@@ -1,4 +1,3 @@
-// dialog.js - In-app replacements for window.confirm / window.alert / window.prompt
 (function () {
     'use strict';
 
@@ -14,9 +13,7 @@
                     '<div class="modal-header" id="appDialogTitle">Confirm</div>' +
                     '<div class="modal-body">' +
                         '<div class="app-dialog-message" id="appDialogMessage"></div>' +
-                        // A value the dialog is ABOUT rather than asking for:
-                        // shown selectable, with one-tap copy, so the user is
-                        // never told to go find something they are looking at.
+                        // A value the dialog is about rather than asking for: shown selectable with one-tap copy.
                         '<div class="app-dialog-copy nm-hidden" id="appDialogCopyRow">' +
                             '<code class="app-dialog-copy-value" id="appDialogCopyValue"></code>' +
                             '<button type="button" class="pubkey-slideout-copy" id="appDialogCopyBtn">Copy</button>' +
@@ -157,7 +154,6 @@
                     (opts.prompt ? field : okBtn).focus();
                     if (opts.prompt) {
                         field.select();
-                        // Keep the input visible once the mobile keyboard opens
                         if (typeof field.scrollIntoView === 'function') {
                             setTimeout(function () { try { field.scrollIntoView({ block: 'nearest' }); } catch (_) {} }, 250);
                         }
@@ -167,8 +163,7 @@
         });
     }
 
-    // With opts.checkboxLabel the promise resolves to { confirmed, checked };
-    // otherwise it resolves to a boolean.
+    // With opts.checkboxLabel resolves to { confirmed, checked }; otherwise to a boolean.
     window.showAppConfirm = function (message, opts) {
         opts = opts || {};
         return open({

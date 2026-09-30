@@ -3,22 +3,10 @@ import 'dart:typed_data';
 
 import 'message_padding.dart';
 
-/// Broadcast recipient id — all `0xFF`, matching bitchat's `SpecialRecipients`.
+/// Broadcast recipient id: all `0xFF`, as bitchat's `SpecialRecipients`.
 final Uint8List kBroadcastRecipient = Uint8List(8)..fillRange(0, 8, 0xFF);
 
-/// A decoded bitchat mesh packet — the on-air unit of the BLE mesh. This is a
-/// 1:1 port of bitchat's `BitchatPacket` + `BinaryProtocol` (iOS/Android), and
-/// wire-compatibility with those clients depends on the exact layout below.
-///
-/// Header (14 bytes for v1, 16 bytes for v2):
-/// ```
-/// version:1 | type:1 | ttl:1 | timestamp:8 (u64 BE, ms) | flags:1 |
-/// payloadLength:2 (v1) / 4 (v2), BE
-/// ```
-/// Variable sections: `senderID:8`, `recipientID:8` (if HAS_RECIPIENT),
-/// optional v2 route (`count:1` + `count*8`), payload, `signature:64`
-/// (if HAS_SIGNATURE). Compressed payloads (HAS_COMPRESSED) prepend the original
-/// size (2 bytes v1 / 4 bytes v2) before the raw-DEFLATE bytes.
+/// A bitchat mesh packet, a 1:1 port of `BitchatPacket` + `BinaryProtocol` whose layout interop depends on.
 class BitchatPacket {
   BitchatPacket({
     this.version = 1,
@@ -34,29 +22,21 @@ class BitchatPacket {
 
   final int version;
   final int type;
-  final Uint8List senderID; // 8 bytes
-  final Uint8List? recipientID; // 8 bytes when present
-  final int timestamp; // u64 milliseconds, big-endian on the wire
+  final Uint8List senderID;
+  final Uint8List? recipientID;
+  final int timestamp; // u64 milliseconds, big-endian on the wire.
   final Uint8List payload;
-  Uint8List? signature; // 64 bytes when present
+  Uint8List? signature;
   int ttl;
-  final List<Uint8List>? route; // v2 source route, 8 bytes/hop
+  final List<Uint8List>? route; // v2 source route, 8 bytes per hop.
 
   bool get isBroadcast =>
       recipientID == null || _bytesEqual(recipientID!, kBroadcastRecipient);
 
-  /// Serializes for transmission (optionally padded to a privacy block size).
   Uint8List? toBytes({bool padding = true}) =>
       BinaryProtocol.encode(this, padding: padding);
 
-  /// Deterministic bytes used for Ed25519 signing/verification: the packet with
-  /// no signature and a fixed TTL of 0 (TTL mutates during relay, so it must be
-  /// excluded), then PKCS#7-padded to the optimal block size. This byte-for-byte
-  /// matches bitchat's `toBinaryDataForSigning`, which calls `encode(...)` with
-  /// its default `padding = true` — so cross-client signatures verify. (Signing
-  /// the UNpadded form silently breaks interop: bitchat rejects our signed
-  /// announce as "unknown" and drops our signed public/#mesh messages, and we
-  /// would reject theirs.)
+  /// Signing bytes: no signature, TTL 0, and padded like bitchat's `toBinaryDataForSigning`, or interop breaks.
   Uint8List? toBytesForSigning() => BinaryProtocol.encode(
         BitchatPacket(
           version: version,
@@ -93,8 +73,7 @@ class BitchatPacket {
   }
 }
 
-/// Binary encoder/decoder for [BitchatPacket] — supports protocol v1 and v2 and
-/// is byte-for-byte compatible with bitchat's `BinaryProtocol`.
+/// Binary codec for [BitchatPacket] v1 and v2, compatible with bitchat's `BinaryProtocol`.
 class BinaryProtocol {
   const BinaryProtocol._();
 
@@ -104,11 +83,9 @@ class BinaryProtocol {
   static const int recipientIdSize = 8;
   static const int signatureSize = 64;
 
-  /// Upper bound on a decoded payload — mirrors bitchat's `MAX_PAYLOAD_LENGTH`
-  /// (10 MiB), guarding against hostile length fields and decompression bombs.
+  /// bitchat's `MAX_PAYLOAD_LENGTH` (10 MiB), against hostile lengths and decompression bombs.
   static const int maxPayloadLength = 10 * 1024 * 1024;
 
-  // Flag bits (the `flags` header byte).
   static const int flagHasRecipient = 0x01;
   static const int flagHasSignature = 0x02;
   static const int flagIsCompressed = 0x04;
@@ -119,9 +96,7 @@ class BinaryProtocol {
   static int _headerSize(int version) =>
       version == 1 ? headerSizeV1 : headerSizeV2;
 
-  /// Encodes [packet]. We never compress on send (an uncompressed frame is
-  /// always valid to a peer); we still fully support decoding compressed frames.
-  /// Returns null if the payload exceeds the v1 length field.
+  /// Never compresses on send; returns null if the payload exceeds the length field.
   static Uint8List? encode(BitchatPacket packet, {bool padding = true}) {
     final payload = packet.payload;
     if (payload.length > maxPayloadLength) return null;
@@ -191,9 +166,7 @@ class BinaryProtocol {
     return result;
   }
 
-  /// Decodes a received frame. Tries the raw bytes first (robust when no padding
-  /// was applied) then retries after stripping PKCS#7 padding — bitchat's exact
-  /// two-pass strategy.
+  /// Tries the raw bytes, then again after stripping padding, as bitchat does.
   static BitchatPacket? decode(Uint8List data) {
     final direct = _decodeCore(data);
     if (direct != null) return direct;
@@ -224,8 +197,7 @@ class BinaryProtocol {
       final payloadLength = version >= 2 ? r.u32() : r.u16();
       if (payloadLength > maxPayloadLength) return null;
 
-      // Bounds pre-check (mirrors bitchat): confirm the frame is large enough
-      // for every declared section before consuming it.
+      // Bounds pre-check, as bitchat does, before consuming any section.
       var expected = _headerSize(version) + senderIdSize + payloadLength;
       if (hasRecipient) expected += recipientIdSize;
       var routeCount = 0;
@@ -286,7 +258,6 @@ class BinaryProtocol {
   }
 }
 
-/// Minimal big-endian byte writer.
 class _ByteWriter {
   _ByteWriter(int capacity) : _buf = Uint8List(capacity);
   Uint8List _buf;
@@ -322,8 +293,7 @@ class _ByteWriter {
 
   void u64(int v) {
     _ensure(8);
-    // Dart ints are 64-bit on native; write big-endian via BigInt to stay safe
-    // for full-width millisecond timestamps.
+    // Write via BigInt so full-width millisecond timestamps stay safe.
     final b = BigInt.from(v);
     for (var i = 7; i >= 0; i--) {
       _buf[_pos++] = ((b >> (i * 8)) & BigInt.from(0xFF)).toInt();
@@ -350,7 +320,6 @@ class _ByteWriter {
   Uint8List toBytes() => Uint8List.sublistView(_buf, 0, _pos);
 }
 
-/// Minimal big-endian byte reader.
 class _ByteReader {
   _ByteReader(this._buf);
   final Uint8List _buf;

@@ -1,17 +1,4 @@
-// Local cache for the custom chat wallpaper.
-//
-// The custom wallpaper is stored in settings as a REMOTE url, because that is
-// what has to travel to the user's other devices through the settings sync (and
-// the web client stores the same value). But rendering it straight from that url
-// means a request to a third-party Blossom host every time the image cache is
-// cold — and Flutter's ImageCache is memory-only, so that is EVERY cold start.
-//
-// So the url stays the synced identity of the wallpaper, and the bytes live on
-// disk next to it: written directly at upload time (no round trip at all on the
-// device that chose it), or fetched once on a device that received the url from
-// sync. After that the wallpaper paints from the local file, offline included.
-// This mirrors the web client, which persists the blob into its `meta` store and
-// renders from an object url (`_ensureWallpaperCached`, users.js).
+// Disk cache for the custom wallpaper; the synced remote url stays its identity.
 
 import 'dart:convert';
 import 'dart:io';
@@ -25,12 +12,9 @@ class WallpaperCache {
 
   static const String _dirName = 'wallpaper';
 
-  /// In-flight/settled lookups keyed by url, so N widget rebuilds asking for the
-  /// same wallpaper cause ONE fetch.
+  /// In-flight lookups keyed by url, so repeated rebuilds cause one fetch.
   static final Map<String, Future<File?>> _inflight = {};
 
-  /// Memoised results, so the common case is a map hit rather than a stat call
-  /// on every paint.
   static final Map<String, File> _resolved = {};
 
   static String _fileNameFor(String url) =>
@@ -43,12 +27,10 @@ class WallpaperCache {
     return dir;
   }
 
-  /// The cached file for [url], or null when it has not been cached yet.
   /// Synchronous so `build` can use it without a FutureBuilder flash.
   static File? cached(String url) => _resolved[url];
 
-  /// Writes [bytes] as the cached copy of [url]. Called at upload time so the
-  /// device that picked the image never fetches it back.
+  /// Called at upload time so the picking device never fetches the image back.
   static Future<File?> store(String url, Uint8List bytes) async {
     if (url.isEmpty || bytes.isEmpty) return null;
     try {
@@ -58,14 +40,12 @@ class WallpaperCache {
       _inflight[url] = Future.value(file);
       return file;
     } catch (_) {
-      // Cache is an optimization; failing to write just means we paint from the
-      // network as before.
+      // Caching is best-effort; on failure we paint from the network.
       return null;
     }
   }
 
-  /// Resolves [url] to a local file, adopting an already-written one or
-  /// fetching once. Concurrent callers share a single fetch.
+  /// Concurrent callers share a single fetch.
   static Future<File?> resolve(
     String url, {
     Future<Uint8List?> Function(String url)? fetch,
@@ -102,8 +82,6 @@ class WallpaperCache {
     }
   }
 
-  /// Deletes every cached wallpaper except [keepUrl] — called when the wallpaper
-  /// changes so a replaced image does not linger on disk forever.
   static Future<void> pruneExcept(String? keepUrl) async {
     try {
       final keep = (keepUrl != null && keepUrl.isNotEmpty)

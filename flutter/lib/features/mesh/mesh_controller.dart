@@ -25,10 +25,7 @@ import '../../widgets/common/nym_avatar.dart' show proxiedAvatarUrl;
 import 'mesh_bridge.dart';
 import 'mesh_diagnostics.dart';
 
-/// The state of one peer's echo probe, for the diagnostics list.
-///
-/// A peer list says who is out there. It cannot say whether they are in the
-/// same room or three relays away — the echo can.
+/// One peer's echo probe state, showing whether a listed peer is actually reachable.
 @immutable
 class MeshPingState {
   const MeshPingState.waiting()
@@ -44,18 +41,14 @@ class MeshPingState {
 
   final int? roundTripMs;
 
-  /// Null when the reply's TTL pair was impossible, which means the packet was
-  /// rewritten rather than relayed. Better no hop count than a wrong one.
+  /// Null when the reply's TTL pair was impossible (packet rewritten, not relayed).
   final int? hops;
   final bool lost;
 
   bool get isWaiting => !lost && roundTripMs == null;
 }
 
-/// Immutable UI snapshot of the mesh radio status. Conversations themselves live
-/// in the normal [AppState] stores (channels/PMs) and render through the
-/// canonical ChatPane — this only carries radio/discovery status and the mesh
-/// markers the sidebar uses to badge which conversations are Bluetooth-backed.
+/// Mesh radio and discovery status plus markers for mesh-backed conversations; messages live in [AppState].
 @immutable
 class MeshUiState {
   const MeshUiState({
@@ -78,10 +71,10 @@ class MeshUiState {
   final int linkCount;
   final List<MeshPeer> peers;
 
-  /// peerID -> the last probe's state. Only holds peers actually probed.
+  /// peerID -> last probe state, only for probed peers.
   final Map<String, MeshPingState> pings;
 
-  /// Bare channel keys (lowercase) that are mesh-backed.
+  /// Lowercase bare channel keys that are mesh-backed.
   final Set<String> meshChannelKeys;
 
   /// PM peer pubkeys that are mesh-backed.
@@ -131,9 +124,7 @@ class MeshUiState {
 
 Uri meshProfileImageUri(String url) => Uri.parse(proxiedAvatarUrl(url) ?? url);
 
-/// Owns the [MeshService] lifecycle and the [MeshBridge] that feeds mesh traffic
-/// into the app's normal chat stores. Reacts to the `meshEnabled` setting to
-/// power the radio on/off.
+/// Owns the [MeshService] lifecycle and the [MeshBridge], powering the radio from the `meshEnabled` setting.
 class MeshController extends StateNotifier<MeshUiState> {
   MeshController({
     required Ref ref,
@@ -164,26 +155,21 @@ class MeshController extends StateNotifier<MeshUiState> {
   final List<StreamSubscription<dynamic>> _subs = [];
   bool _busy = false;
 
-  /// The active bridge, used by [NostrController] to route mesh sends and by the
-  /// sidebar to badge mesh conversations. Null while the mesh is off.
+  /// Active bridge for routing mesh sends and badging; null while the mesh is off.
   MeshBridge? get bridge => _bridge;
 
-  /// Mesh runs only where BLE central+peripheral are available.
+  /// Mesh runs only where BLE central and peripheral are available.
   static bool get isSupportedPlatform =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS);
 
-  /// Tears the mesh down and brings it back up on the current identity. Ghost
-  /// Mode calls this on every rotation: MeshService binds its Noise manager to
-  /// one identity at construction, so a new identity means a new service.
+  /// Restarts the mesh on the current identity; Ghost Mode needs a new service per identity.
   Future<void>? _restartChain;
 
   Future<void> restart() {
     if (!state.enabled) return Future.value();
-    // Serialized: _stop and _start both bail out while _busy, so two overlapping
-    // restarts could tear the mesh down and then skip bringing it back up,
-    // leaving the radio silently off until the next toggle.
+    // Serialized so overlapping restarts can't tear down and then skip the restart.
     final prev = _restartChain ?? Future<void>.value();
     return _restartChain = prev.then((_) async {
       if (!state.enabled) return;
@@ -213,19 +199,14 @@ class MeshController extends StateNotifier<MeshUiState> {
         );
         return;
       }
-      // A persisted Ghost Mode session must be re-armed BEFORE we choose an
-      // identity, or boot would announce the real one and only ghost a moment
-      // later — the one announce that would deanonymise the whole session.
+      // Re-arm a persisted Ghost Mode session before choosing an identity, or boot would announce the real one.
       await _ref.read(ghostModeProvider.notifier).ensureRestored();
       final ghost = _ref.read(ghostModeProvider);
       final identity = ghost.enabled && ghost.current != null
           ? ghost.current!.meshIdentity
           : await NoiseIdentity.loadOrCreate();
       _nostrLink = _computeNostrLink(identity);
-      // Route low-level radio lifecycle (power state, scanning, advertising,
-      // links) into the same on-screen mesh diagnostics panel the receive
-      // pipeline uses, so an iOS device with no Console access can see whether
-      // the transport actually came up.
+      // Route radio lifecycle logs into the on-screen diagnostics panel.
       BleMeshTransport.debugLog = MeshDiagnostics.instance.log;
       final transport = BleMeshTransport(identity.peerID);
       final service = MeshService(
@@ -244,8 +225,6 @@ class MeshController extends StateNotifier<MeshUiState> {
       );
       _bridge = bridge;
 
-      // Peer discovery drives avatar hydration + the marker refresh; the bridge
-      // owns the actual message/receipt/file ingest.
       _subs.add(service.peersStream.listen((peers) {
         for (final p in peers) {
           final pubkey = p.nostrPubkey;
@@ -264,9 +243,7 @@ class MeshController extends StateNotifier<MeshUiState> {
       }));
       _subs.add(service.onProfile.listen(_onProfile));
       _subs.add(service.onPingResult.listen(_onPingResult));
-      // Keep the UI availability live: the BLE radio reports `unknown` at start
-      // and only becomes `ready` a beat later when the adapter powers on, so a
-      // one-shot read would leave the status stuck on "Starting…".
+      // BLE reports `unknown` at start and `ready` once powered, so listen rather than read once.
       _subs.add(transport.availabilityChanged.listen((availability) {
         state = state.copyWith(availability: availability);
       }));
@@ -276,20 +253,14 @@ class MeshController extends StateNotifier<MeshUiState> {
       await service.start();
       state = state.copyWith(
         running: true,
-        // Read the LIVE availability, not start()'s return value: on iOS the
-        // radio flips unknown→ready while start() is still awaiting (announce
-        // broadcast etc.), so the availabilityChanged listener above may have
-        // already pushed `ready` — and the stale captured value would clobber
-        // it right back to `unknown`, pinning the UI on "Starting…".
+        // Read live availability; start()'s captured value may be stale and would clobber `ready`.
         availability: service.availability,
         myPeerID: service.myPeerID,
         meshChannelKeys: Set.of(bridge.meshChannelKeys),
         clearError: true,
       );
     } catch (e) {
-      // Drop the peer list with the radio, exactly as _stop does: a start that
-      // failed leaves whatever was discovered last time on screen, and every
-      // row in it is a peer nothing can reach — including its ping button.
+      // Drop the peer list with the radio so stale unreachable peers aren't shown.
       await _teardown();
       state = state.copyWith(
           error: '$e',
@@ -302,10 +273,7 @@ class MeshController extends StateNotifier<MeshUiState> {
     }
   }
 
-  /// Joins/creates a mesh group [name]. A non-empty [password] makes it an
-  /// encrypted group (only members with the same password can read it). The
-  /// channel is registered as an app channel; the caller opens it via
-  /// `switchView(ChatView.channel(name))`.
+  /// Joins or creates mesh group [name]; a non-empty [password] encrypts it.
   Future<void> joinChannel(String name, {String password = ''}) async {
     final channel = name.startsWith('#') ? name : '#$name';
     if (password.isNotEmpty) {
@@ -318,8 +286,7 @@ class MeshController extends StateNotifier<MeshUiState> {
   bool hasChannelKey(String channel) =>
       _service?.hasChannelKey(channel) ?? false;
 
-  /// Re-copies the bridge's mesh markers into the UI state so the sidebar can
-  /// badge newly-seen mesh channels/PMs. Called by the bridge as traffic lands.
+  /// Copies the bridge's mesh markers into UI state as traffic lands.
   void refreshMarkers() {
     final b = _bridge;
     if (b == null) return;
@@ -338,18 +305,13 @@ class MeshController extends StateNotifier<MeshUiState> {
     return NostrLink.build(pubkey, sigHex);
   }
 
-  // ---- Mesh profile (avatar/banner) transfer --------------------------------
-
   static const int _maxAvatarBytes = 96 * 1024;
   static const int _maxBannerBytes = 384 * 1024;
 
   final Set<String> _profileAsked = {};
 
   Future<MeshProfile?> _buildMyProfile(MeshProfileRequest request) async {
-    // An avatar or banner is a far stronger fingerprint than any of the keys
-    // Ghost Mode rotates — the same picture across two epochs relinks them
-    // instantly. Refuse outright rather than relying on the ghost pubkey
-    // happening to have no profile to look up.
+    // An avatar relinks Ghost Mode epochs instantly, so refuse outright.
     if (_ref.read(ghostModeProvider).enabled) return null;
     final pubkey = _nostrPubkey?.call();
     (Uint8List, String?)? avatar;
@@ -407,11 +369,7 @@ class MeshController extends StateNotifier<MeshUiState> {
   }
 
   void _publishAvatar(String peerID, Uint8List bytes) {
-    // Register under every seed a message/DM row for this peer might use: the
-    // raw peerID, the canonical conversation pubkey (the bridge's Noise-key /
-    // Nostr-link resolution — the seed rows actually key on), and the transient
-    // padded-peerID pseudo-pubkey used before the Noise key is known, so the
-    // peer's real avatar renders in all cases.
+    // Register under every seed a row for this peer might key on, so the avatar renders in all cases.
     final seeds = <String>{peerID, meshStablePubkeyForPeerId(peerID)};
     final peer = state.peerById(peerID);
     if (peer != null) {
@@ -446,25 +404,20 @@ class MeshController extends StateNotifier<MeshUiState> {
         return;
       }
     } catch (_) {
-      // fall through to a fresh request
+      // Fall through to a fresh request.
     }
     unawaited(service.requestProfile(peer.peerID));
   }
 
-  /// How long a probe waits before the row says so. A peer is in the list
-  /// because we heard an announce, which may have been minutes and several
-  /// moves ago; silence is an answer, not a hang.
+  /// How long a probe waits before reporting silence.
   static const Duration pingTimeout = Duration(seconds: 10);
 
   final Map<String, Timer> _pingTimeouts = <String, Timer>{};
 
-  /// Probes [peerID]: are you there, and how many links away?
+  /// Probes whether [peerID] is there and how many links away.
   Future<void> ping(String peerID) async {
     final service = _service;
-    // A radio that is not running cannot measure anything — but returning in
-    // silence made the button look dead: no "pinging…", no result, nothing at
-    // all for a tap that landed. Say it the same way an unanswered ping is
-    // said, so the row always reacts to being pressed.
+    // Report a stopped radio like an unanswered ping so the tap always gets a reaction.
     if (service == null || !state.running) {
       _setPing(peerID, const MeshPingState.lost());
       return;
@@ -503,8 +456,7 @@ class MeshController extends StateNotifier<MeshUiState> {
     _busy = true;
     try {
       await _teardown();
-      // A round trip measured to a peer we can no longer reach is a stale
-      // number, not a reading. (_teardown canceled the timers.)
+      // A round trip to an unreachable peer is stale, not a reading.
       state = state.copyWith(
           running: false, linkCount: 0, peers: const [], pings: const {});
     } finally {
@@ -532,20 +484,15 @@ class MeshController extends StateNotifier<MeshUiState> {
     }
   }
 
-  /// Opens the OS settings page so the user can grant Bluetooth permission.
+  /// Opens OS settings so the user can grant Bluetooth permission.
   Future<void> openSystemSettings() async => _service?.openSystemSettings();
 
   Future<void> shutdown() async => _teardown();
 }
 
-/// Whether the mesh screen overlay is showing inside the home shell. The mesh
-/// screen is NOT a pushed route: it renders in the shell's content area beneath
-/// the off-canvas drawer, so the sidebar opens over it like on any other screen
-/// and a conversation switch (sidebar tap, peer tap, notification tap) closes
-/// it to reveal the chat.
+/// Whether the mesh overlay is showing inside the home shell.
 final meshScreenOpenProvider = StateProvider<bool>((ref) => false);
 
-/// The mesh controller, reacting to the `meshEnabled` setting.
 final meshControllerProvider =
     StateNotifierProvider<MeshController, MeshUiState>((ref) {
   final controller = MeshController(
@@ -556,9 +503,7 @@ final meshControllerProvider =
       final nym = ref.read(appStateProvider).selfNym;
       return nym.isNotEmpty ? nym : 'nym';
     },
-    // Ghost Mode advertises a REAL nostrLink, just an ephemeral one: peers can
-    // still reach this device over Nostr, but the link resolves to a throwaway
-    // key rather than the user's npub.
+    // Ghost Mode advertises a real but ephemeral nostrLink, not the user's npub.
     nostrPubkey: () {
       final ghost = ref.read(ghostModeProvider);
       if (ghost.enabled && ghost.current != null) return ghost.current!.pubkey;

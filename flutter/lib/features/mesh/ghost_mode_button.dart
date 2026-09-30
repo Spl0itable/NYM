@@ -5,9 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
 import 'ghost_mode.dart';
 
-/// Ghost Mode toggle for the mesh status bar: a ghost glyph badged with a red
-/// cross when off and a green check when on. Enabling asks first, because it
-/// deliberately breaks the link between this device and the user's npub.
+/// Ghost Mode toggle; enabling confirms first because it breaks the device-to-npub link.
 class GhostModeButton extends ConsumerWidget {
   const GhostModeButton({super.key, required this.colors});
 
@@ -91,16 +89,13 @@ class _GhostPainter extends CustomPainter {
   final Color body;
   final Color badge;
 
-  /// Painted as a ring behind the badge so it stays readable when the badge and
-  /// the ghost body land on similar colors (green check on a green ghost).
+  /// Ring behind the badge so it stays readable on a similar-colored ghost.
   final Color surface;
   final bool checked;
 
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width, h = size.height;
-    // Off reads as an empty outline, on as a solid shape — legible at 24px
-    // without relying on the badge color alone.
     final stroke = w * 0.09;
     final p = Paint()
       ..color = body
@@ -108,7 +103,6 @@ class _GhostPainter extends CustomPainter {
       ..strokeWidth = stroke
       ..strokeJoin = StrokeJoin.round;
 
-    // Ghost: domed head, straight sides, scalloped hem.
     final path = Path()
       ..moveTo(w * 0.10, h * 0.92)
       ..lineTo(w * 0.10, h * 0.44)
@@ -122,7 +116,6 @@ class _GhostPainter extends CustomPainter {
       ..lineTo(w * 0.21, h * 0.80)
       ..close();
     if (checked) {
-      // Filled: punch the eyes back out of the solid body.
       final eye = Paint()..blendMode = BlendMode.clear;
       canvas.saveLayer(Offset.zero & size, Paint());
       canvas.drawPath(path, p);
@@ -130,7 +123,6 @@ class _GhostPainter extends CustomPainter {
       canvas.drawCircle(Offset(w * 0.54, h * 0.47), w * 0.065, eye);
       canvas.restore();
     } else {
-      // Outline: the body is a stroke, so the eyes are drawn as solid dots.
       canvas.drawPath(path, p);
       final eye = Paint()
         ..color = body
@@ -139,7 +131,6 @@ class _GhostPainter extends CustomPainter {
       canvas.drawCircle(Offset(w * 0.54, h * 0.47), w * 0.055, eye);
     }
 
-    // Status badge, bottom-right. Inset so the ring stays inside the box.
     final c = Offset(w * 0.72, h * 0.72);
     final r = w * 0.20;
     canvas.drawCircle(c, r * 1.30, Paint()..color = surface);

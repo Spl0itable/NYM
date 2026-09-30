@@ -2,20 +2,7 @@ import CryptoKit
 import DeviceCheck
 import Foundation
 
-/// Apple App Attest: asks the Secure Enclave for a hardware-backed attestation
-/// of this app, over a server-chosen challenge.
-///
-/// What comes back is a certificate chain Apple's own App Attest CA signs,
-/// naming the app (Team ID + bundle ID) and carrying the challenge inside an
-/// Apple-issued extension. The server checks the chain to Apple's root, so the
-/// proof cannot be produced by a repackaged build, a simulator, or anything
-/// that is not this app on genuine hardware.
-///
-/// The key id is persisted: Apple's attestation is a one-time ceremony per
-/// generated key, and re-attesting a key already known to their service is
-/// refused. A device that has attested before re-uses its key, and on the
-/// rejections that mean "this key is no longer usable" it starts over with a
-/// fresh one.
+/// App Attest over a server challenge; the key id persists because Apple won't re-attest a known key.
 enum AppAttest {
 
   private static let keyIdDefaultsKey = "nym_app_attest_key_id"
@@ -24,22 +11,14 @@ enum AppAttest {
     DCAppAttestService.shared.isSupported
   }
 
-  /// Produces `["keyId": …, "attestation": …]` for `challenge`, both base64url
-  /// with no padding (the form the worker's `base64UrlDecode` expects).
-  ///
-  /// Calls back with `["reason": …]` when the device cannot attest — a
-  /// simulator, an older OS, App Attest disabled for this app, a key Apple
-  /// refused. No proof means the Dart side enrolls as a build-proof install
-  /// and reports the reason, rather than sending a weaker claim.
+  /// `["keyId", "attestation"]` as unpadded base64url, or `["reason": …]` when the device can't attest.
   static func attest(challenge: String, completion: @escaping ([String: String]?) -> Void) {
     let service = DCAppAttestService.shared
     guard service.isSupported else {
       completion(["reason": "app-attest-unsupported"])
       return
     }
-    // Apple hashes whatever we hand it into the certificate's nonce extension;
-    // the server recomputes sha256(challenge) and compares, which is what ties
-    // this attestation to this enrollment.
+    // The server recomputes sha256(challenge) against the certificate nonce, tying this attestation to the enrollment.
     let clientDataHash = Data(SHA256.hash(data: Data(challenge.utf8)))
 
     withKeyId(service: service) { keyId in
@@ -55,9 +34,7 @@ enum AppAttest {
           ])
           return
         }
-        // A key Apple no longer accepts (revoked, or already attested on a
-        // device that was since restored) is unusable forever. Drop it and
-        // generate a fresh one, once, rather than failing every launch.
+        // A key Apple no longer accepts is unusable forever; regenerate once rather than failing every launch.
         if isInvalidKeyError(error) {
           UserDefaults.standard.removeObject(forKey: keyIdDefaultsKey)
           generateKey(service: service) { fresh in
@@ -118,8 +95,7 @@ enum AppAttest {
     return error.code == DCError.invalidKey.rawValue
   }
 
-  /// The worker decodes both fields with a base64url decoder, so emit that
-  /// alphabet and drop the padding.
+  /// Unpadded base64url, as the worker decodes.
   private static func base64Url(_ data: Data) -> String {
     data.base64EncodedString()
       .replacingOccurrences(of: "+", with: "-")

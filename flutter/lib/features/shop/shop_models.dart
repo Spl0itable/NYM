@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// A purchasable shop item. Mirrors the PWA catalog entry (`js/app.js`
-/// `this.shopItems`, docs/specs/04 §3.1). `icon` is the inline SVG string used
-/// by the web; on native we render it via `flutter_svg`.
+/// A purchasable shop item; [icon] is inline SVG rendered via `flutter_svg`.
 class ShopItem {
   const ShopItem({
     required this.id,
@@ -24,17 +22,15 @@ class ShopItem {
   final String description;
   final int price;
 
-  /// One of: `message-style`, `nickname-flair`, `supporter`, `cosmetic`,
-  /// `bundle`.
+  /// One of `message-style`, `nickname-flair`, `supporter`, `cosmetic`, `bundle`.
   final String type;
 
-  /// Inline SVG markup (the PWA `item.icon`).
   final String icon;
 
   /// `'legendary'` for legendary-tier items, else null.
   final String? tier;
 
-  /// Cosmetic CSS class (e.g. `cosmetic-aura-gold`).
+  /// Cosmetic CSS class, e.g. `cosmetic-aura-gold`.
   final String? cssClass;
 
   final int? maxSupply;
@@ -45,7 +41,6 @@ class ShopItem {
   bool get isLegendary => tier == 'legendary';
 }
 
-/// Which shop tab a card belongs to.
 enum ShopTab { styles, flair, special, limited, inventory }
 
 extension ShopTabLabel on ShopTab {
@@ -65,8 +60,6 @@ extension ShopTabLabel on ShopTab {
   }
 }
 
-/// An item the user owns, persisted in the shop record.
-/// (docs/specs/04 §3.3 `owned{...}`.)
 class OwnedItem {
   const OwnedItem({
     required this.itemId,
@@ -107,9 +100,7 @@ class OwnedItem {
       );
 }
 
-/// The user's currently-active cosmetics (docs/specs/04 §3.3 `active{...}`).
-/// Only one [style] and one [flair] may be active at a time; multiple
-/// [cosmetics] are allowed.
+/// Active cosmetics: at most one [style] and one [flair], any number of [cosmetics].
 class ActiveItems {
   const ActiveItems({
     this.style,
@@ -164,9 +155,7 @@ class ActiveItems {
   }
 }
 
-/// The per-style text color + glow used to render the cosmetic preview,
-/// ported from `css/styles-features.css` (`.message.style-X .message-content`).
-/// Faithful subset: primary color and glow; gradient styles use [gradient].
+/// Per-style text color and glow for the preview; gradient styles use [gradient].
 class MessageStyleVisual {
   const MessageStyleVisual({
     required this.color,
@@ -182,26 +171,14 @@ class MessageStyleVisual {
   final List<Color>? gradient;
   final bool monospace;
 
-  /// Explicit multi-offset glyph shadows for styles whose look is a layered
-  /// `text-shadow` rather than a single soft glow — the glitch chromatic-split
-  /// (`-2px #f00 / +2px #0ff`, `styles-features.css:625-628`). When set these
-  /// replace the single [glow]-derived shadow in the preview bubble.
+  /// Layered glyph shadows (e.g. glitch split) that replace the single [glow] shadow.
   final List<Shadow>? glyphShadows;
 
-  /// Translucent `.message-content { background-color }` painted behind the
-  /// text by the styles that have one (satoshi / eclipse / crt). Mirrors the
-  /// verbatim alpha from `css/styles-features.css`; null = no background.
+  /// Translucent content background for styles that have one; null for none.
   final Color? contentBackground;
 }
 
-/// Cosmetic aura visual: border + glow color (from `.message.cosmetic-X`).
-///
-/// [boxShadows] are the exact `box-shadow` layers from `.message.cosmetic-X`
-/// (inset ring + outer glow) so the preview bubble matches the rendered
-/// message. [borderLeft] is the gold/cyan `border-left` accent some auras add.
-/// [ringGradient]/[sheenGradient] flag the legendary prism/hologram treatments
-/// so the preview can paint a conic ring / holographic sheen rather than a flat
-/// fill.
+/// Aura border, box-shadow layers and optional prism ring or hologram sheen for the preview bubble.
 class CosmeticVisual {
   const CosmeticVisual({
     required this.accent,
@@ -217,22 +194,17 @@ class CosmeticVisual {
   final List<BoxShadow>? boxShadows;
   final Color? borderLeft;
 
-  /// The 8-stop conic prism ring (`cosmetic-aura-rainbow`); when set the preview
-  /// paints a [SweepGradient] border ring instead of a flat gradient fill.
+  /// 8-stop conic prism ring, painted as a [SweepGradient] border.
   final List<Color>? ringGradient;
 
-  /// The holographic multi-color sheen (`cosmetic-bubble-hologram`); when set
-  /// the preview layers a screen-blended gradient sheen over the bubble.
+  /// Holographic sheen, screen-blended over the bubble.
   final List<Color>? sheenGradient;
 }
 
-/// The availability of a limited-drop item, computed from its
-/// `startsAt`/`endsAt`/`maxSupply` + live remaining supply
-/// (`shop.js:_shopItemAvailability`).
+/// Limited-drop availability from start/end dates and remaining supply.
 enum ShopAvailabilityState { available, soon, ended, soldout }
 
-/// A resolved availability `{state, label}` for a limited item — the supply
-/// badge text + color tier (`shop.js:813-830`).
+/// Resolved availability label and color tier for a limited item.
 class ShopAvailability {
   const ShopAvailability(this.state, this.label);
 

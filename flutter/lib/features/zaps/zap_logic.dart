@@ -1,25 +1,11 @@
 import '../../core/constants/event_kinds.dart';
 import '../../models/nostr_event.dart';
 
-/// Pure, socket-free logic for the Nostr side of Lightning zaps (NIP-57):
-/// building the kind-9734 zap request, parsing bolt11 amounts, and the
-/// receipt-dedup key. The LNURL HTTP/invoice/pay flow lives in the zap UI
-/// agent — this only covers the request builder + receipt ingest helpers.
-/// Mirrors `js/modules/zaps.js` (`createZapRequest`, `parseAmountFromBolt11`,
-/// `_recordMessageZap` dedup). (docs/specs/03 §Appendix A kind 9734/9735)
+/// Socket-free NIP-57 helpers: zap request builder, bolt11 amount parsing, receipt dedup.
 class ZapLogic {
   ZapLogic._();
 
-  /// Builds the NIP-57 kind-9734 zap-request event (zaps.js `createZapRequest`).
-  ///
-  /// Tags, in the PWA's order:
-  /// - `['e', messageId]` first (only for message zaps; profile zaps omit it),
-  /// - `['p', recipientPubkey]`,
-  /// - `['amount', millisats]`,
-  /// - `['relays', r0, r1, … up to 5]`,
-  /// - `['k', originalKind]` last (`'20000'`/`'23333'`/`'1059'` for message
-  ///   zaps; `'0'` for profile zaps).
-  /// content = comment (may be empty).
+  /// NIP-57 kind-9734 zap request; tag order is e (message zaps only), p, amount, relays, k.
   static UnsignedEvent buildZapRequest({
     required String pubkey,
     required String recipientPubkey,
@@ -37,10 +23,9 @@ class ZapLogic {
     }
     tags.add(['p', recipientPubkey]);
     tags.add(['amount', '${amountSats * 1000}']);
-    // ['relays', ...firstFive] — note: a single multi-value tag, matching
-    // zaps.js `['relays', ...this.defaultRelays.slice(0, 5)]`.
+    // A single multi-value relays tag with at most five relays.
     tags.add(['relays', ...relays.take(5)]);
-    // k tag: message zaps default to '20000'; profile zaps tag k=0.
+    // k tag: message zaps default to '20000'; profile zaps use '0'.
     final k = messageId != null && messageId.isNotEmpty
         ? (originalKind ?? '20000')
         : '0';
@@ -54,8 +39,7 @@ class ZapLogic {
     );
   }
 
-  /// Parses the sats amount from a bolt11 invoice string (zaps.js
-  /// `parseAmountFromBolt11`). Returns null when malformed or out of bounds.
+  /// Sats amount from a bolt11 invoice, or null when malformed or out of bounds.
   static int? parseAmountFromBolt11(String? bolt11) {
     if (bolt11 == null || bolt11.length < 6 || bolt11.length > 4096) {
       return null;
@@ -86,16 +70,13 @@ class ZapLogic {
     return sats;
   }
 
-  /// Receipt dedup key (zaps.js `_recordMessageZap`): the lowercased bolt11
-  /// prefixed `b:`, falling back to the receipt event id when no bolt11.
+  /// Lowercased bolt11 prefixed `b:`, falling back to the receipt event id.
   static String dedupKey({String? bolt11, required String eventId}) =>
       (bolt11 != null && bolt11.isNotEmpty)
           ? 'b:${bolt11.toLowerCase()}'
           : eventId;
 
-  /// Parsed fields from a kind-9735 zap receipt. Returns null when the receipt
-  /// carries no `['e', …]` target (message zaps only — profile zaps are handled
-  /// separately and don't accrue to a message).
+  /// Parses a kind-9735 receipt, or null without an `e` target (profile zaps don't accrue to a message).
   static ZapReceiptInfo? parseReceipt(NostrEvent e) {
     if (e.kind != EventKind.zapReceipt) return null;
     final messageId = e.tagValue('e');
@@ -114,7 +95,6 @@ class ZapLogic {
   }
 }
 
-/// A parsed kind-9735 message zap receipt.
 class ZapReceiptInfo {
   ZapReceiptInfo({
     required this.messageId,
@@ -125,13 +105,10 @@ class ZapReceiptInfo {
     required this.eventId,
   });
 
-  /// The `['e', …]` zapped message id.
   final String messageId;
 
-  /// The `['p', …]` recipient pubkey (may be null).
   final String? recipientPubkey;
 
-  /// The receipt event author (zapper / provider).
   final String zapperPubkey;
   final int amountSats;
   final String? bolt11;

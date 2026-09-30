@@ -10,8 +10,7 @@
 
     // support probe
     let _supportPromise = null;
-    // Web Bluetooth is Chromium-only and X25519/Ed25519 in WebCrypto arrived in
-    // recent Chrome, so both are probed rather than assumed.
+    // Web Bluetooth is Chromium-only and WebCrypto X25519/Ed25519 is recent, so both are probed.
     function cryptoSupported() {
         if (_supportPromise) return _supportPromise;
         _supportPromise = (async () => {
@@ -91,9 +90,7 @@
         }
     }
 
-    // AEAD
-    // The 12-byte IETF nonce for Noise counter n: four zero bytes then the
-    // little-endian 64-bit counter.
+    // AEAD: the 12-byte IETF nonce is four zero bytes then the little-endian 64-bit counter.
     function nonce12(n) {
         const out = new Uint8Array(12);
         let v = n;
@@ -376,8 +373,7 @@
 
         async handleHandshake(peerID, data) {
             const existing = this.sessions.get(peerID);
-            // Both sides opened at once: settle it by peerID so exactly one
-            // stays the initiator.
+            // Simultaneous open: settle by peerID so exactly one side stays the initiator.
             if (existing && existing.isInitiator && existing.state === 'handshaking' && data.length === 32) {
                 if (this.identity.peerID > peerID) return null;
                 this.sessions.delete(peerID);
@@ -410,12 +406,7 @@
         }
     }
 
-    // public-key recovery from a seed
-    // WebCrypto will not hand back the public half of an imported private key,
-    // so it is recomputed: X25519 by a scalar multiplication against the base
-    // point (via a throwaway JWK round trip), Ed25519 by signing nothing and
-    // reading the key back out of a generated pair. Both go through the same
-    // JWK export path the platform already supports.
+    // WebCrypto won't return the public half of an imported private key, so recompute it via JWK round trips.
     async function x25519PublicFromSeed(seed) {
         const jwk = {
             kty: 'OKP', crv: 'X25519',
@@ -427,8 +418,7 @@
         return b64urlDecode(pub.x);
     }
 
-    // Curve25519 scalar multiplication by the base point (9), enough to derive
-    // a public key from a private seed.
+    // Curve25519 scalar multiplication by the base point (9).
     function x25519BasePoint(seed) {
         const p = (1n << 255n) - 19n;
         const k = Uint8Array.from(seed);
@@ -493,8 +483,7 @@
         return String(claimedPeerID).toLowerCase() === (await derivePeerID(noiseKey));
     }
 
-    // The device's mesh identity: an X25519 static key (the Noise static, whose
-    // hash is the peerID) plus an Ed25519 key that signs announcements.
+    // X25519 static key (Noise static, hashed into the peerID) plus an Ed25519 announcement-signing key.
     class MeshIdentity {
         constructor(fields) { Object.assign(this, fields); }
 
@@ -506,8 +495,7 @@
             });
         }
 
-        // RFC 8410 PKCS#8 wrappers, so a raw 32-byte seed can be imported as a
-        // WebCrypto key. Lets a stored seed (and a test vector) round-trip.
+        // RFC 8410 PKCS#8 wrappers so a raw 32-byte seed can be imported as a WebCrypto key.
         static _pkcs8(seed, oidByte) {
             const out = new Uint8Array(48);
             out.set([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, oidByte, 0x04, 0x22, 0x04, 0x20]);
@@ -519,8 +507,7 @@
             const s = subtle();
             const staticPrivate = await s.importKey('pkcs8', MeshIdentity._pkcs8(staticSeed, 0x6e), { name: 'X25519' }, true, ['deriveBits']);
             const signPrivate = await s.importKey('pkcs8', MeshIdentity._pkcs8(signSeed, 0x70), { name: 'Ed25519' }, true, ['sign']);
-            // WebCrypto cannot re-derive a public key from a private one, so
-            // both are recovered by re-importing as a JWK-less round trip.
+            // WebCrypto cannot re-derive a public key from a private one.
             const staticPublic = await x25519PublicFromSeed(staticSeed);
             const signPublic = await ed25519PublicFromSeed(signSeed);
             return MeshIdentity.fromKeys(staticPrivate, staticPublic, signPrivate, signPublic);
@@ -532,8 +519,7 @@
             return MeshIdentity.fromKeys(x.privateKey, x.publicKey, ed.privateKey, ed.publicKey);
         }
 
-        // Held in memory only — Ghost Mode mints one per epoch so nothing it
-        // advertises ties back to the durable identity.
+        // Memory only: Ghost Mode mints one per epoch so adverts don't tie back to the durable identity.
         static ephemeral() { return MeshIdentity.generate(); }
 
         static async loadOrCreate() {
@@ -572,10 +558,7 @@
         sign(message) { return ed25519Sign(this.signPrivate, message); }
     }
 
-    // nostr link
-    // Binds a mesh identity to a Nostr identity: a BIP340 signature by the Nostr
-    // key over SHA-256("nymmesh-link-v1:" || noiseStaticPublicKey). Only the
-    // holder of the Nostr key can produce it, so the link cannot be spoofed.
+    // BIP340 signature by the Nostr key over SHA-256("nymmesh-link-v1:" || noiseStaticPublicKey).
     const NostrLink = {
         domain: 'nymmesh-link-v1:',
         length: 96,

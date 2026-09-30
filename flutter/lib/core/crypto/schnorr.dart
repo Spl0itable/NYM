@@ -6,15 +6,9 @@ import '../../models/nostr_event.dart';
 import 'keys.dart';
 import 'native_schnorr.dart';
 
-/// BIP340 Schnorr signing/verification for Nostr events.
-
 String _privHex(Uint8List privkey) => bytesToHex(privkey).padLeft(64, '0');
 
-/// Signs the 32-byte event id [idHex] with [privkey], returning a 64-byte
-/// (128-char hex) Schnorr signature. Native libsecp256k1 when loaded in this
-/// isolate (deterministic BIP340, self-verified, ~50 µs); otherwise the
-/// pure-Dart bip340 path with fresh aux randomness (~10–20 ms of BigInt
-/// math — which the CPU profile showed as main-thread jank per send).
+/// Signs [idHex] with BIP340, via native libsecp256k1 when loaded in this isolate, else pure Dart.
 String signId(String idHex, Uint8List privkey) {
   final native = NativeSchnorr.sign(privkey: privkey, idHex: idHex);
   if (native != null) return native;
@@ -22,18 +16,11 @@ String signId(String idHex, Uint8List privkey) {
   return bip340.sign(_privHex(privkey), idHex, aux);
 }
 
-/// Signs an unsigned event: computes its id and returns the signature hex.
 String signEvent(UnsignedEvent event, Uint8List privkey) {
   return signId(event.computeId(), privkey);
 }
 
-/// Verifies a fully-populated [event]: recomputes the id from its content and
-/// checks the Schnorr signature against the event pubkey. Returns false on any
-/// mismatch or malformed input.
-///
-/// Uses native libsecp256k1 when it is loaded in this isolate (~100× faster
-/// than the pure-Dart path — see [NativeSchnorr]); otherwise the pure-Dart
-/// bip340 implementation. Both are BIP340 and agree on every verdict.
+/// Recomputes the id and checks the BIP340 signature; false on any mismatch or malformed input.
 bool verifyEvent(NostrEvent event) {
   if (event.sig.length != 128 || event.pubkey.length != 64) return false;
   final computedId = event.computeId();
@@ -52,12 +39,10 @@ bool verifyEvent(NostrEvent event) {
   }
 }
 
-/// Finalizes a rumor-like unsigned event with [privkey]: sets the pubkey
-/// (derived from the key), computes the id, signs it, and returns a signed
-/// [NostrEvent]. Mirrors nostr-tools `finalizeEvent`.
+/// Sets the signer pubkey, id and signature on [rumorLike], like nostr-tools `finalizeEvent`.
 NostrEvent finalizeEvent(UnsignedEvent rumorLike, Uint8List privkey) {
   final pubkey = getPublicKeyHex(privkey);
-  // Rebuild with the correct pubkey so the id binds to the signer.
+  // Rebuild with the signer's pubkey so the id binds to it.
   final event = NostrEvent(
     pubkey: pubkey,
     createdAt: rumorLike.createdAt,

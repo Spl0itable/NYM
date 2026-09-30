@@ -5,30 +5,16 @@ import '../../core/theme/nym_metrics.dart';
 import '../../features/i18n/i18n.dart';
 import '../anchored_popup.dart';
 
-/// Cryptographic-verification state of a sealed (NIP-17/NIP-59) message,
-/// mirroring the PWA's tri-state `senderVerified` (`messages.js:732-757`):
-///
-/// * [verified] — the seal was signed by the sender's long-term identity key
-///   and that signer matches the claimed author (green lock + check).
-/// * [unverified] — a Bitchat-format seal signed with a throwaway per-message
-///   key with no identity binding (red lock + ✗).
-/// * [unknown] — the seal isn't available on this device (e.g. restored from
-///   history), so verification can't be performed (gray lock + ?).
+/// Verification state of a sealed (NIP-17/NIP-59) message's sender, as in the PWA's `senderVerified`.
 enum CryptoVerifyState { verified, unverified, unknown }
 
-/// The `.crypto-verified-badge` lock shown next to a PM/group message's
-/// timestamp (`messages.js:758` `mkLock`, `styles-components.css:1421`). A 12×12
-/// stroked padlock whose interior glyph + color encode the [state]; tapping it
-/// opens the verification-info popup (`showVerificationPopup`,
-/// `messages.js:3405`).
+/// The padlock badge next to a PM/group message timestamp; tapping opens the verification popup.
 class CryptoVerifiedBadge extends StatelessWidget {
   const CryptoVerifiedBadge({super.key, required this.state, this.size = 12});
 
   final CryptoVerifyState state;
   final double size;
 
-  /// Lock color per state (`.crypto-verified-badge` / `.unverified` /
-  /// `.unknown`): verified `#2ecc71`, unverified `#e74c3c`, unknown `#9aa0a6`.
   Color get _color {
     switch (state) {
       case CryptoVerifyState.verified:
@@ -43,9 +29,7 @@ class CryptoVerifiedBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      // `.crypto-verified-badge { margin-left: 4px }` — a margin sits OUTSIDE
-      // the element's box, so the popup anchors on the lock itself (the inner
-      // Builder context), not the padded footprint.
+      // Margin outside the box so the popup anchors on the lock itself.
       padding: const EdgeInsets.only(left: 4),
       child: Builder(
         builder: (anchorContext) => GestureDetector(
@@ -62,9 +46,6 @@ class CryptoVerifiedBadge extends StatelessWidget {
   }
 }
 
-/// Strokes the padlock + state glyph from the PWA's inline SVG path data, in the
-/// 24-unit viewBox the SVG uses, scaled to the widget size. `stroke-width:2`,
-/// round caps/joins, no fill (`messages.js:746-756`).
 class _LockPainter extends CustomPainter {
   _LockPainter(this.state, this.color);
 
@@ -82,7 +63,6 @@ class _LockPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round
       ..color = color;
 
-    // Lock body: <rect x=3 y=11 w=18 h=11 rx=2 ry=2>.
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         const Rect.fromLTWH(3, 11, 18, 11),
@@ -90,7 +70,6 @@ class _LockPainter extends CustomPainter {
       ),
       paint,
     );
-    // Shackle: M7 11V7 a5 5 0 0 1 10 0 v4.
     final shackle = Path()
       ..moveTo(7, 11)
       ..lineTo(7, 7)
@@ -99,18 +78,15 @@ class _LockPainter extends CustomPainter {
       ..lineTo(17, 11);
     canvas.drawPath(shackle, paint);
 
-    // Interior glyph per state.
     final glyph = Path();
     switch (state) {
       case CryptoVerifyState.verified:
-        // M8.5 16.5 l2.5 2.5 4.5-4.5  (check)
         glyph
           ..moveTo(8.5, 16.5)
           ..lineTo(11, 19)
           ..lineTo(15.5, 14.5);
         break;
       case CryptoVerifyState.unverified:
-        // M9.5 14 l5 5  /  M14.5 14 l-5 5  (✗)
         glyph
           ..moveTo(9.5, 14)
           ..lineTo(14.5, 19)
@@ -118,7 +94,6 @@ class _LockPainter extends CustomPainter {
           ..lineTo(9.5, 19);
         break;
       case CryptoVerifyState.unknown:
-        // M9.6 14.6 a2.4 2.4 0 0 1 3.6 2 c0 1 -1.2 1.4 -1.2 2.4  +  dot
         glyph
           ..moveTo(9.6, 14.6)
           ..arcToPoint(const Offset(13.2, 16.6),
@@ -137,14 +112,7 @@ class _LockPainter extends CustomPainter {
       old.state != state || old.color != color;
 }
 
-/// Opens the verification-info popup (`showVerificationPopup`,
-/// `messages.js:3405-3424`): a `.reactors-modal`-chromed `.verification-popup`
-/// card (styles-chat.css:505-529) ANCHORED to the tapped lock — the same
-/// placement engine as the timestamp popup, with NO dimming scrim. Vertical:
-/// 6px above the anchor when there's head-room (`rect.top > approxHeight(170)
-/// + 20`), else 6px below. Horizontal: `left = max(8, min(rect.left,
-/// innerWidth - width - 8))`. Dismissed on the next outside tap / drag
-/// (mirrors the PWA's document-click + scroll close).
+/// Opens the verification-info popup anchored to the tapped lock.
 void showVerificationPopup(BuildContext context, CryptoVerifyState state) {
   final (title, titleColor, body) = switch (state) {
     CryptoVerifyState.verified => (
@@ -177,31 +145,19 @@ void showVerificationPopup(BuildContext context, CryptoVerifyState state) {
   showAnchoredInfoPopup(context, title: title, titleColor: titleColor, body: body);
 }
 
-/// The `.reactors-modal`-chromed `.verification-popup` card, anchored to a
-/// tapped badge. Shared by the verification lock and the post-quantum shield so
-/// the two popups can never drift apart visually.
-///
-/// Placement mirrors the PWA (`showVerificationPopup`, messages.js): 6px above
-/// the anchor when there's head-room, else 6px below; horizontally clamped to
-/// the 8px viewport gutters. No dimming scrim — dismissed on the next outside
-/// tap or drag.
+/// Info card anchored to a tapped badge, shared by the lock and the PQ shield; no scrim, closes on outside tap.
 void showAnchoredInfoPopup(
   BuildContext context, {
   required String title,
   required Color titleColor,
   required String body,
 }) {
-  // Anchor on the tapped badge's global bounds (the PWA's
-  // `anchorEl.getBoundingClientRect()`).
   final box = context.findRenderObject() as RenderBox?;
   if (box == null || !box.hasSize) return;
   final rect = box.localToGlobal(Offset.zero) & box.size;
   final overlay = Overlay.of(context, rootOverlay: true);
   final screen = MediaQuery.of(context).size;
 
-  // `left = Math.max(8, Math.min(rect.left, innerWidth - width - 8))` with the
-  // popup's `.verification-popup` max-width of 280 (shrunk on tiny screens so
-  // the 8px viewport gutters hold).
   final double width = screen.width - 16 < 280 ? screen.width - 16 : 280;
 
   OverlayEntry? entry;
@@ -215,8 +171,6 @@ void showAnchoredInfoPopup(
       final c = ctx.nym;
       return Stack(
         children: [
-          // No dimming scrim — just an outside-tap / scroll-start dismiss
-          // barrier (PWA closes on document click + scroll).
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -230,10 +184,7 @@ void showAnchoredInfoPopup(
             child: Material(
               type: MaterialType.transparency,
               child: Container(
-                // `.reactors-modal { min-width: 160 }` +
-                // `.verification-popup { max-width: 280 }`.
                 constraints: BoxConstraints(minWidth: 160, maxWidth: width),
-                // `.verification-popup { padding: 12px 14px }`.
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                 decoration: BoxDecoration(
                   color: c.bgSecondary,
@@ -243,8 +194,6 @@ void showAnchoredInfoPopup(
                         ? Colors.black.withValues(alpha: 0.08)
                         : c.glassBorder,
                   ),
-                  // dark: shadow-lg + shadow-glow + a 1px white@0.05 ring;
-                  // light: `0 8px 32px rgba(0,0,0,0.12)`.
                   boxShadow: c.isLight
                       ? const [
                           BoxShadow(
@@ -266,7 +215,6 @@ void showAnchoredInfoPopup(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // `.verification-popup-title`: 13px w700, state color.
                     Text(
                       title,
                       style: TextStyle(
@@ -275,9 +223,7 @@ void showAnchoredInfoPopup(
                         fontSize: 13,
                       ),
                     ),
-                    // `.verification-popup { gap: 6px }`.
                     const SizedBox(height: 6),
-                    // `.verification-popup-body`: 12px/1.45 @ opacity 0.85.
                     Opacity(
                       opacity: 0.85,
                       child: Text(

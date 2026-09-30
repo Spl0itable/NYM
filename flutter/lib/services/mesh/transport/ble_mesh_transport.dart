@@ -7,23 +7,13 @@ import 'package:flutter/foundation.dart';
 import '../mesh_constants.dart';
 import 'mesh_transport.dart';
 
-/// The production BLE mesh transport. Every device runs **both** GATT roles
-/// simultaneously — a peripheral advertising the bitchat service and a central
-/// scanning for and connecting to peers — so any two nearby devices form a link
-/// regardless of who discovered whom. This dual-role controlled flood is exactly
-/// how bitchat's mesh operates, which is what makes cross-app interop possible.
-///
-/// Frames are opaque here: this layer only moves bytes over GATT. TTL, dedup,
-/// Noise sessions and fragmentation all live above it in [MeshService].
+/// Production BLE transport running both GATT roles at once, bitchat's dual-role flood; frames are opaque here.
 class BleMeshTransport implements MeshTransport {
-  /// [advertisedName] is our mesh peerID — bitchat advertises the peerID as the
-  /// BLE device name so peers can pre-seed identity before the announce packet.
+  /// [advertisedName] is our peerID; bitchat advertises it as the BLE device name.
   BleMeshTransport(String advertisedName)
       : _advertisedNameString = advertisedName;
 
-  /// Diagnostic sink, wired by [MeshController] to the on-screen mesh log so a
-  /// device with no adb/Console access can still see the radio lifecycle —
-  /// power state, scanning, advertising, links. Null in tests / when unwired.
+  /// Diagnostic sink for the on-screen mesh log; null in tests.
   static void Function(String line)? debugLog;
 
   void _log(String line) => debugLog?.call('ble: $line');
@@ -40,10 +30,7 @@ class BleMeshTransport implements MeshTransport {
   final _availabilityChanges =
       StreamController<MeshTransportAvailability>.broadcast();
 
-  /// Fires whenever [availability] changes. On iOS the radio reports `unknown`
-  /// synchronously at start() and only flips to `ready` a beat later when the
-  /// CBManager powers on, so a one-shot read at start would leave the UI stuck
-  /// on "Starting…". The controller listens here to keep the status live.
+  /// Fires on availability changes; iOS reports `unknown` at start and flips to `ready` later.
   Stream<MeshTransportAvailability> get availabilityChanged =>
       _availabilityChanges.stream;
 
@@ -55,32 +42,22 @@ class BleMeshTransport implements MeshTransport {
 
   final List<StreamSubscription<dynamic>> _subs = [];
 
-  /// Peripherals we (as central) are connected to, keyed by peer UUID, with the
-  /// remote characteristic we write to and subscribe on.
+  /// Peripherals we are connected to as central, keyed by peer UUID.
   final Map<String, _CentralLink> _centralLinks = {};
 
-  /// Centrals (as peripheral) currently subscribed to our characteristic.
+  /// Centrals subscribed to our characteristic (peripheral role).
   final Map<String, Central> _subscribedCentrals = {};
 
-  /// Our local mutable characteristic (peripheral role).
   GATTCharacteristic? _localCharacteristic;
 
   MeshTransportAvailability _availability = MeshTransportAvailability.unknown;
   bool _started = false;
 
-  /// Whether each role is currently active, so a repeated power-on event (or the
-  /// initial sync check racing the state listener) can't double-start discovery
-  /// or advertising. Reset when the radio leaves the powered-on state.
+  /// Per-role active flags so repeated power-on events can't double-start; reset on power-off.
   bool _scanning = false;
   bool _advertising = false;
 
-  /// Reentrancy guards for the role bring-ups. The state listener and start()'s
-  /// direct check can BOTH invoke _beginPeripheral before either finishes; the
-  /// second call's removeAllServices() then runs AFTER the first call's
-  /// addService(), leaving the device ADVERTISING the mesh service with an
-  /// empty GATT — remote centrals connect and find "no mesh characteristic".
-  /// This race is intermittent, which is exactly why linking worked on some
-  /// runs and not others. The busy flag makes each bring-up single-flight.
+  /// Single-flight guards: overlapping bring-ups could advertise the service with an empty GATT.
   bool _centralStarting = false;
   bool _peripheralStarting = false;
 
@@ -106,12 +83,7 @@ class BleMeshTransport implements MeshTransport {
     _log(
         'start(): bringing up central+peripheral (peerID=$_advertisedNameString)');
 
-    // Wire the event handlers and BOTH managers' state listeners BEFORE the
-    // authorize() awaits below. On iOS each CBManager is created in .unknown
-    // and flips to .poweredOn asynchronously moments after construction; if we
-    // awaited first, that transition could fire on the broadcast state stream
-    // before we subscribed and be lost — leaving the radio powered on but the
-    // roles never started (the classic "mesh never starts, no logs" symptom).
+    // Wire state listeners before awaiting authorize(), or iOS's early power-on event can be missed.
     _wireCentral();
     _wirePeripheral();
 
@@ -124,10 +96,7 @@ class BleMeshTransport implements MeshTransport {
         _scanning = false;
       }
     }));
-    // The peripheral role has its OWN state on iOS. Advertising must (re)start
-    // when the PERIPHERAL manager powers on — not when the central does, as the
-    // old code assumed. Otherwise an iOS device could scan but never advertise,
-    // so no peer (including real bitchat) can discover it and no packets flow.
+    // iOS peripheral role has its own state; advertising must start when the peripheral manager powers on.
     _subs.add(_peripheral.stateChanged.listen((e) {
       _log('peripheral state → ${e.state.name}');
       if (e.state == BluetoothLowEnergyState.poweredOn) {
@@ -137,12 +106,11 @@ class BleMeshTransport implements MeshTransport {
       }
     }));
 
-    // Request runtime authorization for both roles.
     try {
       await _central.authorize();
       await _peripheral.authorize();
     } catch (e) {
-      // authorize() throws on platforms that grant implicitly; that's fine.
+      // authorize() throws on platforms that grant implicitly.
       _log('authorize() threw (implicit-grant platform?): $e');
     }
 
@@ -150,8 +118,7 @@ class BleMeshTransport implements MeshTransport {
     _log('initial state: central=${_central.state.name} '
         'peripheral=${_peripheral.state.name} → ${_availability.name}');
 
-    // Handle the case where a manager was ALREADY powered on by the time we got
-    // here (the state listener above only covers future transitions).
+    // A manager may already be powered on; the listener only covers future transitions.
     if (_central.state == BluetoothLowEnergyState.poweredOn) {
       await _beginCentral();
     }
@@ -223,7 +190,7 @@ class BleMeshTransport implements MeshTransport {
     }
   }
 
-  // ---- Central role ---------------------------------------------------------
+  // Central role
 
   void _wireCentral() {
     _subs.add(_central.discovered.listen((e) => _onDiscovered(e)));
@@ -254,29 +221,20 @@ class BleMeshTransport implements MeshTransport {
 
   final Set<String> _connecting = {};
 
-  /// Per-peer link-failure backoff. A peer that advertises the service but can't
-  /// be linked — an iOS GATT cache returning the service with no characteristics,
-  /// a peripheral whose GATT isn't ready yet, or a distant peer that keeps timing
-  /// out — is otherwise re-discovered and re-connected every few seconds in a
-  /// tight loop that churns the radio and can starve a good link. We skip a peer
-  /// while it's cooling down and grow the cooldown exponentially per consecutive
-  /// failure, but still retry periodically so a transiently-unready peer links
-  /// once it recovers. Cleared the moment a link succeeds.
+  /// Exponential per-peer cooldown after link failures so unlinkable peers don't churn the radio.
   final Map<String, DateTime> _cooldownUntil = {};
   final Map<String, int> _failStreak = {};
 
   static const Duration _cooldownBase = Duration(seconds: 15);
-  // Capped at 1 minute (was 5): a peer that failed because its app was mid-
-  // restart or its GATT briefly unready shouldn't look dead for minutes.
+  // Kept short so a briefly unready peer doesn't look dead for long.
   static const Duration _cooldownMax = Duration(minutes: 1);
 
-  /// Upper bounds on a single connect / GATT-discovery step (iOS provides none).
+  /// Bounds on each connect / GATT-discovery step, since iOS provides none.
   static const Duration _connectTimeout = Duration(seconds: 10);
   static const Duration _discoverTimeout = Duration(seconds: 8);
 
   void _noteLinkFailure(String id) {
-    // Prune expired entries so rotating iOS peer UUIDs can't grow these maps
-    // without bound over a long session.
+    // Prune expired entries so rotating iOS peer UUIDs can't grow these maps unbounded.
     final now = DateTime.now();
     if (_cooldownUntil.length > 128) {
       _cooldownUntil.removeWhere((_, until) => now.isAfter(until));
@@ -305,17 +263,9 @@ class BleMeshTransport implements MeshTransport {
     _connecting.add(id);
     _log('discovered peer $id (rssi ${e.rssi}) — connecting');
     try {
-      // iOS CBCentralManager.connect() has NO built-in timeout — a peer that
-      // never completes the connection leaves the attempt pending forever,
-      // pinning the peer in `_connecting` so it's never retried (and, if it's
-      // the peer we actually want, never linked). Bound every step so a stuck
-      // attempt aborts, backs off, and frees the slot for the next scan hit.
+      // iOS connect() has no timeout, so bound it or a stuck peer is never retried.
       await _central.connect(e.peripheral).timeout(_connectTimeout);
-      // Best-effort MTU bump. iOS/Darwin THROWS UnsupportedError here (Core
-      // Bluetooth negotiates the MTU itself and exposes no manual request) —
-      // if that threw out of the connect flow it aborted every central link on
-      // iOS, which is exactly why the mesh never formed there. Swallow it: the
-      // OS-negotiated MTU is fine and oversized packets fragment anyway.
+      // Best-effort MTU bump; iOS throws UnsupportedError because Core Bluetooth negotiates MTU itself.
       try {
         await _central.requestMTU(e.peripheral, mtu: MeshConstants.desiredMtu);
       } catch (err) {
@@ -326,17 +276,14 @@ class BleMeshTransport implements MeshTransport {
           await _central.discoverGATT(e.peripheral).timeout(_discoverTimeout);
       var characteristic = _findCharacteristic(services);
       if (characteristic == null) {
-        // Retry once: iOS sometimes surfaces the service before its
-        // characteristics have populated on a freshly-opened connection.
+        // Retry once: iOS may surface the service before its characteristics populate.
         await Future<void>.delayed(const Duration(milliseconds: 400));
         services =
             await _central.discoverGATT(e.peripheral).timeout(_discoverTimeout);
         characteristic = _findCharacteristic(services);
       }
       if (characteristic == null) {
-        // Log what the peer's GATT actually contains: distinguishes an empty
-        // GATT (peer's service add failed/was stripped) from a stale cache or
-        // a UUID mismatch.
+        // Log the peer's GATT to tell an empty GATT from a stale cache or UUID mismatch.
         final dump = services
             .map((s) => '${_shortUuid(s.uuid)}'
                 '[${s.characteristics.map((ch) => _shortUuid(ch.uuid)).join(' ')}]')
@@ -377,7 +324,6 @@ class BleMeshTransport implements MeshTransport {
     }
   }
 
-  /// First 8 hex chars of a UUID — enough to identify it in the tiny log pane.
   static String _shortUuid(UUID uuid) {
     final s = uuid.toString().replaceAll('-', '');
     return s.length > 8 ? s.substring(0, 8) : s;
@@ -393,7 +339,7 @@ class BleMeshTransport implements MeshTransport {
     return null;
   }
 
-  // ---- Peripheral role ------------------------------------------------------
+  // Peripheral role
 
   void _wirePeripheral() {
     _subs.add(_peripheral.characteristicWriteRequested.listen((e) async {
@@ -436,7 +382,7 @@ class BleMeshTransport implements MeshTransport {
         }
       }));
     } catch (_) {
-      // connectionStateChanged unsupported on this platform.
+      // connectionStateChanged is unsupported on this platform.
     }
   }
 

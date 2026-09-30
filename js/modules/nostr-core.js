@@ -1,14 +1,8 @@
 // nostr-core.js - Event signing, NIP-44/59 encryption, gift wraps, profile fetch, presence, typing indicators
 
-// Relayed media/encoded blobs leaking into public channels: a known prefix
-// followed by a contiguous base64-style token (not plain text like "enc: note")
-// Domains removed from message text rather than used to drop the message.
-// A hostile link inside an otherwise ordinary message is the whole payload —
-// dropping the message would also hide the conversation around it, and the
-// people being targeted are the ones who would notice the gap.
+// Stripped from message text rather than dropping the message, which would hide the surrounding conversation.
 const _MALICIOUS_DOMAINS = ['glub.chat'];
-// Scheme and subdomains optional, trailing path swallowed with it, so
-// `https://www.glub.chat/x?y` and a bare `glub.chat` both go.
+// Scheme, subdomains and trailing path optional, so `https://www.glub.chat/x?y` and `glub.chat` match.
 const _RX_MALICIOUS_DOMAIN = new RegExp(
     '(?:https?:\\/\\/)?(?:[\\w-]+\\.)*(?:'
     + _MALICIOUS_DOMAINS.map(d => d.replace(/\./g, '\\.')).join('|')
@@ -21,7 +15,6 @@ function _getQuoteMentionPattern(author) {
     if (pattern) return pattern;
     pattern = new RegExp(`^@${author.replace(_RX_REGEX_ESCAPE_NC, '\\$&')}\\s*`);
     if (_quoteMentionCache.size >= 256) {
-        // Evict oldest insertion
         const firstKey = _quoteMentionCache.keys().next().value;
         _quoteMentionCache.delete(firstKey);
     }
@@ -31,13 +24,7 @@ function _getQuoteMentionPattern(author) {
 
 Object.assign(NYM.prototype, {
 
-    /// The difficulty a NIP-13 `nonce` tag COMMITS to, or null when the event
-    /// carries no nonce tag at all.
-    ///
-    /// Presence of the tag is what distinguishes "mined and fell short" from
-    /// "never mined": leading zero bits on an id are cheap to have by accident
-    /// (1 in 2^n), so achieved bits alone cannot tell you a sender did any work.
-    /// Messages from clients other than this one generally have no nonce tag.
+    // NIP-13 committed difficulty, or null without a nonce tag; achieved zero bits alone don't prove work.
     _powTargetFromEvent(event) {
         const tag = event && Array.isArray(event.tags)
             ? event.tags.find(t => Array.isArray(t) && t[0] === 'nonce')
@@ -47,7 +34,7 @@ Object.assign(NYM.prototype, {
         return Number.isFinite(target) && target > 0 ? target : 0;
     },
 
-    /// Leading zero BITS of an event id — the work actually proven (NIP-13).
+    // Leading zero bits of an event id (NIP-13).
     powBitsForId(id) {
         if (typeof id !== 'string' || !/^[0-9a-f]{64}$/i.test(id)) return 0;
         try {
@@ -67,16 +54,7 @@ Object.assign(NYM.prototype, {
         return bits;
     },
 
-    // NIP-13: Validate proof of work
-    /// NIP-13 difficulty an event has actually EARNED.
-    ///
-    /// The committed target in the nonce tag is what counts, not the leading
-    /// zeros alone. Work beyond the commitment earns no credit, which is the
-    /// point: a spammer mining a cheap 8-bit target produces a 16-bit id every
-    /// 256 events by luck, and counting zeros alone hands each of those a free
-    /// pass through a 16-bit floor. An event with no well-formed commitment
-    /// scores 0, and one whose id does not reach its own commitment scores 0
-    /// because the claim is void.
+    // NIP-13: only the committed target counts; no commitment, or an id short of it, scores 0.
     validatedPowBits(event) {
         const tags = Array.isArray(event && event.tags) ? event.tags : [];
         let committed = 0;
@@ -93,13 +71,7 @@ Object.assign(NYM.prototype, {
         return actual >= committed ? committed : 0;
     },
 
-    // Whether the app's own automatic anti-spam heuristics apply: the
-    // web-of-trust gate, the campaign detector, the content heuristics, the
-    // per-channel flood check and the gibberish-nym filter. Through the
-    // relay-pool proxy the pool and the spam engine already filter every
-    // channel message, so they run only in direct mode. Explicit user choices
-    // (blocks, keywords, filter packs, the PoW floor, the verified-app filter)
-    // apply in both modes.
+    // Automatic spam heuristics run only in direct mode (the pool already filters); user choices apply in both.
     _clientGatesActive() {
         return !(this.useRelayProxy && !this._poolFallbackActive);
     },
@@ -115,7 +87,7 @@ Object.assign(NYM.prototype, {
         return this._cryptoCall('minePow', [event, difficulty], () => this._minePowMainThread(event, difficulty));
     },
 
-    // Hashes for ~4ms, yields to the event loop, then resumes. Keeps 60fps.
+    // Hashes for ~4ms, yields to the event loop, then resumes.
     async _minePowMainThread(event, difficulty) {
         if (!difficulty || difficulty <= 0) return event;
         let nonceIdx = event.tags.findIndex(t => Array.isArray(t) && t[0] === 'nonce');
@@ -154,8 +126,7 @@ Object.assign(NYM.prototype, {
                 || this.isVerifiedDeveloper(this.pubkey);
 
             if (ownsRealProfile) {
-                // Merge changes into their existing profile so we don't lose fields
-                // the app doesn't manage (nip05, website, etc.)
+                // Merge into the existing profile so fields the app doesn't manage (nip05, website, etc.) survive.
                 let existing = {};
                 try {
                     const cached = this._cachedKind0Profile;
@@ -168,25 +139,22 @@ Object.assign(NYM.prototype, {
                 const avatarUrl = this.userAvatars.get(this.pubkey);
                 const bannerUrl = this.userBanners.get(this.pubkey);
 
-                // Overwrite fields the app manages, including clearing them
+                // Overwrite fields the app manages, including clearing them.
                 if (this.nym) {
                     existing.name = this.nym;
                     existing.display_name = this.nym;
                 }
                 if (bio !== undefined) existing.about = bio;
-                // Sync lightning address — clear from profile when user removes it
                 if (this.lightningAddress) {
                     existing.lud16 = this.lightningAddress;
                 } else {
                     delete existing.lud16;
                 }
-                // Sync avatar — clear from profile when user removes it
                 if (avatarUrl) {
                     existing.picture = avatarUrl;
                 } else if (!localStorage.getItem('nym_avatar_url')) {
                     delete existing.picture;
                 }
-                // Sync banner — clear from profile when user removes it
                 if (bannerUrl) {
                     existing.banner = bannerUrl;
                 } else if (!localStorage.getItem('nym_banner_url')) {
@@ -194,10 +162,8 @@ Object.assign(NYM.prototype, {
                 }
 
                 profileToSave = existing;
-                // Update cached profile so subsequent saves merge against latest state
                 this._cachedKind0Profile = { ...profileToSave };
             } else {
-                // Ephemeral mode - minimal profile
                 const bio = this.userBios.get(this.pubkey) || '';
                 profileToSave = {
                     name: this.nym,
@@ -206,13 +172,11 @@ Object.assign(NYM.prototype, {
                     about: bio || `Nymchat user`
                 };
 
-                // Include avatar picture if set
                 const avatarUrl = this.userAvatars.get(this.pubkey);
                 if (avatarUrl) {
                     profileToSave.picture = avatarUrl;
                 }
 
-                // Include banner if set
                 const bannerUrl = this.userBanners.get(this.pubkey);
                 if (bannerUrl) {
                     profileToSave.banner = bannerUrl;
@@ -236,10 +200,9 @@ Object.assign(NYM.prototype, {
 
             if (signedEvent) {
                 this.sendToRelay(["EVENT", signedEvent]);
-                // Also publish to DM relays so group chat members see updated profiles
+                // Also publish to DM relays so group chat members see updated profiles.
                 this.sendDMToRelays(["EVENT", signedEvent]);
-                // Mirror to D1 only when the user has real profile data — autogenerated
-                // throwaway identities are kept off the bucket.
+                // Autogenerated throwaway identities are kept off D1.
                 if (this._hasCustomProfileData()) {
                     this._saveProfileToD1(signedEvent);
                 }
@@ -248,8 +211,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Whether the user has entered real profile data worth mirroring to D1.
-    // Autogenerated identities (random nym, no avatar/banner/bio/lightning) stay off.
     _hasCustomProfileData() {
         const pk = this.pubkey;
         if (!pk) return false;
@@ -267,31 +228,24 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    // Upload the signed kind 0 profile event to D1 for fast public reads.
     async _saveProfileToD1(signedEvent) {
         if (!signedEvent || !this.pubkey) return;
-        // Remember which own-profile event we've pushed so duplicate relay
-        // receipts of the same kind 0 don't re-POST it.
+        // Dedup so duplicate relay receipts of the same kind 0 don't re-POST it.
         if (signedEvent.id) this._lastMirroredOwnProfileId = signedEvent.id;
         try {
             await this._storageApiRequest('profile-set', { event: signedEvent });
-            // Cache our own freshly saved profile so reads skip D1 until it changes.
             this._cacheD1Profile(this.pubkey, signedEvent);
         } catch (_) { }
     },
 
-    // Remember a profile already obtained for a pubkey so repeat lookups skip D1.
-    // A newer kind 0 (relay or D1) refreshes the entry; entries expire after the TTL.
+    // A newer kind 0 refreshes the entry; entries expire after the TTL.
     _cacheD1Profile(pubkey, event) {
         if (!pubkey) return;
         if (!this._d1ProfileCache) this._d1ProfileCache = new Map();
         this._d1ProfileCache.set(pubkey, { event: event || null, at: Date.now() });
     },
 
-    // Batch-read profiles from D1 and apply them through the kind 0 handler so the
-    // _kind0Ts dedup keeps live relay updates authoritative. Returns the set of
-    // pubkeys served from D1 (including cache hits) so callers can fall back to
-    // relays for the rest.
+    // Applied through the kind 0 handler so _kind0Ts keeps live relay updates authoritative; returns pubkeys served.
     async _fetchProfilesFromD1(pubkeys) {
         const found = new Set();
         const apiHost = this._getApiHost && this._getApiHost();
@@ -304,17 +258,13 @@ Object.assign(NYM.prototype, {
             if (!/^[0-9a-f]{64}$/.test(pk)) continue;
             const cached = this._d1ProfileCache.get(pk);
             if (cached && (now - cached.at) < ttl) {
-                // Already have this profile cached — no repeat D1 lookup needed.
                 found.add(pk);
                 continue;
             }
             toFetch.push(pk);
         }
         if (!toFetch.length) return found;
-        // profile-get caps a request at 100 pubkeys (storage.js). Slicing to the
-        // first 100 and dropping the rest meant a busy channel's overflow was
-        // never looked up at all — those authors kept the "nym" fallback until
-        // something happened to re-queue them. Walk the whole list in batches.
+        // profile-get caps a request at 100 pubkeys (storage.js), so walk the whole list in batches.
         const records = [];
         for (let start = 0; start < toFetch.length; start += 100) {
             const batch = toFetch.slice(start, start + 100);
@@ -328,13 +278,11 @@ Object.assign(NYM.prototype, {
                     records.push([pk, rec]);
                 });
             } catch (_) {
-                // Whatever this batch would have supplied stays "missing", so
-                // the caller's relay fallback picks it up.
+                // Leave this batch "missing" so the caller's relay fallback picks it up.
                 break;
             }
         }
-        // Verify in small slices off the stream callback so a 100-profile batch
-        // doesn't block the main thread
+        // Verify in small slices so a 100-profile batch doesn't block the main thread.
         for (let i = 0; i < records.length; i++) {
             const [pk, rec] = records[i];
             if (!(await this._verifyRelayEventAsync(rec.event))) continue;
@@ -353,7 +301,7 @@ Object.assign(NYM.prototype, {
     },
 
     async handleEvent(event) {
-        // Normalize against malicious or malformed relay payloads up front so downstream
+        // Normalize malicious or malformed relay payloads up front.
         if (!event || typeof event !== 'object' || typeof event.pubkey !== 'string') return;
         if (!Array.isArray(event.tags)) event.tags = [];
         if (typeof event.created_at !== 'number' || !Number.isFinite(event.created_at)) {
@@ -366,21 +314,20 @@ Object.assign(NYM.prototype, {
             event.content = this.stripMaliciousDomains(event.content);
         }
 
-        // Early deduplication for channel messages to prevent re-processing on reconnect
+        // Early dedup so reconnects don't re-process channel messages.
         if (event.kind === 20000 || event.kind === 23333) {
             if (this.processedMessageEventIds.has(event.id)) {
-                return; // Already processed this message
+                return;
             }
             this.processedMessageEventIds.add(event.id);
 
-            // Prune if too large (keep last 5000 event IDs)
             if (this.processedMessageEventIds.size > 5000) {
                 const idsArray = Array.from(this.processedMessageEventIds);
                 this.processedMessageEventIds = new Set(idsArray.slice(-4000));
             }
         }
 
-        // D1 backfill tags events with the pool's receipt time (stored_at, ms)
+        // D1 backfill tags events with the pool's receipt time (stored_at, ms).
         const _storedAtMs = (Number.isFinite(event.stored_at) && event.stored_at > 0)
             ? event.stored_at : 0;
         const _eventMs = event.created_at * 1000;
@@ -389,15 +336,12 @@ Object.assign(NYM.prototype, {
         const isHistorical = messageAge > 10000; // Older than 10 seconds
 
         if (event.pubkey === this.pubkey) {
-            // For channel messages (kind 20000 geohash, 23333 named)
             if (event.kind === 20000 || event.kind === 23333) {
-                // Check if message already displayed in DOM
                 if (document.querySelector(`[data-message-id="${event.id}"]`)) {
-                    return; // Already displayed optimistically, skip
+                    return;
                 }
             }
 
-            // For reactions (kind 7)
             if (event.kind === 7) {
                 const eTag = event.tags.find(t => t[0] === 'e');
                 const actionTag = event.tags.find(t => t[0] === 'action');
@@ -406,43 +350,37 @@ Object.assign(NYM.prototype, {
                     const messageId = eTag[1];
                     const emoji = event.content;
 
-                    // Check if we already have this reaction in state
                     if (this.reactions.has(messageId)) {
                         const messageReactions = this.reactions.get(messageId);
                         if (messageReactions.has(emoji) &&
                             messageReactions.get(emoji).has(this.pubkey)) {
-                            return; // Already added optimistically, skip
+                            return;
                         }
                     }
                 }
-                // Removal events always pass through to handleReaction
-                // where timestamp-based ordering resolves conflicts
+                // Removals pass through; handleReaction orders by timestamp.
             }
         }
 
 
         if (event.kind === 20000 || event.kind === 23333) {
-            // Validate PoW (NIP-13). Nymbot is exempt: it is a first-party
-            // identity that does not mine, so filtering it out would silently
-            // remove the bot's replies the moment a user turns the filter on.
+            // Nymbot is exempt: it doesn't mine, and filtering it would silently hide its replies.
             if (this.enablePow &&
                 !this.isVerifiedBot(event.pubkey) &&
                 !this.validatePow(event, this.powDifficulty)) {
                 return;
             }
 
-            // Geohash channels carry the channel in a `g` tag (kind 20000);
-            // named channels carry it in a `d` tag (kind 23333).
+            // Geohash channels use a `g` tag (kind 20000); named channels a `d` tag (kind 23333).
             const nymTag = event.tags.find(t => t[0] === 'n');
             const channelTagName = event.kind === 20000 ? 'g' : 'd';
             const channelTag = event.tags.find(t => t[0] === channelTagName);
 
-            // Strip any existing #suffix from n tag (bitchat includes it, Nymchat adds its own)
+            // Strip any existing #suffix (bitchat includes it; Nymchat adds its own).
             const rawNym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
             const nym = rawNym || this.getNymFromPubkey(event.pubkey);
             const geohash = channelTag ? this.sanitizeChannelName(channelTag[1]) : '';
 
-            // Drop events that aren't legitimate channel messages
             if (!geohash) {
                 return;
             }
@@ -451,13 +389,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Cross-transport dedup. A `['nymmesh', <id>]` tag marks this event
-            // as the Nostr replay of a message the Bluetooth mesh already
-            // carried — the sender's outbox publishing, once their internet
-            // came back, what the radio delivered while it was down. Anyone who
-            // was in radio range already holds it under the mesh copy's id, so
-            // registering the id here drops whichever copy arrives second: mesh
-            // first, or relay first and the radio copy arriving after.
+            // `['nymmesh', <id>]` marks a replay of a mesh message; registering the id drops the second copy.
             const meshReplayTag = event.tags.find(t => t[0] === 'nymmesh' && t[1]);
             if (meshReplayTag) {
                 if (!this._meshReplayIds) this._meshReplayIds = new Set();
@@ -469,32 +401,27 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Drop messages to blocked channels so they never get cached in the DOM
+            // Drop messages to blocked channels so they never get cached in the DOM.
             if (this.isChannelBlocked(geohash, geohash)) {
                 return;
             }
 
-            // Block impersonation: drop events using reserved nym "nymbot"
-            // unless they come from the verified bot pubkey
+            // Reserved nym "nymbot" is only allowed from the verified bot pubkey.
             if (nym.toLowerCase() === 'nymbot' && !this.isVerifiedBot(event.pubkey)) {
                 return;
             }
 
-            // Drop spam-bot events. The client's own automatic heuristics run
-            // only in direct mode: through the relay-pool proxy the pool and
-            // the spam engine already filter every channel message.
+            // Automatic heuristics run only in direct mode; the relay-pool proxy already filters.
             const clientGates = this._clientGatesActive();
             if (clientGates && event.pubkey !== this.pubkey && !this.isFriend?.(event.pubkey) &&
                 this.isGibberishNym(nym)) {
                 return;
             }
 
-            // Track discovered geohash for potential batch loading
             if (geohash && !this.discoveredGeohashes.has(geohash)) {
                 this.discoveredGeohashes.add(geohash);
             }
 
-            // Check if user is blocked or message/nickname contains blocked keywords
             if (this.blockedUsers.has(event.pubkey) || this.hasBlockedKeyword(event.content, nym, event.pubkey)) {
                 return;
             }
@@ -516,8 +443,7 @@ Object.assign(NYM.prototype, {
 
             if (event.pubkey !== this.pubkey) {
                 this._trackPubkeyMessage(event.pubkey, event.id);
-                // NIP-13 PoW that meets the nymchat floor is treated as
-                // self-attestation that the sender is using a nymchat client.
+                // NIP-13 PoW meeting the nymchat floor counts as self-attestation of a nymchat client.
                 if (this.nymchatPowFloor > 0 && this.validatePow(event, this.nymchatPowFloor)) {
                     this._markNymchatPubkey(event.pubkey);
                     if (typeof this._observeNymchatPubkey === 'function') {
@@ -526,7 +452,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Check flooding FOR THIS CHANNEL (only for non-historical messages)
             if (clientGates && !isHistorical && this.isFlooding(event.pubkey, geohash)) {
                 return;
             }
@@ -542,12 +467,10 @@ Object.assign(NYM.prototype, {
                 if (verdict.flood || verdict.mute) return;
             }
 
-            // Only track flood for new messages in this channel
             if (clientGates && !isHistorical) {
                 this.trackMessage(event.pubkey, geohash, isHistorical, event.content);
             }
 
-            // Track notification state for this channel
             const channelKey = geohash;
             if (!this.channelNotificationTracking) {
                 this.channelNotificationTracking = new Map();
@@ -557,33 +480,25 @@ Object.assign(NYM.prototype, {
             }
             const alreadyNotified = this.channelNotificationTracking.get(channelKey).has(event.id);
 
-            // Check for BRB auto-response (UNIVERSAL) - only for NEW messages
+            // BRB auto-response, only for new messages.
             if (!isHistorical && this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
-                // Check if we haven't already responded to this user in this session
                 const responseKey = `brb_universal_${this.pubkey}_${nym}`;
                 if (!sessionStorage.getItem(responseKey)) {
                     sessionStorage.setItem(responseKey, '1');
 
-                    // Send auto-response to the same channel where mentioned
                     const response = `@${nym} [Auto-Reply] ${this.awayMessages.get(this.pubkey)}`;
                     await this.publishMessage(response, geohash, geohash);
                 }
             }
 
-            // Add channel if it's new (and not blocked)
             if (geohash && !this.channels.has(geohash) && !this.isChannelBlocked(geohash, geohash)) {
                 this.addChannelToList(geohash, geohash);
             }
 
-            // Check if this is a P2P file offer
             const fileOffer = this.parseFileOfferTag(event.tags, event.pubkey);
 
-            // Fetch kind 0 profile for channel message senders we haven't seen
             if (event.pubkey !== this.pubkey) {
-                // Timestamp only, for the same reason as fetchProfileDirect: an
-                // avatar-less sender otherwise queued a profile fetch on EVERY
-                // message they posted, which in a busy channel is a fetch per
-                // message per such user.
+                // Timestamp only, so avatar-less senders don't queue a profile fetch on every message.
                 const lastFetch = this.profileFetchedAt.get(event.pubkey) || 0;
                 if (Date.now() - lastFetch > 5 * 60 * 1000) {
                     this.profileFetchedAt.set(event.pubkey, Date.now());
@@ -591,7 +506,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Check if this is an edit of a previous message (has 'edit' tag)
             const editTag = event.tags.find(t => t[0] === 'edit');
             if (editTag && editTag[1]) {
                 const originalId = editTag[1];
@@ -602,7 +516,7 @@ Object.assign(NYM.prototype, {
             const eventCreatedAt = Math.floor(event.created_at) || 0;
             const nowSec = Math.floor(Date.now() / 1000);
 
-            // Guard against clock skew
+            // Guard against clock skew.
             let correctedCreatedAt = eventCreatedAt;
             if (eventCreatedAt > nowSec) {
                 const candidateMs = _storedAtMs
@@ -611,27 +525,22 @@ Object.assign(NYM.prototype, {
                 correctedCreatedAt = Math.floor(this._stableClampMs(event.id, candidateMs) / 1000);
             }
 
-            // Something already outside the 24-hour window has landed; ask for
-            // the sweep rather than waiting out its interval.
+            // Something already outside the 24-hour window landed; request the sweep now.
             if (typeof this._channelWindowFloorSec === 'function' &&
                 correctedCreatedAt < this._channelWindowFloorSec() &&
                 typeof this._scheduleChannelWindowPrune === 'function') {
                 this._scheduleChannelWindowPrune();
             }
 
-            // Reconstruct quote display from nymquote tag (NYM-specific quote reply)
-            // On the wire, quotes are sent as @mention + nymquote tag so other clients
-            // see a normal mention; NYM reconstructs the > @author: blockquote format
+            // Quotes travel as @mention + nymquote tag so other clients see a normal mention; rebuild the blockquote here.
             let displayContent = event.content;
             const nymquoteTag = event.tags.find(t => t[0] === 'nymquote');
             if (nymquoteTag && nymquoteTag[1] && nymquoteTag[2]) {
                 const qAuthor = nymquoteTag[1];
                 const qText = nymquoteTag[2];
-                // Strip the @author mention prefix from event content to get user's reply
                 const mentionPattern = _getQuoteMentionPattern(qAuthor);
                 const userMessage = event.content.replace(mentionPattern, '').trim();
-                // Reconstruct > @author: blockquote format for NYM display
-                // Strip nested quotes — only show the last message being quoted
+                // Show only the last quoted message (strip nested quotes).
                 const strippedQText = qText.split('\n').filter(line => !line.startsWith('>')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
                 const textLines = strippedQText.split('\n');
                 const quoteLine = `> @${qAuthor}: ${textLines[0]}` +
@@ -639,10 +548,10 @@ Object.assign(NYM.prototype, {
                 displayContent = userMessage ? `${quoteLine}\n\n${userMessage}` : quoteLine;
             }
 
-            // Register any NIP-30 custom emoji declared on this message
+            // NIP-30 custom emoji.
             this.ingestEmojiTags(event.tags);
 
-            // NIP-92: register Blossom mirror URLs for media in this message
+            // NIP-92 Blossom mirror URLs.
             if (typeof this.ingestImetaTags === 'function') {
                 this.ingestImetaTags(event.tags);
             }
@@ -664,52 +573,38 @@ Object.assign(NYM.prototype, {
                 isFileOffer: !!fileOffer,
                 fileOffer: fileOffer,
                 isBot: this.isVerifiedBot(event.pubkey),
-                // NIP-10 marked root reference — groups this message under its
-                // thread root when threads are enabled (threads.js).
+                // NIP-10 marked root reference (threads.js).
                 threadRoot: (typeof this.threadRootFromChannelTags === 'function')
                     ? this.threadRootFromChannelTags(event.tags) : null,
-                // NIP-13 target the sender committed to, or null when the event
-                // carries no nonce tag (i.e. it did not come from this app).
-                // The work actually PROVEN is recomputed from the id on demand.
+                // Committed NIP-13 target, or null without a nonce tag; proven work is recomputed from the id.
                 powTarget: this._powTargetFromEvent(event)
             };
 
-            // Don't display duplicate of own messages
             if (!this.isDuplicateMessage(message)) {
                 if (message.isBot && typeof this._setBotChannelThinking === 'function') {
                     this._setBotChannelThinking(false);
                 }
                 this.displayMessage(message);
-                // Skip presence for spam-gated senders
                 if (!message._spamGated) {
                     this.updateUserPresence(nym, event.pubkey, message.channel, geohash, event.created_at);
                 }
 
-                // Notification check
                 const _notifStorageKey = geohash ? `#${geohash}` : message.channel;
                 const _notifCurrentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-                // A reply collapsed inside a thread is off screen even while its
-                // channel is open, so it must not count as "already seen" —
-                // otherwise a thread @mention/quote-reply never reached the bell.
+                // Collapsed thread replies are off screen, so they must not count as already seen.
                 const _threadHidden = typeof this._threadReplyHidden === 'function' &&
                     this._threadReplyHidden(message);
                 const _isViewingChannel = !this.inPMMode &&
                     _notifStorageKey === _notifCurrentKey && !_threadHidden;
 
-                // A channel notifies on an @mention — plus, in a thread, on any
-                // reply to a thread the user started (`_threadReplyElevated`),
-                // which is the only way a plain "someone replied to you" ever
-                // reaches them here. `threadNotifyMentionsOnly` narrows a thread
-                // reply back to the mention half.
+                // Channels notify on @mention, plus replies in threads the user started (unless threadNotifyMentionsOnly).
                 const _threadElevated = typeof this._threadReplyElevated === 'function' &&
                     this._threadReplyElevated(message);
                 const _threadSuppressed = typeof this._threadReplySuppressed === 'function' &&
                     this._threadReplySuppressed(message);
                 const _channelAddressesMe = !_threadSuppressed &&
                     (this.isMentioned(message.content) || _threadElevated);
-                // The bell footer says WHERE it came from; a thread reply names
-                // the thread as well as the channel, so "in a thread in #abc"
-                // rather than a bare "#abc" the user then hunts through.
+                // Name the thread as well as the channel in the bell footer.
                 const _notifInThread = !!(message.threadRoot &&
                     typeof this.threadsEnabled === 'function' && this.threadsEnabled());
                 const _channelNotifInfo = () => ({
@@ -731,15 +626,8 @@ Object.assign(NYM.prototype, {
                     (document.hidden || !_isViewingChannel);
 
                 if (shouldNotify) {
-                    // Mark as notified
                     this.channelNotificationTracking.get(channelKey).add(event.id);
-                    // `message._ms`, not the raw created_at: the message list
-                    // renders the skew-corrected time (`correctedCreatedAt`)
-                    // and the bell must agree with it. A future created_at —
-                    // a fast sender clock, or a pool re-stamping cached
-                    // history on replay — otherwise gave the bell entry a
-                    // timestamp ahead of every real one, pinning it to the
-                    // top of a modal that sorts newest-first.
+                    // `message._ms` (skew-corrected) so the bell agrees with the list and future stamps don't pin to the top.
                     this.showNotification(nym, message.content, _channelNotifInfo(),
                         message._ms || message.timestamp.getTime());
                 }
@@ -754,12 +642,10 @@ Object.assign(NYM.prototype, {
             const dTag = event.tags.find(t => t[0] === 'd');
             if (!dTag) return;
 
-            // Settings transfers (from another user to us)
             if (dTag[1]?.startsWith('nym-settings-transfer-') && event.pubkey !== this.pubkey) {
                 this.handleSettingsTransferEvent(event);
             }
 
-            // Presence/away status
             const tTag = event.tags?.find(t => t[0] === 't');
             if (tTag && tTag[1] === 'nym-presence') {
                 this.handlePresenceEvent(event);
@@ -777,31 +663,28 @@ Object.assign(NYM.prototype, {
         } else if (event.kind === 24421) {
             this.handleChannelReadReceipt(event);
         } else if (event.kind === 7) {
-            // Handle reactions (NIP-25)
+            // NIP-25.
             this.handleReaction(event);
         } else if (event.kind === 5) {
-            // Handle deletion events (NIP-09)
+            // NIP-09.
             this.handleDeletionEvent(event);
         } else if (event.kind === 9735) {
             this.handleZapReceipt(event);
         } else if (event.kind === 1059) {
             this._enqueueGiftWrapDM(event);
         } else if (event.kind === 10000) {
-            // Handle mute list of users/keywords
             this.handleMuteList(event);
         } else if (event.kind === 30030) {
-            // NIP-30 custom emoji pack
+            // NIP-30 custom emoji pack.
             this.handleEmojiPackEvent(event);
         } else if (event.kind === 10030) {
-            // NIP-30 user emoji list
+            // NIP-30 user emoji list.
             this.handleUserEmojiListEvent(event);
         } else if (event.kind === 0) {
-            // Handle profile events (kind 0) for lightning addresses and avatars
             try {
                 const profile = JSON.parse(event.content);
                 const pubkey = event.pubkey;
 
-                // Skip stale kind 0 events
                 const eventTs = (typeof event.created_at === 'number') ? event.created_at : 0;
                 if (!this._kind0Ts) this._kind0Ts = new Map();
                 const lastTs = this._kind0Ts.get(pubkey) || 0;
@@ -811,28 +694,22 @@ Object.assign(NYM.prototype, {
                 }
                 if (eventTs > lastTs) this._kind0Ts.set(pubkey, eventTs);
 
-                // Keep the D1 read cache fresh so a newer profile refreshes the
-                // entry instead of forcing another bucket lookup.
+                // Keep the D1 read cache fresh.
                 this._cacheD1Profile(pubkey, event);
 
-                // Cache the full kind 0 profile for own user so saveToNostrProfile
-                // can merge changes without losing fields the app doesn't manage
+                // Cache our own full kind 0 so saveToNostrProfile can merge without losing unmanaged fields.
                 if (pubkey === this.pubkey) {
                     this._cachedKind0Profile = profile;
                     if (eventTs > (this._lastKind0Ts || 0)) {
                         this._lastKind0Ts = eventTs;
                     }
-                    // Mirror the authoritative signed profile to D1 so the D1-first
-                    // lookup stays in sync with the user's real Nostr profile. Gated
-                    // by _hasCustomProfileData (logged-in/developer identities qualify;
-                    // autogenerated throwaways don't) and deduped by event id.
+                    // Mirror our signed profile to D1; gated by _hasCustomProfileData and deduped by event id.
                     if (event.id && event.sig && event.id !== this._lastMirroredOwnProfileId
                         && this._hasCustomProfileData()) {
                         this._saveProfileToD1(event);
                     }
                 }
 
-                // Store lightning address if present
                 if (profile.lud16 || profile.lud06) {
                     const lnAddress = profile.lud16 || profile.lud06;
                     this.userLightningAddresses.set(pubkey, lnAddress);
@@ -841,7 +718,6 @@ Object.assign(NYM.prototype, {
                     this.userLightningAddresses.delete(pubkey);
                 }
 
-                // Extract avatar from profile picture field
                 const pickPictureUrl = (p) => {
                     const candidates = [p && p.picture, p && p.image, p && p.avatar];
                     for (const c of candidates) {
@@ -874,7 +750,6 @@ Object.assign(NYM.prototype, {
                     this.updateRenderedAvatars(pubkey, this.getAvatarUrl(pubkey));
                 }
 
-                // Extract banner image
                 if (profile.banner) {
                     const prevBanner = this.userBanners.get(pubkey);
                     if (prevBanner !== profile.banner) {
@@ -897,7 +772,6 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                // Extract bio/about
                 if (typeof profile.about === 'string') {
                     const bio = profile.about.substring(0, 150);
                     this.userBios.set(pubkey, bio);
@@ -906,15 +780,12 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                // Update nym from kind 0 profile — always accept newer profile data
                 const profileName = [profile.name, profile.username, profile.display_name]
                     .find(v => typeof v === 'string' && v.length > 0);
                 if (profileName) {
                     const truncatedName = profileName.substring(0, 20);
                     const existingUser = this.users.get(pubkey);
-                    // Always update: the kind 0 event is the authoritative source
-                    // for a user's display name. Previous code only updated when
-                    // nym was missing or "nym", causing stale nicknames.
+                    // The kind 0 event is authoritative for display names.
                     if (!existingUser) {
                         this.users.set(pubkey, {
                             nym: truncatedName,
@@ -931,12 +802,10 @@ Object.assign(NYM.prototype, {
                     if (typeof this.updateStoredNymsForPubkey === 'function') {
                         this.updateStoredNymsForPubkey(pubkey, truncatedName);
                     }
-                    // Update PM sidebar and header if this user has a PM conversation
                     this.updatePMNicknameFromProfile(pubkey, truncatedName);
                     if (pubkey === this.pubkey) {
                         this._updateOwnSidebarProfile();
                     } else if (typeof this.updateGroupMembershipDisplay === 'function') {
-                        // Refresh group sidebar entries that include this member
                         this.updateGroupMembershipDisplay(pubkey);
                     }
                     if (typeof this.updateNotificationModalProfile === 'function') {
@@ -948,32 +817,21 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                // Repaint a profile card that is already open for this user.
-                // Every field on it except the avatar is written once, at open,
-                // from whatever was known then, so without this a profile
-                // arriving a moment after the card opened changed nothing on it
-                // until it was closed and reopened. Placed after ALL of the
-                // fields above are stored (nym included) so one call refreshes
-                // the whole card from the store.
+                // Placed after all fields are stored so one call refreshes the whole open card.
                 if (typeof this.updateRenderedProfileCard === 'function') {
                     this.updateRenderedProfileCard(pubkey);
                 }
 
-                // Resolve any pending fetchProfileDirect calls for this pubkey
                 this._resolveProfileCallbacks(pubkey);
             } catch (e) {
-                // Ignore profile parse errors
             }
         } else if (event.kind === this.P2P_SIGNALING_KIND) {
-            // Handle P2P signaling (WebRTC SDP/ICE)
             this.handleP2PSignalingEvent(event);
         } else if (event.kind === this.P2P_FILE_STATUS_KIND) {
-            // Handle P2P file status events (unseeded notifications)
             this.handleP2PFileStatusEvent(event);
         }
     },
 
-    // Does a token look like a randomly-generated alphanumeric string
     _looksLikeRandomToken(token) {
         if (!token || token.length < 8) return false;
         if (!/^[A-Za-z0-9]+$/.test(token)) return false;
@@ -1048,7 +906,7 @@ Object.assign(NYM.prototype, {
         const vowelCount = (lower.match(/[aeiou]/g) || []).length;
         const vowelRatio = vowelCount / token.length;
         if (vowelRatio <= 0.2) score += 1;
-        // 'q' in English is almost always followed by 'u'; violating that is a strong tell
+        // English 'q' is almost always followed by 'u'.
         if (/q(?!u)/i.test(token)) score += 2;
         let rare = 0;
         for (const bg of this._RARE_BIGRAMS) {
@@ -1102,38 +960,32 @@ Object.assign(NYM.prototype, {
         const letterCount = (trimmed.match(/[A-Za-z]/g) || []).length;
         if (trimmed.length >= 8 && letterCount > 0 && digitCount / trimmed.length > 0.5) score += 1;
 
-        // Heavy emoji + text floods (a lone emoji is normal chat and never trips this)
+        // A lone emoji is normal chat and never trips this.
         const emojiMatches = trimmed.match(/\p{Extended_Pictographic}/gu) || [];
         if (emojiMatches.length >= 4 && letterCount > 0) score += 1;
 
         return score;
     },
 
-    // Relayed media/encoded blobs we never render: drop them outright
+    // Relayed media/encoded blobs we never render: drop them outright.
     hasBlockedContentPrefix(content) {
         if (typeof content !== 'string') return false;
         return _RX_BLOCKED_CONTENT_BLOB.test(content.trimStart());
     },
 
-    /// Removes known-malicious domains from message text, leaving the rest of
-    /// the message intact.
     stripMaliciousDomains(content) {
         if (typeof content !== 'string' || !content) return content;
         _RX_MALICIOUS_DOMAIN.lastIndex = 0;
         if (!_RX_MALICIOUS_DOMAIN.test(content)) return content;
         _RX_MALICIOUS_DOMAIN.lastIndex = 0;
-        // Collapse the gap the link leaves behind so the sentence still reads.
+        // Collapse the gap the link leaves behind.
         return content.replace(_RX_MALICIOUS_DOMAIN, '')
             .replace(/[ \t]{2,}/g, ' ')
             .replace(/[ \t]+([.,!?;:])/g, '$1')
             .trim();
     },
 
-    /// Whether an event was published by the glub.chat client, which exists to
-    /// spam these channels. Matched on the tags rather than the content: the
-    /// client stamps itself on every event it sends, and a tag survives any
-    /// rewording of the payload. The version is deliberately not matched —
-    /// pinning `339ddb0` would last exactly until their next build.
+    // Matched on tags, which survive rewording; the version is deliberately not matched.
     isGlubClientEvent(event) {
         if (!event || !Array.isArray(event.tags)) return false;
         for (const t of event.tags) {
@@ -1187,8 +1039,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Score against the user's own text only: @mentions (whose digit-heavy
-        // #suffix would otherwise trip the heuristics) and quoted lines don't count.
+        // Score the user's own text only: @mention suffixes and quoted lines would skew the heuristics.
         const scrubbed = trimmed
             .split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
             .replace(/@\S+/g, ' ')
@@ -1199,7 +1050,6 @@ Object.assign(NYM.prototype, {
         return this._spamScore(scrubbed) >= 3;
     },
 
-    // Detects a randomized / spam-bot nym
     isGibberishNym(nym) {
         if (this.spamFilterEnabled === false) return false;
         if (this.spamFilterAggressive === false) return false;
@@ -1212,57 +1062,50 @@ Object.assign(NYM.prototype, {
     handleMuteList(event) {
         if (event.pubkey !== this.pubkey || event.kind !== 10000) return;
 
-        // Extract blocked users from 'p' tags
         const mutedPubkeys = event.tags
             .filter(tag => tag[0] === 'p' && tag[1])
             .map(tag => tag[1]);
 
         if (mutedPubkeys.length > 0) {
-            // Replace (not merge) with synced blocked users
+            // Replace (not merge) with synced blocked users.
             this.blockedUsers = new Set(mutedPubkeys);
             this.saveBlockedUsers();
             this.updateBlockedList();
             this.updateUserList();
 
-            // Hide messages from blocked users after mute list loads
             mutedPubkeys.forEach(pubkey => {
                 this.hideMessagesFromBlockedUser(pubkey);
             });
         }
 
-        // Extract blocked keywords from 'word' tags
         const mutedWords = event.tags
             .filter(tag => tag[0] === 'word' && tag[1])
             .map(tag => tag[1]);
 
         if (mutedWords.length > 0) {
-            // Replace (not merge) with synced keywords
+            // Replace (not merge) with synced keywords.
             this.blockedKeywords = new Set(mutedWords);
             this.saveBlockedKeywords();
             this.updateKeywordList();
 
-            // Hide messages with blocked keywords after mute list loads
             this.hideMessagesWithBlockedKeywords();
         }
 
-        // Re-render current view to retroactively apply blocks to messages
-        // that loaded before the mute list synced
+        // Re-render so blocks apply to messages that loaded before the mute list synced.
         if (mutedPubkeys.length > 0 || mutedWords.length > 0) {
             this.rerenderCurrentView();
         }
     },
 
     randomNow() {
-        // Randomize timestamp by ±2 hours for NIP-59 metadata protection
-        // Previously ±2 days, but bitchat only looks back 24 hours for DMs
-        // so large offsets caused messages to fall outside its subscription window
+        // ±2 hours NIP-59 jitter; bitchat only looks back 24 hours for DMs.
         const TWO_HOURS = 2 * 60 * 60;
         // CSPRNG so the privacy jitter can't be predicted/stripped by an observer.
         const r = crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
         return Math.round(Date.now() / 1000 - r * TWO_HOURS);
     },
 
-    // Generate UUID v4 (used only by Bitchat's TLV encoder, which parses UUID format)
+    // Used only by Bitchat's TLV encoder, which parses UUID format.
     generateUUID() {
         return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
             const r = Math.random() * 16 | 0;
@@ -1280,15 +1123,10 @@ Object.assign(NYM.prototype, {
         return s;
     },
 
-    // Encode message in Bitchat's bitchat1: format
-    // Bitchat caps a TLV value at 255 bytes: `PrivateMessagePacket` writes a
-    // 1-byte length and `encode()` refuses anything longer, so long text is
-    // sent as several messages. Same constant the mesh path uses.
+    // Bitchat caps a TLV value at 255 bytes (1-byte length), so long text is sent as several messages.
     BITCHAT_MAX_CONTENT_BYTES: 255,
 
-    /// Splits `content` into pieces that each fit one bitchat packet, never
-    /// cutting a multi-byte character in half. Mirrors the mesh `_chunk`
-    /// (mesh-service.js), which has always done this correctly.
+    // Never cuts a multi-byte character; mirrors the mesh `_chunk` (mesh-service.js).
     chunkBitchatContent(content) {
         const bytes = new TextEncoder().encode(content);
         const max = this.BITCHAT_MAX_CONTENT_BYTES;
@@ -1313,14 +1151,7 @@ Object.assign(NYM.prototype, {
 
         const tlvParts = [];
 
-        // ONE-BYTE LENGTHS ONLY, because that is the whole of bitchat's TLV.
-        //
-        // This used to set the high bit of the type byte and follow it with a
-        // 2-byte length for values over 255. That convention does not exist in
-        // bitchat: `PrivateMessagePacket.decode` reads a 1-byte length, meets
-        // type 0x81, falls into its unknown-type branch and discards the ENTIRE
-        // packet. Every message over 255 bytes we ever sent a bitchat user was
-        // dropped on arrival. Callers chunk with chunkBitchatContent instead.
+        // One-byte lengths only: bitchat's decoder discards packets with any other length encoding.
         const pushTlvField = (type, valueBytes) => {
             if (valueBytes.length > 0xFF) {
                 throw new Error('bitchat TLV value over 255 bytes — chunk first');
@@ -1342,51 +1173,49 @@ Object.assign(NYM.prototype, {
 
         const parts = [];
 
-        // Header bytes 0-2
+        // Header bytes 0-2.
         parts.push(0x01); // version 1
         parts.push(0x11); // type = NOISE_ENCRYPTED
         parts.push(0x07); // TTL 7
 
-        // Timestamp bytes 3-10 (8 bytes, big endian milliseconds)
+        // Timestamp bytes 3-10 (8 bytes, big-endian milliseconds).
         const ts = BigInt(now);
         for (let i = 7; i >= 0; i--) {
             parts.push(Number((ts >> BigInt(i * 8)) & 0xFFn));
         }
 
-        // Flags byte 11
-        // 0x01 = HAS_RECIPIENT, 0x02 = HAS_SIGNATURE, 0x04 = IS_COMPRESSED
+        // Flags byte 11: 0x01 = HAS_RECIPIENT, 0x02 = HAS_SIGNATURE, 0x04 = IS_COMPRESSED.
         const hasRecipient = !!recipientPubkey;
         const flags = hasRecipient ? 0x01 : 0x00;
         parts.push(flags);
 
-        // Payload length bytes 12-13 (2 bytes, big-endian)
+        // Payload length bytes 12-13 (2 bytes, big-endian).
         const payloadLen = noisePayload.length;
         parts.push((payloadLen >> 8) & 0xFF);
         parts.push(payloadLen & 0xFF);
 
-        // Sender ID bytes 14-21 (first 8 bytes of our pubkey)
+        // Sender ID bytes 14-21 (first 8 bytes of our pubkey).
         for (let i = 0; i < 8; i++) {
             parts.push(parseInt(this.pubkey.substring(i * 2, i * 2 + 2), 16));
         }
 
-        // Recipient ID bytes 22-29 (if HAS_RECIPIENT flag set)
+        // Recipient ID bytes 22-29 (if HAS_RECIPIENT flag set).
         if (hasRecipient) {
             for (let i = 0; i < 8; i++) {
                 parts.push(parseInt(recipientPubkey.substring(i * 2, i * 2 + 2), 16));
             }
         }
 
-        // Payload (NoisePayload)
         for (const b of noisePayload) parts.push(b);
 
-        // Pad to next block size (256, 512, 1024, 2048) with 0xBE
+        // Pad to the next block size (256, 512, 1024, 2048) with 0xBE.
         const blockSizes = [256, 512, 1024, 2048];
         let targetSize = blockSizes.find(s => s >= parts.length) || 2048;
         while (parts.length < targetSize) {
             parts.push(0xBE);
         }
 
-        // Convert to base64url
+        // base64url.
         const bytes = new Uint8Array(parts);
         const base64 = btoa(String.fromCharCode(...bytes));
         const base64url = base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -1394,17 +1223,15 @@ Object.assign(NYM.prototype, {
         return { content: 'bitchat1:' + base64url, messageId: messageID };
     },
 
-    // Encode a Bitchat receipt (DELIVERED=0x03 or READ_RECEIPT=0x02)
+    // DELIVERED=0x03 or READ_RECEIPT=0x02.
     encodeBitchatReceipt(messageId, receiptType, recipientPubkey) {
         const messageIdBytes = new TextEncoder().encode(messageId);
 
-        // NoisePayload for receipts: [type][raw messageId] (no TLV wrapper!)
-        // Bitchat sends receipts with just the UUID string directly
+        // Receipts carry [type][raw messageId] with no TLV wrapper, as Bitchat sends them.
         const noisePayload = [];
         noisePayload.push(receiptType); // 0x02=READ_RECEIPT, 0x03=DELIVERED
         for (const b of messageIdBytes) noisePayload.push(b);
 
-        // BitchatPacket header
         const parts = [];
         const now = Date.now();
 
@@ -1412,34 +1239,29 @@ Object.assign(NYM.prototype, {
         parts.push(0x11); // type = NOISE_ENCRYPTED
         parts.push(0x07); // TTL
 
-        // Timestamp (8 bytes big-endian)
+        // Timestamp (8 bytes big-endian).
         const ts = BigInt(now);
         for (let i = 7; i >= 0; i--) {
             parts.push(Number((ts >> BigInt(i * 8)) & 0xFFn));
         }
 
-        // Flags (include recipient)
         parts.push(0x01); // HAS_RECIPIENT
 
-        // Payload length
         const payloadLen = noisePayload.length;
         parts.push((payloadLen >> 8) & 0xFF);
         parts.push(payloadLen & 0xFF);
 
-        // Sender ID (first 8 bytes of our pubkey)
+        // Sender ID (first 8 bytes of our pubkey).
         for (let i = 0; i < 8; i++) {
             parts.push(parseInt(this.pubkey.substring(i * 2, i * 2 + 2), 16));
         }
 
-        // Recipient ID
         for (let i = 0; i < 8; i++) {
             parts.push(parseInt(recipientPubkey.substring(i * 2, i * 2 + 2), 16));
         }
 
-        // Payload
         for (const b of noisePayload) parts.push(b);
 
-        // Pad to block size
         const blockSizes = [256, 512, 1024, 2048];
         let targetSize = blockSizes.find(s => s >= parts.length) || 2048;
         while (parts.length < targetSize) {
@@ -1453,8 +1275,6 @@ Object.assign(NYM.prototype, {
         return 'bitchat1:' + base64url;
     },
 
-    // Send a receipt (DELIVERED or READ) back to a Bitchat user
-    // receiptType: 0x02 = READ_RECEIPT, 0x03 = DELIVERED
     async sendBitchatReceipt(messageId, receiptType, recipientPubkey) {
         if (!this.privkey || !this.bitchatUsers.has(recipientPubkey)) return;
 
@@ -1477,10 +1297,7 @@ Object.assign(NYM.prototype, {
         this.sendDMToRelays(['EVENT', wrapped]);
     },
 
-    // Nymchat receipt types: 'delivered' or 'read'
-    // Uses NIP-17 gift wrap with a special rumor format for receipts
-    // Format: rumor with kind 69420 (custom), content empty, tags include ['x', messageId] and ['receipt', type]
-    // Using kind 69420 instead of 14 to avoid showing blank DMs in other NIP-17 clients
+    // NIP-17 rumor of custom kind 69420 (not 14, so other clients show no blank DMs) with x and receipt tags.
     async sendNymReceipt(messageId, receiptType, recipientPubkey, context = 'pm', groupId = null) {
         if (!this._canSendGiftWraps()) return;
         if (context !== 'group' && this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(recipientPubkey)) return;
@@ -1500,13 +1317,11 @@ Object.assign(NYM.prototype, {
                 ...messageIds.map(id => ['x', id]),
                 ['receipt', receiptType]  // 'delivered' or 'read'
             ],
-            content: '',  // Empty content for receipts
+            content: '',
             pubkey: this.pubkey
         };
 
-        // Group receipts encrypt to the recipient's ephemeral key (via groupId)
-        // so they don't expose the real-pubkey membership set; PM receipts stay
-        // addressed to the real pubkey.
+        // Group receipts go to the ephemeral key so they don't expose the real-pubkey membership set.
         if (context === 'group' && groupId) {
             await this._sendGiftWrapsAsync([recipientPubkey], rumor, null, groupId);
             return;
@@ -1527,13 +1342,11 @@ Object.assign(NYM.prototype, {
             : this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, null);
     },
 
-    // Check if a rumor is a typing indicator
     isTypingIndicator(rumor) {
         if (!rumor || !rumor.tags) return false;
         return rumor.tags.some(t => Array.isArray(t) && t[0] === 'typing');
     },
 
-    // Parse typing indicator rumor
     parseTypingIndicator(rumor) {
         if (!rumor || !rumor.tags) return null;
         let status = null;
@@ -1550,7 +1363,6 @@ Object.assign(NYM.prototype, {
         return status ? { status, groupId, ttl: ttl > 0 ? ttl : 0, pubkey: rumor.pubkey } : null;
     },
 
-    // Called when input changes in PM/group mode to signal typing
     handleTypingSignal() {
         if (!this._canSendGiftWraps() || !this.inPMMode) return;
         const context = this.currentGroup ? 'group' : 'pm';
@@ -1583,7 +1395,6 @@ Object.assign(NYM.prototype, {
         }, this._typingStartDebounce);
     },
 
-    // Send typing stop immediately (e.g. when message is sent)
     sendTypingStop() {
         if (!this._canSendGiftWraps() || !this.inPMMode) return;
         const context = this.currentGroup ? 'group' : 'pm';
@@ -1597,7 +1408,6 @@ Object.assign(NYM.prototype, {
         this._sendTypingEvent('stop');
     },
 
-    // Internal: build and send a typing indicator gift-wrap
     async _sendTypingEvent(status) {
         if (!this._canSendGiftWraps()) return;
 
@@ -1613,8 +1423,7 @@ Object.assign(NYM.prototype, {
             if (otherMembers.length === 0) return;
 
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
-            // Encrypt to members' ephemeral keys (via groupId) so typing wraps
-            // don't expose the real-pubkey membership set to relays.
+            // Ephemeral keys so typing wraps don't expose the real-pubkey membership set to relays.
             await this._sendGiftWrapsAsync(otherMembers, rumor, null, this.currentGroup);
         } else if (this.currentPM) {
             if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(this.currentPM)) return;
@@ -1629,7 +1438,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Handle an incoming typing indicator
     handleTypingIndicatorEvent(parsed, senderPubkey, senderVerified = true) {
         if (!parsed || senderPubkey === this.pubkey) return;
         if (senderVerified !== true) return;
@@ -1641,7 +1449,6 @@ Object.assign(NYM.prototype, {
             if (!isMember) return;
         }
 
-        // Determine the conversation key for this indicator
         let convKey;
         if (parsed.groupId) {
             convKey = this.getGroupConversationKey(parsed.groupId);
@@ -1659,7 +1466,6 @@ Object.assign(NYM.prototype, {
             if (entry && entry.timeout) clearTimeout(entry.timeout);
             convTypers.delete(senderPubkey);
         } else {
-            // 'start' – add or refresh
             const existing = convTypers.get(senderPubkey);
             if (existing && existing.timeout) clearTimeout(existing.timeout);
 
@@ -1678,7 +1484,6 @@ Object.assign(NYM.prototype, {
         this.renderTypingIndicator();
     },
 
-    // Render the typing indicator UI for the current conversation
     renderTypingIndicator() {
         if (this._cvActive && typeof this._cvRenderTyping === 'function') { this._cvRenderTyping(); return; }
         this._renderTypingInto(
@@ -1701,7 +1506,6 @@ Object.assign(NYM.prototype, {
 
         const convTypers = convKey ? this.typingUsers.get(convKey) : null;
 
-        // Prune stale typing indicators (older than expire window)
         if (convTypers) {
             const now = Date.now();
             for (const [pk, entry] of convTypers) {
@@ -1719,8 +1523,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Diff against the existing avatars so re-renders don't refetch the
-        // images and visibly flicker on every typing tick.
+        // Diff against existing avatars so re-renders don't refetch and flicker.
         const visibleTypers = typers.slice(0, 3);
         const desiredKeys = visibleTypers.map(([pk]) => pk);
         const existing = Array.from(avatarsEl.querySelectorAll('img[data-avatar-pubkey]'));
@@ -1747,7 +1550,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Build text
         const fmtTyper = (pk, nym) => {
             const flair = (typeof this.getFlairForUser === 'function' && this.getFlairForUser(pk)) || '';
             const m = String(nym || '').match(/#([0-9a-f]{4})$/i);
@@ -1766,13 +1568,11 @@ Object.assign(NYM.prototype, {
         el.classList.add('active');
     },
 
-    // Check if a rumor is a Nymchat receipt
     isNymReceipt(rumor) {
         if (!rumor || !rumor.tags) return false;
         return rumor.tags.some(t => Array.isArray(t) && t[0] === 'receipt' && (t[1] === 'delivered' || t[1] === 'read'));
     },
 
-    // Extract receipt info from a Nymchat receipt rumor
     parseNymReceipt(rumor) {
         if (!rumor || !rumor.tags) return null;
 
@@ -1795,8 +1595,7 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // Public channel typing indicators (kind 24420) and read receipts (kind 24421).
-    // Ephemeral kinds — relays don't store them, so we only react to live signals.
+    // Kinds 24420 (typing) and 24421 (read receipts) are ephemeral; relays don't store them.
     _canPublishChannelEvent() {
         if (!this.connected || !this.pubkey) return false;
         return !!this.privkey
@@ -1848,7 +1647,7 @@ Object.assign(NYM.prototype, {
     sendChannelTypingStop(geohash) {
         const targetGeohash = geohash || this.currentGeohash;
         if (!targetGeohash) return;
-        // Only emit 'stop' if we actually emitted a 'start' for this geohash
+        // Only emit 'stop' if we emitted a 'start' for this geohash.
         if (!this._channelTypingStartedFor || !this._channelTypingStartedFor.has(targetGeohash)) return;
         if (!this.isTypingIndicatorAllowedFor('channel')) return;
         if (!this._canPublishChannelEvent()) return;
@@ -1930,7 +1729,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Catch-up receipts for the current channel
     markVisibleChannelMessagesRead() {
         if (this.inPMMode || !this.currentGeohash) return;
         if (document.hidden || this.userScrolledUp) return;
@@ -1973,30 +1771,24 @@ Object.assign(NYM.prototype, {
         }
         this.channelMessageReaders.get(messageId).set(event.pubkey, readerName);
 
-        // Invalidate the cached DOM for this channel so a later re-render (e.g.
-        // returning to a background channel/column) rebuilds the waterfalled
-        // avatars, then refresh any live DOM. Both are keyed by the receipt's own
-        // geohash so this works regardless of which channel is currently focused.
+        // Keyed by the receipt's geohash so this works regardless of which channel is focused.
         if (this.channelDOMCache) this.channelDOMCache.delete(`#${geohash}`);
         if (typeof this.updateChannelReaderAvatars === 'function') {
             this.updateChannelReaderAvatars(messageId, geohash);
         }
     },
 
-    // Check if a rumor is a Nymchat message (has 'x' tag for message ID)
     isNymMessage(rumor) {
         if (!rumor || !rumor.tags) return false;
         return rumor.tags.some(t => Array.isArray(t) && t[0] === 'x' && t[1] && !this.isNymReceipt(rumor));
     },
 
-    // Extract Nymchat message ID from rumor
     getNymMessageId(rumor) {
         if (!rumor || !rumor.tags) return null;
         const xTag = rumor.tags.find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
         return xTag ? xTag[1] : null;
     },
 
-    // Synchronous gift-wrap helpers (main-thread fallback / sync callers).
     encryptBitchat(plaintext, senderPrivateKey, recipientPublicKey) {
         return window.NymCrypto.encryptBitchat(plaintext, senderPrivateKey, recipientPublicKey);
     },
@@ -2005,8 +1797,7 @@ Object.assign(NYM.prototype, {
         return window.NymCrypto.nip59Wrap(event, senderPrivateKey, recipientPublicKey, expirationTs);
     },
 
-    // Worker-offloaded gift-wrap (encrypt + sign), falling back to the sync path.
-    // `expirationTs` is accepted and NOT forwarded — see bitchatWrap.
+    // `expirationTs` is accepted and NOT forwarded; see bitchatWrap.
     async bitchatWrapEventAsync(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
         return this._cryptoCall('bitchatWrap', [event, senderPrivateKey, recipientPublicKey],
             () => window.NymCrypto.bitchatWrap(event, senderPrivateKey, recipientPublicKey));
@@ -2017,25 +1808,21 @@ Object.assign(NYM.prototype, {
             () => window.NymCrypto.nip59Wrap(event, senderPrivateKey, recipientPublicKey, expirationTs ?? null));
     },
 
-    // Hybrid post-quantum gift wrap, offloaded like the classical ones. The
-    // ML-KEM encapsulation is ~1ms, but group fan-out does one per member, so
-    // it belongs off the UI thread for the same reason the others do.
+    // Offloaded because group fan-out does one ML-KEM encapsulation per member.
     async pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
         return this._cryptoCall('pqNip59Wrap',
             [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null],
             () => window.NymCrypto.pqNip59Wrap(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null));
     },
 
-    // The layered wrap. Same offload; the KEM encapsulation is identical and
-    // only the framing differs.
+    // The layered wrap; only the framing differs.
     async pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
         return this._cryptoCall('pq2Nip59Wrap',
             [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null],
             () => window.NymCrypto.pq2Nip59Wrap(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null));
     },
 
-    /// Builds whichever post-quantum wrap the recipient can open. `usePq2` comes
-    /// from their announcement, never from a guess.
+    // `usePq2` comes from the recipient's announcement, never from a guess.
     async pqWrapForPeerAsync(usePq2, event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
         return usePq2
             ? this.pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs)
@@ -2044,15 +1831,11 @@ Object.assign(NYM.prototype, {
 
     requestUserProfile(pubkey) {
         try {
-            // Use the batched profile fetching system
             this.fetchProfileFromRelay(pubkey);
         } catch (_) { }
     },
 
-    // Issue a profile fetch for a pubkey at most once per throttle window.
-    // Used to discover nickname/avatar updates for already-cached contacts
-    // (the main subscription does not include kind 0, so we need to poll
-    // when the user opens or receives a PM).
+    // The main subscription excludes kind 0, so poll when the user opens or receives a PM.
     refreshUserProfileThrottled(pubkey, throttleMs = 60000) {
         if (!pubkey) return;
         if (!this._profileRefreshAttempts) this._profileRefreshAttempts = new Map();
@@ -2063,17 +1846,10 @@ Object.assign(NYM.prototype, {
         try { this.fetchProfileFromRelay(pubkey); } catch (_) { }
     },
 
-    // Direct profile fetch - sends REQ and resolves when the kind 0 handler
-    // processes the response (or after a timeout fallback).
-    // Concurrent calls for the same pubkey share a single REQ via an in-flight
-    // promise map; subsequent callers attach a resolver instead of re-issuing.
-    // Awaitable profile fetch. Routes through the batched profile queue
-    // so many concurrent callers share a single REQ instead of opening one
-    // each (and tripping per-relay "too many concurrent" limits).
+    // Routes through the batched queue so concurrent callers share one REQ (per-relay concurrency limits).
     async fetchProfileDirect(pubkey) {
         if (!pubkey) return;
 
-        // Skip if we already fetched this profile recently (avoids needless REQ).
         const lastFetch = (this.profileFetchedAt && this.profileFetchedAt.get(pubkey)) || 0;
         if (Date.now() - lastFetch < 5 * 60 * 1000) return;
 
@@ -2091,27 +1867,17 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // One-shot kind 0 fetch for the logged-in user's OWN profile, run at login
-    // (nsec / remote signer / extension). The batched profile path is D1-only
-    // when a storage host is reachable (relay proxy pool mode short-circuits
-    // relay REQs), so a Nostr user new to Nymchat — whose kind 0 lives on relays
-    // but not yet in D1 — would otherwise show the "nym" fallback and default
-    // avatar. This does D1 first and, on a miss, issues a direct relay REQ that
-    // works in both proxy pool and direct modes. handleEvent (invoked by the
-    // message dispatcher) applies the name/avatar and mirrors the profile to
-    // D1; here we just refresh the sidebar.
+    // D1 first, then a direct relay REQ, so a Nostr user new to Nymchat doesn't show the "nym" fallback.
     async fetchOwnProfileFromRelaysOneShot() {
         const pubkey = this.pubkey;
         if (!pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
 
-        // D1 first — a hit applies the profile via handleEvent inside the helper.
         try {
             const found = await this._fetchProfilesFromD1([pubkey]);
             if (found && found.has(pubkey)) { this._updateOwnSidebarProfile(); return; }
         } catch (_) { }
 
-        // Not in D1 yet — fetch from relays once connected. sendRequestToFewRelays
-        // routes through the pool in proxy mode and directly otherwise.
+        // sendRequestToFewRelays routes through the pool in proxy mode and directly otherwise.
         if (!this.connected) {
             if (!this._ownProfileFetchRetries) this._ownProfileFetchRetries = 0;
             if (this._ownProfileFetchRetries++ < 8) {
@@ -2136,9 +1902,7 @@ Object.assign(NYM.prototype, {
             if (type === 'EVENT' && data[0] === subId) {
                 const event = data[1];
                 if (event && event.kind === 0 && event.pubkey === pubkey) {
-                    // The dispatcher also passes this event to handleEvent (which
-                    // applies name/avatar and, in proxy mode, mirrors to D1). Refresh
-                    // the sidebar after that synchronous processing completes.
+                    // Refresh the sidebar after the dispatcher's synchronous handleEvent completes.
                     setTimeout(() => this._updateOwnSidebarProfile(), 0);
                     cleanup();
                 }
@@ -2157,8 +1921,6 @@ Object.assign(NYM.prototype, {
         else run();
     },
 
-    // Refresh the sidebar (name, avatar, lightning address) from the applied
-    // own-profile data and cache it for instant restore on the next load.
     _updateOwnSidebarProfile() {
         const pubkey = this.pubkey;
         if (!pubkey) return;
@@ -2181,7 +1943,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Resolve all pending profile callbacks for a pubkey (called from kind 0 handler)
     _resolveProfileCallbacks(pubkey) {
         const entries = this.pendingProfileResolvers.get(pubkey);
         if (!entries || entries.length === 0) return;
@@ -2200,11 +1961,8 @@ Object.assign(NYM.prototype, {
         if (entries.length === 0) this.pendingProfileResolvers.delete(pubkey);
     },
 
-    // Queue a profile fetch that gets batched with others within 150ms.
-    // Returns immediately (fire-and-forget). The kind 0 handler updates
-    // rendered avatars/names retroactively when responses arrive.
+    // Batched within 150ms, fire-and-forget; the kind 0 handler updates renders retroactively.
     queueProfileFetch(pubkey) {
-        // Skip if we already have a fresh profile
         const lastFetch = this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || 0;
         const fresh = Date.now() - lastFetch < 5 * 60 * 1000;
         const appliedKind0 = this._kind0Ts && this._kind0Ts.has(pubkey);
@@ -2239,27 +1997,13 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
         if (missing.length === 0) return;
 
-        // D1 only ever holds a profile its OWNER mirrored there (`profile-set`
-        // is authenticated), so a pubkey it has never heard of — an external
-        // Nostr user, or a Nymchat user who has not published since the mirror
-        // shipped — is a normal D1 miss, not an absent profile. This used to
-        // bail out whenever `_getApiHost()` was truthy, which on an http(s)
-        // page is ALWAYS: the relay fallback below was dead code, and every D1
-        // miss stayed on the "nym" fallback with no avatar and no lud16 (hence
-        // no zaps). `sendRequestToFewRelays` routes through the pool in relay
-        // proxy mode and directly otherwise, so the REQ is valid in both — the
-        // same thing `fetchOwnProfileFromRelaysOneShot` already does for us.
-        //
-        // Rate-limited per pubkey, because a genuinely profile-less author
-        // re-queues on EVERY message they post: without this a busy channel
-        // would turn one REQ per author into one REQ per message.
+        // D1 only holds owner-mirrored profiles, so a miss is normal; relay REQs are rate-limited per pubkey.
         if (!this._profileRelayAttemptAt) this._profileRelayAttemptAt = new Map();
         const nowMs = Date.now();
         missing = missing.filter(pk => nowMs - (this._profileRelayAttemptAt.get(pk) || 0) >= 5 * 60 * 1000);
         if (missing.length === 0) return;
         for (const pk of missing) this._profileRelayAttemptAt.set(pk, nowMs);
-        // Bounded like the other per-pubkey maps; Map keeps insertion order so
-        // the evicted entry is the oldest attempt.
+        // Map keeps insertion order, so the oldest attempt is evicted.
         while (this._profileRelayAttemptAt.size > 5000) {
             this._profileRelayAttemptAt.delete(this._profileRelayAttemptAt.keys().next().value);
         }
@@ -2284,7 +2028,6 @@ Object.assign(NYM.prototype, {
 
     async generateKeypair() {
         try {
-            // Generate ephemeral keys using nostr-tools bundle functions
             const sk = window.NostrTools.generateSecretKey();
             const pk = window.NostrTools.getPublicKey(sk);
 
@@ -2301,9 +2044,8 @@ Object.assign(NYM.prototype, {
     },
 
     async signEvent(event) {
-        // NIP-07 extension signing (e.g. nos2x, Alby)
+        // NIP-07 extension signing (e.g. nos2x, Alby).
         if (this.nostrLoginMethod === 'extension' && window.nostr?.signEvent) {
-            // Extension expects an unsigned event object and returns the signed event
             const unsigned = {
                 kind: event.kind,
                 created_at: event.created_at,
@@ -2313,7 +2055,7 @@ Object.assign(NYM.prototype, {
             const signed = await window.nostr.signEvent(unsigned);
             return signed;
         }
-        // NIP-46 remote signer
+        // NIP-46 remote signer.
         if (this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
             return await _nip46SignEvent(event);
         }
@@ -2324,13 +2066,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Mirror a NIP-09 deletion to D1: channel objects are author-verified
-    // server-side via the signed kind 5; PM objects sit under our own prefix.
+    // Channel objects are author-verified via the signed kind 5; PM objects sit under our own prefix.
     async _propagateDeletionToD1(deletionEvent, messageId, originalKind) {
         try {
             if (!this._getApiHost || !this._getApiHost()) return;
 
-            // Channel message? Find its channel name from the in-memory store.
             let channelName = null;
             if (this.messages) {
                 for (const [key, msgs] of this.messages.entries()) {
@@ -2371,14 +2111,12 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(['EVENT', signedEvent]);
 
-            // Mirror the deletion to the D1 archive so the event doesn't
-            // resurrect on reload or on another device.
+            // Mirror to D1 so the event doesn't resurrect on reload or another device.
             this._propagateDeletionToD1(signedEvent, messageId, originalKind);
 
             this.deletedEventIds.add(messageId);
 
-            // PM/group bubbles use nymMessageId as data-message-id; capture both ids
-            // for every matching stored message so a late re-render can't resurrect it.
+            // Capture both ids (bubbles use nymMessageId) so a late re-render can't resurrect it.
             this.pmMessages.forEach(msgs => {
                 for (const m of msgs) {
                     if (m.id === messageId || m.nymMessageId === messageId) {
@@ -2389,9 +2127,7 @@ Object.assign(NYM.prototype, {
             });
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
 
-            // For NIP-17 messages: also publish kind-5 against every actual gift-wrap
-            // event id we sent for this shared id, so relays drop them from storage.
-            // The signal kind-5 above only lets other clients soft-hide locally.
+            // Delete every gift-wrap event id sent for this shared id so relays drop them from storage.
             if (originalKind === 1059 && this._giftWrapsForSharedId) {
                 const wrapIds = this._giftWrapsForSharedId.get(messageId);
                 if (wrapIds && wrapIds.size > 0) {
@@ -2415,7 +2151,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Remove message from DOM
             const messageEl = document.querySelector(`[data-message-id="${messageId}"]`);
             if (messageEl) {
                 if (typeof this._playMessageDisintegration !== 'function' || !this._playMessageDisintegration(messageEl)) {
@@ -2423,7 +2158,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Remove message from stored channel messages
             this.messages.forEach((msgs, channel) => {
                 const idx = msgs.findIndex(m => m.id === messageId);
                 if (idx !== -1) {
@@ -2432,7 +2166,6 @@ Object.assign(NYM.prototype, {
                 }
             });
 
-            // Remove message from stored PM messages
             this.pmMessages.forEach((msgs, convKey) => {
                 let removed = false;
                 for (let i = msgs.length - 1; i >= 0; i--) {
@@ -2452,7 +2185,7 @@ Object.assign(NYM.prototype, {
     },
 
     handleDeletionEvent(event) {
-        // NIP-09: only the original author may delete an event
+        // NIP-09: only the original author may delete an event.
         const eTags = (event.tags || []).filter(t => Array.isArray(t) && t[0] === 'e' && t[1]);
         if (eTags.length === 0) return;
         const requesterPubkey = event.pubkey;
@@ -2571,9 +2304,7 @@ Object.assign(NYM.prototype, {
             if (idx !== -1) {
                 msgs.splice(idx, 1);
                 this.persistChannelMessages(channel);
-                // Re-derive, don't bump: a deletion removes a message. Going
-                // through updateUnreadCount added one to the badge for a
-                // message that had just been taken off the list.
+                // Re-derive rather than bump: updateUnreadCount would add one for a removed message.
                 if (typeof this.refreshUnreadCount === 'function') {
                     this.refreshUnreadCount(channel);
                 }
@@ -2620,10 +2351,8 @@ Object.assign(NYM.prototype, {
     },
 
     handleIncomingEdit(originalEventId, newContent, senderPubkey, editEventId) {
-        // Always store the edit so it can be applied even if the original arrives later
-        // (same pattern as deletedEventIds for out-of-order relay delivery)
+        // Store even if the original hasn't arrived (relay delivery is out of order).
         const existing = this.editedMessages.get(originalEventId);
-        // Only update if this edit is newer (or first edit seen)
         if (!existing || (editEventId && editEventId !== existing.editEventId)) {
             this.editedMessages.set(originalEventId, {
                 newContent,
@@ -2633,13 +2362,11 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Prune if too large
         if (this.editedMessages.size > 5000) {
             const entries = Array.from(this.editedMessages.entries());
             this.editedMessages = new Map(entries.slice(-4000));
         }
 
-        // Try to apply to already-loaded messages
         let found = false;
         this.messages.forEach((msgs, channel) => {
             const msg = msgs.find(m => m.id === originalEventId);
@@ -2658,7 +2385,6 @@ Object.assign(NYM.prototype, {
 
     handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey, senderVerified = true) {
         if (senderVerified !== true || !originalId || !senderPubkey) return;
-        // Always store the edit so it can be applied even if the original arrives later
         const scopedKey = `${senderPubkey}:${originalId}`;
         if (!this.editedMessages.has(scopedKey)) {
             this.editedMessages.set(scopedKey, {
@@ -2670,13 +2396,11 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Prune if too large
         if (this.editedMessages.size > 5000) {
             const entries = Array.from(this.editedMessages.entries());
             this.editedMessages = new Map(entries.slice(-4000));
         }
 
-        // Try to apply to already-loaded messages
         const msgs = this.pmMessages.get(conversationKey);
         if (!msgs) return;
 
@@ -2696,7 +2420,6 @@ Object.assign(NYM.prototype, {
     async processBatchedProfileFetch() {
         if (this.profileFetchQueue.length === 0) return;
 
-        // Get unique pubkeys and their resolvers
         const batch = this.profileFetchQueue;
         this.profileFetchQueue = [];
         this.profileFetchTimer = null;
@@ -2709,7 +2432,6 @@ Object.assign(NYM.prototype, {
             pubkeyMap.get(pubkey).push(resolve);
         });
 
-        // D1-first: serve profiles we already have and only relay-fetch the rest.
         try {
             const fromD1 = await this._fetchProfilesFromD1(Array.from(pubkeyMap.keys()));
             for (const pk of fromD1) {
@@ -2718,8 +2440,7 @@ Object.assign(NYM.prototype, {
                 if (list) { list.forEach(r => r()); pubkeyMap.delete(pk); }
             }
         } catch (_) { }
-        // Bitchat users carry their nickname in the message `n` tag and have no
-        // kind 0 profile, so don't relay-fetch them.
+        // Bitchat users carry their nickname in the `n` tag and have no kind 0, so don't relay-fetch them.
         if (this.bitchatUsers) {
             for (const pk of [...pubkeyMap.keys()]) {
                 if (this.bitchatUsers.has(pk)) {
@@ -2747,8 +2468,6 @@ Object.assign(NYM.prototype, {
         const pubkeys = Array.from(pubkeyMap.keys());
         const resolvers = pubkeyMap;
 
-        // Fetch profiles for pubkeys
-
         const subId = "profile-batch-" + Math.random().toString(36).substring(7);
 
         const timeout = setTimeout(() => {
@@ -2759,9 +2478,7 @@ Object.assign(NYM.prototype, {
         }, 3000);
         if (!this._subscriptionHandlers) this._subscriptionHandlers = new Map();
 
-        // Registered as a side-handler on the real handleRelayMessage (keyed by
-        // subId) instead of replacing the method. Normal event processing still
-        // runs for every message — this only adds the profile-specific work.
+        // A side-handler keyed by subId; normal event processing still runs.
         const profileHandler = (type, data) => {
             if (type === 'EVENT' && data[0] === subId) {
                 const event = data[1];
@@ -2769,7 +2486,6 @@ Object.assign(NYM.prototype, {
                     try {
                         const profile = JSON.parse(event.content);
 
-                        // Skip stale kind 0 events relative to what we've already applied
                         const eventTs = (typeof event.created_at === 'number') ? event.created_at : 0;
                         if (!this._kind0Ts) this._kind0Ts = new Map();
                         const lastTs = this._kind0Ts.get(event.pubkey) || 0;
@@ -2779,17 +2495,14 @@ Object.assign(NYM.prototype, {
                         }
                         if (eventTs > lastTs) this._kind0Ts.set(event.pubkey, eventTs);
 
-                        // Keep the D1 read cache fresh so repeat lookups skip the bucket.
                         this._cacheD1Profile(event.pubkey, event);
 
-                        // Mirror our own authoritative profile to D1 so edits made in
-                        // other Nostr clients propagate into D1's cached copy.
+                        // Mirror our own profile to D1 so edits from other Nostr clients propagate.
                         if (event.pubkey === this.pubkey && event.id && event.sig
                             && event.id !== this._lastMirroredOwnProfileId && this._hasCustomProfileData()) {
                             this._saveProfileToD1(event);
                         }
 
-                        // Get name for own profile
                         if (event.pubkey === this.pubkey && (profile.name || profile.username || profile.display_name)) {
                             const profileName = profile.name || profile.username || profile.display_name;
                             this.nym = profileName.substring(0, 20);
@@ -2814,8 +2527,6 @@ Object.assign(NYM.prototype, {
                             this.updatePMNicknameFromProfile(this.pubkey, this.nym);
                         }
 
-                        // Extract avatar from profile picture field, accepting
-                        // common alternate keys and trimming whitespace.
                         const _pickPic = (p) => {
                             const candidates = [p && p.picture, p && p.image, p && p.avatar];
                             for (const c of candidates) {
@@ -2842,12 +2553,9 @@ Object.assign(NYM.prototype, {
                             }
                         }
 
-                        // Store and update for OTHER users (Bitchat users, PM contacts)
                         if (event.pubkey !== this.pubkey && (profile.name || profile.username || profile.display_name)) {
                             const profileName = (profile.name || profile.username || profile.display_name).substring(0, 20);
-                            // Store in users map — always accept the newer kind 0
-                            // event as authoritative so stale nyms don't linger
-                            // when a contact updates their profile.
+                            // Always accept the newer kind 0 as authoritative.
                             const existingUser = this.users.get(event.pubkey);
                             if (!existingUser) {
                                 this.users.set(event.pubkey, {
@@ -2866,9 +2574,7 @@ Object.assign(NYM.prototype, {
                             if (typeof this.updateStoredNymsForPubkey === 'function') {
                                 this.updateStoredNymsForPubkey(event.pubkey, profileName);
                             }
-                            // Update PM nickname displays
                             this.updatePMNicknameFromProfile(event.pubkey, profileName);
-                            // Refresh group sidebar entries that include this member
                             if (typeof this.updateGroupMembershipDisplay === 'function') {
                                 this.updateGroupMembershipDisplay(event.pubkey);
                             }
@@ -2883,7 +2589,6 @@ Object.assign(NYM.prototype, {
                             }
                         }
 
-                        // Get lightning address
                         if (event.pubkey === this.pubkey && (profile.lud16 || profile.lud06)) {
                             const lnAddress = profile.lud16 || profile.lud06;
                             this.lightningAddress = lnAddress;
@@ -2893,7 +2598,6 @@ Object.assign(NYM.prototype, {
                     } catch (e) {
                     }
 
-                    // Resolve all promises for this pubkey
                     const resolveList = resolvers.get(event.pubkey);
                     resolveList.forEach(resolve => resolve());
                     resolvers.delete(event.pubkey);
@@ -2902,7 +2606,6 @@ Object.assign(NYM.prototype, {
                 clearTimeout(timeout);
                 this._subscriptionHandlers.delete(subId);
 
-                // Resolve any remaining unfound profiles
                 resolvers.forEach(resolveList => {
                     resolveList.forEach(resolve => resolve());
                 });
@@ -2916,7 +2619,7 @@ Object.assign(NYM.prototype, {
             subId,
             {
                 kinds: [0],
-                authors: pubkeys, // Array of all pubkeys
+                authors: pubkeys,
                 limit: pubkeys.length
             }
         ];
@@ -2936,22 +2639,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // `opts` is the mesh sender outbox's replay seam (mesh-outbox.js): a message
-    // the radio already carried, republished once relays came back.
-    //   createdAt  — the ORIGINAL send time, so the message keeps its place in
-    //                history and the existing echo still reconciles (the ingest
-    //                matches a placeholder within 60s of the event) however long
-    //                it sat queued.
-    //   localId    — the echo the mesh send already displayed. Reused instead of
-    //                drawing a second bubble for the same message.
-    //   extraTags  — the `['nymmesh', <id>]` marker that lets a peer who already
-    //                received this over the radio drop the Nostr copy.
-    //   buildOnly  — return the SIGNED event instead of publishing it, and draw
-    //                no bubble. Gateway mode (mesh-ui.js) hands that event to a
-    //                peer who still has internet, so it must be byte-identical
-    //                to what we would have published ourselves — same tags, same
-    //                kind, same signature. Exempt from the connected check for
-    //                the obvious reason: it exists for when we are offline.
+    // opts is the mesh-outbox.js replay seam; buildOnly returns the signed event without publishing.
     async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null, opts = null) {
         try {
             const buildOnly = !!(opts && opts.buildOnly);
@@ -2973,20 +2661,17 @@ Object.assign(NYM.prototype, {
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);
 
-            // Thread reply: NIP-10 marked root reference. Other clients see a
-            // normal channel message; Nymchat groups it under its root.
+            // NIP-10 marked root reference; other clients see a normal channel message.
             if (threadRoot && /^[0-9a-f]{64}$/i.test(threadRoot)) {
                 tags.push(['e', threadRoot, '', 'root']);
             } else {
                 threadRoot = null;
             }
 
-            // Build wire content: if quoting, use @mention format instead of > blockquote
-            // so other Nostr clients see a normal mention, while NYM reconstructs the quote
+            // Quotes go out as an @mention so other Nostr clients see a normal mention.
             let wireContent = content;
             if (quoteData) {
                 tags.push(['nymquote', quoteData.author, quoteData.fullText || quoteData.text]);
-                // Extract user's reply text (everything after the > quote block)
                 const lines = content.split('\n');
                 const nonQuoteLines = [];
                 let pastQuote = false;
@@ -3000,10 +2685,10 @@ Object.assign(NYM.prototype, {
                 wireContent = userMessage ? `@${quoteData.author} ${userMessage}` : `@${quoteData.author}`;
             }
 
-            // NIP-30: declare any custom emoji shortcodes used in the message
+            // NIP-30 custom emoji.
             tags.push(...this.customEmojiTagsForContent(wireContent));
 
-            // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message
+            // NIP-92 Blossom mirror URLs.
             if (typeof this.imetaTagsForContent === 'function') {
                 tags.push(...this.imetaTagsForContent(wireContent));
             }
@@ -3043,17 +2728,14 @@ Object.assign(NYM.prototype, {
             };
 
             if (buildOnly) {
-                // No bubble, no relay, no cosmetics timer: the caller owns
-                // delivery from here. PoW still applies — a gateway publishing
-                // for us hands the relays an event that must pass their rules.
+                // The caller owns delivery; PoW still applies since a gateway publishes this event for us.
                 if (typeof this.attachAttestTag === 'function') this.attachAttestTag(event);
                 const difficulty = this._effectivePowDifficulty();
                 if (difficulty > 0) event = await this._minePow(event, difficulty);
                 return await this.signEvent(event);
             }
 
-            // A replay already has its bubble on screen from the mesh send;
-            // drawing another would show the same message twice.
+            // A replay already has its bubble from the mesh send.
             if (!replayId) this.displayMessage(optimisticMessage);
             this.recordOwnActivity();
 
@@ -3095,11 +2777,9 @@ Object.assign(NYM.prototype, {
                 throw new Error('Not connected to relay');
             }
 
-            // Generate a fresh ephemeral keypair for this message
             const ephSk = window.NostrTools.generateSecretKey();
             const ephPk = window.NostrTools.getPublicKey(ephSk);
 
-            // Generate a random nym for the ephemeral identity
             const ephSuffix = ephPk.slice(-4);
             const style = localStorage.getItem('nym_nick_style') || 'fancy';
             let anonNym;
@@ -3139,14 +2819,14 @@ Object.assign(NYM.prototype, {
             const kind = wire.kind;
             tags.push([wire.tag, channelKey]);
 
-            // Thread reply: NIP-10 marked root reference (threads.js).
+            // NIP-10 marked root reference (threads.js).
             if (threadRoot && /^[0-9a-f]{64}$/i.test(threadRoot)) {
                 tags.push(['e', threadRoot, '', 'root']);
             } else {
                 threadRoot = null;
             }
 
-            // Build wire content: if quoting, use @mention format instead of > blockquote
+            // Quotes go out as an @mention so other Nostr clients see a normal mention.
             let wireContent = content;
             if (quoteData) {
                 tags.push(['nymquote', quoteData.author, quoteData.fullText || quoteData.text]);
@@ -3163,10 +2843,10 @@ Object.assign(NYM.prototype, {
                 wireContent = userMessage ? `@${quoteData.author} ${userMessage}` : `@${quoteData.author}`;
             }
 
-            // NIP-30: declare any custom emoji shortcodes used in the message
+            // NIP-30 custom emoji.
             tags.push(...this.customEmojiTagsForContent(wireContent));
 
-            // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message
+            // NIP-92 Blossom mirror URLs.
             if (typeof this.imetaTagsForContent === 'function') {
                 tags.push(...this.imetaTagsForContent(wireContent));
             }
@@ -3225,8 +2905,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Record an observation that a peer is running nymchat (valid PoW or read
-    // receipt). Drives transitive trust via the kind-30078 vouch list.
+    // Valid PoW or a read receipt; drives transitive trust via the kind-30078 vouch list.
     _observeNymchatPubkey(pubkey) {
         if (!pubkey || pubkey === this.pubkey) return;
         if (!this.nymchatVouches) this.nymchatVouches = new Set();
@@ -3264,13 +2943,12 @@ Object.assign(NYM.prototype, {
             const signed = await this.signEvent(event);
             this.sendToRelay(['EVENT', signed]);
             this._lastVouchPublishAt = Date.now();
-        } catch (_) { /* best-effort */ }
+        } catch (_) {}
     },
 
     handleVouchEvent(event) {
         if (!event || event.pubkey === this.pubkey) return;
-        // Only accept vouches from peers we already trust as nymchat so the
-        // trust graph stays rooted in the seeded developer/bot pubkeys.
+        // Only accept vouches from trusted peers so the graph stays rooted in the seeded pubkeys.
         if (!this.nymchatPubkeys || !this.nymchatPubkeys.has(event.pubkey)) return;
         let list;
         try { list = JSON.parse(event.content || '[]'); }
@@ -3283,9 +2961,7 @@ Object.assign(NYM.prototype, {
             if (!this.nymchatPubkeys.has(pk)) added = true;
             this._markNymchatPubkey(pk);
         }
-        // Newly trusted pubkeys mean new vouch authors to fetch — expand the web
-        // of trust one hop via a heavily debounced resubscribe (converges, then
-        // goes quiet once no new pubkeys appear).
+        // Expand the web of trust one hop via a heavily debounced resubscribe.
         if (added) this._scheduleVouchExpansion();
     },
 
@@ -3299,12 +2975,7 @@ Object.assign(NYM.prototype, {
         }, 15000);
     },
 
-    // Rebuild the web of trust from D1 (vouch lists are archived under the
-    // 'nym-vouches' pseudo-channel) instead of re-fetching every trusted peer's
-    // vouch list from relays. Signatures are verified and the graph is expanded
-    // iteratively so a vouch from a newly-trusted author is applied once they're
-    // rooted.
-    /// Hard cap on how much of the vouch archive one pass will ingest.
+    // Hard cap on how much of the vouch archive (D1 'nym-vouches') one pass ingests.
     VOUCH_D1_MAX_EVENTS: 5000,
 
     async _fetchVouchesFromD1() {
@@ -3322,7 +2993,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { return; }
         if (events.length === 0) return;
 
-        // Verification is LAZY and the whole walk is time-sliced.
+        // Verification is lazy and the whole walk is time-sliced.
         const applied = new Set();
         let changed = true;
         let guard = 0;
@@ -3337,15 +3008,11 @@ Object.assign(NYM.prototype, {
             for (let i = 0; i < events.length; i++) {
                 if (applied.has(i)) continue;
                 const ev = events[i];
-                // Untrusted author: handleVouchEvent would drop it anyway, so
-                // don't pay for a signature check yet. A later pass reconsiders
-                // it if the author becomes trusted.
+                // Skip untrusted authors without a signature check; a later pass reconsiders them.
                 if (!ev || !this.nymchatPubkeys || !this.nymchatPubkeys.has(ev.pubkey)) continue;
                 const cached = this._verifiedIdCheck(ev);
                 const ok = (cached !== undefined) ? cached : await this._verifyRelayEventAsync(ev);
                 applied.add(i);
-                // Applying twice is idempotent (_markNymchatPubkey is a set
-                // add), so applying once is equivalent to the old re-scan.
                 if (ok) { try { this.handleVouchEvent(ev); } catch (_) { } }
                 await breathe();
             }
@@ -3355,8 +3022,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Resolve the status-visibility mode from settings: 'enabled' (everyone),
-    // 'friends' (only marked friends, via private gift wraps), or 'disabled'.
+    // 'enabled' (everyone), 'friends' (private gift wraps to friends), or 'disabled'.
     _statusMode() {
         const s = this.settings ? this.settings.showStatus : true;
         if (s === false) return 'disabled';
@@ -3369,8 +3035,7 @@ Object.assign(NYM.prototype, {
             if (!this.connected) return;
 
             const mode = this._statusMode();
-            // The public replaceable event is real only when fully enabled;
-            // otherwise it broadcasts 'hidden' so non-friends see nothing.
+            // Non-enabled modes broadcast 'hidden' publicly.
             const publicStatus = mode === 'enabled' ? status : 'hidden';
 
             const tags = [
@@ -3395,15 +3060,12 @@ Object.assign(NYM.prototype, {
             this.sendToRelay(["EVENT", signedEvent]);
             this._lastPresenceBroadcast = Date.now();
 
-            // Friends-only: deliver our real status privately to each friend.
             if (mode === 'friends') this._sendFriendPresence(status, awayMessage);
         } catch (error) {
-            // Silently fail - presence is best-effort
         }
     },
 
-    // Gift-wrap our real presence to each friend so only they can read it.
-    // Mirrors the typing/call-signaling ephemeral rumor pattern.
+    // Gift-wrapped so only friends can read it.
     async _sendFriendPresence(status, awayMessage = '') {
         try {
             if (!this._canSendGiftWraps()) return;
@@ -3422,23 +3084,17 @@ Object.assign(NYM.prototype, {
             };
             await this._sendGiftWrapsAsync(recipients, rumor, null);
         } catch (_) {
-            // Best-effort.
         }
     },
 
-    // Record local user activity so own status indicator stays "online" and
-    // other clients see us as recently active. Called on every outgoing
-    // channel/PM/group/reaction send. Throttles relay broadcasts.
     recordOwnActivity() {
         if (!this.pubkey) return;
 
-        // Update own entry in users map so getEffectiveUserStatus / userlist
-        // treat us as recently seen.
         const now = Date.now();
         const existing = this.users.get(this.pubkey);
         if (existing) {
             existing.lastSeen = now;
-            // If we were marked away locally, leave away alone — only /back clears it.
+            // Leave away alone; only /back clears it.
             if (existing.status !== 'away' && !(this.awayMessages && this.awayMessages.has(this.pubkey))) {
                 existing.status = 'online';
             }
@@ -3452,15 +3108,12 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Refresh user list UI (debounced via RAF inside updateUserList).
         if (typeof this.updateUserList === 'function') this.updateUserList();
 
-        // When fully disabled, never re-assert presence — otherwise a routine
-        // send would re-broadcast 'online' and undo the hidden state.
+        // Never re-assert presence when disabled, or a send would undo the hidden state.
         if (this._statusMode() === 'disabled') return;
 
-        // Throttle presence broadcasts to once every 60s; skip while away
-        // (cmdAway/cmdBack handle those transitions explicitly).
+        // Skipped while away (cmdAway/cmdBack handle those transitions).
         const PRESENCE_BROADCAST_THROTTLE_MS = 60000;
         const lastBroadcast = this._lastPresenceBroadcast || 0;
         if (now - lastBroadcast < PRESENCE_BROADCAST_THROTTLE_MS) return;
@@ -3468,9 +3121,6 @@ Object.assign(NYM.prototype, {
         this.publishPresence('online');
     },
 
-    // Re-assert our current presence under the active visibility mode. Used on
-    // startup and when the setting changes. publishPresence handles the public
-    // 'hidden' broadcast plus private friend delivery for 'friends' mode.
     async publishStatusVisibility() {
         const away = this.awayMessages && this.awayMessages.has(this.pubkey);
         const awayMsg = away ? (this.awayMessages.get(this.pubkey) || '') : '';
@@ -3500,12 +3150,10 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(["EVENT", signedEvent]);
         } catch (error) {
-            // Silently fail - avatar update broadcast is best-effort
         }
     },
 
-    // Broadcast that our active shop items changed so other clients drop their
-    // cached record for us and re-fetch, instead of waiting out the cache.
+    // Other clients drop their cached record and re-fetch instead of waiting out the cache.
     async publishShopUpdate() {
         try {
             if (!this.connected) return;
@@ -3529,7 +3177,6 @@ Object.assign(NYM.prototype, {
             const signedEvent = await this.signEvent(event);
             this.sendToRelay(["EVENT", signedEvent]);
         } catch (error) {
-            // Silently fail - shop update broadcast is best-effort
         }
     },
 

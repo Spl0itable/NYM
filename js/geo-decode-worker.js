@@ -1,5 +1,3 @@
-// geo-decode-worker.js - Fetches and decodes the geohash globe's map data
-
 importScripts('/js/geo-decode.js');
 
 self.onmessage = (e) => {

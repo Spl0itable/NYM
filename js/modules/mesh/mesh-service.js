@@ -14,9 +14,7 @@
 
     const randomHex = (n) => P().toHex(crypto.getRandomValues(new Uint8Array(n)));
 
-    // Ghost Mode: the mesh presence is decoupled from the real identity. Every
-    // identifier an announce carries is replaced together and rotated on a
-    // jittered epoch, so nothing links one epoch to the next or to the npub.
+    // Ghost Mode: every announce identifier is replaced together and rotated on a jittered epoch, so nothing links.
     class GhostMode {
         constructor(onRotate) {
             this.onRotate = onRotate || (() => Promise.resolve());
@@ -45,9 +43,7 @@
             await this.onRotate();
         }
 
-        // Re-arms a persisted session at boot with a FRESH identity. Deliberately
-        // does not fire onRotate — the caller awaits this before it starts, so
-        // there is nothing to restart yet.
+        // Fresh identity; deliberately doesn't fire onRotate since the caller awaits this before starting.
         async restore() {
             let was = false;
             try { was = localStorage.getItem(GHOST_FLAG_KEY) === '1'; } catch (_) { }
@@ -70,8 +66,7 @@
                 identity: await C().MeshIdentity.ephemeral(),
                 nostrPrivkey,
                 nostrPubkey: T.getPublicKey(nostrPrivkey),
-                // Carries no information: deriving it from the key would make
-                // the two linkable if either leaked.
+                // Random, not key-derived, so the two can't be linked if either leaks.
                 nickname: 'ghost#' + randomHex(2),
                 startedAt: Date.now(),
             };
@@ -104,14 +99,11 @@
             this.onReceipt = opts.onReceipt || (() => { });
             this.onPeersChanged = opts.onPeersChanged || (() => { });
             this.onGhostChanged = opts.onGhostChanged || (() => { });
-            // Gateway mode hands us a Nostr event somebody else signed. The
-            // bridge VERIFIES it before publishing or displaying — a gateway is
-            // a postbox, not an author.
+            // The bridge verifies carried events before publishing or displaying: a gateway is a postbox, not an author.
             this.onNostrCarrier = opts.onNostrCarrier || null;
             // Completed ping probes, for the mesh diagnostics panel.
             this.onPingResult = opts.onPingResult || null;
-            // Called when the prekey batch changes, so it can be written down:
-            // a private half lost on reload is mail that can never be opened.
+            // Persisted because a private half lost on reload is mail that can never be opened.
             this.onPrekeysChanged = opts.onPrekeysChanged || null;
             this.log = opts.log || (() => { });
 
@@ -119,16 +111,12 @@
             this.realIdentity = null;
             this.noise = null;
             this.seen = new (P().SeenPackets)();
-            // Recent public history, reconciled with neighbors so a peer that
-            // was out of range — or in another mesh partition — still gets it.
+            // Reconciled with neighbors so peers out of range or in another partition still get it.
             this.gossip = new (S().GossipSync)();
             this._gossipDirty = false;
-            // Mail this device is carrying for other people — sealed messages
-            // bound for peers who were not in range when they were sent.
+            // Sealed mail carried for peers who were out of range when it was sent.
             this.couriers = new (X().CourierStore)();
-            // This device's one-time keys, and the batches other devices have
-            // published. Sealing to a prekey the recipient DELETES after use is
-            // what makes courier mail forward secret.
+            // Sealing to a prekey the recipient deletes after use makes courier mail forward secret.
             this.prekeys = new (E().LocalPrekeys)();
             // ownerStaticKeyHex -> verified bundle
             this.peerPrekeys = new Map();
@@ -171,22 +159,17 @@
         async start() {
             if (this.running) return;
             this.realIdentity = await C().MeshIdentity.loadOrCreate();
-            // Settle a persisted Ghost session BEFORE picking an identity, so a
-            // restart can never announce the real one first.
+            // Settle a persisted Ghost session first so a restart never announces the real identity.
             await this.ghost.restore();
             await this._applyIdentity();
             this.running = true;
             await this.transport.start();
             this._scheduleAnnounce();
             this.cleanupTimer = setInterval(() => this._cleanupStalePeers(), 30000);
-            // Reconcile public history with whoever is in range. The per-peer
-            // schedule lives in GossipSync; this tick just gives it a heartbeat.
+            // GossipSync owns the per-peer schedule; this tick is its heartbeat.
             this.syncTimer = setInterval(() => { this._gossipTick().catch(() => { }); }, 5000);
             await this._broadcastAnnounce();
-            // Publish our one-time prekeys so senders can seal courier mail to
-            // a key we delete after use rather than to our long-lived identity
-            // key. Broadcast and gossiped, because it has to reach people while
-            // we are AWAY.
+            // Broadcast and gossiped so senders can seal to a deleted-after-use key while we are away.
             this.publishPrekeyBundle().catch(() => { });
             this.onGhostChanged(this.ghostEnabled);
         }
@@ -211,8 +194,7 @@
             this.peers.clear();
             this.pendingPlaintext.clear();
             this.pendingEncrypted.clear();
-            // Probes cannot be answered once the radio is down, and a nonce
-            // held across a restart would complete against a stale reply.
+            // A nonce held across a restart would complete against a stale reply.
             this.pendingPings.clear();
             this.onPeersChanged();
         }
@@ -248,9 +230,7 @@
             return epoch ? epoch.nickname : this.nickname();
         }
 
-        // Ghost Mode must not advertise the real Nostr identity. The epoch has
-        // its own throwaway key, so peers can still reach it without anything
-        // resolving to the user's npub.
+        // Ghost Mode uses the epoch's throwaway key so nothing resolves to the user's npub.
         async _nostrLinkValue() {
             const epoch = this.ghost.enabled ? this.ghost.current : null;
             if (!epoch) return this.nostrLink();
@@ -264,13 +244,7 @@
             }
         }
 
-        /// Probes `peerID`: are you there, and how many links away?
-        ///
-        /// A peer list cannot tell the difference between someone in the same
-        /// room and someone three relays away. The reply carries the TTL this
-        /// packet was LAUNCHED with, so the hop count falls out of comparing it
-        /// against the TTL that arrives. The nonce is unguessable, so only a
-        /// genuine answer to this probe can complete it.
+        // The reply carries the launch TTL, so the hop count falls out; the unguessable nonce prevents spoofed replies.
         async ping(peerID, ttl) {
             const recipient = P().fromHex(peerID);
             if (!recipient || recipient.length !== 8) return false;
@@ -291,8 +265,7 @@
             }
         }
 
-        /// Answers a probe by echoing its nonce, with our own launch TTL so the
-        /// far end can measure the return path too.
+        // Echoes the nonce with our own launch TTL so the far end can measure the return path too.
         async _handlePing(packet, senderPeerID) {
             const probe = E().decodePing(packet.payload);
             if (!probe) return;
@@ -308,8 +281,7 @@
             } catch (_) { }
         }
 
-        /// Completes a probe. An unknown nonce is dropped in silence: it answers
-        /// a probe we never sent, which is a stale reply or somebody guessing.
+        // An unknown nonce is a stale reply or a guess; drop it silently.
         _handlePong(packet, senderPeerID) {
             const reply = E().decodePing(packet.payload);
             if (!reply) return;
@@ -326,13 +298,7 @@
             }
         }
 
-        /// Asks `gatewayPeerID` to publish a signed Nostr event for us.
-        ///
-        /// The sender outbox waits for OUR internet to come back. This does
-        /// not: one peer with a signal is enough for the whole room. The event
-        /// is signed by us before it leaves, so the gateway is a postbox — it
-        /// cannot alter or forge what it publishes, and the relays would reject
-        /// it if it tried.
+        // One peer with signal serves the room; we sign first so the gateway can't alter or forge it.
         async carryToGateway(gatewayPeerID, geohash, event) {
             const recipient = P().fromHex(gatewayPeerID);
             if (!recipient || recipient.length !== 8) return false;
@@ -347,8 +313,7 @@
             } catch (_) { return false; }
         }
 
-        /// Rebroadcasts a relay event to mesh-only peers, so they can READ a
-        /// geohash channel and not only write to it.
+        // So mesh-only peers can read a geohash channel, not only write to it.
         async broadcastFromGateway(geohash, event) {
             const payload = E().encodeCarrier(E().CARRIER_DIRECTION.fromGateway,
                 geohash, P().utf8.encode(JSON.stringify(event)));
@@ -366,24 +331,16 @@
             const carrier = E().decodeCarrier(packet.payload);
             if (!carrier) return;
             this.log(`nostr carrier dir=${carrier.direction} geo=${carrier.geohash} from ${senderPeerID}`);
-            // The bridge verifies the signature before publishing or
-            // displaying. A gateway relays; it does not vouch.
+            // The bridge verifies the signature; a gateway relays, it does not vouch.
             if (this.onNostrCarrier) {
                 try { this.onNostrCarrier(carrier, senderPeerID); } catch (_) { }
             }
         }
 
-        /// Signs and broadcasts our current batch of one-time prekeys.
-        ///
-        /// Broadcast rather than directed, and gossip-synced, because the whole
-        /// point is that a bundle reaches senders while we are AWAY. Anyone
-        /// holding our announce-verified signing key can check it offline, so it
-        /// can spread through devices that have never spoken to us.
+        // Broadcast and gossip-synced so bundles reach senders while we're away; verifiable offline.
         async publishPrekeyBundle() {
             if (!this.identity) return false;
-            // Never while ghosted. Courier mail to or from a ghost is refused at
-            // both ends (mayDeposit), so the bundle could not deliver anything —
-            // it would only be one more thing the epoch broadcasts.
+            // Never while ghosted: mayDeposit refuses ghost mail at both ends, so the bundle could only leak.
             if (this.ghostEnabled) return false;
             if (await this.prekeys.replenish()) await this._savePrekeys();
             const available = this.prekeys.available;
@@ -403,25 +360,18 @@
                     recipientID: P().BROADCAST_RECIPIENT,
                 });
                 await this._send(pkt);
-                // Our own bundle never comes back to us on the air, so file it
-                // here or we would gossip everyone's batch except our own.
+                // Our own bundle never comes back on the air, so file it here.
                 await this._rememberOwnPublic(pkt);
                 return true;
             } catch (_) { return false; }
         }
 
-        /// Files a peer's bundle after verifying it against the signing key
-        /// their announce bound to that Noise key.
-        ///
-        /// Verification is what makes gossip safe: without it anyone could
-        /// publish prekeys "for" someone else and harvest mail sealed to keys
-        /// they hold.
+        // Verified against the owner's announce-bound signing key, or anyone could harvest mail with fake prekeys.
         async _handlePrekeyBundle(packet, senderPeerID) {
             const bundle = E().decodePrekeyBundle(packet.payload);
             if (!bundle) return;
             const ownerHex = P().toHex(bundle.noiseStaticPublicKey);
-            // The signing key comes from the owner's own verified announce, NOT
-            // from the packet — a relayed bundle's carrier is not its author.
+            // The signing key comes from the owner's verified announce, not the packet: the carrier isn't the author.
             const ownerPeerID = await C().derivePeerID(bundle.noiseStaticPublicKey);
             const owner = this.peers.get(ownerPeerID);
             if (!owner || !owner.isVerified || !owner.signingPublicKey) {
@@ -429,8 +379,7 @@
                 return;
             }
             const existing = this.peerPrekeys.get(ownerHex);
-            // A newer bundle replaces an older one; an older one is refused so a
-            // replayed bundle cannot resurrect keys its owner already deleted.
+            // Older bundles are refused so a replay can't resurrect deleted keys.
             if (existing && existing.generatedAtMs >= bundle.generatedAtMs) return;
             const ok = await C().ed25519Verify(owner.signingPublicKey, bundle.signature,
                 E().prekeySignableBytes(bundle));
@@ -447,24 +396,12 @@
             try { this.onPrekeysChanged(await this.prekeys.encode()); } catch (_) { }
         }
 
-        /// Restores the batch minted before the last reload. Without it every
-        /// restart would orphan the mail already sealed to those keys.
+        // Without it a restart would orphan mail sealed to those keys.
         async restorePrekeys(raw) {
             try { await this.prekeys.decode(raw); } catch (_) { }
         }
 
-        /// Seals `payload` to a peer's static key and hands sealed copies to
-        /// nearby peers, who carry it and deliver it if they meet the recipient.
-        ///
-        /// The last-resort delivery path: the recipient is not in range and,
-        /// with no internet, the sender outbox cannot help either. Returns how
-        /// many couriers took a copy — zero when the deposit was refused, which
-        /// the caller should treat as "no worse off", never as an error.
-        ///
-        /// Refusal is the important half. `mayDeposit` blocks a ghost-pinned
-        /// conversation and a ghosted sender outright: handing an envelope to a
-        /// courier tells that courier a message exists and that we sent it, and
-        /// a ghost identity exists precisely so no such link is made.
+        // Last-resort delivery; returns couriers used (0 when refused, e.g. by mayDeposit for ghost conversations).
         async depositWithCouriers(recipientStaticKey, payload, copies) {
             const ghosted = !!this.ghostEnabled;
             const pinned = this.isGhostPinned
@@ -478,13 +415,7 @@
                 return 0;
             }
             const now = Date.now();
-            // Prefer a one-time PREKEY over the long-lived static key when the
-            // recipient has published one. Both seal the same way; the
-            // difference is that they DELETE a prekey after use, so an envelope
-            // captured in transit cannot be opened later even if their identity
-            // key is compromised. Falling back to the static key keeps mail
-            // flowing to a peer whose bundle we have never seen — worse
-            // secrecy, but delivered.
+            // Prefer a one-time prekey (forward secret) and fall back to the static key when none is known.
             const bundle = this.peerPrekeys.get(P().toHex(recipientStaticKey));
             const prekey = bundle ? this.prekeys.chooseFrom(bundle.prekeys) : null;
             let sealed;
@@ -498,10 +429,7 @@
                 return 0;
             }
             const bytes = X().encodeEnvelope({
-                // The TAG is always derived from the identity key, prekey or
-                // not: it is how the recipient recognizes their own mail, and
-                // they cannot look up an envelope by a prekey they may already
-                // have retired.
+                // The tag always derives from the identity key so the recipient can recognize mail for retired prekeys.
                 recipientTag: await X().recipientTagFor(recipientStaticKey, X().epochDayFor(now)),
                 expiryMs: now + X().MAX_LIFETIME_MS,
                 ciphertext: sealed,
@@ -509,9 +437,7 @@
                 prekeyId: prekey ? prekey.id : undefined,
             });
             if (!bytes) return 0;
-            // Awaited: derivePeerID is async, and an unresolved promise here
-            // would never equal a peerID, so mayCourier's "not the recipient"
-            // guard would silently never fire.
+            // Awaited, or mayCourier's "not the recipient" guard would silently never fire.
             const recipientPeerID = await C().derivePeerID(recipientStaticKey);
             let handed = 0;
             for (const peer of this.peers.values()) {
@@ -545,10 +471,7 @@
             const now = Date.now();
             if (now >= envelope.expiryMs) return;
 
-            // Is it for us? Only the recipient can open it, so this is the
-            // test. A v2 envelope names the prekey it was sealed to; if that key
-            // was never ours (or its grace window has lapsed) the open fails and
-            // we simply carry it, exactly as for any other stranger's mail.
+            // Only the recipient can open it; if the v2 prekey isn't ours (or lapsed) we just carry it.
             const pkId = envelope.prekeyId;
             const pkPriv = pkId === undefined ? null : this.prekeys.privateKeyFor(pkId);
             const pkPub = pkId === undefined ? null : this.prekeys.publicKeyFor(pkId);
@@ -559,15 +482,11 @@
                     pkPub || this.identity.staticPublic,
                     pkId === undefined ? null : X().prekeyPrologue(pkId));
                 if (pkId !== undefined && this.prekeys.markConsumed(pkId)) {
-                    // First open of this key: republish the shrunken batch.
-                    // Redeliveries of the same envelope arrive later
-                    // (spray-and-wait), so the private half survives a grace
-                    // window before it is really deleted.
+                    // First open: republish the shrunken batch; the private half survives a grace window for spray-and-wait copies.
                     await this._savePrekeys();
                     this.publishPrekeyBundle().catch(() => { });
                 }
-                // The sender's static key is AUTHENTICATED by the seal's `ss`
-                // DH, so this is who really wrote it — not whoever handed it on.
+                // The sender's static key is authenticated by the seal's `ss` DH.
                 const originPeerID = await C().derivePeerID(opened.senderStaticKey);
                 this.log(`courier envelope OPENED from ${originPeerID} (carried by ${senderPeerID})`);
                 await this._dispatchNoisePayload(originPeerID, opened.payload);
@@ -583,8 +502,7 @@
             }
         }
 
-        /// A peer just became known: hand them any mail we carry for them, and
-        /// give them a share of anything that still has budget to spread.
+        // Hand them mail we carry for them, and a share of anything with budget to spread.
         async _courierEncounter(peer) {
             if (!this.couriers.size) return;
             const recipient = P().fromHex(peer.peerID);
@@ -601,18 +519,14 @@
                             type: P().MsgType.courierEnvelope,
                             payload: bytes, recipientID: recipient, ttl: 0,
                         }));
-                        // Delivered: stop carrying it. If the peer could not
-                        // open it after all, the sender's own retries cover it.
+                        // Delivered: stop carrying it; the sender's own retries cover a failed open.
                         this.couriers.drop(key);
                         this.log(`courier delivered to ${peer.peerID}`);
                     } catch (_) { }
                 }
             }
 
-            // Spray: hand a share on so the message keeps spreading toward a
-            // recipient neither of us has met. Only to a VERIFIED peer — an
-            // unverified one is a radio claiming a name, and telling it we carry
-            // mail is telling a stranger.
+            // Spray only to verified peers: telling an unverified radio we carry mail tells a stranger.
             if (!X().mayCourier({ isVerified: peer.isVerified, isSelf: false, isRecipient: false })) return;
             for (const [key, held] of this.couriers.sprayableTo(peer.peerID)) {
                 const share = X().sprayShare(held.envelope.copies);
@@ -630,12 +544,7 @@
             }
         }
 
-        /// Files one of OUR public sends into the gossip store.
-        ///
-        /// The inbound path never sees our own packets (it drops self-echoes),
-        /// so without this a device would carry everyone's history except its
-        /// own — and the message a user actually sent in a dead spot would be
-        /// the one thing it could not serve to whoever arrived a minute later.
+        // The inbound path drops self-echoes, so our own sends must be filed here to be served later.
         async _rememberOwnPublic(packet) {
             if (!P().isBroadcast(packet) || !S().isSyncable(packet.type)) return;
             if (await this.gossip.onPublicPacketSeen(packet, P().isBroadcast)) {
@@ -643,22 +552,14 @@
             }
         }
 
-        /// Asks each connected peer, on its own schedule, to reconcile public
-        /// history: "here is a compact set of what I hold — send me the rest".
-        ///
-        /// Directed rather than broadcast, and TTL 0 so it is never relayed: a
-        /// sync request is a question for the peer that can hear it, and
-        /// flooding it would ask the whole mesh something only neighbors can
-        /// answer.
+        // Directed with TTL 0 so neighbors answer and it's never flooded mesh-wide.
         async _gossipTick() {
             if (!this.running) return;
             if (this.gossip.prune()) this._gossipDirty = true;
             // Mail we are carrying expires too — someone else's message is not
             // worth holding forever.
             this.couriers.prune();
-            // Delete consumed prekeys whose grace window has lapsed. This is
-            // where forward secrecy actually happens: until the private half is
-            // really gone, privateKeyFor only declines to use it.
+            // Forward secrecy happens here: until pruned, privateKeyFor only declines to use a consumed key.
             if (this.prekeys.prune()) await this._savePrekeys();
             if (this._gossipDirty) {
                 this._gossipDirty = false;
@@ -684,10 +585,7 @@
             }
         }
 
-        /// Answers a peer's reconciliation request with what their filter says
-        /// they are missing. Responses go out DIRECTED with TTL 0 — the
-        /// requester asked, nobody else did, and a replayed public message
-        /// re-entering the flood would go round the mesh a second time.
+        // Responses go out directed with TTL 0 so replayed messages don't re-enter the flood.
         async _handleRequestSync(packet, senderPeerID) {
             if (!this.gossip.shouldAnswer(senderPeerID)) return;
             const request = S().decodeRequestSync(packet.payload);
@@ -699,9 +597,7 @@
             const recipient = P().fromHex(senderPeerID);
             for (const pkt of missing) {
                 try {
-                    // Re-addressed to the requester: the original was a
-                    // broadcast, and re-broadcasting hands it to peers who
-                    // already have it.
+                    // Re-addressed to the requester; re-broadcasting would hit peers who already have it.
                     await this._send(P().makePacket({ ...pkt, recipientID: recipient, ttl: 0 }));
                 } catch (_) {
                     // One packet failing must not abandon the round.
@@ -719,9 +615,7 @@
             return JSON.stringify(rows);
         }
 
-        /// Restores the carried history. Contents are signed public broadcasts,
-        /// already visible to anyone who was in radio range, so they are stored
-        /// as-is — nothing private ever reaches this store.
+        // Signed public broadcasts only, so stored as-is.
         async restoreGossipArchive(raw) {
             if (!raw) return;
             let rows;
@@ -763,9 +657,7 @@
                 const bytes = P().encodePacket(parts[i], true);
                 if (!bytes) continue;
                 await this.transport.broadcast(bytes, exceptLinkId);
-                // Pace multi-fragment transfers so a peer's bounded send queue
-                // doesn't drop fragments, which would make the payload
-                // unreassemblable.
+                // Pace fragments so a peer's bounded send queue doesn't drop them.
                 if (i + 1 < parts.length) await new Promise(r => setTimeout(r, P().MeshConst.interFragmentDelayMs));
             }
         }
@@ -799,10 +691,7 @@
             }, Math.max(5000, base + jitter));
         }
 
-        /// Sends a public message. [channel] null is bitchat's #mesh public chat.
-        /// Returns the mesh message id. The sender outbox republishes it as a
-        /// `['nymmesh', id]` tag so a peer who already received this over the
-        /// radio drops the Nostr copy instead of showing the message twice.
+        // [channel] null is bitchat's #mesh chat; returns the id the outbox tags as `nymmesh` for dedup.
         async sendPublicMessage(content, channel) {
             if (!this.running) throw new Error('mesh not running');
             const msgId = randomHex(8);
@@ -825,11 +714,7 @@
                 await this._rememberOwnPublic(chanPacket);
                 return msgId;
             }
-            // bitchat's public mesh chat carries the RAW UTF-8 content, not a
-            // TLV; the nickname comes from the peer's announce. The packet
-            // carries no id of its own, so the outbox has none to dedup on —
-            // a `#mesh` send is only ever queued when it was made offline, and
-            // that channel is not mirrored to Nostr anyway.
+            // bitchat's public mesh chat carries raw UTF-8, not a TLV; the nickname comes from the announce.
             const meshPacket = await this._buildPacket({
                 type: P().MsgType.message,
                 payload: P().utf8.encode(content),
@@ -935,43 +820,34 @@
                 case T.noiseEncrypted: if (forUs) await this._handleEncrypted(senderPeerID, packet.payload); break;
                 case T.fragment: await this._handleFragment(packet, linkId, rssi); break;
                 case T.courierEnvelope:
-                    // Directed mail. Try to open it: if it is ours, deliver it;
-                    // if not, carry it for whoever it belongs to.
+                    // Directed mail: deliver if ours, else carry it.
                     if (forUs) await this._handleCourierEnvelope(packet, senderPeerID);
                     break;
                 case T.requestSync:
-                    // Local-only by design: a sync request is answered by the
-                    // peer that heard it and never relayed.
+                    // Local-only by design: answered by the peer that heard it, never relayed.
                     if (forUs) await this._handleRequestSync(packet, senderPeerID);
                     break;
                 case T.ping: if (forUs) await this._handlePing(packet, senderPeerID); break;
                 case T.pong: if (forUs) this._handlePong(packet, senderPeerID); break;
                 case T.prekeyBundle:
-                    // Broadcast and gossiped: a bundle has to reach senders
-                    // while its owner is away, which is exactly when it matters.
+                    // Broadcast and gossiped so bundles reach senders while the owner is away.
                     await this._handlePrekeyBundle(packet, senderPeerID);
                     break;
                 case T.nostrCarrier:
-                    // Either a mesh-only peer asking us to publish for them, or
-                    // a gateway handing the room what the relays said.
+                    // A mesh-only peer asking us to publish, or a gateway relaying what the relays said.
                     if (forUs) this._handleNostrCarrier(packet, senderPeerID);
                     break;
                 default: break;
             }
 
-            // Remember public traffic so this device can serve it to a peer who
-            // was out of range when it went by. Directed packets are refused
-            // inside — the store is public history, never anybody's private mail.
+            // Directed packets are refused inside: the store is public history only.
             if (P().isBroadcast(packet) && S().isSyncable(packet.type)) {
                 if (await this.gossip.onPublicPacketSeen(packet, P().isBroadcast)) {
                     this._gossipDirty = true;
                 }
             }
 
-            // Relay the controlled flood, but never a packet addressed only to
-            // us, and never back down the hop it arrived on. A reassembled
-            // packet is not relayed again: its fragments already were, and
-            // re-fragmenting the whole thing would double the air time.
+            // Never relay packets addressed only to us, back down the arrival hop, or reassembled (fragments already were).
             if (!alreadyRelayed && !directedToUs && packet.ttl > 1 && packet.type !== T.leave) {
                 this._scheduleRelay(packet, linkId);
             }
@@ -1006,8 +882,7 @@
             if (!ann) return;
 
             let verified = false;
-            // The peerID must be the fingerprint of the announced Noise key, and
-            // a signed announcement must verify against the announced Ed25519 key.
+            // The peerID must fingerprint the announced Noise key, and the signature must verify against the Ed25519 key.
             if (await C().matchesClaimedPeerID(senderPeerID, ann.noisePublicKey) && packet.signature) {
                 const signable = P().packetSigningBytes(packet);
                 verified = !!signable && await C().ed25519Verify(ann.signingPublicKey, packet.signature, signable);
@@ -1028,17 +903,13 @@
                 if (linked) { peer.nostrPubkey = linked; peer.nostrLinkVerified = true; }
             }
             this.onPeersChanged();
-            // A browser cannot advertise, so a peer only learns us from an
-            // announce we send. Answer a newly seen one promptly instead of
-            // waiting out the idle interval, or the link stays one-way.
+            // Browsers can't advertise, so answer a new announce promptly or the link stays one-way.
             if (isNew) this._announceSoon();
-            // Meeting a peer is the moment mail can move: hand them anything we
-            // carry for them, and a share of anything still spreading.
+            // Meeting a peer is when mail can move.
             this._courierEncounter(peer).catch(() => { });
         }
 
-        // Debounced + jittered so a room full of peers announcing at once
-        // produces one reply, not a storm.
+        // Debounced + jittered so a room announcing at once produces one reply, not a storm.
         _announceSoon() {
             if (this._announceSoonTimer) return;
             this._announceSoonTimer = setTimeout(async () => {
@@ -1068,9 +939,7 @@
             if (!msg || msg.isEncrypted) return;
             const peer = this._touchPeer(senderPeerID);
             this.onPublicMessage({
-                // The sender's outbox republishes this id as a `['nymmesh', id]`
-                // tag when their internet returns, so a receiver that already
-                // has this message can drop the Nostr copy.
+                // The sender's outbox republishes this as a `['nymmesh', id]` tag so receivers can drop the Nostr copy.
                 id: msg.id || null,
                 senderPeerID,
                 senderNickname: msg.sender || (peer && peer.nickname) || senderPeerID,
@@ -1113,12 +982,7 @@
             await this._dispatchNoisePayload(senderPeerID, plaintext);
         }
 
-        /// Handles a decrypted transport payload from `senderPeerID`.
-        ///
-        /// Shared by the live Noise session path and the courier path: an
-        /// envelope opened out of a courier's hands yields the SAME plaintext a
-        /// session would have, so a message that arrived by mail behaves
-        /// exactly like one that arrived over the air.
+        // Shared by live sessions and the courier path, so mail behaves exactly like over-the-air messages.
         async _dispatchNoisePayload(senderPeerID, plaintext) {
             const envelope = P().decodeNoisePayload(plaintext);
             if (!envelope) return;

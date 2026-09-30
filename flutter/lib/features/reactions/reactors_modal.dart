@@ -9,7 +9,6 @@ import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
 import '../../widgets/anchored_popup.dart';
 
-/// One reactor row in the reactor-list popup.
 class ReactorEntry {
   const ReactorEntry({
     required this.pubkey,
@@ -20,34 +19,24 @@ class ReactorEntry {
     this.subtitle,
   });
 
-  /// Reactor pubkey (used for the avatar seed + opening their context menu).
   final String pubkey;
 
-  /// Base nym (without the `#suffix`).
+  /// Base nym without the `#suffix`.
   final String nym;
 
   /// 4-hex pubkey suffix shown dimmed after the nym.
   final String suffix;
 
-  /// Whether this reactor is the local user.
   final bool isYou;
 
-  /// The reactor's profile picture (kind-0 `picture`); identicon fallback when
-  /// null (Rule 4 — every NymAvatar receives an imageUrl).
+  /// Profile picture; identicon fallback when null.
   final String? imageUrl;
 
-  /// Optional secondary line under the nym (e.g. a poll voter's chosen option).
+  /// Optional secondary line, e.g. a poll voter's chosen option.
   final String? subtitle;
 }
 
-/// The reactor-list popup (reactions.js `showReactorsModal`,
-/// styles-features.css `.reactors-modal`). Anchored above a badge, it lists who
-/// reacted with [emoji], capped at 50 rows with a "+N more" overflow line, and
-/// lets a row tap open that user's context menu via [onTapReactor].
-///
-/// Presented as an [OverlayEntry] by [showReactorsModal] so it can be anchored
-/// to the tapped badge and dismissed on outside-tap (matching the PWA's
-/// document-level close + scroll-dismiss behavior).
+/// Reactor-list popup anchored above a badge, capped at 50 rows with a "+N more" line.
 class ReactorsModal extends ConsumerWidget {
   const ReactorsModal({
     super.key,
@@ -63,9 +52,7 @@ class ReactorsModal extends ConsumerWidget {
   final List<ReactorEntry> reactors;
   final void Function(ReactorEntry)? onTapReactor;
 
-  /// Optional header title shown in place of the 40px emoji + count (Foundations
-  /// reuses this list for a "Seen by" sheet). When null the emoji+count header
-  /// is rendered (the reactions case).
+  /// Optional header title replacing the emoji and count header (e.g. "Seen by").
   final String? title;
 
   @override
@@ -73,11 +60,7 @@ class ReactorsModal extends ConsumerWidget {
     final c = context.nym;
     final shown = reactors.take(maxRows).toList();
     final overflow = reactors.length - shown.length;
-    // Watch the unified user store so an avatar that lands AFTER this sheet opens
-    // — whether from the D1 `profile-get` that `ensureProfiles` kicked off, or a
-    // live relay kind-0 — fills the row in immediately. Both sources ingest into
-    // `usersProvider`, so this one watch covers either path; the entry's baked-in
-    // [ReactorEntry.imageUrl] is the fallback until then.
+    // Watch users so avatars that arrive after opening fill in; [ReactorEntry.imageUrl] is the fallback.
     final users = ref.watch(usersProvider);
 
     return Material(
@@ -92,9 +75,6 @@ class ReactorsModal extends ConsumerWidget {
           color: c.bgSecondary,
           border: Border.all(color: c.glassBorder),
           borderRadius: NymRadius.rmd,
-          // dark (styles-chat.css:495): shadow-lg + shadow-glow + a 1px
-          // white@0.05 ring; light (styles-themes-responsive.css:1196-1199):
-          // `0 8px 32px rgba(0,0,0,0.12)` only.
           boxShadow: c.isLight
               ? const [
                   BoxShadow(
@@ -115,7 +95,6 @@ class ReactorsModal extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // `.reactors-modal-header`: 40px emoji + count, or a [title] label.
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
@@ -132,20 +111,13 @@ class ReactorsModal extends ConsumerWidget {
                     )
                   : Row(
                       children: [
-                        // `renderReactionEmoji` (emoji.js:342-351): only an
-                        // exact `:shortcode:` reaction renders as its custom-
-                        // emoji image, at `.custom-emoji-reaction` 1.45em of
-                        // the 40px `.reactors-modal-emoji` font (= 58px,
-                        // margin 0); unicode stays text.
+                        // Only an exact `:shortcode:` reaction renders as a custom emoji image; unicode stays text.
                         InlineEmojiText(
                           text: emoji,
                           style: const TextStyle(fontSize: 40, height: 1),
                           wholeStringOnly: true,
                           emojiSize: 40 * 1.45,
                           emojiMargin: EdgeInsets.zero,
-                          // `.reactors-modal-emoji` is `inline-flex;
-                          // align-items: center` (styles-chat.css:540-545), so
-                          // the img is flex-centered — `vertical-align` inert.
                           emojiAlignment: PlaceholderAlignment.middle,
                         ),
                         const SizedBox(width: 6),
@@ -156,7 +128,6 @@ class ReactorsModal extends ConsumerWidget {
                       ],
                     ),
             ),
-            // `.reactors-modal-list`.
             Flexible(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -218,7 +189,6 @@ class ReactorsModal extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  // Secondary line — e.g. a poll voter's chosen option.
                   if (r.subtitle != null && r.subtitle!.isNotEmpty)
                     Text(
                       r.subtitle!,
@@ -245,8 +215,7 @@ class ReactorsModal extends ConsumerWidget {
   }
 }
 
-/// Shows [ReactorsModal] anchored just above [anchorRect] (the badge bounds in
-/// global coordinates), clamped to the viewport, dismissed on outside tap.
+/// Shows the popup just above [anchorRect], clamped to the viewport and dismissed on outside tap.
 void showReactorsModal(
   BuildContext context, {
   required Rect anchorRect,
@@ -265,7 +234,6 @@ void showReactorsModal(
   entry = OverlayEntry(
     builder: (ctx) => Stack(
       children: [
-        // Outside-tap scrim.
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,

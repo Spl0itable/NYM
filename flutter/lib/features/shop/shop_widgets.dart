@@ -18,9 +18,7 @@ import 'cosmetics.dart'
 import 'shop_catalog.dart';
 import 'shop_models.dart';
 
-/// Renders a catalog item's inline SVG icon, tinted to [color]. The SVGs use
-/// `stroke="currentColor"` / `fill="currentColor"`, so we apply a color filter
-/// matching the web's `currentColor` inheritance.
+/// Renders a catalog item's inline SVG tinted to [color] via `currentColor`.
 class ShopSvgIcon extends StatelessWidget {
   const ShopSvgIcon({
     super.key,
@@ -35,10 +33,7 @@ class ShopSvgIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // currentColor theming instead of a srcIn colorFilter: the filter forces
-    // a Canvas::saveLayer per icon per frame (see NymSvgIcon), and flair
-    // glyphs render on every message row of a flair-wearing user. All shop
-    // glyphs paint exclusively with `currentColor`, so this is identical.
+    // `currentColor` theming avoids the per-icon saveLayer a srcIn colorFilter forces on every row.
     return SvgPicture.string(
       svg,
       width: size,
@@ -48,38 +43,21 @@ class ShopSvgIcon extends StatelessWidget {
   }
 }
 
-/// A flair's `.flair-X` glow — blurred tinted copies of the glyph painted behind
-/// the crisp icon. The CSS expresses this as two SEPARATE properties:
-///   * `text-shadow` — declared on every `.flair-X`, BUT the flair glyph is an
-///     inline path-only `<svg>` (no `<text>`), and CSS `text-shadow` shadows
-///     text runs only, never replaced inline-SVG paths. So the declared halo is
-///     INERT in the browser: the PWA renders these copies for NO flair, in
-///     either mode. We keep the values recorded for fidelity/reference, but they
-///     are never painted.
-///   * `filter: drop-shadow(...)` — only on the brighter star/flame/diamond/
-///     genesis. `filter` DOES apply to a replaced inline SVG, so this is the
-///     only glow the PWA actually renders. The light-mode overrides reset
-///     `color`/`text-shadow` but NOT `filter`, so it survives into light mode.
-/// Keeping the two lists distinct documents that asymmetry exactly.
+/// Flair glow: CSS `text-shadow` is inert on a path SVG so only `filter: drop-shadow` renders, in both modes.
 class _FlairGlow {
   const _FlairGlow({this.textShadows = const [], this.dropShadows = const []});
 
-  /// `text-shadow` blurs (color, blurRadius). Recorded for reference only —
-  /// inert on a path SVG, so never painted (see class doc).
+  /// Recorded for reference only; never painted.
   final List<(Color, double)> textShadows;
 
-  /// `filter: drop-shadow` blurs (color, blurRadius) — both modes.
+  /// `filter: drop-shadow` blurs (color, blurRadius), both modes.
   final List<(Color, double)> dropShadows;
 
-  /// The glow copies to paint. Only the `filter: drop-shadow` copies render in
-  /// the PWA — `text-shadow` does not shadow a path SVG — so we paint the
-  /// `drop-shadow` set in BOTH modes and ignore the inert `text-shadow` halo.
+  /// Only the drop-shadow copies render.
   List<(Color, double)> shadowsFor({required bool isLight}) => dropShadows;
 }
 
-/// The `.flair-badge` — a flair item's SVG tinted to its themed color, sized
-/// like the web (`font-size: 20px`), with the per-flair `.flair-X` glow. Genesis
-/// stamps its edition number.
+/// Flair SVG tinted to its themed color with its glow; Genesis stamps its edition number.
 class FlairBadge extends StatelessWidget {
   const FlairBadge({
     super.key,
@@ -92,8 +70,7 @@ class FlairBadge extends StatelessWidget {
   final int? edition;
   final double size;
 
-  /// Themed flair colors — the EXACT `.flair-X { color }` CSS hex
-  /// (`styles-features.css:323-356, 646-711, 1213`).
+  /// Exact CSS flair colors.
   static const Map<String, Color> colors = {
     'flair-crown': Color(0xFFFFD700),
     'flair-diamond': Color(0xFF00FFFF),
@@ -116,9 +93,7 @@ class FlairBadge extends StatelessWidget {
     'flair-genesis': Color(0xFFFFDF6B),
   };
 
-  /// Light-mode `.flair-X` colors (`body.light-mode .flair-X`,
-  /// styles-themes-responsive.css:765-985) — darker / desaturated for legibility
-  /// on a light surface; the CSS also drops the glow (`text-shadow: none`).
+  /// Darker light-mode flair colors, for legibility on light surfaces.
   static const Map<String, Color> lightColors = {
     'flair-crown': Color(0xFFB8960A),
     'flair-diamond': Color(0xFF0088AA),
@@ -141,84 +116,77 @@ class FlairBadge extends StatelessWidget {
     'flair-genesis': Color(0xFFB8860A),
   };
 
-  /// The `.flair-X` glow, split into its CSS `text-shadow` halo (dark only) and
-  /// `filter: drop-shadow` (both modes — survives `body.light-mode`). Each entry
-  /// is a blurred tinted glyph copy; the CSS `0 0 Npx` blur maps directly to a
-  /// Gaussian `blurRadius` of N. Values are the exact CSS rgba()s
-  /// (`styles-features.css:323-356, 646-711, 1213-1216`).
+  /// Per-flair glow; a CSS `0 0 Npx` blur maps to blurRadius N.
   static const Map<String, _FlairGlow> _glows = {
     'flair-crown': _FlairGlow(
-      textShadows: [(Color(0x80FFD700), 10.0)], // rgba(255,215,0,.5)
+      textShadows: [(Color(0x80FFD700), 10.0)],
     ),
     'flair-diamond': _FlairGlow(
-      textShadows: [(Color(0x8000FFFF), 10.0)], // rgba(0,255,255,.5)
-      dropShadows: [(Color(0xF2B4FFFF), 7.0)], // rgba(180,255,255,.95)
+      textShadows: [(Color(0x8000FFFF), 10.0)],
+      dropShadows: [(Color(0xF2B4FFFF), 7.0)],
     ),
     'flair-skull': _FlairGlow(
-      textShadows: [(Color(0x80FF0000), 10.0)], // rgba(255,0,0,.5)
+      textShadows: [(Color(0x80FF0000), 10.0)],
     ),
     'flair-star': _FlairGlow(
-      textShadows: [(Color(0x80FFFF00), 10.0)], // rgba(255,255,0,.5)
-      dropShadows: [(Color(0xE6FFFF00), 6.0)], // rgba(255,255,0,.9)
+      textShadows: [(Color(0x80FFFF00), 10.0)],
+      dropShadows: [(Color(0xE6FFFF00), 6.0)],
     ),
     'flair-lightning': _FlairGlow(
-      textShadows: [(Color(0x80F7931A), 10.0)], // rgba(247,147,26,.5)
+      textShadows: [(Color(0x80F7931A), 10.0)],
     ),
     'flair-heart': _FlairGlow(
-      textShadows: [(Color(0x80FF1493), 10.0)], // rgba(255,20,147,.5)
+      textShadows: [(Color(0x80FF1493), 10.0)],
     ),
     'flair-mask': _FlairGlow(
-      textShadows: [(Color(0x80FFFFFF), 10.0)], // rgba(255,255,255,.5)
+      textShadows: [(Color(0x80FFFFFF), 10.0)],
     ),
     'flair-rocket': _FlairGlow(
-      textShadows: [(Color(0x99FF6B6B), 10.0)], // rgba(255,107,107,.6)
+      textShadows: [(Color(0x99FF6B6B), 10.0)],
     ),
     'flair-shield': _FlairGlow(
-      textShadows: [(Color(0x9952FF9D), 10.0)], // rgba(82,255,157,.6)
+      textShadows: [(Color(0x9952FF9D), 10.0)],
     ),
     'flair-flame': _FlairGlow(
-      textShadows: [(Color(0x99FF7A1A), 10.0)], // rgba(255,122,26,.6)
-      dropShadows: [(Color(0xE6FF8C28), 6.0)], // rgba(255,140,40,.9)
+      textShadows: [(Color(0x99FF7A1A), 10.0)],
+      dropShadows: [(Color(0xE6FF8C28), 6.0)],
     ),
     'flair-snowflake': _FlairGlow(
-      textShadows: [(Color(0x997FDFFF), 10.0)], // rgba(127,223,255,.6)
+      textShadows: [(Color(0x997FDFFF), 10.0)],
     ),
     'flair-moon': _FlairGlow(
-      textShadows: [(Color(0x99CDD6FF), 10.0)], // rgba(205,214,255,.6)
+      textShadows: [(Color(0x99CDD6FF), 10.0)],
     ),
     'flair-sun': _FlairGlow(
-      textShadows: [(Color(0xB3FFC93C), 12.0)], // rgba(255,201,60,.7) 12px
+      textShadows: [(Color(0xB3FFC93C), 12.0)],
     ),
     'flair-leaf': _FlairGlow(
-      textShadows: [(Color(0x995FD35F), 10.0)], // rgba(95,211,95,.6)
+      textShadows: [(Color(0x995FD35F), 10.0)],
     ),
     'flair-music': _FlairGlow(
-      textShadows: [(Color(0x99B388FF), 10.0)], // rgba(179,136,255,.6)
+      textShadows: [(Color(0x99B388FF), 10.0)],
     ),
     'flair-eye': _FlairGlow(
-      textShadows: [(Color(0x9978DCFF), 10.0)], // rgba(120,220,255,.6)
+      textShadows: [(Color(0x9978DCFF), 10.0)],
     ),
     'flair-anchor': _FlairGlow(
-      textShadows: [(Color(0x995B9DFF), 10.0)], // rgba(91,157,255,.6)
+      textShadows: [(Color(0x995B9DFF), 10.0)],
     ),
     'flair-gem': _FlairGlow(
-      textShadows: [(Color(0x99FF3B6B), 10.0)], // rgba(255,59,107,.6)
+      textShadows: [(Color(0x99FF3B6B), 10.0)],
     ),
     'flair-genesis': _FlairGlow(
       textShadows: [
-        (Color(0xB3FFD700), 8.0), // rgba(255,215,0,.7)
-        (Color(0x66FFAA00), 16.0), // rgba(255,170,0,.4)
+        (Color(0xB3FFD700), 8.0),
+        (Color(0x66FFAA00), 16.0),
       ],
-      dropShadows: [(Color(0xE6FFC800), 7.0)], // rgba(255,200,0,.9)
+      dropShadows: [(Color(0xE6FFC800), 7.0)],
     ),
   };
 
   @override
   Widget build(BuildContext context) {
-    // Genesis stamps an edition number. The PWA injects it as an SVG `<text>`,
-    // but `flutter_svg`/`vector_graphics` silently drops `<text>` elements, so
-    // we render the plain icon (NO dead `<text>`) and overlay the number as a
-    // real Flutter `Text` below (F2).
+    // flutter_svg drops `<text>`, so the Genesis number is overlaid as a Flutter `Text`.
     final showGenesisNumber =
         flairId == 'flair-genesis' && edition != null && edition! > 0;
     final svg = showGenesisNumber
@@ -226,11 +194,7 @@ class FlairBadge extends StatelessWidget {
         : ShopCatalog.flairIcon(flairId, edition);
     if (svg.isEmpty) return const SizedBox.shrink();
     final isLight = context.nym.isLight;
-    // Light mode swaps to the darker `body.light-mode .flair-X` color; the
-    // `.flair-X` `text-shadow` halo is inert on a path SVG (never painted in
-    // either mode), and the `filter: drop-shadow` on star/flame/diamond/genesis
-    // is NOT reset by the light-mode rules, so it survives into light mode —
-    // `_FlairGlow.shadowsFor` returns exactly those drop-shadow copies.
+    // Light mode uses darker colors; the drop-shadow glow isn't reset, so it survives.
     final color = (isLight ? lightColors[flairId] : colors[flairId]) ??
         context.nym.primary;
     final shadows = _glows[flairId]?.shadowsFor(isLight: isLight) ?? const [];
@@ -242,14 +206,11 @@ class FlairBadge extends StatelessWidget {
           : Stack(
               alignment: Alignment.center,
               children: [
-                // Blurred tinted glyph copies (`filter: drop-shadow`).
                 for (final (glowColor, blur) in shadows)
                   Positioned.fill(
                     child: IgnorePointer(
                       child: ImageFiltered(
-                        // Match Flutter's Shadow blur sigma (`Shadow.convertRadius
-                        // ToSigma`) so an SVG glow reads like a `text-shadow`/
-                        // `drop-shadow` of the same CSS blur radius.
+                        // Match Flutter's Shadow sigma so the glow reads like a CSS blur of the same radius.
                         imageFilter: ui.ImageFilter.blur(
                           sigmaX: Shadow.convertRadiusToSigma(blur),
                           sigmaY: Shadow.convertRadiusToSigma(blur),
@@ -260,11 +221,7 @@ class FlairBadge extends StatelessWidget {
                     ),
                   ),
                 icon,
-                // Genesis edition number, mirroring the PWA's SVG `<text>` at
-                // `x=12 y=19.4 font-size=7.5` on the 24-unit viewBox: horizontally
-                // centerd, sitting near the base of the pyramid. `font-size 7.5`
-                // over the 24.1-unit viewBox ≈ 0.31·size; the digit's visual
-                // center falls at ~0.71 of the badge height (Alignment y≈0.42).
+                // Edition number centered near the pyramid base (~0.31x size font, y≈0.42).
                 if (showGenesisNumber)
                   Positioned.fill(
                     child: IgnorePointer(
@@ -289,8 +246,7 @@ class FlairBadge extends StatelessWidget {
   }
 }
 
-/// The `.supporter-badge` — gold trophy + "SUPPORTER" pill
-/// (`css/styles-features.css` `.supporter-badge`).
+/// Gold trophy plus "SUPPORTER" pill.
 class SupporterBadge extends StatelessWidget {
   const SupporterBadge({super.key, this.height = 18});
 
@@ -300,9 +256,7 @@ class SupporterBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Light mode (`body.light-mode .supporter-badge*`): a darker amber pill —
-    // bg rgba(180,140,0,.15→.08), border #b8960a, text #7a5c00, icon #9a7800 —
-    // so the gold reads on a light surface. Dark mode keeps the bright gold.
+    // Light mode uses a darker amber pill so the gold reads on a light surface.
     final isLight = context.nym.isLight;
     final gradient = isLight
         ? const [Color(0x26B48C00), Color(0x14B48C00)]
@@ -325,10 +279,7 @@ class SupporterBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // `.supporter-badge-icon svg { filter: drop-shadow(0 0 4px
-          // rgba(255,215,0,.6)) }` (styles-features.css:1462-1466) — a gold
-          // glow behind the trophy glyph. The light-mode rules recolour the
-          // icon but do NOT reset the filter, so the glow survives light mode.
+          // Gold glow behind the trophy, kept in light mode.
           Stack(
             alignment: Alignment.center,
             children: [
@@ -342,7 +293,7 @@ class SupporterBadge extends StatelessWidget {
                     child: const ShopSvgIcon(
                       svg: ShopCatalog.trophyIcon,
                       size: 14,
-                      color: Color(0x99FFD700), // rgba(255,215,0,.6)
+                      color: Color(0x99FFD700),
                     ),
                   ),
                 ),
@@ -358,7 +309,7 @@ class SupporterBadge extends StatelessWidget {
               color: textColor,
               fontSize: 11,
               letterSpacing: 1,
-              // `.supporter-badge-text` declares no font-weight → 400.
+              // No declared weight, so 400.
               fontWeight: FontWeight.w400,
             ),
           ),
@@ -368,12 +319,7 @@ class SupporterBadge extends StatelessWidget {
   }
 }
 
-/// A live message-bubble preview for a message style (F4 / `_shopStyleDemo`):
-/// a real `.message-content`-equivalent container rendering "Preview message"
-/// in the style's color + glow with the translucent content background and —
-/// for the textured styles — the SAME mode-aware tiled `--style-pattern` SVG
-/// the rendered chat message uses ([messageStyleDecoration]'s watermark via
-/// [StyleWatermarkLayer]), so the card matches the bubble in BOTH themes.
+/// Live message-style preview using the same mode-aware color, glow, background and watermark as the chat bubble.
 class ShopStyleBubblePreview extends StatelessWidget {
   const ShopStyleBubblePreview({
     super.key,
@@ -386,60 +332,31 @@ class ShopStyleBubblePreview extends StatelessWidget {
   final String styleId;
   final String text;
 
-  /// Whether the sample text is an inner `> *` CHILD (the shop item-card demo
-  /// wraps "Preview message" in a `<span>`, shop.js `_shopStyleDemo`:724) or a
-  /// BARE body text node (the "This is how your messages look." active-items block
-  /// puts the text directly in `.message-content`, shop.js:964). It only matters
-  /// for the satoshi container/child split: a child shows the orange `#f7931a`,
-  /// the bare body shows the white/brown container color.
+  /// Whether the sample is a child span (satoshi shows orange) or bare body text (container color).
   final bool sampleIsChild;
 
-  /// When true (chat-bubbles layout) the demo `.message-content` is the rounded
-  /// translucent bubble (`body.chat-bubbles .message-content`); when false (IRC
-  /// layout) it is the bare style-colored glyph line with only `padding: 6px
-  /// 10px` (`body:not(.chat-bubbles) .shop-msg-demo .message-content`,
-  /// styles-features.css:1415), no bubble background, no radius.
+  /// Bubble layout draws the rounded translucent bubble; IRC is a bare padded line.
   final bool bubble;
 
-  // NOTE: the shop demo renders `<div class="message style-X">` (shop.js
-  // `_shopStyleDemo`, :724), so it is styled by the REAL `.message.style-X
-  // .message-content` rules — NOT the `.style-preview-X` classes (which carry a
-  // tinted card wash but are never applied by the shop render; the `preview`
-  // catalog field is unused). So the wash styles (ocean/sakura/galaxy/toxic/
-  // blood/royal/circuit) paint NO content background — only their glowing text +
-  // tiled `--style-pattern` watermark — over the layout's default bubble fill.
-  // Only satoshi/eclipse/crt carry a real content background (contentBackground).
+  // The demo uses the real message-style rules, so only satoshi/eclipse/crt paint a content background.
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Resolve the MODE-AWARE decoration (same source the chat bubble uses), so
-    // the card preview switches to the PWA's `body.light-mode` style colors /
-    // dropped glow in light mode instead of showing the unreadable dark neons.
+    // Mode-aware decoration, so light mode shows the PWA's light style colors.
     final deco = messageStyleDecoration(styleId, isLight: c.isLight);
-    // The MODE-AWARE tiled `--style-pattern` (deco.watermark) — light mode swaps
-    // the darker light-theme tiles (ghost #223044, matrix #006600, …) exactly
-    // like the chat bubble; reading the dark map directly would tile invisible
-    // white ghosts on a light card.
+    // Mode-aware watermark; the dark tiles would be invisible on a light card.
     final watermark = deco?.watermark;
     if (deco == null) {
       return Text(text, style: TextStyle(color: c.text, fontSize: 13));
     }
-    // The glyph shadow(s): explicit multi-offset (glitch) or the single glow,
-    // already nulled in light mode by `messageStyleDecoration`. fire/ice paint a
-    // brighter glyph in the bubble than IRC (`body.chat-bubbles .message.style-X
-    // .message-content { color }`), so resolve the color per the user's layout.
+    // Glyph shadows are already nulled in light mode; fire/ice use a brighter bubble color.
     final base = TextStyle(
-      // A wrapped `<span>` sample is an inner `> *` child — for satoshi the bold
-      // orange `#f7931a`/`#c47a15`; a bare body node uses the white/brown container
-      // color. `previewColorFor` returns the child color for the split styles,
-      // `textColorFor` the container body color.
+      // Child samples use the child color (satoshi orange), bare text the container color.
       color: sampleIsChild
           ? deco.previewColorFor(bubble: bubble)
           : deco.textColorFor(bubble: bubble),
-      // `.shop-msg-demo .message-content { font-size: 13px }` (styles-features
-      // .css:1406-1413), normal weight — only satoshi's inner `> *` children are
-      // bold (`font-weight: bold`, :572), which the wrapped-span sample hits.
+      // 13px normal weight; only satoshi's child spans are bold.
       fontSize: 13,
       fontWeight: (deco.bold || (sampleIsChild && deco.childColor != null))
           ? FontWeight.bold
@@ -454,11 +371,7 @@ class ShopStyleBubblePreview extends StatelessWidget {
             LinearGradient(colors: deco.gradient!).createShader(rect),
         child: Text(text, style: base.copyWith(color: Colors.white)),
       );
-      // The aurora blue glow (`.style-preview-aurora { text-shadow: 0 0 10px
-      // rgba(91,140,255,.3) }`, styles-features.css:630-636; dark mode only —
-      // the light preview resets it). The mask would clip a shadow away, so
-      // paint a shadow-only transparent copy behind the gradient text, exactly
-      // like the chat bubble does.
+      // A mask would clip the glow, so paint a shadow-only copy behind the gradient text.
       final glow = deco.gradientGlow;
       if (glow != null) {
         label = Stack(
@@ -477,30 +390,18 @@ class ShopStyleBubblePreview extends StatelessWidget {
     } else {
       label = Text(text, style: base);
     }
-    // The style's own in-chat `.message-content { background }` for this layout
-    // (satoshi/eclipse/crt, plus aurora's TRANSPARENT bubble replacement); null
-    // for every other style — they tint via text + watermark, not a content
-    // background, exactly as the rendered chat message does.
+    // The style's own content background for this layout, or null.
     final styleBg = deco.contentBackgroundFor(bubble: bubble);
-    // IRC layout: `body:not(.chat-bubbles) .shop-msg-demo .message-content` is
-    // bare text with only `padding: 6px 10px` — NO rounded bubble, NO default
-    // `white@.14` fill. Only the style's own `.message-content { background }`
-    // (satoshi/eclipse/crt) still tints it (styleBg), with no radius.
+    // IRC: bare text with no bubble fill; only the style's own background tints it.
     if (!bubble) {
-      // No watermark and no content bg → just the bare padded glyph line.
+      // No watermark or background: just the padded glyph line.
       if (watermark == null && styleBg == null) {
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           child: label,
         );
       }
-      // The style still carries its tiled `--style-pattern` watermark (ocean,
-      // sakura, …) and/or content bg (satoshi/eclipse/crt) in IRC — just no
-      // rounded bubble. The watermark Stack is clipped to the content rect.
-      // CSS `background-position` origin is the PADDING BOX: the watermark
-      // must fill the padded strip (tiles start at the box's top-left corner,
-      // not inside the text inset) — this is also what makes the pattern
-      // actually visible on the short IRC demo line.
+      // The watermark fills the padding box, tiling from its top-left corner.
       return Container(
         decoration: BoxDecoration(color: styleBg),
         clipBehavior: watermark != null ? Clip.antiAlias : Clip.none,
@@ -518,14 +419,11 @@ class ShopStyleBubblePreview extends StatelessWidget {
     }
     return Container(
       decoration: BoxDecoration(
-        // Bubble layout: `body.chat-bubbles .message-content` is the rounded
-        // translucent bubble (`background: rgba(255,255,255,.14)`, radius 16 /
-        // top-left 4 — styles-features.css:3603-3617). A style with its own
-        // content background (satoshi/eclipse/crt) or a card wash paints over it.
+        // Bubble layout: default translucent bubble, overridden by a style background.
         color: styleBg ??
             (c.isLight
-                ? const Color(0x1A000000) // light: others → black@.10
-                : const Color(0x24FFFFFF)), // dark: white@.14
+                ? const Color(0x1A000000)
+                : const Color(0x24FFFFFF)),
         borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(4),
           topRight: Radius.circular(16),
@@ -536,17 +434,11 @@ class ShopStyleBubblePreview extends StatelessWidget {
       clipBehavior: watermark != null ? Clip.antiAlias : Clip.none,
       child: Stack(
         children: [
-          // CSS `background-position` origin is the PADDING BOX — the tiled
-          // `--style-pattern` starts at the bubble's top-left corner, with the
-          // text inset by the padding on top of it (the previous structure
-          // tiled from INSIDE the padding, offsetting every pattern by the
-          // 12/8 inset vs the PWA card).
+          // The watermark tiles from the bubble's top-left, under the padding.
           if (watermark != null)
             Positioned.fill(child: StyleWatermarkLayer(watermark: watermark)),
           Padding(
-            // Default bubble padding 8px 12px 6px (styles-features.css:3607);
-            // a style's own `.message-content` padding OUTRANKS it — satoshi's
-            // `padding: 10px 15px` (0,3,0 beats 0,2,1) — like message_row.
+            // A style's own padding outranks the default bubble padding.
             padding:
                 deco.contentPadding ?? const EdgeInsets.fromLTRB(12, 8, 12, 6),
             child: label,
@@ -557,11 +449,7 @@ class ShopStyleBubblePreview extends StatelessWidget {
   }
 }
 
-/// Composes one or more [CosmeticAura]s onto [child] the same way the chat
-/// bubble does: the fill (bubble gradient / flat wash / default translucent
-/// bubble), the IRC `border-left` accent, every aura's outer glow, the tiled
-/// watermark (frost edge snowflakes / cosmic starfield) and the
-/// prism-ring / hologram / inset-ring overlay painter.
+/// Composes [CosmeticAura]s onto [child] like the chat bubble: fill, IRC accent, glows, watermark and overlay.
 class ShopAuraBubble extends StatelessWidget {
   const ShopAuraBubble({
     super.key,
@@ -576,24 +464,15 @@ class ShopAuraBubble extends StatelessWidget {
   final List<CosmeticAura> auras;
   final Widget child;
 
-  /// Chat-bubbles vs IRC layout: bubble mode decorates the rounded translucent
-  /// `.message-content`; IRC mode paints border-left + gradient wash on the
-  /// flat row (`body:not(.chat-bubbles) .message.cosmetic-aura-*`).
+  /// Bubble mode decorates the rounded content; IRC mode paints the flat row.
   final bool bubble;
 
   final EdgeInsetsGeometry? padding;
 
-  /// Whether to paint the layout's default translucent bubble fill under
-  /// aura-less fills (false when [child] already draws its own bubble, e.g. the
-  /// active-items preview wrapping a styled content bubble).
+  /// Whether to paint the default bubble fill under aura-less fills.
   final bool defaultFill;
 
-  /// True when the previewed message carries an active `style-…` message
-  /// style. The PWA gates several aura layers on `:not([class*="style-"])`:
-  /// gold's bubble wash (styles-features.css:3700), frost's flat fill (:1165),
-  /// the cosmic bubble starfield (:1192) and the hologram iridescent
-  /// fill/sheen (:1203-1211) — a styled bubble keeps only rings/glows.
-  /// Item-card demos never carry a style, so the default is false.
+  /// An active message style drops some aura layers (gold wash, frost fill, cosmic starfield, hologram sheen).
   final bool styleActive;
 
   @override
@@ -602,14 +481,7 @@ class ShopAuraBubble extends StatelessWidget {
     if (auras.isEmpty) return child;
     final last = auras.last;
 
-    // Fill: the bubble paints the aura gradient only when the PWA bubble has
-    // one (gold); otherwise the aura's flat wash (frost) or the layout default.
-    // IRC paints the 135° row gradient / flat wash with no default fill.
-    // An active message style drops gold's bubble wash (`body.chat-bubbles
-    // .message:not([class*="style-"]).cosmetic-aura-gold .message-content`,
-    // styles-features.css:3700) and frost's flat fill (`:not([class*=
-    // "style-"]).cosmetic-frost`, :1165 — BOTH layouts); the IRC gold ROW
-    // gradient (:1099) carries no such gate.
+    // Bubble paints gold's gradient or frost's wash or the default; IRC paints the row gradient; an active style drops some.
     List<Color>? fillGradient;
     Color? fillColor;
     if (bubble) {
@@ -628,8 +500,7 @@ class ShopAuraBubble extends StatelessWidget {
       fillColor = styleActive ? null : last.background;
     }
 
-    // Every aura's outer glow (`0 0 {blur}px {color}`), at the layout's
-    // color + blur (light gold's bubble glow is `.15` vs the IRC `.12`).
+    // Every aura's outer glow at the layout's color and blur.
     final shadows = <BoxShadow>[
       for (final a in auras)
         if (a.glowColorFor(bubble: bubble) != null &&
@@ -640,18 +511,14 @@ class ShopAuraBubble extends StatelessWidget {
           ),
     ];
 
-    // IRC `border-left: 3px solid …` accent (last aura carrying one).
+    // IRC left accent from the last aura that has one.
     final borderAccent = bubble
         ? null
         : auras.reversed
             .map((a) => a.borderAccent)
             .firstWhere((b) => b != null, orElse: () => null);
 
-    // Watermark (first aura carrying one) + overlay (first prism/holo/ring aura).
-    // The cosmic BUBBLE starfield only tiles when no message style is active
-    // (`body.chat-bubbles .message:not([class*="style-"]).cosmetic-aura-cosmic
-    // .message-content`, styles-features.css:1192-1195); frost's EDGE
-    // snowflakes (:1149-1161) and the ungated IRC row starfield (:1179) stay.
+    // First watermark and overlay auras; the cosmic bubble starfield only tiles without an active style.
     CosmeticAura? watermarkAura;
     for (final a in auras) {
       if (a.watermark != null && (a.edgeWatermark || !bubble || !styleActive)) {
@@ -667,8 +534,7 @@ class ShopAuraBubble extends StatelessWidget {
       }
     }
 
-    // The rounded bubble radius (4 / 16, like the demo bubbles) — IRC rows are
-    // square. A non-uniform Border(left) forbids a radius, so IRC keeps zero.
+    // IRC rows are square since a left-only border forbids a radius.
     final radius = bubble
         ? const BorderRadius.only(
             topLeft: Radius.circular(4),
@@ -681,11 +547,7 @@ class ShopAuraBubble extends StatelessWidget {
     final needsStack = watermarkAura != null || overlayAura != null;
     final inner =
         padding == null ? child : Padding(padding: padding!, child: child);
-    // IRC row-level auras (`body:not(.chat-bubbles) .message.cosmetic-X` —
-    // gold/neon/phoenix/cosmic, the ones carrying a border-left) decorate the
-    // BLOCK message row, so the wash/bar/glow spans the available width; the
-    // content-level auras (rainbow/frost/hologram style the inline-block
-    // `.message-content` in both layouts) hug their child.
+    // Row-level IRC auras span the width; content-level auras hug their child.
     final expand = !bubble && auras.any((a) => a.borderAccent != null);
     return Container(
       width: expand ? double.infinity : null,
@@ -725,9 +587,7 @@ class ShopAuraBubble extends StatelessWidget {
                           aura: overlayAura,
                           radius: radius,
                           bubble: bubble,
-                          // Drops the hologram iridescent fill + sheen when a
-                          // `style-…` class is active (styles-features.css:
-                          // 1203-1211) — the ring/glow stay.
+                          // Drops the hologram fill and sheen when a style is active.
                           styleActive: styleActive,
                         ),
                       ),
@@ -739,10 +599,7 @@ class ShopAuraBubble extends StatelessWidget {
   }
 }
 
-/// A live message-bubble preview for a cosmetic aura (F4 / `_shopCosmeticDemo`):
-/// composes the SAME mode-aware [CosmeticAura] the chat bubble uses (ring +
-/// glow + border-left + gradient + frost snowflake edges / cosmic starfield /
-/// prism ring / hologram sheen) via [ShopAuraBubble], plus the redacted blackout.
+/// Live cosmetic preview built from the same [CosmeticAura] as the chat bubble, plus the redacted blackout.
 class ShopCosmeticBubblePreview extends StatelessWidget {
   const ShopCosmeticBubblePreview({
     super.key,
@@ -754,32 +611,24 @@ class ShopCosmeticBubblePreview extends StatelessWidget {
   final String cosmeticId;
   final String text;
 
-  /// Chat-bubbles vs IRC layout (see [ShopAuraBubble.bubble]).
+  /// Chat-bubbles vs IRC layout.
   final bool bubble;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Redacted: the `.cosmetic-redacted-message` blank — a translucent bar
-    // (`background: rgba(255,255,255,.15)` dark / `rgba(0,0,0,.12)` light —
-    // styles-features.css:1424-1435 + themes:954-957 — color transparent,
-    // radius xs, min-width 120px). The shop demo applies the class immediately
-    // (shop.js:779), so the card always shows the blanked state.
+    // Redacted: a translucent blank bar, always shown blanked.
     if (cosmeticId == 'cosmetic-redacted') {
       return Container(
         constraints: const BoxConstraints(minWidth: 120),
-        // In chat-bubbles mode the demo content is still the rounded bubble —
-        // `body.chat-bubbles .message-content` (padding 8px 12px 6px, radius
-        // 16 / top-left 4) outspecifies `.cosmetic-redacted-message`'s
-        // `--radius-xs`; only the IRC layout keeps the shop-demo `6px 10px`
-        // padding + the redacted radius-xs 8.
+        // Bubble padding and radius outrank the redacted styling in bubble mode.
         padding: bubble
             ? const EdgeInsets.fromLTRB(12, 8, 12, 6)
             : const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
           color: c.isLight
-              ? const Color(0x1F000000) // rgba(0,0,0,.12)
-              : const Color(0x26FFFFFF), // rgba(255,255,255,.15)
+              ? const Color(0x1F000000)
+              : const Color(0x26FFFFFF),
           borderRadius: bubble
               ? const BorderRadius.only(
                   topLeft: Radius.circular(4),
@@ -789,7 +638,7 @@ class ShopCosmeticBubblePreview extends StatelessWidget {
                 )
               : BorderRadius.circular(8),
         ),
-        // Transparent text reserves the 1.2em line-height of a real message.
+        // Transparent text reserves a real message's line height.
         child: Text(
           text,
           style: const TextStyle(color: Colors.transparent, fontSize: 13),
@@ -801,9 +650,7 @@ class ShopCosmeticBubblePreview extends StatelessWidget {
       return Text(text, style: TextStyle(color: c.text, fontSize: 13));
     }
     final label = Text(text, style: TextStyle(color: c.text, fontSize: 13));
-    // An IRC row-level aura spans the demo width ([ShopAuraBubble] expands it)
-    // with the inline-block sample centered inside (`.shop-msg-demo
-    // { text-align: center }`); content-level auras hug the text.
+    // Row-level IRC auras span the demo width with the sample centered.
     final rowLevel = !bubble && aura.borderAccent != null;
     return ShopAuraBubble(
       auras: [aura],
@@ -816,12 +663,7 @@ class ShopCosmeticBubblePreview extends StatelessWidget {
   }
 }
 
-/// The `.shop-item-preview` box (styles-features.css:181-193): full-width,
-/// `padding: 12px`, `rgba(255,255,255,.03)` fill, glass border, radius-sm,
-/// `min-height: 50px`, flex-centered content, 12px `--text` type (no light
-/// override — the tint stays in both modes). ONLY the flair nym rows and the
-/// supporter-badge rows sit in this box in the PWA — the message-style /
-/// cosmetic demos and the bundle chips render BARE in the card.
+/// Preview box for flair and supporter rows only; style/cosmetic demos and bundle chips render bare.
 class ShopPreviewBox extends StatelessWidget {
   const ShopPreviewBox({super.key, required this.child});
 
@@ -849,40 +691,27 @@ class ShopPreviewBox extends StatelessWidget {
   }
 }
 
-/// Renders the preview region for a single shop item card depending on its
-/// type, with the PWA's box-vs-bare split: the flair nym row (and the
-/// supporter nym+badge row) sit in the `.shop-item-preview` box, while the
-/// message-style / cosmetic demos are BARE `.shop-msg-demo` blocks — centered,
-/// no card-within-a-card box (shop.js `_shopStyleDemo`/`_shopCosmeticDemo`).
+/// Per-type preview: flair and supporter rows boxed, style and cosmetic demos bare and centered.
 class ShopItemPreview extends StatelessWidget {
   const ShopItemPreview({super.key, required this.item, this.bubble = true});
 
   final ShopItem item;
 
-  /// The user's current chat layout (chat-bubbles vs IRC). Threaded into the
-  /// live message demos so the card preview renders the cosmetic AS IT WOULD
-  /// APPEAR in the user's layout — the `.shop-msg-demo` reuses the real
-  /// `.message`/`.message-content` classes, which the PWA styles by
-  /// `body.chat-bubbles` vs `body:not(.chat-bubbles)`. The flair/supporter-badge
-  /// nym rows are identical in both layouts (plain `.shop-item-preview` text).
+  /// The user's chat layout, so demos render as they would in chat.
   final bool bubble;
 
   @override
   Widget build(BuildContext context) {
     switch (item.type) {
       case 'message-style':
-        // Bare `.shop-msg-demo` — block, `text-align: center`, no box.
+        // Bare, centered demo with no box.
         return Center(
           child: ShopStyleBubblePreview(styleId: item.id, bubble: bubble),
         );
       case 'nickname-flair':
-        // The Genesis card stamps a sample edition (#69) on the badge, matching
-        // `_renderLimitedCard`.
+        // The Genesis card stamps a sample edition (#69).
         final sampleEdition = item.id == 'flair-genesis' ? 69 : null;
-        // The flair-tab preview nym is REGULAR weight (`<span>Your_Nick …`,
-        // shop.js:759) — only the limited-tab flair card (:864) and the
-        // supporter demo (:786) wrap it in `<strong>`. The markup keeps a
-        // literal space between the nym and the badge's 5px margin.
+        // Regular weight nym; only the limited card and supporter demo bold it.
         return ShopPreviewBox(
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -893,9 +722,7 @@ class ShopItemPreview extends StatelessWidget {
           ),
         );
       case 'supporter':
-        // TWO blocks (shop.js:783): the boxed `.shop-item-preview` nym+badge
-        // row, then a separate BARE `.shop-msg-demo` supporter-style bubble.
-        // Box `margin-bottom: 10px` collapses with the demo's 10px top margin.
+        // Boxed nym and badge row, then a bare supporter-style bubble.
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -911,12 +738,10 @@ class ShopItemPreview extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
-            // supporter-style demo bubble (gold text + wash).
             Center(child: _SupporterStyleBubble(bubble: bubble)),
           ],
         );
       case 'cosmetic':
-        // Bare `.shop-msg-demo`, centered — no box.
         return Center(
           child: ShopCosmeticBubblePreview(cosmeticId: item.id, bubble: bubble),
         );
@@ -926,18 +751,7 @@ class ShopItemPreview extends StatelessWidget {
   }
 }
 
-/// The supporter-style demo bubble (`.message.supporter-style`): gold glyphs +
-/// soft glow over the layout-appropriate surface.
-///
-/// * IRC (`body:not(.chat-bubbles) .message.supporter-style`,
-///   styles-features.css:1473): a 135° gold wash (`rgba(255,215,0,.05)` →
-///   `.02`) + a 3px gold left bar on the flat row, no radius. Light mode
-///   (themes:934-936): wash `rgba(180,140,0,.06→.02)`, bar `#b8960a`.
-/// * Bubble (`body.chat-bubbles .message.supporter-style .message-content`,
-///   styles-features.css:3692): a flat `rgba(255,215,0,.12)` fill on the rounded
-///   bubble (radius 16 / top-left 4), no left bar. Light mode (themes:1421):
-///   `rgba(180,150,0,.08)`.
-/// Text: dark `#ffd700` + 8px gold glow; light `#8a6d00`, no glow (themes:939).
+/// Supporter-style demo: gold text over a gold wash with a left bar (IRC) or a gold-tinted bubble; darker in light mode.
 class _SupporterStyleBubble extends StatelessWidget {
   const _SupporterStyleBubble({this.bubble = true});
 
@@ -950,7 +764,7 @@ class _SupporterStyleBubble extends StatelessWidget {
       tr('Preview message'),
       style: TextStyle(
         color: isLight ? const Color(0xFF8A6D00) : const Color(0xFFFFD700),
-        // `.shop-msg-demo .message-content { font-size: 13px }`, normal weight.
+        // 13px normal weight.
         fontSize: 13,
         shadows: isLight
             ? null
@@ -958,9 +772,7 @@ class _SupporterStyleBubble extends StatelessWidget {
       ),
     );
     if (!bubble) {
-      // IRC: the wash + 3px gold bar sit on the BLOCK `.message` row, so they
-      // span the demo width with the inline-block sample centered inside
-      // (`.shop-msg-demo { text-align: center }`).
+      // IRC wash and bar span the demo width with the sample centered.
       return Container(
         width: double.infinity,
         alignment: Alignment.center,
@@ -970,8 +782,8 @@ class _SupporterStyleBubble extends StatelessWidget {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: isLight
-                ? const [Color(0x0FB48C00), Color(0x05B48C00)] // .06 → .02
-                : const [Color(0x0DFFD700), Color(0x05FFD700)], // .05 → .02
+                ? const [Color(0x0FB48C00), Color(0x05B48C00)]
+                : const [Color(0x0DFFD700), Color(0x05FFD700)],
           ),
           border: Border(
             left: BorderSide(
@@ -988,8 +800,8 @@ class _SupporterStyleBubble extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
       decoration: BoxDecoration(
         color: isLight
-            ? const Color(0x14B49600) // rgba(180,150,0,.08)
-            : const Color(0x1FFFD700), // gold@.12
+            ? const Color(0x14B49600)
+            : const Color(0x1FFFD700),
         borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(4),
           topRight: Radius.circular(16),
@@ -1002,12 +814,7 @@ class _SupporterStyleBubble extends StatelessWidget {
   }
 }
 
-/// The limited-tab supply/availability badge (F5 — `.shop-supply-badge
-/// shop-supply-{state}`). Three color tiers: available green `#52ff9d`, soon
-/// blue `#7fdfff`, ended/soldout red `#ff6b6b` (`styles-features.css:1342-1359`).
-/// Light mode swaps ONLY the text color (`body.light-mode .shop-supply-*`,
-/// styles-themes-responsive.css:1044-1047): available `#1f8a4c`, soon
-/// `#1f6f8a`, ended/soldout `#c0392b`; the bg/border rgba tints stay.
+/// Limited supply badge in green/blue/red tiers; light mode swaps only the text color.
 class ShopSupplyBadge extends StatelessWidget {
   const ShopSupplyBadge({super.key, required this.availability});
 
@@ -1042,9 +849,7 @@ class ShopSupplyBadge extends StatelessWidget {
     };
     final fg = context.nym.isLight ? tier.lightFg : tier.fg;
     return Container(
-      // `.shop-supply-badge { margin: 6px 0; padding: 2px 10px }`
-      // (styles-features.css:1332-1340). The 6px CSS margins collapse with the
-      // neighbors' margins, so callers provide the collapsed gaps instead.
+      // Callers provide the collapsed margins.
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
       decoration: BoxDecoration(
         color: tier.bg,
@@ -1064,10 +869,7 @@ class ShopSupplyBadge extends StatelessWidget {
   }
 }
 
-/// The bundle savings badge + content chips (F6 — `_renderBundleCard`):
-/// a "Save X% · N sats value" badge above each component as a
-/// `.shop-bundle-chip` (icon + name, capped at 10 with "+N more"). Renders
-/// BARE in the card — the PWA `.shop-bundle-contents` has no box.
+/// Bundle "Save X%" badge plus component chips (max 10, then "+N more"), rendered bare.
 class ShopBundlePreview extends StatelessWidget {
   const ShopBundlePreview({super.key, required this.item});
 
@@ -1086,9 +888,7 @@ class ShopBundlePreview extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (savePct > 0) ...[
-          // The save badge is an inline-block div in the card's LEFT-aligned
-          // flow (`.shop-supply-badge`), not centered; its 6px bottom margin
-          // collapses with `.shop-bundle-contents`' 8px top margin → 8px gap.
+          // Left-aligned in the card flow, not centered.
           Align(
             alignment: Alignment.centerLeft,
             child: ShopSupplyBadge(
@@ -1115,8 +915,7 @@ class ShopBundlePreview extends StatelessWidget {
   }
 }
 
-/// A single `.shop-bundle-chip`: the component's SVG icon + name in a rounded
-/// secondary-tinted pill (`styles-features.css:1369-1383`).
+/// Component icon and name in a secondary-tinted pill.
 class _BundleChip extends StatelessWidget {
   const _BundleChip({required this.itemId}) : extra = 0;
   const _BundleChip.more(this.extra) : itemId = null;
@@ -1150,10 +949,7 @@ class _BundleChip extends StatelessWidget {
   }
 }
 
-/// The gold edition-number stamp (`#{n}/{max}`, `.shop-edition-no`,
-/// `styles-features.css:1385-1390`): gold `#ffdf6b`, 12px 700, soft gold glow.
-/// Light mode (`body.light-mode .shop-edition-no`, themes:1048): darker amber
-/// `#8a6d00`, no glow (`text-shadow: none`).
+/// Gold `#{n}/{max}` edition stamp; darker amber without glow in light mode.
 class ShopEditionNumber extends StatelessWidget {
   const ShopEditionNumber({super.key, required this.edition, this.editionMax});
 
@@ -1177,8 +973,7 @@ class ShopEditionNumber extends StatelessWidget {
   }
 }
 
-/// A click-to-copy recovery-code row (F9/F10 — `.nm-shop-6`/`.nm-shop-7`):
-/// a "Recovery code" label over the monospace code; tapping copies it.
+/// Tap-to-copy recovery code row.
 class RecoveryCodeRow extends StatelessWidget {
   const RecoveryCodeRow({
     super.key,
@@ -1228,15 +1023,12 @@ class RecoveryCodeRow extends StatelessWidget {
   }
 }
 
-/// The 45deg "LEGENDARY" corner ribbon (F14 — `.shop-legendary-ribbon`):
-/// gradient `#ffb340→#ff7ad9`, dark text, 8px 800-weight, rotated 45deg in the
-/// top-right corner. Wrap the card in a `Stack` and clip it.
+/// 45° "LEGENDARY" corner ribbon; wrap the card in a clipping Stack.
 class ShopLegendaryRibbon extends StatelessWidget {
   const ShopLegendaryRibbon({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // top:24px right:-48px width:160px rotate(45deg) (styles-features.css:1312).
     return Positioned(
       top: 24,
       right: -48,

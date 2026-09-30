@@ -23,14 +23,14 @@ Object.assign(NYM.prototype, {
         const connectionsToDelete = [];
         this.p2pConnections.forEach((pc, connectionId) => {
             if (connectionId.endsWith(transferId)) {
-                try { pc.close(); } catch (e) { /* ignore */ }
+                try { pc.close(); } catch (e) {}
                 connectionsToDelete.push(connectionId);
             }
         });
         connectionsToDelete.forEach(id => {
             this.p2pConnections.delete(id);
             if (this.p2pDataChannels.has(id)) {
-                try { this.p2pDataChannels.get(id).close(); } catch (e) { /* ignore */ }
+                try { this.p2pDataChannels.get(id).close(); } catch (e) {}
                 this.p2pDataChannels.delete(id);
             }
         });
@@ -47,7 +47,6 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // Handle incoming P2P signaling events
     handleP2PSignalingEvent(event) {
         try {
             const data = JSON.parse(event.content);
@@ -65,7 +64,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Handle P2P file status events (e.g., unseeded notifications)
     _isOfferSeeder(offerId, pubkey) {
         const offer = this.p2pFileOffers && this.p2pFileOffers.get(offerId);
         return !!(offer && pubkey && offer.seederPubkey === pubkey);
@@ -78,11 +76,9 @@ Object.assign(NYM.prototype, {
             if (data.status === 'unseeded' && this.isValidOfferId(data.offerId)
                 && this._isOfferSeeder(data.offerId, event.pubkey)) {
                 this.p2pUnseededOffers.add(data.offerId);
-                // Update UI to show file is no longer available
                 this.updateFileOfferUI(data.offerId, 'unseeded');
             }
         } catch (e) {
-            // Try tag-based approach
             const offerIdTag = (event.tags || []).find(t => t[0] === 'offer_id');
             const statusTag = (event.tags || []).find(t => t[0] === 'status');
             if (offerIdTag && statusTag && statusTag[1] === 'unseeded' && this.isValidOfferId(offerIdTag[1])
@@ -93,26 +89,21 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Share a file via P2P
     async shareP2PFile(file) {
         if (!this.connected || !this.pubkey) {
             this.displaySystemMessage('Must be connected to share files');
             return;
         }
 
-        // Compute file hash for identification
         const arrayBuffer = await file.arrayBuffer();
         const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 
-        // Create unique offer ID
         const offerId = fileHash.substring(0, 16) + '-' + Date.now().toString(36);
 
-        // Store file for seeding
         this.p2pPendingFiles.set(offerId, file);
 
-        // Create file offer metadata
         const fileOffer = {
             offerId: offerId,
             name: file.name,
@@ -123,7 +114,6 @@ Object.assign(NYM.prototype, {
             timestamp: Math.floor(Date.now() / 1000)
         };
 
-        // Store offer locally
         this.p2pFileOffers.set(offerId, fileOffer);
 
         const content = `Sharing file through Nymchat: ${file.name} (${this.formatFileSize(file.size)})`;
@@ -133,8 +123,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Announce a file offer into the active conversation: public geohash
-    // channel (broadcast), 1:1 PM, or private group (encrypted gift wrap).
+    // Public geohash channel (broadcast), 1:1 PM, or private group (encrypted gift wrap).
     async publishFileOffer(fileOffer, content) {
         if (this.inPMMode && this.currentGroup) {
             await this.sendGroupMessage(content, this.currentGroup, { fileOffer });
@@ -221,7 +210,6 @@ Object.assign(NYM.prototype, {
         return offer;
     },
 
-    // Parse and register a file offer carried on a message's tags
     parseFileOfferTag(tags, senderPubkey) {
         const offerTag = (tags || []).find(t => Array.isArray(t) && t[0] === 'offer');
         if (!offerTag || typeof offerTag[1] !== 'string' || offerTag[1].length > 16384) return null;
@@ -237,7 +225,6 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // Format file size for display
     formatFileSize(bytes) {
         bytes = Number(bytes);
         if (!Number.isFinite(bytes) || bytes < 0) bytes = 0;
@@ -247,7 +234,6 @@ Object.assign(NYM.prototype, {
         return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
     },
 
-    // Get file type category for icon styling
     getFileTypeCategory(filename, mimeType) {
         const ext = filename.split('.').pop().toLowerCase();
         const audioExts = ['mp3', 'wav', 'flac', 'aac', 'ogg', 'm4a', 'wma'];
@@ -262,7 +248,6 @@ Object.assign(NYM.prototype, {
         return 'file';
     },
 
-    // Request a file from a seeder
     async requestP2PFile(offerId) {
         if (!this.isValidOfferId(offerId)) return;
         const offer = this.p2pFileOffers.get(offerId);
@@ -281,7 +266,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Update UI to show connecting
         const btn = document.querySelector(`[data-offer-id="${offerId}"] .file-offer-btn`);
         const progressDiv = document.getElementById(`progress-${offerId}`);
         if (btn) {
@@ -293,7 +277,6 @@ Object.assign(NYM.prototype, {
             progressDiv.style.display = 'block';
         }
 
-        // Create transfer state
         const transferId = offerId + '-' + Date.now().toString(36);
         this.p2pActiveTransfers.set(transferId, {
             offerId: offerId,
@@ -304,22 +287,18 @@ Object.assign(NYM.prototype, {
         });
         this.p2pReceivedChunks.set(transferId, []);
 
-        // Create WebRTC connection
         await this.createP2PConnection(offer.seederPubkey, transferId, true);
     },
 
-    // Create a WebRTC peer connection
     async createP2PConnection(peerPubkey, transferId, isInitiator) {
         const connectionId = peerPubkey + '-' + transferId;
 
-        // Create new RTCPeerConnection
         const pc = new RTCPeerConnection({
             iceServers: this.p2pIceServers
         });
 
         this.p2pConnections.set(connectionId, pc);
 
-        // Trickle ICE candidates to the peer
         pc.onicecandidate = (event) => {
             if (event.candidate) {
                 this.sendP2PSignal(peerPubkey, {
@@ -338,7 +317,6 @@ Object.assign(NYM.prototype, {
                 }
                 this.cleanupP2PConnection(connectionId, transferId);
             } else if (pc.iceConnectionState === 'disconnected') {
-                // Give it a moment to recover before declaring error
                 setTimeout(() => {
                     if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
                         if (transfer && transfer.status !== 'complete') {
@@ -352,7 +330,6 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Connection timeout - 30 seconds to establish
         const connectionTimeout = setTimeout(() => {
             const transfer = this.p2pActiveTransfers.get(transferId);
             if (transfer && transfer.status === 'connecting') {
@@ -361,7 +338,6 @@ Object.assign(NYM.prototype, {
             }
         }, 30000);
 
-        // Clear timeout when connected
         const origOnIceChange = pc.oniceconnectionstatechange;
         pc.oniceconnectionstatechange = (e) => {
             if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
@@ -371,14 +347,12 @@ Object.assign(NYM.prototype, {
         };
 
         if (isInitiator) {
-            // Create data channel for receiving file
             const dc = pc.createDataChannel('fileTransfer', {
                 ordered: true
             });
             this.setupDataChannel(dc, transferId, false);
             this.p2pDataChannels.set(connectionId, dc);
 
-            // Create and send offer
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
@@ -390,7 +364,6 @@ Object.assign(NYM.prototype, {
                 offerId: transfer?.offerId
             });
         } else {
-            // Wait for data channel from peer
             pc.ondatachannel = (event) => {
                 const dc = event.channel;
                 this.setupDataChannel(dc, transferId, true);
@@ -401,27 +374,24 @@ Object.assign(NYM.prototype, {
         return pc;
     },
 
-    // Cleanup a P2P connection and associated resources
     cleanupP2PConnection(connectionId, transferId) {
         const pc = this.p2pConnections.get(connectionId);
         if (pc) {
-            try { pc.close(); } catch (e) { /* ignore */ }
+            try { pc.close(); } catch (e) {}
             this.p2pConnections.delete(connectionId);
         }
         const dc = this.p2pDataChannels.get(connectionId);
         if (dc) {
-            try { dc.close(); } catch (e) { /* ignore */ }
+            try { dc.close(); } catch (e) {}
             this.p2pDataChannels.delete(connectionId);
         }
     },
 
-    // Setup data channel handlers
     setupDataChannel(dc, transferId, isSender) {
         dc.binaryType = 'arraybuffer';
 
         dc.onopen = () => {
             if (isSender) {
-                // Start sending file
                 this.startSendingFile(transferId, dc);
             } else {
                 this.updateTransferStatus(transferId, 'transferring', 'Receiving...');
@@ -440,7 +410,6 @@ Object.assign(NYM.prototype, {
         };
 
         dc.onclose = () => {
-            // Check if transfer completed
             const transfer = this.p2pActiveTransfers.get(transferId);
             if (transfer && transfer.status !== 'complete' && transfer.status !== 'error') {
                 this.updateTransferStatus(transferId, 'error', 'Connection closed');
@@ -448,7 +417,6 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Start sending file chunks
     async startSendingFile(transferId, dataChannel) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         if (!transfer) return;
@@ -457,12 +425,11 @@ Object.assign(NYM.prototype, {
         if (!file) {
             try {
                 dataChannel.send(JSON.stringify({ type: 'error', message: 'File no longer available' }));
-            } catch (e) { /* channel may be closed */ }
+            } catch (e) {}
             this.updateTransferStatus(transferId, 'error', 'File no longer available');
             return;
         }
 
-        // Send file metadata first as JSON string
         dataChannel.send(JSON.stringify({
             type: 'metadata',
             name: file.name,
@@ -470,10 +437,9 @@ Object.assign(NYM.prototype, {
             mimeType: file.type
         }));
 
-        // Small delay to ensure metadata is received before binary data
+        // Small delay so metadata is received before binary data.
         await new Promise(resolve => setTimeout(resolve, 50));
 
-        // Read and send file in chunks
         const chunkSize = this.P2P_CHUNK_SIZE;
         const HIGH_WATER = chunkSize * 16;   // start backpressure
         const LOW_WATER = chunkSize * 4;     // resume threshold
@@ -503,11 +469,11 @@ Object.assign(NYM.prototype, {
             }
 
             if (offset >= file.size) {
-                // Small delay to ensure all data chunks are flushed before sending complete
+                // Small delay so all data chunks flush before sending complete.
                 await new Promise(resolve => setTimeout(resolve, 100));
                 try {
                     dataChannel.send(JSON.stringify({ type: 'complete' }));
-                } catch (e) { /* ignore */ }
+                } catch (e) {}
                 transfer.status = 'complete';
                 return;
             }
@@ -515,7 +481,6 @@ Object.assign(NYM.prototype, {
             const chunk = file.slice(offset, offset + chunkSize);
             const arrayBuffer = await chunk.arrayBuffer();
 
-            // Apply backpressure: only wait when the queue is actually full.
             if (dataChannel.bufferedAmount > HIGH_WATER) {
                 await waitForDrain();
                 if (dataChannel.readyState !== 'open') {
@@ -528,8 +493,7 @@ Object.assign(NYM.prototype, {
                 dataChannel.send(arrayBuffer);
                 offset += chunkSize;
 
-                // Continue sending without an artificial setTimeout(0) hop
-                // when the channel has headroom — keeps throughput high.
+                // Skip the setTimeout(0) hop when the channel has headroom to keep throughput high.
                 if (dataChannel.bufferedAmount < HIGH_WATER) {
                     Promise.resolve().then(sendNextChunk);
                 } else {
@@ -541,12 +505,10 @@ Object.assign(NYM.prototype, {
         sendNextChunk();
     },
 
-    // Handle received file chunk
     handleFileChunk(transferId, data) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         if (!transfer) return;
 
-        // Handle JSON string messages (metadata, complete, error)
         if (typeof data === 'string') {
             try {
                 const msg = JSON.parse(data);
@@ -562,12 +524,10 @@ Object.assign(NYM.prototype, {
                     return;
                 }
             } catch (e) {
-                // Not JSON, ignore
             }
             return;
         }
 
-        // Binary chunk (ArrayBuffer)
         if (data instanceof ArrayBuffer) {
             const chunks = this.p2pReceivedChunks.get(transferId);
             if (chunks) {
@@ -583,7 +543,6 @@ Object.assign(NYM.prototype, {
                 chunks.push(data);
                 transfer.bytesReceived += data.byteLength;
 
-                // Update progress
                 if (transfer.offer) {
                     const progress = Math.min(100, (transfer.bytesReceived / transfer.offer.size) * 100);
                     this.updateTransferProgress(transferId, progress);
@@ -592,13 +551,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Complete file transfer and trigger download
     async completeFileTransfer(transferId) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         const chunks = this.p2pReceivedChunks.get(transferId);
 
         if (!transfer || !chunks) return;
-        // Combine chunks into blob
 
         const offer = transfer.offer;
 
@@ -630,7 +587,6 @@ Object.assign(NYM.prototype, {
             console.warn('P2P offer has no advertised hash; skipping integrity check for transfer', transferId);
         }
 
-        // Create download link
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -640,16 +596,13 @@ Object.assign(NYM.prototype, {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        // Update status
         this.updateTransferStatus(transferId, 'complete', 'Download complete!');
 
-        // Cleanup
         this.p2pReceivedChunks.delete(transferId);
 
         this.displaySystemMessage(`File "${transfer.offer?.name || 'file'}" downloaded successfully`);
     },
 
-    // Update transfer progress UI
     updateTransferProgress(transferId, percent) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         if (!transfer) return;
@@ -668,7 +621,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Update transfer status
     updateTransferStatus(transferId, status, message) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         if (!transfer) return;
@@ -694,7 +646,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Send P2P signaling message via Nostr
     async sendP2PSignal(targetPubkey, data) {
         const event = {
             kind: this.P2P_SIGNALING_KIND,
@@ -710,13 +661,11 @@ Object.assign(NYM.prototype, {
         this.sendToRelay(['EVENT', signedEvent]);
     },
 
-    // Handle incoming SDP offer
     async handleP2POffer(senderPubkey, data) {
         const { sdp, transferId, offerId } = data;
 
-        // Check if we have this file to offer
         if (!this.p2pPendingFiles.has(offerId)) {
-            return; // We don't have this file
+            return;
         }
 
         const fileOffer = this.p2pFileOffers.get(offerId);
@@ -725,7 +674,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Create transfer state for sending
         this.p2pActiveTransfers.set(transferId, {
             offerId: offerId,
             offer: fileOffer,
@@ -734,11 +682,9 @@ Object.assign(NYM.prototype, {
             startTime: Date.now()
         });
 
-        // Create peer connection and set remote description
         const pc = await this.createP2PConnection(senderPubkey, transferId, false);
         await pc.setRemoteDescription(new RTCSessionDescription(sdp));
 
-        // Create and send answer
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -749,7 +695,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Handle incoming SDP answer
     async handleP2PAnswer(senderPubkey, data) {
         const { sdp, transferId } = data;
         const connectionId = senderPubkey + '-' + transferId;
@@ -760,7 +705,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Handle incoming ICE candidate
     async handleP2PIceCandidate(senderPubkey, data) {
         const { candidate, transferId } = data;
         const connectionId = senderPubkey + '-' + transferId;
@@ -775,14 +719,12 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Open P2P transfers modal
     openP2PTransfersModal() {
         const modal = document.getElementById('p2pTransfersModal');
         const list = document.getElementById('p2pTransfersList');
 
         if (!modal || !list) return;
 
-        // Build transfer list
         list.innerHTML = '';
 
         if (this.p2pActiveTransfers.size === 0 && this.p2pPendingFiles.size === 0) {
@@ -790,7 +732,6 @@ Object.assign(NYM.prototype, {
         } else {
             const fragment = document.createDocumentFragment();
 
-            // Show seeding files
             this.p2pPendingFiles.forEach((file, offerId) => {
                 const offer = this.p2pFileOffers.get(offerId);
                 if (offer) {
@@ -813,7 +754,6 @@ Object.assign(NYM.prototype, {
                 }
             });
 
-            // Show active transfers
             this.p2pActiveTransfers.forEach((transfer, transferId) => {
                 if (transfer.offer) {
                     const item = document.createElement('div');
@@ -846,16 +786,13 @@ Object.assign(NYM.prototype, {
         modal.classList.add('active');
     },
 
-    // Stop seeding a file and broadcast unseeded event
     async stopSeeding(offerId) {
         const offer = this.p2pFileOffers.get(offerId);
         this.p2pPendingFiles.delete(offerId);
         this.p2pUnseededOffers.add(offerId);
 
-        // Stop torrent seeding if applicable
         this.stopSeedingTorrent(offerId);
 
-        // Close any active transfer connections for this offer
         const transfersToCancel = [];
         this.p2pActiveTransfers.forEach((transfer, transferId) => {
             if (transfer.offerId === offerId) {
@@ -864,7 +801,6 @@ Object.assign(NYM.prototype, {
         });
         transfersToCancel.forEach(transferId => this.cancelTransfer(transferId));
 
-        // Broadcast unseeded event via Nostr so peers know the file is no longer available
         if (offer && this.pubkey) {
             try {
                 let tags = [
@@ -889,21 +825,18 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Update any visible file offer UI to show unseeded status
         this.updateFileOfferUI(offerId, 'unseeded');
 
         this.displaySystemMessage('Stopped seeding file' + (offer ? `: ${offer.name}` : ''));
-        this.openP2PTransfersModal(); // Refresh modal
+        this.openP2PTransfersModal();
     },
 
-    // Update file offer UI element to reflect current status
     updateFileOfferUI(offerId, status) {
         if (!this.isValidOfferId(offerId)) return;
         const offerEl = document.querySelector(`[data-offer-id="${offerId}"]`);
         if (!offerEl) return;
 
         if (status === 'unseeded') {
-            // Update the seeding indicator or download button to show unavailable
             const seedingDiv = offerEl.querySelector('.file-offer-seeding');
             if (seedingDiv) {
                 seedingDiv.innerHTML = `
@@ -925,11 +858,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Initialize WebTorrent client, loading the library on first use.
     async getTorrentClient() {
         if (!this.torrentClient) {
             if (typeof WebTorrent === 'undefined') {
-                // ESM-only bundle: dynamic import, then expose the usual global
+                // ESM-only bundle: dynamic import, then expose the usual global.
                 try {
                     const mod = await import(window.NYM_CDN.webtorrent);
                     window.WebTorrent = mod.default || mod.WebTorrent;
@@ -944,8 +876,6 @@ Object.assign(NYM.prototype, {
         return this.torrentClient;
     },
 
-    // Share a file via WebTorrent (creates a torrent and seeds it)
-    // Handle torrent file sharing - either a .torrent file or seed via WebTorrent
     async shareP2PFileTorrent(file) {
         if (!this.connected || !this.pubkey) {
             this.displaySystemMessage('Must be connected to share files');
@@ -966,7 +896,6 @@ Object.assign(NYM.prototype, {
         const isTorrentFile = file.name.endsWith('.torrent') || file.type === 'application/x-bittorrent';
 
         if (isTorrentFile) {
-            // User selected a .torrent file - read it and add to client
             this.displaySystemMessage(`Loading torrent file "${file.name}"...`);
             const torrentBuffer = await file.arrayBuffer();
 
@@ -974,7 +903,6 @@ Object.assign(NYM.prototype, {
                 this.onTorrentReady(torrent, file.name);
             });
         } else {
-            // Regular file - create a new torrent and seed it
             this.displaySystemMessage(`Creating torrent for "${file.name}"...`);
             client.seed(file, { announceList: [] }, (torrent) => {
                 this.onTorrentReady(torrent, null);
@@ -982,23 +910,18 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Common handler once a torrent is ready (seeded or loaded from .torrent)
     onTorrentReady(torrent, originalTorrentFileName) {
-        // Use the first file in the torrent for display info
         const torrentFile = torrent.files[0];
         const displayName = torrentFile ? torrentFile.name : (originalTorrentFileName || 'Unknown');
         const displaySize = torrent.length || 0;
 
         const offerId = torrent.infoHash.substring(0, 16) + '-' + Date.now().toString(36);
 
-        // Store torrent reference
         this.torrentSeeds.set(offerId, torrent);
 
-        // Store a placeholder in pending files for the transfers modal
         const placeholderFile = new File([], displayName, { type: 'application/x-bittorrent' });
         this.p2pPendingFiles.set(offerId, placeholderFile);
 
-        // Create file offer metadata with magnet URI
         const fileOffer = {
             offerId: offerId,
             name: displayName,
@@ -1010,7 +933,6 @@ Object.assign(NYM.prototype, {
             infoHash: torrent.infoHash
         };
 
-        // Store offer locally
         this.p2pFileOffers.set(offerId, fileOffer);
 
         const content = `Sharing file via torrent: ${displayName} (${this.formatFileSize(displaySize)})`;
@@ -1019,7 +941,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Download a file via WebTorrent
     async downloadTorrent(offerId) {
         const offer = this.p2pFileOffers.get(offerId);
         if (!offer || !offer.magnetURI) {
@@ -1055,7 +976,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Update UI
         const btn = document.querySelector(`[data-offer-id="${offerId}"] .file-offer-btn`);
         const progressDiv = document.getElementById(`progress-${offerId}`);
         if (btn) {
@@ -1067,7 +987,6 @@ Object.assign(NYM.prototype, {
             progressDiv.style.display = 'block';
         }
 
-        // Check if already downloading this torrent
         const existingTorrent = client.get(magnetHash);
         if (existingTorrent) {
             this.displaySystemMessage('Already downloading this torrent');
@@ -1088,11 +1007,11 @@ Object.assign(NYM.prototype, {
 
         client.add(safeMagnetURI, { announce: [] }, (torrent) => {
             const transfer = this.p2pActiveTransfers.get(transferId);
-            if (!transfer) return; // Was canceled
+            if (!transfer) return;
 
             if (torrent.length > this.P2P_MAX_FILE_SIZE ||
                 (typeof offer.size === 'number' && torrent.length > offer.size)) {
-                try { torrent.destroy(); } catch (e) { /* ignore */ }
+                try { torrent.destroy(); } catch (e) {}
                 this.updateTransferStatus(transferId, 'error', 'Torrent rejected: larger than advertised size');
                 this.p2pActiveTransfers.delete(transferId);
                 this.displaySystemMessage('Torrent rejected: larger than advertised size');
@@ -1113,7 +1032,6 @@ Object.assign(NYM.prototype, {
             });
 
             torrent.on('done', () => {
-                // Download complete - save each file
                 torrent.files.forEach((file) => {
                     file.getBlob((err, blob) => {
                         if (err) {
@@ -1136,9 +1054,8 @@ Object.assign(NYM.prototype, {
                 this.updateTransferStatus(transferId, 'complete', 'Download complete!');
                 this.displaySystemMessage(`Torrent download complete: "${offer.name}"`);
 
-                // Keep seeding for a bit, then remove
                 setTimeout(() => {
-                    try { torrent.destroy(); } catch (e) { /* ignore */ }
+                    try { torrent.destroy(); } catch (e) {}
                     this.p2pActiveTransfers.delete(transferId);
                 }, 60000);
             });
@@ -1149,36 +1066,32 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Stop seeding a torrent
     stopSeedingTorrent(offerId) {
         const torrent = this.torrentSeeds.get(offerId);
         if (torrent) {
-            try { torrent.destroy(); } catch (e) { /* ignore */ }
+            try { torrent.destroy(); } catch (e) {}
             this.torrentSeeds.delete(offerId);
         }
     },
 
-    // Cancel an active transfer
     cancelTransfer(transferId) {
         const transfer = this.p2pActiveTransfers.get(transferId);
         if (transfer) {
-            // If it's a torrent transfer, destroy the torrent
             if (transfer.isTorrent && transfer.torrent) {
-                try { transfer.torrent.destroy(); } catch (e) { /* ignore */ }
+                try { transfer.torrent.destroy(); } catch (e) {}
             }
 
-            // Close any associated WebRTC connections and data channels
             const connectionsToDelete = [];
             this.p2pConnections.forEach((pc, connectionId) => {
                 if (connectionId.endsWith(transferId)) {
-                    try { pc.close(); } catch (e) { /* ignore */ }
+                    try { pc.close(); } catch (e) {}
                     connectionsToDelete.push(connectionId);
                 }
             });
             connectionsToDelete.forEach(id => {
                 this.p2pConnections.delete(id);
                 if (this.p2pDataChannels.has(id)) {
-                    try { this.p2pDataChannels.get(id).close(); } catch (e) { /* ignore */ }
+                    try { this.p2pDataChannels.get(id).close(); } catch (e) {}
                     this.p2pDataChannels.delete(id);
                 }
             });
@@ -1186,7 +1099,7 @@ Object.assign(NYM.prototype, {
             this.p2pActiveTransfers.delete(transferId);
             this.p2pReceivedChunks.delete(transferId);
             this.displaySystemMessage('Transfer canceled');
-            this.openP2PTransfersModal(); // Refresh modal
+            this.openP2PTransfersModal();
         }
     },
 

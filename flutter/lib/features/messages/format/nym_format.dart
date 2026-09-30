@@ -1,33 +1,19 @@
-// Pure content -> structured-node formatter, a Dart port of the PWA's
-// `message-format.js` (`NymFormat.format` + `formatWithQuotes`).
-//
-// Instead of emitting HTML, [NymFormat.format] returns a list of block nodes,
-// each carrying inline spans. The renderer (`message_content.dart`) turns these
-// into Flutter widgets. Semantics mirror the JS formatter (docs/specs/03 §9):
-// the same markdown subset, the same media/mention/emoji handling, and the same
-// ordering so that e.g. code spans shield their contents from later passes.
+// Pure content-to-node formatter mirroring the PWA's markdown, media, mention and emoji rules and pass order.
 
 import 'dart:collection';
 import 'dart:convert';
 
 import '../../../models/channel.dart' show isValidGeohash;
 
-/// Any character that can trigger formatting. If absent, the fast path applies
-/// (only newline -> paragraph splitting). Mirrors `RX_FORMAT_TRIGGERS`.
+/// Characters that can trigger formatting; without any, the fast path applies.
 final RegExp _rxTriggers = RegExp(r'[^\x20-\x7E\n]|[*_~`#>@:;/\\&<>"]');
 
-/// A pasted NIP-19 entity or bare event id is all letters and digits, so it
-/// trips none of [_rxTriggers] and the fast path would hand it straight back
-/// as plain text, never reaching the reference pass.
+/// NIP-19 entities are alphanumeric and trip no trigger, so check them separately.
 final RegExp _rxNostrTrigger = RegExp(
     r'(?:nevent|naddr|nprofile|note|npub)1[023456789acdefghjklmnpqrstuvwxyz]{20,}|[0-9a-f]{64}',
     caseSensitive: false);
 
-// ---------------------------------------------------------------------------
-// Context
-// ---------------------------------------------------------------------------
-
-/// Formatting context, the Dart analogue of the JS `ctx` object.
+/// Formatting context, the analogue of the JS `ctx`.
 class FormatContext {
   const FormatContext({
     this.currentChannel,
@@ -37,31 +23,25 @@ class FormatContext {
     this.knownChannels = const {},
   });
 
-  /// Active named channel (lowercase); a `#ref` matching it renders active.
+  /// Active named channel (lowercase); a matching `#ref` renders active.
   final String? currentChannel;
 
-  /// Active geohash channel (lowercase); a geohash `#ref` matching it is active.
+  /// Active geohash channel (lowercase); a matching `#ref` renders active.
   final String? currentGeohash;
 
-  /// NIP-30 custom emoji: shortcode (without colons) -> image url.
+  /// NIP-30 custom emoji: shortcode without colons -> image url.
   final Map<String, String> customEmojis;
 
-  /// Optional media/emoji proxy base (`base?url=...` / `base?emoji=1&url=...`).
+  /// Optional media/emoji proxy base.
   final String? proxyBase;
 
-  /// Channels known to the client; currently informational only.
+  /// Currently informational only.
   final Set<String> knownChannels;
 
   static const empty = FormatContext();
 }
 
-/// Composite key for [NymFormat]'s parse-result cache: the raw content plus the
-/// [FormatContext] fields that actually change the parse output. The two
-/// collection fields ([customEmojis], [knownChannels]) are compared by identity
-/// — they are provider-owned snapshots whose instance is replaced (not mutated
-/// in place) when their contents change, so identity is a correct and cheap
-/// invalidation signal (a new emoji pack yields a new map → cache miss). The
-/// scalar channel/geohash/proxy fields are compared by value.
+/// Parse cache key; the collection fields compare by identity since providers replace rather than mutate them.
 class _ParseCacheKey {
   _ParseCacheKey(this.content, FormatContext c)
       : currentChannel = c.currentChannel,
@@ -98,16 +78,12 @@ class _ParseCacheKey {
       );
 }
 
-// ---------------------------------------------------------------------------
-// Block nodes
-// ---------------------------------------------------------------------------
-
 /// Base type for block-level nodes.
 sealed class FormatBlock {
   const FormatBlock();
 }
 
-/// A run of inline content (one logical line group). Newlines inside are kept.
+/// A run of inline content; internal newlines are kept.
 class ParagraphBlock extends FormatBlock {
   const ParagraphBlock(this.inlines);
   final List<InlineNode> inlines;
@@ -120,12 +96,12 @@ class CodeBlock extends FormatBlock {
   final String? lang;
 }
 
-/// A `> quote` block. May nest [children] and carry a parsed `@author`.
+/// A `> quote` block, possibly nested, with an optional parsed `@author`.
 class QuoteBlock extends FormatBlock {
   const QuoteBlock({required this.children, this.author});
   final List<FormatBlock> children;
 
-  /// Author parsed from a `> @Author: msg` header (suffix included), else null.
+  /// Author from a `> @Author: msg` header, suffix included, else null.
   final String? author;
 }
 
@@ -136,22 +112,20 @@ class HeadingBlock extends FormatBlock {
   final List<InlineNode> inlines;
 }
 
-/// One or more adjacent media items collapsed into a gallery.
+/// Adjacent media items collapsed into a gallery.
 class MediaBlock extends FormatBlock {
   const MediaBlock(this.items);
   final List<MediaItem> items;
 }
 
-/// A playable audio link, rendered as a transport bar with the file offered
-/// underneath it. Audio never joins a [MediaBlock] gallery: a seek bar squeezed
-/// into a photo grid cell cannot be scrubbed.
+/// A playable audio link; never joins a gallery, where a seek bar can't be scrubbed.
 class AudioBlock extends FormatBlock {
   const AudioBlock({required this.url, required this.fileName});
 
-  /// Playback/download URL (already proxied when a proxyBase was supplied).
+  /// Playback/download URL, already proxied when a proxyBase was supplied.
   final String url;
 
-  /// Basename for the download affordance; empty when the URL carries none.
+  /// Download basename; empty when the URL has none.
   final String fileName;
 }
 
@@ -159,66 +133,57 @@ class AudioBlock extends FormatBlock {
 class MediaItem {
   const MediaItem({required this.url, required this.isVideo});
 
-  /// The display URL (already proxied if a proxyBase was supplied).
+  /// Display URL, already proxied when a proxyBase was supplied.
   final String url;
   final bool isVideo;
 }
 
-// ---------------------------------------------------------------------------
-// Inline nodes
-// ---------------------------------------------------------------------------
-
-/// Base type for inline (span-level) nodes.
+/// Base type for inline nodes.
 sealed class InlineNode {
   const InlineNode();
 }
 
-/// Plain text. May contain newlines (rendered as line breaks).
+/// Plain text; newlines render as line breaks.
 class TextSpanNode extends InlineNode {
   const TextSpanNode(this.text);
   final String text;
 }
 
-/// `**bold**` / `__bold__`.
 class BoldNode extends InlineNode {
   const BoldNode(this.children);
   final List<InlineNode> children;
 }
 
-/// `*italic*` / `_italic_`.
 class ItalicNode extends InlineNode {
   const ItalicNode(this.children);
   final List<InlineNode> children;
 }
 
-/// `~~strike~~`.
 class StrikeNode extends InlineNode {
   const StrikeNode(this.children);
   final List<InlineNode> children;
 }
 
-/// Inline `` `code` ``.
 class InlineCodeNode extends InlineNode {
   const InlineCodeNode(this.code);
   final String code;
 }
 
-/// A bare `https?://` link (not media, channel-link, or invite).
+/// A bare `https?://` link that isn't media, a channel link or an invite.
 class LinkNode extends InlineNode {
   const LinkNode(this.url);
   final String url;
 }
 
-/// `@name` or `@name#xxxx`. [suffix] is the 4-hex tag without `#`, or null.
+/// `@name` or `@name#xxxx`; [suffix] is the 4-hex tag without `#`, or null.
 class MentionNode extends InlineNode {
   const MentionNode({required this.base, this.suffix});
 
-  /// The name portion including the leading `@`.
+  /// Name portion including the leading `@`.
   final String base;
   final String? suffix;
 }
 
-/// A `#channel` reference.
 class ChannelRefNode extends InlineNode {
   const ChannelRefNode({
     required this.name,
@@ -226,25 +191,24 @@ class ChannelRefNode extends InlineNode {
     required this.isActive,
   });
 
-  /// Channel name without the leading `#` (lowercased).
+  /// Channel name without `#`, lowercased.
   final String name;
   final bool isGeohash;
   final bool isActive;
 }
 
-/// A standard (unicode) emoji from a `:shortcode:` or ASCII smiley, or a bare
-/// unicode emoji in the source.
+/// A standard unicode emoji from a shortcode, ASCII smiley, or bare emoji.
 class EmojiNode extends InlineNode {
   const EmojiNode(this.unicode);
   final String unicode;
 }
 
-/// A NIP-30 custom emoji `:shortcode:` resolved against `ctx.customEmojis`.
+/// A NIP-30 custom emoji resolved against `ctx.customEmojis`.
 class CustomEmojiNode extends InlineNode {
   const CustomEmojiNode({required this.shortcode, required this.url});
   final String shortcode;
 
-  /// Image url (already proxied if a proxyBase was supplied).
+  /// Image url, already proxied when a proxyBase was supplied.
   final String url;
 }
 
@@ -252,25 +216,21 @@ class CustomEmojiNode extends InlineNode {
 class ChannelLinkChip extends InlineNode {
   const ChannelLinkChip({required this.ref, required this.label});
 
-  /// `<prefix>:<id>` channel ref, e.g. `g:9q8y`.
+  /// `<prefix>:<id>`, e.g. `g:9q8y`.
   final String ref;
 
-  /// The original matched URL text (display label).
+  /// The original matched URL text.
   final String label;
 }
 
-/// A pasted NIP-19 entity (`nevent` / `note` / `naddr` / `npub` / `nprofile`,
-/// with or without the `nostr:` scheme) or a bare 64-hex event id. Rendered as
-/// a reference chip; the row unfurls it into a card underneath.
+/// A pasted NIP-19 entity or bare 64-hex event id, rendered as a chip and unfurled below.
 class NostrRefNode extends InlineNode {
   const NostrRefNode({required this.token, required this.raw});
 
-  /// The entity itself, scheme stripped — what gets decoded and looked up.
+  /// The entity with its scheme stripped.
   final String token;
 
-  /// True for a bare hex id, which keeps its own text rather than being
-  /// shortened into a chip: 64 hex characters are not always an event id, and
-  /// restyling every one of them would be a guess.
+  /// Bare hex keeps its own text, since 64 hex chars aren't always an event id.
   final bool raw;
 }
 
@@ -281,9 +241,7 @@ class GroupInviteChip extends InlineNode {
   final String token;
 }
 
-// ---------------------------------------------------------------------------
-// Built-in shortcode -> unicode emoji map (common subset, ~60 entries).
-// ---------------------------------------------------------------------------
+// Built-in shortcode -> unicode emoji (common subset).
 
 const Map<String, String> kBuiltinEmoji = {
   'smile': '😄',
@@ -370,29 +328,14 @@ const Map<String, String> kBuiltinEmoji = {
   'ok': '🆗',
 };
 
-// ---------------------------------------------------------------------------
-// Parser
-// ---------------------------------------------------------------------------
-
 class NymFormat {
   const NymFormat._();
 
-  /// Strips the game-state token `[gc:BASE64]` that the PWA hides with
-  /// `.game-token { display:none }` (`message-format.js:279`,
-  /// `styles-chat.css:1330-1332`). The token rides the WIRE (the game module +
-  /// the `?guess` router read it back off a quoted reply), but must never be
-  /// visible. The PWA token sits on its own trailing line (`\n[gc:…]`); the extra
-  /// `(?:>[ \t]*)*` here also elides it when it rides a QUOTE line — quoting the
-  /// Nymbot prepends `> ` to every quoted line (`_composeOutgoing`), turning the
-  /// token line into `> [gc:…]`, which the bare `\n[gc:…]` pattern missed and so
-  /// leaked a literal `[gc:…]` blob into the rendered quote (the reported bug).
+  /// Hidden `[gc:BASE64]` game token, including on `> ` quote lines; it rides the wire but must never show.
   static final RegExp _rxGameToken =
       RegExp(r'\n[ \t]*(?:>[ \t]*)*\[gc:[A-Za-z0-9+/=]+\]');
 
-  /// Removes every hidden game-state token (see [_rxGameToken]) from [content]
-  /// for DISPLAY. Never call this on content bound for the wire — the token is
-  /// what routes a quoted reply to `?guess`. A leading token (no preceding
-  /// newline) is also caught so a quote whose first line is the token is clean.
+  /// Strips game tokens for display only; never on wire-bound content, since `?guess` routing reads them.
   static String stripGameTokens(String content) {
     if (!content.contains('[gc:')) return content;
     return content
@@ -400,28 +343,18 @@ class NymFormat {
         .replaceAll(RegExp(r'^[ \t]*(?:>[ \t]*)*\[gc:[A-Za-z0-9+/=]+\]'), '');
   }
 
-  /// Parse-result LRU cache. [format] is called for every visible message row
-  /// on every widget rebuild (a busy channel rebuilds the whole list on each
-  /// inbound event), and the tokenizer below is a heavy recursive multi-pass
-  /// regex parser — re-running it per rebuild was a primary UI-thread sink
-  /// behind the Android input-dispatch ANR. Because the parse is a pure function
-  /// of `(content, ctx)`, we memoize the immutable block tree and hand back the
-  /// SAME instance on a hit (blocks are `const`/final — the renderer only reads
-  /// them). Bounded to [_parseCacheCap] entries with plain LRU eviction so the
-  /// cache can never grow without bound.
+  /// Bounded LRU of parse results; parsing is pure and expensive, and rows re-format on every rebuild.
   static final LinkedHashMap<_ParseCacheKey, List<FormatBlock>> _parseCache =
       LinkedHashMap<_ParseCacheKey, List<FormatBlock>>();
   static const int _parseCacheCap = 800;
 
-  /// Test/diagnostic hook: drop every memoized parse.
+  /// Test hook: drop every memoized parse.
   static void clearParseCache() => _parseCache.clear();
 
-  /// Parses [content] into block nodes per the active [ctx].
   static List<FormatBlock> format(String content, [FormatContext? ctx]) {
     final c = ctx ?? FormatContext.empty;
     final key = _ParseCacheKey(content, c);
-    // `remove` + re-insert promotes the entry to most-recently-used (a
-    // LinkedHashMap preserves insertion order, so the oldest key is `keys.first`).
+    // Remove and re-insert to mark most recently used.
     final hit = _parseCache.remove(key);
     if (hit != null) {
       _parseCache[key] = hit;
@@ -436,17 +369,15 @@ class NymFormat {
   }
 
   static List<FormatBlock> _formatUncached(String content, FormatContext c) {
-    // Elide the hidden game-state token first (matches PWA `display:none`),
-    // including when it rides a quoted (`> [gc:…]`) line.
+    // Elide the hidden game token first, including on quoted lines.
     content = stripGameTokens(content);
 
-    // Fast path: no trigger chars -> plain paragraphs split on blank lines,
-    // keeping single newlines inside a paragraph.
+    // Fast path when nothing can trigger formatting.
     if (!_rxTriggers.hasMatch(content) && !_rxNostrTrigger.hasMatch(content)) {
       return _plainParagraphs(content);
     }
 
-    // Collapse `@name#xxxx#xxxx` -> `@name#xxxx` first (matches JS).
+    // Collapse `@name#xxxx#xxxx` to `@name#xxxx` first.
     final collapsed = content.replaceAllMapped(
       RegExp(r'@([^@#\s]+)#([0-9a-f]{4})#\2\b', caseSensitive: false),
       (m) => '@${m[1]}#${m[2]}',
@@ -456,11 +387,7 @@ class NymFormat {
   }
 
   static List<FormatBlock> _plainParagraphs(String content) {
-    // PWA fast path (message-format.js:89-91): with no trigger chars the content
-    // is returned verbatim, only converting `\n` -> `<br>`. That is a SINGLE
-    // block preserving every newline (including runs of blank lines), not a
-    // split into separate paragraphs. A TextSpan renders `\n` as a line break,
-    // so one ParagraphBlock with the raw content reproduces it 1:1.
+    // One block preserving every newline, like the PWA fast path.
     return [
       ParagraphBlock([TextSpanNode(content)]),
     ];
@@ -468,8 +395,7 @@ class NymFormat {
 
   static const int _maxQuoteDepth = 5;
 
-  /// Splits leading `>` runs into [QuoteBlock]s and formats the rest as inline
-  /// blocks. Mirrors `formatWithQuotes`.
+  /// Splits leading `>` runs into [QuoteBlock]s and formats the rest.
   static List<FormatBlock> _formatWithQuotes(
     String content,
     FormatContext ctx,
@@ -529,7 +455,7 @@ class NymFormat {
 
   static String _cleanQuoteAuthor(String raw) {
     var a = raw.trim();
-    // Collapse `name#xxxx#xxxx` -> `name#xxxx`.
+    // Collapse `name#xxxx#xxxx` to `name#xxxx`.
     a = a.replaceFirstMapped(
       RegExp(r'^([^#]+)#([0-9a-f]{4})#\2$', caseSensitive: false),
       (m) => '${m[1]}#${m[2]}',
@@ -537,42 +463,32 @@ class NymFormat {
     return a;
   }
 
-  // -------------------------------------------------------------------------
-  // Inline / block-within-quote formatting (the bulk of `format`).
-  //
-  // We work in passes, but instead of HTML placeholders we tokenize the string
-  // into a flat list of "tokens" that are either raw text or already-resolved
-  // nodes/blocks, so later passes never re-scan resolved content.
-  // -------------------------------------------------------------------------
+  // Inline passes over a token list of raw text and resolved nodes, so later passes never re-scan resolved content.
 
   static List<FormatBlock> _formatInlineBlocks(String text, FormatContext ctx) {
-    // 1. Extract fenced + inline code first (shields contents).
+    // Extract code first so its contents are shielded.
     final codeBlocks = <CodeBlock>[];
     final inlineCode = <String>[];
     var s = text;
 
-    // Fenced ```lang\ncode```
     s = s.replaceAllMapped(RegExp(r'```([\s\S]*?)```'), (m) {
       final idx = codeBlocks.length;
       codeBlocks.add(_makeCodeBlock(m[1] ?? ''));
       return 'F$idx';
     });
-    // Unterminated ```code (to end).
+    // Unterminated ``` runs to the end.
     s = s.replaceAllMapped(RegExp(r'```([\s\S]+)$'), (m) {
       final idx = codeBlocks.length;
       codeBlocks.add(_makeCodeBlock(m[1] ?? ''));
       return 'F$idx';
     });
-    // Inline `code`.
     s = s.replaceAllMapped(RegExp(r'`([^`]+?)`'), (m) {
       final idx = inlineCode.length;
       inlineCode.add(m[1] ?? '');
       return 'C$idx';
     });
 
-    // Split into block lines: a line that is solely a fenced-code placeholder
-    // becomes its own CodeBlock; `#`/`##`/`###` lines become headings; other
-    // lines accumulate into paragraphs (preserving internal newlines).
+    // Code placeholder lines become code blocks, `#` lines headings, the rest paragraphs.
     final blocks = <FormatBlock>[];
     final lines = s.split('\n');
     final paraBuf = <String>[];
@@ -625,8 +541,7 @@ class NymFormat {
     return CodeBlock(code: trimmed, lang: lang);
   }
 
-  /// Turns one paragraph's text (with code placeholders) into block nodes:
-  /// media galleries split paragraphs, everything else is inline content.
+  /// Media runs split paragraphs into galleries; everything else stays inline.
   static List<FormatBlock> _inlineToBlocks(
     String text,
     FormatContext ctx,
@@ -635,16 +550,14 @@ class NymFormat {
   ) {
     final inlines = _parseInline(text, ctx, codeBlocks, inlineCode);
 
-    // Pull contiguous runs of media into MediaBlocks (galleries). The PWA
-    // collapses adjacent media (whitespace-only between) into one gallery; a
-    // lone media item is rendered standalone (still a MediaBlock with one item).
+    // Adjacent media (whitespace between) collapse into one gallery.
     final blocks = <FormatBlock>[];
     var runInlines = <InlineNode>[];
     var mediaRun = <MediaItem>[];
 
     void flushInlines() {
       if (runInlines.isEmpty) return;
-      // Drop trailing/leading empty text-only runs.
+      // Drop empty text-only runs.
       final hasContent = runInlines
           .any((n) => n is! TextSpanNode || (n).text.trim().isNotEmpty);
       if (hasContent) blocks.add(ParagraphBlock(List.of(runInlines)));
@@ -659,7 +572,7 @@ class NymFormat {
 
     for (final node in inlines) {
       if (node is _AudioInline) {
-        // Its own block: never folded into a gallery run.
+        // Its own block, never folded into a gallery.
         flushMedia();
         flushInlines();
         blocks.add(node.block);
@@ -667,8 +580,7 @@ class NymFormat {
         flushInlines();
         mediaRun.add(node.item);
       } else if (node is TextSpanNode && node.text.trim().isEmpty) {
-        // Whitespace between media keeps the gallery contiguous; otherwise it
-        // belongs to the surrounding paragraph.
+        // Whitespace between media keeps the gallery contiguous.
         if (mediaRun.isNotEmpty) {
           // swallow whitespace between media
         } else {
@@ -688,25 +600,19 @@ class NymFormat {
     return blocks;
   }
 
-  // -------------------------------------------------------------------------
-  // Inline span parser. Operates on text that may contain code placeholders.
-  // -------------------------------------------------------------------------
-
   static List<InlineNode> _parseInline(
     String text,
     FormatContext ctx,
     List<CodeBlock> codeBlocks,
     List<String> inlineCode,
   ) {
-    // Token list begins as a single raw-text token, progressively split.
     var tokens = <_Tok>[_RawTok(text)];
 
-    // Code placeholders -> InlineCodeNode (fenced placeholders shouldn't reach
-    // here since they're block-level, but handle inline ones).
+    // Fenced placeholders are block-level, but handle inline ones.
     tokens = _splitByRegex(tokens, RegExp(r'C(\d+)'),
         (m) => _NodeTok(InlineCodeNode(inlineCode[int.parse(m[1]!)])));
 
-    // Bold/italic/strike — recursive on inner content.
+    // Bold/italic/strike, recursive on inner content.
     tokens = _splitByRegex(
         tokens,
         RegExp(r'\*\*(.+?)\*\*'),
@@ -733,8 +639,7 @@ class NymFormat {
         (m) => _NodeTok(
             StrikeNode(_parseInline(m[1]!, ctx, codeBlocks, inlineCode))));
 
-    // Audio first: video below claims the ambiguous .ogg/.webm, so the
-    // unambiguous audio extensions have to be taken before it runs.
+    // Audio first, since the video pass would claim .ogg/.webm.
     tokens = _splitByRegex(
         tokens,
         RegExp(r'(https?://[^\s]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s]*)?)',
@@ -744,7 +649,6 @@ class NymFormat {
               fileName: _urlFileName(m[1]!),
             ))));
 
-    // Media: video then image.
     tokens = _splitByRegex(
         tokens,
         RegExp(r'(https?://[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)',
@@ -758,7 +662,6 @@ class NymFormat {
         (m) => _NodeTok(_MediaInline(
             MediaItem(url: _proxied(m[1]!, ctx.proxyBase), isVideo: false))));
 
-    // Channel-link chip: app.nym.bar/#<e|g|c>:<id>
     tokens = _splitByRegex(
         tokens,
         RegExp(r'https?://app\.nym\.bar/#([egc]):([^\s<>"]+)',
@@ -766,7 +669,6 @@ class NymFormat {
       return _NodeTok(ChannelLinkChip(ref: '${m[1]}:${m[2]}', label: m[0]!));
     });
 
-    // Group-invite chip: …#gjoin=<token>
     tokens = _splitByRegex(
         tokens, RegExp(r'https?://[^\s<>"]*#gjoin=([A-Za-z0-9_-]+)'), (m) {
       final token = m[1]!;
@@ -777,13 +679,10 @@ class NymFormat {
           GroupInviteChip(name: name.isEmpty ? 'group' : name, token: token));
     });
 
-    // Bare links.
     tokens = _splitByRegex(
         tokens, RegExp(r'https?://[^\s]+'), (m) => _NodeTok(LinkNode(m[0]!)));
 
-    // NIP-19 references. AFTER the bare-link pass, so an entity inside a URL
-    // path (an njump-style viewer link) stays part of that link. The lookbehind
-    // keeps it from matching mid-token or inside a query string.
+    // After bare links so an entity inside a URL stays part of it; the lookbehind blocks mid-token matches.
     tokens = _splitByRegex(
         tokens,
         RegExp(
@@ -797,22 +696,15 @@ class NymFormat {
             caseSensitive: false),
         (m) => _NodeTok(NostrRefNode(token: m[1]!.toLowerCase(), raw: true)));
 
-    // Mentions with suffix: @name#xxxx. The name part allows SPACES (a nym can
-    // be multi-word), bounded by the `#xxxx` suffix — the PWA's
-    // `@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b` (message-format.js). `[^@#\n]*?` is
-    // non-greedy and stops at `@`/`#`/newline; the `(?<!\s)` lookbehind keeps a
-    // trailing space out of the name (so "@John #a1b2" isn't swallowed whole)
-    // and disambiguates when several suffixed mentions share a line.
+    // Suffixed mentions; the name may contain spaces, bounded by `#xxxx`, with no trailing space.
     tokens = _splitByRegex(
         tokens,
         RegExp(r'@([^@#\n]*?)(?<!\s)#([0-9a-f]{4})\b', caseSensitive: false),
         (m) => _NodeTok(MentionNode(base: '@${m[1]}', suffix: m[2])));
 
-    // Simple mentions: @name
     tokens = _splitByRegex(tokens, RegExp(r'@([^@\s][^@\s]*)'),
         (m) => _NodeTok(MentionNode(base: m[0]!)));
 
-    // Channel refs: (start|space)#name
     tokens = _splitByRegex(tokens,
         RegExp(r'(^|\s)#([a-z0-9_-]+)(?=\s|$|[.,!?])', caseSensitive: false),
         (m) {
@@ -827,17 +719,11 @@ class NymFormat {
       return _MultiTok([_RawTok(lead), _NodeTok(ref)]);
     });
 
-    // `:shortcode:` -> custom emoji or standard emoji. The PWA formatter regex
-    // is `/:([a-zA-Z0-9_]+):/` (message-format.js:251) — it does NOT include
-    // `+`/`-`, so `:+1:` / `:-1:` are left as literal text by the renderer (they
-    // are only reachable via the emoji autocomplete, which inserts the emoji
-    // char directly). Keep the char class identical for 1:1 fidelity.
+    // Same char class as the PWA, so `:+1:` and `:-1:` stay literal.
     tokens = _splitByRegex(tokens, RegExp(r':([a-zA-Z0-9_]+):'), (m) {
       final code = m[1]!;
       final lc = code.toLowerCase();
-      // PWA order (message-format.js:251-257): standard emojiMap (lowercased
-      // key) is tried FIRST; only then custom emoji, looked up with the EXACT
-      // (case-sensitive) code — no lowercase fallback.
+      // Standard emoji (lowercased) first, then custom emoji by exact case-sensitive code.
       final std = kBuiltinEmoji[lc];
       if (std != null) return _NodeTok(EmojiNode(std));
       final custom = ctx.customEmojis[code];
@@ -848,16 +734,10 @@ class NymFormat {
       return _RawTok(m[0]!); // leave untouched
     });
 
-    // ASCII smileys (bounded by start/space on both sides).
+    // ASCII smileys bounded by start or whitespace on both sides.
     tokens = _applyAsciiSmileys(tokens);
 
-    // Bare unicode emoji wrapping (extended pictographic). Alternation order
-    // mirrors message-format.js:271: regional-indicator pairs, then keycap
-    // sequences (`#`/`*`/digit + optional VS16 + U+20E3), then the base
-    // pictographic + optional VS16 + skin-tone + ZWJ runs. (The PWA's rarer
-    // subdivision-flag tag sequence — U+E0020..U+E007E + U+E007F — is not
-    // matched here; a documented MINOR gap that only affects e.g. the England
-    // flag emoji enlargement.)
+    // Regional-indicator pairs, keycaps, then pictographic runs; subdivision-flag tag sequences aren't matched.
     tokens = _splitByRegex(
         tokens,
         RegExp(
@@ -865,7 +745,7 @@ class NymFormat {
             unicode: true),
         (m) => _NodeTok(EmojiNode(m[0]!)));
 
-    // Materialize raw tokens into TextSpanNodes; merge adjacency.
+    // Materialize raw tokens into text nodes, merging neighbors.
     final nodes = <InlineNode>[];
     void emit(_Tok t) {
       if (t is _RawTok) {
@@ -907,7 +787,6 @@ class NymFormat {
       '<3': '❤️',
       r'/\': '⚠️',
     };
-    // Match a smiley bounded by start/whitespace on each side.
     final re = RegExp(
         r'(^|\s)(:\)|:-\)|:\(|:-\(|:D|:P|;\)|;-\)|:o|:O|:\||<3|/\\)(?=$|\s)');
     return _splitByRegex(tokens, re, (m) {
@@ -944,17 +823,12 @@ class NymFormat {
     return out;
   }
 
-  // -------------------------------------------------------------------------
-  // Helpers shared with JS.
-  // -------------------------------------------------------------------------
-
   static String _proxied(String url, String? base) {
     if (base == null || base.isEmpty) return url;
     return '$base?url=${Uri.encodeQueryComponent(url)}';
   }
 
-  /// Basename of a URL's path, for the audio download label. Empty when the
-  /// URL has no usable last segment.
+  /// URL path basename for the audio download label; empty when none.
   static String _urlFileName(String url) {
     try {
       final segs = Uri.parse(url).pathSegments;
@@ -979,7 +853,7 @@ class NymFormat {
     return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
   }
 
-  /// Validates + decodes a `#gjoin=` token (base64url JSON with v/g/a/e/n).
+  /// Validates and decodes a `#gjoin=` token (base64url JSON with v/g/a/e/n).
   static Map<String, dynamic>? _parseGroupInvite(String token) {
     if (!RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(token)) return null;
     try {
@@ -1009,10 +883,6 @@ class NymFormat {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Internal token types used only during inline parsing.
-// ---------------------------------------------------------------------------
-
 sealed class _Tok {
   const _Tok();
 }
@@ -1032,8 +902,7 @@ class _MultiTok extends _Tok {
   final List<_Tok> parts;
 }
 
-/// An inline node that carries a media item; flattened into MediaBlocks by
-/// [_inlineToBlocks]. Never reaches the renderer as an inline span.
+/// Carries a media item until [_inlineToBlocks] flattens it into a block.
 class _AudioInline extends InlineNode {
   const _AudioInline(this.block);
   final AudioBlock block;

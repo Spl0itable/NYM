@@ -1,19 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// The TLV payload of a [MeshMessageType.announce] packet — a byte-for-byte port
-/// of bitchat's `IdentityAnnouncement`. It binds a peer's advertised nickname to
-/// its two long-term public keys, and the enclosing packet is Ed25519-signed so
-/// the binding is authenticated.
-///
-/// TLV stream (`type:1 | length:1 | value`):
-/// * `0x01` NICKNAME (UTF-8)
-/// * `0x02` NOISE_PUBLIC_KEY (32-byte Curve25519 static key)
-/// * `0x03` SIGNING_PUBLIC_KEY (32-byte Ed25519 key)
-/// * `0x05` CAPABILITIES (optional little-endian feature bitfield)
-///
-/// Unknown TLV types are preserved for forward compatibility (bitchat may add
-/// fields we don't parse; we must not drop them when re-encoding).
+/// bitchat `IdentityAnnouncement` TLV; unknown types are preserved so re-encoding keeps bitchat extensions.
 class IdentityAnnouncement {
   IdentityAnnouncement({
     required this.nickname,
@@ -25,14 +13,11 @@ class IdentityAnnouncement {
   });
 
   final String nickname;
-  final Uint8List noisePublicKey; // 32 bytes
-  final Uint8List signingPublicKey; // 32 bytes
+  final Uint8List noisePublicKey;
+  final Uint8List signingPublicKey;
   final Uint8List? capabilities;
 
-  /// Nymchat-specific link binding this peer to a Nostr identity (see
-  /// [NostrLink]): `nostrPubkey(32) ‖ schnorr signature(64)`. Null for bitchat
-  /// peers and Nymchat peers signing remotely (no local key). bitchat treats
-  /// this as an unknown TLV and preserves/ignores it.
+  /// Nymchat [NostrLink] `pubkey(32) ‖ sig(64)`; null for bitchat and remote-signer peers.
   final Uint8List? nostrLink;
 
   final List<AnnouncementTlv> unknownTlvs;
@@ -42,12 +27,10 @@ class IdentityAnnouncement {
   static const int _tlvSigningPublicKey = 0x03;
   static const int _tlvCapabilities = 0x05;
 
-  /// Nymchat extension TLV — a Nostr-identity link. Chosen above bitchat's
-  /// assigned range (0x01–0x05) so it never collides.
+  /// Nymchat extension TLV, above bitchat's 0x01–0x05 range.
   static const int _tlvNostrLink = 0x50;
 
-  /// Encodes to the TLV byte stream. Returns null if any value exceeds the
-  /// single-byte length field (255), matching bitchat's guard.
+  /// Returns null when any value exceeds the 1-byte length field, as bitchat does.
   Uint8List? encode() {
     final nickBytes = utf8.encode(nickname);
     if (nickBytes.length > 255 ||
@@ -134,8 +117,6 @@ class IdentityAnnouncement {
   }
 }
 
-/// An announcement TLV whose type this client does not interpret. Retained so
-/// re-encoding a decoded announcement preserves bitchat extensions.
 class AnnouncementTlv {
   AnnouncementTlv(this.type, this.value);
   final int type;

@@ -1,20 +1,11 @@
 import '../../models/nostr_event.dart';
 
-/// The raw event behind a rendered message, and which relays delivered it.
-///
-/// Nothing else keeps either. A message is mapped into a [Message] the moment
-/// it arrives and the event is dropped, and every dedup layer in the stack
-/// exists to throw away all but the first copy — which is exactly the set that
-/// answers "where did this come from". So both are recorded here, and the
-/// recording happens BEFORE the dedup rather than after, or this would report
-/// one relay for every message in the app and look like it worked.
+/// Raw events and the relays that delivered them, recorded before dedup discards the extra copies.
 class EventProvenance {
   EventProvenance({this.maxEvents = 1500, this.maxRelaysPerEvent = 40});
 
-  /// About what a person might scroll back and inspect, not about correctness.
   final int maxEvents;
 
-  /// One event seen on more relays than this is not more informative.
   final int maxRelaysPerEvent;
 
   static const Set<int> panelKinds = {20000, 23333};
@@ -23,16 +14,14 @@ class EventProvenance {
 
   ProvenanceRecord? of(String eventId) => _byId[eventId];
 
-  /// Records a delivery. Called once per copy, including the copies about to
-  /// be deduped away.
+  /// Called once per copy, including copies about to be deduped away.
   void record(NostrEvent event, String? relayUrl) {
     if (event.id.length != 64) return;
     if (!panelKinds.contains(event.kind)) return;
     var rec = _byId.remove(event.id);
     if (rec == null) {
       if (_byId.length >= maxEvents) {
-        // Insertion order is arrival order; the oldest is the least likely to
-        // still be on screen.
+        // Insertion order is arrival order, so the oldest is evicted first.
         _byId.remove(_byId.keys.first);
       }
       rec = ProvenanceRecord(event: event, firstSeen: DateTime.now());
@@ -42,8 +31,7 @@ class EventProvenance {
     addSource(event.id, relayUrl);
   }
 
-  /// Records a delivery that did not come off a relay socket, or adds a relay
-  /// to an event already held.
+  /// Records a non-relay delivery, or adds a relay to an event already held.
   void addSource(String eventId, String? source) {
     final rec = _byId[eventId];
     if (rec == null) return;
@@ -71,6 +59,5 @@ class ProvenanceRecord {
   final List<String> relays = <String>[];
 }
 
-/// Process-wide, like appAttestRegistry: the transports write it and the event
-/// details panel reads it, and neither owns the other.
+/// Process-wide: transports write it and the event details panel reads it.
 EventProvenance eventProvenance = EventProvenance();

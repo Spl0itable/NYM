@@ -22,24 +22,16 @@ import '../identity/modal_chrome.dart';
 import 'build_integrity.dart';
 import 'settings_widgets.dart';
 
-/// Bundled fallback for the About-header version, shown until the live version
-/// resolves (and if the fetch fails offline). Kept in sync with the main
-/// project's `NYMCHAT_VERSION` at release; the live value from
-/// [_kVersionUrl] supersedes it whenever reachable.
+/// Bundled fallback version, shown until the live version resolves; keep in sync with `NYMCHAT_VERSION` at release.
 const String kAboutVersion = 'v3.75.545';
 
-/// Live app version, published by the main project's build as a tiny
-/// `version.json` (`{"version":"vX.Y.Z"}`) derived from `NYMCHAT_VERSION`. The
-/// About header shows this so the native apps track the live main-project
-/// version instead of a hardcoded string. Fetched via native HTTP (no CORS),
-/// cached for the session in [_liveVersionCache].
+/// Live version JSON (`{"version":"vX.Y.Z"}`) published by the main build; cached for the session.
 const String _kVersionUrl = 'https://web.nymchat.app/version.json';
 
-/// Session cache so re-opening About doesn't refetch. Null until first success.
+/// Session cache; null until the first success.
 String? _liveVersionCache;
 
-/// Fetches the live main-project version, or null on any failure (caller keeps
-/// the bundled [kAboutVersion]). Result is cached for the session.
+/// Live version, or null on failure so the caller keeps [kAboutVersion].
 Future<String?> _fetchLiveVersion() async {
   if (_liveVersionCache != null) return _liveVersionCache;
   try {
@@ -50,52 +42,38 @@ Future<String?> _fetchLiveVersion() async {
     final doc = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true));
     if (doc is! Map) return null;
     final v = doc['version'];
-    // Validate shape (vN.N.N-ish) so a stray HTML/error body can't land in the
-    // header.
+    // Validate the shape so a stray HTML or error body can't land in the header.
     if (v is String && RegExp(r'^v?[0-9][0-9A-Za-z.\-]{1,31}$').hasMatch(v)) {
       _liveVersionCache = v;
       return v;
     }
   } catch (_) {
-    // Offline / timeout / bad body — fall back to the bundled constant.
+    // Offline, timeout or bad body: keep the bundled constant.
   }
   return null;
 }
 
-/// The Zapstore publisher key, in hex — the npub whose signed release events
-/// the Android build check reads (`SIGN_WITH` in the publish workflow, shown as
-/// the developer on zapstore.dev/apps/com.nym.bar).
-///
-/// The same key that signs the warrant canary, deliberately: one key to trust,
-/// published in two places, and a reader who has verified one has verified the
-/// other. Kept as its own constant rather than an alias so that if the two ever
-/// diverge, changing one does not silently change the other.
-///
-/// It has to be pinned. Zapstore's relay is public, so anyone can publish a
-/// kind-3063 event claiming any hash; an unpinned lookup would accept whatever
-/// was written to the relay last.
+/// Pinned Zapstore publisher key; unpinned, anyone could publish a matching kind-3063 event.
 const String kZapstorePublisherPubkey =
     'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df';
 
-/// Warrant-canary source + pinned developer pubkey (canary-verify.js:5-6).
+/// Warrant canary source and pinned developer pubkey.
 const String _kCanaryUrl =
     'https://raw.githubusercontent.com/Spl0itable/NYM/main/canary.json';
 const String _kCanaryPubkey =
     'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df';
 
-/// Relay hints embedded in the canary's `nevent` link (`CANARY_RELAY_HINTS`,
-/// app.js:4284).
+/// Relay hints embedded in the canary's `nevent` link.
 const List<String> _kCanaryRelayHints = [
   'wss://sendit.nosflare.com',
   'wss://relay.damus.io',
   'wss://nos.lol',
 ];
 
-/// `var(--success, #3fb950)` — `--success` is never defined in the PWA CSS, so
-/// the fallback always applies (`.about-canary-status.ok` etc.).
+/// `--success` is never defined in the PWA CSS, so this fallback always applies.
 const Color _kSuccess = Color(0xFF3FB950);
 
-/// Resolved warrant-canary check (`run()`, canary-verify.js:20-44).
+/// Resolved warrant-canary check.
 class _CanaryResult {
   const _CanaryResult({
     required this.state,
@@ -125,9 +103,7 @@ class _CanaryResult {
   final String pubkey;
 }
 
-/// `verifySig` (canary-verify.js:9-18): 'unsigned' when sig/pubkey/id are
-/// missing, 'valid' only when the Schnorr signature checks out AND the pubkey
-/// is the pinned developer key, 'invalid' otherwise, 'unverifiable' on a crash.
+/// 'valid' only when the Schnorr signature checks and the pubkey is pinned; 'unsigned' when fields are missing.
 String _verifyCanarySig(Map<String, dynamic> doc) {
   if ((doc['sig'] ?? '') == '' ||
       (doc['pubkey'] ?? '') == '' ||
@@ -149,17 +125,14 @@ Future<http.Response> fetchCanaryDocument({ApiClient? api}) =>
 
 final _canaryApi = ApiClient();
 
-/// Fetches + verifies the published canary (`run()`, canary-verify.js:20-44).
-/// Throws on network/HTTP errors (→ the 'Unavailable offline' state).
+/// Fetches and verifies the canary; throws on network or HTTP errors.
 Future<_CanaryResult> _fetchCanary() async {
   final res = await fetchCanaryDocument();
   if (res.statusCode == 404) return const _CanaryResult(state: 'gone');
   if (res.statusCode < 200 || res.statusCode >= 300) {
     throw Exception('http ${res.statusCode}');
   }
-  // `res.body` would decode charset-less application/json as Latin-1 and
-  // mangle any non-ASCII content, breaking the re-hashed event id. The PWA's
-  // `response.json()` always decodes UTF-8, so mirror that here.
+  // Decode as UTF-8; `res.body` would read charset-less JSON as Latin-1 and break the re-hashed event id.
   final doc = jsonDecode(utf8.decode(res.bodyBytes, allowMalformed: true))
       as Map<String, dynamic>;
   final signed = doc['content'] is String && (doc['sig'] ?? '') != '';
@@ -194,14 +167,11 @@ Future<_CanaryResult> _fetchCanary() async {
   );
 }
 
-/// `fmtCanaryDate` (app.js:4279): ISO date (YYYY-MM-DD) or ''.
+/// ISO date (YYYY-MM-DD) or ''.
 String _fmtCanaryDate(DateTime? d) =>
     d == null ? '' : d.toUtc().toIso8601String().substring(0, 10);
 
-/// NIP-19 `nevent` TLV encoding (nostr-tools `nip19.neventEncode`, which the
-/// PWA uses for the canary's njump link): TLV 0 = 32-byte event id, TLV 1 =
-/// each relay hint (utf8), TLV 2 = author pubkey. Callers fall back to the
-/// raw hex id on failure, matching the PWA's try/catch.
+/// NIP-19 `nevent` TLV: 0 = event id, 1 = each relay hint, 2 = author; callers fall back to the hex id.
 String _neventEncode(String id, String author, List<String> relays) {
   final data = <int>[];
   void tlv(int type, List<int> value) {
@@ -216,7 +186,7 @@ String _neventEncode(String id, String author, List<String> relays) {
     tlv(1, utf8.encode(r));
   }
   if (author.isNotEmpty) tlv(2, hexToBytes(author));
-  // 8-bit bytes → zero-padded 5-bit groups, then bech32-encode.
+  // 8-bit bytes to zero-padded 5-bit groups, then bech32.
   final five = <int>[];
   var acc = 0;
   var bits = 0;
@@ -232,37 +202,24 @@ String _neventEncode(String id, String author, List<String> relays) {
   return b32.bech32.encode(b32.Bech32('nevent', five), 5000);
 }
 
-/// The build-integrity panel's copy.
-///
-/// Android can measure itself: the installed APK is readable at
-/// `ApplicationInfo.sourceDir`, so the app hashes it and compares against the
-/// developer's signed release manifest — the same shape of proof the web app
-/// gets from re-hashing its own files against the repository's attestations,
-/// and checkable by anyone who downloads the published APK.
-///
-/// Everywhere else there is nothing to measure. What runs is AOT machine code,
-/// not the Dart in `flutter/`, and on iOS the binary is re-signed and
-/// encrypted per download, so a hash computed on the device matches nothing
-/// publishable. Those states say so rather than implying a check that never
-/// ran. See build_integrity.dart.
+/// Build-integrity panel copy; only Android can measure itself (see build_integrity.dart).
 const String kBuildIntegrityLabel = 'Build integrity';
 
-/// Android, checked: the installed APK hashes to something the developer's
-/// signed release manifest publishes.
+/// Android: the APK hash is in the signed release manifest.
 const String kBuildStatusVerified = 'Verified official build';
 const String kBuildNoteVerified =
     'The APK installed on this device hashes to the value in the publisher\'s '
     'signed Zapstore release event. Anyone can repeat the check: download the '
     'published APK, hash it, and verify that event against the publisher key.';
 
-/// Android, checked, wrong: the APK is not what was published.
+/// Android: the APK isn't what was published.
 const String kBuildStatusMismatch = 'Unrecognized build';
 const String kBuildNoteMismatch =
     'The APK installed on this device does not match any hash the publisher\'s '
     'signed release events carry for this version. It was modified after '
     'publication, or built by someone else.';
 
-/// Android via Google Play: nothing to compare, and that is not a failure.
+/// Android via Google Play: nothing to compare, and that isn't a failure.
 const String kBuildStatusStore = 'Installed from Google Play';
 const String kBuildNoteStore =
     'Google Play re-signs the upload with its own key and builds a separate '
@@ -270,9 +227,7 @@ const String kBuildNoteStore =
     'developer published and its hash matches nothing. To check a build '
     'yourself, install the APK published directly and open this panel again.';
 
-/// Android, the release events could not be fetched or none verified —
-/// deliberately one state, since an unverifiable claim is worth what a missing
-/// one is.
+/// Android: events unfetchable or unverified, deliberately one state.
 const String kBuildStatusUnreachable = 'Provenance unreachable';
 const String kBuildNoteUnreachable =
     'The signed release events could not be fetched, or none of them checked '
@@ -280,14 +235,14 @@ const String kBuildNoteUnreachable =
     'this panel can tell — it simply has nothing trustworthy to compare '
     'against right now.';
 
-/// Android, the publisher did publish, but not this version.
+/// Android: published, but not this version.
 const String kBuildStatusNotPublished = 'No published hash yet';
 const String kBuildNoteNotPublished =
     'The publisher has released other versions but none matching this one, so '
     'there is nothing to compare the installed APK against. This is what a '
     'build newer than the published listing looks like.';
 
-/// Everywhere else — principally iOS.
+/// Everywhere else, principally iOS.
 const String kBuildStatusUnsupported = 'Not verifiable on this platform';
 const String kBuildNoteUnsupported =
     'This app cannot check itself here: what runs is compiled code, not the '
@@ -317,7 +272,7 @@ const List<String> kBuildIntegrityStrings = [
   kBuildNoteUnsupported,
 ];
 
-/// The status line and explanation for a verdict.
+/// Status line and explanation for a verdict.
 (String, String) buildIntegrityCopy(BuildIntegrityState state) {
   switch (state) {
     case BuildIntegrityState.verified:
@@ -335,20 +290,14 @@ const List<String> kBuildIntegrityStrings = [
   }
 }
 
-/// The About modal (`#aboutModal`, index.html:2118), presented as a centered
-/// `.modal-content`. Layout mirrors the PWA: header (Nymchat + version), build
-/// integrity panel (a statement of what the app can't establish about itself —
-/// see kBuildIntegrityNote), the LIVE warrant-canary panel (fetch + Schnorr verify,
-/// `runCanaryCheck`), description, external links, divider, and the "Contact
-/// the developer" form.
+/// About modal: version header, build integrity, live warrant canary, links and the contact form.
 class AboutScreen extends ConsumerStatefulWidget {
   const AboutScreen({super.key, this.initialTopic, this.initialMessage});
 
-  /// Pre-selected contact-form topic (must be one of the [FormSelect] options,
-  /// e.g. `'Spam false positive'`). Null keeps the default 'General feedback'.
+  /// Pre-selected contact topic, one of the [FormSelect] options; null keeps 'General feedback'.
   final String? initialTopic;
 
-  /// Pre-filled contact-form message body. Null leaves it empty.
+  /// Pre-filled contact message; null leaves it empty.
   final String? initialMessage;
 
   static Future<void> open(
@@ -375,38 +324,33 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   String _topic = 'General feedback';
   final List<TapGestureRecognizer> _recognizers = [];
 
-  /// Contact-form status line (`#aboutContactStatus`). [_statusOk] picks the
-  /// secondary (success) vs danger (error) color.
+  /// Contact status line; [_statusOk] picks success vs error color.
   String? _status;
   bool _statusOk = false;
   bool _sending = false;
 
-  /// Warrant-canary check state (`runCanaryCheck`, app.js:4286): null while
-  /// 'Checking…'; [_canaryFailed] = fetch error → 'Unavailable offline'.
+  /// Null while checking; [_canaryFailed] means the fetch errored.
   _CanaryResult? _canary;
   bool _canaryFailed = false;
 
-  /// Live main-project version once fetched; falls back to [kAboutVersion].
+  /// Live version once fetched, else [kAboutVersion].
   String _version = _liveVersionCache ?? kAboutVersion;
 
-  /// Build-integrity check state: null while it runs, then the verdict.
+  /// Null while the build check runs, then the verdict.
   BuildIntegrityResult? _build;
 
   @override
   void initState() {
     super.initState();
-    // Pre-fill from `reportSpamFalsePositive(content)` (app.js:4399): topic
-    // 'Spam false positive' + the flagged message in a code block.
+    // Pre-fill for a spam false-positive report.
     final topic = widget.initialTopic;
     if (topic != null && topic.isNotEmpty) _topic = topic;
     final msg = widget.initialMessage;
     if (msg != null && msg.isNotEmpty) _messageController.text = msg;
-    // The PWA kicks off `runCanaryCheck()` every time the About modal opens.
     _runCanaryCheck();
-    // Track the live main-project version; keeps the bundled fallback on error.
+    // Keeps the bundled fallback on error.
     _loadLiveVersion();
-    // Hash the installed APK and check it against the signed release manifest.
-    // No-ops off Android, where nothing on the device can be measured.
+    // No-ops off Android.
     _runBuildCheck();
   }
 
@@ -452,10 +396,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // The soft keyboard reduces the visible area but not size.height, so the
-    // dialog must (a) shift up by the keyboard inset and (b) cap its height to
-    // the space left above the keyboard — otherwise the "Contact the developer"
-    // field at the bottom of the scroll body renders behind the keyboard.
+    // Shift up by the keyboard inset and cap the height so the contact field isn't hidden.
     final viewInsets = MediaQuery.of(context).viewInsets;
     final visibleHeight =
         MediaQuery.of(context).size.height - viewInsets.bottom;
@@ -486,7 +427,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                 clipBehavior: Clip.antiAlias,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
-                    // Leave ~40px breathing room inside the visible area.
+                    // Leave ~40px of breathing room.
                     maxHeight:
                         (visibleHeight - 40).clamp(200.0, visibleHeight) * 0.98,
                   ),
@@ -563,7 +504,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                                     label: tr('Message'),
                                     child: _messageBox(),
                                   ),
-                                  // Contact status line (`#aboutContactStatus`, F12).
                                   if (_status != null)
                                     Padding(
                                       padding: const EdgeInsets.only(top: 4),
@@ -585,8 +525,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                           _actions(c),
                         ],
                       ),
-                      // `.modal-close`: 32×32 glass ✕ chip, absolute top-right
-                      // (14,14) over the card — not inline in the title row.
                       ModalChrome.closeChip(
                           c, () => Navigator.of(context).maybePop()),
                     ],
@@ -601,9 +539,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
   }
 
   Widget _header(NymColors c) {
-    // `.modal-header "Nymchat <ver>"`: a full-width title (name + version) with
-    // a 1px glass bottom rule. The close ✕ is the separate absolute chip
-    // (build); right padding (56) keeps the title clear of the floating chip.
+    // Right padding keeps the title clear of the floating close chip.
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(28, 24, 56, 14),
@@ -639,16 +575,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     );
   }
 
-  /// `.about-build` panel (styles-components.css:363-415): white@.04 fill (no
-  /// light override), 12px title/status row, 11px note + meta + links rows.
-  /// The web bundle-attestation check (`build-verify.js`) has no native
-  /// analog — see kBuildIntegrityNote for why — so the panel states that
-  /// plainly, styled like the PWA's w600 `.about-build-status`, and keeps the
-  /// same source/provenance links for a reader to check off-device.
+  /// Build-integrity panel with source and provenance links for checking off-device.
   Widget _buildPanel(NymColors c) {
     final result = _build;
-    // While the check is in flight on a platform that can run one, say so
-    // instead of showing a verdict that is about to change.
+    // While a supported check runs, say so instead of a verdict about to change.
     final pending = result == null && BuildIntegrityService.isSupported;
     final state = result?.state ?? BuildIntegrityState.unsupported;
     final copy = buildIntegrityCopy(state);
@@ -659,7 +589,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       margin: const EdgeInsets.only(top: 14),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0x0AFFFFFF), // rgba(255,255,255,.04), both modes
+        color: const Color(0x0AFFFFFF),
         borderRadius: NymRadius.rsm,
         border: Border.all(color: c.glassBorder),
       ),
@@ -672,9 +602,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
             children: [
               Text(tr(kBuildIntegrityLabel),
                   style: TextStyle(color: c.textDim, fontSize: 12)),
-              // Unclassed `.about-build-status` inherits `var(--text)`, w600.
-              // Only a real check earns a color; the states that couldn't
-              // compare anything stay neutral rather than reading as failures.
+              // Only a real check earns a color; states that compared nothing stay neutral.
               Flexible(
                 child: Text(
                   tr(status),
@@ -692,8 +620,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               ),
             ],
           ),
-          // Say what the check did or could not establish, rather than
-          // restating a fact next to a heading that reads as a verdict.
           if (note.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -701,14 +627,13 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                   style:
                       TextStyle(color: c.textDim, fontSize: 11, height: 1.45)),
             ),
-          // The values a reader needs to repeat the check off-device.
+          // Values needed to repeat the check off-device.
           if (measured != null) ...[
             if (measured.apkSha256 != null)
               _hashRow(c, tr('Installed APK'), measured.apkSha256!),
             if (measured.signerSha256 != null)
               _hashRow(c, tr('Signing certificate'), measured.signerSha256!),
           ],
-          // `.about-build-meta { margin-top: 4px; font-size: 11px }`.
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Wrap(
@@ -719,7 +644,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               ],
             ),
           ),
-          // `.about-build-links { margin-top: 6px; font-size: 11px }`.
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Wrap(
@@ -740,8 +664,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     );
   }
 
-  /// A hash the reader can compare against a published value. Monospace and
-  /// selectable, because the point of showing it is that someone checks it.
+  /// Monospace, selectable hash for comparing against a published value.
   Widget _hashRow(NymColors c, String label, String hex) {
     return Padding(
       padding: const EdgeInsets.only(top: 4),
@@ -763,45 +686,39 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     );
   }
 
-  /// `.about-canary` warrant-canary panel, live like the PWA's
-  /// `runCanaryCheck()` (app.js:4286-4356): fetch + Schnorr-verify the
-  /// published canary, then render the state-colored status chip, the note,
-  /// and the meta row (canary link, monospace sig chip, njump event link, BTC
-  /// anchor link, monospace updated/due dates).
+  /// Live warrant-canary panel: fetch and Schnorr-verify, then status, note and meta row.
   Widget _canaryPanel(NymColors c) {
     final r = _canary;
 
-    // `.about-canary-status` text + state class color.
     String statusText;
     Color statusColor;
     if (_canaryFailed) {
       statusText = tr('Unavailable offline');
-      statusColor = c.textDim; // .checking
+      statusColor = c.textDim;
     } else if (r == null) {
       statusText = tr('Checking…');
-      statusColor = c.textDim; // .checking
+      statusColor = c.textDim;
     } else if (r.state == 'gone') {
       statusText = tr('⚠ Canary removed');
-      statusColor = c.danger; // .gone → var(--danger, #f85149)
+      statusColor = c.danger;
     } else if (r.state == 'forged') {
       statusText = tr('✗ Signature invalid');
-      statusColor = c.danger; // .forged
+      statusColor = c.danger;
     } else if (r.state == 'ok') {
       statusText = tr('✓ All clear');
-      statusColor = _kSuccess; // .ok
+      statusColor = _kSuccess;
     } else {
       statusText = r.overdue ? tr('✗ Update overdue') : tr('✗ Not all clear');
-      statusColor = c.warning; // .stale → var(--warning, #d29922)
+      statusColor = c.warning;
     }
 
-    // `#aboutCanaryNote`.
     var note = '';
     if (r != null && !_canaryFailed) {
       if (r.state == 'gone') {
         note = tr('The signed canary is no longer published. '
             'Treat this as a serious warning.');
       } else if (r.state == 'forged') {
-        // 'develper' [sic] — the PWA string, preserved verbatim (app.js:4340).
+        // 'develper' [sic] matches the PWA string verbatim.
         note = tr('The canary signature does not match the Nymchat develper '
             'key. Do not trust this canary.');
       } else if (r.state == 'ok') {
@@ -814,10 +731,9 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       }
     }
 
-    // Sig/date/event/anchor are filled for every resolved state except 'gone'
-    // (the PWA returns before setting them; on 'checking' they start empty).
+    // Filled for every resolved state except 'gone'.
     var sigText = '';
-    var sigColor = c.textDim; // `.about-canary-sig` default
+    var sigColor = c.textDim;
     var dateText = '';
     String? eventUrl;
     String? anchorLabel;
@@ -825,10 +741,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     if (r != null && !_canaryFailed && r.state != 'gone') {
       if (r.sig == 'valid') {
         sigText = tr('signature ✓');
-        sigColor = _kSuccess; // .about-canary-sig.ok
+        sigColor = _kSuccess;
       } else if (r.sig == 'invalid') {
         sigText = tr('signature ✗');
-        sigColor = c.danger; // .about-canary-sig.bad
+        sigColor = c.danger;
       } else {
         sigText = tr('unsigned');
       }
@@ -841,7 +757,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         try {
           ref = _neventEncode(r.id, r.pubkey, _kCanaryRelayHints);
         } catch (_) {
-          // Fall back to the raw hex id, like the PWA.
+          // Fall back to the raw hex id.
         }
         eventUrl = 'https://njump.me/$ref';
       }
@@ -854,7 +770,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0x0AFFFFFF), // rgba(255,255,255,.04), both modes
+        color: const Color(0x0AFFFFFF),
         borderRadius: NymRadius.rsm,
         border: Border.all(color: c.glassBorder),
       ),
@@ -876,7 +792,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
               ),
             ],
           ),
-          // `.about-canary-note { margin-top: 5px; font-size: 11px }`.
           if (note.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 5),
@@ -885,7 +800,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
                 style: TextStyle(color: c.textDim, fontSize: 11, height: 1.4),
               ),
             ),
-          // `.about-canary-meta { margin-top: 6px; gap: 4px 12px; 11px }`.
           Padding(
             padding: const EdgeInsets.only(top: 6),
             child: Wrap(
@@ -961,9 +875,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     );
   }
 
-  /// `#aboutContactMessage`: a `.form-textarea` (maxlength=2000, no counter)
-  /// sharing the `.form-input` styling — [FormInput] carries the exact fills,
-  /// borders, focus ring, and forced white/black 15px text.
+  /// Contact textarea, max 2000 chars with no counter.
   Widget _messageBox() {
     return FormInput(
       controller: _messageController,
@@ -987,8 +899,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
             onPressed: () => Navigator.of(context).maybePop(),
           ),
           const SizedBox(width: 10),
-          // `.send-btn` style; disabled while sending → opacity .35 (PWA
-          // `.send-btn:disabled`), height 42.
           Opacity(
             opacity: _sending ? 0.35 : 1.0,
             child: InkWell(
@@ -1044,25 +954,18 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     );
   }
 
-  /// Opens [url] externally (F14). Every link is absolute now that the public
-  /// pages live on the apex domain (`site_links.dart`), so there is nothing
-  /// left to resolve against a base.
+  /// Opens [url] externally; every link is absolute.
   Future<void> _openLink(String url) async {
     final uri = Uri.tryParse(url);
     if (uri == null) return;
     try {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (_) {
-      // Best-effort; a missing browser/handler just no-ops.
+      // Best-effort; a missing handler no-ops.
     }
   }
 
-  /// About → Send Message (F12; app.js:4406 `sendAboutContact`): validate a
-  /// non-empty message + relay connection, then build the
-  /// `[Nymchat contact — <topic>]` body and deliver it as an encrypted PM to the
-  /// verified developer via the controller. Drives the button label
-  /// ("Sending…") and the `#aboutContactStatus` line through sent/error states,
-  /// clearing the field only on success.
+  /// Sends the contact message as an encrypted PM to the verified developer, clearing the field only on success.
   Future<void> _sendContact() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) {
@@ -1072,7 +975,6 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       });
       return;
     }
-    // Relay connectivity (PWA `nym.connected`).
     final connected = ref.read(appStateProvider).connectedRelays > 0;
     if (!connected) {
       setState(() {
@@ -1087,9 +989,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       _status = null;
     });
 
-    // The body the PWA gift-wraps to the developer (`sendAboutContact`):
-    //   `[Nymchat contact — <topic>]\n\n<message>`
-    // sent as an encrypted PM to `NostrController.verifiedDeveloperPubkey`.
+    // Gift-wrapped to the developer as `[Nymchat contact — <topic>]\n\n<message>`.
     final body = '[Nymchat contact — $_topic]\n\n$text';
     var ok = false;
     try {

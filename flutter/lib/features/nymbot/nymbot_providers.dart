@@ -1,13 +1,4 @@
-/// Riverpod wiring for the Nymbot feature: the [NymbotService] singleton, the
-/// private-chat engine, and the `?`/`@Nymbot` interception helpers.
-///
-/// The private Nymbot conversation lives in the CANONICAL PM store
-/// (`AppState.messages['pm-<botPubkey>']`), exactly like the PWA keeps it in
-/// `pmMessages` (pms.js:1291-1339) — so the bot thread renders through the same
-/// message pipeline as every other PM (sidebar row, unread counts, receipts,
-/// reactions, system messages, typing indicator). [BotChatController] is the
-/// port of the PWA's `_handleBotPM` /
-/// `_handleBotModelCommand` / `_handleBotTransferCommand` engine (pms.js).
+/// Nymbot wiring: service, the private-chat engine over the canonical bot PM thread, and `?`/`@Nymbot` interception.
 library;
 
 import 'dart:async';
@@ -42,69 +33,39 @@ import '../../services/storage/secure_store.dart';
 import 'anon_bot.dart';
 import 'nymbot_service.dart';
 
-// =============================================================================
-// Interception helpers (pure — safe to call from the composer hot path)
-// =============================================================================
-
-/// True when [text] is a Nymbot public command, i.e. begins with `?` followed
-/// by a non-space character. (`?` alone, or `? foo`, is not a command.)
-///
-/// Matches the worker/PWA rule: a leading `?` then a command token.
+/// True for `?` followed by a non-space command token.
 bool isBotCommand(String text) {
   final t = text.trimLeft();
   return t.length >= 2 && t[0] == '?' && !_isSpace(t[1]);
 }
 
-/// True when [text] mentions `@Nymbot` (case-insensitive), which routes the
-/// message to `?ask` (README line 179: also triggered via an `@Nymbot`
-/// mention followed by the question). The mention may appear anywhere.
+/// True when [text] mentions `@Nymbot` anywhere (case-insensitive), which routes to `?ask`.
 bool isNymbotMention(String text) => _nymbotMention.hasMatch(text);
 
-/// `@Nymbot` as a word (not part of a longer handle like `@Nymbotz`),
-/// optionally carrying the `#xxxx` pubkey discriminator the mention flair now
-/// serializes on the wire (`@Nymbot#4bb2`, autocomplete_queries.dart). Without
-/// swallowing that suffix, [stripNymbotMention] left `#4bb2` behind and the bot
-/// answered its own discriminator instead of the intended question.
+/// `@Nymbot` as a whole word, with its optional `#xxxx` discriminator so stripping doesn't leave it behind.
 final RegExp _nymbotMention = RegExp(
     r'(^|[^A-Za-z0-9_])@Nymbot(?:#[0-9a-f]{4})?\b',
     caseSensitive: false);
 
-/// Strips a leading `@Nymbot` mention (and its optional `#xxxx` discriminator)
-/// and returns the remaining question text, for turning `@Nymbot what is nostr`
-/// into the `?ask` args `what is nostr`. A bare `@Nymbot#4bb2` (mention only)
-/// yields the empty string so [routeToBot] falls back to the quoted text.
+/// Strips a leading `@Nymbot` mention and discriminator; a bare mention yields '' so [routeToBot] uses the quoted text.
 String stripNymbotMention(String text) =>
     text.replaceFirst(_nymbotMention, '').trim();
 
 bool _isSpace(String ch) => ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 
-/// The bot-PM control commands that are handled entirely ON-DEVICE — they are
-/// never encrypted, published to relays, shown as message bubbles, or stored.
-/// A 1:1 port of the interception regex in the PWA's `sendPM`.
+/// Bot-PM control commands handled entirely on-device: never encrypted, published, shown or stored.
 final RegExp botPMCommandRe = RegExp(
     r'^\s*\?(help|commands|balance|buy|clear|transfer|gift|model|anon|git|github)\b',
     caseSensitive: false);
 
-// =============================================================================
-// Service provider
-// =============================================================================
-
-/// The lazy Nymbot HTTP service. No network until a method is called.
+/// Lazy Nymbot HTTP service; no network until a method is called.
 final nymbotServiceProvider = Provider<NymbotService>((ref) {
   final service = NymbotService();
   ref.onDispose(service.dispose);
   return service;
 });
 
-// =============================================================================
-// `?buy` modal mailbox
-// =============================================================================
-
-/// A pending request to open the bot-credits BUY modal (the PWA's
-/// `showBotCreditsModal(null, tier)` from `?buy` and the noCredits path,
-/// pms.js:2413/2478). The engine posts here; the bot-chat surface (and the
-/// shell) listens, opens [BotCreditsModal] with [tier] preselected, then
-/// consumes.
+/// Request to open the credits buy modal with [tier] preselected; listeners open it, then consume.
 class BotBuyRequest {
   const BotBuyRequest({required this.tier});
   final CreditTier tier;
@@ -115,11 +76,11 @@ class BotBuyRequestHooks extends StateNotifier<BotBuyRequest?> {
 
   void request(CreditTier tier) => state = BotBuyRequest(tier: tier);
 
-  /// Clears the pending request once the modal has opened.
+  /// Clears the request once the modal has opened.
   void consume() => state = null;
 }
 
-/// The `?buy` mailbox. The engine writes; the bot-chat screen reads.
+/// The `?buy` mailbox.
 final botBuyRequestProvider =
     StateNotifierProvider<BotBuyRequestHooks, BotBuyRequest?>(
   (ref) => BotBuyRequestHooks(),
@@ -138,10 +99,6 @@ final botAnonRequestProvider =
   (ref) => BotAnonRequestHooks(),
 );
 
-// =============================================================================
-// Private bot-chat engine state
-// =============================================================================
-
 const String kBotPriceUnavailableText =
     "Nymbot can't check the Bitcoin price right now, so it couldn't price "
     'this message. Nothing was charged. Tap Retry to send it again once the '
@@ -158,8 +115,7 @@ class BotPriceRetry {
   final String? wrapId;
 }
 
-/// Immutable snapshot of the private Nymbot chat controls. The conversation
-/// itself lives in the canonical PM store (`AppState.messages['pm-<bot>']`).
+/// Private chat controls; the conversation lives in the canonical PM store.
 class BotChatState {
   const BotChatState({
     this.proModel,
@@ -176,33 +132,23 @@ class BotChatState {
 
   final BotPriceRetry? priceRetry;
 
-  /// The pinned Pro model (`?model <name>`), or null for standard routing.
+  /// Pinned Pro model, or null for standard routing.
   final ProModel? proModel;
 
   final BotBalance balance;
 
-  /// True once a balance response has landed (the header shows
-  /// "checking credits…" until then — PWA `channelMeta` initial text).
+  /// True once a balance has landed; until then the header says "checking credits…".
   final bool balanceKnown;
 
-  /// True when a balance check failed before any count ever landed — the
-  /// header meta shows 'credits unavailable' (PWA `_refreshBotCreditMeta`,
-  /// pms.js:2382-2389). Cleared the moment any balance arrives.
+  /// A check failed before any balance landed; cleared when one arrives.
   final bool balanceUnavailable;
 
   final bool sending;
 
-  /// The `?clear` watermark (seconds), 0 = never cleared. A cleared chat is
-  /// empty but NOT new — the welcome bubble is suppressed (PWA
-  /// `_getBotPmClearedAt`, pms.js:1692-1703 / 3072-3075).
+  /// `?clear` watermark in seconds (0 = never); a cleared chat is empty but gets no welcome.
   final int clearedAtSec;
 
-  /// Transient bot-styled info bubbles (welcome, `?help` guide, command
-  /// outputs). LOCAL-ONLY: they never enter the shared PM store, so they never
-  /// bump the sidebar conversation, are never persisted, and vanish on restart
-  /// — the PWA's `_displayBotInfoMessage` is "local-only and never persisted"
-  /// (pms.js:1773-1776). The bot chat screen merges them into the rendered
-  /// thread by timestamp.
+  /// Local-only info bubbles (welcome, `?help`, command output), never stored; merged into the thread by timestamp.
   final List<Message> infoMessages;
 
   final bool anonEnabled;
@@ -245,23 +191,13 @@ class BotChatState {
   static const _sentinel = Object();
 }
 
-/// Engine for the private Nymbot chat — the native `_handleBotPM` (pms.js:2393).
-///
-/// Owns the pinned Pro model, the credit balance, and the command/reply flows. Messages are read from / written into the
-/// canonical PM store so the conversation persists in shared state, surfaces in
-/// the sidebar, and renders through the canonical chat widgets.
-///
-/// The actual `pubkey`/`auth` blob comes from the parent identity layer — the
-/// app sets it via [bind] before sending. Until bound, sends are refused so this
-/// stays decoupled from shared identity state.
+/// Private Nymbot engine over the canonical PM store; sends are refused until [bind].
 class BotChatController extends StateNotifier<BotChatState> {
   BotChatController(this._ref, this._service) : super(const BotChatState()) {
     _hydrate();
-    // Anything already in the thread (restored history) is not a new send.
+    // Restored history isn't a new send.
     _primeHandled(_thread);
-    // The stored pin may name a model only the live catalog knows, which
-    // hydrates asynchronously — re-resolve it the moment that list arrives so
-    // the pin isn't silently dropped back to standard routing.
+    // Re-resolve a pin only the live catalog knows once it loads, so it isn't dropped to standard routing.
     _ref.listen<ProModelCatalog>(proModelCatalogProvider, (_, next) {
       if (!mounted || _pendingModelKey.isEmpty) return;
       final m = next.byKey(_pendingModelKey);
@@ -271,7 +207,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     });
   }
 
-  /// A pinned `?model` key that no catalog available at hydrate time knew.
+  /// A pinned key no catalog knew at hydrate time.
   String _pendingModelKey = '';
 
   final Ref _ref;
@@ -306,18 +242,14 @@ class BotChatController extends StateNotifier<BotChatState> {
   Uint8List? _privkey;
   EventSigner? _signer;
 
-  /// Own-message ids already routed to the bot (or pre-existing history), so
-  /// the app-state observer never double-fires a request.
+  /// Own-message ids already routed (or pre-existing), so the observer never double-fires.
   final Set<String> _handledIds = <String>{};
   bool _primed = false;
   int _lastLen = -1;
   String _lastLastId = '';
 
-  /// Message ids of the transient bot-styled info bubbles (welcome, `?help`
-  /// guide, command outputs — PWA `_displayBotInfoMessage`), local-only.
+  /// Ids for local-only info bubbles.
   int _infoSeq = 0;
-
-  // --- Persistence (the PWA's nym_botpm_* localStorage keys) ----------------
 
   static const _kProModelPref = 'nym_botpm_pro_model';
   static const _kClearedAtPref = 'nym_botpm_cleared_at';
@@ -331,35 +263,26 @@ class BotChatController extends StateNotifier<BotChatState> {
       final p = await _prefs;
       if (!mounted) return;
       final modelKey = p.getString(_kProModelPref) ?? '';
-      // Resolve through the live catalog first so a key pinned before a
-      // version bump ("claude-opus") still finds its model ("claude-opus-5").
+      // Resolve through the live catalog so older pinned keys find their current model.
       final model = _catalog.byKey(modelKey) ??
           kProModelCatalogFallback.byKey(modelKey);
-      // Unknown for now: hold the key so the listener above can resolve it
-      // once the live catalog loads.
+      // Unknown for now: hold the key until the live catalog loads.
       _pendingModelKey = (model == null && modelKey.isNotEmpty) ? modelKey : '';
       final clearedAt = int.tryParse(p.getString(_kClearedAtPref) ?? '') ?? 0;
       if (p.getString(_kAnonPref) == 'true') anon.setEnabled(true);
-      // Monotonic: a synced remote marker ([applySyncedMarkers]) may have
-      // landed before prefs hydrated — never regress it to the older on-disk
-      // value.
+      // Monotonic: never regress below a synced marker that landed first.
       state = state.copyWith(
           proModel: model,
           clearedAtSec:
               clearedAt > state.clearedAtSec ? clearedAt : state.clearedAtSec);
-      // A cache restore may have landed before the watermark hydrated — drop
-      // any already-loaded bot-thread messages at or before it
-      // (`displayMessage`'s clearedAt guard, pms.js:1121-1124).
+      // Drop already-loaded messages at or before the watermark.
       if (clearedAt > 0) _purgeCleared(clearedAt);
     } catch (_) {
-      // Prefs unavailable (tests) — stay with in-memory defaults.
+      // Prefs unavailable (tests): keep in-memory defaults.
     }
   }
 
-  /// Removes bot-thread messages stamped at or before the `?clear` watermark
-  /// from the canonical store — the ingest-time filter the PWA applies in
-  /// `handleGiftWrapDM` (pms.js:1121-1124), so relay backlog / D1 restore /
-  /// the local cache can't resurrect a cleared thread.
+  /// Removes bot messages at or before the `?clear` watermark so backlog or restores can't resurrect them.
   void _purgeCleared(int clearedAtSec) {
     final stale = <String>[
       for (final m in _thread)
@@ -382,33 +305,19 @@ class BotChatController extends StateNotifier<BotChatState> {
     unawaited(_prefs.then((p) => p.setString(_kClearedAtPref, '$sec')));
   }
 
-  /// Inbound leg of the synced bot-PM markers (`applyNostrSettings`,
-  /// app.js:6083-6098): `botPmWelcomed` only ever flips ON (once the user was
-  /// welcomed on any device the proactive PM stays suppressed everywhere) and
-  /// `botPmClearedAt` is monotonic — take the newest clear time seen on any
-  /// device so a `?clear` elsewhere hides this device's pre-clear Nymbot
-  /// history too. Called from the settings-merge path
-  /// ([NostrController._applySyncedSettings]).
+  /// Applies synced markers: welcomed only turns on, and the newest clear time wins.
   void applySyncedMarkers({bool welcomed = false, int clearedAtSec = 0}) {
     if (welcomed) {
       unawaited(_prefs.then((p) => p.setString(_kWelcomedPref, 'true')));
     }
     if (clearedAtSec > 0 && clearedAtSec > state.clearedAtSec) {
       _setClearedAt(clearedAtSec);
-      // Drop the already-loaded pre-clear thread from the canonical store —
-      // the ingest-time guard the PWA applies in `handleGiftWrapDM`
-      // (pms.js:1121-1124) keyed off the freshly-advanced watermark.
+      // Drop the loaded pre-clear thread.
       _purgeCleared(clearedAtSec);
     }
   }
 
-  // --- Identity ---------------------------------------------------------------
-
-  /// Wires in the user's identity for paid requests. Called by the parent app
-  /// (`bindBotChat`). Pass [signer] (the active [EventSigner] — local OR remote)
-  /// so auth signs through the generic dispatch like the PWA's `_signBotAuth`;
-  /// with only a [privkey] a [LocalSigner] is built from it. [auth] remains an
-  /// override hook for tests / delegated signers that pre-sign.
+  /// Wires the identity for paid requests; [auth] overrides it for tests.
   void bind({
     required String pubkey,
     Map<String, dynamic>? auth,
@@ -446,34 +355,22 @@ class BotChatController extends StateNotifier<BotChatState> {
     unawaited(anon.flush());
   }
 
-  /// Late-attaches the ACTIVE [EventSigner] (local key OR NIP-46 remote) on
-  /// top of [bind], so per-action NIP-98 auth signs through the generic
-  /// dispatch like the PWA's `_signBotAuth` (pms.js:1649-1679) — a
-  /// remote-signer account gets a FRESH single-use signature per money action
-  /// instead of a static pre-bound auth blob. Keeps the bound privkey (the
-  /// local reply-unwrap path) intact.
+  /// Late-attaches the active signer so money actions get fresh signatures; keeps the bound privkey for reply unwrapping.
   void attachSigner(EventSigner? signer) {
     if (signer != null) {
       _signer = signer;
     }
   }
 
-  /// `_purgeBotPMArchive` seam (pms.js:1881-1891): batch `pm-delete` of the
-  /// cleared thread's wrap ids from the D1 archive so no device can restore it.
-  /// Wired by [NostrController.bindBotChat] (the storage-sync slice owns the
-  /// authed transport); null before boot → the purge is skipped best-effort.
+  /// Batch-deletes a cleared thread's wraps from the D1 archive; null before boot skips it.
   Future<void> Function(List<String> wrapIds)? pmArchivePurger;
 
-  /// Debounced encrypted-settings publish (`_debouncedNostrSettingsSave(2000)`,
-  /// pms.js:1878/1903) so the cleared-at watermark / welcomed flag reach the
-  /// user's other devices immediately. Wired by [NostrController.bindBotChat].
+  /// Debounced settings publish so clear/welcome markers reach other devices.
   void Function()? settingsSyncRequester;
 
   bool get isBound => _pubkey != null;
 
-  /// The worker's single-use ledger actions — signed FRESH every time
-  /// (`_signBotAuth`'s `MONEY` set + `clear-history`, pms.js:1655-1658; the
-  /// worker enforces single-use replay for them).
+  /// Single-use ledger actions, signed fresh every time.
   static const Set<String> _sensitiveActions = {
     'transfer-credits',
     'create-invoice',
@@ -481,11 +378,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     'clear-history',
   };
 
-  /// Per-action NIP-98 auth for [action], signed via the generic signer path
-  /// ([Nip98Auth.buildSigned]) so NIP-46 accounts authenticate exactly like a
-  /// local key: money actions sign fresh (single-use replay gate), routine
-  /// actions reuse the shared 90s cache. Falls back to a pre-supplied [_auth]
-  /// blob when no signer is bound.
+  /// NIP-98 auth via the signer: money actions fresh, routine ones from the 90s cache; falls back to [_auth].
   Future<Map<String, dynamic>?> _authFor(String action,
       [String? payload]) async {
     final signer = _signer;
@@ -506,8 +399,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     return payload == null ? _auth : null;
   }
 
-  // --- Canonical-store plumbing -----------------------------------------------
-
   /// The bot conversation's storage key (`pm-<botPubkey>`).
   static final String conversationKey = PmLogic.pmStorageKey(kNymbotPubkey);
 
@@ -517,29 +408,15 @@ class BotChatController extends StateNotifier<BotChatState> {
   List<Message> get _thread =>
       _appState.messages[conversationKey] ?? const <Message>[];
 
-  /// The bot's base display nym ('Nymbot' — seeded user, app.js:1103-1111).
+  /// The bot's base display nym.
   String get _botNym =>
       stripPubkeySuffix(_appState.users[kNymbotPubkey]?.nym ?? 'Nymbot');
 
-  /// Centered system line in the bot conversation (PWA `displaySystemMessage`).
-  ///
-  /// Localized at the sink: every caller builds an English sentence (often with
-  /// interpolated costs / model labels / nyms), so routing it through [tr] here
-  /// localizes all of them into the active UI language without threading a
-  /// template + args through ~40 call sites. `tr` is a synchronous no-op for
-  /// English and returns the source immediately for other languages while the
-  /// translation caches in the background.
+  /// Centered system line, localized here so every English caller string gets translated.
   void _system(String text) =>
       _app.addSystemMessage(tr(text), storageKey: conversationKey);
 
-  /// A transient bot-styled info bubble (welcome, `?help` guide, command
-  /// outputs) that looks like a message from Nymbot — the PWA's
-  /// `_displayBotInfoMessage` (pms.js:1776-1813). LOCAL-ONLY like the PWA
-  /// ("local-only and never persisted"): appended to [BotChatState.infoMessages]
-  /// instead of the shared PM store, so it never bumps the sidebar conversation,
-  /// is never persisted, and vanishes on restart. A repeated [id] (the welcome
-  /// on every open of an empty thread) replaces the old bubble with a fresh
-  /// timestamp, like the PWA's per-open re-render.
+  /// Local-only bot-styled info bubble; a repeated [id] replaces the old one with a fresh timestamp.
   void _displayBotInfoMessage(String text, {String? id, int? createdAtMs}) {
     final nowMs = createdAtMs ?? DateTime.now().millisecondsSinceEpoch;
     final msgId = id ?? 'nymbot-info-$nowMs-${_infoSeq++}';
@@ -560,12 +437,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     ));
   }
 
-  /// A transient, LOCAL-ONLY centered system line in the bot thread. The PWA's
-  /// 'Start of private message' / `?clear` confirmation are `displaySystemMessage`
-  /// DOM rows that never enter `pmMessages` (they vanish on every re-render,
-  /// pms.js:3065-3082 / 1908-1916) — so here they ride [BotChatState.infoMessages]
-  /// instead of the persisted canonical store. A repeated [id] replaces the old
-  /// row with a fresh timestamp (the per-open re-render).
+  /// Local-only centered system line; a repeated [id] replaces the old row.
   void _displayTransientSystem(String text, {String? id}) {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     _appendInfo(Message(
@@ -581,8 +453,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     ));
   }
 
-  /// Appends [msg] to the transient info layer, replacing any older row with
-  /// the same id (the welcome/start line re-rendered fresh on every open).
+  /// Appends [msg], replacing any row with the same id.
   void _appendInfo(Message msg) {
     state = state.copyWith(infoMessages: [
       for (final m in state.infoMessages)
@@ -591,14 +462,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     ]);
   }
 
-  /// Show/clear the synthetic "Nymbot is thinking" indicator in the bot PM —
-  /// `_setBotTyping` (pms.js:1980-1995): 30s auto-expiry, rendered by the
-  /// shared typing-indicator strip (verb 'thinking' for the bot).
-  /// Keeps the 30s expiry refreshed while a reply is still in flight. The
-  /// expiry exists so a killed app doesn't leave the indicator stuck forever,
-  /// but a Nymbot turn can run to the 180s request timeout — a frontier model
-  /// thinking, or the transport walk trying a second route — so setting it
-  /// once made the indicator vanish mid-reply on anything slower than 30s.
+  /// "Thinking" heartbeat: the 30s expiry is refreshed while a reply (up to 180s) is in flight.
   Timer? _typingHeartbeat;
 
   void _setBotTyping(bool on) {
@@ -621,9 +485,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     );
   }
 
-  /// Advances sent→delivered→read receipts on our own messages in the Nymbot
-  /// chat (`_markBotPMReceipts`, pms.js:2062-2081). Never regresses; failed
-  /// messages are skipped.
+  /// Advances receipts on our own messages without regressing; failed ones are skipped.
   void _markBotPMReceipts(String receiptType) {
     final target = PmLogic.deliveryFromReceipt(receiptType);
     for (final m in _thread) {
@@ -639,8 +501,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  /// Marks every message currently in the thread as already-handled so the
-  /// observer only reacts to NEW sends.
+  /// Marks the current thread as handled so only new sends react.
   void _primeHandled(List<Message> list) {
     for (final m in list) {
       _handledIds.add(m.id);
@@ -650,11 +511,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     _lastLastId = list.isNotEmpty ? list.last.id : '';
   }
 
-  /// App-state observer: routes NEW own messages in the bot thread (e.g. sent
-  /// through the canonical PM composer) into the bot engine, so the bot replies
-  /// no matter which surface sent the message. `?` control commands are pulled
-  /// back out of the thread (the PWA never shows them as bubbles,
-  /// pms.js:1584-1591) and executed on-device.
+  /// Routes new own messages from any surface to the bot; `?` commands are pulled out of the thread and run on-device.
   void onAppState(AppState app) {
     final list = app.messages[conversationKey];
     if (list == null) return;
@@ -662,7 +519,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       _primeHandled(list);
       return;
     }
-    // Cheap no-change guard (app state updates are frequent).
+    // Cheap no-change guard.
     if (list.length == _lastLen &&
         (list.isEmpty || list.last.id == _lastLastId)) {
       return;
@@ -674,9 +531,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     for (final m in list) {
       if (_handledIds.add(m.id)) fresh.add(m);
     }
-    // `?clear` watermark: relay backlog / archive restore must never resurrect
-    // a cleared thread (pms.js:1121-1124 drops bot-thread rumors with
-    // `created_at <= clearedAt` at ingest).
+    // Backlog or restores must never resurrect a cleared thread.
     final clearedAt = state.clearedAtSec;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     for (final m in fresh) {
@@ -685,20 +540,13 @@ class BotChatController extends StateNotifier<BotChatState> {
         continue;
       }
       if (!m.isOwn || m.kind != MessageKind.normal || m.isFileOffer) continue;
-      // Only a send made ON THIS DEVICE may buy a reply. `optimistic` marks a
-      // local composer echo (`sendLocal`); an own message that arrived over a
-      // relay or out of the archive is another device's send, already answered
-      // there. Answering it again bought a second reply to one question — on
-      // whatever tier THIS device happened to be set to, which is why the
-      // extras came back as standard routing next to a Pro answer.
+      // Only local sends may buy a reply; others were already answered on their device.
       if (!m.optimistic) continue;
-      // Only LIVE sends trigger the bot — restored/backlogged history must
-      // never re-bill (the PWA gates its reply flow on the live send path).
+      // Only live sends trigger the bot; history must never re-bill.
       if (m.isHistorical || nowMs - m.timestamp > 15000) continue;
       final content = m.content;
       if (botPMCommandRe.hasMatch(canonicalizeCommandInput(content))) {
-        // Control commands never render as bubbles (PWA intercepts them before
-        // publish); pull the echo back out, then run the command.
+        // Control commands never render; remove the echo, then run the command.
         _app.removeMessage(m.id);
         unawaited(handleBotPMCommand(content));
       } else {
@@ -707,45 +555,28 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  // --- Intro / welcome ----------------------------------------------------------
-
-  /// Renders the empty-conversation intro when the bot PM opens with no
-  /// messages: the 'Start of private message' system line, the welcome bubble
-  /// (only when the chat was never `?clear`-ed), and a silent credit refresh —
-  /// `loadPMMessages`'s empty branch (pms.js:3065-3082).
+  /// Empty-thread intro: start line, welcome (unless cleared), and a silent credit refresh.
   void ensureIntro() {
     final list = _thread;
     if (!_primed) _primeHandled(list);
     if (list.isNotEmpty) {
-      // A non-empty conversation re-renders exclusively from the persisted
-      // store on every open (`loadPMMessages`, pms.js:3040-3086) — all
-      // transient `_displayBotInfoMessage` DOM (welcome, `?help` guide,
-      // `?balance` cards) is dropped on a conversation switch.
+      // A non-empty conversation drops all transient bubbles on open.
       if (state.infoMessages.isNotEmpty) {
         state = state.copyWith(infoMessages: const <Message>[]);
       }
       return;
     }
-    // The PWA re-renders the WHOLE empty conversation as transient DOM on
-    // EVERY open (`loadPMMessages`'s empty branch, pms.js:3065-3082): the
-    // 'Start of private message' line, the welcome bubble (only when the chat
-    // was never `?clear`-ed), and a silent credit refresh. Nothing persists —
-    // reset the transient layer to exactly that intro so a restart with a
-    // still-empty thread re-greets like the PWA (no start line ever enters
-    // the persisted canonical store).
+    // Reset the transient layer to exactly the intro; nothing persists.
     state = state.copyWith(infoMessages: const <Message>[]);
     _displayTransientSystem('Start of private message', id: 'nymbot-start');
     if (state.clearedAtSec == 0) {
-      // Rendered fresh (current timestamp) after the start line, matching the
-      // PWA's DOM append order.
+      // Rendered after the start line with a fresh timestamp.
       _displayBotInfoMessage(botWelcomeText, id: 'nymbot-welcome');
     }
     unawaited(checkBotCredits(display: false));
   }
 
-  /// Brand-new users get a proactive PM from Nymbot so a highlighted
-  /// conversation appears in their sidebar from the start. Sent locally, once
-  /// per device — `_maybeSendBotWelcomePM` (pms.js:1840-1879).
+  /// One proactive local welcome PM per device for brand-new users.
   Future<void> maybeSendBotWelcomePM() async {
     SharedPreferences p;
     try {
@@ -777,16 +608,11 @@ class BotChatController extends StateNotifier<BotChatState> {
       senderVerified: true,
     ));
     await p.setString(_kWelcomedPref, 'true');
-    // Push the welcomed flag to synced settings so the user's other devices
-    // skip the proactive PM too (`_debouncedNostrSettingsSave(2000)`,
-    // pms.js:1878).
+    // Sync the welcomed flag so other devices skip it.
     settingsSyncRequester?.call();
   }
 
-  // --- Local controls --------------------------------------------------------
-
-  /// Directly pins/clears the Pro model (the premium picker sheet). Persisted
-  /// like the PWA's `nym_botpm_pro_model`.
+  /// Pins or clears the Pro model directly; persisted.
   void setModelDirect(ProModel? model) {
     state = state.copyWith(proModel: model);
     _persistProModel(model);
@@ -795,13 +621,9 @@ class BotChatController extends StateNotifier<BotChatState> {
   void setBalance(BotBalance b) => state =
       state.copyWith(balance: b, balanceKnown: true, balanceUnavailable: false);
 
-  // --- Command dispatch (the PWA `_handleBotPM` command branches) -------------
-
-  /// Executes a `?` control command typed in the bot PM. On-device only — never
-  /// published, never billed (pms.js:2393-2445).
+  /// Runs a `?` control command on-device; never published or billed.
   Future<void> handleBotPMCommand(String content) async {
-    // A command typed in the user's language is folded back to its canonical
-    // English token before any of the ?command matching below.
+    // Fold localized commands back to canonical English first.
     final trimmed = canonicalizeCommandInput(content.trim());
     _markBotPMReceipts('delivered');
     _markBotPMReceipts('read');
@@ -847,11 +669,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  /// Sends one user message from the bot-chat composer: control commands run
-  /// on-device (no bubble); everything else is published as a REAL NIP-17 PM
-  /// (a gift wrap to the bot + a self-copy, `sendPM` → `sendNIP17PM`,
-  /// pms.js:1594-1599), echoed into the canonical PM store, and routed to the
-  /// worker with the published wrap's id (`_handleBotPM(content, wrapped)`).
+  /// Control commands run on-device; everything else goes out as a real NIP-17 PM and to the worker by wrap id.
   Future<void> sendUserBotPM(String content) async {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
@@ -864,10 +682,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nymMessageId = PmLogic.generateSharedEventId();
 
-    // A send while the bot conversation's thread view is open replies into
-    // that thread: the root's shared id rides inside the encrypted rumor
-    // (`nymthread`), the worker scopes its context to the thread and files
-    // its reply there — same wiring as `_sendMessageContent`.
+    // Sends while the bot thread is open reply into it via the encrypted `nymthread` root.
     String? threadRoot;
     if (appThreadsEnabled) {
       final at = _ref.read(activeThreadProvider);
@@ -876,9 +691,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
     }
 
-    // Build the kind-14 rumor (with the NIP-30 custom-emoji declarations the
-    // PWA spreads in, pms.js:313), wrap it to the bot AND to self, and publish
-    // both — the worker fetches the bot-addressed wrap by its id from relays.
+    // Wrap the kind-14 rumor to the bot and to self and publish both; the worker fetches its wrap by id.
     NostrEvent? botWrap;
     NostrEvent? selfWrap;
     final anonSender = anon.enabled ? anon.ensureIdentity() : null;
@@ -911,9 +724,7 @@ class BotChatController extends StateNotifier<BotChatState> {
                 recipientKem: anon.kemFor(anonSender)?.publicKey)
             : await _wrapRumor(rumor, selfPubkey);
         if (selfWrap != null) _publishDmEvent(selfWrap.toJson());
-        // `sendPM` records own activity right after `sendNIP17PM`
-        // (pms.js:1596): refresh our own lastSeen + the throttled presence
-        // broadcast on bot-screen sends like every other send surface.
+        // Record own activity like every other send surface.
         try {
           _ref.read(nostrControllerProvider).recordOwnActivity();
         } catch (_) {}
@@ -944,13 +755,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     await _runBotExchange(msg, wrapId: botWrap?.id);
   }
 
-  // --- Network -----------------------------------------------------------------
-
-  /// Publishes a pre-signed kind-1059 gift wrap to the DM relays — the PWA's
-  /// `sendDMToRelays(['EVENT', event])`. Rides the shop controller's
-  /// `giftEventPublisher` hook (wired to `pool.publishDm` by the nostr layer,
-  /// the same relay leg the PWA uses for every wrap here); returns false when
-  /// no publisher is wired yet (pre-login boot).
+  /// Publishes a pre-signed kind-1059 wrap to the DM relays; false before a publisher is wired.
   bool _publishDmEvent(Map<String, dynamic> event) {
     final publish =
         _ref.read(shopControllerProvider.notifier).giftEventPublisher;
@@ -963,9 +768,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  /// Gift-wraps [rumor] to [recipientPubkey] (NIP-59), honoring the DM
-  /// forward-secrecy TTL like `publishPM` does. Uses the local key when bound;
-  /// a delegated (NIP-46) signer seals through the remote signer.
+  /// NIP-59 wraps [rumor] with the DM forward-secrecy TTL, via the local key or a remote signer.
   Future<NostrEvent?> _wrapRumor(
       UnsignedEvent rumor, String recipientPubkey,
       {AnonBotIdentity? sender, Uint8List? recipientKem}) async {
@@ -1007,10 +810,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     try {
       final sk = _privkey;
       if (sk != null) {
-        // Hybrid post-quantum whenever the recipient announced a layered
-        // ML-KEM key — which the Nymbot worker now does (its keypair derives
-        // from the bot's own nympq1 root). Falls back to classical exactly
-        // like the canonical PM path; a lookup failure never blocks the send.
+        // Hybrid post-quantum when the bot announced a layered key; falls back to classical, never blocking the send.
         Uint8List? kemPk;
         try {
           kemPk = await _ref
@@ -1020,7 +820,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           kemPk = null;
         }
         if (kemPk != null) {
-          // Awaited inside the try so a seal failure is caught here.
+          // Awaited inside the try so a seal failure is caught.
           return await giftwrap.pq2Nip59Wrap(
             rumor: rumor,
             senderPrivkey: sk,
@@ -1038,9 +838,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
       final signer = _signer;
       if (signer != null) {
-        // Awaited (not just returned) so a failure in the remote-signer seal is
-        // caught by this try/catch rather than escaping as an unhandled async
-        // error.
+        // Awaited so a remote-signer seal failure is caught here.
         Uint8List? kemPk;
         try {
           kemPk = await _ref
@@ -1087,11 +885,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     ];
   }
 
-  /// Unwraps the worker's kind-1059 reply wrap and ingests it into the
-  /// canonical thread — the display leg of `handleGiftWrapDM(data.event, {})`
-  /// (pms.js:2489-2492), including the leading `<think>` split the PWA does at
-  /// decrypt (pms.js:1255-1262). Undecryptable wraps (delegated signer) fall
-  /// back to the relay echo of the wrap we just published.
+  /// Unwraps the worker's reply into the thread, splitting any leading `<think>`; undecryptable wraps arrive via relay echo.
   Future<void> _displayBotReplyWrap(Map<String, dynamic> wrapJson) async {
     final sk = _privkey;
     try {
@@ -1099,10 +893,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       var candidates = anonUnwrapCandidates(wrap);
       if (candidates.isEmpty) {
         if (sk == null) return;
-        // The full self candidate set (ML-KEM keypairs first, classical last):
-        // once the user announced a key, the worker seals its replies
-        // post-quantum, and a classical-only candidate would push every reply
-        // onto the slower relay-echo fallback.
+        // Full self candidate set, ML-KEM first, so post-quantum replies unwrap without the slower fallback.
         try {
           candidates =
               _ref.read(nostrControllerProvider).selfUnwrapCandidates();
@@ -1119,13 +910,11 @@ class BotChatController extends StateNotifier<BotChatState> {
         rumor: rumor,
         wrapId: wrap.id,
         selfPubkey: _pubkey ?? _appState.selfPubkey,
-        // Seal signer must match the claimed rumor author (NIP-59).
+        // Seal signer must match the rumor author (NIP-59).
         senderVerified: unwrapped.seal.pubkey == (rumor['pubkey'] ?? ''),
       );
       if (msg == null) return;
-      // Nymbot replies may lead with a <think> reasoning block — split it into
-      // its own field so previews/search see only the visible reply
-      // (pms.js:1255-1262).
+      // Split a leading `<think>` block so previews see only the reply.
       final tm =
           RegExp(r'^\s*<think>([\s\S]*?)<\/think>\s*', caseSensitive: false)
               .firstMatch(msg.content);
@@ -1138,22 +927,11 @@ class BotChatController extends StateNotifier<BotChatState> {
       _handledIds.add(msg.id);
       _app.ingestPMMessage(msg);
     } catch (_) {
-      // Ciphertext we can't open locally — the published wrap echoes back via
-      // the normal relay gift-wrap ingest.
+      // Can't open it locally; the relay echo will deliver it.
     }
   }
 
-  /// The paid request/reply round-trip for one user message ([m] already in the
-  /// canonical store): delivered receipt → typing 'thinking' strip → worker call
-  /// (eventId of the published wrap; NO plaintext rides the request) → read
-  /// receipt → publish + unwrap `data.event` / republish `data.selfEvent`
-  /// (+ cost / low-balance system lines) — `_handleBotPM`'s paid branch
-  /// (pms.js:2445-2519).
-  ///
-  /// [wrapId] is the published bot-addressed gift wrap's id. Messages arriving
-  /// via the app-state observer (sent through the canonical PM composer, whose
-  /// publish path doesn't surface its wrap ids) get a dedicated wrap built and
-  /// published here so the worker has an event to fetch.
+  /// Paid round trip for [m]: receipts, thinking strip, worker call by wrap id (no plaintext), then publish and unwrap the reply.
   Future<void> _runBotExchange(Message m, {String? wrapId}) async {
     final anonId = anon.ready ? anon.identity : null;
     if (_pubkey == null) {
@@ -1168,9 +946,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         recipientPubkey: kNymbotPubkey,
         content: m.content,
         nymMessageId: m.nymMessageId ?? PmLogic.generateSharedEventId(),
-        // A message sent from a thread view keeps its thread on the rebuilt
-        // wrap too, so the worker sees the same `nymthread` the original
-        // rumor carried.
+        // A rebuilt wrap keeps the original's thread.
         extraTags: [
           if ((m.threadRoot ?? '').isNotEmpty) ['nymthread', m.threadRoot!],
         ],
@@ -1180,8 +956,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         wrapId = wrap.id;
       }
     }
-    // The PWA refuses the round-trip without a published wrap id
-    // (`if (!wrapId)`, pms.js:2443-2446).
+    // No round trip without a published wrap id.
     if (wrapId == null) {
       _system(
           'Nymbot: could not publish your encrypted message. Please try again.');
@@ -1190,8 +965,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     _setBotTyping(true);
     state = state.copyWith(sending: true, priceRetry: null);
     try {
-      // A leading `!` marks a one-off "fresh" message that ignores history
-      // (pms.js:2450 `isFresh`); the published wrap keeps the full text.
+      // Leading `!` marks a one-off message that ignores history.
       final fresh = RegExp(r'^\s*!\s*\S').hasMatch(m.content);
       final pro = state.proModel;
       Map<String, dynamic>? pqAnnouncement;
@@ -1209,8 +983,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         pubkey: anonId?.pk ?? _pubkey!,
         anon: anonId != null,
         eventId: wrapId,
-        // Signed only on the HTTP fallback leg — the authenticated socket
-        // skips per-action auth (shop.js:158-165).
+        // Signed only on the HTTP fallback; the authed socket skips per-action auth.
         signedFor: (payload) async => anonId != null
             ? await anon.authFor('pm', payload)
             : (await _authFor('pm', payload) ?? _auth),
@@ -1223,16 +996,14 @@ class BotChatController extends StateNotifier<BotChatState> {
       _setBotTyping(false);
       _markBotPMReceipts('read');
 
-      // The reply is an encrypted kind-1059 gift wrap: publish it to the DM
-      // relays and unwrap it locally for display (pms.js:2489-2492).
+      // The reply is a kind-1059 wrap: publish it and unwrap for display.
       final event = data['event'];
       if (event is Map) {
         final wrapJson = event.cast<String, dynamic>();
         _publishDmEvent(wrapJson);
         await _displayBotReplyWrap(wrapJson);
       }
-      // Publish the bot's self-addressed copy so the worker can re-fetch and
-      // decrypt its own reply as context on later turns (pms.js:2493-2497).
+      // Publish the bot's self-copy so the worker can use it as context later.
       final selfEvent = data['selfEvent'];
       if (selfEvent is Map &&
           RegExp(r'^[0-9a-f]{64}$', caseSensitive: false)
@@ -1245,7 +1016,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       if (balance != null) {
         final isPro = data['pro'] == true;
         _applyLedgerBalance(balance, pro: isPro);
-        // Cost notices for heavy replies (pms.js:2499-2512).
+        // Cost notices for heavy replies.
         final cost = (data['costCredits'] as num?)?.toDouble()
             ?? (data['cost'] as num?)?.toDouble() ?? 0;
         if (isPro && cost > 0) {
@@ -1270,8 +1041,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     } on NymbotInsufficientCredits catch (e) {
       _setBotTyping(false);
       _markBotPMReceipts('read');
-      // Out of credits → neutral system line + the buy modal, never a red
-      // bubble (pms.js:2470-2483).
+      // Out of credits: a neutral line plus the buy modal, never a red bubble.
       final custom =
           e.message.isNotEmpty && e.message != 'Insufficient credits';
       _system(custom
@@ -1289,17 +1059,12 @@ class BotChatController extends StateNotifier<BotChatState> {
     } on NymbotStillGenerating catch (e) {
       _setBotTyping(false);
       _markBotPMReceipts('read');
-      // Not an error: the worker refused to generate a second answer to a
-      // message it is already answering. A neutral line, never a red bubble.
+      // The worker refused a duplicate answer; a neutral line, not an error.
       _system(e.message);
     } on NymbotException catch (e) {
       _setBotTyping(false);
-      // A response DID come back — the PWA advances read receipts before its
-      // `status >= 400 || data.error` check (pms.js:2481-2487); only the
-      // network-exception catch below skips them.
+      // A response came back, so advance read receipts before the error check.
       _markBotPMReceipts('read');
-      // `status >= 400 || data.error` → 'Nymbot: <error|request failed>'
-      // (pms.js:2484-2487).
       if (e.priceUnavailable && mounted) {
         state = state.copyWith(
             priceRetry: BotPriceRetry(message: m, wrapId: wrapId));
@@ -1324,8 +1089,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     if (state.priceRetry != null) state = state.copyWith(priceRetry: null);
   }
 
-  /// The worker `error` string carried in a [NymbotException] body (the PWA's
-  /// `data.error` reads), or null when the failure had no parseable error.
+  /// The worker `error` string from the exception body, or null.
   static String? _errorDetail(NymbotException e) {
     final body = e.body;
     if (body == null || body.isEmpty) return null;
@@ -1364,9 +1128,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     );
   }
 
-  /// Refreshes the credit balance from the worker; with [display] it also
-  /// prints the balance as a bot info bubble — `_checkBotCredits`
-  /// (pms.js:2525-2548).
+  /// Refreshes the balance; with [display] it also posts a balance bubble.
   Future<void> checkBotCredits({required bool display}) async {
     if (_pubkey == null) return;
     try {
@@ -1390,8 +1152,6 @@ class BotChatController extends StateNotifier<BotChatState> {
             '${std <= 0 && pro <= 0 ? ' Type `?buy` to purchase more.' : ''}');
       }
     } on NymbotException catch (e) {
-      // `'Nymbot: ' + (data.error || 'could not check balance')`
-      // (pms.js:2529-2532).
       if (display) {
         _system('Nymbot: ${_errorDetail(e) ?? 'could not check balance'}');
       }
@@ -1404,15 +1164,14 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  /// Failed check with no count ever cached → header meta 'credits unavailable'
-  /// (`_refreshBotCreditMeta`, pms.js:2382-2389).
+  /// No count ever cached: show "credits unavailable".
   void _markBalanceUnavailable() {
     if (mounted && !state.balanceKnown) {
       state = state.copyWith(balanceUnavailable: true);
     }
   }
 
-  /// Back-compat convenience for the screen's open-time refresh.
+  /// Open-time refresh convenience.
   Future<void> refreshBalance() => checkBotCredits(display: false);
 
   Future<void> setAnonEnabled(bool on) async {
@@ -1449,8 +1208,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  // --- ?model (pms.js `_handleBotModelCommand`, :2119-2145) -------------------
-
   void handleModelCommand(String trimmed) {
     final arg = trimmed
         .replaceFirst(RegExp(r'^\?model\b', caseSensitive: false), '')
@@ -1461,8 +1218,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       unawaited(_ref.read(proModelCatalogProvider.notifier).refresh());
       final all = _catalog.models;
       final groups = _catalog.grouped();
-      // The live catalog runs to dozens of models — too many for a chat
-      // bubble — so summarize per provider and send the rest to the picker.
+      // Too many models for a bubble: summarize per provider and point to the picker.
       final lines = groups.length > 1
           ? [
               for (final g in groups)
@@ -1494,7 +1250,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     final picked = _catalog.byKey(arg);
     if (picked == null) {
-      // Unknown model: KEEP the current pin (pms.js:2139-2142).
+      // Unknown model keeps the current pin.
       _system(
           'Unknown model "$arg". Type ?model to see the available Pro models.');
       return;
@@ -1504,15 +1260,11 @@ class BotChatController extends StateNotifier<BotChatState> {
         'it (${_price(picked)}). Type ?model off to switch back.');
   }
 
-  // --- ?clear (pms.js `_clearBotPMHistory`, :1894-1917) -----------------------
-
   Future<void> clearBotPMHistory() async {
-    // Snapshot the thread's wrap ids BEFORE the local wipe — they key the D1
-    // archive purge (`_purgeBotPMArchive` collects them from `pmMessages`,
-    // pms.js:1885-1887; non-hex local ids are filtered by the purger).
+    // Snapshot wrap ids before the wipe; they key the archive purge.
     final ids = [for (final m in _thread) m.id];
     _setClearedAt(DateTime.now().millisecondsSinceEpoch ~/ 1000);
-    // Best-effort server-side context wipe (`_clearBotServerThread`).
+    // Best-effort server-side context wipe.
     if (_pubkey != null) {
       final anonId = anon.ready ? anon.identity : null;
       final pk = anonId?.pk ?? _pubkey!;
@@ -1525,25 +1277,19 @@ class BotChatController extends StateNotifier<BotChatState> {
                   : (await _authFor('clear-history', payload) ?? _auth))
           .catchError((_) => <String, dynamic>{}));
     }
-    // Batch pm-delete of the thread's wraps from the D1 archive so no device
-    // can restore the cleared thread (`_purgeBotPMArchive`, pms.js:1900).
+    // Purge the thread's wraps from the D1 archive so no device restores them.
     final purge = pmArchivePurger;
     if (purge != null) unawaited(purge(ids));
-    // Sync the cleared-at marker so other devices filter the thread too,
-    // covering any archived wraps this device didn't know about
-    // (`_debouncedNostrSettingsSave(2000)`, pms.js:1901-1903).
+    // Sync the cleared-at marker so other devices filter the thread too.
     settingsSyncRequester?.call();
-    // Wipe the local thread from the canonical store + the transient bubbles.
+    // Wipe the local thread and transient bubbles.
     for (final id in ids) {
       _app.removeMessage(id);
     }
     _handledIds.clear();
     _lastLen = 0;
     _lastLastId = '';
-    // Re-render the empty conversation TRANSIENTLY, like the PWA's
-    // `loadPMMessages(conversationKey, true)` + `displaySystemMessage`
-    // (pms.js:1908-1916): start line, NO welcome (clearedAt), then the
-    // confirmation — none of it enters the persisted store.
+    // Re-render the empty conversation transiently: start line and confirmation, no welcome.
     state = state.copyWith(infoMessages: const <Message>[]);
     _displayTransientSystem('Start of private message', id: 'nymbot-start');
     _displayTransientSystem(
@@ -1551,15 +1297,13 @@ class BotChatController extends StateNotifier<BotChatState> {
         'longer used as context.');
   }
 
-  // --- ?help (pms.js `_displayBotPmHelp`, :1733-1770) -------------------------
-
   @override
   void dispose() {
     _typingHeartbeat?.cancel();
     super.dispose();
   }
 
-  /// The live Pro model catalog, or the built-in list when it hasn't loaded.
+  /// Live catalog, or the built-in list before it loads.
   ProModelCatalog get _catalog {
     final cat = _ref.read(proModelCatalogProvider);
     return cat.isEmpty ? kProModelCatalogFallback : cat;
@@ -1572,8 +1316,7 @@ class BotChatController extends StateNotifier<BotChatState> {
 
   void _displayBotPmHelp() {
     final proModel = state.proModel;
-    // ?help lists a sample rather than the whole live catalog, which can run
-    // to dozens of models.
+    // List a sample, not the whole catalog.
     final allModels = _catalog.models;
     final modelLines = [
       for (final m in allModels.take(8))
@@ -1594,7 +1337,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     _displayBotInfoMessage(
         [
           '**📖 Nymbot premium guide**',
-          // The status line renders in italics (`<em>`, pms.js:1749).
           '*You right now: ${statusBits.join(' · ')}.*',
           '',
           '**1. Standard premium (this chat)**',
@@ -1617,8 +1359,6 @@ class BotChatController extends StateNotifier<BotChatState> {
         id: 'nymbot-help-${DateTime.now().millisecondsSinceEpoch}');
   }
 
-  // --- ?gift (pms.js `_handleBotPM` ?gift branch, :2426-2441) -----------------
-
   void _handleGiftCommand(String trimmed) {
     final arg = trimmed
         .replaceFirst(RegExp(r'^\?gift\b', caseSensitive: false), '')
@@ -1636,15 +1376,10 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
     final giftNym = stripPubkeySuffix(
         _appState.users[giftPubkey]?.nym ?? giftPubkey.substring(0, 8));
-    // Open the gift-credit modal prefilled with the recipient
-    // (`showBotCreditsModal({pubkey, nym})`) via the shared mailbox the shell
-    // listens to.
     _ref
         .read(giftCreditsRequestProvider.notifier)
         .request(pubkey: giftPubkey, nym: giftNym);
   }
-
-  // --- ?transfer (pms.js `_handleBotTransferCommand`, :1919-1976) -------------
 
   Future<void> handleTransferCommand(String trimmed) async {
     final raw = trimmed
@@ -1663,8 +1398,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           '"confirm" to execute (e.g. ?transfer @friend#a1b2 confirm).');
       return;
     }
-    // A public key in either accepted form — hex, npub or nprofile —
-    // otherwise a nym to resolve.
+    // hex, npub or nprofile; otherwise a nym to resolve.
     var targetPubkey = normalizePubkeyInput(targetArg);
     targetPubkey ??= resolvePubkeyFromNym(targetArg);
     if (targetPubkey == null) {
@@ -1719,17 +1453,13 @@ class BotChatController extends StateNotifier<BotChatState> {
           'Transferred ${moved.isEmpty ? '0 credits' : moved.join(' and ')} '
           'to @$targetNym. Your balance is now 0.');
     } on NymbotException catch (e) {
-      // `status >= 400` → `'Transfer failed: ' + (data.error || 'request
-      // failed')` (pms.js:1965-1967).
       _system('Transfer failed: ${_errorDetail(e) ?? 'request failed'}');
     } catch (_) {
       _system('Transfer failed. Please try again.');
     }
   }
 
-  /// Resolves a nym argument to a pubkey, mirroring the PWA's
-  /// `resolvePubkeyFromNym` priority: exact `base#suffix` first, then a bare
-  /// base-nym match (case-insensitive). Returns null when nothing matches.
+  /// Exact `base#suffix` first, then a case-insensitive base match; null if none.
   String? resolvePubkeyFromNym(String arg) {
     final raw = arg.trim().replaceFirst(RegExp(r'^@'), '');
     if (raw.isEmpty) return null;
@@ -1751,14 +1481,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     return null;
   }
 
-  // --- Purchases ----------------------------------------------------------------
-
-  /// Creates a buy invoice (Standard/Pro). When [recipientPubkey] is set the
-  /// credits are gifted to that user (PWA `generateBotCreditInvoice` with
-  /// `reqExtra.recipientPubkey`, zaps.js:606). [comment] is attached to the
-  /// invoice; [zapRequest] is the signed NIP-57 kind-9734 the worker keeps for
-  /// its `canNip57` verify fallback (zaps.js:601-604). Returns null if not
-  /// bound.
+  /// Creates a credits invoice; [recipientPubkey] gifts, [zapRequest] backs the worker's NIP-57 fallback. Null if unbound.
   Future<BotInvoice?> buy(
     int amountSats,
     CreditTier tier, {
@@ -1767,8 +1490,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     Map<String, dynamic>? zapRequest,
   }) async {
     if (_pubkey == null) return null;
-    // A gift to my own pubkey is just a normal self-buy (PWA drops the
-    // recipient when `giftPk === this.pubkey`, zaps.js:606).
+    // A gift to yourself is a normal self-buy.
     final recip = (recipientPubkey != null && recipientPubkey != _pubkey)
         ? recipientPubkey
         : null;
@@ -1783,12 +1505,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     );
   }
 
-  /// One settlement check for [invoice]: asks the worker whether the invoice is
-  /// paid (`check-invoice`) and, once paid, claims the credits (`claim-credits`)
-  /// and refreshes the balance. Returns true when the credits have been
-  /// claimed. Mirrors the PWA's `_checkBotInvoicePaid` + `_claimBotCredits`
-  /// (zaps.js:697-736). Returns false (never throws) when not bound or on a
-  /// transient error, so the caller can keep polling.
+  /// One settlement check that claims and refreshes once paid; never throws, so callers keep polling.
   Future<bool> checkInvoicePaid(BotInvoice invoice) async {
     if (_pubkey == null || invoice.invoiceId.isEmpty) return false;
     try {
@@ -1798,8 +1515,7 @@ class BotChatController extends StateNotifier<BotChatState> {
         auth: () => _authFor('check-invoice'),
       );
       if (check['paid'] != true) return false;
-      // Paid → claim the credits (idempotent server-side). `gifterNym` names
-      // the sender in the recipient's gift DM (zaps.js:755-756).
+      // Claim is idempotent; `gifterNym` names the sender in the gift DM.
       final app = _appState;
       final gifterNym = app.selfPubkey.isNotEmpty
           ? '${stripPubkeySuffix(app.selfNym)}#${getPubkeySuffix(app.selfPubkey)}'
@@ -1811,14 +1527,11 @@ class BotChatController extends StateNotifier<BotChatState> {
         gifterNym: gifterNym,
       );
       if (claim['error'] != null) return false;
-      // Publish the server's pre-signed gift DM so a gifted recipient learns
-      // of the credits immediately (`sendDMToRelays(['EVENT', data.giftEvent])`,
-      // zaps.js:758-760).
+      // Publish the pre-signed gift DM so the recipient learns immediately.
       final giftEvent = claim['giftEvent'];
       if (giftEvent is Map) {
         _publishDmEvent(giftEvent.cast<String, dynamic>());
       }
-      // Reflect the new balance.
       await refreshBalance();
       return true;
     } catch (_) {
@@ -1826,17 +1539,13 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  /// Transfers ALL of the user's credits (standard + Pro) to [targetPubkey]
-  /// (`action: transfer-credits`, PWA `_handleBotTransferCommand`, pms.js:1919).
-  /// On success the local balances are zeroed and the worker response (with
-  /// `transferred`/`proTransferred`) is returned. Returns null if not bound.
+  /// Transfers all credits to [targetPubkey], zeroing local balances on success; null if unbound.
   Future<Map<String, dynamic>?> transferCredits(String targetPubkey) async {
     if (_pubkey == null) return null;
     final res = await _service.transfer(
         pubkey: _pubkey!,
         targetPubkey: targetPubkey,
         signedFor: (payload) => _authFor('transfer-credits', payload));
-    // Mirror the PWA: zero the displayed balances once the transfer succeeds.
     if (res['error'] == null) {
       final b = state.balance;
       state = state.copyWith(
@@ -1854,9 +1563,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 }
 
-/// The private Nymbot chat engine. Also observes the canonical PM store so a
-/// message sent to the bot from ANY surface (bot screen or the canonical PM
-/// composer) triggers the paid request/reply flow.
+/// Private Nymbot engine, observing the PM store so sends from any surface trigger the flow.
 final botChatControllerProvider =
     StateNotifierProvider<BotChatController, BotChatState>((ref) {
   final controller = BotChatController(ref, ref.watch(nymbotServiceProvider));
@@ -1866,13 +1573,7 @@ final botChatControllerProvider =
   return controller;
 });
 
-/// Merges the canonical store thread with the controller's transient info
-/// bubbles ([BotChatState.infoMessages]), ordered by wall-clock timestamp; at
-/// an equal stamp store rows sort first (so the empty-thread welcome lands
-/// right after the 'Start of private message' line, matching the PWA's DOM
-/// append order). Shared by the single-view `BotChatScreen` message area and
-/// the columns deck's bot column — the info bubbles never enter the shared
-/// store, so a store-only render would drop them.
+/// Store thread merged with transient info bubbles by timestamp (store first on ties), for the screen and the columns deck.
 List<Message> mergeBotThreadWithInfo(List<Message> store, List<Message> info) {
   if (info.isEmpty) return store;
   final merged = <({Message m, bool isInfo, int idx})>[
@@ -1888,16 +1589,9 @@ List<Message> mergeBotThreadWithInfo(List<Message> store, List<Message> info) {
   return [for (final e in merged) e.m];
 }
 
-/// Convenience: the catalog of public `?` commands (for help/autocomplete UI).
 final botCommandsProvider = Provider<List<BotCommand>>((_) => kBotCommands);
 
-/// The live Pro model catalog, cached on disk and refreshed in the background.
-///
-/// Reads the worker's `models` action, which serves whatever the hourly
-/// catalog worker mirrored out of Cloudflare's model docs — so a model
-/// Cloudflare adds becomes selectable without an app release. Every failure
-/// path lands on [kProModelCatalogFallback], the list compiled into the
-/// binary, so the picker is never empty.
+/// Disk-cached live Pro catalog refreshed in the background; failures fall back to the built-in list.
 class ProModelCatalogNotifier extends StateNotifier<ProModelCatalog> {
   ProModelCatalogNotifier(this._service) : super(kProModelCatalogFallback) {
     _hydrate();
@@ -1921,13 +1615,12 @@ class ProModelCatalogNotifier extends StateNotifier<ProModelCatalog> {
         if (age < _ttl.inMilliseconds) return;
       }
     } catch (_) {
-      // A corrupt cache is not worth surfacing — refresh over it.
+      // A corrupt cache isn't worth surfacing; refresh over it.
     }
     await refresh();
   }
 
-  /// Fetches the catalog. Safe to call often: overlapping calls collapse, and
-  /// a failure leaves whatever list is already showing in place.
+  /// Overlapping calls collapse, and failures keep the current list.
   Future<void> refresh() async {
     if (_loading) return;
     _loading = true;
@@ -1952,39 +1645,21 @@ final proModelCatalogProvider =
   return ProModelCatalogNotifier(ref.watch(nymbotServiceProvider));
 });
 
-/// Convenience: the Pro model list (for the `?model` picker).
 final proModelsProvider =
     Provider<List<ProModel>>((ref) => ref.watch(proModelCatalogProvider).models);
 
-// =============================================================================
-/// The welcome copy, as the localizer needs to see it.
-///
-/// These are app copy, not user content, so they localize through the same
-/// UI-string cache as every other string (`tr`) rather than through the
-/// message auto-translator: the cache persists across launches, works offline
-/// once filled, and follows a later language change instead of being frozen
-/// into a stored message. [primeBotWelcomeCopy] warms them the moment a
-/// language is chosen, so the greeting is usually translated before it is
-/// first shown.
+/// Welcome copy localized through the UI string cache, primed as soon as a language is chosen.
 List<String> botWelcomeSourceStrings() => const [
       botWelcomeText,
       botFirstContactText,
     ];
 
-/// Pre-translates the welcome copy into the active language. Called when the
-/// language is picked at signup — the greeting arrives seconds later, and
-/// waiting for it to render before translating it would show English first.
+/// Pre-translates the welcome copy when the language is picked at signup.
 void primeBotWelcomeCopy() {
   LocalizationService.instance.prime(botWelcomeSourceStrings());
 }
 
-// Welcome copy (pms.js `_botWelcomeHtml` :1706-1729 / `_botFirstContactText`
-// :1822-1838) — verbatim, with the HTML `<strong>`/`<code>` markers as the
-// markdown the shared formatter renders.
-// =============================================================================
-
-/// The first-person introduction rendered as a bot bubble when a user first
-/// opens the premium chat.
+/// Introduction bubble shown when a user first opens the chat.
 const String botWelcomeText =
     "Hey, I'm **Nymbot** 👋 — your private, end-to-end encrypted 1:1 AI assistant.\n"
     '\n'
@@ -2008,8 +1683,7 @@ const String botWelcomeText =
     '\n'
     'So, what can I help you with?';
 
-/// The slightly-edited welcome used for the proactive first-contact PM that
-/// brand-new users receive (a REAL persisted PM in the sidebar thread).
+/// Welcome variant for the proactive first-contact PM, a real persisted message.
 const String botFirstContactText =
     "Welcome to **Nymchat** 👋 — I'm **Nymbot**, your built-in AI assistant.\n"
     '\n'

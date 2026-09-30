@@ -1,9 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Stores the four identity secrets in the platform keystore (Keychain /
-/// Android Keystore), the native equivalent of the PWA key vault
-/// (docs/specs/01 §2.2). Names match [SecretKeys].
+/// Stores the identity secrets in the platform keystore; names match [SecretKeys].
 class SecureStore {
   SecureStore([FlutterSecureStorage? storage])
       : _storage = storage ?? platform,

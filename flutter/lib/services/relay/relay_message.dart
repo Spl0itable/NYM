@@ -2,10 +2,7 @@ import 'dart:convert';
 
 import '../../models/nostr_event.dart';
 
-/// A Nostr subscription filter (NIP-01) plus the tag filters Nymchat uses.
-///
-/// `toJson` emits standard fields plus `#x` tag keys (e.g. `#e`, `#p`, `#g`,
-/// `#d`, `#k`, `#t`), omitting any null / empty values.
+/// A NIP-01 filter; `toJson` emits `#x` tag keys and omits null or empty values.
 class NostrFilter {
   NostrFilter({
     this.ids,
@@ -24,9 +21,7 @@ class NostrFilter {
   final int? until;
   final int? limit;
 
-  /// Tag filters keyed by a single tag letter, e.g. `e`, `p`, `g`, `d`, `k`,
-  /// `t`. Keys may be supplied with or without the leading `#`; `toJson`
-  /// always emits the `#`-prefixed form.
+  /// Tag filters keyed by letter, with or without `#`; `toJson` always emits the `#` form.
   final Map<String, List<String>> tags;
 
   Map<String, dynamic> toJson() {
@@ -89,7 +84,6 @@ class NostrFilter {
   }
 }
 
-/// Builds the raw outbound Nostr frames (NIP-01) sent over a relay socket.
 class RelayFrame {
   RelayFrame._();
 
@@ -111,12 +105,10 @@ class RelayFrame {
   }
 }
 
-/// Sealed hierarchy of inbound relay messages parsed from raw NIP-01 frames.
 sealed class RelayMessage {
   const RelayMessage();
 
-  /// Parse a raw inbound frame string into a [RelayMessage], or null if the
-  /// frame is malformed / of an unknown type.
+  /// Parses a raw frame, or returns null when it is malformed or of unknown type.
   static RelayMessage? parse(String raw) {
     final dynamic decoded;
     try {
@@ -128,7 +120,6 @@ sealed class RelayMessage {
     return fromList(decoded);
   }
 
-  /// Parse an already-decoded JSON array into a [RelayMessage].
   static RelayMessage? fromList(List<dynamic> arr) {
     if (arr.isEmpty || arr[0] is! String) return null;
     final type = arr[0] as String;
@@ -171,14 +162,12 @@ sealed class RelayMessage {
   }
 }
 
-/// `["EVENT", subId, event]` — an event delivered for a subscription.
 class EventMessage extends RelayMessage {
   const EventMessage(this.subId, this.event);
   final String subId;
   final NostrEvent event;
 }
 
-/// `["OK", id, accepted, message]` — publish acknowledgment.
 class OkMessage extends RelayMessage {
   const OkMessage(this.id, this.accepted, this.message);
   final String id;
@@ -186,19 +175,16 @@ class OkMessage extends RelayMessage {
   final String message;
 }
 
-/// `["EOSE", subId]` — end of stored events for a subscription.
 class EoseMessage extends RelayMessage {
   const EoseMessage(this.subId);
   final String subId;
 }
 
-/// `["NOTICE", message]` — human-readable relay notice.
 class NoticeMessage extends RelayMessage {
   const NoticeMessage(this.message);
   final String message;
 }
 
-/// `["CLOSED", subId, reason]` — relay closed a subscription.
 class ClosedMessage extends RelayMessage {
   const ClosedMessage(this.subId, this.reason);
   final String subId;

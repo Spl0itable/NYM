@@ -26,12 +26,7 @@ import 'key_backup/key_backup_actions.dart';
 import 'modal_chrome.dart';
 import 'nym_identicon.dart';
 
-/// The profile / nickname editor (`#nickEditModal`, index.html:1149).
-///
-/// Fields (verbatim order from the PWA): Nickname (≤20, char count) with the
-/// `#xxxx` pubkey suffix, Avatar (image/url), Banner, Bio (≤150), Lightning
-/// address, then a "Reveal this nym's private key" slideout gated behind a
-/// press-and-hold confirm. Save → `NostrController.saveProfile(...)`.
+/// Profile and nickname editor, with a reveal slideout for the private key and recovery code.
 class NickEditModal extends ConsumerStatefulWidget {
   const NickEditModal({super.key});
 
@@ -52,35 +47,24 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   late final TextEditingController _bio;
   late final TextEditingController _lightning;
 
-  /// The original bio / lightning so `_save` writes only changed fields and
-  /// never blanks an existing value (`changeNick`, app.js:2662-2691).
+  /// Originals so `_save` writes only changed fields and never blanks an existing value.
   String _originalBio = '';
   String _originalLightning = '';
   String _originalNick = '';
 
-  /// The current avatar / banner URLs (kind-0 is a full replacement, so these
-  /// must be re-published when the user only edits bio/lightning, or the
-  /// existing avatar/banner would be dropped). When the user picks a new image
-  /// it is uploaded at pick-time (Blossom) and the HOSTED URL replaces the value
-  /// here — so `_persist` always publishes a real http(s) URL, never `file://`.
+  /// Hosted avatar/banner URLs, re-published on every save since kind 0 is a full replacement; never `file://`.
   String? _currentAvatarUrl;
   String? _currentBannerUrl;
 
-  /// The avatar / banner URLs loaded from the profile at open, so "Remove"
-  /// reverts a freshly-picked image back to the pre-edit value (never blanking
-  /// an existing avatar just because a new pick was abandoned).
+  /// Values at open, so "Remove" reverts a fresh pick instead of blanking the avatar.
   String? _origAvatarUrl;
   String? _origBannerUrl;
 
-  /// Local preview paths shown while/after a pick (the picked file), purely for
-  /// the on-screen thumbnail. The published value is always the hosted URL above.
+  /// Local preview paths for the on-screen thumbnail only.
   String? _avatarPath;
   String? _bannerPath;
 
-  /// `.upload-progress` affordance state, mirroring new_pm_modal: `_uploading`
-  /// toggles the bar, `_uploadLabel` is the "Uploading avatar…"/"Uploading
-  /// banner…" line, `_uploadProgress` drives the fill (15%→55%→100%, users.js
-  /// `_uploadFileWithProgress`).
+  /// Upload progress state: bar visibility, label, and fill fraction.
   bool _uploading = false;
   String _uploadLabel = 'Uploading…';
   double _uploadProgress = 0;
@@ -97,14 +81,11 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   bool _pqRootReplaceOpen = false;
   bool _saving = false;
 
-  /// Per-surface upload caps, mirroring the PWA nick-edit avatar/banner guards
-  /// (`handleNickEditAvatarSelect` rejects >5MB, `handleNickEditBannerSelect`
-  /// >10MB). Avatar 5MB, banner 10MB.
+  /// Upload caps: avatar 5MB, banner 10MB.
   static const int _avatarMaxBytes = 5 * 1024 * 1024;
   static const int _bannerMaxBytes = 10 * 1024 * 1024;
 
-  /// Best-effort MIME from the picked file's extension (BUD-02 `Content-Type`),
-  /// mirroring `_contentTypeFor` in new_pm_modal.dart.
+  /// Best-effort MIME type from the file extension (BUD-02 `Content-Type`).
   static String _contentTypeFor(String path) {
     final lower = path.toLowerCase();
     if (lower.endsWith('.png')) return 'image/png';
@@ -113,8 +94,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     return 'image/jpeg';
   }
 
-  /// Which form the full public key is shown in (npub by default). Shared
-  /// app-wide with the user context menu via `nym_pubkey_format`.
+  /// Full-pubkey display form, shared app-wide with the context menu.
   PubkeyFormat _pubkeyFormat = PubkeyFormat.npub;
 
   @override
@@ -126,18 +106,14 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       if (stored != _pubkeyFormat) setState(() => _pubkeyFormat = stored);
     });
     final id = ref.read(nostrControllerProvider).identity;
-    // Prefer the live `selfNym` (which `_ingestProfile` updates from the D1
-    // kind-0 profile on login) over the identity's derived/ephemeral nym, so the
-    // editor opens pre-filled with your REAL saved nickname, not "anon####".
+    // Prefer the live `selfNym` (updated from the saved profile) over the derived ephemeral nym.
     final selfNym = ref.read(appStateProvider).selfNym;
     final nym = selfNym.isNotEmpty ? selfNym : (id?.nym ?? '');
-    // The nym is `name#suffix`; the input edits only the name part. Split on
-    // the TRAILING 4-hex suffix only, so a name containing '#' survives.
+    // Split only the trailing 4-hex suffix, so a name containing '#' survives.
     _originalNick = splitNymSuffix(nym).base;
     _nick = TextEditingController(text: _originalNick);
 
-    // Pre-fill bio + lightning from the current profile so opening the editor
-    // shows existing values and saving can't silently blank them (app.js:2595).
+    // Pre-fill bio and lightning so saving can't silently blank them.
     final profile = id != null
         ? ref.read(appStateProvider).users[id.pubkey]?.profile
         : null;
@@ -173,11 +149,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final media = MediaQuery.of(context);
-    // The on-screen keyboard's height. Pad the bottom by it so the centered
-    // modal shifts UP (re-centering in the visible area above the keyboard)
-    // and cap the modal's height to what stays visible — otherwise tapping a
-    // lower field (Bio / Lightning) leaves it hidden behind the keyboard. The
-    // inner SingleChildScrollView then auto-scrolls the focused field into view.
+    // Pad by the keyboard height and cap the modal height so lower fields stay visible.
     final keyboardInset = media.viewInsets.bottom;
     return Center(
       child: AnimatedPadding(
@@ -242,8 +214,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  // `.modal-header`: 22px primary UPPERCASE ls1.5 w700 + bottom rule. A block
-  // element in the PWA — full width, LEFT-aligned (never centered).
+  // Full width and left-aligned, never centered.
   Widget _modalHeader(NymColors c) => Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(24, 22, 24, 14),
@@ -316,8 +287,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               ),
             ),
             const SizedBox(width: 8),
-            // The tail of the pubkey, shown in full in the panel above —
-            // nothing to tap for, so nothing that looks tappable.
+            // The key tail is shown in full above, so this doesn't look tappable.
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               child: Text(
@@ -342,12 +312,9 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  /// The full pubkey panel (`#pubkeySlideout` in the PWA): a title, an
-  /// explanatory paragraph, the full pubkey, and a Copy button. It sits above
-  /// the nickname field, which is where the `#suffix` it explains comes from.
+  /// Full pubkey panel above the nickname field, explaining where the `#suffix` comes from.
   Widget _pubkeySlideout(NymColors c) {
-    // npub by default, one tap from hex — the same app-wide preference the
-    // user context menu writes (`nym_pubkey_format`, key_format.dart).
+    // Same app-wide npub/hex preference as the context menu.
     final isNpub = _pubkeyFormat == PubkeyFormat.npub;
     final pk = formatPubkeyForDisplay(_pubkey, _pubkeyFormat);
     return Container(
@@ -379,8 +346,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             style: TextStyle(color: c.textDim, fontSize: 11, height: 1.4),
           ),
           const SizedBox(height: 8),
-          // The key gets the full width; the controls sit under it. Beside it
-          // they squeezed a 64-character string into a third of the row.
+          // The key gets the full width, with the controls below it.
           SelectableText(
             pk,
             style: TextStyle(
@@ -412,7 +378,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  /// Flip npub⇄hex and persist, so the context menu agrees on next open.
+  /// Flip npub/hex and persist so the context menu agrees.
   Future<void> _togglePubkeyFormat() async {
     final next = _pubkeyFormat == PubkeyFormat.npub
         ? PubkeyFormat.hex
@@ -429,8 +395,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         _label(c, tr('Avatar')),
         Row(
           children: [
-            // `.avatar-preview` (styles-features.css:2891): a CIRCLE
-            // (border-radius 50%) with a 2px glass border, not a rounded square.
+            // A circle with a 2px glass border.
             Container(
               width: 64,
               height: 64,
@@ -540,10 +505,6 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  /// `.upload-progress` body: an "Uploading …" label over the `.progress-bar`
-  /// (height 6, bg white/0.05, radius 10) with the `.progress-fill` (90°
-  /// primary→secondary gradient) at the live progress width (mirrors
-  /// new_pm_modal's `_uploadProgressBar`).
   Widget _uploadProgressBar(NymColors c) {
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -645,11 +606,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
           onTap: () => setState(() => _revealOpen = !_revealOpen),
           child: Row(
             children: [
-              // `#revealPrivkeyArrow` (app.js:2959) — a filled triangle that
-              // swaps down/right with the slideout (the PWA rewrites the SVG,
-              // no CSS rotation).
-              // Secondary, not dim: this is the one row in the modal that
-              // leads to key material, and it should not read as a caption.
+              // Secondary, not dim: this row leads to key material.
               NymSvgIcon(
                 _revealOpen
                     ? NymIcons.revealArrowDown
@@ -684,7 +641,6 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // The nsec-warning triangle (index.html:1237).
                     NymSvgIcon(NymIcons.warningTriangle,
                         size: 16, color: c.warning),
                     const SizedBox(width: 6),
@@ -699,8 +655,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                // The PWA reveals the nsec on a plain click toggle — no hold
-                // gate (toggleRevealPrivkey, app.js:2959). Populate immediately.
+                // The nsec reveals on a plain toggle with no hold gate.
                 _nsecRow(c),
                 const SizedBox(height: 16),
                 _pqRootRow(c),
@@ -716,10 +671,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  /// The recovery code, beside the nsec. It is the OTHER half of what a device
-  /// needs: without it a second device reads new messages but not the
-  /// quantum-resistant ones, and losing every device holding it loses that
-  /// history for good.
+  /// Recovery code row; without it another device can't read quantum-resistant messages.
   Widget _pqRootRow(NymColors c) {
     final ctrl = ref.read(nostrControllerProvider);
     final code = ctrl.pqRootCode;
@@ -776,9 +728,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             ),
           ],
         ),
-        // The fingerprint, as the PWA shows it: it lets two devices be
-        // compared without either revealing the code itself, and it is the
-        // only visible confirmation that a paste actually took.
+        // The fingerprint lets devices be compared without revealing the code and confirms a paste took.
         if (_pqRootFingerprint != null) ...[
           const SizedBox(height: 6),
           Text(
@@ -904,7 +854,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         danger: true,
       );
 
-  /// Short public fingerprint of the held root, or null without one.
+  /// Short public fingerprint of the held root, or null.
   String? get _pqRootFingerprint {
     final code = ref.read(nostrControllerProvider).pqRootCode;
     if (code == null) return null;
@@ -1063,13 +1013,10 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               ),
             ),
             IconButton(
-              // `toggleNsecVisibility` (index.html:1242) shows the SAME eye for
-              // both states — the PWA only flips the input type, never the glyph.
+              // Same eye glyph for both states; only the visibility flips.
               icon: NymSvgIcon(NymIcons.nsecEye, size: 18, color: c.textDim),
               onPressed: () => setState(() => _nsecVisible = !_nsecVisible),
             ),
-            // `copyRevealedNsec` (index.html:1243) — one-tap copy of the nsec
-            // (the two-sheet glyph, identical to the context-menu copy).
             if (nsec.isNotEmpty)
               IconButton(
                 tooltip: tr('Copy'),
@@ -1090,8 +1037,6 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: c.glassBorder)),
       ),
-      // `.modal-actions`: center, gap 10 (Randomize / Cancel are `.icon-btn`,
-      // Change is `.send-btn`). No casino icon in the PWA.
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -1147,12 +1092,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  /// Pick an avatar/banner, then UPLOAD it (Blossom) before saving — the kind-0
-  /// `picture`/`banner` must carry a hosted URL, never a `file://` path. Mirrors
-  /// the PWA `handleNickEdit{Avatar,Banner}Select` → `uploadImage` flow: enforce
-  /// the per-surface cap (avatar 5MB / banner 10MB), show the progress
-  /// affordance, then store the returned URL. On failure the old image is kept
-  /// (nothing published) and the PWA failure alert is shown.
+  /// Uploads the picked image before saving so kind 0 carries a hosted URL; on failure the old image is kept.
   Future<void> _pickImage(bool avatar) async {
     if (_uploading) return; // one upload at a time
     final Uint8List bytes;
@@ -1166,13 +1106,12 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       contentType = _contentTypeFor(file.path);
       path = file.path;
     } catch (_) {
-      // Picker unavailable (e.g. tests / desktop) — silently ignore.
+      // Picker unavailable (tests, desktop): ignore.
       return;
     }
-    if (!mounted) return; // readAsBytes awaited above
+    if (!mounted) return;
 
-    // Enforce the per-surface size cap before uploading (PWA rejects oversize
-    // files with a system message and aborts the upload).
+    // Enforce the size cap before uploading.
     final cap = avatar ? _avatarMaxBytes : _bannerMaxBytes;
     if (bytes.length > cap) {
       final capMb = avatar ? 5 : 10;
@@ -1190,7 +1129,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
 
     setState(() {
       _uploading = true;
-      _uploadProgress = 0.15; // PWA seeds the fill at 15%.
+      _uploadProgress = 0.15;
       _uploadLabel = avatar ? 'Uploading avatar…' : 'Uploading banner…';
     });
 
@@ -1209,8 +1148,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     if (!mounted) return;
 
     if (url == null || url.isEmpty) {
-      // Keep the old image — never publish a broken/local value (PWA shows
-      // "Upload failed — try again").
+      // Keep the old image; never publish a broken or local value.
       setState(() {
         _uploading = false;
         _uploadProgress = 0;
@@ -1224,13 +1162,12 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       _uploadProgress = 1;
       if (avatar) {
         _currentAvatarUrl = url;
-        _avatarPath = path; // local preview thumbnail
+        _avatarPath = path;
       } else {
         _currentBannerUrl = url;
         _bannerPath = path;
       }
     });
-    // PWA confirms the avatar swap with "Avatar updated successfully".
     if (avatar && mounted) {
       await showAppAlert(context, tr('Avatar updated successfully'));
     }
@@ -1240,14 +1177,12 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     final newNick = _nick.text.trim();
     final nickChanged = newNick.isNotEmpty && newNick != _originalNick;
 
-    // Reserved nicknames ("Luxas") require proving the developer nsec before
-    // the rename is allowed (changeNick → isReservedNick gate, app.js:2693).
+    // Reserved nicknames require proving the developer nsec first.
     if (nickChanged && isReservedNick(newNick)) {
       final verified = await DevNsecModal.open(context);
       if (!mounted) return;
       if (verified == null) {
-        // Canceled the reserved-nick check: persist bio/lightning edits but
-        // keep the current nick (app.js:2705-2709).
+        // Check canceled: persist bio and lightning but keep the current nick.
         await _persist(includeName: false);
         return;
       }
@@ -1256,11 +1191,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     await _persist(includeName: nickChanged);
   }
 
-  /// Publishes the kind-0 profile. Because a kind-0 is a full replacement, ALL
-  /// fields are sent from the prefilled controllers / current URLs — an
-  /// untouched bio/lightning/avatar is re-published as-is (never blanked); a
-  /// cleared field is intentionally blanked. [includeName] gates the rename so
-  /// a non-change (or a canceled reserved-nick check) leaves the nick alone.
+  /// Publishes the full kind-0 from current fields; [includeName] gates the rename.
   Future<void> _persist({required bool includeName}) async {
     setState(() => _saving = true);
     final bio = _bio.text.trim();
@@ -1270,12 +1201,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       ok = await ref.read(nostrControllerProvider).saveProfile(
             name: includeName ? _nick.text.trim() : null,
             about: bio,
-            // `_currentAvatarUrl`/`_currentBannerUrl` are always hosted http(s)
-            // URLs: either the value loaded from the existing profile or the URL
-            // returned by `uploadImage` at pick-time. A locally-picked file is
-            // NEVER published — only its uploaded URL is. Re-publishing the
-            // existing URLs also keeps them on the replaced kind-0 when only the
-            // bio/lightning changed.
+            // Always hosted URLs, never a local file.
             picture: _currentAvatarUrl,
             banner: _currentBannerUrl,
             lud16: lightning,
@@ -1293,8 +1219,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
-  /// Fills the nick field with a freshly generated random nym (Randomize,
-  /// app.js:2721 `randomizeNick`).
+  /// Fills the nick field with a random nym.
   void _randomize() {
     final pk = _pubkey;
     final generated = NymGenerator().generate(pk);

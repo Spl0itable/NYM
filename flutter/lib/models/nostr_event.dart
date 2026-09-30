@@ -2,8 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart' show sha256;
 
-/// A Nostr event (NIP-01). Mirrors the plain-object events the PWA passes
-/// around. Tags are `List<List<String>>`.
+/// A Nostr event (NIP-01).
 class NostrEvent {
   NostrEvent({
     this.id = '',
@@ -24,17 +23,10 @@ class NostrEvent {
   final String content;
   String sig;
 
-  /// Pool receipt time in milliseconds, injected by the D1 `channel-get`
-  /// endpoint (the archive row's `stored_at`). 0 when absent — it's only
-  /// present on events restored from the D1 backfill, not on live or
-  /// direct-relay events. Not part of NIP-01, so it is excluded from
-  /// [computeId] and [toJson] and never affects id hashing or signature
-  /// verification; it's an inbound-only annotation used as a stable ceiling
-  /// for future-dated timestamps.
+  /// D1 archive receipt time in ms (0 if absent); inbound-only, excluded from id and JSON.
   final int storedAt;
 
-  /// NIP-01 serialization used for computing the event id:
-  /// `[0, pubkey, created_at, kind, tags, content]` → sha256 hex.
+  /// NIP-01 event id: sha256 of `[0, pubkey, created_at, kind, tags, content]`.
   String computeId() {
     final serialized = jsonEncode([
       0,
@@ -48,7 +40,6 @@ class NostrEvent {
     return digest.toString();
   }
 
-  /// First value of the first tag matching [name], or null.
   String? tagValue(String name) {
     for (final t in tags) {
       if (t.isNotEmpty && t[0] == name && t.length > 1) return t[1];
@@ -56,7 +47,6 @@ class NostrEvent {
     return null;
   }
 
-  /// All tags matching [name].
   Iterable<List<String>> tagsNamed(String name) =>
       tags.where((t) => t.isNotEmpty && t[0] == name);
 
@@ -108,7 +98,7 @@ class NostrEvent {
   }
 }
 
-/// An unsigned event ("rumor" in NIP-59) — has an id but no signature.
+/// An unsigned event (NIP-59 rumor): has an id but no signature.
 class UnsignedEvent {
   UnsignedEvent({
     required this.pubkey,

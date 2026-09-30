@@ -1,17 +1,4 @@
-// Inline video player for message media (gap report 02 §F16). Mirrors the PWA's
-// inline `<video controls playsinline preload="metadata">` with a fullscreen
-// expand button (`message-format.js:152-166`, `messages.js:1457-1509`) and the
-// `video.message-video` / `.video-container` sizing from
-// `styles-chat.css:980-1072`:
-//   * single video — max 300x300, min-height 80, 1px glass border,
-//     border-radius var(--radius-sm) (12);
-//   * gallery cell — fills the tile, max-height 220, object-fit cover, no border,
-//     radius 0 (the grid clips its own corners).
-//
-// Initial state is a poster/tap-to-play tile (metadata-only preload analog):
-// the controller initializes lazily on first tap. If initialization fails we
-// fall back to a tap-to-open affordance that launches the URL externally
-// (`url_launcher`), so a broken/unsupported source is never a dead tile.
+// Inline video that initializes on first tap and falls back to opening the URL externally if every source fails.
 
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
@@ -23,15 +10,9 @@ import '../../../core/utils/safe_url.dart';
 import 'media_source.dart';
 import 'message_content.dart' show proxiedMedia;
 
-/// `--radius-sm` (`styles-core.css:87`).
 const double _kVideoRadius = 12;
 
-/// An inline, tap-to-play video tile backed by [VideoPlayerController].
-///
-/// [maxSize] caps both dimensions (300 for a single video, 220 for a gallery
-/// cell). Pass [borderRadius] to override the default `--radius-sm` (gallery cells
-/// pass `BorderRadius.zero` and let the grid clip). [bordered] draws the 1px glass
-/// border for the single-video case.
+/// Tap-to-play video tile; [maxSize] caps both dimensions, [bordered] adds the single-video border.
 class VideoMessage extends StatefulWidget {
   const VideoMessage({
     super.key,
@@ -44,11 +25,7 @@ class VideoMessage extends StatefulWidget {
 
   final String url;
 
-  /// NIP-92 imeta Blossom mirror URLs to fall
-  /// back to when the primary source fails. Mirrors the PWA's
-  /// `_attachMediaFallbacks` video handler (messages.js:1165-1186), which swaps
-  /// the `<source>` src to the next `data-media-fallbacks` mirror on `error`
-  /// and re-loads.
+  /// NIP-92 imeta mirror URLs tried in order when the primary source fails.
   final List<String> fallbackUrls;
 
   final double maxSize;
@@ -62,20 +39,15 @@ class VideoMessage extends StatefulWidget {
 class _VideoMessageState extends State<VideoMessage> {
   VideoPlayerController? _controller;
 
-  /// Mouse-hover over the tile (`.video-container:hover`) — drives the desktop
-  /// scale/shadow/border lift and the expand button's fade-in. [MouseRegion]
-  /// enter/exit never fire on touch, so touch platforms never see it.
+  /// Desktop hover only; [MouseRegion] never fires on touch.
   bool _hovered = false;
 
-  /// Lazily initializing the controller after the first tap.
   bool _initializing = false;
 
-  /// Initialization failed (primary AND every imeta mirror) → tap-to-open.
+  /// Primary and every mirror failed; show tap-to-open.
   bool _failed = false;
 
-  /// The source that actually initialized (or the last one tried), mirroring
-  /// the PWA keeping `.video-expand-btn[data-video-src]` in sync with the
-  /// swapped-in mirror (messages.js:1176-1180).
+  /// The source that initialized, or the last one tried.
   String? _activeUrl;
 
   @override
@@ -159,14 +131,9 @@ class _VideoMessageState extends State<VideoMessage> {
       body = _posterTile(c);
     }
 
-    // `.video-container:hover video.message-video { transform: scale(1.02);
-    // box-shadow: var(--shadow-md); border-color: rgba(255,255,255,0.15) }`
-    // over `transition: all var(--transition)` (styles-chat.css:1029-1046) —
-    // the same desktop-only hover lift images get.
     Widget result;
     if (!widget.bordered) {
-      // Gallery cell: no border/shadow; the scaled video is clipped by the
-      // cell (the PWA's `.message-gallery { overflow: hidden }`).
+      // Gallery cells have no border and are clipped by the grid.
       result = ClipRRect(
         borderRadius: radius,
         child: AnimatedScale(
@@ -177,10 +144,6 @@ class _VideoMessageState extends State<VideoMessage> {
         ),
       );
     } else {
-      // A lone video carries the 1px glass border, brightening to white@0.15
-      // on hover alongside the lift + shadow. `--shadow-md` is 0 4px 16px
-      // black@0.4 dark / black@0.1 light (styles-core.css:92 +
-      // styles-themes-responsive.css:536).
       result = AnimatedScale(
         scale: _hovered ? 1.02 : 1.0,
         duration: NymMotion.transition,
@@ -217,25 +180,21 @@ class _VideoMessageState extends State<VideoMessage> {
     );
   }
 
-  /// The constraints shared by every state (`max-width/height`, `min-height:80`).
+  /// Constraints shared by every state.
   BoxConstraints get _constraints => BoxConstraints(
         maxWidth: widget.maxSize,
         maxHeight: widget.maxSize,
         minHeight: 80,
       );
 
-  /// Initial poster / tap-to-play state (also shows a spinner while initializing).
   Widget _posterTile(NymColors c) {
     return GestureDetector(
       onTap: _start,
       child: Container(
         constraints: _constraints,
-        // A 16:9 poster footprint before we know the real aspect ratio.
+        // 16:9 poster footprint until the real aspect ratio is known.
         width: widget.maxSize,
         height: widget.maxSize * 9 / 16,
-        // `video.message-video { background: var(--bg-tertiary) }`
-        // (styles-chat.css:1029-1040) — rgba(20,20,35,0.9) dark /
-        // rgba(240,240,237,0.9) light.
         color: c.bgTertiary,
         alignment: Alignment.center,
         child: _initializing
@@ -252,8 +211,7 @@ class _VideoMessageState extends State<VideoMessage> {
     );
   }
 
-  /// The live player with a play/pause overlay, a scrubber, and a fullscreen
-  /// expand button (mirrors `.video-expand-btn`).
+  /// Live player with play/pause overlay, scrubber and fullscreen button.
   Widget _playerTile(NymColors c) {
     final controller = _controller!;
     final value = controller.value;
@@ -265,7 +223,6 @@ class _VideoMessageState extends State<VideoMessage> {
           alignment: Alignment.center,
           children: [
             VideoPlayer(controller),
-            // Tap anywhere to toggle play/pause.
             Positioned.fill(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -287,7 +244,6 @@ class _VideoMessageState extends State<VideoMessage> {
                 ),
               ),
             ),
-            // Scrubber pinned to the bottom edge.
             Positioned(
               left: 0,
               right: 0,
@@ -302,12 +258,7 @@ class _VideoMessageState extends State<VideoMessage> {
                 ),
               ),
             ),
-            // `.video-expand-btn` — fullscreen open (top-right, dark pill).
-            // It rests at opacity 0 and fades in over `--transition` on
-            // container hover (styles-chat.css:1048-1072); touch-primary
-            // devices pin it visible (`@media (hover: none)`,
-            // styles-themes-responsive.css:51-55). Like CSS opacity:0, the
-            // hidden button still hit-tests.
+            // Fades in on hover but stays visible on touch devices; still hit-tests while hidden, like CSS opacity 0.
             Positioned(
               top: 8,
               right: 8,
@@ -324,8 +275,7 @@ class _VideoMessageState extends State<VideoMessage> {
     );
   }
 
-  /// Init-failed fallback: a tile that opens the URL externally on tap
-  /// (`url_launcher`), never a dead end.
+  /// Init-failed fallback that opens the URL externally.
   Widget _fallbackTile(NymColors c) {
     return GestureDetector(
       onTap: _openExternally,
@@ -333,8 +283,6 @@ class _VideoMessageState extends State<VideoMessage> {
         constraints: _constraints,
         width: widget.maxSize,
         height: widget.maxSize * 9 / 16,
-        // `video.message-video { background: var(--bg-tertiary) }` — the same
-        // fill the unplayed <video> element sits on in both themes.
         color: c.bgTertiary,
         alignment: Alignment.center,
         child: Column(
@@ -352,15 +300,13 @@ class _VideoMessageState extends State<VideoMessage> {
     );
   }
 
-  /// The `@media (hover: none)` analog: on touch-primary platforms the
-  /// expand button never gets a hover reveal, so it stays pinned visible.
+  /// On touch-primary platforms the expand button stays visible.
   bool _touchPlatform(BuildContext context) {
     final p = Theme.of(context).platform;
     return p == TargetPlatform.android || p == TargetPlatform.iOS;
   }
 
-  /// Opens the video full-screen in a dialog route (the PWA's expand-to-modal,
-  /// `expandVideo`). The same controller is reused so playback continues.
+  /// Full-screen dialog reusing the same controller so playback continues.
   void _openFullscreen() {
     final controller = _controller;
     if (controller == null) return;
@@ -374,7 +320,6 @@ class _VideoMessageState extends State<VideoMessage> {
   }
 }
 
-/// The `.video-expand-btn` fullscreen affordance (a 30x30 dark rounded button).
 class _ExpandButton extends StatelessWidget {
   const _ExpandButton({required this.onTap});
   final VoidCallback onTap;
@@ -382,7 +327,6 @@ class _ExpandButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      // `.video-expand-btn { cursor: pointer }` (styles-chat.css:1048-1067).
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: onTap,
@@ -391,8 +335,6 @@ class _ExpandButton extends StatelessWidget {
           height: 30,
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.6),
-            // `.video-expand-btn { border-radius: var(--radius-sm) }` (=12,
-            // styles-chat.css:1048-1057).
             borderRadius:
                 const BorderRadius.all(Radius.circular(_kVideoRadius)),
             border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
@@ -404,9 +346,7 @@ class _ExpandButton extends StatelessWidget {
   }
 }
 
-/// A full-screen video overlay reusing an already-initialized [controller]
-/// (mirrors the PWA's image/video expand modal). Tapping the backdrop or the
-/// close button dismisses; tapping the video toggles play/pause.
+/// Full-screen overlay reusing [controller]; backdrop or close dismisses, video tap toggles play.
 class _FullscreenVideo extends StatefulWidget {
   const _FullscreenVideo({required this.controller});
   final VideoPlayerController controller;

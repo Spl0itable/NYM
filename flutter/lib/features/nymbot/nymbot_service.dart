@@ -7,22 +7,7 @@ import '../../services/api/api_client.dart';
 import '../../services/api/api_config.dart';
 import 'nymbot_models.dart';
 
-/// Thin client for the Nymbot worker (`POST /api/bot`), ported from the call
-/// sites in the PWA and the contract in `functions/api/bot.js`.
-///
-/// Two surfaces share the one endpoint:
-///   * Public `?` commands  → body `{command, args, …}` → `{event}` (a signed
-///     Nostr event whose `content` is the response text).
-///   * Private paid chat    → body `{action, …}` → varies per action.
-///
-/// Private-chat actions ride the app's ONE identity-authed `/api` WebSocket
-/// FIRST when the controller has wired [setApiSocketRequest], falling back to
-/// the signed HTTP POST — the PWA's `_botMoneyRequest` (shop.js:155-173), whose
-/// WS leg shares the single `_apiSock` with the storage sync. Public `?`
-/// commands stay plain HTTP like the PWA's `fetch` in commands.js:196.
-///
-/// Network is **lazy**: nothing is fetched at construction; every method makes
-/// exactly one request when called.
+/// Nymbot worker client: public `?` commands over HTTP, private-chat actions WS-first with signed HTTP fallback; lazy network.
 class NymbotService {
   NymbotService({
     http.Client? client,
@@ -36,36 +21,19 @@ class NymbotService {
   final String _base;
   final String _userAgent;
 
-  // ===========================================================================
-  // WS-first transport (`_botMoneyRequest`, shop.js:155-173)
-  // ===========================================================================
-
-  /// Per-action socket/HTTP wait (`_apiSocketSend`'s `opts.timeout || 45000`,
-  /// shop.js:142). The `pm` action overrides with [_pmTimeout].
+  /// Per-action socket/HTTP wait; `pm` uses [_pmTimeout].
   static const Duration _defaultTimeout = Duration(seconds: 45);
 
-  /// `_botMoneyRequest('pm', …, { timeout: 180000 })` (pms.js).
   static const Duration _pmTimeout = Duration(seconds: 180);
 
-  /// WS-first transport seam: runs one raw ledger [action] over the app's ONE
-  /// shared identity-authed `/api` socket — [ApiClient.botSocketRequest], the
-  /// PWA's `_apiSocketSend(action, extra, {raw:true, timeout})` on the single
-  /// `_apiSock` shared with the storage sync (shop.js:158-161). A null result
-  /// (socket unavailable / auth-less / failed) falls back to the signed HTTP
-  /// POST. Wired by the controller once the storage socket is up; null keeps
-  /// this service HTTP-only (logged out / tests), mirroring the PWA's
-  /// `if (this.pubkey)` gate.
+  /// Runs a raw ledger action over the shared authed `/api` socket; null falls back to HTTP, and unset keeps this HTTP-only.
   Future<({int status, Map<String, dynamic> data})?> Function(
     String action,
     Map<String, dynamic> extra, {
     Duration? timeout,
   })? _apiSocketRequest;
 
-  /// Registers (or clears, on sign-out/identity teardown) the shared-socket
-  /// request seam (see [_apiSocketRequest]). Identity switches need no special
-  /// handling here: the socket lives on the controller's per-identity
-  /// [ApiClient], which is disposed and rebuilt with the new identity's auth —
-  /// the native analog of the PWA's page reload dropping `_apiSock`.
+  /// Registers or clears the shared-socket seam; identity switches rebuild the socket's [ApiClient] elsewhere.
   void setApiSocketRequest(
     Future<({int status, Map<String, dynamic> data})?> Function(
       String action,
@@ -76,14 +44,7 @@ class NymbotService {
     _apiSocketRequest = request;
   }
 
-  /// One private-chat/ledger action: WS-first over the shared authenticated
-  /// socket (signed ONCE per connection by its owner), falling back to the
-  /// signed HTTP POST on any socket failure — a 1:1 port of `_botMoneyRequest`
-  /// (raw semantics: resolves `{status, data}` so callers can branch on
-  /// `noCredits`/`error` themselves).
-  ///
-  /// [auth] builds the per-action NIP-98 event and is only invoked on the HTTP
-  /// leg, exactly like the PWA signing `_signBotAuth(action)` at fallback time.
+  /// WS-first over the authed socket, else signed HTTP; [auth] is only built for the HTTP leg. Resolves `{status, data}`.
   Future<({int status, Map<String, dynamic> data})> _botRequest(
     String action,
     Map<String, dynamic> extra, {
@@ -95,8 +56,7 @@ class NymbotService {
   }) async {
     final ws = anon ? null : _apiSocketRequest;
     if (ws != null) {
-      // The socket is authenticated once; frames drop pubkey/auth (the worker
-      // pins the socket's pubkey). Null → fall back to HTTP (shop.js:162).
+      // The socket is authed once, so frames omit pubkey/auth; null falls back to HTTP.
       final res = await ws(action, extra, timeout: timeout);
       if (res != null) return res;
     }
@@ -112,27 +72,13 @@ class NymbotService {
     return _postRaw(body, timeout: timeout);
   }
 
-  /// `https://<host>/api/bot` — the PWA hits a same-origin `/api/bot`
-  /// (`_getApiHost()`); natively the host is the fixed [ApiConfig.apiHost],
-  /// exactly like `ApiClient.botUrl`.
+  /// Fixed native host, like `ApiClient.botUrl`.
   static final String _defaultBase = 'https://${ApiConfig.apiHost}/api/bot';
 
-  /// The `/api/bot` URL requests go to — also the `['u', url]` a NIP-98 auth
-  /// event must bind to (`_signBotAuth`, pms.js:1651-1652).
+  /// Request URL, which a NIP-98 auth event must bind in its `u` tag.
   String get baseUrl => _base;
 
-  // ===========================================================================
-  // Public `?` commands
-  // ===========================================================================
-
-  /// Sends a public `?` command and returns its plain-text response.
-  ///
-  /// [command] is the keyword without `?` (e.g. `ask`); [args] the remainder.
-  /// [geohash] scopes the channel (kind-20000 geohash channels); [conversation]
-  /// is the optional reply-chain history (≤6 msgs). [channelMessages] and
-  /// [activeUsers] feed the context-aware commands (`?ask`/`?summarize`/`?who`).
-  ///
-  /// The worker returns `{event}`; we surface `event.content` (the reply text).
+  /// Returns the reply text; [conversation] is optional reply-chain history (max 6).
   Future<String> sendPublicCommand(
     String command,
     String args, {
@@ -157,12 +103,7 @@ class NymbotService {
     return _extractEventContent(json);
   }
 
-  /// `action: models` — the live Pro model catalog.
-  ///
-  /// Unauthenticated: it is public catalog data (mirrored hourly from
-  /// Cloudflare's model docs into D1) and the picker has to render before the
-  /// user has a balance. Returns null on any failure so callers fall back to
-  /// [kProModelCatalogFallback] rather than showing an empty list.
+  /// Public, unauthenticated model catalog; null on failure so callers use [kProModelCatalogFallback].
   Future<ProModelCatalog?> fetchModelCatalog() async {
     try {
       final json = await _post(<String, dynamic>{'action': 'models'});
@@ -173,29 +114,7 @@ class NymbotService {
     }
   }
 
-  // ===========================================================================
-  // Private paid chat
-  // ===========================================================================
-
-  /// Sends a private 1:1 chat turn to Nymbot (`action: pm`).
-  ///
-  /// The worker's `pm` action **never accepts plaintext** (bot.js:1428-1583):
-  /// the client first gift-wraps the user's message (kind 1059 to the bot),
-  /// publishes it, then sends only the published wrap's [eventId] (400
-  /// `"Missing message event id"` without it). [fresh] mirrors the PWA's
-  /// `!`-prefixed one-off flag; [proModel] pins a Pro frontier model. Waits up
-  /// to 180s (`{ timeout: 180000 }`, pms.js) on both transports.
-  ///
-  /// Returns the decoded response map: `{event, selfEvent, balance, cost,
-  /// taskType, pro, proModel, modelCalls, lowBalance}` where
-  /// `event`/`selfEvent` are **gift-wrapped kind-1059 replies** the caller must
-  /// publish to relays and NIP-44-unwrap to display (pms.js:2489-2497). There
-  /// is no plaintext `reply` field.
-  ///
-  /// On insufficient credits the worker returns `{noCredits, pro, balance,
-  /// required, error}` — checked BEFORE the status like the PWA (pms.js:2473,
-  /// the atomic-spend race 402 carries it too, bot.js:1562) and surfaced as a
-  /// [NymbotInsufficientCredits] exception.
+  /// Sends only the published gift wrap's [eventId], never plaintext, and waits up to 180s for the reply.
   Future<Map<String, dynamic>> sendBotMessage({
     required String pubkey,
     required String eventId,
@@ -211,20 +130,13 @@ class NymbotService {
       'eventId': eventId,
       'fresh': fresh,
       if (proModel != null) 'proModel': proModel,
-      // Lets the worker read a command the user typed in their own language.
+      // Lets the worker read a command typed in the user's language.
       if (cmdAlias != null) 'cmdAlias': cmdAlias,
-      // Our own signed nym-pq announcement, so the worker seals its reply
-      // post-quantum deterministically (it verifies the signature; no
-      // archive/relay lookup race can leave the reply classical).
+      // Our signed nym-pq announcement, so the worker seals its reply post-quantum without a lookup race.
       if (pqAnnouncement != null) 'pqAnnouncement': pqAnnouncement,
     };
 
-    // A `pending` answer means an earlier attempt at THIS SAME message is
-    // still generating on the worker — our socket dropped and this is the
-    // HTTP retry. Ask again with the same event id to collect that reply when
-    // it lands: letting the worker generate a second one would charge twice
-    // and put two different answers to one question in the thread
-    // (`_handleBotPM`'s pending loop, pms.js).
+    // `pending` means an earlier attempt at this message is still generating; re-ask with the same id rather than paying twice.
     late ({int status, Map<String, dynamic> data}) res;
     for (var tries = 0;; tries++) {
       res = await _botRequest(
@@ -255,13 +167,12 @@ class NymbotService {
         message: json['error']?.toString() ?? 'Insufficient credits',
       );
     }
-    // `status >= 400 || !data || data.error` are one failure branch
-    // (pms.js:2486-2487).
+    // `status >= 400 || !data || data.error` is one failure branch.
     _throwOnError(res);
     return json;
   }
 
-  /// Fetches the user's standard + Pro credit balances (`action: balance`).
+  /// Standard and Pro credit balances.
   Future<BotBalance> balance({
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
@@ -274,18 +185,12 @@ class NymbotService {
       auth: auth,
       anon: anon,
     );
-    // Never zero-fill from an `{error}`/error-status body — the PWA shows
-    // `'Nymbot: ' + (data.error || 'could not check balance')` instead
-    // (`_checkBotCredits`, pms.js:2529-2532).
+    // Never zero-fill from an error body.
     _throwOnError(res);
     return BotBalance.fromJson(res.data);
   }
 
-  /// Creates a Lightning invoice to buy credits (`action: create-invoice`).
-  ///
-  /// [tier] picks Standard (10 sats/credit) or Pro (100 sats/credit).
-  /// [recipientPubkey] gifts the credits to another user. [zapRequest] is an
-  /// optional NIP-57 zap request the worker attaches.
+  /// Creates a credits invoice; [recipientPubkey] gifts, [zapRequest] is an optional NIP-57 request.
   Future<BotInvoice> buy({
     required int amountSats,
     required CreditTier tier,
@@ -313,9 +218,7 @@ class NymbotService {
     return BotInvoice.fromJson(res.data, tier: tier, amountSats: amountSats);
   }
 
-  /// Polls invoice settlement (`action: check-invoice`). Returns the raw map so
-  /// callers can read `{paid, settled, …}` (worker shape).
-  /// TODO(verify): exact field names of the check-invoice response.
+  /// Polls settlement, returning the raw `{paid, settled, …}` map.
   Future<Map<String, dynamic>> checkInvoice({
     required String invoiceId,
     required String pubkey,
@@ -333,9 +236,7 @@ class NymbotService {
     return res.data;
   }
 
-  /// Claims credits once an invoice is paid (`action: claim-credits`).
-  /// [gifterNym] is `<nym>#<suffix>` so a gifted recipient's DM names the
-  /// sender (`_claimBotCredits`, zaps.js:752-756).
+  /// Claims credits for a paid invoice; [gifterNym] (`<nym>#<suffix>`) names the sender in a gift DM.
   Future<Map<String, dynamic>> claimCredits({
     required String invoiceId,
     required String pubkey,
@@ -359,15 +260,10 @@ class NymbotService {
     return res.data;
   }
 
-  /// Selects/changes the pinned Pro model for the chat. This is a pure local
-  /// preference in the PWA (`?model <name>` flips a setting that becomes the
-  /// `proModel` field on the next `pm`). Returns the resolved [ProModel], or
-  /// null for `?model off`. No network.
+  /// Local Pro model preference for the next `pm`; null for `?model off`.
   ProModel? selectModel(String arg) => lookupProModel(arg);
 
-  /// Gifts credits to [recipientPubkey] (a paid buy with `recipientPubkey` set).
-  /// `?gift @nym` resolves the nym to a pubkey upstream, then funds via Lightning
-  /// like [buy].
+  /// Paid buy with [recipientPubkey] set.
   Future<BotInvoice> gift({
     required int amountSats,
     required CreditTier tier,
@@ -431,8 +327,7 @@ class NymbotService {
     return res.data;
   }
 
-  /// Transfers all of the user's credits (standard + Pro) to another user
-  /// (`action: transfer-credits`).
+  /// Transfers all standard and Pro credits to another user.
   Future<Map<String, dynamic>> transfer({
     required String pubkey,
     required String targetPubkey,
@@ -450,7 +345,6 @@ class NymbotService {
     return res.data;
   }
 
-  /// Clears the private chat history server-side (`action: clear-history`).
   Future<Map<String, dynamic>> clearHistory({
     required String pubkey,
     Future<Map<String, dynamic>?> Function()? auth,
@@ -469,14 +363,7 @@ class NymbotService {
     return res.data;
   }
 
-  // ===========================================================================
-  // Auth (shared NIP-98 kind-27235, same builder as the shop)
-  // ===========================================================================
-
-  /// Builds the NIP-98 `auth` map for a mutating bot [action] bound to this
-  /// service's `/api/bot` URL (`_signBotAuth`, pms.js:1649). Returns null when
-  /// the identity has no signable privkey. Pass the result as the `auth:`
-  /// argument to [buy] / [claimCredits] / [transfer] / etc.
+  /// NIP-98 `auth` map bound to this `/api/bot` URL, or null without a signable privkey.
   Map<String, dynamic>? buildAuth({
     required String action,
     required String pubkey,
@@ -491,10 +378,6 @@ class NymbotService {
     );
   }
 
-  // ===========================================================================
-  // Plumbing
-  // ===========================================================================
-
   Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {
     final res = await _client.post(
       Uri.parse(_base),
@@ -504,8 +387,7 @@ class NymbotService {
       },
       body: jsonEncode(body),
     );
-    // `allowMalformed` mirrors TextDecoder / `response.json()` (U+FFFD
-    // replacement, never throwing) like `ApiClient._utf8Body`.
+    // `allowMalformed` so bad UTF-8 becomes U+FFFD instead of throwing.
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw NymbotException(
         'Nymbot request failed (${res.statusCode})',
@@ -521,9 +403,7 @@ class NymbotService {
     return decoded;
   }
 
-  /// The raw HTTP leg of [_botRequest]: resolves `{status, data}` without
-  /// throwing on an error status (the PWA's `resp.json().catch(() => ({}))`,
-  /// shop.js:171-172), bounded by [timeout].
+  /// Raw HTTP leg: resolves `{status, data}` without throwing on error status, bounded by [timeout].
   Future<({int status, Map<String, dynamic> data})> _postRaw(
     Map<String, dynamic> body, {
     required Duration timeout,
@@ -549,9 +429,7 @@ class NymbotService {
     return (status: res.statusCode, data: data);
   }
 
-  /// Rejects an error-status result — the pre-WS `_post` contract callers of
-  /// the raw-map actions rely on (their `res['error']` reads cover the 2xx
-  /// error bodies). The re-encoded body rides along for `data.error` reads.
+  /// Throws on an error status, carrying the re-encoded body for `data.error` reads.
   static void _throwOnStatus(({int status, Map<String, dynamic> data}) res) {
     if (res.status < 200 || res.status >= 300) {
       throw NymbotException(
@@ -562,9 +440,7 @@ class NymbotService {
     }
   }
 
-  /// Rejects the PWA's single failure branch `status >= 400 || data.error`
-  /// (pms.js:2486-2487 / 2530-2531). The re-encoded body rides along so
-  /// callers can surface the exact error text (the `data.error` reads).
+  /// Throws on `status >= 400 || data.error`, carrying the body so callers can show the error text.
   static void _throwOnError(({int status, Map<String, dynamic> data}) res) {
     final err = res.data['error'];
     if (err is String && err.isNotEmpty) {
@@ -574,11 +450,11 @@ class NymbotService {
     _throwOnStatus(res);
   }
 
-  /// Pulls the reply text out of the public-command `{event}` envelope.
+  /// Reply text from the public-command `{event}` envelope.
   String _extractEventContent(Map<String, dynamic> json) {
     final content = _maybeEventContent(json);
     if (content != null) return content;
-    // Tolerate a flat `{response}` shape if the worker/contract ever changes.
+    // Tolerate a flat `{response}` shape.
     if (json['response'] is String) return json['response'] as String;
     throw const NymbotException('Nymbot response missing event content');
   }
@@ -607,7 +483,7 @@ int? _asNullableInt(Object? v) {
   return null;
 }
 
-/// Thrown when a Nymbot request fails at the transport/shape level.
+/// A transport- or shape-level Nymbot failure.
 class NymbotException implements Exception {
   const NymbotException(this.message, {this.statusCode, this.body});
 
@@ -630,10 +506,7 @@ class NymbotException implements Exception {
   String toString() => 'NymbotException: $message';
 }
 
-/// Thrown by [NymbotService.sendBotMessage] when the worker answers `pending`:
-/// an earlier attempt at the same message is still generating and holds the
-/// turn's claim, so this one deliberately did NOT generate a second reply.
-/// Not a failure — the answer exists, it just hasn't landed yet.
+/// Worker answered `pending`: an earlier attempt still holds the turn, so no second reply was generated.
 class NymbotStillGenerating implements Exception {
   const NymbotStillGenerating(this.message);
 
@@ -643,8 +516,7 @@ class NymbotStillGenerating implements Exception {
   String toString() => 'NymbotStillGenerating($message)';
 }
 
-/// Thrown by [NymbotService.sendBotMessage] when the user lacks credits
-/// (worker `{noCredits, pro, balance, required, error}`).
+/// Worker reported insufficient credits.
 class NymbotInsufficientCredits implements Exception {
   const NymbotInsufficientCredits({
     required this.pro,
@@ -653,7 +525,7 @@ class NymbotInsufficientCredits implements Exception {
     required this.message,
   });
 
-  /// True when the shortfall is on the Pro credit ledger.
+  /// True when the shortfall is on the Pro ledger.
   final bool pro;
   final double balance;
   final int required;

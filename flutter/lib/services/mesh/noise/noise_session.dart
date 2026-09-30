@@ -2,15 +2,9 @@ import 'dart:typed_data';
 
 import 'noise_handshake.dart';
 
-/// Lifecycle state of a [NoiseSession].
 enum NoiseSessionState { uninitialized, handshaking, established, failed }
 
-/// A single Noise `XX` session with one peer: it drives the three-message
-/// handshake and then provides authenticated transport encryption.
-///
-/// Transport framing matches bitchat exactly: each encrypted message is
-/// `<4-byte big-endian counter><ciphertext||tag>`, and the receiver validates
-/// the counter against a 1024-entry sliding replay window before decrypting.
+/// One Noise XX session; frames are `<4-byte BE counter><ct||tag>` with a 1024-entry replay window (bitchat).
 class NoiseSession {
   NoiseSession({
     required this.peerID,
@@ -66,8 +60,7 @@ class NoiseSession {
     return _handshake!.writeMessage();
   }
 
-  /// Processes an incoming handshake message. Returns the response to send back,
-  /// or null when no response is required (handshake complete on our side).
+  /// Processes a handshake message; returns the reply, or null when none is required.
   Future<Uint8List?> processHandshakeMessage(Uint8List message) async {
     try {
       if (_state == NoiseSessionState.uninitialized && !isInitiator) {
@@ -105,7 +98,7 @@ class NoiseSession {
     _remoteStaticPublicKey = hs.remoteStaticPublicKey;
     _handshakeHash = hs.handshakeHash;
     final (c1, c2) = hs.split();
-    // Initiator sends on c1 / receives on c2; responder is mirrored.
+    // Initiator sends on c1 and receives on c2; the responder is mirrored.
     _sendCipher = isInitiator ? c1 : c2;
     _receiveCipher = isInitiator ? c2 : c1;
     _messagesSent = 0;
@@ -115,7 +108,6 @@ class NoiseSession {
     _state = NoiseSessionState.established;
   }
 
-  /// Encrypts a transport [data] frame: `<4-byte BE counter><ciphertext>`.
   Future<Uint8List> encrypt(Uint8List data) async {
     if (!isEstablished || _sendCipher == null) {
       throw StateError('Session not established');
@@ -133,7 +125,6 @@ class NoiseSession {
     return out;
   }
 
-  /// Decrypts a transport frame produced by [encrypt] on the peer.
   Future<Uint8List> decrypt(Uint8List payload) async {
     if (!isEstablished || _receiveCipher == null) {
       throw StateError('Session not established');
@@ -163,8 +154,6 @@ class NoiseSession {
     final overCount = _messagesSent > messageLimit;
     return overTime || overCount;
   }
-
-  // ---- Sliding-window replay protection (bitchat-compatible) ----------------
 
   bool _isValidNonce(int nonce) {
     if (nonce + _replayWindowSize <= _highestReceivedNonce) return false;

@@ -32,9 +32,7 @@ import 'event_mapper.dart';
 import 'event_signer.dart';
 import 'identity_service.dart';
 
-/// Parses the bitchat geo-relay CSV (`host,lat,lng` rows) into [GeoRelay]s.
-/// Mirrors `_parseGeoRelaysCsv` (relays.js:51): strips scheme + trailing
-/// slashes, skips the header row and any row missing a host or coords.
+/// Parses the bitchat geo-relay CSV (`host,lat,lng`), stripping scheme and slashes and skipping bad rows.
 List<GeoRelay> parseGeoRelaysCsv(String csv) {
   final out = <GeoRelay>[];
   final lines = csv.split('\n');
@@ -59,7 +57,7 @@ List<GeoRelay> parseGeoRelaysCsv(String csv) {
   return out;
 }
 
-/// A decrypted gift-wrap result handed to the controller for routing.
+/// A decrypted gift wrap handed to the controller for routing.
 class GiftWrapUnwrapped {
   GiftWrapUnwrapped({
     required this.wrapId,
@@ -72,41 +70,30 @@ class GiftWrapUnwrapped {
     this.fromArchive = false,
   });
 
-  /// True when this wrap arrived over the hybrid post-quantum transport.
-  /// Orthogonal to [senderVerified]: that is authentication, this is
-  /// confidentiality.
+  /// Arrived over the hybrid PQ transport; confidentiality, orthogonal to [senderVerified].
   final bool isPq;
 
-  /// True when this wrap was replayed from the D1 archive (`pm-get` boot /
-  /// reconnect restore) rather than arriving live off a relay — the PWA's
-  /// `fromD1` flag (pms.js:1021 gates `_archivePMEvent` on `!fromD1` so a
-  /// replay never re-uploads, and reaction/zap bursts only fire live).
+  /// Replayed from the D1 archive rather than live, so it is never re-uploaded.
   final bool fromArchive;
 
-  /// The kind-1059 gift-wrap event id (used as the message id).
+  /// The kind-1059 wrap id, used as the message id.
   final String wrapId;
   final int wrapCreatedAt;
 
-  /// The full signed kind-1059 wrap event as received off the relay. The PM D1
-  /// archive (`pm-put`/`pm-deposit`, pms.js `_archivePMEvent`) re-uploads the
-  /// untouched wrap, so the controller needs the original event JSON — the rumor
-  /// alone is not storable. Null for the remote-signer unwrap path (the wrap is
-  /// still available there, but archiving is best-effort).
+  /// The untouched signed wrap, needed for the D1 archive; null on the remote-signer path.
   final Map<String, dynamic>? rawWrap;
 
   /// The decrypted inner rumor (kind 14 / 69420 / 7 …).
   final Map<String, dynamic> rumor;
 
-  /// True when the NIP-59 seal was authenticated (`seal.pubkey==rumor.pubkey
-  /// && verifyEvent(seal)`); bitchat wraps are unverified.
+  /// True when the NIP-59 seal authenticated the rumor author; bitchat wraps are unverified.
   final bool senderVerified;
   final bool isBitchat;
 
   int? get rumorKind => (rumor['kind'] as num?)?.toInt();
 }
 
-/// Settings the service needs for TTL / receipt scoping, passed in from the
-/// controller so the service never imports the settings provider.
+/// Messaging settings passed in so the service never imports the settings provider.
 class MessagingSettings {
   const MessagingSettings({
     this.dmForwardSecrecyEnabled = false,
@@ -116,40 +103,32 @@ class MessagingSettings {
   final bool dmForwardSecrecyEnabled;
   final int dmTtlSeconds;
 
-  /// The gift-wrap `expiration` ts (now + ttl) when forward secrecy is on, else
-  /// null (docs/specs/03 §10).
+  /// Gift-wrap `expiration` (now + ttl) when forward secrecy is on, else null.
   int? expirationFor(int nowSec) =>
       (dmForwardSecrecyEnabled && dmTtlSeconds > 0)
           ? nowSec + dmTtlSeconds
           : null;
 }
 
-/// The user's status-visibility mode, derived from the `nym_show_status`
-/// setting ('true' | 'friends' | 'false'). Mirrors nostr-core.js `_statusMode`.
+/// Status visibility derived from `nym_show_status`, as the PWA's `_statusMode`.
 enum PresenceStatusMode {
-  /// `showStatus === true`: broadcast the real status publicly.
+  /// Broadcast the real status publicly.
   enabled,
 
-  /// `showStatus === 'friends'`: broadcast `hidden` publicly, share real status
-  /// privately with friends (the gift-wrapped friend presence path).
+  /// Broadcast `hidden` publicly and share the real status privately with friends.
   friends,
 
-  /// `showStatus === false`: never assert presence; broadcasts `hidden`.
+  /// Never assert presence; broadcasts `hidden`.
   disabled,
 }
 
-/// Maps the native `showStatus` string ('true' | 'friends' | 'false') to the
-/// PWA's `_statusMode()` result.
 PresenceStatusMode presenceStatusModeFrom(String showStatus) {
   if (showStatus == 'false') return PresenceStatusMode.disabled;
   if (showStatus == 'friends') return PresenceStatusMode.friends;
   return PresenceStatusMode.enabled;
 }
 
-/// Pure builder for the kind-30078 nym-presence tag list. Mirrors the PWA's
-/// `publishPresence` / `publishAvatarUpdate` / `publishShopUpdate` tag shapes so
-/// every presence flavor shares the `['d','nym-presence'],['t','nym-presence']`
-/// replaceable identity. Kept pure (no signing / IO) so it's unit-testable.
+/// Pure builder for kind-30078 nym-presence tags, sharing the PWA's replaceable `d`/`t` identity.
 class PresencePayload {
   const PresencePayload({
     required this.nym,
@@ -161,20 +140,15 @@ class PresencePayload {
   });
 
   final String nym;
-  final String status; // caller's real status: 'online' | 'away' | 'hidden'
+  final String status; // The real status: 'online' | 'away' | 'hidden'.
   final String awayMessage;
   final PresenceStatusMode mode;
   final String? avatarUrl;
 
-  /// Emits the bare `['shop-update','1']` cache-bust flag (the ONLY shop tag
-  /// the protocol carries — `publishShopUpdate`, nostr-core.js:2876-2885).
-  /// Receivers react by force-refreshing the sender's D1 `shop-status` record;
-  /// the actual style/flair/cosmetics never ride the presence event.
+  /// Emits only the `['shop-update','1']` cache-bust flag; cosmetics never ride presence.
   final bool shopUpdate;
 
-  /// The status that actually goes on the public replaceable event. Only the
-  /// `enabled` mode broadcasts the real status; otherwise `hidden` (PWA:
-  /// `const publicStatus = mode === 'enabled' ? status : 'hidden'`).
+  /// Real status only in `enabled` mode, otherwise `hidden`.
   String get publicStatus =>
       mode == PresenceStatusMode.enabled ? status : 'hidden';
 
@@ -185,7 +159,7 @@ class PresencePayload {
       ['n', nym],
       ['status', publicStatus],
     ];
-    // away message only when fully enabled + actually away (PWA gate).
+    // Away message only when fully enabled and actually away.
     if (mode == PresenceStatusMode.enabled &&
         status == 'away' &&
         awayMessage.isNotEmpty) {
@@ -201,7 +175,6 @@ class PresencePayload {
   }
 }
 
-/// Callbacks the service emits as it routes inbound events.
 class NostrHandlers {
   NostrHandlers({
     this.onEvent,
@@ -210,44 +183,33 @@ class NostrHandlers {
     this.onEventRetracted,
   });
 
-  /// Every verified inbound event (already signature-checked by the pool).
+  /// Every inbound event, already signature-checked by the pool.
   final void Function(NostrEvent event)? onEvent;
   final void Function(int connectedCount)? onConnectionChanged;
 
-  /// A decrypted kind-1059 gift wrap addressed to us.
   final void Function(GiftWrapUnwrapped unwrapped)? onGiftWrap;
 
   final void Function(String eventId)? onEventRetracted;
 }
 
-/// Owns the relay pool and wires it to the crypto + identity layers. Subscribes
-/// to the channel/profile/reaction kinds and publishes channel messages.
-/// (docs/specs/01 §4.5, 03 §2.2)
+/// Owns the relay pool and wires it to the crypto and identity layers.
 class NostrService {
-  /// Process-wide off-thread signature verifier, shared by every transport this
-  /// service builds (proxy, direct-fallback, restore probe) so a burst of
-  /// inbound EVENTs across them coalesces into one isolate hop. Mirrors the
-  /// PWA's single shared `verify-worker.js`. Stateless, so one instance is safe.
+  /// Process-wide verifier shared by every transport, so bursts coalesce into one isolate hop.
   static final IsolateVerifier _verifier = IsolateVerifier();
 
-  /// Process-wide off-thread gift-wrap worker (the PWA's `crypto-pool.js`
-  /// analog), shared so inbound unwrap bursts and outbound wrap fan-outs across
-  /// every service instance coalesce. Stateless aside from its in-flight batch,
-  /// so one instance is safe.
+  /// Process-wide gift-wrap worker shared so unwrap and wrap bursts coalesce.
   static final CryptoWorker _cryptoWorker = CryptoWorker.instance;
 
-  /// Our own ML-KEM keypair, supplied by the controller which owns the root.
-  /// Lets a signer login strip the layered format's outer layer before handing
-  /// the inside to the signer; null when this device holds no root.
+  /// Our ML-KEM keypair from the controller, to strip the layered outer layer before a signer; null without a root.
   ({Uint8List kemSk, Uint8List kemPk})? Function()? selfKemForUnwrap;
 
   /// A peer's ML-KEM key, only when they accept the layered format.
   Uint8List? Function(String realPubkey)? pqPeerKey;
 
-  /// Our own ML-KEM key for copies addressed to ourselves.
+  /// Our own ML-KEM key for self-addressed copies.
   Uint8List? Function()? pqSelfKey;
 
-  /// Whether copies addressed to ourselves may use the layered format.
+  /// Whether self-addressed copies may use the layered format.
   bool Function()? pqSelfLayered;
 
   ({Uint8List? kem, bool layered}) _pqTarget(String realPubkey) {
@@ -259,51 +221,27 @@ class NostrService {
     return (kem: kem, layered: kem != null);
   }
 
-  /// Wrap ids (kind-1059 event ids) we've ALREADY unwrapped this process.
-  ///
-  /// Unwrapping a gift wrap is a per-candidate secp256k1 ECDH + ChaCha20 +
-  /// HMAC decrypt plus a BIP340 seal verify — the single most expensive inbound
-  /// op. The D1 PM/group archive REPLAYS the very same wraps on every boot and
-  /// every resume (`_restorePmArchive` / `_backfillGroupArchive`), and the old
-  /// code re-did all that crypto for each one before the downstream id-dedup
-  /// discarded the duplicate rumor — a primary cause of the slow-to-open /
-  /// slow-after-background behavior. This set lets a replay skip the whole
-  /// unwrap. Process-wide (survives resume) and bounded (oldest-first eviction).
+  /// Wrap ids already unwrapped this process, so D1 replays skip the costly unwrap; bounded, oldest-first.
   static final LinkedHashSet<String> _processedWrapIds =
       LinkedHashSet<String>();
   static const int _processedWrapCap = 100000;
 
-  /// Bounds the number of in-flight remote-signer (NIP-46) `nip44_decrypt`
-  /// round-trips ([_unwrapRemote]). Inbound gift wraps are handled concurrently
-  /// (`unawaited(_handleGiftWrap(...))`), and a PM/D1 backfill replays hundreds
-  /// of self-addressed wraps at once — without a cap each fires two sequential
-  /// RPCs at the SINGLE signer socket, which bunkers rate-limit / prompt per-op,
-  /// producing mass 60s timeouts that read as "PMs won't load". A small cap
-  /// keeps the socket responsive while backfill drains. (Local-key unwraps run
-  /// off-isolate via the crypto worker and are unaffected.)
+  /// Caps concurrent NIP-46 decrypt round-trips so backfill doesn't flood the single signer socket.
   final _AsyncSemaphore _remoteUnwrapGate = _AsyncSemaphore(3);
 
-  /// Seeds [ids] as already-verified signatures (e.g. channel message ids
-  /// restored from the local cache — verified when first received) so the
-  /// cold-boot archive/live replay of that history skips re-verification.
+  /// Seeds already-verified ids, e.g. from the local cache, so replays skip re-verification.
   static void seedVerifiedIds(Iterable<String> ids) =>
       _verifier.markVerified(ids);
 
-  /// The newest verified event ids, for persisting across launches (see
-  /// [IsolateVerifier.snapshotVerifiedIds]) — restored via [seedVerifiedIds] on
-  /// the next boot so the relay/D1 replay of reactions, profiles, presence and
-  /// out-of-cache history skips the expensive signature math.
+  /// Newest verified ids for persisting across launches.
   static List<String> snapshotVerifiedIds({int max = 20000}) =>
       _verifier.snapshotVerifiedIds(max: max);
 
-  /// Hook fired whenever a signature newly verifies (the persistable set grew).
-  /// The controller wires a debounced disk persist here.
+  /// Called when a signature newly verifies, for a debounced persist.
   static set onVerifiedIdsChanged(void Function()? cb) =>
       _verifier.onNewVerified = cb;
 
-  /// Seeds [wrapIds] as already-unwrapped (e.g. cached PM message ids, which
-  /// ARE their wrap ids — see `_onGiftWrap`) so the cold-boot PM restore skips
-  /// re-unwrapping history already on disk.
+  /// Seeds wrap ids already unwrapped (cached PM ids are wrap ids) so restores skip them.
   static void seedProcessedWraps(Iterable<String> wrapIds) {
     for (final id in wrapIds) {
       if (id.isEmpty) continue;
@@ -326,25 +264,14 @@ class NostrService {
     }
   }
 
-  /// The [EventVerifier] handed to every pool: verify each inbound event off
-  /// the main thread (batched). Preserves the per-event keep/drop contract the
-  /// relay layer relies on — see [IsolateVerifier].
+  /// Pool [EventVerifier]: batched off-main verification with per-event verdicts.
   static Future<bool> _verifyOffThread(NostrEvent event) =>
       _verifier.verify(event);
 
-  /// Off-main-thread signature verification for the D1 archive-replay paths
-  /// (vouch / emoji rows) that previously ran `schnorr.verifyEvent` INLINE on
-  /// the main isolate during a boot backfill. Routes through the same batched
-  /// [IsolateVerifier] as the live pool, so a whole archive cohort verified in
-  /// one turn coalesces into a single isolate hop. Fail-closed like the pool.
+  /// Batched off-main verification for D1 archive replays; fails closed.
   Future<bool> verifyEvent(NostrEvent event) => _verifier.verify(event);
 
-  /// Default constructor. [useProxy] selects the transport: when true (the
-  /// native default per spec §4.2) the service runs over the multiplexed
-  /// `RelayPoolProxy` (`wss://<host>/api/relay-pool`); when false it uses the
-  /// direct [RelayPool]. An explicit [pool] overrides selection (tests).
-  ///
-  /// The injected [verify] is preserved across both transports.
+  /// [useProxy] picks the relay-pool proxy (default) or direct [RelayPool]; an explicit [pool] overrides.
   NostrService({
     required this.identity,
     EventSigner? signer,
@@ -354,8 +281,7 @@ class NostrService {
     ApiClient? apiClient,
   })  : _apiClient = apiClient ?? ApiClient(),
         _relays = relays,
-        // An explicitly-injected pool (tests) disables the proxy→direct
-        // auto-fallback: the caller owns the transport.
+        // An injected pool disables the proxy-to-direct auto-fallback.
         _autoFallback = pool == null && useProxy,
         signer = signer ??
             (identity.privkey != null ? LocalSigner(identity.privkey!) : null),
@@ -371,28 +297,18 @@ class NostrService {
                     writeOnlyRelays: RelayConfig.writeOnlyRelays,
                     verify: _verifyOffThread,
                   )) {
-    // Route every ApiClient's /api traffic into our persistent api-stats object
-    // so the Network Stats "App data" section is populated (mirrors the PWA's
-    // single shared `nym.relayStats` that `_trackApiData` writes to). This is
-    // process-wide (the PWA has one global); only the production proxy-default
-    // path arms it — an injected pool / `useProxy:false` (tests) leaves the sink
-    // untouched so unit tests stay isolated.
+    // Route process-wide /api traffic into our stats in production only, keeping tests isolated.
     if (_autoFallback) {
       ApiClient.apiStatsSink = _apiStats;
     }
-    // The transports know which socket a frame arrived on; only the service
-    // knows the geo directory. Set here rather than at each construction site
-    // so a pool swapped in by the fallback path carries the gate too.
+    // Set here so a pool swapped in by fallback carries the geo gate too.
     _pool.geoOriginAllows = geoOriginAllowsEvent;
   }
 
-  /// Persistent /api traffic counters, kept on the service (NOT the pool) so the
-  /// App-data tallies survive a proxy↔direct pool swap. Folded into the live
-  /// relay stats by [relayStats]. Mirrors the PWA's `nym.relayStats` api fields.
+  /// Persistent /api counters kept on the service so they survive a pool swap.
   final RelayStats _apiStats = RelayStats();
 
-  /// Factory: force the direct-WebSocket transport. Mirrors the PWA's
-  /// `_poolFallbackActive` direct path — used when the relay pool fails.
+  /// Forces the direct-WebSocket transport, used when the relay pool fails.
   factory NostrService.direct({
     required Identity identity,
     EventSigner? signer,
@@ -407,54 +323,33 @@ class NostrService {
         apiClient: apiClient,
       );
 
-  /// The active identity. Mutable so hardcore keypair mode can swap the signing
-  /// key in place (see [rotateIdentity]) without tearing down the live relay
-  /// connections — every publish reads `identity.pubkey` at call time.
+  /// Mutable so hardcore mode can swap the key in place; publishes read it at call time.
   Identity identity;
 
-  /// The active signer: a [LocalSigner] for nsec/ephemeral keys, a
-  /// [Nip46SignerAdapter] for a remote signer, or null when signing is
-  /// unavailable. Every publish / gift-wrap path routes through this so the
-  /// NIP-46 remote path works end-to-end (mirrors the PWA's `signEvent`).
-  /// Mutable for the same hardcore-rotation reason as [identity].
+  /// Active signer (local, NIP-46 or null) that every publish and wrap path routes through; mutable for rotation.
   EventSigner? signer;
 
-  /// The attestation badge to carry on outgoing channel messages, set by
-  /// [AttestService] once this install has enrolled. Null until then, and on a
-  /// device that cannot attest it stays null — the message still sends, it
-  /// just goes unbadged.
+  /// Attestation badge for outgoing channel messages; null until enrolled, and messages still send without it.
   String? attestBadge;
 
-  /// Surgically swap the signing identity in place — hardcore keypair mode
-  /// (messages.js:2392-2404 → `generateKeypair()`, which only swaps `privkey`/
-  /// `pubkey`; it does NOT reconnect relays or re-subscribe). The live [pool]
-  /// and its subscriptions persist (the `#p:[self]` gift-wrap filter stays on
-  /// the prior pubkey, exactly like the PWA), and the NEXT publish signs with
-  /// [newSigner] / advertises [newIdentity].
+  /// Swaps the signing identity in place for hardcore mode without reconnecting or re-subscribing, as the PWA does.
   void rotateIdentity(Identity newIdentity, EventSigner? newSigner) {
     identity = newIdentity;
     signer = newSigner;
   }
 
-  /// The active transport. Swappable: starts as the proxy (default) and is
-  /// replaced by a direct [RelayPool] if the proxy proves unreachable (and back
-  /// again if the proxy recovers). Read through the [pool] getter so callers
-  /// always route through the CURRENT transport.
+  /// The active transport, swapped to direct if the proxy is unreachable and back on recovery.
   PoolTransport _pool;
 
-  /// The relay set this service was constructed with (null = defaults). Reused
-  /// when building the direct-fallback / restored-proxy pools so the swap keeps
-  /// the same relay coverage.
+  /// Relay set from construction (null = defaults), reused for fallback and restore pools.
   final List<String>? _relays;
 
-  /// True only for the production proxy-default path: enables the
-  /// proxy→direct auto-fallback + background restore. An injected pool (tests)
-  /// or `useProxy:false` leaves the transport fixed.
+  /// True only on the production proxy path: enables auto-fallback and background restore.
   final bool _autoFallback;
 
   final ApiClient _apiClient;
 
-  /// The active transport (current pool after any swap).
+  /// The current pool after any swap.
   PoolTransport get pool => _quietHeld ? _QuietPool(_pool) : _pool;
 
   Set<String> _quiet = const <String>{};
@@ -479,17 +374,12 @@ class NostrService {
     _quietTimer ??= Timer.periodic(const Duration(minutes: 10), (_) => load());
   }
 
-  /// Live relay stats for the Network Stats modal, with the persistent /api
-  /// "App data" counters folded in. The pool tracks relay traffic + shard info;
-  /// the service-owned [_apiStats] tracks the backend traffic (so it survives
-  /// pool swaps). Mirrors the PWA's single `nym.relayStats` (which holds both).
-  /// Read a fresh merged snapshot each call.
+  /// Fresh relay stats with the persistent /api counters folded in.
   RelayStats get relayStats {
-    final s = _pool.stats; // already a snapshot
+    final s = _pool.stats; // Already a snapshot.
     final api = _apiStats;
     if (!api.hasApiData) return s;
-    // Fold the API byte totals + per-action breakdown into the relay snapshot.
-    // (The pool's bytesSent/Received already excludes API traffic, so add it.)
+    // Pool byte totals exclude API traffic, so add it.
     s.bytesReceived += api.apiBytesReceived;
     s.bytesSent += api.apiBytesSent;
     s.apiBytesReceived += api.apiBytesReceived;
@@ -500,24 +390,19 @@ class NostrService {
     return s;
   }
 
-  /// True when the active transport is the multiplexed proxy pool. Reflects the
-  /// CURRENT pool, so it flips to false after a fallback to direct and back to
-  /// true after a background proxy restore.
+  /// True when the current transport is the proxy pool.
   bool get isProxyMode => _pool is RelayPoolProxy;
 
-  /// True while running on the direct-relay fallback (proxy was unreachable).
-  /// Mirrors the PWA's `_poolFallbackActive`.
+  /// True while running on the direct fallback.
   bool _poolFallbackActive = false;
   bool get isFallbackActive => _poolFallbackActive;
 
-  /// Background timer + attempt counter for restoring proxy mode after a
-  /// fallback (mirrors `_schedulePoolReconnectInBackground`, relays.js:1610).
+  /// Timer and attempt counter for restoring proxy mode after a fallback.
   Timer? _bgRestoreTimer;
   int _bgRestoreAttempts = 0;
   bool _bgRestoreInFlight = false;
 
-  /// Guards [_swapPool] so overlapping triggers (multiple shard callbacks, or a
-  /// restore racing a fallback) can't run two swaps at once.
+  /// Guards [_swapPool] against overlapping swaps.
   bool _swapping = false;
 
   Subscription? _mainSub;
@@ -525,16 +410,7 @@ class NostrService {
   Timer? _statusTimer;
   NostrHandlers? _handlers;
 
-  /// Connects to relays and issues the main "critical" REQ — the PWA's
-  /// `_buildCriticalFilters` set (see [_buildCriticalFilters] for the full
-  /// proxy/D1 vs direct split).
-  ///
-  /// [channelMode] mirrors `!settings.groupChatPMOnlyMode` (relays.js:2488):
-  /// when false, every public-channel filter (channels, channel reactions/zaps/
-  /// deletions, polls) is omitted. [vouchAuthors] / [profileAuthors] feed the
-  /// DIRECT-mode-only author'd filters (peer `nym-vouches` lists / PM-contact
-  /// kind-0 watches); they're ignored while the proxy+D1 path is active. All
-  /// three can be updated later via [updateCriticalInputs].
+  /// Connects and issues the main critical REQ; [channelMode] false omits public-channel filters.
   Future<void> start(
     NostrHandlers handlers, {
     bool channelMode = true,
@@ -560,58 +436,28 @@ class NostrService {
     });
     handlers.onConnectionChanged?.call(pool.connectedCount);
 
-    // Fetch the geo-relay list and shard it onto the pool so geohash channels
-    // connect to the closest geo relays (the P0 fix: without this the proxy is
-    // built with NO geo shards and geohash subscriptions are never delivered).
-    // Fire-and-forget — boot must not block on the proxy `geo-relays` round-trip;
-    // a slow/failed fetch just leaves the pool on its default+critical shards
-    // until the next channel entry retries. Mirrors the PWA's `_geoRelaysReady`
-    // → `_poolSendRelayConfig` once the list arrives.
+    // Load and shard geo relays in the background, or geohash subscriptions are never delivered.
     unawaited(loadAndApplyGeoRelays().catchError((_) {}));
   }
 
-  // ---------------------------------------------------------------------------
-  // Critical REQ filter set (PWA `_buildCriticalFilters`, relays.js:2485-2570).
-  // ---------------------------------------------------------------------------
+  // Critical REQ filter set
 
-  /// `!settings.groupChatPMOnlyMode` (relays.js:2488) — gates every
-  /// public-channel filter out of the critical set.
+  /// Gates every public-channel filter out of the critical set.
   bool _channelMode = true;
 
-  /// Authors whose post-quantum key announcements we watch: our conversation
-  /// partners, group members and ourselves. Unlike the vouch list — a broadcast
-  /// web of trust — PQ keys are only needed for peers we actually message, so
-  /// this filter is scoped rather than fetched wholesale (pq.js / relays.js).
+  /// PQ key announcement authors, scoped to peers we actually message plus ourselves.
   List<String> _pqAuthors = const [];
 
-  /// DIRECT-mode vouch REQ authors: the current trust graph's pubkeys
-  /// (`this.nymchatPubkeys`, relays.js:2538-2542), hex64-filtered and capped
-  /// at [_vouchAuthorCap]. Unused while the proxy+D1 path supplies vouches.
+  /// Direct-mode vouch authors, hex-filtered and capped at [_vouchAuthorCap].
   List<String> _vouchAuthors = const [];
 
-  /// DIRECT-mode kind-0 REQ authors: every PM conversation's pubkey
-  /// (`this.pmConversations.keys()`, relays.js:2559-2563); self is appended at
-  /// build time. Unused while D1 `profile-get` supplies peer profiles.
+  /// Direct-mode kind-0 authors (PM contacts; self is appended).
   List<String> _profileAuthors = const [];
 
-  /// Whether the D1 archive backs this transport's history. The PWA gates on
-  /// `_getApiHost()` alone (relays.js:2489) because the page host IS the worker
-  /// host; natively the equivalent signal is the relay-pool PROXY being the
-  /// active transport — it runs on the same worker that archives to D1, so a
-  /// proxy fallback to direct sockets means D1 can't be assumed and the full
-  /// 24h-window REQ set must pull history straight from the relays.
+  /// Whether D1 backs history: natively, when the relay-pool proxy is the active transport.
   bool get _d1Available => ApiConfig.apiHost.isNotEmpty && isProxyMode;
 
-  /// Builds the main REQ filter list — a 1:1 port of the PWA's
-  /// `_buildCriticalFilters(since24h, channelSince)` (relays.js:2485-2570),
-  /// preserving filter order. Two shapes, selected by [_d1Available]:
-  ///
-  ///  - PROXY/D1: the relay-pool proxy has already archived history to D1 and
-  ///    the controller restores it from there, so relays are asked for ONLY
-  ///    live events — `since: now` windows and `limit: 1` on nearly every
-  ///    filter (`lim`/`chSince` collapse, relays.js:2490-2492).
-  ///  - DIRECT: full 24h windows + real limits pull history from the relays,
-  ///    and the author'd vouch/profile filters replace their D1 equivalents.
+  /// Port of the PWA's `_buildCriticalFilters`: live-only windows under D1, full 24h windows in direct mode.
   List<NostrFilter> _buildCriticalFilters() {
     final filters = <NostrFilter>[];
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -623,9 +469,7 @@ class NostrService {
     final self = identity.pubkey;
     const channelKindTags = ['20000', '23333'];
 
-    // Gift wraps addressed to us (PMs, group messages, receipts, typing).
-    // NIP-59 backdates created_at, so NO `since`; cap at limit:1 under D1 —
-    // the PM/group backlog is restored from D1 (relays.js:2494).
+    // Gift wraps to us: NIP-59 backdates created_at, so no `since`; limit 1 under D1.
     filters.add(NostrFilter(
       kinds: [EventKind.giftWrap],
       limit: d1Available ? 1 : 500,
@@ -633,15 +477,12 @@ class NostrService {
         'p': [self],
       },
     ));
-    // Channels: real-time `since` only, no limit — TWO separate filters,
-    // exactly like the PWA (relays.js:2497-2498).
+    // Channels: real-time `since`, two filters as in the PWA.
     if (channelMode) {
       filters.add(NostrFilter(kinds: [EventKind.geoChannel], since: chSince));
       filters.add(NostrFilter(kinds: [EventKind.namedChannel], since: chSince));
     }
-    // Reactions on OUR channel messages (`#p:[self]` + `#k` channel kinds,
-    // relays.js:2501-2504). The `#k` gate is what keeps foreign kind-7 traffic
-    // (reactions to non-Nymchat notes that merely p-tag us) out of the app.
+    // Reactions on our channel messages; `#k` keeps out foreign kind-7s that merely p-tag us.
     filters.add(NostrFilter(
       kinds: [EventKind.reaction],
       since: d1Available ? nowSec : null,
@@ -651,8 +492,7 @@ class NostrService {
         'k': channelKindTags,
       },
     ));
-    // All channel reactions — badge counts on everyone's messages
-    // (relays.js:2506).
+    // All channel reactions, for badge counts.
     if (channelMode) {
       filters.add(NostrFilter(
         kinds: [EventKind.reaction],
@@ -663,7 +503,7 @@ class NostrService {
         },
       ));
     }
-    // Public reactions to gift-wrapped (PM/group) messages (relays.js:2509-2512).
+    // Public reactions to gift-wrapped messages.
     filters.add(NostrFilter(
       kinds: [EventKind.reaction],
       since: d1Available ? nowSec : null,
@@ -672,7 +512,7 @@ class NostrService {
         'k': ['1059'],
       },
     ));
-    // NIP-09 deletions of channel messages / gift wraps (relays.js:2514).
+    // NIP-09 deletions of channel messages and gift wraps.
     if (channelMode) {
       filters.add(NostrFilter(
         kinds: [EventKind.deletion],
@@ -683,8 +523,7 @@ class NostrService {
         },
       ));
     }
-    // NIP-57 zap receipts addressed to us — channel, PM, and profile zaps
-    // (`#k:[20000,23333,1059,0]`, relays.js:2517).
+    // NIP-57 zap receipts to us (`#k:[20000,23333,1059,0]`).
     filters.add(NostrFilter(
       kinds: [EventKind.zapReceipt],
       since: chSince,
@@ -694,7 +533,7 @@ class NostrService {
         'k': ['20000', '23333', '1059', '0'],
       },
     ));
-    // Zap receipts on everyone's channel messages — badges (relays.js:2520).
+    // Zap receipts on everyone's channel messages.
     if (channelMode) {
       filters.add(NostrFilter(
         kinds: [EventKind.zapReceipt],
@@ -705,7 +544,7 @@ class NostrService {
         },
       ));
     }
-    // Zap receipts on gift-wrapped (PM/group) messages (relays.js:2522).
+    // Zap receipts on gift-wrapped messages.
     filters.add(NostrFilter(
       kinds: [EventKind.zapReceipt],
       since: chSince,
@@ -714,8 +553,7 @@ class NostrService {
         'k': ['1059'],
       },
     ));
-    // P2P file-transfer signaling addressed to us — 2-minute window
-    // (relays.js:2525).
+    // P2P file-transfer signaling to us, 2-minute window.
     filters.add(NostrFilter(
       kinds: [EventKind.p2pSignaling],
       since: nowSec - 120,
@@ -724,7 +562,7 @@ class NostrService {
         'p': [self],
       },
     ));
-    // Presence (nym-presence): real-time only under D1 (relays.js:2528-2531).
+    // Presence: real-time only under D1.
     filters.add(NostrFilter(
       kinds: [EventKind.appData],
       since: d1Available ? nowSec : null,
@@ -733,7 +571,7 @@ class NostrService {
         't': [AppDataTopic.presence],
       },
     ));
-    // Channel polls + votes (relays.js:2533-2535).
+    // Channel polls and votes.
     if (channelMode) {
       filters.add(NostrFilter(
         kinds: [EventKind.appData],
@@ -744,9 +582,7 @@ class NostrService {
         },
       ));
     }
-    // Web of trust: live-only under D1 (history rebuilt from the D1
-    // `nym-vouches` pseudo-channel by the controller); direct mode REQs the
-    // trusted authors' lists outright (relays.js:2536-2543).
+    // Web of trust: live-only under D1; direct mode REQs trusted authors' lists.
     if (d1Available) {
       filters.add(NostrFilter(
         kinds: [EventKind.appData],
@@ -766,13 +602,7 @@ class NostrService {
         },
       ));
     }
-    // Hybrid post-quantum key announcements.
-    //
-    // Under D1 this is a live tail only, like every other filter here: history
-    // comes from the archive (`PqAnnouncementSource`) and a discovery miss
-    // additionally fetches the single peer it needs. Asking the relays for one
-    // announcement per author made this the one filter that backfilled in
-    // proxy-pool mode, on every reconnect and every subscription rebuild.
+    // PQ key announcements: a live tail under D1, since history comes from the archive.
     if (d1Available) {
       filters.add(NostrFilter(
         kinds: [EventKind.appData],
@@ -792,15 +622,13 @@ class NostrService {
         },
       ));
     }
-    // NIP-30 custom emoji packs: real-time + limit:1 under D1 (history via the
-    // D1 emoji restore); else discover up to 300 (relays.js:2546-2548).
+    // NIP-30 emoji packs: real-time under D1, else discover up to 300.
     filters.add(NostrFilter(
       kinds: [EventKind.emojiPack],
       since: d1Available ? nowSec : null,
       limit: d1Available ? 1 : 300,
     ));
-    // P2P file seeding status (global — deliberately NO `#p`, matching the
-    // PWA) + our own kind-10030 emoji-pack list (relays.js:2551-2552).
+    // Global P2P seeding status (no `#p`, as the PWA) plus our kind-10030 list.
     filters.add(NostrFilter(
       kinds: [EventKind.p2pFileStatus],
       since: d1Available ? nowSec : since24h,
@@ -811,9 +639,7 @@ class NostrService {
       authors: [self],
       limit: 1,
     ));
-    // Kind-0 profiles: live self-updates only under D1 (peer profiles come
-    // from `profile-get`); direct mode watches every PM contact + self, NO
-    // limit (relays.js:2554-2568).
+    // Kind-0: self only under D1; direct mode watches every PM contact and self.
     if (d1Available) {
       filters.add(NostrFilter(
         kinds: [EventKind.profile],
@@ -831,10 +657,7 @@ class NostrService {
     return filters;
   }
 
-  /// Updates the critical-REQ inputs and, when anything actually changed,
-  /// schedules a debounced [resubscribeMain]. Mirrors the PWA's
-  /// `_scheduleCriticalResubscribe` triggers: a new PM contact (pms.js:2803),
-  /// a vouch-graph hop (nostr-core.js:2685-2693), or a channel-mode flip.
+  /// Updates critical-REQ inputs and debounces [resubscribeMain] when anything changed.
   void updateCriticalInputs({
     bool? channelMode,
     Iterable<String>? vouchAuthors,
@@ -870,17 +693,14 @@ class NostrService {
     if (changed) scheduleCriticalResubscribe();
   }
 
-  /// Author cap on the direct-mode vouch filter (relays.js:2539
-  /// `.slice(0, 500)`).
+  /// Author cap on the direct-mode vouch filter.
   static const int _vouchAuthorCap = 500;
 
   List<String> _sanitizeVouchAuthors(Iterable<String> authors) =>
       List<String>.unmodifiable(
           authors.where(TrustGraph.isHex64).take(_vouchAuthorCap));
 
-  /// Debounce for [resubscribeMain] (the PWA's `_scheduleCriticalResubscribe`,
-  /// relays.js:1286 — 750ms against burst churn, e.g. hydration adding many
-  /// PM contacts in quick succession).
+  /// 750ms debounce for [resubscribeMain] against bursts.
   Timer? _criticalResubTimer;
 
   void scheduleCriticalResubscribe() {
@@ -891,39 +711,20 @@ class NostrService {
     });
   }
 
-  /// Closes and re-issues the main critical REQ with freshly-built filters —
-  /// the PWA's `resubscribeAllRelays` → `_poolSubscribe` (which CLOSEs
-  /// `_lastPoolSubId` and REQs a new set, relays.js:2603-2622). No-op before
-  /// [start].
+  /// Closes and re-issues the main critical REQ; no-op before [start].
   void resubscribeMain() {
     if (_handlers == null) return;
     final old = _mainSub;
     unawaited(_eventSub?.cancel());
-    // `close()` CLOSEs on the transport that created the sub and releases its
-    // stream — after a pool swap that's the detached old pool (harmless), and
-    // the sub was never replayed onto the new one.
+    // close() targets the creating pool, which after a swap is the detached old one.
     unawaited(old?.close());
     _mainSub = pool.subscribe(_buildCriticalFilters());
     _eventSub = _mainSub!.events.listen(_routeInbound);
   }
 
-  // ---------------------------------------------------------------------------
-  // Proxy → direct fallback + background restore.
-  //
-  // The proxy (`wss://<host>/api/relay-pool`) is the DEFAULT transport. When it
-  // can't establish a connection (host-lookup / socket errors before it EVER
-  // confirms — e.g. the relay-pool host is unreachable on a real device), the
-  // PWA falls back to DIRECT relay connections after 2 consecutive pool failures
-  // and keeps trying to restore pool mode in the background (relays.js
-  // `_fallbackToDirectConnections` / `_schedulePoolReconnectInBackground`). This
-  // ports that: it swaps `_pool` to a direct [RelayPool], replays every live
-  // subscription onto it (so channel / PM / gift-wrap feeds resume seamlessly),
-  // then periodically retries a fresh proxy and swaps back if it comes up.
-  // ---------------------------------------------------------------------------
+  // Proxy to direct fallback and background restore
 
-  /// Wire the active pool's [RelayPoolProxy.onProxyUnreachable] to the
-  /// fall-back-to-direct swap (no-op unless [_autoFallback] and the pool is a
-  /// proxy). Re-invoked whenever a new proxy is constructed (initial + restore).
+  /// Wires the proxy's unreachable signal to the direct fallback; re-run for each new proxy.
   void _wireProxyFallback() {
     if (!_autoFallback) return;
     final p = _pool;
@@ -938,8 +739,7 @@ class NostrService {
     }
   }
 
-  /// The proxy reported it can't reach its endpoint (2 consecutive pre-connect
-  /// failures). Swap to a direct [RelayPool] and start the background restore.
+  /// Proxy unreachable: swap to direct and start the background restore.
   void _onProxyUnreachable() {
     if (!_autoFallback || _poolFallbackActive) return;
     _poolFallbackActive = true;
@@ -951,34 +751,20 @@ class NostrService {
     unawaited(_swapToDirect(direct));
   }
 
-  /// Forward fallback: replace the proxy with the freshly-built direct [pool]
-  /// (not yet connected). Tears the old proxy's SOCKETS down (keeping the live
-  /// `Subscription` objects alive), connects [pool], and replays every active
-  /// subscription onto it so its `events` stream keeps flowing. Then arms the
-  /// background proxy-restore loop.
+  /// Replaces the proxy with [direct], replaying live subscriptions onto it, then arms the restore loop.
   Future<void> _swapToDirect(RelayPool direct) async {
     if (_swapping) return;
     _swapping = true;
     try {
       final old = _pool;
 
-      // Snapshot the live subscriptions from the OLD pool's registry. This
-      // captures BOTH service-created subs and any created directly via
-      // `service.pool.subscribe(...)` (e.g. the controller's P2P sub), because
-      // they all registered on the pool. Reuse the same `Subscription` objects
-      // so every existing `events.listen(...)` downstream keeps receiving.
+      // Snapshot every sub registered on the old pool and reuse the same objects so listeners keep receiving.
       final live = _activeSubsOf(old);
 
       // Detach the old pool's sockets without closing the subscriptions.
       await _detachSockets(old);
 
-      // Bring up the direct pool and replay every live subscription on it (same
-      // objects → same streams; the sub's dedup makes replay idempotent). The
-      // MAIN critical REQ is rebuilt instead of replayed: its filter set is
-      // mode-shaped (proxy+D1 → since:now/limit:1 collapse; direct → full 24h
-      // windows + author'd vouch/profile filters), so a verbatim replay would
-      // leave the direct relays serving the D1-collapsed live-only set with no
-      // D1 behind it to fill the history.
+      // Replay live subs on the direct pool, but rebuild the main REQ since its filters are mode-shaped.
       _pool = direct;
       direct.geoOriginAllows = geoOriginAllowsEvent;
       direct.connectAll();
@@ -988,9 +774,7 @@ class NostrService {
       }
       resubscribeMain();
 
-      // Re-establish geo-relay coverage on the new transport (direct mode opens
-      // a direct socket per geo url) so geohash channels keep working across the
-      // swap.
+      // Re-establish geo-relay coverage on the new transport.
       applyGeoRelays();
 
       // The mainSub object is unchanged, so _eventSub keeps routing inbound.
@@ -1014,7 +798,7 @@ class NostrService {
   Future<void> _detachSockets(PoolTransport p) async {
     if (p is RelayPoolProxy) {
       p.onProxyUnreachable =
-          null; // don't let a teardown close fire the trigger
+          null; // Don't let a teardown close fire the trigger.
       await p.disconnectSocketsOnly();
     } else if (p is RelayPool) {
       await p.disconnectSocketsOnly();
@@ -1023,9 +807,7 @@ class NostrService {
     }
   }
 
-  /// Background restore cadence, mirroring `_schedulePoolReconnectInBackground`
-  /// (relays.js:1610): first retry after 15s, then exponential backoff
-  /// `min(15000 * 2^min(n-1,4), 120000)` with 50–100% jitter.
+  /// Background restore: first retry after 15s, then `min(15000 * 2^min(n-1,4), 120000)` with 50–100% jitter.
   void _scheduleBgRestore() {
     if (!_autoFallback || !_poolFallbackActive) return;
     if (_bgRestoreInFlight) return;
@@ -1039,32 +821,28 @@ class NostrService {
   Duration _bgRestoreBackoff(int attempts) {
     final expIdx = min(attempts - 1, 4);
     final base = min(15000 * pow(2, expIdx).toInt(), 120000);
-    // 50–100% jitter (relays.js `_jitter`).
+    // 50–100% jitter.
     final jittered = (base * (0.5 + _bgRng.nextDouble() * 0.5)).floor();
     return Duration(milliseconds: jittered);
   }
 
   final Random _bgRng = Random();
 
-  /// Try a fresh [RelayPoolProxy] connect in the background; if it CONFIRMS
-  /// (reaches a connected POOL:STATUS), swap back to proxy mode. Otherwise the
-  /// probe's own unreachable trigger reschedules the next attempt.
+  /// Probes a fresh proxy; swaps back when it confirms, else its unreachable trigger reschedules.
   void _tryRestoreProxy() {
     _bgRestoreTimer = null;
     if (!_poolFallbackActive) return;
     _bgRestoreAttempts++;
     _bgRestoreInFlight = true;
 
-    // A short-lived probe proxy: if it confirms, we adopt it as the live pool
-    // (already connected) and replay subs onto it. If it can't reach the host
-    // (its own onProxyUnreachable fires), we discard it and back off.
+    // Short-lived probe: adopted if it confirms, discarded with backoff if not.
     late final RelayPoolProxy probe;
     probe = RelayPoolProxy(
       relays: _relays ?? RelayConfig.defaultRelays,
       dmRelays: RelayConfig.defaultRelays,
       verify: _verifyOffThread,
       onProxyUnreachable: () {
-        // Probe failed to reach the host — drop it and schedule the next try.
+        // Probe failed to reach the host: drop it and schedule the next try.
         _bgRestoreInFlight = false;
         unawaited(probe.disconnectAll());
         _scheduleBgRestore();
@@ -1079,17 +857,13 @@ class NostrService {
       }
       _bgRestoreInFlight = false;
       _bgRestoreAttempts = 0;
-      // The probe is already connected; swap WITHOUT re-running connectAll on it
-      // by handing it over as the live pool and replaying subs.
+      // The probe is already connected; adopt it without re-running connectAll.
       unawaited(_adoptRestoredProxy(probe));
     };
     probe.connectAll();
   }
 
-  /// Promote a probe proxy that has already confirmed connectivity to the live
-  /// transport: replay the direct pool's live subscriptions onto it and tear the
-  /// direct sockets down. (The probe is already connected, so unlike
-  /// [_swapToDirect] we do NOT call `connectAll` again — we replay directly.)
+  /// Promotes a confirmed probe proxy: replay live subs onto it and tear down the direct sockets.
   Future<void> _adoptRestoredProxy(RelayPoolProxy restored) async {
     if (_swapping || !_poolFallbackActive) {
       unawaited(restored.disconnectAll());
@@ -1102,19 +876,17 @@ class NostrService {
       await _detachSockets(old);
       _pool = restored;
       restored.geoOriginAllows = geoOriginAllowsEvent;
-      restored.onProxyUnreachable = _onProxyUnreachable; // future blips
+      restored.onProxyUnreachable = _onProxyUnreachable; // Future blips.
       _wireRetract(restored);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
         restored.replaySubscription(entry.sub, entry.filters);
       }
-      // Back on the proxy: rebuild the main REQ into its D1-collapsed shape
-      // (see _swapToDirect for the rationale).
+      // Back on the proxy: rebuild the main REQ into its D1 shape.
       resubscribeMain();
       _poolFallbackActive = false;
       _stopBgRestore();
-      // Re-shard the geo relays onto the restored proxy so geohash channels
-      // keep their geo coverage after swapping back.
+      // Re-shard the geo relays onto the restored proxy.
       applyGeoRelays();
       debugPrint('[NostrService] proxy restored; swapped direct → proxy '
           '(${live.length} subs replayed)');
@@ -1131,28 +903,19 @@ class NostrService {
     _bgRestoreAttempts = 0;
   }
 
-  /// Subscribes the active channel's typing/read-receipt feed (kinds 24420 /
-  /// 24421, `#g` for geohash channels). Closes any previous channel-typing sub.
-  /// (docs/specs/03 §1.4) Returns the [Subscription].
+  /// The active channel's typing/read-receipt subscription (kinds 24420/24421).
   Subscription? _channelTypingSub;
   String? _channelTypingKey;
   Subscription subscribeChannelTyping(String channelKey,
       {bool isGeohash = true}) {
-    // Dedup identity is (tag-kind, key) — a named channel whose name is a valid
-    // geohash string must NOT reuse the geohash sub, and vice versa. Only reuse
-    // the cached sub when it is STILL OPEN: after a proxy pool-swap or any close
-    // the old `Subscription` is dead, so returning it would silently stop the
-    // typing/receipt feed until the channel key changes.
+    // Key by tag kind and channel, and reuse the cached sub only while it is still open.
     final id = '${isGeohash ? 'g' : 'd'}:$channelKey';
     final cached = _channelTypingSub;
     if (_channelTypingKey == id && cached != null && !cached.isClosed) {
       return cached;
     }
     _channelTypingSub?.close();
-    // 1h window: ephemeral kinds aren't stored, but a live event whose
-    // created_at is slightly in the past (sender clock skew) must not be dropped
-    // by a relay applying `since` to the live stream — so keep a safe margin
-    // rather than the PWA's tighter `since: now` (relays.js:1430).
+    // 1h `since` margin so clock-skewed live events aren't dropped by relays.
     final since = DateTime.now().millisecondsSinceEpoch ~/ 1000 - 3600;
     final sub = pool.subscribe([
       NostrFilter(
@@ -1167,34 +930,15 @@ class NostrService {
     sub.eose.then((_) => null);
     _channelTypingSub = sub;
     _channelTypingKey = id;
-    // Route typing events through onEvent; cancellation handled on close.
+    // Typing events route through onEvent; cancellation is handled on close.
     s.onError((_) {});
     return sub;
   }
 
-  /// Cap on how long a one-shot announcement lookup waits before giving up and
-  /// letting the message go classical — which is the behavior that was there
-  /// before, not a new failure mode.
+  /// Max wait for a one-shot PQ announcement lookup before sending classically.
   static const Duration pqLookupTimeout = Duration(milliseconds: 2500);
 
-  /// Fetches one peer's post-quantum announcement now, rather than waiting for
-  /// the critical subscription to be rebuilt around them.
-  ///
-  /// That rebuild only happens once a PM conversation entry exists, and it is
-  /// debounced 750ms on top — but the entry for a brand new conversation is
-  /// not created until the first message has already been sent. So the key was
-  /// never in hand for the message that needed it, and the shield never
-  /// appeared on it.
-  ///
-  /// Events are routed through the normal [onEvent] handler, so the registry
-  /// ingests this exactly as it would a pushed announcement.
-  /// How long to keep listening after EOSE, when the key still has not
-  /// arrived. EOSE completes on a quorum of relays, not all of them, and the
-  /// relays that do NOT carry the announcement are the ones that answer
-  /// instantly — they have nothing to look up. So the quorum can be reached by
-  /// relays that have nothing while the one holding the key is still working,
-  /// and giving up there is how two users who had both published their keys
-  /// went on messaging each other classically.
+  /// Extra listening after EOSE, since the quorum may be reached by relays that lack the key.
   static const Duration pqEoseGrace = Duration(milliseconds: 600);
 
   Future<bool> fetchPqAnnouncement(String pubkey, {bool Function()? found}) async {
@@ -1212,12 +956,9 @@ class NostrService {
     final s = sub.events.listen((e) => _handlers?.onEvent?.call(e));
     try {
       await sub.eose.timeout(pqLookupTimeout, onTimeout: () => null);
-      // The relay sends EOSE after the stored event, but delivery of the event
-      // itself is a separate microtask; give it one turn to be ingested.
+      // The event may be delivered a microtask after EOSE; give it one turn.
       await Future<void>.delayed(Duration.zero);
-      // Then keep listening, briefly, for a relay that was slower than the
-      // quorum. Skipped the moment the key is in hand, so a lookup that
-      // succeeded does not sit out the grace period.
+      // Wait briefly for a slower relay, unless the key already arrived.
       if (found != null && !found()) {
         final deadline = DateTime.now().add(pqEoseGrace);
         while (!found() && DateTime.now().isBefore(deadline)) {
@@ -1233,15 +974,7 @@ class NostrService {
     return sub.answered;
   }
 
-  /// Adds ephemeral group pubkeys as additional `#p` gift-wrap subscriptions so
-  /// rotated-key group messages reach us. Best-effort; auto-managed by the
-  /// controller as keys rotate.
-  ///
-  /// [limit] / [since] mirror the PWA's filter split (`_refreshEphemeralSubscriptions`,
-  /// relays.js:2711-2721): under an API host the sub is real-time only
-  /// (`limit: 1` — D1 supplies the history), otherwise a 7-day `since` +
-  /// per-key limit pulls the relay backlog. The controller picks per its
-  /// storage-sync availability; both null keep the unbounded legacy filter.
+  /// Adds ephemeral group pubkeys as `#p` gift-wrap subs; [limit]/[since] choose live-only or 7-day backfill.
   Subscription subscribeEphemeral(
     List<String> ephemeralPubkeys, {
     int? limit,
@@ -1257,8 +990,7 @@ class NostrService {
     ]);
   }
 
-  /// Routes an inbound verified event: gift wraps are unwrapped + emitted via
-  /// [NostrHandlers.onGiftWrap]; everything else flows through [onEvent].
+  /// Routes a verified event: gift wraps are unwrapped to [NostrHandlers.onGiftWrap], all else to [onEvent].
   void _routeInbound(NostrEvent event) {
     if (_quiet.isNotEmpty &&
         (_quiet.contains(event.pubkey) || _quiet.contains(event.id))) {
@@ -1268,9 +1000,7 @@ class NostrService {
       unawaited(_handleGiftWrap(event));
       return;
     }
-    // Advance the self kind-0 watermark on our OWN inbound profiles
-    // (nostr-core.js:625-627) so the next [publishProfile] strictly outranks
-    // them — e.g. a kind-0 published from another device with clock skew.
+    // Advance the self kind-0 watermark so the next [publishProfile] outranks it.
     if (event.kind == EventKind.profile &&
         event.pubkey == identity.pubkey &&
         event.createdAt > _lastKind0Ts) {
@@ -1279,14 +1009,10 @@ class NostrService {
     _handlers?.onEvent?.call(event);
   }
 
-  /// Candidate secret keys for unwrap: our identity key plus any registered
-  /// ephemeral group keys.
-  /// How many ephemeral keys get paired with our ML-KEM epochs. The wrap's `p`
-  /// tag names the right one and [_orderedEphemeralSks] puts it first, so the
-  /// common case is one decapsulation; the spare covers a stale p tag.
+  /// Ephemeral keys paired with our ML-KEM epochs; the p-tag match comes first, the spare covers a stale tag.
   static const int _ephPqPairingLimit = 2;
 
-  /// Our ephemeral group secret keys with the one [wrap] is addressed to first.
+  /// Our ephemeral group secret keys, the one [wrap] is addressed to first.
   List<Uint8List> _orderedEphemeralSks(NostrEvent? wrap) {
     if (wrap == null || _ephemeralSks.length < 2) return _ephemeralSks;
     String? target;
@@ -1309,7 +1035,7 @@ class NostrService {
     return _ephemeralSks;
   }
 
-  /// The candidate list [_handleGiftWrap] builds, so tests drive the real one.
+  /// The candidate list [_handleGiftWrap] builds, exposed for tests.
   @visibleForTesting
   List<giftwrap.UnwrapCandidate> unwrapCandidatesForTest(NostrEvent? wrap) =>
       _candidates(wrap);
@@ -1318,22 +1044,13 @@ class NostrService {
     final out = <giftwrap.UnwrapCandidate>[];
     final sk = identity.privkey;
     if (sk != null) {
-      // Our identity key paired with each ML-KEM epoch, newest first, so a
-      // wrap sent just before a rotation still opens. These come first because
-      // unwrapGiftWrap picks the transport by inspecting the payload — a
-      // classical wrap simply falls through them to the classical candidate.
+      // Identity key paired with each ML-KEM epoch, newest first; classical wraps fall through to the classical candidate.
       for (final k in _pqSelfKeys) {
         out.add((sk: sk, bitchat: false, kemSk: k.kemSk, kemPk: k.kemPk));
       }
       out.add(giftwrap.classicalCandidate(sk, bitchat: true));
     }
-    // A group's post-quantum wrap uses two DIFFERENT keys: the classical leg
-    // goes to our rotating ephemeral secp key, the KEM leg to our long-lived
-    // identity ML-KEM key. Offered as separate candidates neither opens it —
-    // the pq2 branch skips a candidate with no KEM material, and the classical
-    // branch cannot read a pq2 payload — so every post-quantum group message
-    // was dropped. Pair them, p-tag match first and bounded, like the PWA's
-    // `pqUnwrapCandidates`.
+    // Group PQ wraps need the ephemeral secp key and identity ML-KEM key paired in one candidate.
     if (_pqSelfKeys.isNotEmpty) {
       for (final esk in _orderedEphemeralSks(wrap).take(_ephPqPairingLimit)) {
         for (final k in _pqSelfKeys) {
@@ -1351,16 +1068,14 @@ class NostrService {
     return out;
   }
 
-  /// Our ML-KEM keypairs (current epoch + a bounded window of previous ones),
-  /// supplied by the controller so rotated-key post-quantum wraps decrypt.
+  /// Our ML-KEM keypairs (current plus recent epochs), so rotated-key PQ wraps decrypt.
   List<({Uint8List kemSk, Uint8List kemPk})> _pqSelfKeys = const [];
 
   void setPqSelfKeys(List<({Uint8List kemSk, Uint8List kemPk})> keys) {
     _pqSelfKeys = List.unmodifiable(keys);
   }
 
-  /// Registered ephemeral secret keys (current + previous group keys) supplied
-  /// by the controller so rotated-key wraps can be decrypted.
+  /// Current and previous ephemeral group keys, so rotated-key wraps decrypt.
   final List<Uint8List> _ephemeralSks = [];
 
   void setEphemeralKeys(List<Uint8List> sks) {
@@ -1377,26 +1092,13 @@ class NostrService {
     _anonBotKeys = List.unmodifiable(keys);
   }
 
-  /// Unwraps a kind-1059 gift wrap restored from the D1 PM archive and routes it
-  /// through the normal [NostrHandlers.onGiftWrap] path (pms.js
-  /// `_pmRestoreD1Page` → `handleGiftWrapDM(ev, {fromD1:true})`). The controller's
-  /// session dedup keeps the archive upload a no-op for restored wraps, so the
-  /// same handler can be reused safely.
+  /// Unwraps a D1-archived wrap through the normal gift-wrap path, flagged as archive.
   void unwrapArchivedWrap(NostrEvent wrap) {
     if (wrap.kind != EventKind.giftWrap) return;
     unawaited(_handleGiftWrap(wrap, fromArchive: true));
   }
 
-  /// Unwraps a LIVE kind-1059 gift wrap that arrived on an auxiliary relay
-  /// subscription (the ephemeral group-key REQ, `_refreshEphemeralSubscriptions`)
-  /// through the SAME live path the main gift-wrap sub uses — i.e. `fromArchive:
-  /// false`, so a group message another member wrapped to our ephemeral key is
-  /// archived to D1, notified, and surfaced real-time exactly like a `#p:[self]`
-  /// wrap. This is NOT [unwrapArchivedWrap]: that flags the wrap `fromArchive`
-  /// and SKIPS the D1 archive (`_archiveGiftWrap`), which is correct only for
-  /// D1-replayed history — using it for live wraps means received group messages
-  /// are never persisted and vanish on relaunch. Mirrors the PWA, whose
-  /// ephemeral REQ feeds `handleGiftWrapDM` with `fromD1` unset (relays.js:2723).
+  /// Unwraps a live wrap from an auxiliary sub as live, so it is archived and notified (unlike [unwrapArchivedWrap]).
   void unwrapLiveWrap(NostrEvent wrap) {
     if (wrap.kind != EventKind.giftWrap) return;
     unawaited(_handleGiftWrap(wrap));
@@ -1406,21 +1108,14 @@ class NostrService {
       {bool fromArchive = false}) async {
     final handlers = _handlers;
     if (handlers?.onGiftWrap == null) return;
-    // Already unwrapped this process (a boot/resume archive replay, or the live
-    // wrap whose archived copy this is)? Skip the expensive ECDH+decrypt+verify
-    // — the produced rumor would only be discarded by the downstream id dedup.
+    // Already unwrapped this process: skip the costly unwrap.
     if (wrap.id.isNotEmpty && _processedWrapIds.contains(wrap.id)) return;
     final candidates = _candidates(wrap);
 
-    // Remote-signer (NIP-46) path: no local identity key is available, so the
-    // wrap addressed to *our* identity pubkey must be unwrapped via the remote
-    // `nip44_decrypt` RPC for both the wrap and the seal layers (the wrap is
-    // addressed to our identity key; the seal is between sender and us). Group
-    // ephemeral keys are still local and handled by [candidates] above.
+    // NIP-46: no local identity key, so self-addressed wraps unwrap via the remote `nip44_decrypt`.
     final sig = signer;
     if (sig != null && sig.isRemote && _isAddressedToSelf(wrap)) {
-      // Cap concurrent remote decrypts so a backfill burst can't flood the one
-      // signer socket (see [_remoteUnwrapGate]); gate only the RPC round-trips.
+      // Cap concurrent remote decrypts; gate only the RPC round-trips.
       await _remoteUnwrapGate.acquire();
       ({NostrEvent seal, Map<String, dynamic> rumor, bool isPq})? res;
       try {
@@ -1436,12 +1131,7 @@ class NostrService {
     }
 
     if (candidates.isEmpty) return;
-    // Local-key unwrap: per-DM ECDH + ChaCha20 + triple jsonDecode, looped over
-    // candidate keys. Bursts to ~1000 wraps on PM backfill, so run it off the
-    // main isolate via the shared crypto worker (the PWA's `crypto-pool.js`
-    // analog). The worker runs the SAME [giftwrap.unwrapGiftWrap] inside an
-    // isolate, preserving per-candidate try/next + the null-on-undecryptable
-    // skip, and falls back to the inline path on web / on isolate failure.
+    // Local-key unwrap runs in the crypto worker, falling back inline on web or failure.
     final res = await _cryptoWorker.unwrap(wrap, candidates);
     if (res == null) return;
 
@@ -1449,8 +1139,7 @@ class NostrService {
         fromArchive: fromArchive, isBitchat: res.isBitchat, isPq: res.isPq);
   }
 
-  /// True when [wrap] is addressed (`['p', …]`) to our identity pubkey (vs an
-  /// ephemeral group key). Used to gate the remote-decrypt path.
+  /// True when [wrap] is p-tagged to our identity pubkey rather than an ephemeral group key.
   bool _isAddressedToSelf(NostrEvent wrap) {
     final self = identity.pubkey;
     for (final t in wrap.tags) {
@@ -1459,19 +1148,7 @@ class NostrService {
     return false;
   }
 
-  /// Unwraps a self-addressed gift [wrap] via the signer's `nip44_decrypt`
-  /// (NIP-07 or NIP-46): decrypt the wrap content (sealed by the ephemeral wrap
-  /// key to our identity key), then the seal content. Returns null on any
-  /// failure, so the caller falls back to the local candidates.
-  ///
-  /// The layered format is what lets a signer take part at all. Its outer layer
-  /// needs only our own ML-KEM key — derived from the root, which this device
-  /// holds directly — and what is left inside is an ordinary NIP-44 payload the
-  /// signer decrypts as it always has. The combined format cannot be done here:
-  /// it mixes the raw ECDH output into the key, which no signer returns.
-  ///
-  /// [selfKem] is our decapsulation keypair, or null when this device holds no
-  /// root — in which case a layered wrap simply does not open here.
+  /// Unwraps a self-addressed wrap via the signer; layered PQ needs [selfKem] from the root; null on failure.
   Future<({NostrEvent seal, Map<String, dynamic> rumor, bool isPq})?>
       _unwrapRemote(
     NostrEvent wrap,
@@ -1479,8 +1156,7 @@ class NostrService {
     ({Uint8List kemSk, Uint8List kemPk})? selfKem,
   }) async {
     try {
-      // Both layers were sealed to the p-tag target: our identity key here,
-      // since this path only runs for self-addressed wraps.
+      // Both layers were sealed to our identity key on this path.
       final recipPk = identity.pubkey;
       var usedPq = false;
       Future<String> strip(String content, String senderPk) async {
@@ -1504,8 +1180,7 @@ class NostrService {
     }
   }
 
-  /// Verifies the seal authorship (NIP-59 sender auth) and emits the unwrapped
-  /// rumor through [handlers]. Shared by the local + remote unwrap paths.
+  /// Verifies NIP-59 seal authorship and emits the rumor; shared by local and remote paths.
   Future<void> _emitUnwrapped(
     NostrHandlers handlers,
     NostrEvent wrap,
@@ -1515,9 +1190,7 @@ class NostrService {
     bool isPq = false,
     bool fromArchive = false,
   }) async {
-    // We successfully decrypted this wrap — record its id so a later archive
-    // replay (boot/resume) skips re-unwrapping it. Recorded here (not gated on
-    // seal validity) so a known-forged wrap isn't re-checked every resume.
+    // Record the id once decrypted, even if the seal is forged, so replays skip it.
     _rememberProcessedWrap(wrap.id);
     final rumorPubkey = rumor['pubkey'] as String?;
     if (rumorPubkey == null || rumorPubkey.isEmpty) return;
@@ -1527,22 +1200,14 @@ class NostrService {
     var emitRumor = rumor;
     if (isBitchat) {
       senderVerified = false;
-      // bitchat-app PMs carry a `bitchat1:` BitchatPacket as the rumor content
-      // (NoisePayload TLV), not plain text. Decode it the way the PWA's
-      // `parseBitchatMessage` does so the actual message text reaches the UI;
-      // without this the message renders as the raw `bitchat1:…` blob.
-      // Non-message payloads (delivery/read receipts) are not rumors to show —
-      // drop them rather than ingesting a blank PM.
+      // Decode `bitchat1:` rumor content to text as the PWA does; drop receipt payloads.
       final decoded = _decodeBitchatRumor(rumor);
       if (decoded == null) return;
       emitRumor = decoded;
     } else {
-      // NIP-59 sender auth off the main isolate, batched with the live pool's
-      // verifier. During a PM/group D1 backfill this is up to ~1000 seal
-      // verifies (sha256 + BIP340) that used to run INLINE on the render thread.
-      // The cheap pubkey check stays inline so a mismatch short-circuits the hop.
+      // Batched off-main seal verification; the cheap pubkey check short-circuits first.
       if (seal.pubkey != rumorPubkey || !(await _verifier.verify(seal))) {
-        return; // forged
+        return; // Forged.
       }
     }
 
@@ -1558,13 +1223,7 @@ class NostrService {
     ));
   }
 
-  /// Normalizes a bitchat-app rumor for emission. When the rumor `content` is a
-  /// `bitchat1:` BitchatPacket it is decoded (PWA `parseBitchatMessage`): a
-  /// PRIVATE_MESSAGE yields a copy whose `content` is the decoded text (with the
-  /// bitchat message id added as an `['x', id]` tag for dedup/receipts when the
-  /// rumor lacks one); a receipt/other payload returns null so the caller drops
-  /// it instead of surfacing a blank message. A non-`bitchat1:` content (e.g. a
-  /// Nymchat rumor delivered over a bitchat wrap) is returned unchanged.
+  /// Decodes `bitchat1:` content to text (adding an `x` id tag if missing); null for receipts; other content unchanged.
   Map<String, dynamic>? _decodeBitchatRumor(Map<String, dynamic> rumor) {
     final content = rumor['content'];
     if (content is! String || !bitchat.isBitchatPacket(content)) return rumor;
@@ -1591,15 +1250,14 @@ class NostrService {
     return next;
   }
 
-  /// Requests recent kind-0 profiles for [pubkeys] (best-effort, auto-closing).
+  /// Requests recent kind-0s for [pubkeys]; best-effort, auto-closing.
   void fetchProfiles(List<String> pubkeys) {
     if (pubkeys.isEmpty) return;
     final sub = pool.subscribe([
       NostrFilter(
           kinds: [EventKind.profile], authors: pubkeys, limit: pubkeys.length),
     ]);
-    // Route through [_routeInbound] so a fetched SELF kind-0 also advances the
-    // profile-save watermark (nostr-core.js:625-627).
+    // Route through [_routeInbound] so a fetched self kind-0 advances the watermark.
     final s = sub.events.listen(_routeInbound);
     sub.eose.then((_) {
       s.cancel();
@@ -1607,8 +1265,7 @@ class NostrService {
     });
   }
 
-  /// Publishes a channel message (kind 20000/23333) per docs/specs/03 §2.2.
-  /// Returns the signed event (with its id) or null if the identity can't sign.
+  /// Publishes a kind 20000/23333 channel message; returns the signed event, or null if we can't sign.
   Future<NostrEvent?> publishChannelMessage({
     required String channelKey,
     required String content,
@@ -1617,28 +1274,16 @@ class NostrService {
     List<List<String>> emojiTags = const [],
     int powDifficulty = 0,
     EventSigner? signerOverride,
-    // Thread reply: the root message's event id. Emitted as a NIP-10 marked
-    // ['e', rootId, '', 'root'] tag so other clients still see a normal
-    // channel message while Nymchat groups it under its root (threads).
+    // Thread reply root id, emitted as a NIP-10 `['e', rootId, '', 'root']` tag.
     String? threadRoot,
-    // The mesh sender outbox replays a message the radio already carried, so it
-    // publishes with the ORIGINAL send time rather than the moment relays came
-    // back: history keeps its order, and the sender's own optimistic echo still
-    // reconciles (the channel ingest matches a placeholder within 60s of the
-    // event) however long the entry sat queued. Null = now, the normal send.
+    // Original send time for mesh outbox replays, keeping order and optimistic reconciliation; null = now.
     int? createdAtSec,
-    // Extra tags merged in verbatim — the outbox's `['nymmesh', <id>]`, which
-    // lets a peer who already received this over the radio drop the Nostr copy.
+    // Extra tags merged verbatim, e.g. the outbox's `['nymmesh', <id>]` for mesh dedup.
     List<List<String>> extraTags = const [],
-    // Return the SIGNED event without publishing it. Gateway mode hands that
-    // event to a peer who still has internet, so it must be byte-identical to
-    // what we would have published ourselves — same tags, same kind, same
-    // proof of work, same signature. The caller owns delivery from there.
+    // Return the signed event without publishing, byte-identical, for gateway mode.
     bool buildOnly = false,
   }) async {
-    // [signerOverride] is the pseudonymous-send path: a fresh per-message
-    // ephemeral key (publishMessagePseudonymous) so the message is unlinkable to
-    // the durable identity. Default = the logged-in signer.
+    // [signerOverride] is the pseudonymous path: a per-message ephemeral key.
     final sig = signerOverride ?? signer;
     if (sig == null) return null;
 
@@ -1650,9 +1295,7 @@ class NostrService {
     final nowMs =
         hasStamp ? createdAtSec * 1000 : DateTime.now().millisecondsSinceEpoch;
 
-    // The attestation badge binds to the key that signs the event, so a
-    // pseudonymous send (its own ephemeral key) carries none — and must not,
-    // or it would link the throwaway identity back to the durable one.
+    // No attestation badge on pseudonymous sends, or it would link the throwaway key.
     final badge = signerOverride == null ? attestBadge : null;
 
     final tags = <List<String>>[
@@ -1662,16 +1305,12 @@ class NostrService {
       if (badge != null && badge.isNotEmpty) ['nymattest', badge],
       if (threadRoot != null && threadRoot.isNotEmpty)
         ['e', threadRoot, '', 'root'],
-      // NIP-30: declare any custom emoji used in the message so other clients
-      // render them (messages.js `customEmojiTagsForContent`).
+      // NIP-30: declare custom emoji used in the message.
       ...emojiTags,
       ...extraTags,
     ];
 
-    // Channel messages carry the Nymchat NIP-13 PoW floor (and any higher user
-    // setting) — the self-attestation the web-of-trust uses to tell a Nymchat
-    // client from spam (PWA `max(userPow, nymchatPowFloor)`). Mined off the main
-    // thread, then signed by the (local or remote) signer.
+    // Mine at least the Nymchat PoW floor off the main thread, then sign.
     final difficulty =
         powDifficulty > kNymchatPowFloor ? powDifficulty : kNymchatPowFloor;
     final mined = await mineNonce(
@@ -1688,10 +1327,7 @@ class NostrService {
     eventProvenance.recordLocal(signed, 'THIS CLIENT');
     if (buildOnly) return signed;
 
-    // Geohash channel messages (kind 20000 with a `g` tag) route through
-    // GEO_EVENT so the proxy prioritizes the closest geo relays; the proxy
-    // falls back to a plain EVENT when no closest relays are known
-    // (relays.js `broadcastEvent`). Named channels publish plainly.
+    // Geohash messages use GEO_EVENT so the proxy prioritizes the closest geo relays.
     if (isGeo) {
       final closest =
           closestGeoRelays(geohash).map((r) => r.url).toList(growable: false);
@@ -1702,13 +1338,7 @@ class NostrService {
     return signed;
   }
 
-  /// Publishes a public channel reaction (kind 7) per docs/specs/03 §5.1.
-  /// Tags: `['e',messageId], ['p',targetPubkey], ['k',originalKind]` plus the
-  /// NIP-30 [emojiTags] for a custom `:shortcode:` reaction (reactions.js
-  /// :990-995/:1111-1117 spread `...customEmojiTagsForContent(emoji)` into
-  /// both the add and remove tag lists), a `['g',geohash]` (geohash channel)
-  /// or `['d',channel]` (named channel) tag, and `['action','remove']` when
-  /// [remove] is set. Returns the signed event.
+  /// Publishes a kind-7 channel reaction with `e`/`p`/`k`, NIP-30 emoji, channel `g`/`d`, and `action: remove` when [remove].
   Future<NostrEvent?> publishReaction({
     required String messageId,
     required String targetPubkey,
@@ -1727,12 +1357,10 @@ class NostrService {
       ['p', targetPubkey],
       ['k', originalKind],
       if (remove) ['action', 'remove'],
-      // NIP-30: declare the custom emoji so other clients can render the
-      // :shortcode: (emoji.js `customEmojiTagsForContent`).
+      // NIP-30: declare the custom emoji.
       ...emojiTags,
     ];
-    // Carry the channel id so the relay/D1 archive can key the reaction
-    // (reactions.js: geohash → ['g',gh]; else named → ['d',channel]).
+    // Carry the channel id so the relay/D1 archive can key the reaction.
     if (originalKind == '20000' && geohash != null && geohash.isNotEmpty) {
       tags.add(['g', geohash]);
     } else if (originalKind == '23333' &&
@@ -1753,8 +1381,7 @@ class NostrService {
     return signed;
   }
 
-  /// Publishes a kind-30078 poll-create or poll-vote event (already-built
-  /// [rumor] from [PollLogic]). Returns the signed event with its id.
+  /// Publishes a prebuilt kind-30078 poll create or vote.
   Future<NostrEvent?> publishPollEvent(UnsignedEvent rumor) async {
     final sig = signer;
     if (sig == null) return null;
@@ -1763,13 +1390,7 @@ class NostrService {
     return signed;
   }
 
-  /// Publishes our kind-30078 `nym-vouches` list (web-of-trust). Mirrors
-  /// nostr-core.js `publishNymchatVouches` (line 2645): a parameterized
-  /// replaceable event tagged `['d','nym-vouches'],['t','nym-vouches']` whose
-  /// content is the JSON array of pubkeys we've observed running Nymchat, so
-  /// other clients can expand their trust graph through us. No-op for an empty
-  /// list (the PWA returns early when `list.length === 0`). Returns the signed
-  /// event, or null when there's nothing to publish / no signer.
+  /// Publishes our kind-30078 `nym-vouches` list; no-op for an empty list.
   Future<NostrEvent?> publishVouches(List<String> vouchedPubkeys) async {
     final sig = signer;
     if (sig == null || vouchedPubkeys.isEmpty) return null;
@@ -1790,24 +1411,10 @@ class NostrService {
     return signed;
   }
 
-  /// created_at of the last `nym-pq` announcement we published, so a rapid
-  /// republish cannot tie on the second and be dropped by the relay's
-  /// replacement tie-break.
+  /// created_at of our last `nym-pq`, so a quick republish can't tie and be dropped.
   int _lastPqTs = 0;
 
-  /// Publishes our kind-30078 `nym-pq` announcement: the ML-KEM-768 public key
-  /// other Nymchat clients encapsulate to. Mirrors the PWA's
-  /// `publishPqAnnouncement` (js/modules/pq.js).
-  ///
-  /// The event's signature is what binds the KEM key to this Nostr identity —
-  /// an attacker cannot substitute their own without also forging a secp256k1
-  /// signature. The NIP-40 `expiration` tag lets relays drop a stale
-  /// announcement on their own, so a downgraded or abandoned device stops
-  /// attracting post-quantum messages it cannot read.
-  /// [kemPublicKey] is null for a Nymchat client that cannot or will not do
-  /// post-quantum; the announcement still goes out, because its presence is
-  /// what tells peers we run Nymchat.
-  /// [rootSeeded] marks the payload `v:2` + `src:"root"` (PQ-ROOT-SPEC §3).
+  /// Publishes our `nym-pq` ML-KEM key, signature-bound with a NIP-40 expiration; sent even without a key.
   Future<NostrEvent?> publishPqAnnouncement({
     required Uint8List? kemPublicKey,
     required int epoch,
@@ -1817,15 +1424,7 @@ class NostrService {
   }) async {
     final sig = signer;
     if (sig == null) return null;
-    // Kind 30078 is addressable (NIP-01): the relay keeps one event per
-    // (kind, pubkey, d-tag), so this replaces our previous announcement in
-    // place rather than adding a second one.
-    //
-    // Replacement is decided by created_at, and on a TIE the relay keeps the
-    // lexically-lower event id — so a republish landing in the same second as
-    // the last one can be silently dropped, leaving peers on a stale key. A
-    // key rotation immediately after a boot publish is exactly that case.
-    // Same monotonic floor [publishProfile] uses for kind 0.
+    // Addressable replace keeps the lower id on a created_at tie, so use a monotonic floor.
     final nowSec = max(
       DateTime.now().millisecondsSinceEpoch ~/ 1000,
       _lastPqTs + 1,
@@ -1856,20 +1455,10 @@ class NostrService {
     return signed;
   }
 
-  /// created_at of the newest self kind-0 we've published OR received
-  /// (nostr-core.js `_lastKind0Ts`, advanced at 148 on publish and 625-627 on
-  /// inbound): the monotonic floor for [publishProfile] timestamps.
+  /// created_at of our newest published or received self kind-0: the floor for [publishProfile].
   int _lastKind0Ts = 0;
 
-  /// Publishes a kind-0 profile metadata event with [content] (the JSON-encoded
-  /// profile object). Returns the signed event. (docs/specs/03 §Appendix A)
-  ///
-  /// The timestamp is the PWA's jittered-with-monotonic-floor value
-  /// (nostr-core.js:145-148): `max(randomNow(), _lastKind0Ts + 1)`, so every
-  /// saved kind-0 is strictly newer than the last one published or received
-  /// for self — a fast double-save can't tie on created_at (relays keep the
-  /// lexically-lower id on a tie, silently dropping the second edit), and a
-  /// slightly-future self kind-0 from another device can't out-rank this one.
+  /// Publishes kind 0 at `max(randomNow(), _lastKind0Ts + 1)`, so edits never tie or lose to skewed copies.
   Future<NostrEvent?> publishProfile(String content) async {
     final sig = signer;
     if (sig == null) return null;
@@ -1888,9 +1477,7 @@ class NostrService {
     return signed;
   }
 
-  /// Publishes a NIP-57 kind-9734 zap request (already-built [rumor] from
-  /// [ZapLogic.buildZapRequest]). Returns the signed event so the caller can
-  /// pass it to the LNURL callback's `nostr` param.
+  /// Publishes a prebuilt NIP-57 zap request and returns it for the LNURL `nostr` param.
   Future<NostrEvent?> publishZapRequest(UnsignedEvent rumor) async {
     final sig = signer;
     if (sig == null) return null;
@@ -1899,17 +1486,7 @@ class NostrService {
     return signed;
   }
 
-  /// Publishes OUR OWN signed kind-9735 zap-receipt for a CHANNEL message we
-  /// paid, so peers' (and the recipient's) live `#k`/`#p` subscriptions update
-  /// the zap badge in real time. Mirrors zaps.js `_publishOwnMessageZapEvent`
-  /// (line 1527): the LNURL provider's receipt carries no top-level `k` tag and
-  /// never matches those subs, so we mint a receipt that does. Tags:
-  /// `['e',messageId], ['p',recipientPubkey], ['k',originalKind],
-  /// ['bolt11',bolt11]` (+ `['g',geohash]` for a geohash channel, else
-  /// `['d',channel]` for a named channel), content `''`. For a geohash channel
-  /// it's additionally delivered to the closest geo relays (like
-  /// [publishChannelMessage]). Returns the signed event so the controller can
-  /// register its id (own-echo dedup) and route ingestion.
+  /// Mints our own kind-9735 receipt for a channel zap, with a `k` tag so live badge subscriptions match.
   Future<NostrEvent?> publishMessageZapReceipt({
     required String messageId,
     required String recipientPubkey,
@@ -1931,8 +1508,7 @@ class NostrService {
       ['p', recipientPubkey],
       ['k', originalKind],
       ['bolt11', bolt11],
-      // Carry the channel id so the relay/D1 archive can key the receipt
-      // (zaps.js: geohash → ['g',gh]; else named → ['d',channel]).
+      // Carry the channel id so the relay/D1 archive can key the receipt.
       if (isGeo)
         ['g', geohash]
       else if (originalKind == '${EventKind.namedChannel}' &&
@@ -1959,9 +1535,7 @@ class NostrService {
     return signed;
   }
 
-  /// Gift-wraps [rumor] to each of [recipients] (one wrap per recipient,
-  /// NIP-59) and publishes them. Used for private reactions / private zap
-  /// announcements / call signaling. Returns true if any wrap was published.
+  /// Gift-wraps [rumor] to each recipient and publishes; true if any wrap published.
   Future<bool> publishGiftWrappedRumor({
     required UnsignedEvent rumor,
     required List<String> recipients,
@@ -1986,27 +1560,9 @@ class NostrService {
     return any;
   }
 
-  // ---------------------------------------------------------------------------
-  // Gift-wrapped publish paths (PM / group / receipt / typing) + presence.
-  // ---------------------------------------------------------------------------
+  // Gift-wrapped publish paths and presence
 
-  /// Builds the signed kind-1059 gift wrap of [rumor] for [recipientPubkey],
-  /// choosing the off-thread worker for a [LocalSigner] and the remote-capable
-  /// async path for a NIP-46 signer.
-  ///
-  /// For a [LocalSigner] the whole wrap (seal + ephemeral wrap) is pure local
-  /// crypto, so it runs on the shared [_cryptoWorker] isolate (the PWA's
-  /// `crypto-pool.js` analog) — the worker generates the ephemeral wrap key
-  /// inside the isolate and runs the SAME `nip59Wrap`, producing a wrap
-  /// indistinguishable from the synchronous path. For a NIP-46 remote signer
-  /// the **seal** must round-trip the network (`nip44_encrypt` + `sign_event`),
-  /// so that path stays on [giftwrap.nip59WrapAsync] as before.
-  /// [recipientKemPublicKey], when non-null, makes the wrap hybrid. A local
-  /// signer hybridizes both layers; a remote one hybridizes the WRAP only,
-  /// because a signer returns a finished NIP-44 payload rather than a
-  /// conversation key and the seal has nowhere to mix the KEM secret in. The
-  /// wrap is the layer that matters — it is what a recorder stores, and
-  /// reaching the seal means breaking it first.
+  /// Builds a wrap: local keys in the crypto worker, NIP-46 via the async path; [recipientKemPublicKey] makes it hybrid.
   Future<NostrEvent?> _buildWrap(
     UnsignedEvent rumor,
     String recipientPubkey, {
@@ -2026,8 +1582,7 @@ class NostrService {
         layered: layered,
       );
     }
-    // Remote (NIP-46) signer: seal via the remote RPCs; the wrap layer uses a
-    // fresh local ephemeral key, which is ours, so it can still be hybrid.
+    // NIP-46: remote seal; the local ephemeral wrap layer can still be hybrid.
     return giftwrap.nip59WrapAsync(
       rumor: rumor,
       senderSigner: sig,
@@ -2038,13 +1593,7 @@ class NostrService {
     );
   }
 
-  /// Builds a signed kind-1059 **bitchat** gift wrap of [rumor] for
-  /// [recipientPubkey]. Both the seal and the wrap content are encrypted with
-  /// `encryptBitchat` (the `v2:` transport), so a bitchat-app peer can decrypt
-  /// our message. Bitchat sealing keys the seal content on the SENDER's local
-  /// key, so this is a local-key-only path — exactly like the PWA, whose
-  /// bitchat dual-send lives inside `if (this.privkey)` (pms.js:326). Returns
-  /// null for a remote (NIP-46) signer.
+  /// bitchat `v2:` gift wrap for bitchat peers; local keys only, null for NIP-46.
   Future<NostrEvent?> _buildBitchatWrap(
     UnsignedEvent rumor,
     String recipientPubkey, {
@@ -2060,8 +1609,7 @@ class NostrService {
     );
   }
 
-  /// Gift-wraps [rumor] to [recipientPubkey] (NIP-59) and publishes it. Returns
-  /// the wrap event, or null if we can't sign.
+  /// Gift-wraps [rumor] to [recipientPubkey] and publishes; null if we can't sign.
   Future<NostrEvent?> _wrapAndPublish(
     UnsignedEvent rumor,
     String recipientPubkey, {
@@ -2074,28 +1622,12 @@ class NostrService {
         recipientKemPublicKey: recipientKemPublicKey,
         layered: layered);
     if (wrap == null) return null;
-    // Gift wraps (kind 1059) publish via DM_EVENT so the proxy gives them
-    // priority to the default relays (relays.js `sendDMToRelays`). In direct
-    // mode this is a plain publish (the PoolTransport default).
+    // Gift wraps publish via DM_EVENT so the proxy prioritizes default relays.
     await pool.publishDm(wrap);
     return wrap;
   }
 
-  /// Publishes a NIP-17 PM rumor to the recipient AND a self-copy (so own
-  /// messages restore across devices). Honors TTL via [settings].
-  /// (docs/specs/03 §3.1–§3.2)
-  ///
-  /// Bitchat interop (PWA `sendNIP17PM`): each entry in [bitchatRumors] is
-  /// published as a parallel `bitchat1:`-encoded gift wrap so a bitchat-app peer
-  /// can decrypt us (sent for every peer whose signed announcement does not
-  /// prove they are running Nymchat). There is more than one only when the text
-  /// exceeds the 255 bytes bitchat allows in a TLV field and had to be split.
-  /// [sendNymWrap] gates the NIP-17 recipient wrap. `PqPmPlan` never clears it
-  /// any more — every recipient gets a Nymchat wrap, post-quantum or classical
-  /// — and it stays only so a caller with no recipient to reach (a self-copy)
-  /// can say so. The self-copy is ALWAYS NIP-17 so own messages restore across
-  /// devices, and only NIP-17 wraps are reported via [onWrap] for D1
-  /// archive/deposit — the PWA never deposits bitchat wraps (relay-only).
+  /// Publishes a NIP-17 PM and a self-copy, plus bitchat wraps for non-Nymchat peers; only NIP-17 wraps reach [onWrap].
   Future<bool> publishPM({
     required UnsignedEvent rumor,
     required String recipientPubkey,
@@ -2112,15 +1644,7 @@ class NostrService {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final expiration = settings.expirationFor(nowSec);
 
-    // bitchat-format wrap for a known-bitchat / unknown peer. Relay-only (NOT
-    // passed to [onWrap], so never deposited to D1 — the PWA deposits only the
-    // nym wrap). Skipped for a self-copy and for remote signers (bitchat sealing
-    // needs a local key).
-    //
-    // NO expiration on this one. Bitchat 1.7.1 checks the gift wrap's tags are
-    // EXACTLY [["p", recipient]] and rejects the DM outright otherwise, so a
-    // NIP-40 tag here made every message undeliverable to Bitchat for anyone
-    // with disappearing messages switched on. The PWA has never sent one.
+    // bitchat wrap: relay-only, never deposited, and no expiration tag since bitchat rejects extra tags.
     if (bitchatRumors.isNotEmpty && recipientPubkey != identity.pubkey) {
       for (final r in bitchatRumors) {
         final bwrap = await _buildBitchatWrap(r, recipientPubkey);
@@ -2128,11 +1652,7 @@ class NostrService {
       }
     }
 
-    // Report each produced NIP-17 wrap so the controller can archive/deposit at
-    // SEND time like the PWA (`_depositPMEvent(nymWrapped)` + `_archivePMEvent(
-    // selfWrapped)`, pms.js:365-378) — without the deposit an offline peer
-    // never receives the wrap at all in pool mode (relays carry no history;
-    // their next `pm-get` restore is the only delivery path).
+    // Report NIP-17 wraps for archive and deposit at send time; deposit is an offline peer's only delivery in pool mode.
     if (sendNymWrap) {
       final recipientWrap = await _wrapAndPublish(rumor, recipientPubkey,
           expiration: expiration,
@@ -2141,8 +1661,7 @@ class NostrService {
       if (recipientWrap != null) onWrap?.call(recipientWrap);
     }
     if (recipientPubkey != identity.pubkey) {
-      // Post-quantum whenever we are, or the archive becomes the weakest
-      // link. Opened by any device holding the root.
+      // Self-copy is post-quantum whenever we are, so the archive isn't the weak link.
       final selfWrap = await _wrapAndPublish(rumor, identity.pubkey,
           expiration: expiration,
           recipientKemPublicKey: selfKemPublicKey,
@@ -2152,26 +1671,7 @@ class NostrService {
     return true;
   }
 
-  /// Publishes a group rumor: one gift wrap per [recipients], each encrypted to
-  /// the supplied per-member [encryptTo] pubkey (ephemeral when known).
-  /// (docs/specs/03 §4.3)
-  /// [kemKeyFor], when supplied, returns the member's announced ML-KEM key or
-  /// null. Because each member already gets an independent wrap, a group can
-  /// mix post-quantum and classical recipients with no protocol change and no
-  /// negotiation — which is what keeps mixed Nymchat/Bitchat groups working.
-  ///
-  /// The two legs use different keys on purpose: the classical ECDH goes to the
-  /// member's rotating ephemeral pubkey (via [encryptTo]), keeping the metadata
-  /// protection that rotation buys, while the KEM leg encapsulates to their
-  /// long-lived identity ML-KEM key. Security is max(classical, PQ), so the
-  /// rotation still delivers its forward secrecy against classical attackers
-  /// while the KEM leg delivers harvest-now-decrypt-later protection.
-  ///
-  /// Returns the post-quantum coverage of the fan-out via [onCoverage]: a group
-  /// message counts as protected only when EVERY member got a post-quantum
-  /// wrap, since one classical copy of the same plaintext is enough for an
-  /// attacker. `rootCount` is how many of those wraps went to a root-seeded
-  /// key — full coverage under legacy keys is not the same guarantee.
+  /// One wrap per member: classical leg to [encryptTo], KEM leg to their identity key; [onCoverage] reports PQ coverage.
   Future<bool> publishGroupMessage({
     required UnsignedEvent rumor,
     required List<String> recipients,
@@ -2195,20 +1695,12 @@ class NostrService {
         ? _pqTarget(pk).layered
         : (layeredFor?.call(pk) ?? false);
 
-    // Group fan-out is the worst multiplier — one full wrap (ECDH + sign) per
-    // recipient, right on the send tap. For a local key, ship the WHOLE
-    // recipient list to the worker in a single isolate hop (loop runs inside the
-    // isolate, one ephemeral key per recipient), then publish each result. The
-    // remote (NIP-46) path can't batch (each seal is a network RPC), so it keeps
-    // the per-recipient loop.
+    // Local key: wrap the whole recipient list in one isolate hop; NIP-46 loops per recipient.
     if (sig is LocalSigner) {
       final targets = [for (final pk in recipients) encryptTo(pk)];
-      // Keyed by the ENCRYPTION target (the ephemeral pubkey), because that is
-      // what wrapMany looks jobs up by — while the key itself comes from the
-      // member's real pubkey, which is what published the announcement.
+      // Keyed by encryption target, as wrapMany looks jobs up; the key comes from the real pubkey.
       final kemByTarget = <String, Uint8List>{};
-      // Keyed by the same encryption target as kemByTarget, since that is what
-      // wrapMany looks jobs up by.
+      // Keyed by encryption target, as wrapMany looks jobs up.
       final layeredTargets = <String>{};
       var pqCount = 0;
       var rootCount = 0;
@@ -2243,10 +1735,7 @@ class NostrService {
       return true;
     }
 
-    // Remote (NIP-46) signer: the seal goes through the signer and cannot be
-    // hybrid, but the wrap's ephemeral key is ours, so it still can be — and
-    // the wrap is the layer a recorder stores. Coverage is counted the same
-    // way, since the protection against that threat is the same.
+    // NIP-46: the seal can't be hybrid, but the wrap can; coverage counts the same.
     var remotePq = 0;
     var remoteRoot = 0;
     for (final pk in recipients) {
@@ -2265,8 +1754,7 @@ class NostrService {
     return true;
   }
 
-  /// Publishes a gift-wrapped delivery/read receipt (kind 69420) for
-  /// [messageId] to [recipientPubkey]. (docs/specs/03 §10)
+  /// Publishes a gift-wrapped kind-69420 delivery/read receipt.
   Future<bool> publishReceipt({
     String? messageId,
     List<String>? messageIds,
@@ -2294,8 +1782,7 @@ class NostrService {
     return wrap != null;
   }
 
-  /// Publishes a gift-wrapped typing indicator (kind 69420) to each recipient.
-  /// [groupId] is set for group typing (adds a `['g', …]` tag).
+  /// Publishes a gift-wrapped kind-69420 typing indicator; [groupId] adds a `g` tag.
   Future<bool> publishTyping({
     required String status, // 'start' | 'stop'
     required List<String> recipients,
@@ -2330,10 +1817,7 @@ class NostrService {
     return any;
   }
 
-  /// Publishes a public channel typing indicator (kind 24420). The channel wire
-  /// tag is `['g', channelKey]` for a geohash channel and `['d', channelKey]`
-  /// for a named channel (e.g. `#nymchat`), mirroring the PWA's
-  /// `channelWire(channelKey)` (docs/specs/03 §10).
+  /// Publishes a kind-24420 channel typing indicator with the channel `g`/`d` tag.
   Future<NostrEvent?> publishChannelTyping({
     required String status,
     required String channelKey,
@@ -2360,12 +1844,7 @@ class NostrService {
     return signed;
   }
 
-  /// Publishes a public channel read receipt (kind 24421) for [messageId] by
-  /// [authorPubkey] in [channelKey]. Mirrors the PWA's `sendChannelReadReceipt`
-  /// (nostr-core.js): tags are `['e', messageId]`, `['p', authorPubkey]`, the
-  /// channel wire tag (`['g', channelKey]` geohash / `['d', channelKey]` named),
-  /// and `['n', nym]`. Ephemeral kind — relays don't store it, so it's
-  /// fire-and-forget. Returns the signed event (null when there is no signer).
+  /// Publishes a fire-and-forget kind-24421 channel read receipt; null without a signer.
   Future<NostrEvent?> publishChannelReceipt({
     required String messageId,
     required String authorPubkey,
@@ -2394,18 +1873,7 @@ class NostrService {
     return signed;
   }
 
-  /// Publishes a kind-30078 nym-presence event. (docs/specs/03 §2.5,
-  /// nostr-core.js `publishPresence`).
-  ///
-  /// [status] is the caller's real status (`online`/`away`/`hidden`); the
-  /// *public* status actually broadcast is computed by [PresencePayload] from
-  /// [mode]: only the `enabled` mode broadcasts the real status, otherwise
-  /// `hidden` goes out so non-friends see nothing (PWA: `publicStatus`).
-  ///
-  /// [avatarUrl] mirrors `publishAvatarUpdate` and [shopUpdate] mirrors
-  /// `publishShopUpdate` (the bare `['shop-update','1']` cache-bust flag);
-  /// combining them in one event matches the PWA's single-replaceable-event
-  /// shape (all share `['d','nym-presence']`).
+  /// Publishes kind-30078 presence; [mode] decides whether the real [status] or `hidden` goes public.
   Future<NostrEvent?> publishPresence({
     required String status, // 'online' | 'away' | 'hidden'
     required String nym,
@@ -2438,13 +1906,9 @@ class NostrService {
     return signed;
   }
 
-  /// Friends-only private presence (nostr-core.js `_sendFriendPresence`):
-  /// gift-wraps a kind-25054 presence rumor (carrying the *real* [status]) to
-  /// each friend so only they can read it, while the public kind-30078 stays
-  /// `hidden`. [recipients] is the friend pubkey set (the controller filters out
-  /// self / empties). Returns true if any wrap was published.
+  /// Gift-wraps a kind-25054 real-status rumor to each friend; true if any wrap published.
   Future<bool> sendFriendPresence({
-    required String status, // real status: 'online' | 'away'
+    required String status, // Real status: 'online' | 'away'.
     required String nym,
     required List<String> recipients,
     String awayMessage = '',
@@ -2473,21 +1937,7 @@ class NostrService {
     return any;
   }
 
-  /// Publishes one settings category as a self-addressed NIP-59 `nym-sync`
-  /// gift wrap (`_publishWrappedNostrEvent`, settings.js:599-663): an unsigned
-  /// kind-30078 rumor tagged `['d', dTag]` whose content is the payload JSON,
-  /// sealed (kind 13) to self through the active signer (so a NIP-46 remote
-  /// signer works, mirroring the PWA's extension/NIP-46 branch), then wrapped
-  /// (kind 1059) by a fresh ephemeral key with the outer tags
-  /// `['p', self], ['d', sha256('<pubkey>:<dTag>')], ['k','nym-sync']` — relays
-  /// only ever see the opaque per-account digest (`_syncOuterDTag`,
-  /// settings.js:177-184).
-  ///
-  /// Size guards match the PWA byte-for-byte: a rumor or seal whose JSON
-  /// exceeds the 65535-byte NIP-44 plaintext limit, or a final `["EVENT",…]`
-  /// frame over 65000 chars (`_sendWrappedIfFits`, settings.js:590-596), skips
-  /// the publish. The wrap goes out via the DM path (`sendDMToRelays`).
-  /// Returns the wrap event, or null when skipped / unsignable.
+  /// Publishes a settings category as a self-addressed `nym-sync` wrap; null if oversized or unsignable.
   Future<NostrEvent?> publishNymSyncWrap({
     required Map<String, dynamic> payload,
     required String dTag,
@@ -2498,8 +1948,7 @@ class NostrService {
     final self = identity.pubkey;
     final now = createdAt ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-    // Inner rumor: kind 30078, real created_at, id computed, no sig
-    // (settings.js:604-611).
+    // Inner rumor: kind 30078, real created_at, id computed, no sig.
     final rumorTags = [
       ['d', dTag],
     ];
@@ -2523,19 +1972,7 @@ class NostrService {
 
     final outerD = sha256.convert(utf8.encode('$self:$dTag')).toString();
 
-    // Builds both layers with whichever encryption is in play. Null when the
-    // sealed plaintext outgrows what NIP-44 can carry, or the frame outgrows
-    // what relays take.
-    //
-    // The construction runs OFF the main isolate wherever the keys allow it
-    // (see nym_sync_builder.dart — a CPU profile showed these publishes as
-    // the dominant recurring main-isolate cost during catch-up):
-    //  * a LOCAL key builds BOTH layers in one `compute` hop;
-    //  * a remote signer (NIP-46/extension) produces the inner NIP-44 and the
-    //    seal signature remotely as before, and only the WRAP layer — which
-    //    is keyed by a throwaway key generated here, never the identity key —
-    //    hops to the isolate.
-    // Any isolate failure falls back to the same construction inline.
+    // Builds both layers, off-isolate where keys allow (whole thing for local keys, wrap only for signers); null if oversized.
     Future<NostrEvent?> build(
       Future<String> Function(String plaintext) seal,
       Uint8List? wrapKemPk,
@@ -2568,25 +2005,10 @@ class NostrService {
       return json == null ? null : NostrEvent.fromJson(json);
     }
 
-    // Settings are a self-addressed gift wrap like any other, and they carry
-    // more about a user than most single messages do — the conversation list,
-    // the group keys, the history categories. Left classical they would be the
-    // weakest thing on the relay: readable by anyone who breaks secp256k1,
-    // regardless of how carefully the messages themselves were sealed.
-    //
-    // The LAYERED format, so a signer login is not excluded: the outer layer
-    // is keyed from the KEM secret alone and the inner NIP-44 is produced by
-    // whatever holds the identity key. This used to call pqEncrypt, the
-    // combined format, which needs the raw ECDH output and therefore a local
-    // nsec — so extension and NIP-46 accounts silently kept their settings,
-    // conversation list and group keys on classical encryption.
+    // Layered PQ so signer logins get it too; settings carry more than most single messages.
     final selfKem = _pqSelfKeys.isEmpty ? null : _pqSelfKeys.first;
 
-    // LOCAL key: hand the WHOLE construction (inner NIP-44, pq2 layers,
-    // ML-KEM, both signatures, both size gates — including the hybrid →
-    // classical fallback) to one compute hop. Same output contract as the
-    // inline path below, which remains the remote-signer path and the
-    // fallback if the isolate hop fails.
+    // Local key: one compute hop for the whole construction, with the inline path as fallback.
     if (sig is LocalSigner) {
       try {
         final job = <String, dynamic>{
@@ -2604,93 +2026,66 @@ class NostrService {
         await pool.publishDm(wrapped);
         return wrapped;
       } catch (_) {
-        // Isolate failure — build inline below instead.
+        // Isolate failure: build inline below instead.
       }
     }
 
     if (selfKem != null) {
       final wrapped = await build(
-        // Outer seal: the signer (or the local key) produces the inner NIP-44.
+        // Outer seal: the signer or local key produces the inner NIP-44.
         (pt) async => pq.pq2Seal(
             await sig.nip44Encrypt(self, pt), self, self, selfKem.kemPk),
-        // The wrap layer is ours by construction — a throwaway key generated
-        // in the isolate — so it never needs the signer.
+        // The wrap layer uses a throwaway key, so it never needs the signer.
         selfKem.kemPk,
       );
       if (wrapped != null) {
         await pool.publishDm(wrapped);
         return wrapped;
       }
-      // The hybrid costs ~1.5 KB a layer for the KEM ciphertext, which a
-      // category already close to the relay cap cannot absorb. Losing the sync
-      // entirely would be a worse trade than losing the post-quantum layer, so
-      // an oversized one falls back rather than going unpublished.
+      // An oversized hybrid falls back to classical rather than going unpublished.
     }
 
     final wrapped = await build(
       (pt) => sig.nip44Encrypt(self, pt),
-      null, // classical wrap layer
+      null, // Classical wrap layer.
     );
     if (wrapped == null) return null;
     await pool.publishDm(wrapped);
     return wrapped;
   }
 
-  // ---------------------------------------------------------------------------
-  // Geo relays (spec §4.7 / relays.js fetchGeoRelays + getClosestRelaysForGeohash)
-  // ---------------------------------------------------------------------------
+  // Geo relays
 
-  /// The bitchat geo-relay CSV (same source the proxy mirrors). Used as a
-  /// fallback when the proxy `geo-relays` action is unavailable.
+  /// bitchat geo-relay CSV, the fallback when the proxy `geo-relays` action is unavailable.
   static const String geoRelayCsvUrl =
       'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
 
-  /// The validator-gated copy inside the bitchat repo that bitchat iOS reads
-  /// (`GeoRelayDirectory.swift` remoteURL). Distinct from [geoRelayCsvUrl],
-  /// which bitchat-android still reads — the two directories have diverged.
+  /// Validator-gated copy that bitchat iOS reads, diverged from [geoRelayCsvUrl].
   static const String geoRelayVettedCsvUrl =
       'https://raw.githubusercontent.com/permissionlesstech/bitchat/refs/heads/main/relays/online_relays_gps.csv';
 
-  /// The upstream directory (bitchat-android's) and the vetted one (iOS's),
-  /// kept apart because selection applies each client's own rule.
+  /// Upstream (Android) and vetted (iOS) directories, kept apart since each client selects by its own rule.
   final List<GeoRelay> _geoRelaysUpstream = [];
   final List<GeoRelay> _geoRelaysVetted = [];
 
-  /// All geo relays loaded so far (lazily fetched).
+  /// All geo relays loaded so far.
   final List<GeoRelay> geoRelays = [];
 
-  /// Geo relays for the geohash channels the user has actually entered. In
-  /// low-data mode these are the ONLY geo relays sharded onto the pool (the full
-  /// list is skipped); otherwise they're prepended to the full list for priority.
-  /// Mirrors the PWA's `currentGeoRelays` (relays.js:205).
+  /// Geo relays for entered geohash channels: the only ones in low-data mode, else prioritized.
   final Set<String> currentGeoRelays = <String>{};
 
-  /// Low-Data Mode: when true the pool only carries defaults + DM relays + the
-  /// [currentGeoRelays] for entered channels (geo relays load on demand);
-  /// otherwise every geo relay is sharded onto the pool up front. Mirrors
-  /// `settings.lowDataMode` (relays.js:1907/1978). Set by the controller from
-  /// the live setting via [setLowDataMode]; defaults to false (the PWA default).
+  /// Low-data mode: shard only defaults, DM relays and [currentGeoRelays]; set via [setLowDataMode].
   bool lowDataMode = false;
 
-  /// Applies a Low Data Mode change (`applyLowDataMode`, relays.js:350-399;
-  /// invoked by the PWA on every settings save / toggle flip, app.js:3989 and
-  /// :7268). Enabling collapses the relay set to the 5 defaults + DM relays +
-  /// the entered channels' on-demand geo relays (in pool mode
-  /// `_poolSendRelayConfig` respects lowDataMode — here [applyGeoRelays] does,
-  /// via [_geoRelayUrlsForPool]); disabling fetches the full geo-relay list if
-  /// needed and re-shards everything back on. Call once at boot with the
-  /// persisted setting (before/after [start] both work) and again on every
-  /// flip. No-op when the mode is unchanged.
+  /// Applies a low-data mode change, collapsing or restoring geo-relay coverage; no-op when unchanged.
   Future<void> setLowDataMode(bool enabled) async {
     if (lowDataMode == enabled) return;
     lowDataMode = enabled;
     if (enabled) {
-      // Keep only the current channels' geo relays sharded
-      // (relays.js:352-368).
+      // Keep only the current channels' geo relays sharded.
       applyGeoRelays();
     } else {
-      // Reconnect the full broadcast + geo relay coverage
-      // (relays.js:371-399).
+      // Reconnect the full geo relay coverage.
       await loadAndApplyGeoRelays();
     }
   }
@@ -2698,16 +2093,10 @@ class NostrService {
   /// SharedPreferences key for the persisted geo-relay directory.
   static const String geoRelayCacheKey = 'nym_geo_relays';
 
-  /// How long a cached directory is used before we look for changes. Matches
-  /// bitchat on both platforms: iOS `geoRelayFetchIntervalSeconds`
-  /// (TransportConfig.swift) and Android `ONE_DAY_MS` (RelayDirectory.kt) are
-  /// both 24h. The directory changes rarely, and refetching it on every cold
-  /// start costs a round trip before geohash channels can be joined.
+  /// Cached directory lifetime, 24h like bitchat on both platforms.
   static const Duration geoRelayCacheTtl = Duration(hours: 24);
 
-  /// Reads the persisted directory. Returns null when absent or unusable —
-  /// never merely because it is stale, so a failed refresh can still fall back
-  /// to it.
+  /// Decodes the persisted directory; null only when absent or unusable, never merely stale.
   static List<GeoRelay> _decodeGeoRelayList(Object? raw) {
     if (raw is! List) return const [];
     final out = <GeoRelay>[];
@@ -2761,25 +2150,18 @@ class NostrService {
         }),
       );
     } catch (_) {
-      // Storage unavailable — the in-memory directory still works this session.
+      // Storage unavailable: the in-memory directory still works this session.
     }
   }
 
-  /// Fetches the geo relay list via the API proxy (`action=geo-relays`),
-  /// falling back to a direct CSV fetch+parse. Caches into [geoRelays].
-  ///
-  /// A directory persisted within [geoRelayCacheTtl] is adopted WITHOUT any
-  /// network call, so a cold start or reconnect works from disk. Pass
-  /// [force] to check for changes regardless of age.
+  /// Fetches geo relays via the proxy, else the CSV; a fresh cached directory skips the network unless [force].
   Future<List<GeoRelay>> fetchGeoRelays({
     Future<String> Function(Uri url)? csvFetcher,
     bool force = false,
   }) async {
     final cached = await _loadGeoRelayCache();
     if (cached != null) {
-      // Adopt the cached lists either way: fresh, this is the whole operation;
-      // stale, they keep geohash channels working while the refresh is in
-      // flight and remain the fallback if that refresh fails.
+      // Adopt the cache either way; if stale it covers the refresh and its failure.
       _adoptGeoRelays(cached.relays, cached.vetted);
       final age = DateTime.now().difference(cached.fetchedAt);
       if (!force && !age.isNegative && age < geoRelayCacheTtl) {
@@ -2789,8 +2171,7 @@ class NostrService {
 
     var dirs = await _apiClient.geoRelayDirectories();
     if (dirs.upstream.isEmpty && csvFetcher != null) {
-      // Direct fallback. The vetted list is best-effort: without it we still
-      // match bitchat-android, which is what this did before.
+      // Direct fallback; the vetted list is best-effort.
       try {
         final csv = await csvFetcher(Uri.parse(geoRelayCsvUrl));
         var vetted = const <GeoRelay>[];
@@ -2798,11 +2179,11 @@ class NostrService {
           vetted = parseGeoRelaysCsv(
               await csvFetcher(Uri.parse(geoRelayVettedCsvUrl)));
         } catch (_) {
-          // additive only
+          // Additive only.
         }
         dirs = (upstream: parseGeoRelaysCsv(csv), vetted: vetted);
       } catch (_) {
-        // keep whatever we have
+        // Keep whatever we have.
       }
     }
     if (dirs.upstream.isNotEmpty) {
@@ -2812,9 +2193,7 @@ class NostrService {
     return geoRelays;
   }
 
-  /// Installs both directories. [geoRelays] becomes their UNION so pool
-  /// sharding covers everything either names; the two stay separate because
-  /// selection applies each client's own rule (see [closestGeoRelays]).
+  /// Installs both directories; [geoRelays] is their union for sharding.
   void _adoptGeoRelays(List<GeoRelay> upstream, List<GeoRelay> vetted) {
     _geoRelaysUpstream
       ..clear()
@@ -2834,17 +2213,14 @@ class NostrService {
       ..addAll(byUrl.values);
   }
 
-  /// The geo-relay url list to shard onto the pool right now, mirroring
-  /// `_computeExpectedShards` (relays.js:1905): in low-data mode only the
-  /// [currentGeoRelays] for entered channels; otherwise every fetched geo relay
-  /// with the current ones prepended for priority.
+  /// Geo relay urls to shard: current ones only in low-data mode, else all with current first.
   List<String> _geoRelayUrlsForPool() {
     if (lowDataMode) return currentGeoRelays.toList();
     final urls = <String>[
       for (final r in geoRelays) r.url,
     ];
     final seen = urls.toSet();
-    // Prepend the entered-channel geo relays (priority), de-duped.
+    // Prepend the entered-channel geo relays, deduped.
     for (final url in currentGeoRelays) {
       if (!seen.contains(url)) {
         urls.insert(0, url);
@@ -2854,17 +2230,10 @@ class NostrService {
     return urls;
   }
 
-  /// Push the current geo-relay set onto the live pool so geohash-channel
-  /// subscriptions reach the closest geo relays (proxy: geo shards; direct:
-  /// direct geo sockets). Safe to call repeatedly — the pool reconciles only
-  /// the delta. Mirrors `_poolSendRelayConfig()` (relays.js:212/355).
+  /// Pushes the current geo-relay set onto the live pool; the pool reconciles only the delta.
   void applyGeoRelays() => pool.updateGeoRelays(_geoRelayUrlsForPool());
 
-  /// Fetch the geo-relay list (if not already loaded) and shard it onto the
-  /// live pool. Call once after [start] connects so geohash channels work from
-  /// the first entry. No-op in low-data mode (geo relays load on channel entry
-  /// via [connectGeoRelaysForGeohash]). Mirrors the PWA loading `_geoRelaysReady`
-  /// then `_poolSendRelayConfig` once the list arrives.
+  /// Fetches and shards geo relays once after [start]; no-op in low-data mode.
   Future<void> loadAndApplyGeoRelays({
     Future<String> Function(Uri url)? csvFetcher,
   }) async {
@@ -2874,17 +2243,11 @@ class NostrService {
     if (!lowDataMode) applyGeoRelays();
   }
 
-  /// Entering a geohash channel: pick the [RelayConfig.geoRelayCount] closest
-  /// geo relays, mark them current, and shard them onto the live pool so the
-  /// channel's subscription is delivered to them. Fetches the geo-relay list
-  /// first if needed. Faithful port of `connectToGeoRelays` (relays.js:179).
+  /// Entering a geohash channel: mark the closest geo relays current and shard them onto the pool.
   Future<void> connectGeoRelaysForGeohash(String geohash,
       {Future<String> Function(Uri url)? csvFetcher}) async {
     if (geohash.isEmpty) return;
-    // Skip geo-relay connections in group-chat/PM-only mode, exactly like the
-    // PWA (`if (this.settings.groupChatPMOnlyMode) return`, relays.js:185).
-    // `_channelMode` mirrors `!groupChatPMOnlyMode`, so no channel filters are
-    // in the critical REQ anyway — connecting geo relays would just be waste.
+    // Skip in group-chat/PM-only mode, as the PWA does.
     if (!_channelMode) return;
     if (geoRelays.isEmpty) {
       await fetchGeoRelays(csvFetcher: csvFetcher);
@@ -2895,29 +2258,16 @@ class NostrService {
     for (final r in closest) {
       if (currentGeoRelays.add(r.url)) changed = true;
     }
-    // Re-shard whenever the channel introduced a new geo relay (or always in
-    // low-data mode, where the pool otherwise carries no geo relays).
+    // Re-shard when a new geo relay was introduced, or always in low-data mode.
     if (changed || lowDataMode) applyGeoRelays();
   }
 
-  // --- Geo-relay keep-alive (relays.js `startGeoRelayKeepAlive`, 135-176) -----
+  // Geo-relay keep-alive
 
   Timer? _geoKeepAliveTimer;
   String? _geoKeepAliveGeohash;
 
-  /// Keep the active geohash channel's closest geo relays connected: every 30s,
-  /// re-check that each of the geohash's [RelayConfig.geoRelayCount] closest
-  /// relays is still in the pool's connected set and re-run
-  /// [connectGeoRelaysForGeohash] when any has dropped. Faithful port of
-  /// `startGeoRelayKeepAlive` (relays.js:135-168) — the transport owns per-socket
-  /// reconnection, but a geo relay the pool permanently dropped (or one whose
-  /// shard never came up) needs this channel-level nudge to be re-added, exactly
-  /// like the PWA's interval. Latest-wins: restarted with the new geohash on each
-  /// geohash-channel entry; [stopGeoRelayKeepAlive] cancels it on leaving.
-  ///
-  /// The `document.hidden` skip (relays.js:144) has no native analog here — the
-  /// controller stops the keep-alive when the app backgrounds — so the callback
-  /// only guards on the active geohash still matching and channel mode.
+  /// Every 30s, re-adds the active geohash's closest relays if any dropped; restarted per channel entry.
   void startGeoRelayKeepAlive(String geohash) {
     _geoKeepAliveTimer?.cancel();
     _geoKeepAliveTimer = null;
@@ -2933,8 +2283,7 @@ class NostrService {
   void _geoKeepAliveTick() {
     final gh = _geoKeepAliveGeohash;
     if (gh == null) return;
-    // groupChatPMOnlyMode → no channel filters are subscribed, skip
-    // (relays.js:145).
+    // No channel filters in PM-only mode.
     if (!_channelMode) return;
     final closest = closestGeoRelays(gh);
     if (closest.isEmpty) return;
@@ -2943,45 +2292,20 @@ class NostrService {
     if (anyMissing) unawaited(connectGeoRelaysForGeohash(gh));
   }
 
-  /// Stop the geo-relay keep-alive (`stopGeoRelayKeepAlive`, relays.js:170) —
-  /// on leaving a geohash channel, app teardown, or backgrounding.
+  /// Stops the geo-relay keep-alive.
   void stopGeoRelayKeepAlive() {
     _geoKeepAliveTimer?.cancel();
     _geoKeepAliveTimer = null;
     _geoKeepAliveGeohash = null;
   }
 
-  /// Picks the [count] geo relays closest to [geohash]'s center using the
-  /// Haversine distance (`calculateDistance`, channel.dart). Mirrors
-  /// `getClosestRelaysForGeohash`.
-  /// Whether a geohash channel message may be admitted from the relay that
-  /// delivered it.
-  ///
-  /// The subscriptions stay open — the sidebar, the explorer and the archive
-  /// are built from seeing every channel on every relay. What this decides is
-  /// narrower: bitchat publishes a geohash message to the relays nearest that
-  /// geohash and reads it back from the same ones, so a kind 20000 tagged
-  /// `g=<geohash>` that arrived from anywhere else was not sent by a
-  /// participant in that place. It was sprayed at the tag.
-  ///
-  /// Kind 20000 only. Nothing else is ever published to geo relays — reactions
-  /// and polls on a geohash channel go to the defaults like every other kind —
-  /// so applying this to them would delete every reaction in every geohash
-  /// channel, ours included.
-  ///
-  /// Fails open wherever it cannot judge: an unloaded directory, a geohash
-  /// that will not decode, an untagged frame, and a neighbourhood we hold no
-  /// socket to. That last one is what keeps low-data mode working, where only
-  /// the channels already visited are sharded — there is no admissible source
-  /// to wait for, so rejecting would hide the channel rather than filter it.
+  /// Admits kind-20000 geohash messages only from that geohash's nearest relays, failing open whenever it can't judge.
   bool geoOriginAllowsEvent(NostrEvent e, String? relayUrl) {
     if (e.kind != EventKind.geoChannel) return true;
     if (relayUrl == null || relayUrl.isEmpty) return true;
     final gh = e.tagValue('g')?.toLowerCase();
     if (gh == null || gh.isEmpty) return true;
-    // decodeGeohash tolerates characters outside the base32 alphabet and
-    // returns a coordinate anyway, so junk would otherwise be measured against
-    // real relays and judged. The PWA guards the same way.
+    // decodeGeohash accepts junk characters, so validate first.
     if (!ch.isValidGeohash(gh)) return true;
 
     final closest = closestGeoRelays(gh);
@@ -2991,7 +2315,7 @@ class NostrService {
 
     final connected = pool.connectedRelayUrls;
     for (final u in allow) {
-      if (connected.contains(u)) return false; // a source exists; this is not it
+      if (connected.contains(u)) return false; // A source exists and this is not it.
     }
     return true;
   }
@@ -3001,12 +2325,7 @@ class NostrService {
     if (geoRelays.isEmpty || geohash.isEmpty) return const [];
     final center = ch.decodeGeohash(geohash);
 
-    // Distance is computed ONCE per relay rather than inside the comparator,
-    // and every sort carries an explicit tiebreak because Dart's List.sort is
-    // NOT stable — tied relays would otherwise come out in an unspecified
-    // order. Ties are the common case here, not an edge case: 353 of the 409
-    // relays in the upstream directory share exact coordinates with another
-    // relay, because the CSV uses city centroids.
+    // Compute distance once per relay and tiebreak explicitly: List.sort is unstable and ties are common.
     List<({GeoRelay relay, double distance, int index})> rank(
             List<GeoRelay> list) =>
         [
@@ -3019,8 +2338,7 @@ class NostrService {
             ),
         ];
 
-    // bitchat-android's rule: distance only, ties by directory position (its
-    // Kotlin sortedBy is stable over the CSV order).
+    // bitchat-android's rule: distance only, ties by directory position.
     final upstream =
         rank(_geoRelaysUpstream.isNotEmpty ? _geoRelaysUpstream : geoRelays)
           ..sort((a, b) {
@@ -3028,19 +2346,14 @@ class NostrService {
             return d != 0 ? d : a.index.compareTo(b.index);
           });
 
-    // bitchat iOS's rule: (distance, host) ascending. Every url here is
-    // `wss://<host>` with the same prefix, so comparing urls orders by host.
+    // bitchat iOS's rule: (distance, host) ascending.
     final vetted = rank(_geoRelaysVetted)
       ..sort((a, b) {
         final d = a.distance.compareTo(b.distance);
         return d != 0 ? d : a.relay.url.compareTo(b.relay.url);
       });
 
-    // UNION of what each client would pick. The two directories agree on the
-    // closest five for only 3.6% of locations (mean overlap 2.87 of 5), so no
-    // single rule reaches both populations — and a geohash channel only works
-    // if publishers and subscribers land on the same relays. Costs ~6 relays
-    // instead of 5; buys reachability by every bitchat user.
+    // Union of both clients' picks, since their directories rarely agree on the closest five.
     final out = <GeoRelay>[];
     final seen = <String>{};
     for (final r in [...upstream.take(count), ...vetted.take(count)]) {
@@ -3049,18 +2362,14 @@ class NostrService {
     return out;
   }
 
-  /// Exposes the identity pubkey for the controller.
   String get selfPubkey => identity.pubkey;
 
-  /// True when this identity can sign (a signer is present — a local key or a
-  /// connected NIP-46 remote signer). Mirrors the PWA's `_canSendGiftWraps` /
-  /// `_canPublishChannelEvent` (privkey OR remote signer connected).
+  /// True when a local key or connected NIP-46 signer can sign.
   bool get canSign => signer != null;
 
-  /// Generates a fresh secret key (for ephemeral group keys).
+  /// Generates a fresh secret key for ephemeral group keys.
   static Uint8List freshSecretKey() => keys.generatePrivateKey();
 
-  /// Convenience: parse a channel message from a raw event.
   static dynamic channelMessageFrom(NostrEvent e, String selfPubkey) =>
       EventMapper.channelMessage(e, selfPubkey: selfPubkey);
 
@@ -3073,8 +2382,7 @@ class NostrService {
     stopGeoRelayKeepAlive();
     _stopBgRestore();
     _poolFallbackActive = false;
-    // Detach our api-stats sink if it's still the active one (avoid a stale
-    // disposed-service object catching later ApiClient traffic).
+    // Detach our api-stats sink if still active, so a disposed service catches no traffic.
     if (identical(ApiClient.apiStatsSink, _apiStats)) {
       ApiClient.apiStatsSink = null;
     }
@@ -3085,13 +2393,7 @@ class NostrService {
   }
 }
 
-/// A minimal async semaphore (fair, FIFO) bounding concurrent async work.
-///
-/// Used to cap in-flight remote-signer `nip44_decrypt` RPCs during gift-wrap
-/// backfill so a single NIP-46 signer socket isn't flooded (see
-/// [NostrService._remoteUnwrapGate]). [acquire] resolves immediately while
-/// permits remain, else queues; [release] hands a permit to the next waiter (or
-/// returns it to the pool). Always pair `acquire()` with a `finally` `release()`.
+/// Fair FIFO async semaphore; always pair acquire() with a finally release().
 class _AsyncSemaphore {
   _AsyncSemaphore(this._permits) : assert(_permits > 0);
 

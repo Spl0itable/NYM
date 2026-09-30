@@ -3,45 +3,22 @@ import 'package:flutter/material.dart';
 import '../../features/i18n/i18n.dart';
 import 'crypto_verified_badge.dart' show showAnchoredInfoPopup;
 
-/// Post-quantum coverage of a message.
-///
-/// Deliberately SEPARATE from [CryptoVerifyState]: that lock encodes
-/// authentication (who signed this), this shield encodes confidentiality (how
-/// hard the key exchange is to break). The two are orthogonal — a message can
-/// be post-quantum encrypted yet unverified, or verified yet classically
-/// encrypted — so collapsing them into one glyph would say something false
-/// about one axis or the other.
+/// Post-quantum coverage of a message, kept separate from [CryptoVerifyState] (confidentiality vs authentication).
 enum PqBadgeState {
-  /// Every copy of this message used the hybrid ECDH + ML-KEM-768 exchange,
-  /// under ML-KEM keys seeded from identity roots on both sides.
+  /// Every copy used hybrid ECDH + ML-KEM-768 with ML-KEM keys seeded from identity roots on both sides.
   full,
 
-  /// Hybrid on the wire, but an ML-KEM key on one side or the other was
-  /// derived from its Nostr identity key. Recovering that identity key
-  /// reproduces the ML-KEM key with it, so the message does not survive the
-  /// attack the shield would otherwise claim.
+  /// Hybrid, but an ML-KEM key was derived from a Nostr identity key, so recovering that key breaks it.
   legacy,
 
-  /// A group message where only some members could receive a post-quantum
-  /// copy. Rendered distinctly rather than as protected: if even one member got
-  /// a classical copy of the same plaintext, breaking secp256k1 reveals the
-  /// message.
+  /// Group message where only some members got a post-quantum copy; one classical copy exposes the plaintext.
   partial,
 
-  /// Encrypted, but with no post-quantum layer at all. Shown rather than
-  /// omitted: a missing shield is ambiguous between "unprotected", "broken",
-  /// and "this build lacks the feature".
+  /// No post-quantum layer; shown explicitly because a missing shield would be ambiguous.
   classical,
 }
 
-/// Resolves the shield state for a message. Never null for an encrypted one.
-///
-/// Callers decide whether a shield belongs at all — a public channel message
-/// is plaintext on the relay (see `_pqState` in message_row.dart).
-///
-/// [pqCoverage] is the fan-out's (post-quantum, total) member counts and
-/// OVERRIDES [pqEncrypted]: an optimistic send-time flag must never outrank
-/// what went on the wire. [pqRoot] caps the result at [PqBadgeState.legacy].
+/// Shield state for an encrypted message; [pqCoverage] overrides [pqEncrypted] and [pqRoot] caps at legacy.
 PqBadgeState pqBadgeStateFor({
   required bool pqEncrypted,
   bool pqRoot = false,
@@ -54,10 +31,7 @@ PqBadgeState pqBadgeStateFor({
     if (cov.pq != cov.total) return PqBadgeState.partial;
     return pqRoot ? PqBadgeState.full : PqBadgeState.legacy;
   }
-  // In a group, `pqEncrypted` is one wrap out of many, and the same plaintext
-  // went to every member. Without a coverage count the honest answer is
-  // "partly": a received group message never carries one, and a sent one can
-  // render before it lands.
+  // A group message without a coverage count is only partly protected: the same plaintext went to every member.
   if (pqEncrypted) {
     if (isGroup) return PqBadgeState.partial;
     return pqRoot ? PqBadgeState.full : PqBadgeState.legacy;
@@ -66,12 +40,6 @@ PqBadgeState pqBadgeStateFor({
 }
 
 /// The `.crypto-pq-badge` shield shown next to the verification lock.
-///
-/// A shield silhouette is what reads at 12px — interior detail would not — and
-/// the single tilted orbit inside distinguishes it from the plain ✓
-/// `verified-badge` without using a letterform, which would not survive
-/// translation. Violet, so it can never be confused with the lock's green /
-/// red / gray.
 class CryptoPqBadge extends StatelessWidget {
   const CryptoPqBadge({
     super.key,
@@ -82,15 +50,11 @@ class CryptoPqBadge extends StatelessWidget {
 
   final PqBadgeState state;
 
-  /// (post-quantum, total) member counts, so the popup can name them.
   final ({int pq, int total})? coverage;
 
   final double size;
 
-  /// `#8B7CF6` for full coverage; the other two drop to a neutral gray — and
-  /// deliberately not the lock's error red. Partial is a weaker guarantee and
-  /// classical is the encryption everyone had until recently; neither is a
-  /// failure. Classical is dimmed further so the three read as one scale.
+  /// Only full coverage is violet; the others are neutral gray, not error red, since neither is a failure.
   Color get _color => switch (state) {
         PqBadgeState.full => const Color(0xFF8B7CF6),
         PqBadgeState.partial => const Color(0xFF9AA0A6),
@@ -101,8 +65,7 @@ class CryptoPqBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      // `.crypto-pq-badge { margin-left: 3px }` — outside the box, so the popup
-      // anchors on the shield itself.
+      // Margin outside the box so the popup anchors on the shield itself.
       padding: const EdgeInsets.only(left: 3),
       child: Builder(
         builder: (anchorContext) => GestureDetector(
@@ -119,8 +82,6 @@ class CryptoPqBadge extends StatelessWidget {
   }
 }
 
-/// Strokes the shield + orbit from the PWA's inline SVG path data, in the same
-/// 24-unit viewBox, scaled to the widget size.
 class _ShieldPainter extends CustomPainter {
   _ShieldPainter(this.state, this.color);
 
@@ -138,7 +99,6 @@ class _ShieldPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round
       ..color = color;
 
-    // M12 2.5 L20 5.5 v6 c0 4.5-3.4 7.6-8 9.5 -4.6-1.9-8-5-8-9.5 v-6 z
     final shield = Path()
       ..moveTo(12, 2.5)
       ..lineTo(20, 5.5)
@@ -148,15 +108,10 @@ class _ShieldPainter extends CustomPainter {
       ..lineTo(4, 5.5)
       ..close();
 
-    // <ellipse cx=12 cy=12 rx=6.2 ry=2.6 transform="rotate(-32 12 12)">
     final orbitRect = Rect.fromCenter(
         center: const Offset(12, 12), width: 12.4, height: 5.2);
     final orbit = Path()..addOval(orbitRect);
-    // Composed by multiplication rather than the mutating helpers: the
-    // translate/scale ones are deprecated on current SDKs and their
-    // replacements do not exist on the oldest this package supports
-    // (pubspec: sdk ^3.6.0), so either spelling breaks one end of the range.
-    // These constructors are stable across all of it.
+    // Built from matrix constructors: the mutating translate/scale helpers are deprecated on newer SDKs.
     const rotateAbout = 12.0;
     final rotated = orbit.transform((Matrix4.translationValues(
                 rotateAbout, rotateAbout, 0.0) *
@@ -165,14 +120,10 @@ class _ShieldPainter extends CustomPainter {
         .storage);
 
     if (state == PqBadgeState.partial || state == PqBadgeState.legacy) {
-      // `stroke-dasharray: 3 2` — reads as "not fully closed" at a glance.
       _strokeDashed(canvas, shield, paint);
       _strokeDashed(canvas, rotated, paint);
     } else if (state == PqBadgeState.classical) {
-      // Same silhouette, so the three states read as one scale rather than
-      // three unrelated icons — but struck through, and WITHOUT the orbit:
-      // the orbit is the post-quantum part, so drawing one here would be the
-      // one thing this badge exists to deny.
+      // Legacy draws the shield struck through and without the orbit, which denotes post-quantum.
       canvas.drawPath(shield, paint);
       canvas.drawLine(const Offset(5.5, 5), const Offset(18.5, 18), paint);
     } else {
@@ -182,8 +133,6 @@ class _ShieldPainter extends CustomPainter {
     canvas.restore();
   }
 
-  /// Dart has no stroke-dasharray, so walk the path metrics and stroke 3-unit
-  /// dashes separated by 2-unit gaps.
   void _strokeDashed(Canvas canvas, Path path, Paint paint) {
     const dash = 3.0, gap = 2.0;
     for (final metric in path.computeMetrics()) {
@@ -201,12 +150,7 @@ class _ShieldPainter extends CustomPainter {
       old.state != state || old.color != color;
 }
 
-/// The post-quantum info popup's copy. Names the primitives and states the
-/// limit: confidentiality, not authentication — signatures are still
-/// secp256k1.
-///
-/// Each string is named so `kPqPopupStrings` can be checked against the
-/// sweep catalog; one the catalog does not carry is never translated.
+/// Post-quantum popup copy; each string is named so `kPqPopupStrings` can be checked against the i18n catalog.
 const String kPqFullTitle = 'Quantum-resistant encryption';
 const String kPqFullBody =
     "This message's key exchange combined the standard NIP-44 secp256k1 "
@@ -241,7 +185,6 @@ const String kPqPartialTail =
     "those copies carry the same message, treat this one as "
     "classically encrypted overall.";
 
-/// Every literal the popup can show.
 const List<String> kPqPopupStrings = [
   kPqFullTitle,
   kPqFullBody,

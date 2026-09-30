@@ -1,10 +1,4 @@
-/// Which long message bodies the user expanded past their "Read more" clamp.
-///
-/// This lived as `_expanded` in the collapsible's own State, which loses it the
-/// same two ways `TranslatedMessages` documents: a row scrolled out of the lazy
-/// list is disposed, and an arriving message can re-parent a still-visible row.
-/// Keyed by the collapsible's own id — the message id, plus a suffix for a
-/// separately-clamped quote — it survives both.
+/// Expanded "Read more" bodies, kept outside row State so lazy-list disposal and re-parenting don't lose them.
 library;
 
 import 'dart:collection';
@@ -12,8 +6,7 @@ import 'dart:collection';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class ExpandedMessages extends Notifier<Set<String>> {
-  /// Bounded like `TranslatedMessages`: a long session in a busy channel would
-  /// otherwise hold one entry per expanded body forever.
+  /// Bounded so a long session doesn't grow this forever.
   static const int _max = 500;
 
   @override

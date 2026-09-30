@@ -31,28 +31,11 @@ import '../widgets/chat/chat_pane.dart';
 import '../widgets/sidebar/sidebar.dart';
 import '../widgets/wallpaper/wallpaper_layer.dart';
 
-/// The responsive root of the app shell (`.container`, docs/specs/02 §1.1–1.2).
-///
-/// Wide (width > 1024): a Row of [Sidebar 290px, Expanded(ChatPane)].
-/// Mobile/tablet (<= 1024): the ChatPane fills the width with an off-canvas
-/// 300px drawer sidebar that slides in over 150ms behind a dim 0.6 black
-/// backdrop; the chat-header hamburger opens it. The PWA gates the off-canvas
-/// drawer on `innerWidth <= 1024` (`app.js:45,98,137,178` +
-/// `styles-themes-responsive.css:442-476`), so tablets/split-screen get the
-/// hamburger drawer + mobile header, not the fixed two-pane layout.
-///
-/// The call overlay + incoming-call modal are mounted above everything, and
-/// the CallService is read on mount so inbound call signals are handled even
-/// before any call UI appears.
+/// Responsive shell: two panes above 1024px, else a 300px off-canvas drawer; call UI mounts above everything.
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
-  /// A stable key BootGate can attach (`HomeShell(key: HomeShell.tutorialKey)`)
-  /// and read back as the [TutorialSidebarDriver]
-  /// (`HomeShell.tutorialKey.currentState`) to pass to
-  /// `TutorialOverlay(sidebar: …)`. Exposed here (this file is owned by the
-  /// shell slice) so the BootGate wiring is a single line — see CROSS-FILE
-  /// NEEDS. [HomeShellState] implements [TutorialSidebarDriver].
+  /// Stable key BootGate reads back as the [TutorialSidebarDriver].
   static final GlobalKey<HomeShellState> tutorialKey =
       GlobalKey<HomeShellState>();
 
@@ -64,25 +47,18 @@ class HomeShellState extends ConsumerState<HomeShell>
     implements TutorialSidebarDriver {
   bool _drawerOpen = false;
 
-  /// True while a narrow (<=1024) layout is mounted, so the tutorial driver
-  /// knows whether opening/closing the drawer is meaningful.
+  /// True while a narrow layout is mounted, so the tutorial driver knows the drawer matters.
   bool _narrow = false;
 
-  /// The sidebar edge-swipe threshold: a DEDICATED constant, `this.
-  /// swipeThreshold = 50` (app.js:1053-1054) — NOT the user-tunable message
-  /// `settings.swipeThreshold` (default 60, options 40-100).
+  /// Dedicated edge-swipe threshold, not the user-tunable message `swipeThreshold`.
   static const double _sidebarSwipeThreshold = 50;
 
-  /// The touch pointer being tracked by the edge-swipe listener, or null when
-  /// no touch is armed. The PWA's `swipeStartX` doubles as this flag — it is
-  /// non-null only while a touch that began at `clientX < 50` is down and has
-  /// not yet toggled the drawer (ui-context.js:8-30).
+  /// Pointer armed by a touch within 50px of an edge, or null.
   int? _edgeSwipePointer;
 
-  /// Global x of the arming touch-down (the PWA's `swipeStartX`).
   double _edgeSwipeStartX = 0;
 
-  /// Which edge armed the tracked touch: the right one drives the thread.
+  /// The right edge drives the thread.
   bool _edgeSwipeFromRight = false;
 
   /// The thread last closed, so a right-edge swipe can step back into it.
@@ -91,43 +67,29 @@ class HomeShellState extends ConsumerState<HomeShell>
   @override
   void initState() {
     super.initState();
-    // Fresh tutorial-target keys for this shell instance (prevents a disposed
-    // shell's GlobalKeys from reparenting into a newly-mounted one).
+    // Fresh target keys so a disposed shell's GlobalKeys can't reparent here.
     TutorialTargets.reset();
     // Constructing the CallService registers the inbound call-signal handler.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(callServiceProvider);
       _maybeBootProximityLocation();
-      // Bot engine boot for an identity that was ready before the shell
-      // mounted (the selfPubkey listener in build covers later logins).
+      // For an identity ready before mount; the selfPubkey listener covers later logins.
       _bindBotEngine();
     });
   }
 
-  /// Keeps the private Nymbot engine alive from boot and binds it to the live
-  /// identity: reading the provider registers its app-state observer (so `?`
-  /// commands and bot replies work even when the bot screen was never opened),
-  /// `bindBotChat` wires the paid-auth identity, and the once-per-device
-  /// proactive first-contact PM fires — the PWA's post-hydration
-  /// `_maybeSendBotWelcomePM` (app.js:5655-5661).
+  /// Keeps the Nymbot engine alive from boot, binds it to the identity, and sends the one-time welcome PM.
   void _bindBotEngine() {
     if (ref.read(appStateProvider).selfPubkey.isEmpty) return;
-    // Reading the provider instantiates the engine + its observer.
     final engine = ref.read(botChatControllerProvider.notifier);
     final nostr = ref.read(nostrControllerProvider);
     nostr.bindBotChat();
-    // Route paid-auth signing through the ACTIVE signer (local or NIP-46
-    // remote) — the PWA's `_signBotAuth` generic dispatch (pms.js:1649-1679),
-    // so money actions sign fresh per request on remote-signer accounts too.
+    // Sign paid actions through the active signer (local or NIP-46) per request.
     engine.attachSigner(nostr.signer);
     unawaited(engine.maybeSendBotWelcomePM());
   }
 
-  /// Boot-time GPS fetch (the PWA's app.js:6855 startup branch): if proximity
-  /// sort was already enabled in a prior session AND location permission is
-  /// still granted, fetch the fix so the Haversine channel sort engages without
-  /// the user re-opening Settings. Best-effort + silent; a denial/timeout simply
-  /// leaves `userLocation` null (proximity then falls back to activity order).
+  /// If proximity sort was already on and location is still granted, fetch a fix at boot; silent on failure.
   Future<void> _maybeBootProximityLocation() async {
     if (!ref.read(settingsProvider).sortByProximity) return;
     if (ref.read(userLocationProvider) != null) return; // already located
@@ -147,12 +109,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     ref.read(callServiceProvider).startGroupCall(groupId, video: video);
   }
 
-  // --- TutorialSidebarDriver (narrow-layout drawer open/close per step) ------
-  // Mirrors `ensureSidebarOpenOnMobile` / `ensureSidebarClosedOnMobile`
-  // (app.js:97-175): on wide layouts these are no-ops; on narrow ones they
-  // slide the drawer and resolve once the ~300ms settle window has passed.
-
-  /// The drawer state to restore once the tour ends (`restoreSidebarAfterTutorial`).
+  /// Drawer state to restore once the tour ends.
   bool? _drawerStateBeforeTour;
 
   void _rememberDrawerState() {
@@ -183,16 +140,9 @@ class HomeShellState extends ConsumerState<HomeShell>
     if (prev != _drawerOpen) setState(() => _drawerOpen = prev);
   }
 
-  // --- Left-edge swipe (`setupMobileGestures`, ui-context.js:5-32) ----------
-  // Raw pointer listeners, NOT gesture-arena recognizers: the PWA binds
-  // passive document-level touchstart/touchmove with no axis locking, so the
-  // gesture fires on ANY touch (even a sloppy diagonal one that is also
-  // scrolling the list) and never steals events from what's underneath —
-  // message swipe-left still works inside the edge zone (the message gesture
-  // itself abandons only RIGHT swipes starting there, messages.js:2196-2201).
+  // Raw pointer listeners, not arena recognizers, so the swipe fires on any touch and never steals events underneath.
 
-  /// `touchstart`: only a touch landing within 50px of the left edge arms the
-  /// gesture (`if (touch.clientX < 50) this.swipeStartX = touch.clientX`).
+  /// Only a touch landing within 50px of an edge arms the gesture.
   void _edgePointerDown(PointerDownEvent e) {
     if (e.kind != PointerDeviceKind.touch) return;
     if (_edgeSwipePointer != null) return;
@@ -204,14 +154,10 @@ class HomeShellState extends ConsumerState<HomeShell>
     _edgeSwipeFromRight = fromRight;
   }
 
-  /// `touchmove`: net rightward displacement from the touch-down point
-  /// (`swipeDistance = clientX - swipeStartX`) past the fixed 50px threshold
-  /// calls `toggleSidebar()`, then tracking stops for the rest of the touch
-  /// (ui-context.js:16-25). Toggle, not open: the same left-edge right-swipe
-  /// CLOSES an open drawer.
+  /// Past the 50px threshold the drawer toggles (so it also closes), then tracking stops for this touch.
   void _edgePointerMove(PointerMoveEvent e) {
     if (e.pointer != _edgeSwipePointer) return;
-    // Right edge, traveling left: step back INTO the thread just left.
+    // Right edge, traveling left: step back into the thread just left.
     if (_edgeSwipeFromRight) {
       if (_edgeSwipeStartX - e.position.dx > _sidebarSwipeThreshold) {
         _edgeSwipePointer = null;
@@ -221,9 +167,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     }
     if (e.position.dx - _edgeSwipeStartX > _sidebarSwipeThreshold) {
       _edgeSwipePointer = null;
-      // An open drawer closes first, as before. Otherwise a thread takes the
-      // gesture — backing out of it is what the header chevron does — and only
-      // with neither open does it reach the drawer.
+      // An open drawer closes first, then a thread backs out, and only then does the drawer open.
       if (_drawerOpen) {
         setState(() => _drawerOpen = false);
         return;
@@ -236,8 +180,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
-  /// Right-edge swipe: back into the thread just left, or failing that the
-  /// conversation menu the PM/group header opens on tap.
+  /// Back into the thread just left, else the PM/group header's menu.
   void _reopenLastThread() {
     if (_drawerOpen) return;
     if (ref.read(activeThreadProvider) != null) return;
@@ -253,8 +196,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     _openConversationMenu(app);
   }
 
-  /// What tapping a PM or group header does (chat_pane.dart). Channels have no
-  /// such menu, so the swipe does nothing there.
+  /// Channels have no header menu, so the swipe does nothing there.
   void _openConversationMenu(AppState app) {
     final view = app.view;
     if (view.kind == ViewKind.group) {
@@ -275,8 +217,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     );
   }
 
-  /// `touchend`/`touchcancel` → `this.swipeStartX = null` (unconditionally —
-  /// the PWA resets on any touch lift, ui-context.js:27-29).
+  /// Any touch lift disarms.
   void _edgePointerEnd(PointerEvent e) {
     if (e.kind != PointerDeviceKind.touch) return;
     _edgeSwipePointer = null;
@@ -285,14 +226,10 @@ class HomeShellState extends ConsumerState<HomeShell>
 
   @override
   Widget build(BuildContext context) {
-    // Always-mounted "Gift Nymbot Credits" listener (PWA `showBotCreditsModal`
-    // opens from ANYWHERE, not just inside the bot PM). The context menu posts
-    // the recipient to `giftCreditsRequestProvider`; here we bind the bot chat
-    // (so the paid gift action authenticates), open the gift-credit modal
-    // prefilled with the recipient, then consume the one-shot request.
+    // Always-mounted gift listener: bind the bot chat, open the prefilled gift modal, consume the request.
     ref.listen<GiftCreditsRequest?>(giftCreditsRequestProvider, (prev, next) {
       if (next == null) return;
-      // Consume immediately so a rebuild can't re-open the modal.
+      // Consume immediately so a rebuild can't reopen the modal.
       ref.read(giftCreditsRequestProvider.notifier).consume();
       final nostr = ref.read(nostrControllerProvider);
       nostr.bindBotChat();
@@ -308,10 +245,7 @@ class HomeShellState extends ConsumerState<HomeShell>
       });
     });
 
-    // Always-mounted `?buy` / out-of-credits listener: the engine posts the
-    // request from ANY surface (bot screen, canonical PM view, columns) and the
-    // shell opens the shared credits modal with the right tier preselected
-    // (PWA `showBotCreditsModal(null, tier)`, pms.js:2413/2478).
+    // Always-mounted `?buy` listener opening the shared credits modal with the right tier.
     ref.listen<BotBuyRequest?>(botBuyRequestProvider, (prev, next) {
       if (next == null) return;
       ref.read(botBuyRequestProvider.notifier).consume();
@@ -328,23 +262,14 @@ class HomeShellState extends ConsumerState<HomeShell>
       });
     });
 
-    // Bind the bot engine + fire the proactive welcome PM once an identity
-    // lands (login after the shell mounted).
+    // Bind the bot engine once an identity lands after mount.
     ref.listen<String>(appStateProvider.select((s) => s.selfPubkey),
         (prev, next) {
       if (next.isEmpty || next == prev) return;
       _bindBotEngine();
     });
 
-    // Switching the active conversation — via a sidebar tap OR a context-menu
-    // action like "Private Message" from the nyms list — closes the mobile
-    // drawer so the chosen view is revealed, matching the PWA (any conversation
-    // switch collapses the mobile sidebar). Direct taps already fire
-    // `onItemSelected`; this covers the context-menu path that bypasses it.
-    // Guarded on a real view change (ChatView has value equality) so unrelated
-    // rebuilds can't force the drawer shut while the user is browsing it.
-    // Whatever closes a thread — chevron, swipe, a quote jump — is what the
-    // right-edge swipe steps back into.
+    // A real view change closes the mobile drawer; a closed thread is remembered for the right-edge swipe.
     ref.listen(activeThreadProvider, (prev, next) {
       if (prev != null && next == null) _lastThread = prev;
       if (next != null) _lastThread = null;
@@ -354,9 +279,7 @@ class HomeShellState extends ConsumerState<HomeShell>
       if (prev != next && _narrow && _drawerOpen && mounted) {
         setState(() => _drawerOpen = false);
       }
-      // Switching conversations also dismisses the mesh overlay (a sidebar
-      // tap, a peer tap, or a notification tap should land you IN the chat,
-      // with the mesh screen out of the way).
+      // Switching conversations also dismisses the mesh overlay.
       if (prev != next && ref.read(meshScreenOpenProvider)) {
         ref.read(meshScreenOpenProvider.notifier).state = false;
       }
@@ -364,22 +287,15 @@ class HomeShellState extends ConsumerState<HomeShell>
 
     final c = context.nym;
     final width = MediaQuery.of(context).size.width;
-    // Off-canvas drawer governs the whole 0–1024 range; fixed two-pane is
-    // >1024 only (PWA `app.js` gates on `innerWidth > 1024`).
+    // The drawer governs the 0–1024 range; two panes only above 1024.
     final isWide = width > NymDimens.tabletBreakpoint;
     _narrow = !isWide;
 
-    // Deck (multi-column) vs single chat view (`nym_chat_view_mode`).
     final useColumns = ref.watch(settingsProvider.select((s) => s.useColumns));
-    // Ghost swaps the ambient glow to white tints with no vignette
-    // (`body.theme-ghost::before`).
     final isGhost =
         ref.watch(settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
 
-    // Android's back gesture had nothing to pop — a thread, the mesh screen and
-    // the drawer are state, not routes — so it left the app instead of the
-    // thread. It now unwinds them in the same order the left-edge swipe does,
-    // and only leaves when there is nothing left to close.
+    // Back unwinds thread, mesh screen and drawer in swipe order, leaving the app only when nothing is open.
     final canLeave = !(_drawerOpen ||
         ref.watch(meshScreenOpenProvider) ||
         ref.watch(activeThreadProvider) != null);
@@ -393,28 +309,17 @@ class HomeShellState extends ConsumerState<HomeShell>
       backgroundColor: c.bg,
       body: Stack(
         children: [
-          // `body::before` — always-on ambient corner glows + center vignette,
-          // painted beneath the wallpaper (styles-core.css:130-144, with
-          // ghost/light overrides). pointer-events:none.
-          //
-          // Both background layers are RepaintBoundary-isolated: they are
-          // static full-screen vector paints (the tiled wallpaper patterns run
-          // hundreds of clip+shader cells), and without their own layers ANY
-          // repaint that climbs to this Stack — typing dots, load shimmer,
-          // composer pulses, snap-in entrances — re-rasterized both at the
-          // animation's frame rate. As cached layers they re-paint only when
-          // the theme/wallpaper actually changes.
+          // Ambient glow and wallpaper are repaint-isolated so animations elsewhere don't re-raster them.
           Positioned.fill(
             child: RepaintBoundary(child: _AmbientGlow(c: c, isGhost: isGhost)),
           ),
-          // `#wallpaperLayer` — fixed, behind all content, pointer-events:none.
           const Positioned.fill(child: RepaintBoundary(child: WallpaperLayer())),
           Positioned.fill(
             child: isWide
                 ? _wide(context, useColumns)
                 : _mobile(context, useColumns),
           ),
-          // Active-call UI and incoming-call modal render nothing when idle.
+          // Call UI renders nothing when idle.
           const Positioned.fill(child: CallOverlay()),
           const Positioned.fill(child: IncomingCallModal()),
         ],
@@ -422,7 +327,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     ));
   }
 
-  /// Closes the innermost thing back should close, one per press.
+  /// Closes the innermost open thing, one per press.
   void _popInApp() {
     if (_drawerOpen) {
       if (mounted) setState(() => _drawerOpen = false);
@@ -437,11 +342,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     }
   }
 
-  /// The main content region: always the ChatPane. In columns mode the deck
-  /// replaces the messages list INSIDE the pane (so the chat header + composer
-  /// stay mounted), matching the PWA, which hides only `#messagesScroller` and
-  /// shows `#columnsStrip` in its place (styles-columns.css:9-15) — never the
-  /// `.chat-header` or `.input-container`.
+  /// Always the ChatPane; in columns mode the deck replaces only the message list inside it.
   Widget _content(BuildContext context, bool useColumns,
       {bool compact = false}) {
     return ChatPane(
@@ -454,9 +355,7 @@ class HomeShellState extends ConsumerState<HomeShell>
   }
 
   Widget _wide(BuildContext context, bool useColumns) {
-    // The mesh screen swaps into the content area like any other view; the
-    // persistent sidebar stays put (so it needs no hamburger — onOpenSidebar
-    // stays null).
+    // The mesh screen swaps in like any view; the persistent sidebar needs no hamburger.
     final meshOpen = ref.watch(meshScreenOpenProvider);
     return Row(
       children: [
@@ -469,29 +368,16 @@ class HomeShellState extends ConsumerState<HomeShell>
   }
 
   Widget _mobile(BuildContext context, bool useColumns) {
-    // The edge-swipe gesture is phone-only (`if (window.innerWidth <= 768)`,
-    // ui-context.js:6).
+    // The edge swipe is phone-only (≤768px).
     final phone = MediaQuery.of(context).size.width <= 768;
-    // Left-edge swipe to TOGGLE the drawer (`setupMobileGestures`,
-    // ui-context.js:5-32): only on phones (innerWidth <= 768, NOT tablets),
-    // a touch starting within 50px of the left edge that travels right past
-    // the fixed 50px threshold calls `toggleSidebar()`. A raw Listener over
-    // the whole shell mirrors the PWA's passive document-level touch
-    // listeners: it never enters the gesture arena, so it cannot lose the
-    // swipe to the vertical scrollable (no axis lock) and never swallows the
-    // gestures underneath it (message swipe-left still works from the edge).
-    // Because it wraps the drawer too, it fires either way and toggles an
-    // open drawer closed, like the PWA's document listener.
+    // A raw Listener over the whole shell, drawer included, so the swipe never loses to scrollables.
     final stack = Stack(
       children: [
         Positioned.fill(
           child: _content(context, useColumns, compact: true),
         ),
 
-        // Mesh screen overlay — INSIDE the shell, beneath the dim scrim and
-        // drawer, so the sidebar opens over it like on any other screen and the
-        // shell's left-edge swipe keeps working. Closed by any conversation
-        // switch (see the view listener in build) or its own back chevron.
+        // Mesh overlay beneath the scrim and drawer, so the sidebar opens over it.
         if (ref.watch(meshScreenOpenProvider))
           Positioned.fill(
             child: MeshScreen(
@@ -499,12 +385,7 @@ class HomeShellState extends ConsumerState<HomeShell>
             ),
           ),
 
-        // Dim backdrop (`.mobile-overlay`): rgba(0,0,0,0.6) that snaps between
-        // display:none/block with NO fade (styles-shell.css:1-14). Only with
-        // solid-ui (default ON — Transparency off) does light mode drop the
-        // alpha to 0.35 (`body.solid-ui.light-mode .mobile-overlay`,
-        // styles-themes-responsive.css:1638-1646); with Transparency enabled
-        // it stays 0.6 in both modes. Tap to close.
+        // Snapping dim backdrop (no fade); 0.35 in solid-ui light mode, else 0.6. Tap to close.
         if (_drawerOpen)
           GestureDetector(
             onTap: () => setState(() => _drawerOpen = false),
@@ -518,10 +399,7 @@ class HomeShellState extends ConsumerState<HomeShell>
             ),
           ),
 
-        // Off-canvas drawer: translateX(-100%) → 0 over 150ms linear. Under
-        // OS reduce-motion the PWA's global kill-switch forces the transition
-        // to 0.01ms (`@media (prefers-reduced-motion: reduce)`,
-        // styles-themes-responsive.css:1846-1856) — snap instantly.
+        // 150ms linear slide, instant under reduce-motion.
         AnimatedSlide(
           duration: MediaQuery.of(context).disableAnimations
               ? Duration.zero
@@ -531,12 +409,7 @@ class HomeShellState extends ConsumerState<HomeShell>
           child: SizedBox(
             width: NymDimens.sidebarDrawerWidth,
             height: double.infinity,
-            // `.sidebar.open { box-shadow: 10px 0 40px rgba(0,0,0,0.5) }` — a
-            // directional (rightward-only) drop shadow, not a Material ambient
-            // elevation (styles-themes-responsive.css:198-201). The edge-swipe
-            // Listener above wraps the drawer too, so a left-edge right-swipe
-            // over the open drawer toggles it CLOSED, like the PWA's
-            // document-level listener.
+            // Rightward-only drop shadow, not a Material elevation.
             child: DecoratedBox(
               decoration: BoxDecoration(
                 boxShadow: _drawerOpen
@@ -549,11 +422,7 @@ class HomeShellState extends ConsumerState<HomeShell>
                       ]
                     : const [],
               ),
-              // The off-canvas drawer additionally gets `border-left: 1px
-              // solid var(--glass-border)` on top of the base border-right
-              // (styles-themes-responsive.css:179-192 and 442-455). Painted as
-              // a foreground hairline because the Sidebar fills itself with
-              // bgSecondary.
+              // Foreground hairline, since the Sidebar paints its own background.
               child: DecoratedBox(
                 position: DecorationPosition.foreground,
                 decoration: BoxDecoration(
@@ -582,11 +451,7 @@ class HomeShellState extends ConsumerState<HomeShell>
   }
 }
 
-/// `body::before`: the always-on ambient layer — two corner radial glows plus a
-/// center→edge vignette (styles-core.css:130-144). Ghost swaps to white tints
-/// with no vignette (`body.theme-ghost::before`, :520-524); light mode lowers
-/// the corner alphas and also drops the vignette (`body.light-mode::before`,
-/// :540-544). pointer-events:none.
+/// Ambient corner glows plus a center vignette; ghost uses white tints and light drops the vignette.
 class _AmbientGlow extends StatelessWidget {
   const _AmbientGlow({required this.c, required this.isGhost});
   final NymColors c;
@@ -613,13 +478,7 @@ class _AmbientGlowPainter extends CustomPainter {
     if (size.isEmpty) return;
     final rect = Offset.zero & size;
 
-    // Corner glow colors per variant. CSS specificity ties resolve by source
-    // order, so for ghost-LIGHT `body.light-mode::before` (line 540) wins over
-    // `body.theme-ghost::before` (line 520) → the light primary/secondary tints,
-    // not white. Hence: light first (covers ghost-light), then ghost-dark white,
-    // then dark non-ghost.
-    //   Light: primary@0.03 / secondary@0.02; ghost-dark: white@0.02 / 0.015;
-    //   dark: primary@0.04 / secondary@0.03.
+    // Light first (it wins for ghost-light by CSS source order), then ghost-dark white, then dark.
     final Color glow20, glow80;
     if (c.isLight) {
       glow20 = c.primary.withValues(alpha: 0.03);
@@ -632,24 +491,13 @@ class _AmbientGlowPainter extends CustomPainter {
       glow80 = c.secondary.withValues(alpha: 0.03);
     }
 
-    // Each CSS layer is `radial-gradient(ellipse at f% f%, ...)` with the
-    // default farthest-corner extent: an ellipse with the farthest-side aspect
-    // ratio (m·w : m·h, where m = max(f, 1-f)) uniformly scaled to pass
-    // through the farthest corner at offset (m·w, m·h) from the center — so
-    // radii √2·m·w × √2·m·h. Flutter's RadialGradient shader is circular, so
-    // stretch a circle of radius rx with a y-scale local matrix about the
-    // center to get the viewport-shaped ellipse.
+    // CSS farthest-corner ellipse: a circular shader stretched by a y-scale matrix about the center.
     void ellipseGradient(double f, List<Color> colors, List<double> stops) {
       final center = Offset(size.width * f, size.height * f);
       final m = math.max(f, 1 - f);
       final rx = math.sqrt2 * m * size.width;
       final ry = math.sqrt2 * m * size.height;
-      // Composed from the non-mutating constructors rather than a
-      // `..translate()/..scale()` cascade: the mutating helpers are deprecated
-      // on current SDKs, and the typed replacements they point at do not exist
-      // on the oldest SDK pubspec allows — the exact range trap
-      // pq_badge_paint_test guards `lib/` against (by name, so this comment
-      // deliberately does not spell them). This composition works at both ends.
+      // Non-mutating constructors work across the whole supported SDK range.
       final matrix = Matrix4.translationValues(center.dx, center.dy, 0.0) *
           Matrix4.diagonal3Values(1.0, ry / rx, 1.0) *
           Matrix4.translationValues(-center.dx, -center.dy, 0.0);
@@ -667,14 +515,11 @@ class _AmbientGlowPainter extends CustomPainter {
       );
     }
 
-    // `radial-gradient(ellipse at 20% 20%, color 0%, transparent 50%)`: the
-    // fade ends halfway to the farthest-corner ellipse (mirrored at 80% 80%).
+    // Fade ends halfway to the farthest-corner ellipse.
     ellipseGradient(0.2, [glow20, glow20.withValues(alpha: 0)], const [0, 0.5]);
     ellipseGradient(0.8, [glow80, glow80.withValues(alpha: 0)], const [0, 0.5]);
 
-    // Center vignette (dark non-ghost only): rgba(0,0,0,0) at the center →
-    // black 0.2 at 100%, i.e. full strength only at the exact viewport
-    // corners (farthest-corner extent).
+    // Dark non-ghost only: full vignette strength only at the corners.
     if (!isGhost && !c.isLight) {
       ellipseGradient(
         0.5,

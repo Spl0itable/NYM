@@ -13,18 +13,14 @@ import 'app_strings_catalog.dart';
 import 'i18n.dart';
 import 'localization_service.dart';
 
-/// A selectable UI-language option: its stored code (empty ⇒ English source)
-/// and its English display name.
+/// A UI-language option: stored code (empty for English source) and English display name.
 class UiLanguageOption {
   const UiLanguageOption(this.code, this.name);
   final String code;
   final String name;
 }
 
-/// The full UI-language menu: English pinned first (stored as `''` so it maps
-/// to the no-translate source path), then every language the message
-/// translator supports, alphabetically. Reuses [sortedTranslateLanguages] so
-/// the app-language list stays in lockstep with the message-translation list.
+/// English first (stored as `''`), then every translator language alphabetically.
 final List<UiLanguageOption> kUiLanguageOptions = [
   const UiLanguageOption('', 'English'),
   ...sortedTranslateLanguages()
@@ -32,9 +28,7 @@ final List<UiLanguageOption> kUiLanguageOptions = [
       .map((e) => UiLanguageOption(e.key, e.value)),
 ];
 
-/// The display name for a stored UI-language [code] (empty/`en` ⇒ English).
-/// Leads with the endonym so the row reads in the language it names, with the
-/// English name appended when it differs.
+/// Endonym first, with the English name appended when it differs.
 String uiLanguageName(String code) {
   if (code.isEmpty || code == 'en') return 'English';
   final subtitle = languageSubtitle(code);
@@ -42,41 +36,24 @@ String uiLanguageName(String code) {
   return subtitle.isEmpty ? native : '$native — $subtitle';
 }
 
-/// Applies [code] as the app UI language and kicks translation. NON-BLOCKING:
-/// the caller can proceed immediately (no progress dialog, no render block), so
-/// the user starts using the app right away.
-///
-/// Prioritization is handled by [LocalizationService]'s two-lane queue: the
-/// screens shown next — the welcome/signup modal, then the tutorial — translate
-/// FIRST via the high-priority lane (their on-demand `tr()` renders + the
-/// tutorial's [LocalizationService.prime]), while the full-app catalog [sweep]
-/// kicked here runs in the LOW-priority background behind them. A brief English
-/// flash before each screen's strings land is fine.
+/// Applies [code] without blocking; next screens translate on the high-priority lane ahead of the background sweep.
 void applyUiLanguage(WidgetRef ref, String code) {
   ref.read(settingsProvider.notifier).setUiLanguage(code);
-  // Apply immediately rather than waiting on the root's settings listener (its
-  // callback fires asynchronously); setLanguage is idempotent, so the listener
-  // re-invoking it with the same code is a harmless no-op.
+  // Apply now rather than waiting for the async settings listener; setLanguage is idempotent.
   final svc = LocalizationService.instance;
   svc.setLanguage(code);
   if (!svc.isActive) return; // English: nothing to translate.
-  // Command names are what the user types, so they translate ahead of the
-  // bulk catalog rather than behind it.
+  // Command names are typed, so they translate ahead of the bulk catalog.
   svc.prime(commandSourcePhrases());
-  // Nymbot greets a brand-new user seconds after this, so its welcome copy is
-  // primed here rather than translated on first paint.
+  // Nymbot greets a new user seconds later, so prime its welcome copy now.
   primeBotWelcomeCopy();
   svc.sweep(kAppStringsCatalog);
 }
 
-/// First-run, full-screen language chooser shown at the very start of
-/// onboarding (before the guided tutorial). Picking a language localizes the
-/// app going forward and persists the choice; [onComplete] then advances to the
-/// tutorial. English is offered first so the default path is one tap.
+/// First-run language chooser shown before the tutorial; [onComplete] advances.
 class LanguageSelectScreen extends ConsumerWidget {
   const LanguageSelectScreen({super.key, required this.onComplete});
 
-  /// Called once a language has been chosen and applied.
   final VoidCallback onComplete;
 
   @override
@@ -95,8 +72,7 @@ class LanguageSelectScreen extends ConsumerWidget {
                 children: [
                   const SizedBox(height: 8),
                   Text(
-                    // English by design — the user hasn't chosen a language yet,
-                    // so this welcome greeting stays in the source language.
+                    // English by design: no language has been chosen yet.
                     'Choose your language',
                     textAlign: TextAlign.center,
                     style: TextStyle(
@@ -132,8 +108,7 @@ class LanguageSelectScreen extends ConsumerWidget {
   }
 }
 
-/// A searchable, scrollable list of [kUiLanguageOptions] with the active one
-/// checked. Reused by the onboarding screen and the Settings language dialog.
+/// Searchable language list, reused by onboarding and the Settings dialog.
 class LanguagePickerList extends StatefulWidget {
   const LanguagePickerList({
     super.key,
@@ -163,7 +138,6 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Search box.
         Container(
           decoration: BoxDecoration(
             color: c.bgTertiary,
@@ -279,11 +253,7 @@ class _LanguageRow extends StatelessWidget {
   }
 }
 
-/// Opens the shared, searchable language chooser — the same ~130-language list
-/// [kUiLanguageOptions] the onboarding picker uses. [selectedCode] is checked in
-/// the list; [onSelected] receives the picked code once the dialog closes. Used
-/// for BOTH the app language (Appearance) and the message-translation target
-/// (Messaging & Display) so the two offer the exact same list.
+/// Shared searchable language dialog, used for both the app language and the translation target.
 Future<void> showLanguageListDialog(
   BuildContext context, {
   required String selectedCode,
@@ -343,9 +313,7 @@ Future<void> showLanguageListDialog(
   );
 }
 
-/// The Appearance → Language chooser: opens the shared dialog and applies the
-/// pick as the app UI language (translation runs non-blocking in the
-/// background).
+/// Appearance language chooser; applies the pick as the UI language.
 Future<void> showLanguagePickerDialog(BuildContext context, WidgetRef ref) {
   return showLanguageListDialog(
     context,

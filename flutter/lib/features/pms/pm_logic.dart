@@ -7,18 +7,13 @@ import '../../models/nostr_event.dart';
 import '../../services/nostr/event_mapper.dart';
 import '../p2p/p2p_models.dart';
 
-/// Pure, socket-free logic for NIP-17 private messages: rumor construction,
-/// rumor→[Message] mapping, and receipt/typing parsing. Kept testable so the
-/// crypto/relay layers can be exercised without networking.
-/// (docs/specs/03 §3.1–§3.4, §10)
+/// Socket-free NIP-17 PM logic: rumor construction, rumor-to-[Message] mapping, receipt and typing parsing.
 class PmLogic {
   PmLogic._();
 
   static final Random _rng = Random.secure();
 
-  /// 64-hex CSPRNG shared id (mirrors `_generateSharedEventId`). Used for the
-  /// `['x', nymMessageId]` tag carried across PM/group copies for dedup +
-  /// receipt matching.
+  /// 64-hex CSPRNG shared id for the `['x', nymMessageId]` tag used for dedup and receipt matching.
   static String generateSharedEventId() {
     final sb = StringBuffer();
     for (var i = 0; i < 32; i++) {
@@ -27,16 +22,7 @@ class PmLogic {
     return sb.toString();
   }
 
-  /// Builds the kind-14 PM rumor for [content] addressed to [recipientPubkey].
-  /// Tags: `['p',recipient]`, `['x',nymMessageId]`, `['ms',ms]` (docs/specs/03
-  /// §3.2). [nowSec]/[nowMs] are injectable for deterministic tests.
-  ///
-  /// [extraTags] threads the optional `['offer', JSON]` file-offer, NIP-30
-  /// custom-emoji (`customEmojiTagsForContent(content)`), and NIP-92 imeta
-  /// tags the PWA spreads into the rumor (`sendNIP17PM`, pms.js:306-315);
-  /// they are appended after `ms`, matching the PWA push order. The caller
-  /// builds them from provider/controller state (like
-  /// [GroupLogic.buildGroupMessageRumor]'s seam).
+  /// Kind-14 PM rumor with p, x and ms tags, then [extraTags] (offer, NIP-30 emoji, NIP-92 imeta) in PWA order.
   static UnsignedEvent buildPmRumor({
     required String selfPubkey,
     required String recipientPubkey,
@@ -62,28 +48,21 @@ class PmLogic {
     );
   }
 
-  /// AppState storage key for a PM thread with [peerPubkey]. Matches the UI's
-  /// `ChatView.pm(pubkey)` keying (`pm-<peerPubkey>`), so PM messages land in
-  /// the same map the sidebar opens.
+  /// Storage key matching `ChatView.pm(pubkey)`, so messages land where the sidebar opens.
   static String pmStorageKey(String peerPubkey) => 'pm-$peerPubkey';
 
-  /// Wire-level conversation key per the spec (`pm-<sorted pubkeys>`). Useful
-  /// for cross-device dedup keys; not the AppState store key.
+  /// Wire-level key (`pm-<sorted pubkeys>`) for cross-device dedup; not the store key.
   static String pmWireKey(String self, String other) =>
       getPMConversationKey(self, other);
 
-  /// Maps a decrypted rumor map (kind 14) recovered from a gift wrap into a PM
-  /// [Message]. [wrapId] is the gift-wrap event id (for reactions/zaps).
-  /// [selfPubkey] determines ownership; [senderVerified] flows from NIP-59
-  /// seal verification.
+  /// Maps a decrypted kind-14 rumor to a PM [Message]; [senderVerified] comes from NIP-59 seal verification.
   static Message? mapPmRumor({
     required Map<String, dynamic> rumor,
     required String wrapId,
     required String selfPubkey,
     required bool senderVerified,
     bool pqEncrypted = false,
-    // Applied to the resolved peer, which for our own copy is the `p` tag
-    // rather than the rumor's author.
+    // Applied to the resolved peer, which for our own copy is the `p` tag, not the author.
     bool Function(String peerPubkey)? pqRootFor,
   }) {
     if ((rumor['kind'] as num?)?.toInt() != EventKind.dmRumor) return null;
@@ -98,16 +77,10 @@ class PmLogic {
         : senderPubkey;
     final nymMessageId = _tagValue(tags, 'x');
     final ms = int.tryParse(_tagValue(tags, 'ms') ?? '') ?? 0;
-    // Thread reply marker: the root's shared nymMessageId (threads).
+    // Thread reply marker: the root's shared nymMessageId.
     final threadRoot = _tagValue(tags, 'nymthread');
 
-    // A PM can carry a P2P file offer on an `['offer', JSON]` tag (pms.js:1270
-    // — `parseFileOfferTag(rumor.tags, senderPubkey)` sets isFileOffer/
-    // fileOffer so the bubble renders a file-offer card instead of plain
-    // text). `parseFileOfferTag` binds the offer's seederPubkey to the actual
-    // sender (anti-spoof) and returns null when absent/mismatched. The PWA's
-    // side effect of registering the offer into `p2pFileOffers` (p2p.js:187)
-    // is the ingest layer's job here — this mapper stays socket-free.
+    // `parseFileOfferTag` binds the seeder to the actual sender (anti-spoof); registering the offer is the ingest layer's job.
     final fileOffer = parseFileOfferTag(tags, senderPubkey);
 
     final createdAtRaw = (rumor['created_at'] as num?)?.toInt() ?? 0;
@@ -118,9 +91,7 @@ class PmLogic {
     );
 
     final isOwn = senderPubkey == selfPubkey;
-    // Pure-mapper fallback: `nym#xxxx` (the PWA's `getNymFromPubkey` default,
-    // users.js:1085 — never 'anon'). The controller re-resolves the author
-    // against the users map after mapping, like the PWA's `senderName`.
+    // Fallback `nym#xxxx`, never 'anon'; the controller re-resolves the author afterwards.
     final author = getNymFromPubkey('nym', senderPubkey);
 
     return Message(
@@ -171,8 +142,6 @@ class PmLogic {
     return !isTyping(rumor) && !isReceipt(rumor);
   }
 
-  // ---- receipts / typing (kind 69420 rumor) -------------------------------
-
   /// True if [rumor] carries a `['receipt', 'delivered'|'read']` tag.
   static bool isReceipt(Map<String, dynamic> rumor) {
     for (final t in _tags(rumor)) {
@@ -183,15 +152,10 @@ class PmLogic {
     return false;
   }
 
-  /// True if [rumor] carries a `['typing', …]` tag.
   static bool isTyping(Map<String, dynamic> rumor) =>
       _tags(rumor).any((t) => t.isNotEmpty && t[0] == 'typing');
 
-  /// Parses a receipt rumor → (messageId, receiptType, reader), or null. The
-  /// reader (the rumor author — the peer who delivered/read our message) is
-  /// needed for GROUP read receipts, which render the reader's avatar rather
-  /// than a 1:1 checkmark. Group vs PM is decided by the matched own message's
-  /// `isGroup` flag on receive, so no wire `g` tag is required (matching the PWA).
+  /// Parses a receipt with its reader, needed for group read-receipt avatars; group vs PM comes from the matched message.
   static ReceiptInfo? parseReceipt(Map<String, dynamic> rumor) {
     final messageIds = <String>[];
     String? type;
@@ -209,7 +173,6 @@ class PmLogic {
     );
   }
 
-  /// Parses a typing rumor → (status, groupId?), or null.
   static TypingInfo? parseTyping(Map<String, dynamic> rumor) {
     String? status;
     String? groupId;
@@ -229,8 +192,7 @@ class PmLogic {
     );
   }
 
-  /// Maps a receipt type to a [DeliveryStatus] rank (so we only advance, never
-  /// regress, delivery state).
+  /// Delivery status rank, so state only advances.
   static int statusOrder(DeliveryStatus s) {
     switch (s) {
       case DeliveryStatus.read:
@@ -272,7 +234,6 @@ class PmLogic {
   }
 }
 
-/// A parsed delivery/read receipt from a kind-69420 rumor.
 class ReceiptInfo {
   ReceiptInfo({
     required this.messageId,
@@ -288,12 +249,10 @@ class ReceiptInfo {
   /// 'delivered' | 'read'.
   final String receiptType;
 
-  /// The rumor author — the peer who delivered/read our message. Used to attach
-  /// the reader avatar for GROUP read receipts.
+  /// The peer who delivered or read our message, for group read-receipt avatars.
   final String? readerPubkey;
 }
 
-/// A parsed typing indicator from a kind-69420 rumor.
 class TypingInfo {
   TypingInfo({required this.status, this.groupId, this.pubkey, this.ttlSec = 0});
 

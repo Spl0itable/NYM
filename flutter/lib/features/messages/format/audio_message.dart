@@ -1,12 +1,4 @@
-// Inline audio player for message media. The bot's ?speak replies (and any
-// audio link someone pastes) used to render as a bare URL; this gives them a
-// transport bar with the file offered underneath, in both the single-chat and
-// columns views — the PWA's `.audio-container` (`message-format.js`,
-// `styles-chat.css`) rendered natively.
-//
-// Playback is lazy: nothing is fetched until the first tap, so a channel full
-// of audio links costs no bandwidth on render. A source that fails to load
-// falls back to the download affordance rather than becoming a dead bar.
+// Inline audio player; nothing is fetched until the first tap, and a load failure falls back to download.
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
@@ -17,11 +9,9 @@ import '../../../core/utils/safe_url.dart';
 import 'media_source.dart';
 import 'message_content.dart' show proxiedMedia;
 
-/// `--radius-sm` (`styles-core.css:87`).
 const double _kAudioRadius = 12;
 
-/// Matches `.message-content .audio-container { max-width: 340px }`; columns
-/// pass a smaller cap via [maxWidth].
+/// Columns pass a smaller cap via [maxWidth].
 const double _kAudioMaxWidth = 340;
 
 class AudioMessage extends StatefulWidget {
@@ -34,7 +24,6 @@ class AudioMessage extends StatefulWidget {
 
   final String url;
 
-  /// Basename shown on the download link; falls back to a generic label.
   final String fileName;
 
   final double maxWidth;
@@ -103,8 +92,7 @@ class _AudioMessageState extends State<AudioMessage> {
         if (_source == null && mounted) setState(() => _failed = true);
       }
     } catch (_) {
-      // Unsupported codec or an unreachable source: keep the download route
-      // working instead of leaving a bar that does nothing.
+      // Keep the download route working rather than leaving a dead bar.
       if (mounted) setState(() => _failed = true);
     } finally {
       if (mounted) setState(() => _loading = false);

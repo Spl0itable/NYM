@@ -13,18 +13,9 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import '../i18n/i18n.dart';
 import 'zap_modal.dart';
 
-/// The lightning bolt fill color (`--lightning`, `#f7931a`).
 const Color _kLightning = Color(0xFFF7931A);
 
-/// The inline `⚡ total` zap badge + quick-zap button shown at the FRONT of a
-/// message's reactions row (`updateMessageZaps`, `zaps.js:1702-1784`). Reads
-/// [zapsProvider] for [message]; renders nothing until the message has zaps.
-///
-/// - `.zap-badge` (`styles-chat.css:134-151`): orange-gradient pill (135°
-///   .15→.08), border orange@.3, padding 3×10, radius 20, 14px lightning bolt,
-///   12px/600 `--lightning` abbreviated total. `title` = "N zappers • M sats".
-/// - `.add-zap-btn` (`styles-chat.css:332-355`): white@.04 pill, glass border,
-///   padding 4×8, radius 20, opacity 0.6, 16px bolt+plus glyph; tap → quick-zap.
+/// Inline zap total badge plus quick-zap button at the front of the reactions row; nothing until the message has zaps.
 class ZapBadge extends ConsumerStatefulWidget {
   const ZapBadge({super.key, required this.message});
 
@@ -38,14 +29,10 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     with SingleTickerProviderStateMixin {
   final GlobalKey _badgeKey = GlobalKey();
 
-  /// `.zap-badge-shock` (`@keyframes zapBadgeShock`, styles-features.css:464):
-  /// a 0.55s scale-up-and-settle pulse with a gold/cyan box-shadow flash,
-  /// applied to the badge each time the total ticks up (zaps.js:1697).
+  /// 0.55s scale-and-glow pulse played each time the total ticks up.
   late final AnimationController _shock;
 
-  /// Last observed total (sats). -1 = not yet observed; the first observation
-  /// (existing zaps on load) is recorded WITHOUT a burst so only live increases
-  /// pop. A zap-less message records 0 here, so its first zap still bursts.
+  /// -1 until first observed; the initial total is recorded without a burst so only live increases pop.
   int _lastTotal = -1;
 
   Message get message => widget.message;
@@ -74,14 +61,11 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     }
 
     final total = zaps.totalSats;
-    // Lightning burst when the total ticks up while mounted (zaps.js
-    // `_playZapBurst`, fired from `_recordMessageZap`): the SVG bolt flash +
-    // radiating mini-bolts over the badge, plus the `.zap-badge-shock` pulse on
-    // the badge pill itself. Anchored to the badge.
+    // Burst and pulse on a live total increase, anchored to the badge.
     if (_lastTotal >= 0 && total > _lastTotal) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _shock.forward(from: 0); // `.zap-badge-shock` (deferred off-build)
+        _shock.forward(from: 0);
         final box = _badgeKey.currentContext?.findRenderObject() as RenderBox?;
         if (box == null || !box.hasSize) return;
         ZapBurst.play(context, box.localToGlobal(box.size.center(Offset.zero)));
@@ -90,10 +74,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     _lastTotal = total;
 
     final zappers = zaps.zapperCount;
-    // Tooltip mirrors zaps.js:1748-1751: "N zappers • M sats total", with a
-    // trailing " (U unverified)" when any zap on this message is unverified (a
-    // gift-wrapped, zapper-signed announcement not validated against the
-    // recipient's LNURL provider pubkey).
+    // Tooltip adds " (U unverified)" when any zap wasn't validated against the recipient's LNURL provider key.
     final unverifiedSats = zaps.unverifiedSats;
     final zapperLabel = zappers == 1
         ? tr('{n} zapper', {'n': abbreviateNumber(zappers)})
@@ -114,9 +95,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
       children: [
         Tooltip(
           message: tooltip,
-          // `.zap-badge-shock` — scale-pulse + glow flash while _shock runs.
-          // The scale/translate/glow all re-evaluate each tick inside the
-          // builder; the constant inner pill is passed as the cached `child`.
+          // The constant inner pill is the cached `child`; transforms re-evaluate each tick.
           child: AnimatedBuilder(
             animation: _shock,
             builder: (context, child) {
@@ -169,7 +148,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
             ),
           ),
         ),
-        // Quick-zap button: only when the author pubkey is known.
+        // Quick-zap only when the author pubkey is known.
         if (message.pubkey.isNotEmpty) ...[
           const SizedBox(width: 5),
           _QuickZapBtn(
@@ -180,17 +159,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     );
   }
 
-  /// The `.zap-badge-shock` box-shadow flash (`@keyframes zapBadgeShock`,
-  /// styles-features.css:467-473). box-shadow is keyed at 0/20/60/100% (the
-  /// 40% keyframe omits it), each segment eased with the animation's
-  /// `ease-out`:
-  ///   0%   0 0 10px orange(247,147,26)@.5
-  ///   20%  0 0 18px gold(255,216,107)@.95 + 0 0 26px cyan(159,232,255)@.7
-  ///   60%  0 0 16px orange@.9
-  ///   100% 0 0 10px orange@.5
-  /// CSS pads the shorter lists with transparent zero shadows, so the cyan
-  /// companion fades in to the 20% flare and back out by 60%. Driven by the
-  /// same `_shock` controller as the scale.
+  /// Pulse glow keyed at 0/20/60/100% with ease-out; a cyan companion flares at 20%.
   List<BoxShadow> _shockGlow() {
     if (!_shock.isAnimating) return const [];
     final t = _shock.value;
@@ -233,8 +202,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     ];
   }
 
-  /// CSS interpolates shadow colors with premultiplied alpha; [Color.lerp] is
-  /// straight-alpha, so lerp the premultiplied components and divide back out.
+  /// CSS lerps shadow colors premultiplied; [Color.lerp] is straight-alpha, so premultiply and divide back.
   static Color _shadowLerp(Color a, Color b, double t) {
     final alpha = a.a + (b.a - a.a) * t;
     if (alpha <= 0) return const Color(0x00000000);
@@ -248,16 +216,9 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     );
   }
 
-  /// Resolves the author's lightning address and opens the zap modal, mirroring
-  /// `handleQuickZap` (`zaps.js:1786`). The PWA always does a FRESH fetch first
-  /// (`fetchLightningAddressForUser`) rather than trusting the cache, so an
-  /// author whose kind-0 hasn't arrived yet still gets zapped instead of a
-  /// spurious "cannot receive zaps". Posts the PWA's "Checking…" system note,
-  /// awaits the resolve, then either opens the modal or reports no address.
+  /// Fresh-fetches the author's lightning address before opening the zap modal, so an unseen kind 0 isn't reported as unzappable.
   Future<void> _quickZap(BuildContext context) async {
-    // Live profile preferred over the nym frozen onto the message: this text is
-    // shown to the user right now, so it should name the sender the way the
-    // rest of the UI does.
+    // Prefer the live profile nym over the one frozen onto the message.
     final liveNym = ref.read(appStateProvider).users[message.pubkey]?.nym;
     final baseNym = pickDisplayNym(liveNym, message.author);
     final notifier = ref.read(appStateProvider.notifier);
@@ -285,7 +246,6 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
   }
 }
 
-/// The `.add-zap-btn` pill (bolt+plus glyph, dim until hover/press).
 class _QuickZapBtn extends StatelessWidget {
   const _QuickZapBtn({required this.onTap});
   final VoidCallback onTap;
@@ -318,7 +278,7 @@ class _QuickZapBtn extends StatelessWidget {
   }
 }
 
-/// The PWA lightning bolt (`M13 2L3 14h8l-1 8 10-12h-8l1-8z`, 24×24 viewBox).
+/// Lightning bolt path on a 24x24 viewBox.
 class _BoltPainter extends CustomPainter {
   const _BoltPainter(this.color);
   final Color color;
@@ -346,8 +306,7 @@ class _BoltPainter extends CustomPainter {
   bool shouldRepaint(covariant _BoltPainter old) => old.color != color;
 }
 
-/// The quick-zap glyph: a bolt offset left (`M11 2L1 14h8l-1 8 10-12h-8l1-8z`)
-/// plus a small "+" at the top-right (the PWA `add-zap-btn` SVG).
+/// Bolt offset left with a small "+" at the top-right.
 class _BoltPlusPainter extends CustomPainter {
   const _BoltPlusPainter(this.color);
   final Color color;
@@ -369,7 +328,7 @@ class _BoltPlusPainter extends CustomPainter {
       ..lineTo(11 * s, 2 * s)
       ..close();
     canvas.drawPath(bolt, fill);
-    // The "+" (vertical bar x=19 y=2..6, horizontal bar x=17..21 y=4).
+    // "+": vertical bar x=19 y=2..6, horizontal bar x=17..21 y=4.
     final stroke = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
@@ -384,9 +343,7 @@ class _BoltPlusPainter extends CustomPainter {
   bool shouldRepaint(covariant _BoltPlusPainter old) => old.color != color;
 }
 
-/// The instantaneous transform of the `.zap-badge-shock` pulse
-/// (`@keyframes zapBadgeShock`, styles-features.css:467): scale + a small
-/// horizontal wobble, keyed at 0/20/40/60/100% of the 0.55s window.
+/// Scale plus a small horizontal wobble over the 0.55s pulse.
 class _ZapBadgeShock {
   const _ZapBadgeShock(this.scale, this.dx);
   final double scale;
@@ -394,9 +351,7 @@ class _ZapBadgeShock {
 
   static _ZapBadgeShock at(double t, bool animating) {
     if (!animating) return const _ZapBadgeShock(1, 0);
-    // Keyframes: 0%(1,0) 20%(1.25,-1) 40%(1.12,2) 60%(1.18,-1) 100%(1,0).
-    // `animation: zapBadgeShock 0.55s ease-out` — the timing function applies
-    // per keyframe segment.
+    // Keyframes 0%(1,0) 20%(1.25,-1) 40%(1.12,2) 60%(1.18,-1) 100%(1,0), ease-out per segment.
     if (t < 0.20) {
       final f = Curves.easeOut.transform(t / 0.20);
       return _ZapBadgeShock(_l(1, 1.25, f), _l(0, -1, f));
@@ -416,21 +371,13 @@ class _ZapBadgeShock {
       a + (b - a) * t.clamp(0.0, 1.0);
 }
 
-/// A one-shot zap "burst" overlay (`_playZapBurst`, zaps.js:1655): the PWA's
-/// `.zap-burst` SVG lightning-bolt flash (`@keyframes zapBurst`, 0.6s) plus 9
-/// `.zap-bolt` radiating mini-bolts (`@keyframes zapBolt`, 0.5s), drawn over the
-/// zap badge. Mirrors the `ReactionBurst` structure but with the electric bolt
-/// + radiating bolts instead of an emoji + dot sparks.
-///
-/// Inserted into the root [Overlay]; removes itself after ~800ms (the PWA's
-/// `setTimeout(…, 800)`).
+/// One-shot zap burst: a bolt flash plus 9 radiating mini-bolts over the badge; removes itself after ~800ms.
 class ZapBurst {
   ZapBurst._();
 
   static const _durationMs = 800;
-  static const _boltCount = 9; // zaps.js:1675 `boltCount = 9`.
+  static const _boltCount = 9;
 
-  /// Spawns a zap burst centerd at [globalCenter].
   static void play(BuildContext context, Offset globalCenter) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
@@ -443,8 +390,7 @@ class ZapBurst {
   }
 }
 
-/// One radiating `.zap-bolt`: a direction (dx,dy), its rotation, and a 0..1
-/// start delay (the PWA's `animationDelay` up to 60ms).
+/// One radiating mini-bolt: direction, rotation and a 0..1 start delay (up to 60ms).
 class _ZapBolt {
   _ZapBolt(this.dx, this.dy, this.rot, this.delay);
   final double dx;
@@ -470,8 +416,7 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
   void initState() {
     super.initState();
     final rng = math.Random();
-    // zaps.js:1676-1684: angle = i/N*2π + random±0.25; dist = 20+random*20;
-    // rotation = angle + 90°; animationDelay up to 60ms.
+    // angle = i/N*2π ± 0.25; dist = 20..40; rotation = angle + 90°; delay up to 60ms.
     _bolts = List.generate(ZapBurst._boltCount, (i) {
       final angle = (i / ZapBurst._boltCount) * math.pi * 2 +
           (rng.nextDouble() - 0.5) * 0.5;
@@ -497,10 +442,7 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
 
   @override
   Widget build(BuildContext context) {
-    // The burst is inserted into the root Overlay, which is NOT under a
-    // Material (app.dart). Painting is all CustomPaint/DecoratedBox (no Text),
-    // so there is no yellow-underline risk, but IgnorePointer keeps it
-    // non-interactive like `pointer-events: none`.
+    // IgnorePointer keeps the overlay non-interactive.
     return IgnorePointer(
       child: AnimatedBuilder(
         animation: _c,
@@ -516,23 +458,10 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
     );
   }
 
-  /// `animation: zapBurst 0.6s cubic-bezier(0.2, 1.4, 0.5, 1)` — in CSS the
-  /// timing function applies PER keyframe segment, and the 1.4 y control point
-  /// overshoots each segment's target before settling.
+  /// Overshooting curve applied per keyframe segment, as in CSS.
   static const Cubic _kBurstCurve = Cubic(0.2, 1.4, 0.5, 1);
 
-  /// The `.zap-burst` 40×40 SVG bolt (`@keyframes zapBurst`, 0.6s of the 0.8s
-  /// window): scale 0→1.6→1.05→1.35→0.5, rotate -12°→6°→-7°→5°→0°, opacity
-  /// 0→1→…→0, each segment eased with the overshooting [_kBurstCurve]. The
-  /// upward jump (translate -50%→-90% of the 40px box) is only keyed on the
-  /// final 45%→100% segment.
-  ///
-  /// `filter` is keyed only at 15% (`brightness(2.2)`) and 45%
-  /// (`brightness(1.8)`); the implicit 0%/100% keys hold the element's
-  /// drop-shadow filter. drop-shadow↔brightness is a mismatched filter list,
-  /// which CSS interpolates DISCRETELY (flip at eased progress 0.5), while
-  /// 15%→45% interpolates brightness 2.2→1.8 smoothly — so the glow is
-  /// replaced by a brightness flash for the middle of the burst.
+  /// 40x40 bolt flash keyframes; brightness stands in for the drop-shadow glow mid-burst.
   Widget _buildFlash() {
     final t = (_c.value * 800 / 600).clamp(0.0, 1.0);
     double scale;
@@ -559,12 +488,10 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
       scale = _u(1.35, 0.5, f);
       rotDeg = _u(5, 0, f);
       opacity = _u(1, 0, f);
-      // translate(-50%,-50%) → translate(-50%,-90%): -40% of 40px = -16px.
+      // -40% of 40px = -16px.
       yShift = _u(0, -16, f);
     }
 
-    // filter keys: drop-shadows(0%) → brightness(2.2)@15% →
-    // brightness(1.8)@45% → drop-shadows(100%).
     double brightness = 1;
     var dropShadow = true;
     if (t < 0.15) {
@@ -583,15 +510,13 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
     }
 
     const box = 40.0;
-    // `.zap-burst svg { fill: #ffd86b }` (24×24 bolt path, reused).
     Widget bolt = const SizedBox(
       width: box,
       height: box,
       child: CustomPaint(painter: _BoltPainter(Color(0xFFFFD86B))),
     );
     if (dropShadow) {
-      // drop-shadow(0 0 10px rgba(247,147,26,.9)) +
-      // drop-shadow(0 0 18px rgba(159,232,255,.55)) — the bolt glow.
+      // The bolt glow drop-shadows.
       bolt = DecoratedBox(
         decoration: const BoxDecoration(
           boxShadow: [
@@ -602,8 +527,7 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
         child: bolt,
       );
     } else {
-      // brightness(k): multiply RGB by k, alpha untouched. It REPLACES the
-      // drop-shadow filter while active (mismatched lists don't combine).
+      // brightness(k) multiplies RGB and replaces the drop-shadow while active.
       bolt = ColorFiltered(
         colorFilter: ColorFilter.matrix(<double>[
           brightness, 0, 0, 0, 0, //
@@ -630,18 +554,15 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
     );
   }
 
-  /// The 9 `.zap-bolt` mini-bolts (`@keyframes zapBolt`, 0.5s of the window):
-  /// scaleY 0→1→0.2, translating from the center out to (dx,dy), each a 2×14px
-  /// rounded gradient bar (white→gold→orange) with a gold/cyan glow.
+  /// 9 mini-bolts growing then shrinking to 0.2 as they travel out, each a 2x14 gradient bar with a glow.
   List<Widget> _buildBolts() {
     return _bolts.map((b) {
       final raw = ((_c.value - b.delay) * 800 / 500).clamp(0.0, 1.0);
-      // 0%→40%: travel half-way + grow to full height; 40%→100%: rest of the
-      // travel while shrinking to 0.2 and fading out.
+      // 0–40%: half the travel while growing; 40–100%: the rest while shrinking and fading.
       final double prog; // 0..1 fraction of the (dx,dy) travel
       final double scaleY;
       final double opacity;
-      // `animation: zapBolt 0.5s ease-out` — eased per keyframe segment.
+      // Ease-out per keyframe segment.
       if (raw < 0.40) {
         final f = Curves.easeOut.transform(raw / 0.40);
         prog = _l(0, 0.5, f);
@@ -697,7 +618,6 @@ class _ZapBurstWidgetState extends State<_ZapBurstWidget>
   static double _l(double a, double b, double t) =>
       a + (b - a) * t.clamp(0.0, 1.0);
 
-  /// Unclamped lerp — the overshooting [_kBurstCurve] drives values past
-  /// their keyframe targets (CSS bezier overshoot).
+  /// Unclamped so the overshooting curve can pass keyframe targets.
   static double _u(double a, double b, double t) => a + (b - a) * t;
 }

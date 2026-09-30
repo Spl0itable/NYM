@@ -1,4 +1,3 @@
-/// Presence status of a user (docs/specs/03 §2.5).
 enum UserStatus { online, away, offline, hidden }
 
 UserStatus userStatusFromString(String? s) {
@@ -14,10 +13,10 @@ UserStatus userStatusFromString(String? s) {
   }
 }
 
-/// Active-presence threshold (ms).
+/// Active-presence threshold in ms.
 const int kActiveThresholdMs = 300000;
 
-/// A seen user (`this.users` entry) merged with kind-0 profile data.
+/// A seen user merged with kind-0 profile data.
 class User {
   User({
     required this.pubkey,
@@ -42,38 +41,23 @@ class User {
   int lastSeen;
   UserStatus status;
 
-  /// Channels the user was seen in.
   final Set<String> channels;
 
   UserProfile? profile;
   String? awayMessage;
 
-  /// Active flair-shop cosmetics broadcast by this user (via the presence
-  /// `shop-update` tag / shop backend). Self cosmetics come from the shop
-  /// controller; others' come from presence ingestion.
-  String? shopStyle; // active message-style item id
-  String? shopFlair; // active nickname-flair item id
-  bool isSupporter; // owns the supporter badge
+  /// Other users' active shop cosmetics from presence; self reads the shop controller.
+  String? shopStyle; // Active message-style item id.
+  String? shopFlair; // Active nickname-flair item id.
+  bool isSupporter; // Owns the supporter badge.
 
-  /// Active special-cosmetic item ids broadcast by this user (the
-  /// `active.cosmetics` array — `cosmetic-aura-gold`, `cosmetic-frost`, …).
-  /// Populated by presence / shop-status ingestion for OTHER users; the self
-  /// pubkey reads these live from the shop controller instead. (`shop.js:459`.)
+  /// Other users' active special-cosmetic item ids; self reads the shop controller.
   List<String> shopCosmetics;
 
-  /// Active numbered-flair edition (`active.editions['flair-genesis']`), stamped
-  /// on the rendered flair badge for OTHER users. Null when unknown / unnumbered.
+  /// Numbered-flair edition for other users; null when unknown.
   int? shopEdition;
 
-  /// Effective status given the active threshold (docs/specs/03 §2.5).
-  ///
-  /// [isVerifiedBot] mirrors the PWA's verified-bot always-online override
-  /// (`getEffectiveUserStatus`, users.js:1112: `verifiedBotPubkeys.has(pubkey)
-  /// -> 'online'`). It sits AFTER the `hidden` short-circuit and BEFORE the
-  /// away/recency checks, exactly as in the PWA (statusHidden at :1111 wins over
-  /// the bot override at :1112). Callers pass
-  /// `kVerifiedBotPubkeys.contains(pubkey)` so every call site inherits the
-  /// override without its own special-case.
+  /// Effective status; a verified bot is always online unless hidden, as in the PWA.
   UserStatus effectiveStatus({int? nowMs, bool isVerifiedBot = false}) {
     if (status == UserStatus.hidden) return UserStatus.hidden;
     if (isVerifiedBot) return UserStatus.online;
@@ -85,7 +69,6 @@ class User {
   }
 }
 
-/// Kind-0 profile metadata (NIP-01).
 class UserProfile {
   UserProfile({
     this.name,
@@ -102,10 +85,7 @@ class UserProfile {
 
   String? name;
 
-  /// The non-standard `username` field some clients publish — the middle link
-  /// of the PWA's display-name chain `name || username || display_name`
-  /// (nostr-core.js:697-698). Parsed so the boot profile-cache path resolves
-  /// the same nym as live kind-0 ingest.
+  /// Non-standard `username`, middle of the PWA chain `name || username || display_name`.
   String? username;
   String? displayName;
   String? about;
@@ -115,7 +95,7 @@ class UserProfile {
   String? lud16;
   String? lud06;
 
-  /// Timestamp of the kind-0 event this profile was parsed from (sec).
+  /// created_at (seconds) of the source kind-0 event.
   int kind0Ts;
 
   String? get lightningAddress => lud16 ?? lud06;

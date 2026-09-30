@@ -1,4 +1,4 @@
-/// A 1:1 PM conversation meta entry (`pmConversations`, docs/specs/03 §3.4).
+/// A 1:1 PM conversation meta entry (`pmConversations`).
 class PMConversation {
   PMConversation({
     required this.pubkey,
@@ -9,7 +9,7 @@ class PMConversation {
   final String pubkey;
   String nym;
 
-  /// Last message time (ms), for sidebar ordering (most recent first).
+  /// Last message time in ms.
   int lastMessageTime;
 
   Map<String, dynamic> toJson() =>

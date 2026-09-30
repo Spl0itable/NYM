@@ -11,24 +11,19 @@ import 'relay_connection.dart';
 import 'relay_message.dart';
 import 'relay_stats.dart';
 
-/// Tracks seen event ids so duplicate events arriving from multiple relays are
-/// only surfaced once. Pure and testable (no sockets).
-///
-/// Bounded: once [maxIds] is exceeded the oldest ids are evicted (insertion
-/// order). Eviction can in theory let a very old id reappear, which is
-/// acceptable for a transport-layer dedup cache.
+/// Bounded seen-id set that surfaces cross-relay duplicates once; evicts oldest first.
 class EventDeduper {
   EventDeduper({this.maxIds = 10000});
 
   final int maxIds;
   final Set<String> _seen = <String>{};
 
-  /// Returns true if [id] is new (and records it); false if already seen.
+  /// Records [id]; true when new, false when already seen.
   bool add(String id) {
     if (_seen.contains(id)) return false;
     _seen.add(id);
     if (_seen.length > maxIds) {
-      // Evict oldest (Set preserves insertion order in Dart).
+      // Evict oldest; Dart Sets preserve insertion order.
       final overflow = _seen.length - maxIds;
       final toRemove = _seen.take(overflow).toList();
       _seen.removeAll(toRemove);
@@ -42,13 +37,11 @@ class EventDeduper {
   void clear() => _seen.clear();
 }
 
-/// Generates a PWA-style subscription id: a random base36 string, equivalent
-/// to JS `Math.random().toString(36).slice(2)`.
 String copyKey(NostrEvent event) => '${event.id}:${event.sig}';
 
 String generateSubId([Random? rng]) {
   final r = rng ?? Random();
-  // 11 base36 chars ~= 56 bits of entropy, similar magnitude to the JS form.
+  // 11 base36 chars, about 56 bits, like JS `Math.random().toString(36)`.
   const chars = '0123456789abcdefghijklmnopqrstuvwxyz';
   final sb = StringBuffer();
   for (var i = 0; i < 11; i++) {
@@ -57,78 +50,46 @@ String generateSubId([Random? rng]) {
   return sb.toString();
 }
 
-/// Async signature verifier injected into the pool. Defaults to accept-all so
-/// this layer does not depend on the crypto module.
+/// Injected async signature verifier; defaults to accept-all so this layer needs no crypto.
 typedef EventVerifier = Future<bool> Function(NostrEvent event);
 
 Future<bool> _acceptAll(NostrEvent _) async => true;
 
-/// The common pool surface shared by the direct [RelayPool] and the proxy
-/// `RelayPoolProxy`, so [NostrService] can hold either transparently and a
-/// [Subscription] can route CLOSE/teardown back through its owner.
+/// Pool surface shared by direct [RelayPool] and `RelayPoolProxy`.
 abstract interface class PoolTransport {
-  /// Tear down [sub] on the transport (sends CLOSE / unsubscribe).
   void closeSubscription(Subscription sub);
 
-  /// Open a new subscription on the transport.
   Subscription subscribe(List<NostrFilter> filters, {String? subId});
 
-  /// Connect every relay / shard socket.
   void connectAll();
 
-  /// Apply the latest geo-relay set so geohash-channel subscriptions reach the
-  /// closest geo relays. In proxy mode this re-shards the pool and pushes the
-  /// updated RELAYS config + opens geo shard sockets (mirrors
-  /// `_poolSendRelayConfigNow` / `connectToGeoRelays`, relays.js:2839); in direct
-  /// mode it opens a direct socket per geo url and back-fills active subs
-  /// (`connectToGeoRelays` legacy branch). No-op when [geoRelayUrls] is empty.
+  /// Applies the geo-relay set: proxy mode re-shards, direct mode opens sockets and back-fills subs.
   void updateGeoRelays(List<String> geoRelayUrls);
 
-  /// Broadcast [event]; returns the number of relays/shards that accepted it.
+  /// Broadcasts [event]; returns how many relays/shards accepted it.
   Future<int> publish(NostrEvent event);
 
-  /// Publish a DM gift-wrap (kind 1059). In proxy mode this wraps the event in a
-  /// `["DM_EVENT",e]` frame so the proxy prioritizes the default relays
-  /// (relays.js `sendDMToRelays`); in direct mode it is a plain publish.
+  /// Publishes a kind-1059 DM; proxy mode sends `["DM_EVENT",e]` so default relays get priority.
   Future<int> publishDm(NostrEvent event);
 
-  /// Publish a geohash channel event (kind 20000 with a `g` tag). In proxy mode,
-  /// when [closestRelayUrls] is non-empty this sends a
-  /// `["GEO_EVENT",e,[urls]]` frame so the proxy prioritizes the closest geo
-  /// relays (relays.js `broadcastEvent`); otherwise it is a plain publish. In
-  /// direct mode it is always a plain publish.
+  /// Publishes a geohash event; proxy mode sends `["GEO_EVENT",e,[urls]]` when [closestRelayUrls] is set.
   Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls);
 
-  /// Relays currently reported as connected.
   int get connectedCount;
 
-  /// The set of relay URLs currently reported as connected (proxy: the deduped
-  /// per-shard connected sets; direct: the open sockets). Used by the geo-relay
-  /// keep-alive to detect a dropped geo relay (`poolConnectedRelays` /
-  /// per-relay ws state in the PWA's `startGeoRelayKeepAlive`, relays.js:152/161).
+  /// Connected relay URLs, used by the geo-relay keep-alive to spot drops.
   Set<String> get connectedRelayUrls;
 
-  /// Decides whether a geohash channel event may be admitted from the relay
-  /// that delivered it. Owned by NostrService, which holds the geo directory;
-  /// the transports only know which socket a frame came in on.
-  ///
-  /// Null admits everything, which is also what the implementation does for
-  /// anything it cannot judge — the failure that matters here is hiding a
-  /// channel, not letting one message through.
+  /// Admission check for geohash events by delivering relay; null admits all, and unjudgeable events pass.
   set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn);
 
-  /// Live relay-traffic counters (bytes in/out, events, throughput history,
-  /// per-relay events + latency) for the Network Stats modal. Aggregated across
-  /// every relay/shard socket. Mirrors the PWA's `nym.relayStats`.
+  /// Live traffic counters aggregated across every socket, for the Network Stats modal.
   RelayStats get stats;
 
-  /// Close every socket and subscription.
   Future<void> disconnectAll();
 }
 
-/// An active multi-relay subscription. Emits deduped, optionally-verified
-/// [NostrEvent]s; [eose] completes when a quorum of relays signals EOSE (or on
-/// timeout). Call [close] to tear down.
+/// Multi-relay subscription emitting deduped, optionally verified events; [eose] completes on quorum or timeout.
 class Subscription {
   Subscription._(
     this.subId,
@@ -142,8 +103,7 @@ class Subscription {
         _eoseTimeout = eoseTimeout,
         _onRejected = onRejected;
 
-  /// Transport-agnostic constructor used by both [RelayPool] and the proxy
-  /// transport. Exposes the start/event/eose hooks under public names.
+  /// Transport-agnostic constructor used by both pool transports.
   factory Subscription.forTransport(
     String subId,
     PoolTransport transport,
@@ -181,31 +141,23 @@ class Subscription {
   bool _closed = false;
   bool _answered = false;
 
-  /// Deduped (and verified) events for this subscription.
   Stream<NostrEvent> get events => _events.stream;
 
   bool get answered => _answered;
 
-  /// Completes when enough relays have signaled EOSE, or on timeout.
   Future<void> get eose => _eose.future;
 
-  /// True once [close] has run — the stream is closed and no more events will
-  /// arrive. Callers that cache a `Subscription` (e.g. the single channel-typing
-  /// sub) must re-create it rather than reuse a closed one.
+  /// True once closed; cached subscriptions must be re-created, not reused.
   bool get isClosed => _closed;
 
   void _start() => startEose();
 
-  /// Arms the EOSE timeout. Public so the proxy transport can drive it.
+  /// Arms the EOSE timeout; public so the proxy transport can drive it.
   void startEose() {
     _eoseTimer = Timer(_eoseTimeout, _completeEose);
   }
 
-  /// Called by the pool when an EVENT for this sub arrives from [relayUrl].
-  ///
-  /// [RelayPool] dedupes per-subscription here. The proxy transport dedupes
-  /// globally (cross-shard) BEFORE calling this, so its dedup is a no-op
-  /// second pass — harmless.
+  /// Handles an EVENT from [relayUrl]; the proxy dedupes globally first, making this pass a no-op.
   Future<void> onEvent(String relayUrl, NostrEvent event) async {
     if (_closed) return;
     if (_delivered.contains(event.id)) return;
@@ -223,7 +175,6 @@ class Subscription {
     if (!_events.isClosed) _events.add(event);
   }
 
-  /// Called by the pool when an EOSE for this sub arrives from [relayUrl].
   void onEose(String relayUrl, {bool closed = false}) {
     if (_closed) return;
     if (!closed) _answered = true;
@@ -240,7 +191,6 @@ class Subscription {
     if (!_eose.isCompleted) _eose.complete();
   }
 
-  /// Close the subscription: sends CLOSE to all relays and releases resources.
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
@@ -252,10 +202,7 @@ class Subscription {
   }
 }
 
-/// Manages a set of relays in DIRECT WebSocket mode.
-///
-/// Transport-only: no app state, no UI. Verification is injected so this layer
-/// has no dependency on the crypto module.
+/// Direct WebSocket relay pool; transport only, with verification injected.
 class RelayPool implements PoolTransport {
   RelayPool({
     required List<String> relays,
@@ -280,8 +227,7 @@ class RelayPool implements PoolTransport {
   final RelayConnection Function(String url) _connectionFactory;
   final Random _rng;
 
-  /// Fraction of relays that must EOSE before a subscription's [Subscription.eose]
-  /// completes (clamped to at least one relay).
+  /// Fraction of relays that must EOSE before [Subscription.eose] completes (at least one).
   final double eoseQuorum;
   final Duration eoseTimeout;
 
@@ -289,43 +235,33 @@ class RelayPool implements PoolTransport {
   final Map<String, StreamSubscription<RelayMessage>> _msgSubs = {};
   final Map<String, StreamSubscription<RelayStatus>> _statusSubs = {};
 
-  /// subId -> active subscription.
   final Map<String, Subscription> _subscriptions = {};
 
-  /// Pool-level throughput history (last 60 per-second event counts). The
-  /// per-socket counters live on each [RelayConnection]; this aggregate list is
-  /// owned here and fed by [_sampler] (mirrors `startRelayStatsSampling`).
+  /// Pool-level throughput history (last 60 per-second counts), fed by [_sampler].
   final List<int> _throughputHistory = [];
 
-  /// 1-second sampler: pushes the last second's aggregate event count onto
-  /// [_throughputHistory] (cap 60) and resets each socket's per-second counter.
+  /// 1s sampler that aggregates per-socket counts into [_throughputHistory] and resets them.
   Timer? _sampler;
 
-  bool get _isWritable => true; // all relays are writable
+  bool get _isWritable => true;
   bool _isReadable(String url) => !_writeOnly.contains(url);
 
   List<String> get relayUrls => _connections.keys.toList();
 
-  /// Number of relays currently in the connected state.
   @override
   int get connectedCount =>
       _connections.values.where((c) => c.isConnected).length;
 
-  /// Per-relay connected status snapshot.
   Map<String, bool> get connectionStatus =>
       {for (final e in _connections.entries) e.key: e.value.isConnected};
 
-  /// The set of currently-connected relay URLs (open sockets).
   @override
   Set<String> get connectedRelayUrls => {
         for (final e in _connections.entries)
           if (e.value.isConnected) e.key,
       };
 
-  /// Aggregate live traffic counters across every relay socket (a fresh
-  /// snapshot each read). Sums each [RelayConnection]'s bytes/events and merges
-  /// its per-relay event + latency maps, then attaches the pool-owned
-  /// throughput history. Mirrors the PWA's single `nym.relayStats`.
+  /// Fresh aggregate of every socket's counters plus the pool-owned throughput history.
   @override
   RelayStats get stats {
     final agg = RelayStats(
@@ -340,12 +276,10 @@ class RelayPool implements PoolTransport {
       s.eventsPerRelay.forEach((url, n) {
         agg.eventsPerRelay[url] = (agg.eventsPerRelay[url] ?? 0) + n;
       });
-      // Last-measured REQ→EOSE latency per relay; one socket per url here, so
-      // assignment is a straight copy.
+      // One socket per url here, so latency is a straight copy.
       s.latencyPerRelay.forEach((url, ms) {
         agg.latencyPerRelay[url] = ms;
       });
-      // Per-relay, per-kind breakdown (one socket per url → straight copy).
       s.kindStatsPerRelay.forEach((url, perKind) {
         agg.kindStatsPerRelay[url] = {
           for (final e in perKind.entries) e.key: e.value.copy(),
@@ -355,9 +289,7 @@ class RelayPool implements PoolTransport {
     return agg;
   }
 
-  /// Start the 1-second throughput sampler (idempotent). Sums the per-socket
-  /// `eventsThisSecond`, pushes it onto [_throughputHistory] (cap 60), then
-  /// resets each socket's counter. Mirrors `startRelayStatsSampling`.
+  /// Starts the 1s throughput sampler (idempotent).
   void _startSampler() {
     if (_sampler != null) return;
     _sampler = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -389,8 +321,7 @@ class RelayPool implements PoolTransport {
 
   Set<String> get bannedRelays => Set.unmodifiable(_bannedRelays);
 
-  /// Add a relay to the pool. If the pool is already connected, the new relay
-  /// is connected and back-filled with active read subscriptions.
+  /// Adds a relay; when already connected it connects and back-fills active subscriptions.
   void addRelay(String url) {
     if (_bannedRelays.contains(url)) return;
     if (_connections.containsKey(url)) return;
@@ -404,7 +335,6 @@ class RelayPool implements PoolTransport {
     }
   }
 
-  /// Remove a relay from the pool and close its socket.
   Future<void> removeRelay(String url) async {
     final conn = _connections.remove(url);
     await _msgSubs.remove(url)?.cancel();
@@ -412,7 +342,6 @@ class RelayPool implements PoolTransport {
     await conn?.close();
   }
 
-  /// Connect every relay in the pool.
   @override
   void connectAll() {
     _startSampler();
@@ -421,12 +350,7 @@ class RelayPool implements PoolTransport {
     }
   }
 
-  /// Direct-mode geo relay delivery: open a direct socket to each geo relay url
-  /// not already in the pool, so geohash-channel events reach them. Each newly
-  /// added relay is connected and back-filled with the active read subscriptions
-  /// (via [addRelay]), mirroring `connectToGeoRelays`'s legacy branch
-  /// (relays.js:220) + `ensureGeoRelayDelivery` (the geo relays then carry the
-  /// standing kind-20000 sub). No-op for urls already present or blocked.
+  /// Direct mode: opens and back-fills a socket per new geo relay url; skips present or blocked urls.
   @override
   void updateGeoRelays(List<String> geoRelayUrls) {
     for (final url in geoRelayUrls) {
@@ -436,7 +360,6 @@ class RelayPool implements PoolTransport {
     }
   }
 
-  /// Close every relay socket and all subscriptions.
   @override
   Future<void> disconnectAll() async {
     _stopSampler();
@@ -459,12 +382,10 @@ class RelayPool implements PoolTransport {
     }
   }
 
-  /// Active filters per subId, so newly added relays can be back-filled.
+  /// Active filters per subId, for back-filling newly added relays.
   final Map<String, List<NostrFilter>> _activeFilters = {};
 
-  /// Subscribe across all readable relays. Returns a [Subscription] that
-  /// dedupes and (optionally) verifies events and exposes an [Subscription.eose]
-  /// future.
+  /// Subscribes across all readable relays.
   @override
   Subscription subscribe(List<NostrFilter> filters, {String? subId}) {
     final id = subId ?? generateSubId(_rng);
@@ -499,9 +420,7 @@ class RelayPool implements PoolTransport {
     }
   }
 
-  /// Snapshot of the live subscriptions (subId → its `Subscription` + filters),
-  /// so [NostrService] can replay them onto a replacement pool after a swap
-  /// (e.g. when the proxy endpoint becomes reachable again and we swap back).
+  /// Live subscriptions and filters, for replay onto a replacement pool after a swap.
   Map<String, ({Subscription sub, List<NostrFilter> filters})>
       activeSubscriptions() => {
             for (final e in _subscriptions.entries)
@@ -511,11 +430,7 @@ class RelayPool implements PoolTransport {
               ),
           };
 
-  /// Adopt an EXISTING [sub] (created on a previous pool) onto this pool and
-  /// re-issue its REQ to every readable relay, so its live `events` stream keeps
-  /// flowing after a swap. The sub's internal dedup suppresses any events it
-  /// already delivered (seamless, no duplicates). Newly added relays back-fill
-  /// it via [addRelay]/[_subscriptions].
+  /// Adopts [sub] from a previous pool and re-issues its REQ; its dedup suppresses repeats.
   void replaySubscription(Subscription sub, List<NostrFilter> filters) {
     final id = sub.subId;
     _subscriptions[id] = sub;
@@ -527,9 +442,7 @@ class RelayPool implements PoolTransport {
     }
   }
 
-  /// Tear down every relay socket WITHOUT closing the active [Subscription]
-  /// objects, so they can be re-driven on another pool (the direct↔proxy swap).
-  /// Mirrors [RelayPoolProxy.disconnectSocketsOnly].
+  /// Closes sockets but keeps [Subscription]s alive for the direct/proxy swap.
   Future<void> disconnectSocketsOnly() async {
     _stopSampler();
     _subscriptions.clear();
@@ -549,13 +462,12 @@ class RelayPool implements PoolTransport {
     }
   }
 
-  /// Broadcast [event] to all writable relays. Returns the number of relays
-  /// that accepted it (OK with accepted=true).
+  /// Broadcasts [event]; returns how many relays accepted it.
   @override
   Future<int> publish(NostrEvent event) async {
     final futures = <Future<OkMessage>>[];
     for (final entry in _connections.entries) {
-      // _isWritable is always true; write-only relays still receive EVENTs.
+      // Write-only relays still receive EVENTs.
       if (_isWritable) {
         futures.add(entry.value.publish(event));
       }
@@ -565,18 +477,15 @@ class RelayPool implements PoolTransport {
     return results.where((r) => r.accepted).length;
   }
 
-  /// Direct mode has no proxy frames: DM gift-wraps publish as plain EVENTs.
+  /// Direct mode has no proxy frames: DMs publish as plain EVENTs.
   @override
   Future<int> publishDm(NostrEvent event) => publish(event);
 
-  /// Direct mode has no proxy frames: geo channel events publish as plain
-  /// EVENTs (the direct path reaches the geo relays via the live sockets;
-  /// relays.js `ensureGeoRelayDelivery` legacy branch).
+  /// Direct mode has no proxy frames: geo events publish as plain EVENTs.
   @override
   Future<int> publishGeo(NostrEvent event, List<String> closestRelayUrls) =>
       publish(event);
 
-  /// See [PoolTransport.geoOriginAllows].
   bool Function(NostrEvent event, String? relayUrl)? _geoOriginAllows;
   @override
   set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) =>
@@ -585,21 +494,17 @@ class RelayPool implements PoolTransport {
   void _onRelayMessage(String relayUrl, RelayMessage msg) {
     switch (msg) {
       case EventMessage(:final subId, :final event):
-        // Dropped before verification: the glub.chat client tags
-        // every event it sends, so this costs one tag scan and
-        // saves a signature check on every one of them.
+        // Dropped before verification: glub.chat tags every event it sends.
         if (SpamFilter.isGlubClient(event.tags)) return;
         if (RelayConfig.isAppRelayOnly(
                 event.kind, event.tagValue('g'), event.tagValue('d')) &&
             relayUrl != RelayConfig.appRelay) {
           return;
         }
-        // Before verification and before dedup: a copy off the wrong relay
-        // must not claim the event id and suppress the neighbourhood's own.
+        // Gate before verification and dedup, so a wrong-relay copy can't claim the id.
         final geoGate = _geoOriginAllows;
         if (geoGate != null && !geoGate(event, relayUrl)) return;
-        // Before the dedup below, because the copies it discards are the
-        // relay list.
+        // Record before dedup, since the discarded copies are the relay list.
         eventProvenance.record(event, relayUrl);
         final sub = _subscriptions[subId];
         if (sub != null) {
@@ -609,12 +514,11 @@ class RelayPool implements PoolTransport {
       case EoseMessage(:final subId):
         _subscriptions[subId]?.onEose(relayUrl);
       case ClosedMessage(:final subId, :final reason):
-        // Treat a relay-side CLOSED as that relay reaching EOSE for quorum
-        // purposes so a closed sub doesn't stall the eose future.
+        // Count a relay-side CLOSED as EOSE so the quorum doesn't stall.
         _subscriptions[subId]?.onEose(relayUrl, closed: true);
         _dropIfRelayWideRejection(relayUrl, reason);
       case OkMessage(:final message):
-        // Handled per-connection via publish() futures.
+        // OKs are handled per connection via publish() futures.
         _dropIfRelayWideRejection(relayUrl, message);
       case NoticeMessage(:final message):
         _dropIfRelayWideRejection(relayUrl, message);

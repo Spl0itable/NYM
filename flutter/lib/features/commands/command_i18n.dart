@@ -1,11 +1,4 @@
-// Localized aliases for the `/` and `?` command vocabularies.
-//
-// Canonical command tokens stay English everywhere internally and on the wire
-// (dispatch ids, the /api/bot payload, the mesh). This layer only adds *input
-// aliases* in the active UI language plus localized display names, so a user
-// can type /unirse or ?chiste and still reach the join handler. Both the
-// English and the localized form are always accepted. Mirrors
-// `js/modules/command-i18n.js` in the PWA.
+// Localized input aliases for `/` and `?` commands; canonical English tokens stay internal and on the wire.
 
 import '../i18n/i18n.dart';
 import '../i18n/localization_service.dart';
@@ -13,8 +6,7 @@ import '../nymbot/bot_commands.dart';
 import '../nymbot/nymbot_models.dart';
 import 'command_registry.dart';
 
-/// Short English phrases that translate better than the bare token. A null
-/// value means "never translate" (proper nouns and abbreviations).
+/// English phrases that translate better than the bare token; null means never translate.
 const Map<String, String?> kCommandSourcePhrase = {
   '/pm': 'private message',
   '/nick': 'nickname',
@@ -32,8 +24,7 @@ const Map<String, String?> kCommandSourcePhrase = {
   '?nostr': null,
 };
 
-/// Every canonical token worth translating: multi-character, non-alias entries
-/// from both vocabularies, in registry order.
+/// Multi-character, non-alias canonical tokens from both vocabularies, in registry order.
 List<String> canonicalCommandTokens() {
   final out = <String>[];
   final seen = <String>{};
@@ -48,7 +39,7 @@ List<String> canonicalCommandTokens() {
   for (final c in kBotCommands) {
     add('?${c.name}');
   }
-  // The PM-only set (?image, ?speak, ?clear) isn't in the public catalog.
+  // The PM-only set isn't in the public catalog.
   for (final c in kBotPMCommands) {
     add(c.name);
   }
@@ -63,23 +54,21 @@ String? commandSourcePhrase(String token) {
   return token.substring(1);
 }
 
-/// Every source phrase the command vocabularies need, for [LocalizationService]
-/// to pre-translate as soon as a language is chosen.
+/// Every source phrase for [LocalizationService] to pre-translate once a language is chosen.
 List<String> commandSourcePhrases() => [
       for (final token in canonicalCommandTokens())
         if (commandSourcePhrase(token) != null) commandSourcePhrase(token)!,
     ];
 
-/// Folds a translated phrase into something typeable as a single token.
+/// Folds a translated phrase into a single typeable token.
 String commandSlug(String text) {
   final lowered = text.trim().toLowerCase();
   return lowered.replaceAll(RegExp(r'[^\p{L}\p{N}_-]+', unicode: true), '');
 }
 
-/// Strips combining marks so an alias can also be typed without accents.
+/// Strips accents so an alias can also be typed without them.
 String commandDeaccent(String token) {
-  // Dart has no NFD normalizer in core, so fold the accented letters the
-  // command vocabularies actually produce.
+  // No NFD normalizer in core Dart, so fold the accented letters these vocabularies produce.
   const folds = {
     'á': 'a', 'à': 'a', 'â': 'a', 'ä': 'a', 'ã': 'a', 'å': 'a', 'ā': 'a',
     'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e', 'ē': 'e',
@@ -97,23 +86,20 @@ String commandDeaccent(String token) {
   return buf.toString();
 }
 
-/// The alias tables for the active language.
 class CommandAliases {
   const CommandAliases(this.local, this.lookup);
 
-  /// canonical token → localized display token.
+  /// canonical token -> localized display token.
   final Map<String, String> local;
 
-  /// typed token → canonical token.
+  /// typed token -> canonical token.
   final Map<String, String> lookup;
 
   static const CommandAliases empty =
       CommandAliases(<String, String>{}, <String, String>{});
 }
 
-/// Builds the alias tables from whatever the localization cache currently
-/// holds. Cheap (map lookups only) and safe to call per keystroke; entries
-/// appear as their translations land.
+/// Built from the current localization cache; cheap enough to call per keystroke.
 CommandAliases commandAliases() {
   if (!LocalizationService.instance.isActive) return CommandAliases.empty;
   final tokens = canonicalCommandTokens();
@@ -155,12 +141,10 @@ CommandAliases commandAliases() {
   return CommandAliases(local, lookup);
 }
 
-/// Localized display token for a canonical command, or the canonical one.
 String localizedCommandToken(String canonical) =>
     commandAliases().local[canonical] ?? canonical;
 
-/// Canonical token for something the user typed, or null when unknown. English
-/// names and aliases always win over a localized alias.
+/// Canonical token for typed input, or null; English names and aliases win over localized ones.
 String? resolveCommandToken(String typed) {
   final t = typed.toLowerCase();
   if (resolveCommand(t) != null) return resolveCommand(t)!.name;
@@ -170,7 +154,7 @@ String? resolveCommandToken(String typed) {
   return aliases.lookup[t] ?? aliases.lookup[commandDeaccent(t)];
 }
 
-/// `?token` → canonical `?name` for the bot vocabulary, or null.
+/// `?token` to canonical `?name` for the bot vocabulary, or null.
 String? resolveBotCommandToken(String typed) {
   if (!typed.startsWith('?')) return null;
   final name = typed.substring(1).toLowerCase();
@@ -180,8 +164,7 @@ String? resolveBotCommandToken(String typed) {
   return null;
 }
 
-/// Rewrites a leading localized command token back to canonical English,
-/// leaving the arguments untouched.
+/// Rewrites a leading localized command token to canonical English, leaving arguments untouched.
 String canonicalizeCommandInput(String text) {
   final m = RegExp(r'^([/?])(\S+)').firstMatch(text);
   if (m == null) return text;
@@ -191,8 +174,7 @@ String canonicalizeCommandInput(String text) {
   return canonical + text.substring(m.group(0)!.length);
 }
 
-/// `{typed, canonical}` when raw input opens with a localized command, so the
-/// worker can normalize the same text server-side. Null otherwise.
+/// `{typed, canonical}` when input opens with a localized command, so the worker can normalize it too.
 Map<String, String>? commandAliasHint(String text) {
   final m = RegExp(r'^\s*([/?]\S+)').firstMatch(text);
   if (m == null) return null;
@@ -202,8 +184,7 @@ Map<String, String>? commandAliasHint(String text) {
   return {'typed': typed, 'canonical': canonical};
 }
 
-/// Rewrites canonical tokens inside rendered text (Nymbot help, system
-/// messages) so the names shown match what the app accepts.
+/// Rewrites canonical tokens inside rendered text so shown names match what the app accepts.
 String localizeCommandTokensIn(String text) {
   final aliases = commandAliases();
   if (aliases.local.isEmpty || text.isEmpty) return text;
@@ -217,15 +198,14 @@ String localizeCommandTokensIn(String text) {
   );
 }
 
-/// `"/unirse, /j"` display form — [formatCommandDisplay] with the canonical
-/// name swapped for its localized alias. Single-letter shortcuts stay English.
+/// `"/unirse, /j"` display form; single-letter shortcuts stay English.
 String localizedCommandDisplay(CommandSpec spec) {
   final name = localizedCommandToken(spec.name);
   if (spec.aliases.isEmpty) return name;
   return '$name, ${spec.aliases.join(', ')}';
 }
 
-/// [buildBotPaletteRows] that also matches localized names and shows them.
+/// [buildBotPaletteRows] that also matches and shows localized names.
 List<BotPaletteCommand> buildLocalizedBotPaletteRows(String input) {
   final aliases = commandAliases();
   if (aliases.local.isEmpty) return buildBotPaletteRows(input);

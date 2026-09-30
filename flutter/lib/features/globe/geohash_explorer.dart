@@ -20,92 +20,57 @@ import 'geo_projection.dart';
 import 'geohash_channel.dart';
 import 'topojson.dart';
 
-/// Breakpoint below which the explorer collapses to its phone layout (the PWA's
-/// `@media (max-width: 768px)` rules: info panel becomes a bottom bar, the window
-/// button group collapses into a `<select>`).
+/// Below this width the explorer uses its phone layout.
 const double kGlobeNarrowBreakpoint = 768;
 
 
-/// Path to the bundled admin-1 (state/province) GeoJSON (F2/F3).
 const String kAdmin1Asset =
     'assets/data/ne_50m_admin_1_states_provinces_lakes.json';
 
-/// Path to the bundled populated-places (cities) GeoJSON (F4).
 const String kCitiesAsset = 'assets/data/ne_50m_populated_places_simple.json';
 
-/// Zoom at/above which the admin-1 + city detail layers are lazy-loaded
-/// (geohash-globe.js:10-11: ADMIN1_ZOOM_THRESHOLD / CITY_ZOOM_THRESHOLD).
+/// Zoom at which admin-1 and city layers lazy-load.
 const double kSubregionZoomThreshold = 2.5;
 
-/// Active-window options in hours (matches the PWA's `windowOptions`).
+/// Active-window options in hours.
 const List<int> kActiveWindowOptions = [1, 3, 6, 12, 24];
 
-/// Activity-refresh cadence (`ACTIVE_WINDOW_REFRESH_MS=30000`): re-tally channel
-/// counts so the dots/heatmap stay current.
+/// Re-tally channel activity every 30s.
 const Duration kActiveWindowRefresh = Duration(milliseconds: 30000);
 
-/// Day/night terminator refresh cadence (`DAYNIGHT_REFRESH_MS=60000`): the
-/// terminator drifts slowly, so it repaints half as often as activity (F9).
+/// Repaint the day/night terminator every 60s.
 const Duration kDaynightRefresh = Duration(milliseconds: 60000);
 
-/// Top-level worker entry for [compute]: decode the world TopoJSON off the UI
-/// thread. Defined at top level so it can run in an isolate.
+/// Isolate entry for [compute] decoding the world TopoJSON.
 List<GeoFeature> decodeWorldFeaturesIsolate(String jsonString) =>
     decodeWorldTopoJson(jsonString);
 
-/// Top-level worker entry for [compute]: decode the admin-1 GeoJSON off the UI
-/// thread (the dataset is ~1.7 MB).
+/// Isolate entry for [compute] decoding the ~1.7 MB admin-1 GeoJSON.
 List<GeoFeature> decodeAdmin1FeaturesIsolate(String jsonString) =>
     decodeAdmin1GeoJson(jsonString);
 
-/// Top-level worker entry for [compute]: decode the cities GeoJSON off the UI
-/// thread.
+/// Isolate entry for [compute] decoding the cities GeoJSON.
 List<CityPoint> decodeCitiesIsolate(String jsonString) =>
     decodeCitiesGeoJson(jsonString);
 
-/// Session-scoped globe view preferences (GL-L1/GL-L2). The PWA keeps the last
-/// Heat / Day-Night / Geohash-grid toggle states and the active-window selection
-/// on the in-memory app instance (`_heatmapPreference` / `_daynightPreference` /
-/// `_geohashGridPreference`, geohash-globe.js:349-351; `_geohashActiveWindowHours`,
-/// :238-243), so reopening the explorer within a session restores them. Flutter
-/// pushes a brand-new [GeohashExplorer] each time (sidebar.dart:602), so without a
-/// session holder every open would reset all four. This provider is the holder:
-/// read in `initState` to seed the widget fields and written from the toggle /
-/// window callbacks. No disk persistence — the PWA's preferences aren't persisted
-/// either (a fresh app launch starts from these defaults: all toggles off, 24h).
+/// Session-only globe preferences (toggles and window), since each open builds a new explorer; not persisted.
 final globePrefsProvider =
     StateProvider<({bool heat, bool daynight, bool grid, int windowHours})>(
   (ref) => (heat: false, daynight: false, grid: false, windowHours: 24),
 );
 
-/// The `#geohashExplorerModal` screen — a self-contained equirectangular world
-/// map for browsing geohash channels. Pan via drag, zoom via scroll/pinch, an
-/// active-window selector, controls (zoom, reset, heat, day/night, grid), a
-/// legend, and a channel/cell info panel with a Join button.
-///
-/// Selecting (Join) a geohash pops this route with the lowercase geohash string
-/// so the caller can open that channel: `Navigator.push<String>(...)`.
+/// Equirectangular geohash channel map; Join pops the route with the lowercase geohash.
 class GeohashExplorer extends ConsumerStatefulWidget {
   const GeohashExplorer({super.key, this.focusGeohash});
 
-  /// Open zoomed to this cell, with its info panel already showing — the
-  /// "show me where this channel is" entry point used by the chat header's
-  /// location line. Null opens the default world view.
+  /// Open zoomed to this cell with its info panel showing; null opens the world view.
   final String? focusGeohash;
 
-  /// A non-opaque modal route (F11): the app stays visible behind a
-  /// `rgba(0,0,0,0.4)` scrim while the explorer card floats over it, matching
-  /// the PWA's centered `.geohash-explorer-modal` overlay (instead of a full
-  /// opaque page transition). Resolves to the chosen lowercase geohash (or null
-  /// if dismissed), so callers keep using `Navigator.push<String>(...)`.
+  /// Non-opaque modal route floating over the app; resolves to the chosen geohash or null.
   static Route<String> route({String? focusGeohash}) {
     return PageRouteBuilder<String>(
       opaque: false,
-      // The scrim is painted by the Scaffold below (which has a `context` and
-      // so can resolve light/dark): dark `rgba(0,0,0,0.4)` →
-      // `body.light-mode .geohash-explorer-modal { rgba(0,0,0,0.3) }`
-      // (styles-themes-responsive.css:681-683). A static `route()` can't read
-      // `context.nym`, so the barrier stays transparent here.
+      // The Scaffold paints the mode-aware scrim, since this static route has no context.
       barrierColor: Colors.transparent,
       barrierDismissible: false,
       transitionDuration: const Duration(milliseconds: 180),
@@ -124,14 +89,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   List<GeoFeature> _features = const [];
   Size _lastSize = Size.zero;
 
-  /// Whether [GeohashExplorer.focusGeohash] has been framed yet (once only).
+  /// Whether [GeohashExplorer.focusGeohash] has been framed yet.
   bool _focusApplied = false;
 
-  // --- Lazy detail layers (F2/F3/F4) ---------------------------------------
-  // Admin-1 borders/labels + city dots/labels are loaded on demand once the
-  // view zooms to `kSubregionZoomThreshold`, mirroring the PWA's
-  // `ensureSubregions`. The `*Loaded` guards prevent a double-load (the PWA
-  // flips `admin1Loaded`/`citiesLoaded` true before the promise resolves).
+  // Admin-1 and city layers load once past the zoom threshold; the loaded flags flip first to prevent double loads.
   List<GeoFeature> _admin1Features = const [];
   List<CityPoint> _cities = const [];
   bool _admin1Loaded = false;
@@ -145,30 +106,19 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   String? _hoveredGeohash;
   bool _dragging = false;
 
-  /// The currently selected channel/cell (drives the info panel + Join).
+  /// Selected channel or cell, driving the info panel and Join.
   GeohashChannelPoint? _selected;
 
-  /// Reverse-geocoded "city, country" for [_selected]; seeded with the PWA's
-  /// literal `Loading location...` until the geocode resolves.
+  /// Reverse-geocoded "city, country" for [_selected].
   String _locationInfo = tr('Loading location...');
 
-  /// Monotonic token so a stale geocode response can't overwrite a newer
-  /// selection's Location row (mirrors re-selecting in the PWA).
+  /// Guards against a stale geocode overwriting a newer selection.
   int _geocodeToken = 0;
 
-  // GL-H1 — pinch-zoom baseline. `ScaleUpdateDetails.scale` is cumulative since
-  // the gesture started; the PWA anchors zoom to the gesture-start spread
-  // (`pinch.zoom * newDist/pinch.dist`, geohash-globe.js:973-990). To reproduce
-  // that without exponential runaway we convert the cumulative scale into a
-  // per-frame incremental factor (`scale / _lastScale`) applied to the current
-  // view. `_lastScale` tracks the previous frame's cumulative scale and is reset
-  // to 1.0 on each `onScaleStart`.
+  // Cumulative pinch scale of the previous frame, used to derive a per-frame factor; reset on scale start.
   double _lastScale = 1.0;
 
-  // --- Heatmap precompute (F1) ---------------------------------------------
-  // The PWA's `drawHeatmap` accumulates blobs into a half-res buffer then
-  // remaps per-pixel alpha through the palette; that can't run inside paint, so
-  // we build a `ui.Image` off the paint pass and hand it to the painter.
+  // Heatmap image built off the paint pass, since the accumulate-and-remap can't run inside paint.
   ui.Image? _heatImage;
   HeatmapInput? _heatInputForImage; // the input that produced _heatImage
   HeatmapInput? _heatInFlight; // the input currently being built
@@ -176,11 +126,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
   final ApiClient _api = ApiClient();
 
-  // Periodic refresh, split into two cadences to match the PWA exactly (F9):
-  //   - activity: re-tally channel counts every ACTIVE_WINDOW_REFRESH_MS (30s);
-  //   - day/night: repaint the terminator every DAYNIGHT_REFRESH_MS (60s),
-  //     and only while day/night mode is on (the PWA's daynightTimer early-outs
-  //     when `!daynightMode`).
+  // Activity re-tally every 30s; terminator repaint every 60s only while day/night is on.
   Timer? _activeWindowTimer;
   Timer? _daynightTimer;
   final ValueNotifier<int> _ticker = ValueNotifier<int>(0);
@@ -188,44 +134,29 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   @override
   void initState() {
     super.initState();
-    // GL-L1/GL-L2 — restore the last session's toggle/window preferences so a
-    // re-open of the explorer keeps Heat/Day-Night/Grid + the active window the
-    // user last chose (mirrors the PWA's instance-held preferences).
+    // Restore this session's toggles and active window.
     final prefs = ref.read(globePrefsProvider);
     _heatmap = prefs.heat;
     _daynight = prefs.daynight;
     _grid = prefs.grid;
     _activeWindowHours = prefs.windowHours;
     _loadFeatures();
-    // GL3 — quietly pull recent-activity counts from D1 on open so the globe
-    // reflects real activity (especially the default 24h view) for channels we
-    // never loaded, mirroring the PWA's `showGeohashExplorer`, which calls
-    // `fetchGeohashActivityFromD1` (geohash-globe.js:210). Throttled + best-effort
-    // inside the controller; the rebuild on completion re-tallies the dots.
+    // Pull recent D1 activity on open so unloaded channels still show; throttled in the controller.
     _refreshD1Activity();
-    // Activity tick (30s): refresh D1 activity (throttled), bump the repaint
-    // notifier, and rebuild so the dots / heatmap re-tally against the moving
-    // active window. Mirrors the PWA's ACTIVE_WINDOW_REFRESH_MS timer, which
-    // calls `fetchGeohashActivityFromD1` + `updateGeohashChannels`
-    // (geohash-globe.js:1020-1029).
+    // Refresh D1 activity and rebuild so dots re-tally against the moving window.
     _activeWindowTimer = Timer.periodic(kActiveWindowRefresh, (_) {
       if (!mounted) return;
       _refreshD1Activity();
       _ticker.value++;
       setState(() {}); // re-run _channels() against the new "now".
     });
-    // Day/night tick (60s): repaint only when the terminator is shown.
+    // Repaint only when the terminator is shown.
     _daynightTimer = Timer.periodic(kDaynightRefresh, (_) {
       if (mounted && _daynight) _ticker.value++;
     });
   }
 
-  /// GL3 — fire the controller's throttled D1 activity refresh (the PWA's
-  /// `fetchGeohashActivityFromD1`). Folds discovered activity into
-  /// `channelLastActivity`, which [buildGeohashChannels] reads as the D1 presence
-  /// signal; the resulting `appStateProvider` change rebuilds this widget so the
-  /// dots/heatmap re-tally. Best-effort and self-throttling (~30s) in the
-  /// controller, so calling it on open and on every 30s tick is safe.
+  /// Throttled (~30s) D1 activity refresh folded into `channelLastActivity`; safe to call often.
   void _refreshD1Activity() {
     unawaited(ref.read(nostrControllerProvider).refreshGeohashActivity());
   }
@@ -248,16 +179,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       if (!mounted) return;
       setState(() => _features = feats);
     } catch (_) {
-      // Leave the map empty (ocean + graticule) if decoding fails.
+      // Decoding failed: leave an empty map.
     }
   }
 
-  /// Lazy-loads the admin-1 + city detail datasets once the view crosses
-  /// `kSubregionZoomThreshold`, exactly like the PWA's `ensureSubregions`
-  /// (geohash-globe.js:354): each is loaded at most once (the `*Loaded` guard is
-  /// flipped before the async decode starts, so a burst of zoom events can't
-  /// trigger a second load), decoded off the UI thread, cached, and painted on
-  /// arrival. Call after any zoom change.
+  /// Loads admin-1 and city data once each past the zoom threshold, decoded off the UI thread; call after any zoom change.
   void _ensureSubregions() {
     if (_view.zoom >= kSubregionZoomThreshold && !_admin1Loaded) {
       _admin1Loaded = true;
@@ -276,7 +202,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       if (!mounted) return;
       setState(() => _admin1Features = feats);
     } catch (_) {
-      // Leave admin-1 borders absent if decoding fails (allow a retry).
+      // Decoding failed: allow a retry.
       _admin1Loaded = false;
     }
   }
@@ -288,7 +214,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       if (!mounted) return;
       setState(() => _cities = cities);
     } catch (_) {
-      // Leave city dots absent if decoding fails (allow a retry).
+      // Decoding failed: allow a retry.
       _citiesLoaded = false;
     }
   }
@@ -298,13 +224,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     return buildGeohashChannels(state, windowHours: _activeWindowHours);
   }
 
-  /// GL4 — change the active window and re-tally. The rebuild re-runs
-  /// [_channels] against [hours], and bumping [_ticker] (the painter's repaint
-  /// signal) forces the dots/heatmap to redraw immediately — mirroring the PWA's
-  /// `setGeohashActiveWindow`, which sets `_geohashActiveWindowHours` then calls
-  /// `geohashMap.updatePoints()` (channels.js:329-343). The heat image is keyed
-  /// on the windowed point set, so it rebuilds when the count changes too. No D1
-  /// refetch (the PWA's window change doesn't refetch either; the 30s tick does).
+  /// Changes the window and forces an immediate redraw; no D1 refetch.
   void _setActiveWindow(int hours) {
     if (hours == _activeWindowHours) return;
     setState(() => _activeWindowHours = hours);
@@ -312,10 +232,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     _ticker.value++;
   }
 
-  /// GL-L1/GL-L2 — snapshot the current toggle/window preferences into the
-  /// session [globePrefsProvider] so a later re-open of the explorer restores
-  /// them (the PWA writes these on every toggle/window change, geohash-globe.js
-  /// :1090/1096/1102 and channels.js:329-343).
+  /// Snapshot preferences so a later reopen restores them.
   void _savePrefs() {
     ref.read(globePrefsProvider.notifier).state = (
       heat: _heatmap,
@@ -325,9 +242,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     );
   }
 
-  /// The user's location for the map marker / distance row, but only when the
-  /// PWA would show it: `settings.sortByProximity && userLocation` (matches
-  /// `showYourLocation` in geohash-globe.js:236).
+  /// User location, only when proximity sort is on and a location is known.
   ({double lat, double lng})? _userLocation() {
     final sortByProximity = ref.read(settingsProvider).sortByProximity;
     final loc = ref.read(userLocationProvider);
@@ -337,16 +252,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
   void _setView(GeoView v, Size size) {
     setState(() => _view = v.clamped(size));
-    // Trigger the admin-1/city lazy-load on any zoom change (PWA calls
-    // `ensureSubregions` from onWheel/onTouchMove/zoomBy/zoomToBounds).
+    // Trigger the lazy detail load on any zoom change.
     _ensureSubregions();
   }
 
-  // --- Heatmap image lifecycle (F1) ----------------------------------------
-
-  /// (Re)builds the heatmap [ui.Image] when [heatmap] is on and the inputs
-  /// (view/size/activity) changed, debounced like the PWA's throttled redraw.
-  /// No-op (and clears any cached image) when heatmap mode is off.
+  /// Rebuilds the heatmap image when inputs change; clears it when heatmap is off.
   void _maybeRebuildHeat(Size size, List<GeohashChannelPoint> channels) {
     if (!_heatmap) {
       if (_heatImage != null || _heatInputForImage != null) {
@@ -366,7 +276,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           (lng: c.lng, lat: c.lat, messages: c.messages),
       ],
     );
-    // Already current or already building this exact input — nothing to do.
+    // Already current or already building this input.
     if (input == _heatInputForImage || input == _heatInFlight) return;
     _heatDebounce?.cancel();
     _heatDebounce = Timer(const Duration(milliseconds: 60), () {
@@ -377,7 +287,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           img?.dispose();
           return;
         }
-        // Drop the result if the inputs moved on while we were building.
+        // Drop the result if the inputs moved on meanwhile.
         if (_heatInFlight != input) {
           img?.dispose();
           return;
@@ -391,8 +301,6 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       });
     });
   }
-
-  // --- Gesture handling -----------------------------------------------------
 
   GeohashChannelPoint? _channelAt(Offset local, Size size) {
     const hitR = 10.0;
@@ -413,9 +321,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     final local = d.localPosition;
     final ch = _channelAt(local, size);
     if (ch != null) {
-      // PWA (`geohash-globe.js` onPointerUp): tapping a channel dot calls
-      // `selectGeohashChannel(ch)` only — it selects/joins without re-framing
-      // the camera. Only a grid-cell tap (`_selectGeohashCell`) zooms to bounds.
+      // Tapping a dot selects without re-framing; only grid-cell taps zoom.
       _selectChannel(ch);
       return;
     }
@@ -428,9 +334,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     }
   }
 
-  /// Selects a channel/cell for the info panel and (re)starts a reverse-geocode
-  /// for its Location row. Mirrors `selectGeohashChannel` (channels.js:345): the
-  /// Location row shows `Loading location...` until the geocode resolves.
+  /// Selects for the info panel and starts a reverse geocode for its Location row.
   void _selectChannel(GeohashChannelPoint point) {
     final token = ++_geocodeToken;
     setState(() {
@@ -441,8 +345,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     _fetchLocation(point.lat, point.lng, token);
   }
 
-  /// Reverse-geocodes (lat,lng) → "city, country" (`fetchGeocode(lat,lng,10)`),
-  /// updating the Location row only if [token] is still the active selection.
+  /// Updates the Location row only if [token] is still current.
   Future<void> _fetchLocation(double lat, double lng, int token) async {
     String result;
     try {
@@ -465,8 +368,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     setState(() => _locationInfo = result);
   }
 
-  /// Mirrors `_selectGeohashCell`: zoom to the cell, reuse an existing channel
-  /// entry if present, else synthesize one.
+  /// Zooms to the cell, reusing an existing channel entry or synthesizing one.
   void _selectCell(String geohash, Size size) {
     final gh = geohash.toLowerCase();
     final bounds = geohashBounds(gh);
@@ -482,7 +384,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
             isJoined: false,
           );
     _selectChannel(point);
-    // `zoomToBounds` in the PWA also calls `ensureSubregions` after re-framing.
+    // Re-framing also triggers the lazy detail load.
     _setView(_view.fitBounds(bounds, size), size);
   }
 
@@ -497,18 +399,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       _locationInfo = tr('Loading location...');
       _activeWindowHours = 24;
     });
-    // GL-L1/GL-L2 — Reset View clears the session preferences too (the PWA's
-    // reset nulls `_heatmapPreference`/etc. and forces the window back to 24,
-    // geohash-globe.js:1062/1067/1072/1218-1220), so a later re-open starts from
-    // the home state rather than restoring the pre-reset toggles.
+    // Reset also clears the session preferences.
     _savePrefs();
   }
 
   void _join(String geohash) {
     Navigator.of(context).pop(geohash.toLowerCase());
   }
-
-  // --- Build ----------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -519,19 +416,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       warning: nym.warning,
     );
 
-    // F11 — the PWA explorer is a centered overlay that floats over the
-    // still-visible app, with a 90%×90% (max 1200×800) card carrying
-    // `shadow-lg` + `shadow-glow`. The scaffold paints the translucent scrim
-    // (it has a context, so it resolves light/dark): dark `rgba(0,0,0,0.4)` →
-    // `body.light-mode .geohash-explorer-modal { rgba(0,0,0,0.3) }`
-    // (styles-themes-responsive.css:681-683). Under a non-opaque [route] the
-    // barrier is transparent and this scrim is the only dimming layer (still
-    // translucent, so the app shows through); under a plain opaque route it also
-    // covers the black void behind the card.
+    // Centered overlay card over a mode-aware translucent scrim, the only dimming layer under a non-opaque route.
     return Scaffold(
       backgroundColor: nym.isLight
-          ? const Color(0x4D000000) // black @ 0.3
-          : const Color(0x66000000), // black @ 0.4
+          ? const Color(0x4D000000)
+          : const Color(0x66000000),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -543,34 +432,26 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
                 decoration: BoxDecoration(
                   color: nym.bgSecondary,
                   border: Border.all(color: nym.glassBorder),
-                  // `.geohash-explorer-content border-radius: var(--radius-xl)` = 24px.
                   borderRadius: BorderRadius.circular(24),
-                  // `body.light-mode .geohash-explorer-content { box-shadow:
-                  // 0 8px 40px rgba(0,0,0,0.12) }` — one soft shadow, no glow in
-                  // light (styles-themes-responsive.css:1054-1056).
                   boxShadow: nym.isLight
                       ? const [
                           BoxShadow(
-                            color: Color(0x1F000000), // black @ 0.12
+                            color: Color(0x1F000000),
                             blurRadius: 40,
                             offset: Offset(0, 8),
                           ),
                         ]
                       : [
-                          // --shadow-lg: 0 8px 32px rgba(0,0,0,0.5)
                           const BoxShadow(
                             color: Color(0x80000000),
                             blurRadius: 32,
                             offset: Offset(0, 8),
                           ),
-                          // --shadow-glow: 0 0 20px rgb(from primary / 0.1)
                           BoxShadow(color: nym.primaryA(0.1), blurRadius: 20),
                         ],
                 ),
                 clipBehavior: Clip.antiAlias,
-                // `.modal-close` is `position:absolute` within
-                // `.geohash-explorer-content`, so float it over the card via a
-                // Stack rather than inlining it in the header row.
+                // The close chip floats over the card via a Stack.
                 child: Stack(
                   children: [
                     Column(
@@ -579,7 +460,6 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
                         Expanded(child: _body(style)),
                       ],
                     ),
-                    // top:14 right:14, 32×32 circular chip.
                     Positioned(
                       top: 14,
                       right: 14,
@@ -600,13 +480,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
   Widget _header(NymColors nym) {
     return Container(
-      // `.geohash-explorer-header { padding: 16px 24px; padding-right: 56px; }`
-      // — the right gutter reserves room for the absolute `.modal-close` chip.
-      // A block element: full width, LEFT-aligned title (never centered).
+      // Right padding reserves room for the close chip; title left-aligned.
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(24, 16, 56, 16),
       decoration: BoxDecoration(
-        color: const Color(0x26000000), // rgba(0,0,0,0.15)
+        color: const Color(0x26000000),
         border: Border(bottom: BorderSide(color: nym.glassBorder)),
       ),
       child: Text(
@@ -625,16 +503,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
-        // On first layout (or resize) clamp the view to the new size.
+        // Clamp the view on first layout or resize.
         if (size != _lastSize) {
           _lastSize = size;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
             setState(() => _view = _view.clamped(size));
-            // A requested focus can only be honored once the map has a size
-            // to frame the cell against, so it rides the first real layout.
-            // Guarded by `_focusApplied` so a later resize doesn't yank the
-            // camera back after the user has panned away.
+            // Frame the focus cell once, on the first real layout.
             final focus = widget.focusGeohash;
             if (!_focusApplied && focus != null && focus.isNotEmpty) {
               _focusApplied = true;
@@ -643,15 +518,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           });
         }
 
-        // Watch the store so heatmap/dots reflect activity changes, and the
-        // proximity flag/location so the "Your Location" legend row + marker
-        // appear/disappear live.
+        // Watch the store and location so dots, heatmap and the location row update live.
         ref.watch(appStateProvider);
         ref.watch(settingsProvider.select((s) => s.sortByProximity));
         ref.watch(userLocationProvider);
         final channels = _channels();
 
-        // Keep the precomputed heatmap image in sync with the current inputs.
+        // Keep the heatmap image in sync with the current inputs.
         _maybeRebuildHeat(size, channels);
 
         final narrow = size.width < kGlobeNarrowBreakpoint;
@@ -675,8 +548,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     GeoMapStyle style,
     List<GeohashChannelPoint> channels,
   ) {
-    // Desktop cursor (F6): `grabbing` while dragging, `click` over a dot, else
-    // `grab` — mirrors `onPointerMove`/`onPointerDown` in geohash-globe.js.
+    // `grabbing` while dragging, `click` over a dot, else `grab`.
     final cursor = _dragging
         ? SystemMouseCursors.grabbing
         : (_hoveredGeohash != null
@@ -686,8 +558,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     return MouseRegion(
       cursor: cursor,
       onHover: (event) {
-        // Only update the hovered dot when not dragging (PWA gates on
-        // `!dragging`). Touch taps drive selection separately via onTapUp.
+        // Only update hover when not dragging; touch taps select via onTapUp.
         if (_dragging) return;
         final ch = _channelAt(event.localPosition, size);
         final gh = ch?.geohash;
@@ -696,7 +567,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
         }
       },
       onExit: (_) {
-        // Clear hover unless a dot is selected (keep the selected dot enlarged).
+        // Clear hover unless a dot is selected.
         final keep = _selected?.geohash;
         if (_hoveredGeohash != null && _hoveredGeohash != keep) {
           setState(() => _hoveredGeohash = keep);
@@ -720,18 +591,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
             setState(() => _dragging = true);
           },
           onScaleUpdate: (d) {
-            // Pan: translate the incremental focal-point delta into degrees,
-            // applied to the *current* view (PWA pans by per-frame deltas).
+            // Pan by per-frame focal deltas converted to degrees.
             final s = _view.scale(size);
             var v = _view.copyWith(
               cx: _view.cx - d.focalPointDelta.dx / s,
               cy: _view.cy + d.focalPointDelta.dy / s,
             );
-            // GL-H1 — pinch zoom around the focal point using the per-frame
-            // INCREMENTAL factor (cumulative `d.scale` / last cumulative), not
-            // the cumulative scale itself. This matches the PWA's linear
-            // finger-spread→zoom mapping (geohash-globe.js:973-990) instead of
-            // compounding `zoomₙ = zoomₙ₋₁ × d.scaleₙ` and running away.
+            // Pinch zoom by the per-frame incremental factor, avoiding compounding runaway.
             if (d.scale != 1.0) {
               final factor = d.scale / _lastScale;
               _lastScale = d.scale;
@@ -743,12 +609,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
             _lastScale = 1.0;
             setState(() => _dragging = false);
           },
-          // Clipped to the map's own box. A CustomPainter draws on the canvas
-          // it is handed and is NOT bounded by its layout slot, so a zoomed-in
-          // world painted coastlines and dots straight over the "GEOHASH
-          // EXPLORER" header sitting above it. The card's own Clip.antiAlias
-          // does not help: the header is INSIDE the card, so the overspill was
-          // never crossing the boundary that clips.
+          // A CustomPainter isn't bounded by its slot, so clip or zoomed content paints over the header.
           child: ClipRect(
             child: RepaintBoundary(
               child: CustomPaint(
@@ -777,7 +638,6 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   }
 
   Widget _topLeftControls(Size size, bool narrow) {
-    // PWA: `.geohash-controls-tl` top/left 20px, → 10px under 768px.
     final inset = narrow ? 10.0 : 20.0;
     return Positioned(
       top: inset,
@@ -802,7 +662,6 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   }
 
   Widget _bottomControls(bool narrow) {
-    // PWA: `.geohash-controls` bottom/left 20px, → 10px under 768px.
     final inset = narrow ? 10.0 : 20.0;
     return Positioned(
       bottom: inset,
@@ -830,32 +689,26 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
   Widget _legend(bool narrow) {
     final nym = context.nym;
-    // Show the "Your Location" row only when the PWA would (`showYourLocation`:
-    // proximity sort on AND a known location), matching geohash-globe.js:236.
+    // Only with proximity sort on and a known location.
     final showYourLocation = _userLocation() != null;
-    // On narrow layouts the font shrinks 10→9 and the inset moves 20→10.
     final fontSize = narrow ? 9.0 : 10.0;
     final inset = narrow ? 10.0 : 20.0;
     return Positioned(
       bottom: inset,
       right: inset,
       child: Container(
-        // `.geohash-legend` padding 0 14px; the items carry the vertical margin.
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
         decoration: BoxDecoration(
-          color: const Color(0xB3000000), // rgba(0,0,0,0.7)
+          color: const Color(0xB3000000),
           border: Border.all(color: nym.glassBorder),
-          // `.geohash-legend border-radius: var(--radius-sm)` = 12px.
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Active row: dot (with primary glow) + "Active" + window control.
             _legendRow(
               dotColor: nym.primary,
-              // `.nm-geo-1 { box-shadow: 0 0 5px var(--primary); }`
               glow: nym.primary,
               label: tr('Active'),
               fontSize: fontSize,
@@ -865,7 +718,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
               const SizedBox(height: 5),
               _legendRow(
                 dotColor:
-                    nym.warning, // `.nm-geo-2 { background: var(--warning); }`
+                    nym.warning,
                 label: tr('Your Location'),
                 fontSize: fontSize,
               ),
@@ -897,8 +750,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           ),
         ),
         const SizedBox(width: 8),
-        // `.geohash-legend` sets no `color`, so the `<span>` inherits `--text`
-        // (the themed accent), not a fixed gray.
+        // Inherits `--text`, not a fixed gray.
         Text(label,
             style: TextStyle(fontSize: fontSize, color: context.nym.text)),
         if (trailing != null) ...[
@@ -910,13 +762,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   }
 
   Widget _windowGroup(NymColors nym) {
-    // `.geohash-window-btn { border-left: 1px solid var(--glass-border); }` with
-    // `:first-child { border-left: 0; }` → a 1px hairline divider BETWEEN each
-    // button (1h|3h|6h|12h|24h), not before the first.
+    // 1px dividers between window buttons, not before the first.
     final children = <Widget>[];
     for (var i = 0; i < kActiveWindowOptions.length; i++) {
       if (i > 0) {
-        // A full-height 1px divider (border-left spans the button's content box).
         children.add(Container(width: 1, color: nym.glassBorder));
       }
       final h = kActiveWindowOptions[i];
@@ -925,12 +774,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: nym.glassBorder),
-        // `.geohash-window-group border-radius: var(--radius-xs)` = 8px.
         borderRadius: BorderRadius.circular(8),
       ),
       clipBehavior: Clip.antiAlias,
-      // IntrinsicHeight lets the 1px dividers stretch to the button height,
-      // matching the CSS `border-left` that covers the full content box.
+      // IntrinsicHeight lets the dividers stretch to button height.
       child: IntrinsicHeight(
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -941,16 +788,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     );
   }
 
-  /// The compact `<select>` fallback shown under 768px in place of the button
-  /// group (`.geohash-window-select`: rgba(255,255,255,0.05) bg, glassBorder,
-  /// fontSize 11, padding 2/6).
+  /// Compact dropdown shown under 768px instead of the button group.
   Widget _windowSelect(NymColors nym) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0x0DFFFFFF), // rgba(255,255,255,0.05)
+        color: const Color(0x0DFFFFFF),
         border: Border.all(color: nym.glassBorder),
-        // `.geohash-window-select border-radius: var(--radius-xs)` = 8px.
         borderRadius: BorderRadius.circular(8),
       ),
       child: DropdownButtonHideUnderline(
@@ -966,7 +810,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
               DropdownMenuItem<int>(value: h, child: Text('${h}h')),
           ],
           onChanged: (h) {
-            if (h != null) _setActiveWindow(h); // GL4
+            if (h != null) _setActiveWindow(h);
           },
         ),
       ),
@@ -975,7 +819,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
   Widget _windowBtn(int hours, bool active, NymColors nym) {
     return InkWell(
-      onTap: () => _setActiveWindow(hours), // GL4
+      onTap: () => _setActiveWindow(hours),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         color: active ? nym.primaryA(0.18) : Colors.transparent,
@@ -994,9 +838,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   Widget _infoPanel(GeohashChannelPoint ch, bool narrow) {
     final nym = context.nym;
 
-    // PWA rows (channels.js:361-372): Coordinates (decimal, 4dp), Location
-    // (reverse-geocoded, "Loading location..." until resolved), Distance (only
-    // when a user location is known), Messages. No Status row.
+    // Rows: coordinates (4dp), location, distance (with a user location), messages.
     final coords = '${ch.lat.toStringAsFixed(4)}, ${ch.lng.toStringAsFixed(4)}';
     final user = _userLocation();
     final distance = user == null
@@ -1015,13 +857,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
     final card = Container(
       width: narrow ? null : 300, // narrow: stretch via Positioned left/right.
-      // `.geohash-info-panel { padding: 16px; padding-right: 36px; }` — the right
-      // gutter reserves room for the absolute `.geohash-info-close` chip.
+      // Right padding reserves room for the close chip.
       padding: const EdgeInsets.fromLTRB(16, 16, 36, 16),
       decoration: BoxDecoration(
-        color: const Color(0xB3000000), // rgba(0,0,0,0.7)
+        color: const Color(0xB3000000),
         border: Border.all(color: nym.glassBorder),
-        // `.geohash-info-panel border-radius: var(--radius-md)` = 16px.
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -1029,7 +869,6 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            // `.geohash-info-title { text-transform: lowercase; }`
             '#${ch.geohash.toLowerCase()}',
             style: TextStyle(
               color: nym.primary,
@@ -1049,14 +888,12 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
                 backgroundColor: nym.primaryA(0.1),
                 foregroundColor: nym.primary,
                 shape: RoundedRectangleBorder(
-                  // `.geohash-join-btn border-radius: var(--radius-xs)` = 8px.
                   borderRadius: BorderRadius.circular(8),
                   side: BorderSide(color: nym.primaryA(0.3)),
                 ),
               ),
               child: Text(
-                // PWA: `Go to Channel` when joined, else `Join Channel`
-                // (uppercased by `.geohash-join-btn { text-transform: uppercase }`).
+                // "Go to Channel" when joined, else "Join Channel".
                 ch.isJoined ? tr('GO TO CHANNEL') : tr('JOIN CHANNEL'),
                 style: const TextStyle(
                     fontSize: 12,
@@ -1069,9 +906,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       ),
     );
 
-    // `.geohash-info-close` is `position:absolute; top:8; right:8` within the
-    // panel — float the 24×24 chip over the card via a Stack instead of inlining
-    // it in the title row.
+    // The close chip floats over the panel via a Stack.
     final panel = Stack(
       children: [
         card,
@@ -1086,15 +921,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       ],
     );
 
-    // Under 768px the panel becomes a fixed bottom bar (bottom:60 left/right:10,
-    // max-width:none); otherwise it sits top-right (top:20 right:20).
+    // Under 768px a bottom bar, otherwise top-right.
     return narrow
         ? Positioned(bottom: 60, left: 10, right: 10, child: panel)
         : Positioned(top: 20, right: 20, child: panel);
   }
 
-  /// Haversine great-circle distance in km (`calculateDistance`,
-  /// geohash-globe.js:1271, R = 6371).
+  /// Haversine distance in km (R = 6371).
   double _distanceKm(double lat1, double lon1, double lat2, double lon2) {
     const r = 6371.0;
     const deg = math.pi / 180;
@@ -1109,9 +942,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     return r * c;
   }
 
-  /// One info row rendered as `Label: value` on a single wrapped line, with the
-  /// PWA's 5px vertical margin/padding and a 1px bottom hairline (`.geohash-
-  /// info-item`); the last row drops the border.
+  /// One `Label: value` row with a bottom hairline, dropped on the last row.
   Widget _infoRow(String label, String value, NymColors nym,
       {bool isLast = false}) {
     return Container(
@@ -1131,7 +962,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
               style: TextStyle(
                 fontSize: 12,
                 color: nym.text,
-                fontWeight: FontWeight.w700, // <strong>
+                fontWeight: FontWeight.w700,
               ),
             ),
             TextSpan(
@@ -1151,12 +982,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     double? width,
   }) {
     final nym = context.nym;
-    // `.geohash-control-btn border-radius: var(--radius-xs)` = 8px.
     final radius = BorderRadius.circular(8);
     return SizedBox(
       width: width,
-      // `.geohash-control-btn.active { box-shadow: 0 0 12px rgb(from primary / 0.25); }`
-      // — the outer glow lives outside the Material's clip so it renders.
+      // The active glow sits outside the Material's clip so it renders.
       child: DecoratedBox(
         decoration: BoxDecoration(
           borderRadius: radius,
@@ -1196,10 +1025,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   }
 }
 
-/// The header `✕` chip — a 32×32 circular `.modal-close` button
-/// (`styles-components.css:91-115`). Idle: `rgba(255,255,255,0.05)` fill,
-/// `glassBorder` ring, `text-dim` glyph at 16px. Hover: `rgba(255,68,68,0.12)`
-/// fill, `danger` glyph, `rgba(255,68,68,0.3)` ring.
+/// 32x32 circular close chip that turns danger-red on hover.
 class _ModalCloseButton extends StatefulWidget {
   const _ModalCloseButton({required this.nym, required this.onTap});
 
@@ -1223,7 +1049,7 @@ class _ModalCloseButtonState extends State<_ModalCloseButton> {
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          // `transition: all var(--transition)` = 0.25s cubic-bezier(0.4,0,0.2,1).
+          // 0.25s cubic-bezier(0.4, 0, 0.2, 1).
           duration: const Duration(milliseconds: 250),
           curve: const Cubic(0.4, 0, 0.2, 1),
           width: 32,
@@ -1232,16 +1058,16 @@ class _ModalCloseButtonState extends State<_ModalCloseButton> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: _hovered
-                ? const Color(0x1FFF4444) // rgba(255,68,68,0.12)
-                : const Color(0x0DFFFFFF), // rgba(255,255,255,0.05)
+                ? const Color(0x1FFF4444)
+                : const Color(0x0DFFFFFF),
             border: Border.all(
               color: _hovered
-                  ? const Color(0x4DFF4444) // rgba(255,68,68,0.3)
+                  ? const Color(0x4DFF4444)
                   : nym.glassBorder,
             ),
           ),
           child: Text(
-            '✕', // ✕
+            '✕',
             style: TextStyle(
               fontSize: 16,
               height: 1,
@@ -1254,10 +1080,7 @@ class _ModalCloseButtonState extends State<_ModalCloseButton> {
   }
 }
 
-/// The info-panel `✕` chip — a 24×24 `.geohash-info-close` button
-/// (`styles-components.css:1800-1821`). Idle: transparent fill + transparent
-/// border, `radius-xs`(8), `text-dim` glyph at 12px. Hover: `rgba(255,255,255,0.08)`
-/// fill, `text` glyph, `glassBorder` ring.
+/// 24x24 info-panel close chip, transparent until hover.
 class _InfoCloseButton extends StatefulWidget {
   const _InfoCloseButton({required this.nym, required this.onTap});
 
@@ -1287,17 +1110,16 @@ class _InfoCloseButtonState extends State<_InfoCloseButton> {
           height: 24,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            // `border-radius: var(--radius-xs)` = 8px.
             borderRadius: BorderRadius.circular(8),
             color: _hovered
-                ? const Color(0x14FFFFFF) // rgba(255,255,255,0.08)
+                ? const Color(0x14FFFFFF)
                 : Colors.transparent,
             border: Border.all(
               color: _hovered ? nym.glassBorder : Colors.transparent,
             ),
           ),
           child: Text(
-            '✕', // ✕
+            '✕',
             style: TextStyle(
               fontSize: 12,
               height: 1,

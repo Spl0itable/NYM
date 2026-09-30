@@ -41,13 +41,10 @@ const NYM_FORMAT_TOOLS = [
 
 const NYM_FORMAT_TOOLS_BY_ID = NYM_FORMAT_TOOLS.reduce((m, t) => { m[t.id] = t; return m; }, {});
 
-// Image/video URLs the formatter turns into inline media. Kept in sync with the
-// media regexes in message-format.js so the composer previews exactly the set of
-// attachments the recipients will see rendered.
+// Kept in sync with the media regexes in message-format.js.
 const NYM_COMPOSER_MEDIA_RX = /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?[^\s]*)?)/gi;
 const NYM_COMPOSER_VIDEO_EXTS = ['mp4', 'webm', 'ogg', 'mov'];
 
-// live input formatting 
 const NYM_RICH_FENCE_RX = /```[\s\S]*?```|```[\s\S]*$/g;
 
 const NYM_RICH_LINE_PREFIXES = [
@@ -57,9 +54,7 @@ const NYM_RICH_LINE_PREFIXES = [
     { type: 'quote', mark: '> ' }
 ];
 
-// Ordered by precedence: when two constructs start at the same offset the
-// earlier entry wins, which reproduces the sequential replace order the
-// message formatter uses.
+// Ordered by precedence: at the same offset the earlier entry wins, matching the formatter's replace order.
 const NYM_RICH_INLINE = [
     { type: 'code', rx: /`([^`]+?)`/g, open: '`', close: '`', leaf: true },
     { type: 'bold', rx: /\*\*(.+?)\*\*/g, open: '**', close: '**' },
@@ -69,13 +64,10 @@ const NYM_RICH_INLINE = [
     { type: 'strike', rx: /~~(.+?)~~/g, open: '~~', close: '~~' }
 ];
 
-// Nesting past this depth is left as plain text. Four covers every combination
-// the toolbar can produce and bounds the work done on every keystroke.
+// Nesting past this depth stays plain text; bounds per-keystroke work.
 const NYM_RICH_MAX_DEPTH = 4;
 
-// First match of `rx` lying wholly inside [from, to). Matching runs against the
-// whole draft rather than a slice so the lookbehinds above still see the real
-// preceding character.
+// Matches against the whole draft so lookbehinds still see the real preceding character.
 function nymRichFirstMatch(text, from, to, rx) {
     rx.lastIndex = from;
     let m;
@@ -110,9 +102,7 @@ function nymRichParseInline(text, from, to, depth) {
         out.push({
             kind: 'inline', type: spec.type, start, end,
             open: spec.open, close: spec.close,
-            // Nothing reveals. Revealing the whole span put the markers back on
-            // screen for as long as the caret was anywhere inside the run —
-            // which, while you are typing it, is always.
+            // Nothing reveals: revealing would show markers whenever the caret is inside the run.
             reveal: [],
             children: spec.leaf
                 ? (innerEnd > innerStart ? [{ kind: 'text', start: innerStart, end: innerEnd }] : [])
@@ -123,8 +113,7 @@ function nymRichParseInline(text, from, to, depth) {
     return out;
 }
 
-// Everything outside a fenced code block: line prefixes first (they only count
-// at a real line start), then inline constructs within each line.
+// Line prefixes first (they only count at a real line start), then inline constructs.
 function nymRichParseFlow(text, from, to, out) {
     let pos = from;
     while (pos < to) {
@@ -139,11 +128,7 @@ function nymRichParseFlow(text, from, to, out) {
                 out.push({
                     kind: 'line', type: p.type, start: lineStart, end: lineEnd,
                     open: p.mark, close: '',
-                    // Block markers never reveal: what a heading or a quote is
-                    // reads off its own styling, and showing the prefix again
-                    // would shift the line every time the caret passed the
-                    // start of it. Backspace at the start of the body removes
-                    // the prefix instead (nymRichMarkerDelete).
+                    // Block markers never reveal; Backspace at the start of the body removes the prefix (nymRichMarkerDelete).
                     reveal: [],
                     children: nymRichParseInline(text, lineStart + p.mark.length, lineEnd, 0)
                 });
@@ -160,7 +145,6 @@ function nymRichParseFlow(text, from, to, out) {
     }
 }
 
-// The edit a Backspace/Delete next to a hidden marker should make.
 function nymRichMarkerDelete(text, caret, forward) {
     if (!text || caret < 0 || caret > text.length) return null;
     const cut = (ranges) => {
@@ -171,8 +155,7 @@ function nymRichMarkerDelete(text, caret, forward) {
         return out;
     };
 
-    // Innermost first, so the tightest formatting at the caret is the one that
-    // comes off: in "***x***" a Backspace should drop one level, not both.
+    // Innermost first: in "***x***" a Backspace should drop one level, not both.
     const nodes = [];
     const walk = (list) => {
         for (const n of list) {
@@ -191,15 +174,11 @@ function nymRichMarkerDelete(text, caret, forward) {
             if (!n.open) continue;
             const openEnd = n.start + n.open.length;
             const closeStart = n.close ? n.end - n.close.length : n.end;
-            // The caret sits at one of the run's two inner edges (the only two
-            // places a hidden marker is adjacent to visible text), or just
-            // outside it.
             const atEnd = forward ? caret === closeStart : caret === n.end;
             const atStart = forward ? caret === n.start : caret === openEnd;
             if (!atStart && !(n.close && atEnd)) continue;
             const ranges = [[n.start, openEnd]];
             if (n.close) ranges.push([closeStart, n.end]);
-            // Keep the caret where the text it was against ended up.
             const caretOut = atEnd ? n.start + (closeStart - openEnd) : n.start;
             return { text: cut(ranges), caret: caretOut };
         }
@@ -215,20 +194,15 @@ function nymRichParseFormat(text) {
     while ((m = NYM_RICH_FENCE_RX.exec(text)) !== null) {
         if (m.index > pos) nymRichParseFlow(text, pos, m.index, out);
         const start = m.index, end = start + m[0].length;
-        // The formatter also renders an unterminated trailing fence, which has
-        // no closing marker to hide.
+        // The formatter also renders an unterminated trailing fence.
         const closed = m[0].length >= 6 && m[0].endsWith('```');
         const innerEnd = closed ? end - 3 : end;
         out.push({
             kind: 'fence', type: 'codeblock', start, end,
             open: '```', close: closed ? '```' : '',
-            // Never revealed, like the line prefixes above — a code block is
-            // unmistakable from its own rendering, and revealing the fence the
-            // instant the caret reached it would undo the empty block the user
-            // just opened by typing it.
+            // Never revealed, or the fence would reappear and undo the block the user just opened.
             reveal: [],
-            // No body yet: the block still has to be visible, or three
-            // backticks would look like they did nothing.
+            // No body yet: the block must stay visible or three backticks would look like nothing happened.
             emptyBody: innerEnd <= start + 3,
             children: innerEnd > start + 3 ? [{ kind: 'text', start: start + 3, end: innerEnd }] : []
         });
@@ -240,9 +214,7 @@ function nymRichParseFormat(text) {
 
 Object.assign(NYM.prototype, {
 
-    // The parse tree for a draft, consumed by the input renderer in
-    // ui-context.js. Exposed on the prototype so the renderer can stay
-    // agnostic about the grammar.
+    // Consumed by the input renderer in ui-context.js.
     _richParseFormat(text) {
         return nymRichParseFormat(text);
     },
@@ -251,23 +223,17 @@ Object.assign(NYM.prototype, {
         return nymRichMarkerDelete(text, caret, forward);
     },
 
-    // formatting toolbar 
-    // Build the toolbar once and wire the toggle button, tool clicks and the
-    // keyboard shortcuts. Called from initialize().
     setupFormatToolbar() {
         const btn = document.getElementById('formatInputBtn');
         const toolbar = document.getElementById('formatToolbar');
         const input = document.getElementById('messageInput');
         if (!btn || !toolbar || !input) return;
 
-        // No preview toggle: the input itself renders the formatting.
         toolbar.innerHTML = NYM_FORMAT_TOOLS.map(t =>
             `<button type="button" class="format-tool" data-format-tool="${t.id}" title="${this.escapeHtml(t.title)}" aria-label="${this.escapeHtml(t.title)}">${t.html}</button>`
         ).join('');
 
-        // mousedown (not click) so the caret/selection in the contenteditable is
-        // still intact when the tool runs — clicking a button would otherwise
-        // blur the input and collapse the selection first.
+        // mousedown (not click) so the contenteditable selection is still intact when the tool runs.
         toolbar.addEventListener('mousedown', (e) => {
             const tool = e.target.closest('.format-tool');
             if (!tool) return;
@@ -282,8 +248,7 @@ Object.assign(NYM.prototype, {
             this.toggleFormatToolbar();
         });
 
-        // Ctrl/Cmd shortcuts. contenteditable would otherwise apply the browser's
-        // own execCommand bold/italic and inject foreign HTML into the input.
+        // Otherwise contenteditable applies the browser's own bold/italic and injects foreign HTML.
         input.addEventListener('keydown', (e) => {
             if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
             const key = (e.key || '').toLowerCase();
@@ -327,8 +292,6 @@ Object.assign(NYM.prototype, {
         this._refreshComposerOffsets();
     },
 
-    // Apply one toolbar tool to the current selection (or the word under the
-    // caret when nothing is selected).
     applyInputFormat(id) {
         const tool = NYM_FORMAT_TOOLS_BY_ID[id];
         const input = document.getElementById('messageInput');
@@ -338,14 +301,11 @@ Object.assign(NYM.prototype, {
         else if (tool.block) this._toggleInputCodeBlock(input, tool.block);
         else if (tool.prefix != null) this._toggleInputLinePrefix(input, tool.prefix, tool.exclusive);
 
-        // Same signal a keystroke sends: keeps autocomplete, the send button,
-        // auto-resize, the live formatting and the media strip in step.
+        // Same signal a keystroke sends, keeping dependent UI in step.
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.focus();
     },
 
-    // The [start, end) of the word under `pos`, or a zero-width range when the
-    // caret sits on whitespace.
     _wordRangeAt(v, pos) {
         const isWord = (ch) => ch && !/\s/.test(ch);
         let start = pos, end = pos;
@@ -354,9 +314,7 @@ Object.assign(NYM.prototype, {
         return { start, end };
     },
 
-    // Toggle `before…after` around the selection. Recognizes an existing wrap
-    // both inside the selection ("**bold**" selected) and just outside it
-    // ("bold" selected between the asterisks), so a second click always undoes.
+    // Recognizes a wrap inside or just outside the selection, so a second click always undoes.
     _wrapInputSelection(el, before, after) {
         const v = el.value;
         let s = el.selectionStart;
@@ -367,8 +325,7 @@ Object.assign(NYM.prototype, {
             s = w.start;
             e = w.end;
         }
-        // Never swallow the whitespace at the edges of a selection — markdown
-        // delimiters must hug the text or the formatter won't match them.
+        // Markdown delimiters must hug the text or the formatter won't match them.
         while (e > s && /\s/.test(v[e - 1])) e--;
         while (s < e && /\s/.test(v[s])) s++;
 
@@ -390,8 +347,6 @@ Object.assign(NYM.prototype, {
         el.setSelectionRange(s + bl, s + bl + sel.length);
     },
 
-    // The full-line span covering the selection, so line-oriented tools operate
-    // on whole lines the way markdown does.
     _selectedLineSpan(v, s, e) {
         const start = v.lastIndexOf('\n', s - 1) + 1;
         let end = v.indexOf('\n', e);
@@ -419,9 +374,6 @@ Object.assign(NYM.prototype, {
         el.setSelectionRange(innerStart, innerStart + block.length);
     },
 
-    // Add/remove `prefix` on every line the selection touches. When all touched
-    // lines already carry it the click removes it, mirroring how the bold/italic
-    // toggles behave.
     _toggleInputLinePrefix(el, prefix, exclusive) {
         const v = el.value;
         let s = el.selectionStart, e = el.selectionEnd;
@@ -440,10 +392,7 @@ Object.assign(NYM.prototype, {
         el.setSelectionRange(span.start, span.start + out.length);
     },
 
-    // The formatting toggle shares an absolutely-positioned action row with the
-    // translate button, which only exists while the draft has text. Reserve
-    // exactly as much right padding inside the input as the visible buttons
-    // occupy so text never runs underneath them.
+    // Reserve right padding for the visible inline buttons so text never runs underneath them.
     syncComposerInlineActions() {
         const input = document.getElementById('messageInput');
         const row = document.getElementById('inputInlineActions');
@@ -456,9 +405,7 @@ Object.assign(NYM.prototype, {
             : '';
     },
 
-    // attachment previews 
-    // Every media URL currently in the draft, with the offsets needed to remove
-    // one precisely (the same URL can legitimately appear twice).
+    // Includes offsets because the same URL can legitimately appear twice.
     _composerMediaMatches(value) {
         const out = [];
         if (!value) return out;
@@ -476,10 +423,7 @@ Object.assign(NYM.prototype, {
         return out;
     },
 
-    // Local object URLs for files this session uploaded, keyed by their hosted
-    // URL. Previewing from the local blob avoids re-downloading what the user
-    // just sent up, and shows a thumbnail instantly even if the Blossom server
-    // is slow to serve the fresh blob back.
+    // Hosted URL -> local object URL, so previews show instantly without re-downloading.
     _rememberComposerMediaBlob(url, file) {
         if (!url || !file) return;
         if (!this._composerMediaBlobs) this._composerMediaBlobs = new Map();
@@ -489,9 +433,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Drop object URLs for media no longer referenced by the draft. URLs still
-    // "held" (uploaded but not yet appended to the draft) are exempt, otherwise
-    // the blob would be revoked in the window between upload and append.
+    // "Held" URLs are exempt so a blob isn't revoked between upload and append.
     _releaseComposerMediaBlobs(activeUrls) {
         if (!this._composerMediaBlobs || !this._composerMediaBlobs.size) return;
         const keep = new Set(activeUrls || []);
@@ -503,13 +445,8 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Placeholder thumbnails rendered from the local files while their upload is
-    // still in flight, so the strip appears the instant a file is picked.
-
     _composerAttachmentSeq: 0,
 
-    // Registers freshly-picked files as uploading tiles, so the user sees what
-    // they chose before a byte is up. Returns the new records.
     addComposerAttachments(files) {
         if (!this._composerAttachments) this._composerAttachments = [];
         const added = [];
@@ -541,8 +478,7 @@ Object.assign(NYM.prototype, {
         const rec = this.composerAttachmentById(id);
         if (!rec) return null;
         Object.assign(rec, patch || {});
-        // The local object URL keeps standing in for the hosted one, so the
-        // thumbnail never flickers and we do not re-fetch what we just sent.
+        // The local object URL keeps standing in for the hosted one to avoid flicker and refetch.
         if (rec.status === 'done' && rec.url) {
             if (!this._composerMediaBlobs) this._composerMediaBlobs = new Map();
             if (!this._composerMediaBlobs.has(rec.url)) {
@@ -560,16 +496,13 @@ Object.assign(NYM.prototype, {
         const idx = list.findIndex(a => a.id === id);
         if (idx < 0) return;
         const [rec] = list.splice(idx, 1);
-        // Safe to revoke only while nothing else points at it: once uploaded,
-        // the blob map is standing in for the hosted URL.
+        // Safe to revoke only before upload completes; afterward the blob stands in for the hosted URL.
         if (rec && rec.status !== 'done') {
             try { URL.revokeObjectURL(rec.objectUrl); } catch (_) { }
         }
         this.updateComposerMediaPreviews();
     },
 
-    // The hosted URLs to append to the outgoing message, in the order added.
-    // A still-uploading or failed tile contributes nothing.
     composerAttachmentUrls() {
         return (this._composerAttachments || [])
             .filter(a => a.status === 'done' && a.url)
@@ -580,7 +513,6 @@ Object.assign(NYM.prototype, {
         return (this._composerAttachments || []).some(a => a.status === 'uploading');
     },
 
-    // Called once the message carrying these attachments has gone out.
     clearComposerAttachments() {
         for (const a of (this._composerAttachments || [])) {
             if (a.status !== 'done') {
@@ -592,7 +524,6 @@ Object.assign(NYM.prototype, {
         this.updateComposerMediaPreviews();
     },
 
-    // changed, otherwise a keystroke would restart every <video> preload.
     updateComposerMediaPreviews() {
         const strip = document.getElementById('mediaPreviewStrip');
         const input = document.getElementById('messageInput');
@@ -646,9 +577,6 @@ Object.assign(NYM.prototype, {
             + '<polyline points="1 4 1 10 7 10"></polyline>'
             + '<path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>';
 
-        // One tile per attachment. The wheel IS the progress indicator, per
-        // file and in place, instead of one bar for the whole batch that could
-        // not say which file it was talking about.
         const tiles = attachments.map(a => {
             const s = this.escapeHtml(a.objectUrl);
             const media = a.kind === 'video'
@@ -678,7 +606,6 @@ Object.assign(NYM.prototype, {
         this._refreshComposerOffsets();
     },
 
-    // Delegated handlers for the strip (bound once from initialize()).
     setupComposerMediaPreviews() {
         const strip = document.getElementById('mediaPreviewStrip');
         if (!strip || strip._nymBound) return;
@@ -700,8 +627,6 @@ Object.assign(NYM.prototype, {
                 e.preventDefault();
                 const rec = this.composerAttachmentById(tile.dataset.attachmentId);
                 if (!rec) return;
-                // A failed tile IS the retry button: the file is still held, so
-                // one failure never costs the user the rest of the batch.
                 if (rec.status === 'failed') this.retryComposerAttachment(rec.id);
                 else if (rec.status === 'done') {
                     if (rec.kind === 'video') this.expandVideo(rec.objectUrl);
@@ -722,8 +647,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Drop one attachment: strip its URL (and the whitespace it brought with it)
-    // back out of the draft.
     removeComposerMedia(index) {
         const input = document.getElementById('messageInput');
         if (!input || !Number.isInteger(index)) return;
@@ -731,8 +654,7 @@ Object.assign(NYM.prototype, {
         const match = this._composerMediaMatches(v)[index];
         if (!match) return;
         let { start, end } = match;
-        // Swallow one trailing space, else one leading space, so removing a
-        // middle attachment doesn't leave a double space behind.
+        // Swallow one trailing, else one leading, space so no double space remains.
         if (v[end] === ' ') end++;
         else if (start > 0 && v[start - 1] === ' ') start--;
         const caret = Math.min(start, v.length);

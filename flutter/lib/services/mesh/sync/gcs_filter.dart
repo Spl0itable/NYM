@@ -1,33 +1,10 @@
-// gcs_filter.dart - Golomb-Coded Set filters for gossip sync.
-//
-// A byte-for-byte port of bitchat's `GCSFilter.swift`. Two peers reconcile
-// their recent public history by exchanging a compact probabilistic set of the
-// packet ids each already holds; whatever is missing from the other's filter
-// gets sent. A GCS is what makes that affordable over BLE — ~1.2 bytes per id
-// at a 1% false-positive rate, against 16 bytes for the id itself.
-//
-// Interop with the real bitchat clients depends on every constant and every bit
-// of the encoding below, so this is a transcription, not a re-derivation:
-//
-//  * Packet id is 16 bytes ([packetIdFor]). For GCS mapping, `h64` is the first
-//    8 bytes of SHA-256 over that id, with the top bit cleared.
-//  * Map into `[1, M)` as `h64 % M`, remapping 0 → 1 so no delta is zero.
-//  * Sort ascending, encode deltas as Golomb-Rice with parameter P: the
-//    quotient `q = (x - 1) >> P` in unary (q ones then a zero), then the P-bit
-//    remainder `r = (x - 1) & ((1 << P) - 1)`.
-//  * The bitstream is MSB-first within each byte.
-//
-// A false positive costs one message the peer never receives from us in this
-// round; the next round (different id set, different filter) will usually carry
-// it. That is the trade the whole design is built on, so the FPR is a tuning
-// knob, never a correctness one.
+// Golomb-Coded Set filters for gossip sync, transcribed byte for byte from bitchat's `GCSFilter.swift`.
 
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 
-/// The result of building a filter.
 class GcsParams {
   const GcsParams({
     required this.p,
@@ -36,32 +13,21 @@ class GcsParams {
     required this.includedCount,
   });
 
-  /// Golomb-Rice parameter.
   final int p;
 
-  /// Hash range (`count * 2^P`), the modulus ids map into.
+  /// Hash range (`count * 2^P`) that ids map into.
   final int m;
 
-  /// The Golomb-Rice bitstream.
   final Uint8List data;
 
-  /// How many of the input ids the filter actually encodes.
-  ///
-  /// Below `ids.length` when the encoding overflowed the byte budget and the
-  /// tail was trimmed. Callers deriving a since-cursor need this: trimming
-  /// drops from the tail, so with ids passed newest-first the covered set is
-  /// always a contiguous newest-prefix — which is what makes the cursor exact
-  /// rather than an arbitrary hash-order subset.
+  /// Ids actually encoded; with newest-first input the covered set is a newest prefix.
   final int includedCount;
 }
 
-/// Golomb-Coded Set encoding/decoding, and the id hashing that feeds it.
 class GcsFilter {
   const GcsFilter._();
 
-  /// Highest Golomb-Rice parameter accepted from the wire. P maps to an FPR of
-  /// ~1/2^P; past 32 the remainder width exceeds any practical filter and the
-  /// decode shifts would silently overflow into garbage.
+  /// Highest P accepted from the wire; larger values would overflow the decode shifts.
   static const int maxP = 32;
 
   /// P from a target false-positive rate (~1/2^P).
@@ -71,19 +37,14 @@ class GcsFilter {
     return math.max(1, p);
   }
 
-  /// Roughly how many elements fit in [sizeBytes] at parameter [p] — the
-  /// encoding costs about `P + 2` bits each.
+  /// Rough element capacity of [sizeBytes], at about `P + 2` bits each.
   static int estimateMaxElements({required int sizeBytes, required int p}) {
     final bits = math.max(8, sizeBytes * 8);
     final per = math.max(3, p + 2);
     return math.max(1, bits ~/ per);
   }
 
-  /// Builds a filter over [ids], which the caller passes NEWEST-FIRST.
-  ///
-  /// The modulus is fixed to the initial candidate count so `m` stays stable
-  /// while the tail is trimmed to fit [maxBytes] — a peer decoding the filter
-  /// has to compute the same buckets we did, and it only has `m` from the wire.
+  /// Builds a filter over newest-first [ids]; `m` stays fixed while the tail is trimmed to fit.
   static GcsParams buildFilter({
     required List<Uint8List> ids,
     required int maxBytes,
@@ -112,7 +73,7 @@ class GcsFilter {
       count = math.max(1, (count * 9) ~/ 10);
       encoded = encodeFirst(count);
     }
-    // A single element that still overflows cannot be represented at all.
+    // A single element that still overflows cannot be represented.
     if (encoded.length > maxBytes) {
       return GcsParams(p: p, m: range, data: Uint8List(0), includedCount: 0);
     }
@@ -124,12 +85,7 @@ class GcsFilter {
     );
   }
 
-  /// Decodes a wire filter back to its sorted bucket values.
-  ///
-  /// Out-of-range parameters are REJECTED rather than decoded into garbage:
-  /// callers read an empty result as "the peer holds nothing" and fall back to
-  /// sending everything, which is the safe direction — wasted airtime, never a
-  /// silently dropped message.
+  /// Decodes to sorted buckets; bad parameters yield empty, which safely means resend everything.
   static List<int> decodeToSortedSet({
     required int p,
     required int m,
@@ -152,7 +108,6 @@ class GcsFilter {
     return values;
   }
 
-  /// Binary search over a decoded filter.
   static bool contains(List<int> sortedValues, int candidate) {
     var lo = 0;
     var hi = sortedValues.length - 1;
@@ -169,16 +124,14 @@ class GcsFilter {
     return false;
   }
 
-  /// The bucket [id] maps to under modulus [m] — how a responder tests whether
-  /// the requester might already hold a packet.
+  /// The bucket [id] maps to under modulus [m].
   static int bucket(Uint8List id, int m) {
     final modulo = math.max(1, m);
     if (modulo <= 1) return 0;
     return _mapHash(_h64(id), modulo);
   }
 
-  /// First 8 bytes of SHA-256 over the 16-byte packet id, top bit cleared so
-  /// the value stays positive in every language's signed 64-bit integer.
+  /// First 8 bytes of SHA-256 over the id, top bit cleared to stay positive in signed 64-bit.
   static int _h64(Uint8List id16) {
     final digest = sha256.convert(id16).bytes;
     var x = 0;
@@ -207,9 +160,7 @@ class GcsFilter {
     return value == 0 ? 1 : value;
   }
 
-  /// Clamps into range and drops duplicates, keeping the sequence strictly
-  /// increasing — the encoder emits deltas and a zero delta is not
-  /// representable.
+  /// Clamps and dedupes into a strictly increasing sequence, since a zero delta is not representable.
   static List<int> _normalize(List<int> values, int modulo) {
     if (modulo <= 1 || values.isEmpty) return const [];
     final result = <int>[];
@@ -241,12 +192,7 @@ class GcsFilter {
   }
 }
 
-/// The 16-byte deterministic id gossip sync keys a packet on: the first 16
-/// bytes of SHA-256 over `type | senderID | timestamp(BE64) | payload`.
-///
-/// Matches bitchat's `PacketIdUtil`. Deliberately excludes TTL and signature —
-/// TTL mutates as a packet is relayed, so including it would make every hop a
-/// different "packet" and the whole reconciliation meaningless.
+/// bitchat `PacketIdUtil`: SHA-256(type | senderID | ts BE64 | payload)[:16], excluding TTL and signature.
 Uint8List packetIdFor({
   required int type,
   required Uint8List senderID,
@@ -264,7 +210,6 @@ Uint8List packetIdFor({
   return Uint8List.fromList(digest.sublist(0, 16));
 }
 
-/// MSB-first bit writer.
 class _BitWriter {
   final BytesBuilder _buf = BytesBuilder();
   int _cur = 0;
@@ -302,8 +247,7 @@ class _BitWriter {
   }
 }
 
-/// MSB-first bit reader. Returns null once the stream is exhausted, which is
-/// how the decoder knows to stop rather than reading zeros forever.
+/// MSB-first bit reader; returns null once exhausted.
 class _BitReader {
   _BitReader(this._data) {
     if (_data.isNotEmpty) {

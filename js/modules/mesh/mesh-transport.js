@@ -52,8 +52,7 @@
             this.onLinkChange();
         }
 
-        // Devices the user already granted. Chrome exposes these without a
-        // prompt, so a reload does not make the user re-pick every peer.
+        // Chrome exposes previously granted devices without a prompt.
         async reconnectKnown() {
             if (!navigator.bluetooth.getDevices) return;
             let devices = [];
@@ -99,8 +98,7 @@
             });
         }
 
-        // An advertisement means the peer is in range again — the cue to
-        // reconnect without waiting on a timer.
+        // An advertisement means the peer is back in range; reconnect without waiting on a timer.
         _watch(device) {
             if (this.watched.has(device.id) || !device.watchAdvertisements) return;
             this.watched.add(device.id);
@@ -153,8 +151,7 @@
             }
         }
 
-        // Broadcasts a frame to every live link. [exceptLinkId] suppresses the
-        // hop a relayed packet arrived on.
+        // [exceptLinkId] suppresses the hop a relayed packet arrived on.
         async broadcast(bytes, exceptLinkId) {
             const targets = [];
             for (const link of this.links.values()) {

@@ -2,38 +2,36 @@ import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../nym_icons.dart';
 
-/// The identity of a context-menu action (mirrors the `#ctxXxx` items in
-/// index.html's `#contextMenu`). Order matches the PWA's markup.
+/// Context-menu actions, in the PWA's `#contextMenu` markup order.
 enum CtxAction {
-  react, // #ctxReact
-  mention, // #ctxMention
-  privateMessage, // #ctxPM
-  slap, // #ctxSlap ("Slap with Trout") — injected after PM (ui-context.js:507)
-  hug, // #ctxHug ("Give warm Hug") — injected after Slap (ui-context.js:526)
-  addToGroup, // #ctxAddToGroup ("Create Group Chat")
-  zap, // #ctxZap (lightning)
-  giftCredits, // #ctxGiftCredits ("Gift Nymbot Credits")
-  quote, // #ctxQuote
-  copyMessage, // #ctxCopyMessage
-  translate, // #ctxTranslate
-  friend, // #ctxFriend (Add/Remove Friend)
-  report, // #ctxReport
-  edit, // #ctxEditMessage (own only)
-  delete, // #ctxDeleteMessage (own / mod)
-  // group moderation (shown only when applicable)
-  makeMod, // #ctxAddMod
-  revokeMod, // #ctxRemoveMod
-  makeAdmin, // #ctxAddAdmin
-  revokeAdmin, // #ctxRemoveAdmin
-  transferOwner, // #ctxTransferOwner
-  kick, // #ctxKickMember
-  ban, // #ctxBanMember
-  block, // #ctxBlock (Block/Unblock)
-  editProfile, // #ctxEditProfile (own only) — appears last (index.html:260)
+  react,
+  mention,
+  privateMessage,
+  slap,
+  hug,
+  addToGroup,
+  zap,
+  giftCredits,
+  quote,
+  copyMessage,
+  translate,
+  friend,
+  report,
+  edit, // Own messages only.
+  delete, // Own messages, or moderators.
+  // Group moderation, shown only when applicable.
+  makeMod,
+  revokeMod,
+  makeAdmin,
+  revokeAdmin,
+  transferOwner,
+  kick,
+  ban,
+  block,
+  editProfile, // Own profile only.
 }
 
-/// Target metadata for a context-menu invocation, mirroring the PWA's
-/// `this.contextMenuData` plus the role flags `showContextMenu` derives.
+/// Target of a context-menu invocation plus derived role flags.
 class CtxTarget {
   const CtxTarget({
     required this.pubkey,
@@ -45,7 +43,6 @@ class CtxTarget {
     this.isFriend = false,
     this.isBlocked = false,
     this.isBot = false,
-    // group context (null when not viewing a group):
     this.inGroup = false,
     this.iAmOwner = false,
     this.iAmAdmin = false,
@@ -58,16 +55,14 @@ class CtxTarget {
   });
 
   final String pubkey;
-  final String nym; // base nym (no suffix)
+  final String nym; // Base nym, no suffix.
   final bool isSelf;
 
-  /// Message body (null for mention/sidebar profile clicks).
   final String? content;
 
-  /// Real event id of the message (null for profile clicks).
   final String? messageId;
 
-  /// Profile-only mode (nyms sidebar): only PM / Report / Block.
+  /// Profile-only mode (nyms sidebar).
   final bool profileOnly;
 
   final bool isFriend;
@@ -83,10 +78,7 @@ class CtxTarget {
   final bool targetIsAdmin;
   final bool targetIsMod;
 
-  /// When this profile was opened from a group's member list, the originating
-  /// group id — the user context menu then shows a top-left "back" chevron that
-  /// returns to that group's context menu (PWA `backToGroupId`,
-  /// ui-context.js:354/371). Null for every other entry point.
+  /// Group id when opened from a group's member list, enabling a back chevron to that group's menu.
   final String? backToGroupId;
 
   bool get iCanAdminister => iAmOwner || iAmAdmin;
@@ -98,26 +90,16 @@ class CtxTarget {
   bool get iOutrankTarget => iAmOwner || _myRank < _targetRank;
 }
 
-/// Builds the visible, ordered action list for [t], mirroring the visibility
-/// rules in ui-context.js `showContextMenu` (lines 354-661). Edit is own-only;
-/// zap/report/friend/block/PM/mention are hidden for self; moderation items
-/// appear only when the role rules permit; translate/quote/copy need content.
+/// Visible, ordered action list for [t], following the PWA `showContextMenu` visibility rules.
 List<CtxAction> buildContextMenuActions(CtxTarget t) {
   final hasContent = t.content != null && t.content!.isNotEmpty;
   final hasMessage = t.messageId != null && t.messageId!.isNotEmpty;
 
-  // "Create Group Chat" / "Gift Nymbot Credits" gates (ui-context.js:575-584).
-  // AddToGroup also requires we're NOT already viewing a group.
+  // Add-to-group requires not already viewing a group.
   final showAddToGroup = !t.isSelf && !t.isBot && !t.inGroup;
   final showGiftCredits = !t.isSelf && !t.isBot;
 
-  // Profile-only mode (nyms sidebar): the PWA explicitly hides Mention,
-  // Translate, Slap, Hug, mod items and Edit *Message* (`editOption`); everything
-  // else stays subject to its own gate. With no messageId/content present,
-  // React/Zap/Quote/Copy/Delete fall away too — leaving PM, AddToGroup,
-  // GiftCredits, Friend, Report, Block, and (for self) Edit *Profile*, which the
-  // PWA keeps visible (`ctxEditProfile` is shown when pubkey === self, and the
-  // profile-only block never hides it) (ui-context.js:586-594, 640-654).
+  // Profile-only hides Mention, Translate, Slap, Hug, mod items and Edit Message; Edit Profile stays for self.
   if (t.profileOnly) {
     return [
       if (!t.isSelf) CtxAction.privateMessage,
@@ -130,7 +112,6 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     ];
   }
 
-  // Group moderation visibility (ui-context.js lines 477-484).
   final other = t.inGroup && t.targetIsMember && !t.isSelf;
   final showKickOrBan = other && t.iCanModerate && t.iOutrankTarget;
   final showAddMod = other &&
@@ -144,7 +125,6 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
   final showRemoveAdmin = other && t.iAmOwner && t.targetIsAdmin;
   final showTransfer = other && t.iAmOwner;
 
-  // Mod/owner can delete another member's message in the current group.
   final canDeleteOwn = t.isSelf && hasMessage;
   final canModDelete = !canDeleteOwn &&
       hasMessage &&
@@ -152,12 +132,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
       !t.isSelf &&
       (t.iAmOwner || (t.iCanModerate && t.iOutrankTarget));
 
-  // Order mirrors the runtime DOM (index.html:94-260) with Slap/Hug injected
-  // right after PM (ui-context.js:507-530): React, Mention, PM, Slap, Hug,
-  // AddToGroup, Zap, GiftCredits, Quote, Copy, Translate, Friend, Report, Edit,
-  // Delete, AddMod, RemoveMod, TransferOwner, Kick, Ban, Block, EditProfile.
-  // Note: Mention is NOT self-gated in the PWA (only hidden in profileOnly) — it
-  // shows on your own messages too.
+  // Mention is not self-gated in the PWA, so it shows on your own messages too.
   return [
     if (hasMessage) CtxAction.react,
     CtxAction.mention,
@@ -186,8 +161,6 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
   ];
 }
 
-/// The visible label for an action given the target (handles Add/Remove Friend
-/// and Block/Unblock toggles, ui-context.js lines 555-569).
 String ctxActionLabel(CtxAction a, CtxTarget t) {
   switch (a) {
     case CtxAction.react:
@@ -241,10 +214,6 @@ String ctxActionLabel(CtxAction a, CtxTarget t) {
   }
 }
 
-/// The leading 16px glyph (a [NymIcons] SVG string) for an action row,
-/// reproducing the PWA's per-item inline SVGs verbatim (index.html:94-266; the
-/// injected Slap/Hug glyphs at ui-context.js:504/524). Reused by the
-/// quick-context-menu (F3) for the shared items. Rendered through [NymSvgIcon].
 String ctxActionSvg(CtxAction a) {
   switch (a) {
     case CtxAction.react:
@@ -296,9 +265,7 @@ String ctxActionSvg(CtxAction a) {
   }
 }
 
-/// Builds a [CtxTarget] from a [Message] and the local pubkey, deriving
-/// self/group flags. Group role flags default false (the seeded store has no
-/// public mod accessor; pass overrides when richer group data is available).
+/// Group role flags default to false; pass overrides when richer group data is available.
 CtxTarget ctxTargetForMessage(
   Message message, {
   required String selfPubkey,

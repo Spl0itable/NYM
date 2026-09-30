@@ -2,23 +2,19 @@
 
 Object.assign(NYM.prototype, {
 
-    // The SVG shared by the hover button and the reply-count row.
     THREAD_ICON_SVG: '<svg viewBox="0 0 20 20"><path fill="currentColor" fill-rule="evenodd" d="M10 3a7 7 0 1 0 3.394 13.124.75.75 0 0 1 .542-.074l2.794.68-.68-2.794a.75.75 0 0 1 .073-.542A7 7 0 0 0 10 3m-8.5 7a8.5 8.5 0 1 1 16.075 3.859l.904 3.714a.75.75 0 0 1-.906.906l-3.714-.904A8.5 8.5 0 0 1 1.5 10M6 8.25a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 6 8.25M6.75 11a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5z" clip-rule="evenodd"></path></svg>',
 
     threadsEnabled() {
         return !this.settings || this.settings.threadsEnabled !== false;
     },
 
-    // The id a reply's thread tag points at: the shared cross-recipient id for
-    // PMs/groups, the event id for channel messages.
+    // The shared cross-recipient id for PMs/groups, the event id for channel messages.
     threadKeyForMessage(msg) {
         if (!msg) return null;
         return (msg.isPM && msg.nymMessageId) ? msg.nymMessageId : msg.id;
     },
 
-    // Whether a message can be a thread root: it needs an id every client can
-    // reference (a real event id or shared nymMessageId, not an optimistic
-    // temp id), and must not itself be a reply.
+    // Needs an id every client can reference (not an optimistic temp id) and must not be a reply.
     _threadEligibleRoot(msg) {
         if (!msg || msg.threadRoot) return false;
         const key = this.threadKeyForMessage(msg);
@@ -27,7 +23,7 @@ Object.assign(NYM.prototype, {
         return /^[0-9a-f]{64}$/i.test(key);
     },
 
-    // Extract the thread root from a channel event's tags (NIP-10 marked tags).
+    // NIP-10 marked tags.
     threadRootFromChannelTags(tags) {
         if (!Array.isArray(tags)) return null;
         let root = null;
@@ -41,14 +37,12 @@ Object.assign(NYM.prototype, {
         return (id && /^[0-9a-f]{64}$/i.test(id)) ? id : null;
     },
 
-    // Extract the thread root from a PM/group rumor's tags.
     threadRootFromRumorTags(tags) {
         if (!Array.isArray(tags)) return null;
         const t = tags.find(t => Array.isArray(t) && t[0] === 'nymthread' && t[1]);
         return t ? String(t[1]) : null;
     },
 
-    // The in-memory store list a message lives in.
     _threadListForMessage(msg) {
         if (!msg) return null;
         if (msg.isPM) {
@@ -122,8 +116,7 @@ Object.assign(NYM.prototype, {
         return dropped;
     },
 
-    // True when a reply's root message is present locally. A reply whose root
-    // we never saw falls back to rendering inline so it is never lost.
+    // A reply whose root we never saw renders inline so it is never lost.
     _threadRootExistsFor(msg) {
         if (!msg || !msg.threadRoot) return false;
         const list = this._threadListForMessage(msg);
@@ -132,16 +125,7 @@ Object.assign(NYM.prototype, {
         return list.some(m => m !== msg && this.threadKeyForMessage(m) === rootId);
     },
 
-    // True when a message is HIDDEN behind a collapsed thread: it is a reply
-    // whose root we hold (so it renders inside the thread instead of inline)
-    // and whose thread view isn't the one currently open.
-    //
-    // Such a message never reaches the screen even while its conversation is on
-    // screen, so the notification gates must not treat "viewing the
-    // conversation" as "the user saw it" for it. Without this an @mention or a
-    // quote-reply landing in a thread played its sound
-    // (`_onThreadReplyArrived`) and was never recorded: the bell modal stayed
-    // empty for a message the user was told about but could not see.
+    // Hidden replies never reach the screen, so notification gates must not treat them as seen.
     _threadReplyHidden(message) {
         if (!message || !message.threadRoot) return false;
         if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
@@ -150,16 +134,7 @@ Object.assign(NYM.prototype, {
         return !(at && at.rootId === message.threadRoot);
     },
 
-    // A thread is a conversation of its own, so the flat rules of the channel /
-    // PM / group it hangs under are the wrong ones to judge its replies by. Two
-    // predicates carry the difference, and both are no-ops for a message that
-    // is not a thread reply.
-
-    // True when the reply landed in a thread the USER started. Opening a thread
-    // on your own message is joining a conversation, so its replies reach you
-    // the way a mention does. Without this, replying under someone's message
-    // notified them of nothing at all: a channel only ever notified on an
-    // @mention, and the reply was collapsed out of sight.
+    // Replies in a thread the user started notify like a mention.
     _threadReplyRootIsMine(message) {
         if (!message || !message.threadRoot) return false;
         const list = this._threadListForMessage(message);
@@ -170,10 +145,7 @@ Object.assign(NYM.prototype, {
         return !!root.isOwn || (!!this.pubkey && root.pubkey === this.pubkey);
     },
 
-    // True when `threadNotifyMentionsOnly` holds this reply back: the setting is
-    // on and the reply neither @mentions nor quote-replies the user. It is the
-    // thread-scoped twin of `groupNotifyMentionsOnly`, and it applies wherever a
-    // thread hangs — channel, PM or group.
+    // Thread-scoped twin of `groupNotifyMentionsOnly`, for channel, PM or group threads.
     _threadReplySuppressed(message) {
         if (!message || !message.threadRoot) return false;
         if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
@@ -181,10 +153,7 @@ Object.assign(NYM.prototype, {
         return !this.isMentioned(message.content);
     },
 
-    // True when this reply reaches the user whatever the conversation's own
-    // rules say — it is in a thread they started. An @mention already passes
-    // every gate, so only the thread-ownership half needs lifting here, and
-    // `threadNotifyMentionsOnly` turns it off.
+    // Only the thread-ownership half needs lifting; an @mention already passes every gate.
     _threadReplyElevated(message) {
         if (!message || !message.threadRoot) return false;
         if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
@@ -192,9 +161,7 @@ Object.assign(NYM.prototype, {
         return this._threadReplyRootIsMine(message);
     },
 
-    // Reply-count lookup, cached per store list. The cache keys on the list's
-    // identity and length so inserts (push/splice) and slice reassignments
-    // both invalidate it naturally.
+    // Keyed on the list's identity and length so push/splice and reassignments invalidate it.
     _threadReplyCountFor(msg) {
         const list = this._threadListForMessage(msg);
         if (!list || !list.length) return 0;
@@ -210,7 +177,6 @@ Object.assign(NYM.prototype, {
         return key ? (this._threadCountCache.map.get(key) || 0) : 0;
     },
 
-    // All replies for a root, chronological.
     _threadRepliesFor(rootMsg) {
         const list = this._threadListForMessage(rootMsg) || [];
         const rootId = this.threadKeyForMessage(rootMsg);
@@ -222,9 +188,7 @@ Object.assign(NYM.prototype, {
             .sort((a, b) => this._compareMessages(a, b));
     },
 
-    // Nymbot in channel threads 
-    // `nym#abcd`, the shape quote-replies use, so /api/bot can tell the bot's
-    // own turns apart from the humans' in a thread transcript.
+    // `nym#abcd`, the quote-reply shape, so /api/bot can tell the bot's turns from humans'.
     _threadMessageAuthor(msg) {
         const nym = this.resolveDisplayNym(msg && msg.pubkey, (msg && msg.author) || '');
         const suffix = (msg && msg.pubkey && typeof this.getPubkeySuffix === 'function')
@@ -232,7 +196,6 @@ Object.assign(NYM.prototype, {
         return suffix ? `${nym}#${suffix}` : nym;
     },
 
-    // The channel thread's messages, root first then replies, chronological.
     _threadChannelChain(rootId, storageKey) {
         if (!rootId || !storageKey || !this.threadsEnabled()) return [];
         const list = this.messages.get(storageKey) || [];
@@ -241,12 +204,7 @@ Object.assign(NYM.prototype, {
         return [root, ...this._threadRepliesFor(root)];
     },
 
-    // The Nymbot message a plain thread reply is answering, shaped like a
-    // pendingQuote so the bot command path treats a thread reply exactly like a
-    // quote-reply. Null unless Nymbot is the thread's root or its last speaker
-    // — a thread nobody asked the bot into still needs an explicit ?command or
-    // @Nymbot mention. Call this BEFORE publishing the outgoing message, so the
-    // user's own message isn't the thread's last one yet.
+    // Null unless Nymbot is the root or last speaker; call before publishing the outgoing message.
     _threadBotQuoteContext(rootId, storageKey) {
         const chain = this._threadChannelChain(rootId, storageKey)
             .filter(m => String(m.content || '').trim());
@@ -255,9 +213,7 @@ Object.assign(NYM.prototype, {
         if (!chain[0].isBot && !last.isBot) return null;
         const botMsgs = chain.filter(m => m.isBot);
         if (!botMsgs.length) return null;
-        // An unfinished game lives in the newest [gc:] token in the thread;
-        // quoting a bot message without it would route the guess to ?ask and
-        // drop the game.
+        // An unfinished game lives in the newest [gc:] token; quoting without it would drop the game.
         let target = null;
         for (let i = botMsgs.length - 1; i >= 0; i--) {
             if (/\[gc:[A-Za-z0-9+/=]+\]/.test(botMsgs[i].content || '')) { target = botMsgs[i]; break; }
@@ -267,10 +223,7 @@ Object.assign(NYM.prototype, {
         return { author: this._threadMessageAuthor(target), text, fullText: text };
     },
 
-    // One entry's text, with the wire envelope off: quote block, and for the
-    // bot its @mention and zap prompt. Left in, the model mimics the format
-    // instead of answering. The quote is redundant here anyway — in a thread
-    // the message it quotes is its own entry.
+    // Strip the wire envelope, or the model mimics the format instead of answering.
     _threadEntryText(msg) {
         let text = String((msg && msg.content) || '')
             .split('\n').filter(l => !l.startsWith('>')).join('\n');
@@ -278,20 +231,16 @@ Object.assign(NYM.prototype, {
         return text.replace(/\n{3,}/g, '\n\n').trim();
     },
 
-    // The @mention a bot reply opens with and the zap prompt it can close
-    // with. The `[gc:]` token stays — ?guess reads the live game out of it.
+    // The `[gc:]` token stays; ?guess reads the live game out of it.
     _stripBotEnvelope(text) {
         return String(text || '')
             .replace(/^@[^\s]+[ \t]+/, '')
             .replace(/^[ \t]*\u26a1.*$/gm, '');
     },
 
-    // The thread transcript as bot conversation context, in the same
-    // {author, text} shape _extractQuoteChain produces. `exclude` drops the
-    // message just published (it is sent separately as the question).
+    // Same {author, text} shape as _extractQuoteChain; `exclude` drops the just-published message.
     _threadBotConversation(rootId, storageKey, opts = {}) {
         const limit = opts.limit || 20;
-        // Normalized like the entries: the caller hands it over as published.
         const exclude = opts.exclude ? this._threadEntryText({ content: opts.exclude }) : '';
         const entries = this._threadChannelChain(rootId, storageKey)
             .filter(m => !m._spamGated)
@@ -303,15 +252,12 @@ Object.assign(NYM.prototype, {
         return entries.slice(-limit);
     },
 
-    // Find a message by its thread key within a conversation context.
     _threadFindMessage(ctx, id) {
         const list = ctx.isPM ? (this.pmMessages.get(ctx.storageKey) || [])
             : (this.messages.get(ctx.storageKey) || []);
         return list.find(m => this.threadKeyForMessage(m) === id) || null;
     },
 
-    // Resolve the conversation context for a message element (which column it
-    // sits in under column view, otherwise the active conversation).
     _threadCtxForElement(el) {
         const colEl = el && el.closest && el.closest('.cv-column');
         if (colEl && this._cvActive) {
@@ -349,8 +295,6 @@ Object.assign(NYM.prototype, {
         return '';
     },
 
-    // Open the thread for the message element/button `target` (hover button,
-    // reply-count row, or long-press menu item).
     openMessageThread(target, opts = {}) {
         if (!this.threadsEnabled()) return;
         const msgEl = target && target.closest ? target.closest('[data-message-id]') : null;
@@ -360,25 +304,18 @@ Object.assign(NYM.prototype, {
         const id = msgEl.dataset.messageId;
         let msg = this._threadFindMessage(ctx, id);
         if (!msg) return;
-        // Opening "the thread" of a reply means opening its root's thread.
         if (msg.threadRoot) {
             const root = this._threadFindMessage(ctx, msg.threadRoot);
             if (root) {
                 msg = root;
             } else {
-                // The root is no longer in the local store (bounded cache /
-                // replay window). The thread still exists — open it keyed by
-                // the reply's root reference; the view renders "Original
-                // message unavailable" above whatever replies remain, instead
-                // of dead-ending on the "cannot start a thread yet" toast
-                // (that toast is for unconfirmed OWN messages, not this).
+                // Root aged out of the local store: open by the reply's root reference instead of dead-ending.
                 this.openThreadView(msg.threadRoot, ctx);
                 return;
             }
         }
         if (!this._threadEligibleRoot(msg)) {
-            // A stray body click on an unsendable/system row stays quiet; the
-            // explicit affordances (button, menu item) explain themselves.
+            // A stray body click on an unsendable/system row stays quiet.
             if (!opts.silent) {
                 this.displaySystemMessage('This message cannot start a thread yet — try again once it has finished sending.');
             }
@@ -387,8 +324,6 @@ Object.assign(NYM.prototype, {
         this.openThreadView(this.threadKeyForMessage(msg), ctx);
     },
 
-    // The container the thread view renders into: the focused column's list in
-    // column view, otherwise the single shared messages container.
     _threadContainerFor(ctx) {
         if (this._cvActive) {
             const col = this._cvColumnForKey(ctx.storageKey);
@@ -399,7 +334,6 @@ Object.assign(NYM.prototype, {
         return document.getElementById('messagesContainer');
     },
 
-    // Swap the current view to the thread: same container, same composer.
     openThreadView(rootId, ctx, opts = {}) {
         if (!this.threadsEnabled() || !rootId || !ctx) return;
         const container = this._threadContainerFor(ctx);
@@ -428,14 +362,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Full render of the open thread into its container: back bar, the root
-    // message, a divider, then the replies (chronological).
     _renderThreadView(container) {
         const at = this.activeThread;
         if (!at || !container) return;
         container.innerHTML = '';
-        // Invalidate the single-view DOM cache so leaving the thread does a
-        // full conversation re-render instead of restoring thread rows.
+        // Invalidate the single-view DOM cache so leaving the thread re-renders the conversation.
         container.dataset.lastChannel = '';
         container.classList.add('thread-view-active');
 
@@ -478,8 +409,6 @@ Object.assign(NYM.prototype, {
         this._updateThreadDivider(replies.length);
         this._scheduleScrollToBottom(true);
 
-        // Backfill zap receipts for the thread's messages, same as the main
-        // conversation render does.
         if (typeof this._backfillZapReceipts === 'function') {
             const ids = [];
             for (const m of (root ? [root, ...replies] : replies)) {
@@ -490,8 +419,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Render one message into the thread container through displayMessage's
-    // thread mode (shallow clone so the store object never carries the flag).
+    // Shallow clone so the store object never carries the thread flag.
     _renderThreadMessage(msg, container) {
         const clone = Object.assign({}, msg);
         clone._threadRender = true;
@@ -517,8 +445,6 @@ Object.assign(NYM.prototype, {
             : (count === 1 ? '1 reply' : `${this.abbreviateNumber(count)} replies`);
     },
 
-    // Composer hint while replying in a thread; the original placeholder is
-    // restored on close.
     _setThreadComposerHint(active) {
         const input = document.getElementById('messageInput');
         if (!input) return;
@@ -533,9 +459,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // The thread root the composer should attach to the message being sent,
-    // or null when not in a thread view (or it belongs to another
-    // conversation — never mis-thread a send).
+    // Null outside a thread view or when it belongs to another conversation (never mis-thread a send).
     _threadRootForSend() {
         const at = this.activeThread;
         if (!at || !this.threadsEnabled()) return null;
@@ -550,14 +474,11 @@ Object.assign(NYM.prototype, {
         return (!this.inPMMode && key === ctx.storageKey) ? at.rootId : null;
     },
 
-    // True when the thread view currently owns `container`, so ordinary
-    // conversation messages must not render into it (they are stored and
-    // reappear when the thread closes).
+    // Ordinary conversation messages must not render into an occupied container.
     _threadViewOccupies(container) {
         return !!(this.activeThread && this._threadContainer && container === this._threadContainer);
     },
 
-    // Leave the thread view and restore the conversation in the same container.
     closeThreadView(opts = {}) {
         const at = this.activeThread;
         if (!at) return;
@@ -569,9 +490,7 @@ Object.assign(NYM.prototype, {
             container.classList.remove('thread-view-active');
             this.renderMessagesWithVirtualScroll(container, at.ctx.storageKey, true, !!at.ctx.isPM);
         }
-        // Step the nav history back past the thread entry so Forward can
-        // reopen it — only when the close came from the user (the back bar),
-        // not from navigation itself.
+        // Only for user-initiated closes, not navigation itself.
         if (opts.nav !== false) {
             const current = this.navigationHistory && this.navigationHistory[this.navigationIndex];
             if (current && current.type === 'thread' && this.navigationIndex > 0) {
@@ -580,13 +499,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Open the thread a bell-history entry came from. The notification names
-    // the thread it happened in, so tapping it must land IN that thread —
-    // dropping the user at the flat conversation leaves them hunting for the
-    // reply behind whichever "N replies" row it collapsed into.
-    //
-    // Returns false when the entry names no thread (or threads are off), so the
-    // caller keeps its plain open-the-conversation behavior.
+    // Returns false when the entry names no thread (or threads are off).
     openThreadFromNotification(info) {
         if (!info || !info.threadRoot || !this.threadsEnabled()) return false;
         let ctx = null;
@@ -611,14 +524,11 @@ Object.assign(NYM.prototype, {
             };
         }
         if (!ctx || !ctx.storageKey) return false;
-        // Same ordering as `_navOpenThread`: the caller has already switched the
-        // conversation, and the thread view takes the container from there.
+        // Same ordering as `_navOpenThread`: the caller has already switched the conversation.
         this.openThreadView(info.threadRoot, ctx);
         return true;
     },
 
-    // Called by _navigateTo for 'thread' history entries: make sure the
-    // conversation is open first, then swap to the thread without re-pushing.
     _navOpenThread(entry) {
         const ctx = entry.ctx || {};
         if (!this._cvActive) {
@@ -639,25 +549,11 @@ Object.assign(NYM.prototype, {
         this.openThreadView(entry.rootId, ctx, { push: false });
     },
 
-    // ---- Live updates -----------------------------------------------------
-
-    // A reply for the visible conversation arrived (or was just sent): refresh
-    // the root's reply-count row and, when its thread is open, append it there.
     _onThreadReplyArrived(message) {
         this._threadCountCache = null;
         this._refreshThreadIndicators(message.threadRoot, message);
 
-        // Thread renders are silent in displayMessage (a re-render must never
-        // replay sounds), so a LIVE reply landing in the OPEN thread plays its
-        // one mention/PM sound here — the same gates as the normal live-message
-        // path, which plays a sound for a mention the user can see.
-        //
-        // A reply for a COLLAPSED thread is deliberately NOT sounded here: it is
-        // off screen, so it goes through the real notification path
-        // (`showNotification`) like any other message the user cannot see, which
-        // plays the sound AND records the bell entry. Sounding it here as well
-        // was the whole bug — the tone fired while the notification modal stayed
-        // empty, because the conversation being open suppressed the notification.
+        // Only a live reply in the open thread sounds here; collapsed-thread replies go through showNotification.
         if (!this._threadReplyHidden(message) &&
             !message.isHistorical && !message.isOwn && !message.isBot &&
             this.settings && this.settings.sound &&
@@ -677,12 +573,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Remove INLINE copies of a root's replies from the conversation view
-    // (never from an open thread view). A reply renders inline when its root
-    // hasn't hydrated/arrived yet — the "never lost" fallback — but once the
-    // root IS here the reply belongs to the thread, and the DOM dedupe would
-    // otherwise keep the stray inline copy forever: the message shows both
-    // "escaped" at top level and inside its thread.
+    // Once the root is here, drop stray inline copies of its replies (never from an open thread view).
     _sweepInlineThreadReplies(rootMsg) {
         if (!rootMsg || typeof document === 'undefined') return;
         if (!this.threadsEnabled()) return;
@@ -703,18 +594,13 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Update/create the "N replies" row on every rendered copy of the root
-    // (single view and columns; never inside an active thread view).
     _refreshThreadIndicators(rootId, sampleMsg) {
         if (!rootId) return;
         const list = sampleMsg ? this._threadListForMessage(sampleMsg) : null;
         const rootMsg = list ? (list.find(m => this.threadKeyForMessage(m) === rootId) || null) : null;
         const count = rootMsg ? this._threadRepliesFor(rootMsg).length : 0;
-        // The root being present means its replies belong in the thread, not
-        // inline — clear any that escaped while the root was still missing.
         if (rootMsg && count > 0) this._sweepInlineThreadReplies(rootMsg);
-        // `.message` rows only — the hover reaction button carries the same
-        // data-message-id and must never receive an indicator.
+        // `.message` rows only; the hover reaction button carries the same data-message-id.
         document.querySelectorAll(`.message[data-message-id="${rootId}"]`).forEach(el => {
             if (el.closest('.thread-view-active')) return;
             let row = el.querySelector(':scope > .thread-indicator-row');
@@ -732,10 +618,7 @@ Object.assign(NYM.prototype, {
     },
 
     _buildThreadIndicator(rootId) {
-        // A full-width row wrapping the pill, so it always breaks onto its own
-        // line beneath the reactions/zaps row instead of wrapping inline with
-        // the message content (the flex `.message` floated a bare pill to the
-        // top-right — a fit-content flex item next to the bubble).
+        // Full-width row so the pill always breaks onto its own line.
         const row = document.createElement('div');
         row.className = 'thread-indicator-row';
         const btn = document.createElement('button');
@@ -748,7 +631,6 @@ Object.assign(NYM.prototype, {
         return row;
     },
 
-    // Append the reply-count row while building a root message's element.
     _appendThreadIndicator(messageEl, message, count) {
         const rootId = this.threadKeyForMessage(message);
         if (!rootId) return;
@@ -758,9 +640,7 @@ Object.assign(NYM.prototype, {
         messageEl.appendChild(indicator);
     },
 
-    // Clear thread state when the active conversation changes underneath the
-    // view. No re-render here: the caller is about to render the new
-    // conversation into the same container anyway.
+    // No re-render: the caller is about to render the new conversation into the same container.
     _closeThreadViewOnSwitch() {
         if (!this.activeThread) return;
         const container = this._threadContainer;
@@ -770,8 +650,6 @@ Object.assign(NYM.prototype, {
         if (container) container.classList.remove('thread-view-active');
     },
 
-    // Column view: focusing a different column while a thread is open exits
-    // the thread (its column gets its conversation back).
     _threadOnColumnFocus(colKey) {
         const at = this.activeThread;
         if (at && at.ctx && at.ctx.storageKey !== colKey) {
@@ -779,8 +657,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Settings toggle: re-render so replies collapse into threads or flow back
-    // inline immediately.
     applyThreadsEnabled() {
         this._threadCountCache = null;
         if (!this.threadsEnabled()) this._closeThreadViewOnSwitch();
@@ -792,16 +668,7 @@ Object.assign(NYM.prototype, {
     }
 });
 
-// Clicking a message body opens its thread (threads enabled only). Interactive
-// children — links, media, buttons, badges, @mentions, the author, timestamps —
-// keep their own behavior; a text selection or a just-fired long-press never
-// triggers it. A mention is listed here rather than left to its own handler
-// stopping the event: this listener is on `document`, so it is registered
-// before that one and would win the race, and a mention that resolves to
-// nobody stops nothing at all.
-// Quoted blocks are excluded here rather than relying on the quote handler
-// stopping the event first: that handler is delegated on the conversation
-// container, which never sees a click inside a column's own list.
+// Interactive children keep their behavior; this is on `document` so it runs before delegated handlers.
 (function () {
     document.addEventListener('click', function (e) {
         var n = window.nym;
@@ -810,10 +677,7 @@ Object.assign(NYM.prototype, {
         var msgEl = e.target && e.target.closest && e.target.closest('.message[data-message-id]');
         if (!msgEl) return;
         if (msgEl.closest('.thread-view-active')) return;
-        // Bubble layout: the row spans the full width with the bubble
-        // (.message-content) aligned to one side, so the blank flex area next
-        // to it must not read as a message click — own bubbles sit right and
-        // the whole empty left half would otherwise open the thread.
+        // Bubble layout: the blank flex area beside the bubble must not open the thread.
         if (document.body.classList.contains('chat-bubbles')) {
             var contentEl = e.target.closest('.message-content');
             if (!contentEl || contentEl.closest('.message[data-message-id]') !== msgEl) return;

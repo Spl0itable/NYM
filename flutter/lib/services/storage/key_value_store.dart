@@ -1,8 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Thin wrapper over SharedPreferences that mirrors the PWA's localStorage
-/// access pattern (string get/set/remove, with typed helpers). All Nymchat
-/// preference keys (see [StorageKeys]) flow through this.
+/// SharedPreferences wrapper mirroring the PWA's localStorage access pattern.
 class KeyValueStore {
   KeyValueStore(this._prefs);
 
@@ -20,10 +18,7 @@ class KeyValueStore {
 
   Future<void> remove(String key) => _prefs.remove(key);
 
-  /// Drops EVERY stored key — the panic path's final
-  /// `localStorage.clear()` sweep (panic.js:136). Never used on sign-out,
-  /// which keeps device-level prefs like the theme (app.js `signOut` removes
-  /// only its explicit key list).
+  /// Drops every stored key for the panic wipe; never used on sign-out, which keeps device prefs.
   Future<void> clear() => _prefs.clear();
 
   bool contains(String key) => _prefs.containsKey(key);
@@ -55,7 +50,6 @@ class KeyValueStore {
     // PWA persists these as JSON arrays.
     final trimmed = v.trim();
     if (trimmed.startsWith('[')) {
-      // best-effort parse without importing dart:convert here
       return trimmed
           .substring(1, trimmed.length - 1)
           .split(',')

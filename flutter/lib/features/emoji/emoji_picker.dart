@@ -1,18 +1,4 @@
-// Emoji picker — 1:1 port of the PWA's composer `.enhanced-emoji-modal`, the
-// surface the composer Emoji button actually opens (reactions.js
-// `toggleEmojiPicker` → `showEnhancedEmojiPickerForInput` →
-// `_ensureEnhancedEmojiModal`, lines 690-895; styles styles-components.css:
-// 1204-1254). The legacy `#emojiPicker` markup (index.html:791, reactions.js
-// `setupEmojiPicker`:1195) is dead — nothing ever toggles it `.active`.
-//
-// Layout (top → bottom), matching `_emojiSectionsHtml` (emoji.js lines 534-557):
-//   - `.emoji-modal-header`: search input + close ✕
-//   - "Recently Used" section (when recents exist)
-//   - custom NIP-30 pack sections (rendered as network images)
-//   - default categories in `kEmojiCategoryOrder`, titles capitalized
-// Grid `.emoji-grid`: 6 columns (styles-components.css:1310); 5 columns at
-// width ≤480px (styles-themes-responsive.css:437-439). Search filters by emoji
-// char or any of its shortcode names (emoji.js `_applyEmojiSearch`).
+// Composer emoji picker: search header, recents, custom NIP-30 packs, then default categories; 6 columns, 5 at ≤480px.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,13 +16,10 @@ import 'custom_emoji.dart';
 import 'emoji_data.dart';
 import 'modal_close_chip.dart';
 
-/// Width breakpoint below which the grid drops to 5 columns
-/// (styles-themes-responsive.css:428 `max-width: 480px`).
+/// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
 
-/// A picker panel. [recents] is the current most-recent-first list; selecting
-/// an emoji calls [onSelect] with the literal char (unicode) or `:code:`
-/// (custom). The host updates recents and inserts into the composer.
+/// [onSelect] gets the unicode char or `:code:`; the host updates recents and inserts.
 class EmojiPicker extends ConsumerStatefulWidget {
   const EmojiPicker({
     super.key,
@@ -46,18 +29,15 @@ class EmojiPicker extends ConsumerStatefulWidget {
     this.proxyBase,
   });
 
-  /// Most-recent-first recents (unicode chars and/or `:code:` tokens).
+  /// Most-recent-first unicode chars and/or `:code:` tokens.
   final List<String> recents;
 
-  /// Called with the chosen emoji (unicode char or `:shortcode:`).
   final ValueChanged<String> onSelect;
 
-  /// Dismisses the picker (`.emoji-modal-close` ✕, reactions.js:710). When
-  /// null the ✕ falls back to popping an enclosing modal route (dialog /
-  /// bottom-sheet hosts); overlay-portal hosts should pass their `hide`.
+  /// When null, close pops an enclosing modal route; overlay-portal hosts should pass their `hide`.
   final VoidCallback? onClose;
 
-  /// Optional media/emoji proxy base for custom emoji images.
+  /// Optional media proxy base for custom emoji images.
   final String? proxyBase;
 
   @override
@@ -71,9 +51,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
 
   late final Map<String, List<String>> _emojiToNames = buildEmojiToNames();
 
-  // Favorite-star state (emoji.js `nym_emoji_category_favorites` /
-  // `nym_emoji_pack_favorites`). Loaded lazily once prefs resolve; toggling a
-  // star reorders that block to the top live and persists.
+  // Favorite stars load lazily; toggling reorders the block live and persists.
   EmojiFavoritesStore? _catFavStore;
   EmojiFavoritesStore? _packFavStore;
   List<String> _categoryFavorites = const [];
@@ -82,9 +60,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
   @override
   void initState() {
     super.initState();
-    // The panel lifts above the keyboard by reading View.viewInsets (see
-    // build); that read establishes no rebuild dependency, so observe metrics
-    // changes to repaint as the keyboard animates in/out.
+    // `View.viewInsets` sets up no rebuild dependency, so observe metrics to follow the keyboard.
     WidgetsBinding.instance.addObserver(this);
     _loadFavorites();
   }
@@ -132,9 +108,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     super.dispose();
   }
 
-  /// Recents filtered to drop custom `:code:` tokens whose pack is no longer
-  /// known (emoji.js `_recentEmojisForPicker`, lines 150-159). The PWA caps the
-  /// picker recents at 20 on mobile (`innerWidth<=768`) / 24 on desktop.
+  /// Drops custom tokens whose pack is unknown; capped at 20 on mobile, 24 on desktop.
   List<String> _visibleRecents(CustomEmojiState custom, double width) {
     final cap = width <= 768 ? 20 : kRecentEmojisCap;
     return widget.recents
@@ -147,8 +121,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         .toList();
   }
 
-  /// True when an emoji passes the current search (emoji.js `_applyEmojiSearch`:
-  /// matches the char itself or any of its space-joined names).
+  /// Matches the char itself or any of its names.
   bool _matches(String emoji) {
     if (_query.isEmpty) return true;
     final q = _query.toLowerCase();
@@ -162,8 +135,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     return false;
   }
 
-  /// Custom emoji match: search against the shortcode (emoji.js sets
-  /// `data-names` to the shortcode for custom options).
+  /// Custom emoji match on the shortcode.
   bool _matchesCustom(String shortcode) {
     if (_query.isEmpty) return true;
     return shortcode.toLowerCase().contains(_query.toLowerCase());
@@ -172,10 +144,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Read the LIVE NIP-30 store (kind-30030 packs + kind-10030 list + inbound
-    // `emoji` tags). It hydrates from the persisted cache on launch, so this is
-    // a strict superset of the old static `customEmojiStateProvider` and updates
-    // live as packs arrive over relays.
+    // The live NIP-30 store, hydrated from cache and updated as packs arrive.
     final custom = ref.watch(liveCustomEmojiProvider);
     final transparency =
         ref.watch(settingsProvider.select((s) => s.transparencyEnabled));
@@ -184,7 +153,6 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
 
     final sections = <_Section>[];
 
-    // Recently Used.
     final recents = _visibleRecents(custom, width).where((e) {
       final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
       return m == null ? _matches(e) : _matchesCustom(m.group(1)!);
@@ -204,11 +172,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       ));
     }
 
-    // Custom NIP-30 packs ranked fav(0)→own(1)→subscribed(2)→rest(3), then
-    // created_at desc (emoji.js `buildCustomEmojiSectionsHtml`:487-495). Own =
-    // authored by the self pubkey; subscribed = referenced by the user's
-    // kind-10030 list (`isPackSubscribed`). Own/subscribed packs get a ` ★`
-    // title suffix.
+    // Packs ranked fav, own, subscribed, rest, then newest; own/subscribed get a ` ★` suffix.
     final packFavSet = _packFavorites.toSet();
     final selfPubkey = ref.read(nostrControllerProvider).identity?.pubkey;
     final liveNotifier = ref.read(liveCustomEmojiProvider.notifier);
@@ -225,10 +189,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         if (r != 0) return r;
         return b.createdAt.compareTo(a.createdAt);
       });
-    // The PWA renders at most 50 pack sections, each sliced to its first 120
-    // known emojis (`buildCustomEmojiSectionsHtml`, emoji.js:499-504). The
-    // 50-pack budget counts packs with ≥1 KNOWN emoji; the search filter only
-    // hides buttons afterwards (`_applyEmojiSearch`), so it doesn't free slots.
+    // At most 50 packs with a known emoji, 120 emojis each; search only hides cells, freeing no slots.
     var shownPacks = 0;
     for (final pack in orderedPacks) {
       if (shownPacks >= 50) break;
@@ -247,8 +208,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       ];
       if (cells.isEmpty) continue;
       final star = (isOwn(pack) || isSubscribed(pack)) ? ' ★' : '';
-      // `pack.title || 'Emoji pack'` (emoji.js:507) — an empty/missing cached
-      // title still gets a section header.
+      // An empty cached title still gets a section header.
       final packTitle = pack.title.isEmpty ? tr('Emoji pack') : pack.title;
       sections.add(_section(
         c,
@@ -260,7 +220,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       ));
     }
 
-    // Default categories, favorited categories hoisted to the top of the block.
+    // Favorited categories hoisted to the top of the block.
     for (final category in orderedEmojiCategories(_categoryFavorites)) {
       final list = kEmojisByCategory[category]!;
       final cells = <Widget>[
@@ -279,19 +239,11 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       ));
     }
 
-    // Keyboard-aware, like the PWA riding the visual viewport: overlay hosts
-    // anchor the panel to the SCREEN bottom, so the panel itself pads up by
-    // the keyboard height and shrinks to the space left above it — keeping
-    // the search field + results visible while typing. We read the inset from
-    // the raw FlutterView rather than MediaQuery: inside an OverlayPortal that
-    // sits under a resizing Scaffold, MediaQuery.viewInsets is already
-    // consumed (reports 0), so the panel would never lift. View.viewInsets is
-    // in physical px and is never consumed by an ancestor.
+    // Pad up by the keyboard via raw `View.viewInsets`; MediaQuery's insets are already consumed under a resizing Scaffold.
     final view = View.of(context);
     final keyboardInset = view.viewInsets.bottom / view.devicePixelRatio;
     final maxPanelHeight = keyboardInset > 0
-        // Screen minus keyboard, status bar, and the 60px bottom-bar offset
-        // the phone popover anchors at (+8 breathing room).
+        // Screen minus keyboard, status bar and the 60px bottom-bar anchor (+8).
         ? (MediaQuery.sizeOf(context).height -
                 keyboardInset -
                 MediaQuery.paddingOf(context).top -
@@ -300,18 +252,13 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
             .toDouble()
         : 400.0;
 
-    // NOTE: This widget is used inside overlays/portals in a few places.
-    // TextField requires a Material ancestor, and Flexible/Expanded require a
-    // bounded main-axis constraint. We enforce both here so the picker is safe
-    // to mount anywhere.
+    // Supplies a Material and bounded constraints so the picker mounts safely in overlays.
     return Material(
       type: MaterialType.transparency,
       child: Padding(
         padding: EdgeInsets.only(bottom: keyboardInset),
         child: ConstrainedBox(
-          // `.enhanced-emoji-modal`: width 350, max-height 400
-          // (styles-components.css:1214-1215); the phone placement adds
-          // `max-width: 90%` inline (reactions.js:883, innerWidth ≤768).
+          // Width 350, max height 400; phones cap at 90% width.
           constraints: BoxConstraints(
               maxWidth: width <= 768 ? (width * 0.9).clamp(0.0, 350.0) : 350.0,
               maxHeight: maxPanelHeight),
@@ -322,22 +269,10 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
             return Container(
               height: height,
               decoration: BoxDecoration(
-                // `.enhanced-emoji-modal` bg: `var(--bg-secondary)`
-                // (styles-components.css:1208) — the themed surface color; the
-                // light-mode rule (styles-themes-responsive.css:1162-1165)
-                // overrides only shadow/border, NOT the background. With
-                // Transparency OFF (`solid-ui`) it's the opaque
-                // `var(--glass-bg)` (#14141e dark / #ffffff light,
-                // styles-themes-responsive.css:1597/1624) — `c.glassBg`.
+                // Transparency uses the themed secondary background; solid-ui uses the opaque glass background.
                 color: transparency ? c.bgSecondary : c.glassBg,
-                // Border `var(--glass-border)`; the light-mode border-color
-                // override rgba(0,0,0,0.08) equals light `--glass-border`.
                 border: Border.all(color: c.glassBorder),
                 borderRadius: NymRadius.rmd,
-                // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5); light mode redefines
-                // it to rgba(0,0,0,0.12) (styles-themes-responsive.css:537, and
-                // explicitly on `body.light-mode .enhanced-emoji-modal` at
-                // :1162-1165).
                 boxShadow: [
                   BoxShadow(
                     color: c.isLight
@@ -354,16 +289,10 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _header(c),
-                  // `.emoji-modal-header { margin-bottom: 10px }`.
                   const SizedBox(height: 10),
                   Expanded(
                     child: CustomScrollView(
-                      // Lazy: each SliverGrid only mounts the cells in (and just
-                      // around) the viewport, so ONLY visible custom-emoji images
-                      // fetch + decode — the PWA's `loading="lazy"`. The old
-                      // SingleChildScrollView + shrinkWrap GridView mounted EVERY
-                      // cell across every pack at once, loading hundreds of images
-                      // simultaneously → out-of-memory crash on open.
+                      // Lazy slivers mount only visible cells; eager grids loaded every pack image at once and ran out of memory.
                       slivers: [
                         for (final s in sections)
                           ..._sectionSlivers(c, s, columns),
@@ -379,9 +308,6 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     );
   }
 
-  /// `.emoji-modal-header` (styles-components.css:1225-1232): search input +
-  /// close ✕ in a row (gap 10), padding-bottom 10, bottom `--glass-border`
-  /// divider — matching the PWA's composer emoji modal (reactions.js:708-711).
   Widget _header(NymColors c) {
     return Container(
       padding: const EdgeInsets.only(bottom: 10),
@@ -392,18 +318,13 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         children: [
           Expanded(child: _search(c)),
           const SizedBox(width: 10),
-          // `.modal-close.emoji-modal-close` ✕ chip.
           ModalCloseChip(onTap: _handleClose),
         ],
       ),
     );
   }
 
-  /// `.emoji-modal-close` tap (`closeEnhancedEmojiModal`). Prefer the host's
-  /// [EmojiPicker.onClose]; dialog/bottom-sheet hosts (settings swipe-react
-  /// picker, call overlay) fall back to popping their modal route. Without
-  /// either there is nothing to dismiss, so do nothing rather than popping the
-  /// hosting screen.
+  /// Prefer the host's [EmojiPicker.onClose], else pop a modal route, else do nothing.
   void _handleClose() {
     final onClose = widget.onClose;
     if (onClose != null) {
@@ -415,36 +336,26 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     }
   }
 
-  /// `.emoji-search-input` (styles-components.css:1245-1254).
   Widget _search(NymColors c) {
-    // Light mode restyles this input via `body.light-mode input`
-    // (styles-themes-responsive.css:561-569): fill rgba(0,0,0,0.04) and
-    // border rgba(0,0,0,0.1), both !important, in every state.
+    // Light mode forces a black@0.04 fill and black@0.1 border in every state.
     final borderColor = c.isLight ? const Color(0x1A000000) : c.glassBorder;
-    // Some callers mount the picker inside an OverlayPortal / LookupBoundary.
-    // TextField requires a Material ancestor *within the closest*
-    // LookupBoundary, so wrap the input itself defensively.
+    // TextField needs a Material within the closest LookupBoundary, so wrap the input itself.
     return Material(
       type: MaterialType.transparency,
       child: TextField(
         controller: _searchController,
         onChanged: (v) => setState(() => _query = _sanitizeUserText(v).trim()),
-        // `color: var(--text-bright)`; light mode wins with the MORE specific
-        // `body.light-mode .emoji-search-input { color: var(--text)
-        // !important }` (styles-themes-responsive.css:1063-1068), which beats
-        // the generic `body.light-mode input { color: #000 }` rule (:583-593)
-        // on specificity — so light mode uses the themed `--text`.
+        // Light mode uses `--text` for this input.
         style:
             TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
         cursorColor: c.isLight ? c.text : c.textBright,
         decoration: InputDecoration(
           isDense: true,
-          // reactions.js:709.
           hintText: tr('Search emoji...'),
           hintStyle: TextStyle(color: c.textDim, fontSize: 12),
           filled: true,
           fillColor: c.isLight
-              ? const Color(0x0A000000) // rgba(0,0,0,0.04)
+              ? const Color(0x0A000000)
               : Colors.white.withValues(alpha: 0.05),
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -456,9 +367,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
             borderRadius: NymRadius.rxs,
             borderSide: BorderSide(color: borderColor),
           ),
-          // No `.emoji-search-input:focus` rule exists in the PWA (the primary
-          // focus ring belonged to the dead `.emoji-picker-search-input:focus`,
-          // styles-components.css:2133), so focus keeps the same border.
+          // No focus rule exists for this input, so focus keeps the same border.
           focusedBorder: OutlineInputBorder(
             borderRadius: NymRadius.rxs,
             borderSide: BorderSide(color: borderColor),
@@ -468,14 +377,12 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     );
   }
 
-  /// Defensively sanitize user input to avoid crashes when the platform IME
-  /// sends an unpaired surrogate (rare, but can happen on Android).
+  /// Replaces unpaired surrogates the Android IME can send, avoiding crashes.
   static String _sanitizeUserText(String input) {
     final units = input.codeUnits;
     final out = StringBuffer();
     for (var i = 0; i < units.length; i++) {
       final u = units[i];
-      // High surrogate.
       if (u >= 0xD800 && u <= 0xDBFF) {
         if (i + 1 < units.length) {
           final next = units[i + 1];
@@ -486,11 +393,9 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
             continue;
           }
         }
-        // Unpaired high surrogate -> replacement.
         out.write('\uFFFD');
         continue;
       }
-      // Unpaired low surrogate -> replacement.
       if (u >= 0xDC00 && u <= 0xDFFF) {
         out.write('\uFFFD');
         continue;
@@ -500,10 +405,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     return out.toString();
   }
 
-  /// `.emoji-section` + `.emoji-section-title` (10px uppercase dim,
-  /// letter-spacing 1) wrapping a grid (styles-components.css:1255-1312).
-  /// [onToggleFavorite]/[isFavorite] add the trailing favorite-star button on
-  /// default-category and custom-pack titles (emoji.js:446-451, 510-512).
+  /// Section title plus grid; [onToggleFavorite] adds a trailing favorite star.
   _Section _section(NymColors c,
       {required String title,
       required List<Widget> children,
@@ -517,8 +419,6 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     );
   }
 
-  /// `.emoji-option`: 23px glyph, transparent, hover highlight (here a tap
-  /// target).
   Widget _unicodeCell(String emoji) {
     return _EmojiCell(
       onTap: () => widget.onSelect(emoji),
@@ -530,31 +430,22 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     );
   }
 
-  /// Custom emoji rendered as a 30×30 image (emoji.js `renderCustomEmojiImg`).
-  /// Selecting inserts the `:shortcode:` token.
+  /// 30x30 custom emoji image; selecting inserts `:shortcode:`.
   Widget _customCell(String shortcode, String url) {
     return _EmojiCell(
       onTap: () => widget.onSelect(':$shortcode:'),
-      // SVG-aware + decode-safe (same handling as the message body): SVG custom
-      // emoji render via flutter_svg, others via the cached raster path, and an
-      // undecodable image shows a small broken-image glyph instead of throwing
-      // "ImageDecoder unimplemented".
+      // SVG-aware and decode-safe; an undecodable image shows a broken-image glyph instead of throwing.
       child: InlineNetworkImage(
-        // Always route custom-emoji images through the media proxy so the
-        // user's IP is hidden from the host (PWA getProxiedEmojiUrl). When an
-        // explicit [proxyBase] is supplied (tests) honor it; otherwise fall
-        // back to the shared ApiClient proxy via [proxiedMedia].
+        // Always proxied so the user's IP is hidden from the host; an explicit [proxyBase] wins (tests).
         url: (widget.proxyBase != null && widget.proxyBase!.isNotEmpty)
             ? proxiedEmojiUrl(url, widget.proxyBase)
             : proxiedMedia(url, emoji: true),
         width: 30,
         height: 30,
         fit: BoxFit.contain,
-        // A gridful of cells would otherwise hammer flutter_cache_manager's
-        // sqflite DB (the "database has been locked 0:00:10" flood on open).
+        // Memory-only so a gridful of cells doesn't lock the cache manager's sqflite DB.
         memoryOnly: true,
-        // 2 cache-busting retries at 800ms·n, like the PWA's custom-emoji
-        // error handler (inline-bindings.js:166-183).
+        // Two cache-busting retries at 800ms·n.
         retryOnError: true,
         placeholder: const SizedBox(width: 30, height: 30),
         errorChild: const SizedBox(
@@ -563,25 +454,18 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
     );
   }
 
-  /// The lazy slivers for one [section]: its title header + a virtualized
-  /// [SliverGrid]. The grid only mounts the cells in (and just around) the
-  /// viewport, so only VISIBLE custom-emoji images fetch + decode — keeping a
-  /// big pack from loading hundreds of images at once. `addAutomaticKeepAlives`
-  /// is off so scrolled-away cells (and their decoded images) are released.
+  /// Title plus a virtualized grid; keep-alives are off so scrolled-away images are released.
   List<Widget> _sectionSlivers(NymColors c, _Section section, int columns) {
     return [
       SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.only(top: 2, bottom: 6),
-          // `.emoji-default-cat-title` / `.emoji-pack-title`: flex space-between,
-          // the star button trailing.
           child: Row(
             children: [
               Expanded(
                 child: Text(
                   section.title.toUpperCase(),
                   overflow: TextOverflow.ellipsis,
-                  // `.emoji-section-title`: 10px upper, ls1, dim.
                   style: TextStyle(
                       fontSize: 10, color: c.textDim, letterSpacing: 1),
                 ),
@@ -613,8 +497,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
   }
 }
 
-/// A single emoji section (title + flat list of cells); laid out into a lazy
-/// grid by [_EmojiPickerState._sectionSlivers] which knows the column count.
+/// Title plus flat cells, laid out lazily by [_EmojiPickerState._sectionSlivers].
 class _Section {
   const _Section({
     required this.title,
@@ -626,13 +509,11 @@ class _Section {
   final List<Widget> cells;
   final bool isFavorite;
 
-  /// When non-null, a favorite star is shown at the end of the title row.
+  /// When non-null, a favorite star ends the title row.
   final VoidCallback? onToggleFavorite;
 }
 
-/// `.emoji-category-fav-btn` / `.emoji-pack-fav-btn`: a 14px star, dim by
-/// default (hover → primary), filled `#F5C518` when active
-/// (styles-components.css:1350-1380).
+/// 14px favorite star, dim by default and filled `#F5C518` when active.
 class _FavStar extends StatelessWidget {
   const _FavStar({required this.active, required this.onTap});
   final bool active;
@@ -650,8 +531,6 @@ class _FavStar extends StatelessWidget {
         borderRadius: NymRadius.rxs,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-          // `.emoji-category-fav-btn` / `.emoji-pack-fav-btn` (emoji.js:449/511):
-          // the custom 5-point star — outline by default, filled gold `.active`.
           child: NymSvgIcon(
             active ? NymIcons.starFilled : NymIcons.starOutline,
             size: 14,
@@ -663,9 +542,7 @@ class _FavStar extends StatelessWidget {
   }
 }
 
-/// `.emoji-option` tap target: transparent, radius xs. On hover the cell fills
-/// `rgba(255,255,255,0.08)` and the glyph scales to 1.15
-/// (styles-components.css:1325-1341).
+/// Emoji cell that fills and scales to 1.15 on hover.
 class _EmojiCell extends StatefulWidget {
   const _EmojiCell({required this.onTap, required this.child});
   final VoidCallback onTap;

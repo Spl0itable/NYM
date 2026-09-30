@@ -14,8 +14,7 @@ Object.assign(NYM.prototype, {
             }
         }
         if (ids.length === 0) return;
-        // Zaps are archived to D1, so restore from there. Only hit relays for a
-        // backfill when D1 is unavailable.
+        // Zaps are archived to D1; only backfill from relays when D1 is unavailable.
         if (!this._getApiHost || !this._getApiHost()) {
             const subId = 'zap-bf-' + Math.random().toString(36).slice(2, 9);
             try {
@@ -53,13 +52,11 @@ Object.assign(NYM.prototype, {
                     if (kTag[1] === '20000' || kTag[1] === '23333') scope = 'channel';
                     else if (kTag[1] === '1059') scope = 'pm';
                     else if (kTag[1] === '0') scope = 'profile';
-                    // Ignore parse errors
                 }
             } catch (_) { }
         }
         if (!scope) return;
-        // channel/pm zaps key on the zapped event id; profile zaps have no e tag
-        // (the server keys them on the recipient pubkey instead).
+        // Profile zaps have no e tag; the server keys them on the recipient pubkey.
         if (scope !== 'profile') {
             const targetId = eTag && eTag[1];
             if (!targetId || !this._isNostrHex64(targetId)) return;
@@ -94,7 +91,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Fetch invoice from LNURL
     PROJECT_LIGHTNING_ADDRESSES: ['69420@wallet.yakihonne.com', '69420@cake.cash'],
 
     lightningAddressesForPubkey(pubkey) {
@@ -106,10 +102,7 @@ Object.assign(NYM.prototype, {
         return own.indexOf(pubkey) === -1 ? [] : this.PROJECT_LIGHTNING_ADDRESSES.slice();
     },
 
-    /// Tries each address in turn, returning the first invoice produced. A
-    /// wallet can fail for reasons that have nothing to do with the payer —
-    /// host down, malformed LNURL, amount outside its min/maxSendable — so one
-    /// bad wallet should not fail the zap.
+    // One bad wallet (host down, bad LNURL, amount out of range) should not fail the zap.
     async fetchLightningInvoiceWithFallback(addresses, amountSats, comment) {
         const list = (addresses || []).filter((a, i, arr) => a && arr.indexOf(a) === i);
         let lastError = new Error('No lightning address available');
@@ -134,7 +127,6 @@ Object.assign(NYM.prototype, {
                 throw new Error('Invalid lightning address format');
             }
 
-            // Fetch LNURL endpoint via Cloudflare proxy
             const lnurlResponse = await this.proxiedJsonFetch(`https://${domain}/.well-known/lnurlp/${username}`);
             if (!lnurlResponse.ok) {
                 throw new Error('Failed to fetch LNURL endpoint');
@@ -142,33 +134,26 @@ Object.assign(NYM.prototype, {
 
             const lnurlData = await lnurlResponse.json();
 
-            // Convert sats to millisats
             const amountMillisats = parseInt(amountSats) * 1000;
 
-            // Check bounds
             if (amountMillisats < lnurlData.minSendable || amountMillisats > lnurlData.maxSendable) {
                 throw new Error(`Amount must be between ${lnurlData.minSendable / 1000} and ${lnurlData.maxSendable / 1000} sats`);
             }
 
-            // Build callback URL
             const callbackUrl = new URL(lnurlData.callback);
             callbackUrl.searchParams.set('amount', amountMillisats);
 
-            // Add comment if allowed
             if (comment && lnurlData.commentAllowed) {
                 callbackUrl.searchParams.set('comment', comment.substring(0, lnurlData.commentAllowed));
             }
 
-            // Add nostr params for zap
             if (lnurlData.allowsNostr && lnurlData.nostrPubkey) {
-                // Create zap request event
                 const zapRequest = await this.createZapRequest(amountSats, comment);
                 if (zapRequest) {
                     callbackUrl.searchParams.set('nostr', JSON.stringify(zapRequest));
                 }
             }
 
-            // Fetch invoice via Cloudflare proxy
             const invoiceResponse = await this.proxiedJsonFetch(callbackUrl.toString());
             if (!invoiceResponse.ok) {
                 throw new Error('Failed to fetch invoice');
@@ -184,7 +169,7 @@ Object.assign(NYM.prototype, {
                     pr: invoiceData.pr,
                     successAction: invoiceData.successAction,
                     verify: invoiceData.verify,
-                    // Provider's Nostr pubkey lets the worker validate the NIP-57 receipt
+                    // Provider's Nostr pubkey lets the worker validate the NIP-57 receipt.
                     providerPubkey: lnurlData.nostrPubkey || null,
                     amount: amountSats
                 };
@@ -196,7 +181,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Resolve any pending waiters for a user's lightning address
     notifyLightningAddress(pubkey, address) {
         const waiters = this.pendingLightningWaiters.get(pubkey);
         if (!waiters) return;
@@ -206,9 +190,7 @@ Object.assign(NYM.prototype, {
         this.pendingLightningWaiters.delete(pubkey);
     },
 
-    // Wait for a user's lightning address to be discovered
     waitForLightningAddress(pubkey, timeoutMs = 8000) {
-        // If already cached, resolve immediately
         if (this.userLightningAddresses.has(pubkey)) {
             return Promise.resolve(this.userLightningAddresses.get(pubkey));
         }
@@ -216,16 +198,13 @@ Object.assign(NYM.prototype, {
         return new Promise((resolve) => {
             const resolver = (addr) => resolve(addr || null);
 
-            // Register waiter
             if (!this.pendingLightningWaiters.has(pubkey)) {
                 this.pendingLightningWaiters.set(pubkey, new Set());
             }
             const set = this.pendingLightningWaiters.get(pubkey);
             set.add(resolver);
 
-            // Timeout fallback
             const timer = setTimeout(() => {
-                // Clean up this resolver to prevent leaks
                 const s = this.pendingLightningWaiters.get(pubkey);
                 if (s) {
                     s.delete(resolver);
@@ -234,25 +213,22 @@ Object.assign(NYM.prototype, {
                 resolve(null);
             }, timeoutMs);
 
-            // Wrap resolver to clear timeout when it fires
             const wrapped = (addr) => {
                 clearTimeout(timer);
                 resolve(addr || null);
             };
 
-            // Replace the bare resolver with a wrapped one that clears the timeout
             set.delete(resolver);
             set.add(wrapped);
         });
     },
 
     async fetchLightningAddressForUser(pubkey) {
-        // Serve from cache if available
         if (this.userLightningAddresses.has(pubkey)) {
             return this.userLightningAddresses.get(pubkey);
         }
 
-        // Our own identities are known — never make the user wait on a relay.
+        // Our own identities are known; never make the user wait on a relay.
         const known = this.lightningAddressesForPubkey(pubkey);
         if (known.length) {
             this.userLightningAddresses.set(pubkey, known[0]);
@@ -261,18 +237,15 @@ Object.assign(NYM.prototype, {
 
         try { this.requestUserProfile(pubkey); } catch (_) { }
 
-        // Trigger a batched profile fetch (kind 0 has LUD16/LUD06)
+        // Kind 0 carries LUD16/LUD06.
         try { this.queueProfileFetch(pubkey); } catch (_) { }
 
-        // Wait for handleEvent(kind 0) to notice LUD16/LUD06 (or timeout)
         return await this.waitForLightningAddress(pubkey, 4000);
     },
 
     async loadLightningAddress() {
-        // Only load if we have a pubkey
         if (!this.pubkey) return;
 
-        // First, try to load from pubkey-specific localStorage
         const saved = localStorage.getItem(`nym_lightning_address_${this.pubkey}`);
         if (saved) {
             this.lightningAddress = saved;
@@ -280,11 +253,9 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // If not in localStorage, try to fetch from Nostr profile
         const profileAddress = await this.fetchLightningAddressForUser(this.pubkey);
         if (profileAddress) {
             this.lightningAddress = profileAddress;
-            // Cache it in localStorage for this pubkey
             localStorage.setItem(`nym_lightning_address_${this.pubkey}`, profileAddress);
             this.updateLightningAddressDisplay();
         }
@@ -302,9 +273,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Show zap modal
     showZapModal(messageId, recipientPubkey, recipientNym) {
-        // Check if recipient has lightning address
         const lnAddress = this.userLightningAddresses.get(recipientPubkey);
 
         if (!lnAddress) {
@@ -313,7 +282,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Store target info
         this.currentZapTarget = {
             messageId,
             recipientPubkey,
@@ -321,7 +289,6 @@ Object.assign(NYM.prototype, {
             lnAddress
         };
 
-        // Reset modal state
         this._resetZapModalToDefault();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
@@ -330,26 +297,23 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapComment').value = '';
         this._wireZapAutoGenerate(() => this.generateZapInvoice());
 
-        // Show modal
         document.getElementById('zapModal').classList.add('active');
     },
 
     showProfileZapModal(recipientPubkey, recipientNym, lnAddress) {
-        // Zapping Nymbot's profile means buying private-message credits
+        // Zapping Nymbot's profile means buying private-message credits.
         if (this.isVerifiedBot(recipientPubkey)) {
             this.showBotCreditsModal();
             return;
         }
-        // Store target info for profile zap (no messageId)
         this.currentZapTarget = {
-            messageId: null, // No message ID for profile zaps
+            messageId: null,
             recipientPubkey,
             recipientNym,
             lnAddress,
             isProfileZap: true
         };
 
-        // Reset modal state
         this._resetZapModalToDefault();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
@@ -358,11 +322,9 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapComment').value = '';
         this._wireZapAutoGenerate(() => this.generateZapInvoice());
 
-        // Show modal
         document.getElementById('zapModal').classList.add('active');
     },
 
-    // Convert a sats amount to Nymbot message credits
     _botBulkBonusFallback: [
         { bonus: 0.10, standardSats: 500, proSats: 5000 },
         { bonus: 0.15, standardSats: 1000, proSats: 10000 },
@@ -402,8 +364,7 @@ Object.assign(NYM.prototype, {
         return Math.floor((sats / 10) * this._botBulkMultiplier(sats, 'standard'));
     },
 
-    // Pro credits: 100 sats each, same bulk bonuses at 10x thresholds
-    // (mirrors botProCreditsForSats in functions/api/bot.js)
+    // Pro credits: 100 sats each, bulk bonuses at 10x thresholds (mirrors botProCreditsForSats in bot.js).
     _botProCreditsForSats(sats) {
         sats = Math.max(0, Math.floor(Number(sats) || 0));
         return Math.floor((sats / 100) * this._botBulkMultiplier(sats, 'pro'));
@@ -413,20 +374,16 @@ Object.assign(NYM.prototype, {
         return this._botCreditTier === 'pro' ? this._botProCreditsForSats(sats) : this._botCreditsForSats(sats);
     },
 
-    // Preset purchase tiers for the Nymbot credit modal
     _botCreditTiers: [100, 500, 1000, 2500, 5000, 10000],
-    // Smallest Pro preset (2K sats = 20 credits) clears the largest per-message
-    // reserve (Claude Fable 5 at 16), so any purchase can use any model.
+    // Smallest Pro preset (2K sats = 20 credits) clears the largest per-message reserve (Claude Fable 5 at 16).
     _botProCreditPresets: [2000, 5000, 10000, 20000, 50000, 100000],
 
-    // Capture the default sats buttons once so regular zaps can restore them
     _captureDefaultZapAmounts() {
         if (this._defaultZapAmountsHtml != null) return;
         const c = document.querySelector('.zap-amounts');
         if (c && !c.querySelector('.bot-credit-btn')) this._defaultZapAmountsHtml = c.innerHTML;
     },
 
-    // Restore the regular sats buttons and hide the credit estimate line
     _resetZapModalToDefault() {
         const c = document.querySelector('.zap-amounts');
         if (c && this._defaultZapAmountsHtml != null && c.querySelector('.bot-credit-btn')) {
@@ -442,7 +399,6 @@ Object.assign(NYM.prototype, {
         if (input) input.oninput = null;
     },
 
-    // Picking an amount (a preset button or the custom field + Enter) generates the invoice
     _wireZapAutoGenerate(generate, onAmountSelected) {
         const sendBtn = document.getElementById('zapSendBtn');
         if (sendBtn) sendBtn.style.display = 'none';
@@ -481,7 +437,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Standard vs Pro switch shown above the amount presets in credit mode
     _renderBotCreditTierToggle(onTierChange) {
         const container = document.querySelector('.zap-amounts');
         if (!container || !container.parentElement) return;
@@ -555,7 +510,6 @@ Object.assign(NYM.prototype, {
         ].filter(Boolean).join('<br>');
     },
 
-    // Show/refresh a live "X sats = Y messages" estimate for the custom amount
     _setupBotCreditEstimate() {
         const input = document.getElementById('zapCustomAmount');
         if (!input) return;
@@ -599,8 +553,6 @@ Object.assign(NYM.prototype, {
             + ' — charged on the tokens each reply uses, so a short question costs a fraction of one';
     },
 
-    // Open the zap modal in "buy Nymbot credits" mode. tier preselects the
-    // Standard/Pro switch (e.g. when the user ran out of Pro credits).
     showBotCreditsModal(giftRecipient, tier) {
         const botPubkey = this.verifiedBot.pubkey;
         const isGift = !!(giftRecipient && giftRecipient.pubkey);
@@ -640,8 +592,6 @@ Object.assign(NYM.prototype, {
         document.getElementById('zapModal').classList.add('active');
     },
 
-    // Ask the bot worker to generate a credit-purchase invoice from Nymbot's
-    // own Lightning address, then display and poll it via the normal zap UI.
     async generateBotCreditInvoice() {
         if (!this.currentZapTarget || !this.currentZapTarget.isBotCreditPurchase) return;
         if (this.zapCheckInterval) { clearInterval(this.zapCheckInterval); this.zapCheckInterval = null; }
@@ -693,13 +643,13 @@ Object.assign(NYM.prototype, {
             this._addPendingPurchase({ kind: 'credit', invoiceId: invoice.invoiceId, amount, recipientNym: giftNym || null, anon: anonBuy });
             this.displayZapInvoice(invoice);
             if (invoice.verify) {
-                // LUD-21: poll the verify URL
+                // LUD-21: poll the verify URL.
                 this.checkZapPayment(invoice);
             } else if (invoice.serverVerify) {
-                // No LUD-21 verify URL — the worker confirms payment via the bot wallet (NWC)
+                // No LUD-21 verify URL: the worker confirms payment via the bot wallet (NWC).
                 this.checkBotCreditPaymentViaServer(invoice);
             } else {
-                // Last resort: wait for the NIP-57 zap receipt
+                // Last resort: wait for the NIP-57 zap receipt.
                 this._listenForBotCreditReceipt(invoice);
             }
         } catch (error) {
@@ -708,9 +658,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Fallback payment detection when the bot wallet has no LUD-21 verify URL:
-    // subscribe for the NIP-57 zap receipt (kind 9735) and match it to this
-    // invoice by its bolt11 tag. handleZapReceipt picks up the match.
+    // No LUD-21 verify URL: match the kind 9735 receipt by bolt11 (handleZapReceipt).
     _listenForBotCreditReceipt(invoice) {
         if (this._botCreditReceiptWait && this._botCreditReceiptWait.subId) {
             this.sendToRelay(["CLOSE", this._botCreditReceiptWait.subId]);
@@ -739,8 +687,7 @@ Object.assign(NYM.prototype, {
         }, 180000);
     },
 
-    // Poll the worker, which confirms the credit payment via the bot wallet (NWC)
-    // even when no LUD-21 verify URL or NIP-57 receipt is available.
+    // Confirms via the bot wallet (NWC) even without a LUD-21 verify URL or NIP-57 receipt.
     checkBotCreditPaymentViaServer(invoice) {
         if (this._botCreditServerPoll) {
             clearInterval(this._botCreditServerPoll);
@@ -781,9 +728,6 @@ Object.assign(NYM.prototype, {
         return !!(data && data.paid);
     },
 
-    // "I've paid" button: immediately re-check the current invoice and, if the
-    // bot wallet confirms payment, finalize the purchase. Works for shop items,
-    // Nymbot credits, and LUD-21 zaps.
     async manualCheckPayment() {
         const el = document.getElementById('zapStatus');
         if (el) {
@@ -815,10 +759,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // After a Nymbot credit invoice is paid, ask the worker to verify the
-    // payment (server-side, against the invoice it issued) and add credits.
-    // receipt is the NIP-57 zap receipt, used when the wallet has no LUD-21
-    // verify URL.
+    // Server-side verification against the issued invoice; receipt is used when there's no LUD-21 verify URL.
     async _claimBotCredits(invoiceId, recipientNym, receipt, anon) {
         if (!invoiceId) {
             this.displaySystemMessage('Nymbot credit purchase: payment received but the invoice reference was lost. Run ?balance shortly — if credits are missing, contact support.');
@@ -845,9 +786,6 @@ Object.assign(NYM.prototype, {
                     if (data.giftEvent) {
                         try { this.sendDMToRelays(['EVENT', data.giftEvent]); } catch (e) { }
                     }
-                    // Verify the k tag is for one of our supported kinds. If
-                    // missing, fall through (legacy compat) but only display
-                    // if we actually have the message in storage.
                     this.displaySystemMessage(`Gifted +${data.credited} Nymbot ${isPro ? 'Pro ' : ''}credits to @${recipientNym || 'user'}.`);
                 } else if (isPro) {
                     this._setBotProCreditDisplay(data.balance);
@@ -869,14 +807,12 @@ Object.assign(NYM.prototype, {
     },
 
     cleanupOldLightningAddress() {
-        // Remove old non-pubkey-specific entry if it exists
         const oldAddress = localStorage.getItem('nym_lightning_address');
         if (oldAddress) {
             localStorage.removeItem('nym_lightning_address');
         }
     },
 
-    // Create zap request event (NIP-57)
     async createZapRequest(amountSats, comment) {
         try {
             if (!this.currentZapTarget) {
@@ -887,7 +823,7 @@ Object.assign(NYM.prototype, {
                 kind: 9734,
                 created_at: Math.floor(Date.now() / 1000),
                 tags: [
-                    ['p', this.currentZapTarget.recipientPubkey], // Recipient of zap
+                    ['p', this.currentZapTarget.recipientPubkey],
                     ['amount', (parseInt(amountSats) * 1000).toString()], // Amount in millisats
                     ['relays', ...this.defaultRelays.slice(0, 5)] // Limit to 5 relays
                 ],
@@ -895,7 +831,6 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            // Add event tag only if this is a message zap (not profile zap)
             if (this.currentZapTarget.messageId) {
                 zapRequest.tags.unshift(['e', this.currentZapTarget.messageId]); // Event being zapped
 
@@ -912,12 +847,10 @@ Object.assign(NYM.prototype, {
                 this.currentZapTarget._groupId = (this.inPMMode && this.currentGroup) ? this.currentGroup : null;
                 this.currentZapTarget._pmPeer = (this.inPMMode && !this.currentGroup) ? this.currentPM : null;
             } else {
-                // Profile zap: tag k=0 so the receipt can be filtered by the
-                // recipient's broad #k subscription alongside message zaps.
+                // k=0 so the receipt matches the recipient's broad #k subscription alongside message zaps.
                 zapRequest.tags.push(['k', '0']);
             }
 
-            // Sign the request
             const signedEvent = await this.signEvent(zapRequest);
             this._lastSignedZapRequest = signedEvent;
 
@@ -927,11 +860,9 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Generate and display invoice
     async generateZapInvoice() {
         if (!this.currentZapTarget) return;
 
-        // Clear any stale payment state from a previous invoice
         if (this.zapCheckInterval) {
             clearInterval(this.zapCheckInterval);
             this.zapCheckInterval = null;
@@ -946,7 +877,6 @@ Object.assign(NYM.prototype, {
         }
         this.currentZapInvoice = null;
 
-        // Get amount
         const selectedBtn = document.querySelector('.zap-amount-btn.selected');
         const customAmount = document.getElementById('zapCustomAmount').value;
         const amount = customAmount || (selectedBtn ? selectedBtn.dataset.amount : null);
@@ -958,21 +888,16 @@ Object.assign(NYM.prototype, {
 
         let comment = (document.getElementById('zapComment').value || '').trim();
         if (!comment) {
-            // Label the payment so the recipient knows what it was for
             comment = this.currentZapTarget.messageId ? 'Zap for your message' : 'Profile zap';
         }
 
-        // Show loading state
         document.getElementById('zapAmountSection').style.display = 'none';
         document.getElementById('zapInvoiceSection').style.display = 'block';
         document.getElementById('zapStatus').className = 'zap-status checking';
         document.getElementById('zapStatus').innerHTML = '<span class="loader"></span> Generating invoice...';
 
         try {
-            // Fetch the invoice
-            // Resolved address first, then the project chain when the target is
-            // one of ours, so a failing primary wallet falls through instead of
-            // dropping the zap.
+            // Resolved address first, then the project chain for our own targets, so a failing wallet falls through.
             const invoice = await this.fetchLightningInvoiceWithFallback(
                 [
                     this.currentZapTarget.lnAddress,
@@ -991,10 +916,8 @@ Object.assign(NYM.prototype, {
                 };
                 this._addPendingZap(invoice, this.currentZapTarget);
 
-                // Display invoice
                 this.displayZapInvoice(invoice);
 
-                // Start checking for payment
                 this.checkZapPayment(invoice);
             }
         } catch (error) {
@@ -1003,29 +926,24 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Display the invoice with QR code
     displayZapInvoice(invoice) {
         document.getElementById('zapStatus').style.display = 'none';
         document.getElementById('zapInvoiceDisplay').style.display = 'block';
 
-        // Display invoice text
         const invoiceEl = document.getElementById('zapInvoice');
         invoiceEl.textContent = invoice.pr;
 
-        // Generate QR code
         const qrContainer = document.getElementById('zapQRCode');
-        qrContainer.innerHTML = ''; // Clear existing QR
+        qrContainer.innerHTML = '';
 
-        // Center the QR via a class (no inline styles — keeps us CSP-compliant)
+        // Class instead of inline styles for CSP compliance.
         qrContainer.classList.add('nm-zap-7');
 
-        // Create QR code element with white border styling
         const qrDiv = document.createElement('div');
         qrDiv.id = 'zapQRCodeCanvas';
         qrDiv.className = 'nm-zap-8';
         qrContainer.appendChild(qrDiv);
 
-        // Generate QR using the invoice (QRCode lib loaded on demand)
         (async () => {
             try {
                 if (typeof QRCode === 'undefined') await window.loadScriptOnce(window.NYM_CDN.qrcode);
@@ -1048,16 +966,13 @@ Object.assign(NYM.prototype, {
             }
         })();
 
-        // Reveal the "I've paid" action in the footer, next to Cancel. The
-        // generic send/close button stays hidden — Cancel already dismisses the
-        // modal, so we don't need a separate Close.
+        // Cancel already dismisses the modal, so the generic close button stays hidden.
         const paidBtn = document.getElementById('zapPaidBtn');
         if (paidBtn) paidBtn.classList.remove('nm-hidden');
         const sendBtn = document.getElementById('zapSendBtn');
         if (sendBtn) { sendBtn.style.display = 'none'; sendBtn.onclick = null; }
     },
 
-    // Ask the worker whether a zap invoice was paid
     async _serverVerifyZapPaid(invoice, receipt) {
         if (!invoice) return false;
         const base = this._getProxyBaseUrl();
@@ -1080,12 +995,8 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Check if payment was made. The LUD-21 verify URL is the authoritative,
-    // invoice-scoped signal, confirmed server-side. With no verify URL the
-    // NIP-57 receipt leads, backed by a slower server poll that can still
-    // settle the invoice over the bot wallet's NIP-47 connection
+    // LUD-21 verify URL is authoritative; otherwise the NIP-57 receipt leads, backed by a slower NWC server poll.
     async checkZapPayment(invoice) {
-        // Clear any existing payment check interval to prevent stale invoice polling
         if (this.zapCheckInterval) {
             clearInterval(this.zapCheckInterval);
             this.zapCheckInterval = null;
@@ -1120,15 +1031,12 @@ Object.assign(NYM.prototype, {
         }, stepMs);
     },
 
-    // Listen for the NIP-57 zap receipt and confirm payment by matching the
-    // receipt's bolt11 to our invoice. Works for both message zaps and direct
-    // profile zaps (which carry no event id)
+    // Matches by bolt11, so it works for profile zaps too (no event id).
     listenForZapReceipt() {
         const target = this.currentZapTarget;
         const invoice = this.currentZapInvoice;
         if (!target || !invoice) return;
 
-        // Close any existing zap receipt subscription to prevent stale matching
         if (this.zapReceiptSubId) {
             this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
             this.zapReceiptSubId = null;
@@ -1147,8 +1055,7 @@ Object.assign(NYM.prototype, {
             timer: null
         };
 
-        // Filter by recipient pubkey (always p-tagged on the receipt) rather
-        // than event id, so profile zaps resolve too. bolt11 disambiguates.
+        // Filter by recipient (always p-tagged) so profile zaps resolve too; bolt11 disambiguates.
         this.sendToRelay(["REQ", subId, {
             kinds: [9735],
             "#p": [target.recipientPubkey],
@@ -1173,11 +1080,10 @@ Object.assign(NYM.prototype, {
         }, 180000);
     },
 
-    // Handle successful payment
     handleZapPaymentSuccess(amount) {
         if (!this.currentZapTarget) return;
 
-        // Capture credit-purchase details before closeZapModal clears state
+        // Capture before closeZapModal clears state.
         const isBotCreditPurchase = !!this.currentZapTarget.isBotCreditPurchase;
         const botCreditInvoiceId = this.currentZapInvoice && this.currentZapInvoice.invoiceId;
         const botCreditReceipt = (this.currentZapInvoice && this.currentZapInvoice.receipt) || null;
@@ -1189,8 +1095,7 @@ Object.assign(NYM.prototype, {
             const t = this.currentZapTarget;
             this._recordOwnMessageZap(t.messageId, amount, bolt11, true);
             if (t._groupId || t._pmPeer) {
-                // PM/group zap: announce privately via gift wrap so we don't leak
-                // the zap to the public relay.
+                // PM/group zap: announce privately via gift wrap so the zap doesn't leak to public relays.
                 this._publishOwnPrivateZapEvent(t.messageId, t.recipientPubkey, bolt11, t._groupId, t._pmPeer);
             } else {
                 this._publishOwnMessageZapEvent(t.messageId, t.recipientPubkey, bolt11, t._messageKind, t._geohash, t._channelId);
@@ -1203,7 +1108,6 @@ Object.assign(NYM.prototype, {
             this._removePendingPurchase(this._pendingZapId(this.currentZapInvoice.pr));
         }
 
-        // Clear check interval
         if (this.zapCheckInterval) {
             clearInterval(this.zapCheckInterval);
             this.zapCheckInterval = null;
@@ -1213,7 +1117,6 @@ Object.assign(NYM.prototype, {
             this._botCreditServerPoll = null;
         }
 
-        // Update UI
         document.getElementById('zapInvoiceDisplay').style.display = 'none';
         const paidBtn = document.getElementById('zapPaidBtn');
         if (paidBtn) paidBtn.classList.add('nm-hidden');
@@ -1229,34 +1132,28 @@ Object.assign(NYM.prototype, {
             this._claimBotCredits(botCreditInvoiceId, botCreditGiftNym, botCreditReceipt, botCreditAnon);
         }
 
-        // Close modal after 2 seconds
         setTimeout(() => {
             this.closeZapModal();
         }, 2000);
     },
 
-    // Handle zap receipt events (NIP-57)
     handleZapReceipt(event) {
         if (event.kind !== 9735) return;
 
-        // Ignore the zap-occurred events we published ourselves echoing back —
-        // our own zap is already recorded locally at payment time.
+        // Ignore echoes of our own zap events; our zap is recorded locally at payment time.
         if (this._ownPublishedZapIds && this._ownPublishedZapIds.has(event.id)) return;
 
         if (this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
 
-        // Parse zap receipt
         const eTag = event.tags.find(t => t[0] === 'e');
         const pTag = event.tags.find(t => t[0] === 'p');
         const boltTag = event.tags.find(t => t[0] === 'bolt11');
         const descriptionTag = event.tags.find(t => t[0] === 'description');
 
-        // Archive channel/pm zaps (keyed on e tag) and profile zaps (no e tag,
-        // keyed on the recipient pubkey) so D1 backfill can serve them.
+        // Archive message zaps (e tag) and profile zaps (recipient pubkey) for D1 backfill.
         if (boltTag) this._archiveZapReceipt(event, eTag, descriptionTag);
 
-        // Nymbot credit purchase (no LUD-21 verify): match the receipt to the
-        // pending invoice by bolt11. This is a profile zap, so it has no e tag.
+        // Bot credit purchase without LUD-21: match by bolt11 (profile zap, no e tag).
         if (this._botCreditReceiptWait && boltTag && boltTag[1] &&
             String(boltTag[1]).toLowerCase() === String(this._botCreditReceiptWait.pr).toLowerCase()) {
             const wait = this._botCreditReceiptWait;
@@ -1268,8 +1165,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Shop purchase (no LUD-21 verify): match the receipt to the pending
-        // shop invoice by bolt11, then confirm the purchase server-side.
+        // Shop purchase without LUD-21: match by bolt11, then confirm server-side.
         if (this._shopReceiptWait && boltTag && boltTag[1] &&
             String(boltTag[1]).toLowerCase() === String(this._shopReceiptWait.pr).toLowerCase()) {
             const wait = this._shopReceiptWait;
@@ -1281,9 +1177,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Direct message/profile zap (no LUD-21 verify): match the receipt to
-        // the pending invoice by bolt11, then finalize the modal. Profile zaps
-        // have no e tag, so bolt11 is the only reliable match.
+        // Direct zap without LUD-21: bolt11 is the only reliable match for profile zaps.
         if (this._zapReceiptWait && boltTag && boltTag[1] &&
             String(boltTag[1]).toLowerCase() === String(this._zapReceiptWait.pr).toLowerCase()) {
             const wait = this._zapReceiptWait;
@@ -1294,8 +1188,7 @@ Object.assign(NYM.prototype, {
                 if (this.zapReceiptSubId === wait.subId) this.zapReceiptSubId = null;
             }
             const amount = wait.amount || this.parseAmountFromBolt11(boltTag[1]);
-            // Keep the receipt so the worker can validate it (e.g. on "I've paid").
-            // handleZapPaymentSuccess records the message badge (deduped by bolt11).
+            // Kept so the worker can validate it; handleZapPaymentSuccess dedupes by bolt11.
             if (this.currentZapInvoice) this.currentZapInvoice.receipt = event;
             this._rebroadcastZapReceipt(event);
             this.handleZapPaymentSuccess(amount);
@@ -1304,7 +1197,6 @@ Object.assign(NYM.prototype, {
 
         if (!boltTag) return;
 
-        // Profile zap (no e tag): if it's tagged to us, notify and exit.
         if (!eTag) {
             if (pTag && pTag[1] === this.pubkey) {
                 this._handleIncomingProfileZap(event, descriptionTag, boltTag);
@@ -1315,7 +1207,6 @@ Object.assign(NYM.prototype, {
         const messageId = eTag[1];
         const bolt11 = boltTag[1];
 
-        // Parse amount from bolt11
         const amount = this.parseAmountFromBolt11(bolt11);
         if (!amount) return;
 
@@ -1499,9 +1390,7 @@ Object.assign(NYM.prototype, {
             ? `⚡ zapped ${sats} sats to: "${msgPreview}"`
             : `⚡ zapped ${sats} sats to your message`;
 
-        // Tag the notification so the modal can re-render the body with the
-        // actual message text once it arrives (e.g. if the zapped message
-        // isn't in local storage yet).
+        // Lets the modal re-render the body once the zapped message arrives.
         channelInfo.zapMessageId = messageId;
         channelInfo.zapSats = sats;
 
@@ -1512,9 +1401,7 @@ Object.assign(NYM.prototype, {
         else this.showNotification(zapperNym, body, channelInfo, ts);
     },
 
-    // Best-effort fetch of a zapped message we don't have yet. Stored events
-    // flow back through handleRelayMessage → displayMessage → this.messages,
-    // and the notifications modal re-reads message text at render time.
+    // Fetched events flow into this.messages, and the notifications modal re-reads text at render time.
     _fetchZappedMessage(messageId) {
         if (!messageId || !/^[0-9a-f]{64}$/i.test(messageId)) return;
         if (!this._zapFetchInflight) this._zapFetchInflight = new Set();
@@ -1532,7 +1419,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Parse amount from bolt11 invoice
     parseAmountFromBolt11(bolt11) {
         if (typeof bolt11 !== 'string' || bolt11.length < 6 || bolt11.length > 4096) return null;
         const match = bolt11.match(/^lnbc(\d{1,15})([munp])/i);
@@ -1601,8 +1487,6 @@ Object.assign(NYM.prototype, {
         return req;
     },
 
-    // Re-broadcast a zap receipt for our own zap to our full relay set, so more
-    // clients pick it up than wherever the LNURL server originally published it.
     // Deduped by receipt id so we only republish once.
     _rebroadcastZapReceipt(event) {
         if (!event || event.kind !== 9735 || !event.id) return;
@@ -1612,10 +1496,7 @@ Object.assign(NYM.prototype, {
         try { this.sendToRelay(["EVENT", event]); } catch (_) { }
     },
 
-    // Publish our own signed kind-9735 carrying the e/p/k tags when we zap a
-    // channel message. The LNURL receipt has no top-level k tag, so it never
-    // matches the live #k subscriptions other users (and the recipient) run —
-    // this event does, giving real-time badge updates and recipient notifications.
+    // The LNURL receipt has no top-level k tag, so it misses live #k subscriptions; this event matches them.
     async _publishOwnMessageZapEvent(messageId, recipientPubkey, bolt11, kind, geohash, channelId) {
         if (!messageId || !recipientPubkey || !bolt11) return;
         if (kind !== '20000' && kind !== '23333') return;
@@ -1654,9 +1535,7 @@ Object.assign(NYM.prototype, {
         this._archiveZapReceipt(signed, signed.tags.find(t => t[0] === 'e'), descTag);
     },
 
-    // Announce a PM/group message zap privately by gift-wrapping a kind-9735
-    // rumor to the conversation members, so recipients see the badge update
-    // and get notified without leaking the zap to public relays.
+    // Gift-wrapped kind-9735 rumor so members see the zap without leaking it to public relays.
     async _publishOwnPrivateZapEvent(messageId, recipientPubkey, bolt11, groupId, pmPeer) {
         if (!messageId || !recipientPubkey || !bolt11) return;
         if (!this._canSendGiftWraps()) return;
@@ -1729,17 +1608,14 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Record our own zap against a message, deduped by the invoice's bolt11 so
-    // the verify-URL confirmation and a later NIP-57 receipt for the same
-    // payment don't both count it.
+    // Deduped by bolt11 so the verify-URL confirmation and a later NIP-57 receipt don't double count.
     _recordOwnMessageZap(messageId, amount, bolt11, isLive) {
         if (!messageId || !amount) return;
         if (!this._selfCountedZapInvoices) this._selfCountedZapInvoices = new Set();
         const key = bolt11 ? String(bolt11).toLowerCase() : ('amt:' + messageId + ':' + amount);
         if (this._selfCountedZapInvoices.has(key)) return;
         this._selfCountedZapInvoices.add(key);
-        // Key on the invoice so our own zap and its echo (public receipt or a
-        // gift-wrapped announcement) dedup against each other.
+        // Keyed on the invoice so our zap and its echo dedup against each other.
         this._recordMessageZap(messageId, this.pubkey, amount, 'b:' + key, isLive, true);
     },
 
@@ -1769,8 +1645,7 @@ Object.assign(NYM.prototype, {
         if (applied) {
             if (isLive) this._playZapBurst(messageId);
         } else {
-            // Message isn't in the current DOM — drop its channel's cached render
-            // so the zap badge and quick-zap button appear on next navigation.
+            // Not in the DOM: drop the channel's cached render so the badge appears on next navigation.
             this._invalidateZapDOMCache(messageId);
         }
         return true;
@@ -1788,7 +1663,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Electricity shock burst anchored to a message's zap badge
     _playZapBurst(messageId) {
         const messageEl = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
         if (!messageEl) return;
@@ -1835,12 +1709,8 @@ Object.assign(NYM.prototype, {
         setTimeout(() => badge.classList.remove('zap-badge-shock'), 600);
     },
 
-    // Update message with zap display
     updateMessageZaps(messageId) {
-        // A message can be rendered more than once (main view + thread view),
-        // so update every copy. Scoped to `.message` rows — the hover
-        // `.reaction-btn` carries the same data-message-id and must never be
-        // treated as a message element.
+        // A message can render more than once; `.message` excludes the hover `.reaction-btn`.
         const els = document.querySelectorAll(`.message[data-message-id="${messageId}"]`);
         if (!els.length) return false;
         let updated = false;
@@ -1851,24 +1721,21 @@ Object.assign(NYM.prototype, {
     _updateMessageZapsEl(messageId, messageEl) {
         if (!messageEl) return false;
 
-        // Capture scroll state before modifying DOM so we can auto-scroll if needed
         const container = document.getElementById('messagesScroller');
         const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
         const messageZaps = this.zaps.get(messageId);
 
-        // Find or create reactions row (always a DIRECT child of the row)
+        // Always a direct child of the row.
         let reactionsRow = messageEl.querySelector(':scope > .reactions-row');
         if (!reactionsRow) {
             reactionsRow = document.createElement('div');
             reactionsRow.className = 'reactions-row';
-            // Keep the reply-count thread row beneath the reactions/zaps row.
             const threadIndicator = messageEl.querySelector(':scope > .thread-indicator-row');
             if (threadIndicator) messageEl.insertBefore(reactionsRow, threadIndicator);
             else messageEl.appendChild(reactionsRow);
         }
 
-        // Remove existing zap badges
         const existingZap = reactionsRow.querySelector('.zap-badge');
         if (existingZap) {
             existingZap.remove();
@@ -1878,9 +1745,7 @@ Object.assign(NYM.prototype, {
             existingZapBtn.remove();
         }
 
-        // Only add badges if there are zaps
         if (messageZaps && messageZaps.amounts.size > 0) {
-            // Calculate total zaps from the amounts map
             let totalZaps = 0;
             messageZaps.amounts.forEach(amount => {
                 totalZaps += amount;
@@ -1902,10 +1767,8 @@ Object.assign(NYM.prototype, {
             if (unverifiedSats > 0) zapTitle += ` (${this.abbreviateNumber(unverifiedSats)} unverified)`;
             zapBadge.title = zapTitle;
 
-            // Insert at beginning of reactions row
             reactionsRow.insertBefore(zapBadge, reactionsRow.firstChild);
 
-            // Add quick zap button for every viewer of a zapped message
             const pubkey = messageEl.dataset.pubkey;
             if (pubkey) {
                 const addZapBtn = document.createElement('span');
@@ -1922,12 +1785,10 @@ Object.assign(NYM.prototype, {
                     await this.handleQuickZap(messageId, pubkey, messageEl);
                 };
 
-                // Insert after zap badge
                 reactionsRow.insertBefore(addZapBtn, zapBadge.nextSibling);
             }
         }
 
-        // Auto-scroll to keep zaps visible if user was already at the bottom
         if (wasAtBottom) {
             this._scheduleScrollToBottom();
         }
@@ -1935,21 +1796,16 @@ Object.assign(NYM.prototype, {
     },
 
     async handleQuickZap(messageId, pubkey, messageEl) {
-        // Get the author's nym
         const author = messageEl.dataset.author;
 
-        // Show loading message
         this.displaySystemMessage(`Checking if @${author} can receive zaps...`);
 
         try {
-            // Always fetch fresh to ensure we have the latest
             const lnAddress = await this.fetchLightningAddressForUser(pubkey);
 
             if (lnAddress) {
-                // User has lightning address, show zap modal
                 this.showZapModal(messageId, pubkey, author);
             } else {
-                // No lightning address found
                 this.displaySystemMessage(`@${author} cannot receive zaps (no lightning address set)`);
             }
         } catch (error) {
@@ -1957,12 +1813,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Close zap modal
     closeZapModal() {
         const modal = document.getElementById('zapModal');
         if (modal) modal.classList.remove('active');
 
-        // Clear any payment check intervals
         if (this.zapCheckInterval) {
             clearInterval(this.zapCheckInterval);
             this.zapCheckInterval = null;
@@ -1976,7 +1830,6 @@ Object.assign(NYM.prototype, {
             this._botCreditServerPoll = null;
         }
 
-        // Close any zap receipt subscriptions
         if (this.zapReceiptSubId) {
             this.sendToRelay(["CLOSE", this.zapReceiptSubId]);
             this.zapReceiptSubId = null;
@@ -1986,7 +1839,6 @@ Object.assign(NYM.prototype, {
             this._zapReceiptWait = null;
         }
 
-        // Reset modal state for regular zaps
         this._resetZapModalToDefault();
         const zapAmountsContainer = document.querySelector('.zap-amounts');
         if (zapAmountsContainer) {
@@ -2012,7 +1864,6 @@ Object.assign(NYM.prototype, {
         if (amountSection) amountSection.style.display = 'block';
         if (invoiceSection) invoiceSection.style.display = 'none';
 
-        // Restore modal actions (may have been replaced by shop success screen)
         const modalActions = document.querySelector('#zapModal .modal-actions');
         if (modalActions) {
             modalActions.innerHTML = `
@@ -2022,24 +1873,20 @@ Object.assign(NYM.prototype, {
             `;
         }
 
-        // Clear contexts
         this.currentZapTarget = null;
         this.currentZapInvoice = null;
         this.currentPurchaseContext = null;
         this.currentShopInvoice = null;
 
-        // Clear selected amounts
         document.querySelectorAll('.zap-amount-btn').forEach(btn => {
             btn.classList.remove('selected');
         });
     },
 
-    // Copy invoice to clipboard
     copyZapInvoice() {
         if (!this.currentZapInvoice) return;
 
         navigator.clipboard.writeText(this.currentZapInvoice.pr).then(() => {
-            // Show feedback
             const btn = event.target;
             const originalText = btn.textContent;
             btn.textContent = 'Copied!';
@@ -2051,15 +1898,13 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Open invoice in wallet
     openInWallet() {
-        // Check both currentZapInvoice and currentShopInvoice
         const invoice = this.currentZapInvoice || this.currentShopInvoice;
         if (!invoice) return;
 
         const invoiceStr = invoice.pr;
 
-        // Build a lightning: URI (don't double-prefix)
+        // Don't double-prefix lightning:.
         const invoiceToOpen = invoiceStr.toLowerCase().startsWith('lightning:') ?
             invoiceStr : `lightning:${invoiceStr}`;
 
@@ -2090,7 +1935,6 @@ Object.assign(NYM.prototype, {
 
         const targetInput = args.trim().replace(/^@/, '');
 
-        // Check if input is a pubkey (64 hex characters)
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
             const targetPubkey = targetInput.toLowerCase();
 
@@ -2122,7 +1966,6 @@ Object.assign(NYM.prototype, {
             searchSuffix = targetInput.substring(hashIndex + 1);
         }
 
-        // Find matching users
         const matches = [];
         this.users.forEach((user, pubkey) => {
             const baseNym = this.stripPubkeySuffix(user.nym);
@@ -2159,14 +2002,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Check for lightning address
         const displayNym = this.formatNymWithPubkey(targetNym, targetPubkey);
         this.displaySystemMessage(`Checking if @${displayNym} can receive zaps...`, 'system', { html: true });
 
         const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
 
         if (lnAddress) {
-            // Show zap modal for profile zap (no messageId)
             this.showProfileZapModal(targetPubkey, targetNym, lnAddress);
         } else {
             this.displaySystemMessage(`@${displayNym} cannot receive zaps (no lightning address set)`, 'system', { html: true });

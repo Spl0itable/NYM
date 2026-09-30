@@ -1,13 +1,4 @@
-// Lazy OpenGraph link-preview card, a 1:1 port of the PWA's `.link-preview`
-// surface (ui-context.js `unfurlUrl` + `_renderLinkPreview` + `_attachLinkPreviews`,
-// lines 682-831; markup index.html; styles styles-features.css `.link-preview`).
-//
-// For a bare http(s) link in a message the PWA lazily unfurls it through the
-// backend proxy (`/api/proxy?action=unfurl`) and renders a card with the
-// site/title/description and (proxied) preview image + favicon. Media URLs
-// (image/video extensions) are skipped — they already render inline. The card
-// is collapsed/lazy (fetched only when mounted), and dismiss/error tolerant:
-// any failure or an empty `{title, description}` renders nothing.
+// Lazy OpenGraph link-preview card via the unfurl proxy; media URLs are skipped and any failure renders nothing.
 
 import 'dart:async';
 
@@ -19,8 +10,6 @@ import '../../../core/theme/nym_metrics.dart';
 import '../../../services/api/api_client.dart';
 import '../../../core/utils/safe_url.dart';
 
-/// Parsed link-preview content (mirrors `proxy.js` `extractOpenGraph` /
-/// ui-context.js `_renderLinkPreview`). Built from an [UnfurlResult].
 class LinkPreviewData {
   const LinkPreviewData({
     required this.url,
@@ -38,19 +27,16 @@ class LinkPreviewData {
   final String siteName;
   final String? favicon;
 
-  /// The site label shown in the card header: `siteName` when present, else the
-  /// URL hostname (ui-context.js:792-798).
+  /// Header label: `siteName` when present, else the URL host.
   String get host {
     if (siteName.isNotEmpty) return siteName;
     final u = Uri.tryParse(url);
     return u?.host ?? '';
   }
 
-  /// The PWA only renders a card when there is a title or description
-  /// (ui-context.js:778). Mirror that gate.
+  /// A card renders only when there is a title or description.
   bool get hasContent => title.isNotEmpty || description.isNotEmpty;
 
-  /// Builds from the proxy's `?action=unfurl` JSON shape.
   factory LinkPreviewData.fromUnfurl(UnfurlResult r) => LinkPreviewData(
         url: r.url,
         title: r.title ?? '',
@@ -62,24 +48,19 @@ class LinkPreviewData {
       );
 }
 
-/// Returns true for URLs that should NOT get a link preview because they are
-/// already rendered as inline media (ui-context.js:815). Mirrors the PWA regex
-/// `\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$`.
+/// True for URLs already rendered as inline media, which get no preview.
 bool isInlineMediaUrl(String url) =>
     RegExp(r'\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$',
             caseSensitive: false)
         .hasMatch(url);
 
-/// A lazily-unfurled link-preview card. Fetches [UnfurlResult] for [url] via
-/// [ApiClient.unfurl] on mount; renders nothing while loading, on error, or
-/// when the result has no title/description. The preview image + favicon are
-/// loaded through the media proxy (mirrors `_renderLinkPreview`).
+/// Unfurls [url] on mount; renders nothing while loading, on error, or without a title or description.
 class LinkPreviewCard extends StatefulWidget {
   const LinkPreviewCard({super.key, required this.url, this.api});
 
   final String url;
 
-  /// Injectable for tests; defaults to a live [ApiClient].
+  /// Injectable for tests.
   final ApiClient? api;
 
   @override
@@ -103,12 +84,7 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
         return;
       }
     }
-    // DWELL before fetching: rows mount while flinging through history (and
-    // ahead of the viewport, in the list's cache extent), and an immediate
-    // fetch per link-bearing row fired a burst of unfurl requests mid-scroll —
-    // network churn plus a mid-scroll relayout when each response landed. A
-    // card the user scrolls straight past is disposed before the timer fires
-    // and never fetches; one they actually stop on unfurls ~instantly.
+    // Dwell before fetching so rows flung past mid-scroll never fire unfurl requests.
     _dwell = Timer(const Duration(milliseconds: 300), () {
       _dwell = null;
       if (mounted) _load();
@@ -140,7 +116,6 @@ class _LinkPreviewCardState extends State<LinkPreviewCard> {
   @override
   Widget build(BuildContext context) {
     final data = _data;
-    // Collapsed until ready; dismiss/error tolerant (renders nothing).
     if (_failed || data == null) return const SizedBox.shrink();
     return _Card(data: data, api: _api);
   }
@@ -155,10 +130,6 @@ class _Card extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final size = _baseTextSize(context);
-    // `.link-preview` is a horizontal flex card (`styles-features.css:4348`):
-    // a 120px left thumbnail + a right text column, max-width 400, radius 8.
-    // At ≤768px the card spans the full message width and the thumbnail
-    // shrinks to 80px (`styles-themes-responsive.css:1531-1539`).
     final narrow = MediaQuery.of(context).size.width <= 768;
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -181,18 +152,15 @@ class _Card extends StatelessWidget {
                 children: [
                   if (data.image != null)
                     SizedBox(
-                      // `.link-preview-image { width: 120px }`, 80px at ≤768px.
                       width: narrow ? 80 : 120,
                       child: CachedNetworkImage(
                         imageUrl: api.mediaProxyUrl(data.image!),
                         fit: BoxFit.cover,
-                        // og:image files are frequently full-size photos —
-                        // decode at the 80/120px card slot, not intrinsic size.
+                        // og:image is often full-size; decode at the card slot size.
                         memCacheWidth: ((narrow ? 80 : 120) *
                                 MediaQuery.devicePixelRatioOf(context) *
                                 1.5)
                             .ceil(),
-                        // The PWA hides a broken preview image; collapse it.
                         errorWidget: (_, __, ___) => const SizedBox.shrink(),
                       ),
                     ),
@@ -215,8 +183,6 @@ class _Card extends StatelessWidget {
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  // `.link-preview-title { color: var(--text) }`
-                                  // (styles-features.css:4397-4405).
                                   color: c.text,
                                   fontSize: size * 0.9,
                                   fontWeight: FontWeight.w600,
@@ -227,7 +193,7 @@ class _Card extends StatelessWidget {
                             if (data.description.isNotEmpty) ...[
                               const SizedBox(height: 3),
                               Text(
-                                // PWA slices description to 200 chars.
+                                // Description is sliced to 200 chars.
                                 data.description.length > 200
                                     ? data.description.substring(0, 200)
                                     : data.description,
@@ -254,12 +220,10 @@ class _Card extends StatelessWidget {
     );
   }
 
-  /// The base body text size from settings (the link-preview ems are relative).
+  /// Base body text size from settings; the preview's ems are relative to it.
   double _baseTextSize(BuildContext context) =>
       DefaultTextStyle.of(context).style.fontSize ?? 15;
 
-  /// `.link-preview-site`: an UPPERCASE text-dim label with a 14×14 favicon and
-  /// `letter-spacing:0.3` (`styles-features.css:4390`).
   Widget _siteRow(BuildContext context, NymColors c, double size) {
     final favicon = data.favicon;
     return Row(

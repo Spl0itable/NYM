@@ -213,10 +213,7 @@ Object.assign(NYM.prototype, {
         }).slice(0, limit);
     },
 
-    // Move reaction state from oldId to newId so reaction keys always match the
-    // ID the DOM renders with. A message's nymMessageId can be assigned after
-    // reactions were already stored under its event ID; without this migration
-    // those reactions vanish once the bubble redraws keyed by nymMessageId.
+    // nymMessageId can be assigned after reactions were stored under the event ID; rekey so they don't vanish.
     _migrateReactionKey(oldId, newId) {
         if (!oldId || !newId || oldId === newId) return false;
         let changed = false;
@@ -237,7 +234,6 @@ Object.assign(NYM.prototype, {
             changed = true;
         }
 
-        // Rekey timestamp-tracking entries (`${id}:${emoji}:${pubkey}`)
         if (this.reactionLastAction) {
             const prefix = oldId + ':';
             for (const [k, v] of Array.from(this.reactionLastAction.entries())) {
@@ -257,7 +253,6 @@ Object.assign(NYM.prototype, {
 
     handleReaction(event) {
         if (event && this.blockedUsers && this.blockedUsers.has(event.pubkey)) return;
-        // Register any NIP-30 custom emoji declared on this reaction
         this.ingestEmojiTags(event.tags);
         const reactionContent = event.content;
         if (!this.isValidReactionEmoji(reactionContent)) return;
@@ -269,16 +264,14 @@ Object.assign(NYM.prototype, {
 
         if (!eTag) return;
 
-        // Only process reactions for our supported kinds
-        // 20000 = geohash channel, 23333 = named channel, 1059 = NIP-17 gift wraps, 14 = group rumor messages
+        // 20000 = geohash channel, 23333 = named channel, 1059 = NIP-17 gift wraps, 14 = group rumor messages.
         if (kTag && !['20000', '23333', '1059', '14'].includes(kTag[1])) {
             return;
         }
 
         const messageId = eTag[1];
 
-        // When no kTag is present, verify this reaction targets a known Nymchat message
-        // to avoid showing notifications for reactions from other Nostr apps
+        // Without a k tag, require a known Nymchat target to skip reactions from other Nostr apps.
         if (!kTag) {
             const inDom = !!document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
             let inMessages = false;
@@ -298,23 +291,20 @@ Object.assign(NYM.prototype, {
 
         const reactorNym = this.getNymFromPubkey(event.pubkey);
 
-        // Use timestamp tracking to ensure only the latest action wins
-        // (handles out-of-order event delivery from relays on reload)
+        // Latest action wins; relays can deliver out of order on reload.
         const actionKey = `${messageId}:${reactionContent}:${event.pubkey}`;
         const lastAction = this.reactionLastAction.get(actionKey);
         const eventTs = event.created_at || 0;
         if (lastAction && lastAction.ts > eventTs) {
-            return; // We already processed a newer action for this reaction
+            return;
         }
         this.reactionLastAction.set(actionKey, { action: isRemoval ? 'remove' : 'add', ts: eventTs });
 
-        // Prune if too large
         if (this.reactionLastAction.size > 5000) {
             const entries = Array.from(this.reactionLastAction.entries());
             this.reactionLastAction = new Map(entries.slice(-4000));
         }
 
-        // Handle reaction removal
         if (isRemoval) {
             const messageReactions = this.reactions.get(messageId);
             if (messageReactions && messageReactions.has(reactionContent)) {
@@ -345,7 +335,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Store reaction with pubkey and nym
         if (!this.reactions.has(messageId)) {
             this.reactions.set(messageId, new Map());
         }
@@ -355,18 +344,13 @@ Object.assign(NYM.prototype, {
             messageReactions.set(reactionContent, new Map());
         }
 
-        // Store pubkey with nym
         const isNewReaction = !messageReactions.get(reactionContent).has(event.pubkey);
         messageReactions.get(reactionContent).set(event.pubkey, reactorNym);
         this.persistReactions(messageId);
 
-        // Update UI if message is visible, otherwise invalidate DOM cache
-        // so the reaction appears when the user switches to that channel
+        // Off-screen: invalidate the owning channel's cached DOM so it re-renders with the reaction.
         const reactionApplied = this.updateMessageReactions(messageId);
         if (!reactionApplied) {
-            // Message not in current DOM — find which channel owns it and
-            // invalidate that channel's cached DOM so it re-renders with the
-            // new reaction when the user navigates there.
             for (const [key, msgs] of this.messages.entries()) {
                 if (msgs.some(m => m.id === messageId)) {
                     this.channelDOMCache.delete(key);
@@ -381,7 +365,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Burst on the badge for live reactions from other users, mirroring our own
         if (reactionApplied && isNewReaction && event.pubkey !== this.pubkey) {
             const reactionAge = Date.now() - (event.created_at * 1000);
             if (reactionAge <= 10000) {
@@ -389,7 +372,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Notify if someone reacted to OUR message (not our own reaction)
         if (pTag && pTag[1] === this.pubkey && event.pubkey !== this.pubkey) {
             const messageAge = Date.now() - (event.created_at * 1000);
             const isHistorical = messageAge > 10000;
@@ -400,8 +382,6 @@ Object.assign(NYM.prototype, {
                 pubkey: event.pubkey,
                 messageId: messageId
             };
-            // Determine the channel/PM context for navigation
-            // Check if the reacted message is in the current channel view
             const msgEl = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
             if (msgEl) {
                 if (this.inPMMode && this.currentPM) {
@@ -417,7 +397,6 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (!channelInfo.sourceType) {
-                // Search channel message stores
                 for (const [key, msgs] of this.messages.entries()) {
                     if (msgs.some(m => m.id === messageId)) {
                         channelInfo.sourceType = 'geohash';
@@ -429,10 +408,8 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (!channelInfo.sourceType) {
-                // Search PM message stores
                 for (const [key, msgs] of this.pmMessages.entries()) {
                     if (msgs.some(m => m.id === messageId || m.nymMessageId === messageId)) {
-                        // Determine if this is a group PM or 1:1 PM
                         if (key.startsWith('group-')) {
                             channelInfo.sourceType = 'group';
                             channelInfo.sourceGroupId = key.slice(6);
@@ -445,7 +422,6 @@ Object.assign(NYM.prototype, {
                     }
                 }
             }
-            // Try to find a preview of the original message
             let msgPreview = '';
             if (msgEl) {
                 const raw = msgEl.dataset.rawContent;
@@ -454,7 +430,6 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (!msgPreview) {
-                // Search in-memory message stores
                 for (const msgs of this.messages.values()) {
                     const found = msgs.find(m => m.id === messageId);
                     if (found) {
@@ -485,11 +460,7 @@ Object.assign(NYM.prototype, {
     },
 
     updateMessageReactions(messageId) {
-        // A message can be rendered more than once (main view + thread view),
-        // so update every copy. Scoped to `.message` rows: the hover
-        // `.reaction-btn` carries the same data-message-id and must never be
-        // treated as a message element (injecting a row into it duplicated
-        // badges and polluted the hover-button stack).
+        // A message can render more than once (main + thread view); `.message` excludes the hover `.reaction-btn`.
         const els = document.querySelectorAll(`.message[data-message-id="${messageId}"]`);
         if (!els.length) return false;
         let updated = false;
@@ -500,23 +471,18 @@ Object.assign(NYM.prototype, {
     _updateMessageReactionsEl(messageId, messageEl) {
         if (!messageEl) return false;
 
-        // Capture scroll state before modifying DOM so we can auto-scroll if needed
         const container = document.getElementById('messagesScroller');
         const wasAtBottom = container && (container.scrollHeight - container.scrollTop <= container.clientHeight + 150);
 
-        // Defensive: drop any reactions-row a past bug nested inside the
-        // hover buttons, so it can never shadow the real row below.
+        // Defensive: drop any reactions-row nested inside the hover buttons so it can't shadow the real row.
         messageEl.querySelectorAll('.msg-hover-buttons .reactions-row, .reaction-btn .reactions-row')
             .forEach(el => el.remove());
 
         const reactions = this.reactions.get(messageId);
         if (!reactions || reactions.size === 0) {
-            // Remove reaction badges from DOM but preserve zap badges
             const reactionsRow = messageEl.querySelector(':scope > .reactions-row');
             if (reactionsRow) {
-                // Remove reaction badges and add-reaction button, keep zap elements
                 reactionsRow.querySelectorAll('.reaction-badge, .add-reaction-btn').forEach(el => el.remove());
-                // If only zap elements remain (or nothing), clean up empty row
                 if (reactionsRow.children.length === 0) {
                     reactionsRow.remove();
                 }
@@ -525,15 +491,12 @@ Object.assign(NYM.prototype, {
             return true;
         }
 
-        // Remove existing reactions display but preserve zap badges. The row
-        // is always a DIRECT child of the message row — a scoped lookup can
-        // never pick up a row nested somewhere inside the content.
+        // The row is always a direct child of the message row.
         let reactionsRow = messageEl.querySelector(':scope > .reactions-row');
         let zapBadge = null;
         let addZapBtn = null;
 
         if (reactionsRow) {
-            // Save zap badge and button if they exist
             zapBadge = reactionsRow.querySelector('.zap-badge');
             if (zapBadge) {
                 zapBadge = zapBadge.cloneNode(true);
@@ -547,24 +510,19 @@ Object.assign(NYM.prototype, {
         if (!reactionsRow) {
             reactionsRow = document.createElement('div');
             reactionsRow.className = 'reactions-row';
-            // Keep the reply-count thread row beneath the reactions/zaps row.
             const threadIndicator = messageEl.querySelector(':scope > .thread-indicator-row');
             if (threadIndicator) messageEl.insertBefore(reactionsRow, threadIndicator);
             else messageEl.appendChild(reactionsRow);
         }
 
-        // Clear and rebuild reactions
         reactionsRow.innerHTML = '';
 
-        // Re-add zap badge first if it exists
         if (zapBadge) {
             reactionsRow.appendChild(zapBadge);
         }
 
-        // Re-add quick zap button ONLY if it already existed (meaning there are zaps)
         if (addZapBtn) {
             reactionsRow.appendChild(addZapBtn);
-            // Re-attach the click handler
             const pubkey = messageEl.dataset.pubkey;
             addZapBtn.onclick = async (e) => {
                 e.stopPropagation();
@@ -572,30 +530,23 @@ Object.assign(NYM.prototype, {
             };
         }
 
-        // Clear and rebuild reactions
         reactions.forEach((reactors, emoji) => {
             const badge = document.createElement('span');
 
-            // Check if current user has already reacted with this emoji
             const hasReacted = reactors.has(this.pubkey);
 
-            // Set class based on reaction state
             badge.className = hasReacted ? 'reaction-badge user-reacted' : 'reaction-badge';
             badge.dataset.emoji = emoji;
             badge.dataset.messageId = messageId;
 
             badge.innerHTML = `${this.renderReactionEmoji(emoji)} ${this.abbreviateNumber(reactors.size)}`;
 
-            // No tooltip — long-press shows reactors modal instead
-
-            // Long-press to show reactors modal
             let longPressTimer = null;
             let didLongPress = false;
             let touchActive = false;
             let suppressClickUntil = 0;
 
             const startLongPress = (e) => {
-                // Ignore synthetic mouse events that follow a touch sequence
                 if (e.type === 'mousedown' && touchActive) return;
                 didLongPress = false;
                 longPressTimer = setTimeout(() => {
@@ -611,8 +562,7 @@ Object.assign(NYM.prototype, {
                     clearTimeout(longPressTimer);
                     longPressTimer = null;
                 }
-                // If the long press fired, swallow the synthetic click that
-                // touchend produces so we don't toggle the user's reaction.
+                // Swallow the synthetic click after a long press so it doesn't toggle the reaction.
                 if (didLongPress && e && e.cancelable) {
                     try { e.preventDefault(); } catch { }
                 }
@@ -626,7 +576,6 @@ Object.assign(NYM.prototype, {
             badge.addEventListener('touchcancel', (e) => { cancelLongPress(e); touchActive = false; });
             badge.addEventListener('touchmove', cancelLongPress);
 
-            // Click handler - only fire if not a long press
             badge.onclick = async (e) => {
                 e.stopPropagation();
                 if (didLongPress || Date.now() < suppressClickUntil) {
@@ -643,7 +592,6 @@ Object.assign(NYM.prototype, {
             reactionsRow.appendChild(badge);
         });
 
-        // Adds "add reaction" badge
         const addBtn = document.createElement('span');
         addBtn.className = 'add-reaction-btn';
         addBtn.innerHTML = `
@@ -658,7 +606,6 @@ Object.assign(NYM.prototype, {
         };
         reactionsRow.appendChild(addBtn);
 
-        // Auto-scroll to keep reactions visible if user was already at the bottom
         if (wasAtBottom) {
             this._scheduleScrollToBottom();
         }
@@ -666,7 +613,6 @@ Object.assign(NYM.prototype, {
     },
 
     showReactorsModal(messageId, emoji, badge) {
-        // Close any existing reactors modal
         this.closeReactorsModal();
 
         const reactions = this.reactions.get(messageId);
@@ -674,8 +620,6 @@ Object.assign(NYM.prototype, {
         const reactors = reactions.get(emoji);
         if (!reactors || reactors.size === 0) return;
 
-        // Build user list, capping the rendered rows so a large reactor list
-        // doesn't blow out the modal — overflow is summarized as "+N more".
         const MAX_ROWS = 50;
         const entries = Array.from(reactors.entries());
         const shown = entries.slice(0, MAX_ROWS);
@@ -709,13 +653,11 @@ Object.assign(NYM.prototype, {
             this.ensureListProfiles(modal, shown.map(([pk]) => pk));
         }
 
-        // Position near the badge
         const rect = badge.getBoundingClientRect();
         const modalRect = modal.getBoundingClientRect();
         const spaceAbove = rect.top;
         const spaceBelow = window.innerHeight - rect.bottom;
 
-        // Horizontal: align left edge with badge, but keep within viewport
         let left = rect.left;
         if (left + modalRect.width > window.innerWidth - 10) {
             left = window.innerWidth - modalRect.width - 10;
@@ -723,14 +665,12 @@ Object.assign(NYM.prototype, {
         if (left < 10) left = 10;
         modal.style.left = left + 'px';
 
-        // Vertical: prefer above, fall back to below
         if (spaceAbove > modalRect.height + 10) {
             modal.style.bottom = (window.innerHeight - rect.top + 6) + 'px';
         } else {
             modal.style.top = (rect.bottom + 6) + 'px';
         }
 
-        // Click user row to open their context menu
         modal.querySelectorAll('.reactors-modal-user').forEach((el, i) => {
             el.addEventListener('click', (e) => {
                 const [pubkey, nym] = shown[i];
@@ -750,22 +690,18 @@ Object.assign(NYM.prototype, {
     },
 
     showReactionPicker(messageId, button) {
-        // Toggle if clicking same button
         if (this.enhancedEmojiModal && this.activeReactionPickerButton === button) {
             this.closeEnhancedEmojiModal();
             this.activeReactionPickerButton = null;
             return;
         }
 
-        // Remember which button opened this
         this.activeReactionPickerButton = button;
 
-        // Use enhanced picker
         this.showEnhancedReactionPicker(messageId, button);
     },
 
-    // The enhanced modal DOM is expensive (~7k nodes), so it's built once,
-    // detached on close, and rebuilt only when packs/favorites/recents change.
+    // The modal DOM is ~7k nodes, so it's built once, detached on close, and rebuilt only on data changes.
     _ensureEnhancedEmojiModal() {
         let modal = this._cachedEmojiModal;
         if (modal && this._emojiRecentsDirty && !this._emojiPickerDirty) {
@@ -888,17 +824,13 @@ ${this._emojiSectionsHtml()}`;
     },
 
     showEnhancedReactionPicker(messageId, button, onSelect) {
-        // Check if clicking the same button that opened the current modal
         if (this.enhancedEmojiModal && this.activeReactionPickerButton === button) {
             this.closeEnhancedEmojiModal();
             return;
         }
 
-        // Close any existing picker
         this.closeEnhancedEmojiModal();
 
-        // Remember which button opened this and the chosen-emoji callback so
-        // toggleEmojiPackFavorite can re-render without changing the mode
         this.activeReactionPickerButton = button;
         this._activePickerOnSelect = onSelect || null;
         this._activePickerMessageId = messageId || null;
@@ -906,11 +838,9 @@ ${this._emojiSectionsHtml()}`;
 
         const modal = this._ensureEnhancedEmojiModal();
 
-        // Position modal
         const rect = button.getBoundingClientRect();
         let css;
         if (window.innerWidth <= 768) {
-            // Center on mobile
             css = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);max-width:90%;max-height:80vh;z-index:10010;';
         } else {
             const spaceBelow = window.innerHeight - rect.bottom;
@@ -931,14 +861,11 @@ ${this._emojiSectionsHtml()}`;
     },
 
     toggleEmojiPicker() {
-        // Check if modal already exists
         if (this.enhancedEmojiModal) {
-            // Close existing modal
             this.closeEnhancedEmojiModal();
             return;
         }
 
-        // Create modal for emoji picker
         const button = document.querySelector('.icon-btn.input-btn[title="Emoji"]');
         if (button) {
             this.showEnhancedEmojiPickerForInput(button);
@@ -946,16 +873,13 @@ ${this._emojiSectionsHtml()}`;
     },
 
     showEnhancedEmojiPickerForInput(button) {
-        // Close any existing picker
         this.closeEnhancedEmojiModal();
 
-        // Track the launch button so category-favorite toggles can re-render
         this.activeReactionPickerButton = button;
         this._activePickerMode = 'input';
 
         const modal = this._ensureEnhancedEmojiModal();
 
-        // Position near button
         const rect = button.getBoundingClientRect();
         let css;
         if (window.innerWidth <= 768) {
@@ -978,7 +902,6 @@ ${this._emojiSectionsHtml()}`;
             this.enhancedEmojiModal.remove();
             this.enhancedEmojiModal = null;
         }
-        // Clear the button reference
         this.activeReactionPickerButton = null;
         this._activePickerOnSelect = null;
         this._activePickerMessageId = null;
@@ -998,17 +921,14 @@ ${this._emojiSectionsHtml()}`;
             this.reactionToggleTracker.set(key, tracker);
         }
 
-        // Check if in cooldown
         if (now < tracker.cooldownUntil) {
             const remaining = Math.ceil((tracker.cooldownUntil - now) / 1000);
             this.displaySystemMessage(`Slow down! You can react again in ${remaining}s`);
             return false;
         }
 
-        // Prune old timestamps outside the window
         tracker.timestamps = tracker.timestamps.filter(ts => now - ts < windowMs);
 
-        // Check if over limit
         if (tracker.timestamps.length >= maxToggles) {
             tracker.cooldownUntil = now + 60000; // 1 minute cooldown
             this.displaySystemMessage('Too many reaction toggles. Try again in 60s');
@@ -1029,7 +949,6 @@ ${this._emojiSectionsHtml()}`;
             const targetPubkey = messageEl.dataset.pubkey;
             if (!targetPubkey) return;
 
-            // Ensure local state contains this reaction
             if (!this.reactions.has(messageId)) {
                 this.reactions.set(messageId, new Map());
             }
@@ -1038,27 +957,22 @@ ${this._emojiSectionsHtml()}`;
                 messageReactions.set(emoji, new Map());
             }
 
-            // Check if already reacted
             if (messageReactions.get(emoji).has(this.pubkey)) {
-                return; // Already reacted with this emoji
+                return;
             }
 
             window.nymHapticTap && window.nymHapticTap();
 
-            // Add reaction immediately to local state
             messageReactions.get(emoji).set(this.pubkey, this.nym);
             this.persistReactions(messageId);
 
-            // Update UI immediately
             this.updateMessageReactions(messageId);
 
             this._burstOnBadge(messageId, emoji, messageEl);
 
-            // Bump our own presence so status stays "online".
             this.recordOwnActivity();
 
-            // Infer original kind from message context
-            let originalKind = '20000'; // default to geohash channel
+            let originalKind = '20000';
             if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
                 originalKind = '1059'; // NIP-17 gift wrap (covers 1:1 PMs and group messages)
             } else if (this.currentGeohash && !this.isValidGeohash(this.currentGeohash)) {
@@ -1087,7 +1001,6 @@ ${this._emojiSectionsHtml()}`;
                 pubkey: this.pubkey
             };
 
-            // For group messages: send reaction as gift wrap to all members so it stays private
             const groupId = messageEl.dataset.groupId;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
@@ -1098,7 +1011,6 @@ ${this._emojiSectionsHtml()}`;
                 }
             }
 
-            // For 1:1 PM messages: send reaction as gift wrap to the peer so it stays private
             if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
                 if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(this.currentPM)) {
                     this.addToRecentEmojis(emoji);
@@ -1113,7 +1025,6 @@ ${this._emojiSectionsHtml()}`;
                     content: emoji,
                     pubkey: this.pubkey
                 };
-                // Gift wrap to both ourselves and the peer
                 await this._sendGiftWrapsAsync([this.pubkey, this.currentPM], reactionRumor, null);
                 this.addToRecentEmojis(emoji);
                 return;
@@ -1122,20 +1033,17 @@ ${this._emojiSectionsHtml()}`;
             const signedEvent = await this.signEvent(event);
 
             if (signedEvent) {
-                // Send to relay (async - UI already updated)
                 this.sendToRelay(["EVENT", signedEvent]);
                 if (reactionGeohash) {
                     this.ensureGeoRelayDelivery(signedEvent, reactionGeohash);
                 }
                 this.addToRecentEmojis(emoji);
             } else {
-                // Signing failed - revert the optimistic update
                 messageReactions.get(emoji).delete(this.pubkey);
                 this.updateMessageReactions(messageId);
                 this.displaySystemMessage('Failed to sign reaction');
             }
         } catch (error) {
-            // Revert optimistic update on error
             const messageReactions = this.reactions.get(messageId);
             if (messageReactions && messageReactions.has(emoji)) {
                 messageReactions.get(emoji).delete(this.pubkey);
@@ -1154,7 +1062,6 @@ ${this._emojiSectionsHtml()}`;
             const targetPubkey = messageEl.dataset.pubkey;
             if (!targetPubkey) return;
 
-            // Remove reaction from local state immediately
             const messageReactions = this.reactions.get(messageId);
             if (!messageReactions || !messageReactions.has(emoji)) return;
             messageReactions.get(emoji).delete(this.pubkey);
@@ -1166,13 +1073,10 @@ ${this._emojiSectionsHtml()}`;
             }
             this.persistReactions(messageId);
 
-            // Update UI immediately
             this.updateMessageReactions(messageId);
 
-            // Bump our own presence so status stays "online".
             this.recordOwnActivity();
 
-            // Infer original kind from message context
             let originalKind = '20000';
             if (messageEl.classList.contains('pm') || messageEl.dataset.isPM === '1') {
                 originalKind = '1059';
@@ -1202,7 +1106,6 @@ ${this._emojiSectionsHtml()}`;
                 pubkey: this.pubkey
             };
 
-            // For group messages: send unreact as gift wrap to all members
             const groupId = messageEl.dataset.groupId;
             if (groupId && this._canSendGiftWraps()) {
                 const group = this.groupConversations.get(groupId);
@@ -1212,7 +1115,6 @@ ${this._emojiSectionsHtml()}`;
                 }
             }
 
-            // For 1:1 PM messages: send unreact as gift wrap to the peer
             if (messageEl.dataset.isPM === '1' && !groupId && this._canSendGiftWraps() && this.currentPM) {
                 const now = Math.floor(Date.now() / 1000);
                 const reactionRumor = {
@@ -1235,7 +1137,6 @@ ${this._emojiSectionsHtml()}`;
                     this.ensureGeoRelayDelivery(signedEvent, removeGeohash);
                 }
             } else {
-                // Signing failed - revert the optimistic removal
                 if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
                 const mr = this.reactions.get(messageId);
                 if (!mr.has(emoji)) mr.set(emoji, new Map());
@@ -1245,7 +1146,6 @@ ${this._emojiSectionsHtml()}`;
                 this.displaySystemMessage('Failed to sign reaction removal');
             }
         } catch (error) {
-            // Revert optimistic removal on error
             if (!this.reactions.has(messageId)) this.reactions.set(messageId, new Map());
             const mr = this.reactions.get(messageId);
             if (!mr.has(emoji)) mr.set(emoji, new Map());

@@ -11,23 +11,10 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import 'enhanced_emoji_modal.dart';
 import 'reaction_burst.dart';
 
-/// Breakpoint below which the picker centers (PWA `window.innerWidth <= 768`).
+/// Breakpoint at or below which the picker centers.
 const double _kReactionPickerMobileMax = 768;
 
-/// Opens the enhanced emoji picker as a reaction picker for [message]
-/// (reactions.js `showEnhancedReactionPicker`). Picking an emoji toggles the
-/// reaction via [NostrController.toggleReaction] with the inferred original
-/// kind, records the pick into recents, and plays the add burst.
-///
-/// Recents (F7): the picker's "Recently Used" section is sourced from
-/// [recentEmojisProvider] (read here, not passed by the caller) and the chosen
-/// emoji is recorded back to it on pick.
-///
-/// Positioning (F10): on a wide window (> 768px) with an [anchorRect] (the
-/// add-reaction trigger's global bounds) the picker is anchored next to the
-/// trigger (below if there is room, else above; right-aligned past mid-screen),
-/// mirroring the PWA desktop branch. Otherwise it is centerd (the PWA mobile
-/// branch).
+/// Opens the emoji picker as a reaction picker, anchored to [anchorRect] on wide windows and centered otherwise.
 void showReactionPicker(
   BuildContext context,
   WidgetRef ref,
@@ -41,14 +28,10 @@ void showReactionPicker(
 
   showDialog<void>(
     context: context,
-    // The PWA appends the `.enhanced-emoji-modal` straight to <body> with no
-    // backdrop; an outside click closes it (ui-context.js:1106-1112).
+    // No backdrop; an outside tap closes it.
     barrierColor: Colors.transparent,
     builder: (dialogCtx) {
-      // `.enhanced-emoji-modal`: width 350, max-height 400
-      // (styles-components.css:1203-1217); the mobile branch overrides via
-      // inline style to max-width 90% / max-height 80vh (reactions.js:834-836;
-      // the inline max-height wins over the class's 400px).
+      // Mobile caps it at 90% width and 80% height.
       final card = EnhancedEmojiModal(
         width: anchored ? 350 : math.min(350, screen.width * 0.9),
         height: anchored ? 400 : screen.height * 0.8,
@@ -56,8 +39,6 @@ void showReactionPicker(
         onClose: () => Navigator.of(dialogCtx).maybePop(),
         onSelect: (emoji) async {
           Navigator.of(dialogCtx).maybePop();
-          // Record the pick into the shared recents store (F7) so the
-          // "Recently Used" section reflects it next time.
           ref.read(recentEmojisProvider.notifier).record(emoji);
           final controller = ref.read(nostrControllerProvider);
           final view = ref.read(currentViewProvider);
@@ -71,15 +52,9 @@ void showReactionPicker(
             kind: inferOriginalKind(message, view: view),
           );
           if (ok && !already) {
-            // Every add path buzzes: `sendReaction` fires `nymHapticTap` (the
-            // shared 30ms vibrate) right after the optimistic add
-            // (reactions.js:968) — including picks from this enhanced picker.
             HapticFeedback.mediumImpact();
             if (context.mounted) {
-              // Anchor at the message's reaction badge for this emoji (it
-              // mounts this frame from the optimistic add) — the PWA's
-              // `_burstOnBadge(messageId, emoji, messageEl)` from the toggle
-              // path (reactions.js:977), not at the picker cell.
+              // Anchor at the message's reaction badge, which mounts this frame from the optimistic add.
               ReactionBurst.playAtBadge(context, message.id, emoji);
             }
           }
@@ -87,7 +62,6 @@ void showReactionPicker(
       );
 
       if (!anchored) {
-        // Mobile: `top:50%;left:50%;transform:translate(-50%,-50%)`.
         return Center(child: card);
       }
       return _AnchoredPicker(
@@ -96,11 +70,7 @@ void showReactionPicker(
   );
 }
 
-/// Positions [child] next to [anchorRect] on desktop, mirroring the PWA's
-/// `showEnhancedReactionPicker` desktop math (reactions.js:838-846): below when
-/// `spaceBelow > 450 || spaceBelow > spaceAbove`, else above; when the trigger
-/// sits past mid-screen `right: min(innerWidth - rect.right, 10)`, else
-/// `left: max(rect.left, 10)`.
+/// Below the trigger when there is room, else above; right-aligned past mid-screen.
 class _AnchoredPicker extends StatelessWidget {
   const _AnchoredPicker({
     required this.anchorRect,

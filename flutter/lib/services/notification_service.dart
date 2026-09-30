@@ -5,46 +5,26 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-/// What a notification is about. Selects the Android channel (so the user can
-/// tune each kind in system settings) and the alert weight.
+/// Selects the Android channel and alert weight.
 enum NotificationKind {
-  /// A PM or group message addressed to us.
   message,
 
-  /// An @-mention in a public channel.
   mention,
 
-  /// A reaction, zap, or other low-urgency social signal.
   activity,
 }
 
-/// The OS-level result of asking to post notifications.
 enum NotificationPermission {
-  /// The OS will display what we post.
   granted,
 
-  /// The user declined, or turned notifications off in system settings.
-  /// Nothing we post will be shown until they change that.
+  /// Declined or turned off in system settings; nothing posted will show.
   denied,
 
-  /// No notification surface here (web / desktop / test host).
+  /// No notification surface here (web, desktop, test host).
   unsupported,
 }
 
-/// Posts OS notifications for events the app decrypted itself.
-///
-/// Nymchat has no push provider: there is no FCM and no APNs registration, so
-/// nothing about who is messaging whom ever reaches a third party. Every
-/// notification originates from an event this device received over its own
-/// relay socket or the Bluetooth mesh and decrypted locally, which is also why
-/// PMs and group chats can show real content — the plaintext only ever exists
-/// here.
-///
-/// The OS still has to agree to display them, and that is a runtime grant on
-/// both platforms: Android 13+ requires POST_NOTIFICATIONS, and iOS shows
-/// nothing at all until `requestAuthorization` has been accepted. Neither is
-/// implied by the manifest/Info.plist entries, so [requestPermission] has to be
-/// called before any of this is visible — see [ensurePermission].
+/// Local notifications for events decrypted on this device; no push provider ever sees who messages whom.
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
@@ -58,8 +38,7 @@ class NotificationService {
   final Random _random = Random();
   bool _initialized = false;
 
-  /// Tap payloads (see `notification_routing.dart`) from notifications the user
-  /// opened while the app was already running.
+  /// Tap payloads from notifications opened while the app was running.
   Stream<String> get payloadStream => _payloadStreamController.stream;
 
   /// The payload of the notification that launched the app, consumed once.
@@ -69,7 +48,6 @@ class NotificationService {
     return payload;
   }
 
-  /// Whether this platform can post notifications at all.
   static bool get isSupported {
     if (kIsWeb) return false;
     try {
@@ -84,10 +62,7 @@ class NotificationService {
     if (_initialized) return;
     const androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
-    // Authorization is deliberately NOT requested here. Asking during startup
-    // spends the one prompt iOS gives us before the user has any idea what it
-    // is for; [requestPermission] asks at a moment that makes sense instead
-    // (enabling notifications, or the first launch that has an identity).
+    // Don't request authorization at startup: iOS gives one prompt, so ask when it makes sense.
     const iosSettings = DarwinInitializationSettings(
       requestSoundPermission: false,
       requestBadgePermission: false,
@@ -112,13 +87,7 @@ class NotificationService {
     }
   }
 
-  /// Asks the OS for permission to post notifications, showing the system
-  /// prompt the first time. Returns what the OS decided.
-  ///
-  /// Android: POST_NOTIFICATIONS (API 33+; older versions report granted).
-  /// iOS: alert + badge + sound authorization. On both, a user who has already
-  /// answered gets no second prompt — the OS returns the standing answer, so
-  /// this is safe to call whenever notifications are switched on.
+  /// Shows the system prompt the first time and returns the OS decision; safe to call repeatedly.
   Future<NotificationPermission> requestPermission() async {
     if (!isSupported) return NotificationPermission.unsupported;
     try {
@@ -129,8 +98,7 @@ class NotificationService {
                 AndroidFlutterLocalNotificationsPlugin>();
         if (android == null) return NotificationPermission.unsupported;
         final granted = await android.requestNotificationsPermission();
-        // Null means the plugin could not ask (no attached activity); fall back
-        // to what the OS reports, which is the truth that matters.
+        // Null means the plugin could not ask; fall back to what the OS reports.
         if (granted == true) return NotificationPermission.granted;
         final enabled = await android.areNotificationsEnabled();
         return enabled == true
@@ -154,8 +122,7 @@ class NotificationService {
     }
   }
 
-  /// What the OS currently allows, without prompting. Used to tell the user
-  /// their notifications are switched on in the app but blocked by the system.
+  /// What the OS currently allows, without prompting.
   Future<NotificationPermission> permissionStatus() async {
     if (!isSupported) return NotificationPermission.unsupported;
     try {
@@ -181,22 +148,14 @@ class NotificationService {
     }
   }
 
-  /// Requests permission only when the OS has not already granted it, so a
-  /// caller can be sure notifications are deliverable without re-prompting a
-  /// user who said yes long ago.
+  /// Requests permission only when not already granted.
   Future<NotificationPermission> ensurePermission() async {
     final status = await permissionStatus();
     if (status == NotificationPermission.granted) return status;
     return requestPermission();
   }
 
-  /// Posts a notification.
-  ///
-  /// [conversationKey] is the conversation this belongs to (PM peer, group id,
-  /// channel). Passing one makes the notification REPLACE the previous one for
-  /// that conversation instead of stacking a fresh copy per message, and groups
-  /// the conversation's notifications together on both platforms — the
-  /// behavior every messaging app has. Without one, each call stacks.
+  /// Posts a notification; a [conversationKey] replaces and groups that conversation's notification.
   Future<void> showNotification({
     required String title,
     required String body,
@@ -207,8 +166,7 @@ class NotificationService {
     if (!isSupported) return;
     await initialize();
 
-    // A stable per-conversation id updates the existing notification; anything
-    // unkeyed falls back to a unique id so it cannot silently replace another.
+    // Unkeyed notifications get a unique id so they never replace another.
     final notificationId = conversationKey == null || conversationKey.isEmpty
         ? _generateUniqueId()
         : conversationKey.hashCode & 0x7fffffff;
@@ -224,20 +182,17 @@ class NotificationService {
           : Priority.high,
       enableVibration: kind != NotificationKind.activity,
       playSound: true,
-      // Long messages are readable when expanded instead of ellipsized.
       styleInformation: BigTextStyleInformation(body, contentTitle: title),
-      // Tapping dismisses; the app routes to the conversation from the payload.
       autoCancel: true,
       groupKey: conversationKey,
-      // The lock screen shows that a message arrived, not what it said —
-      // decrypted content should not be readable over someone's shoulder.
+      // The lock screen hides decrypted content.
       visibility: NotificationVisibility.private,
     );
     final iosDetails = DarwinNotificationDetails(
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
-      // iOS groups by thread, which is how a conversation stays one stack.
+      // iOS groups by thread, keeping a conversation in one stack.
       threadIdentifier: conversationKey,
     );
     final details =
@@ -247,20 +202,16 @@ class NotificationService {
         payload: payload);
   }
 
-  /// Clears the notification(s) for a conversation the user has now read.
   Future<void> cancelConversation(String conversationKey) async {
     if (!isSupported || conversationKey.isEmpty) return;
     try {
       await _notifications.cancel(conversationKey.hashCode & 0x7fffffff);
     } catch (_) {
-      // Nothing posted for it / plugin unavailable.
+      // Nothing posted for it, or plugin unavailable.
     }
   }
 
-  /// Android notification channels, one per [NotificationKind], so the user can
-  /// silence reactions without silencing PMs. A channel's importance is fixed
-  /// at creation by Android, which is why these are distinct ids rather than
-  /// one channel whose importance we vary.
+  /// One Android channel per kind, since a channel's importance is fixed at creation.
   _Channel _channelFor(NotificationKind kind) {
     switch (kind) {
       case NotificationKind.message:
@@ -288,7 +239,6 @@ class NotificationService {
   }
 
   int _generateUniqueId() {
-    // Combine counter with random component to ensure uniqueness
     _notificationIdCounter = (_notificationIdCounter + 1) % 100000;
     return _notificationIdCounter + _random.nextInt(100000) * 100000;
   }

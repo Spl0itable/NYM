@@ -14,16 +14,7 @@ import 'pm_context_menu.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
 
-/// A single PM thread row (`.pm-item`, pms.js `createPMConversation`). Same box
-/// metrics as `.channel-item` with a 26px PM avatar (`margin-right:4px`), the
-/// `.pm-name` (`{nym}<span class="nym-suffix">#suffix</span>{flair} {verified}
-/// {friend}`) and an optional unread pill. The live sidebar PM row has **no**
-/// status dot — that lives only in the chat-header avatar.
-///
-/// A 500ms press-and-hold (mouse primary button or touch — the PWA binds no
-/// `contextmenu` handler) opens the `.quick-context-menu` (Block/Unblock user,
-/// Leave conversation) at the press point — see [SidebarRowGestures] /
-/// [showPmContextMenu].
+/// A sidebar PM thread row; unlike the chat header it has no status dot.
 class PMListItem extends ConsumerWidget {
   const PMListItem({
     super.key,
@@ -43,7 +34,6 @@ class PMListItem extends ConsumerWidget {
   final double textSize;
   final VoidCallback onTap;
 
-  /// True when this conversation is Bluetooth-mesh-backed — shows a glyph.
   final bool mesh;
 
   @override
@@ -60,10 +50,6 @@ class PMListItem extends ConsumerWidget {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      // The PWA's 500ms press-and-hold (mouse button 0 / touch, 10px move
-      // cancel) opens the quick menu at the press point and swallows the
-      // following tap; right-click deliberately does nothing
-      // (sidebar-sections.js:239-303).
       child: SidebarRowGestures(
         onTap: onTap,
         onShowMenu: (pos) {
@@ -71,21 +57,12 @@ class PMListItem extends ConsumerWidget {
           showPmContextMenu(context, ref, pubkey, pos);
           return true;
         },
-        // `.pm-item.active` shares `.channel-item.active`: primary fill/
-        // border/glow + a 3px primary accent bar (NOT purple).
         builder: (context, hovered) => Stack(
           children: [
             Container(
               constraints: const BoxConstraints(minHeight: 36),
-              // `:hover { padding-left: 14px }` (rest 12px).
               padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 9, 12, 9),
               decoration: BoxDecoration(
-                // `.pm-item.active` fill is primary@0.10 + a primary@0.05 glow
-                // (dark); `body.light-mode` neutralises it to black@0.06 with
-                // `box-shadow:none` (styles-themes-responsive.css:1139), the
-                // primary@0.20 border + primary accent bar stay. Hover
-                // (loses to active): white@0.06 dark / black@0.04 light
-                // (styles-shell.css:368-374 / styles-themes-responsive:1132).
                 color: active
                     ? (c.isLight
                         ? Colors.black.withValues(alpha: 0.06)
@@ -106,17 +83,10 @@ class PMListItem extends ConsumerWidget {
               ),
               child: Row(
                 children: [
-                  // `.avatar-pm`: 26px, margin-right 4 (no sidebar status dot).
                   NymAvatar(seed: pubkey, size: 26, imageUrl: picture),
                   const SizedBox(width: 4),
                   Expanded(
-                    // `.pm-name { flex: 1 }`: color --text-dim, normal
-                    // weight, with a dim `.nym-suffix` tail. `white-space:
-                    // normal` + `word-break:break-word` (styles-shell.css:
-                    // 418-429) — long names WRAP onto multiple lines, no
-                    // ellipsis. Flair/verified/friend badges live INSIDE the
-                    // name span in the PWA DOM (pms.js:2759), so they hug
-                    // (and wrap with) the text instead of floating right.
+                    // Long names wrap rather than ellipsize, and badges sit inside the name span so they wrap with it.
                     child: Text.rich(
                       TextSpan(
                         children: [
@@ -175,14 +145,10 @@ class PMListItem extends ConsumerWidget {
                       ),
                     ),
                   ),
-                  // `.channel-badges { margin-left: 5px; flex-shrink: 0 }` —
-                  // the unread pill sits flush right, forming a column.
                   if (unread > 0) ...[
                     const SizedBox(width: 5),
                     _UnreadPill(count: unread),
                   ],
-                  // Same menu the hold opens, to the right of the unread
-                  // pill (`.row-menu-btn`).
                   if (pubkey.isNotEmpty) ...[
                     const SizedBox(width: 2),
                     SidebarRowMenuButton(
@@ -233,7 +199,6 @@ class _UnreadPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `.unread-badge`: bg --primary, text --bg, pill, tabular-nums; caps at 99+.
     return Container(
       constraints: const BoxConstraints(minWidth: 30),
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),

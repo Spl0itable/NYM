@@ -1,10 +1,4 @@
-// Pure query engines for the four composer autocompletes, ported 1:1 from
-// `js/modules/autocomplete.js` (docs/specs/03 §8). Each returns at most
-// [kAutocompleteMax] = 8 results, matching the PWA's `.slice(0, 8)` cap.
-//
-// These are side-effect-free so they can be unit-tested directly and reused by
-// the dropdown widget. The widget owns rendering + keyboard nav; insertion
-// (splicing the chosen token back into the input) lives in the composer.
+// Pure query engines for the four composer autocompletes, each capped at [kAutocompleteMax] results.
 
 import '../../core/utils/nym_utils.dart';
 import '../../features/globe/geo_projection.dart' show geohashBounds;
@@ -13,11 +7,9 @@ import '../../models/user.dart';
 import '../emoji/custom_emoji.dart';
 import '../emoji/emoji_data.dart';
 
-/// Max results per dropdown (`.slice(0, 8)` everywhere in autocomplete.js).
 const int kAutocompleteMax = 8;
 
-/// The 10 seed channels the PWA always offers (app.js:681 `commonGeohashes`).
-/// `nymchat` is the named default; the rest are geohash prefixes.
+/// The 10 seed channels always offered; `nymchat` is named, the rest are geohash prefixes.
 const List<String> kCommonGeohashes = [
   'nymchat',
   '9q',
@@ -31,11 +23,6 @@ const List<String> kCommonGeohashes = [
   'tjm5',
 ];
 
-// ---------------------------------------------------------------------------
-// @ mentions (showAutocomplete, autocomplete.js:276)
-// ---------------------------------------------------------------------------
-
-/// One mention row.
 class MentionResult {
   const MentionResult({
     required this.pubkey,
@@ -52,29 +39,14 @@ class MentionResult {
   final String suffix;
   final UserStatus status;
 
-  /// Remote avatar URL (kind-0 `picture`) for the 18×18 row avatar
-  /// (`getAvatarUrl`, autocomplete.js:382). Null → identicon fallback.
+  /// Remote avatar URL; null falls back to an identicon.
   final String? avatarUrl;
 
-  /// The text inserted into the composer: `@base#suffix ` (note trailing space),
-  /// matching `selectAutocomplete` (autocomplete.js:503).
+  /// Inserted text `@base#suffix ` with a trailing space.
   String get insertText => '@$baseNym#$suffix ';
 }
 
-/// Ranks users for an `@` mention. Filters by `base#suffix` substring (case-
-/// insensitive), excludes [blocked] pubkeys, and orders:
-/// channel members (online → away → offline) then others (online → away →
-/// offline), alphabetical within each bucket — exactly showAutocomplete.
-///
-/// [currentChannelKey] is the active channel key (geohash or name). [priority]
-/// is the PM-peer / group-member set that should be treated as "in channel"
-/// (`_mentionPriorityPubkeys`).
-///
-/// [verifiedBots] is the verified-bot pubkey set (the host passes
-/// `kVerifiedBotPubkeys`); members are forced `online` for ordering via
-/// `effectiveStatus(isVerifiedBot:)`, matching the PWA's verified-bot
-/// always-online override in `getEffectiveUserStatus` (users.js:1112). Empty by
-/// default so the pure query layer needs no state-layer import (CC-2).
+/// Filters by `base#suffix`, excludes [blocked], and orders members then others by online/away/offline, then name.
 List<MentionResult> queryMentions({
   required Map<String, User> users,
   required String search,
@@ -159,11 +131,6 @@ List<MentionResult> queryMentions({
   ].take(kAutocompleteMax).toList();
 }
 
-// ---------------------------------------------------------------------------
-// # channels (showChannelAutocomplete, autocomplete.js:521)
-// ---------------------------------------------------------------------------
-
-/// One channel row.
 class ChannelResult {
   const ChannelResult({
     required this.name,
@@ -180,19 +147,13 @@ class ChannelResult {
   final bool isCurrent;
   final bool isGeohash;
 
-  /// Human-readable place for geohash channels — the decoded-center coordinate
-  /// string (`getGeohashLocation`, geohash-globe.js:1256). Empty for named
-  /// channels or when the geohash can't be decoded.
+  /// Decoded-center coordinate label for geohash channels; empty otherwise.
   final String location;
 
-  /// Inserted text: `#name ` (insertChannelReference, autocomplete.js:684).
   String get insertText => '#$name ';
 }
 
-/// Decoded-center coordinate label for a geohash channel, ported 1:1 from the
-/// PWA's `getGeohashLocation` (geohash-globe.js:1256-1269): the center of the
-/// geohash cell rendered as `"{lat}°{N|S}, {lng}°{E|W}"` (2 decimals).
-/// Returns `''` when [geohash] is not a decodable geohash.
+/// `"{lat}°{N|S}, {lng}°{E|W}"` (2 decimals) for the cell center, or '' when not decodable.
 String geohashLocationLabel(String geohash) {
   final b = geohashBounds(geohash);
   if (b == null) return '';
@@ -205,10 +166,7 @@ String geohashLocationLabel(String geohash) {
 
 final RegExp _validChannelRe = RegExp(r'^[\p{L}\p{N}]+$', unicode: true);
 
-/// Ranks channels for a `#` reference. Sources, in PWA order: channels we have
-/// messages for (keys of [messageChannelCounts], `#`-stripped), joined sidebar
-/// [channels], then [kCommonGeohashes]. Filters to valid names containing
-/// [search]; sorts current → joined → message count desc → name.
+/// Sources: channels with messages, joined channels, then seeds; sorted current, joined, message count, name.
 List<ChannelResult> queryChannels({
   required String search,
   required List<ChannelEntry> channels,
@@ -219,7 +177,7 @@ List<ChannelResult> queryChannels({
   final map = <String, ChannelResult>{};
   final searchLower = search.toLowerCase();
 
-  // From messages we have (keys are bare channel names here).
+  // Keys are bare channel names here.
   messageChannelCounts.forEach((name, count) {
     final geo = isValidGeohash(name);
     map[name] = ChannelResult(
@@ -232,7 +190,6 @@ List<ChannelResult> queryChannels({
     );
   });
 
-  // From sidebar channels.
   for (final ch in channels) {
     final key = ch.key;
     if (map.containsKey(key)) continue;
@@ -246,7 +203,6 @@ List<ChannelResult> queryChannels({
     );
   }
 
-  // From the seed common geohashes.
   for (final g in kCommonGeohashes) {
     if (map.containsKey(g)) continue;
     final geo = isValidGeohash(g);
@@ -278,12 +234,7 @@ List<ChannelResult> queryChannels({
   return matches.take(kAutocompleteMax).toList();
 }
 
-// ---------------------------------------------------------------------------
-// : emoji (showEmojiAutocomplete, autocomplete.js:25)
-// ---------------------------------------------------------------------------
-
-/// One emoji row. [customUrl] is set for NIP-30 custom emoji (rendered as an
-/// image; [emoji] is then the `:shortcode:` token to insert).
+/// One emoji row; for NIP-30 custom emoji [customUrl] is set and [emoji] is the `:shortcode:` token.
 class EmojiResult {
   const EmojiResult({required this.name, required this.emoji, this.customUrl});
 
@@ -293,15 +244,10 @@ class EmojiResult {
 
   bool get isCustom => customUrl != null;
 
-  /// Inserted text: the emoji (or `:shortcode:`) + a trailing space
-  /// (selectSpecificEmojiAutocomplete, autocomplete.js:184).
   String get insertText => '$emoji ';
 }
 
-/// Builds the searchable emoji index from the shortcode map, the categorized
-/// unicode set, and any custom emoji — mirroring the `allEmojiEntries` assembly
-/// in showEmojiAutocomplete. `priority` 1 = named (emojiMap/custom), 2 =
-/// category-only (no shortcode name).
+/// Searchable emoji index; priority 1 = named (map or custom), 2 = category-only.
 List<({String name, String emoji, int priority, String? customUrl})>
     _buildEmojiIndex(CustomEmojiState custom) {
   final entries =
@@ -333,10 +279,7 @@ List<({String name, String emoji, int priority, String? customUrl})>
   return entries;
 }
 
-/// Resolves the `:` emoji dropdown. Empty [search] → recents first, then the
-/// first 10 non-recent entries, capped to 8. Non-empty → fuzzy match on name OR
-/// emoji, ranked exact → prefix → priority → shorter-name (the exact comparator
-/// in showEmojiAutocomplete).
+/// Empty search: recents, then 10 others, capped; otherwise match name or emoji ranked exact, prefix, priority, length.
 List<EmojiResult> queryEmoji({
   required String search,
   List<String> recents = const [],
@@ -350,12 +293,7 @@ List<EmojiResult> queryEmoji({
     kEmojiShortcodeMap.forEach((name, emoji) {
       emojiToNames.putIfAbsent(emoji, () => name);
     });
-    // Recents may include `:shortcode:` custom-emoji tokens. When the live
-    // custom-emoji map still has the code, emit `customUrl` so the dropdown
-    // renders the IMAGE (not the literal text); otherwise fall back to the
-    // unicode/text glyph (autocomplete.js:116-126). The label colons are
-    // stripped here because `name` renders as `:$name:` (autocomplete.js:129-131
-    // — `name.replace(/^:+|:+$/g,'')`).
+    // Custom recents still in the live map render as images; label colons are stripped.
     final result = <EmojiResult>[
       for (final e in recents) _recentEmojiResult(e, emojiToNames, custom),
       ...index.where((e) => !recentSet.contains(e.emoji)).take(10).map((e) =>
@@ -391,15 +329,9 @@ List<EmojiResult> queryEmoji({
       .toList();
 }
 
-/// `:` matches a custom-emoji shortcode token, e.g. `:partyparrot:`
-/// (autocomplete.js:116 `emoji.match(/^:([a-zA-Z0-9_]+):$/)`).
 final _customEmojiTokenRe = RegExp(r'^:([a-zA-Z0-9_]+):$');
 
-/// Builds the [EmojiResult] for a single recent. Custom-emoji recents (a
-/// `:shortcode:` token whose code is still in the live [custom] map) carry a
-/// [customUrl] so the dropdown renders the image; the label has its wrapping
-/// colons stripped because the row renders it as `:$name:` (autocomplete.js
-/// :116-131).
+/// Custom recents still in [custom] carry a [customUrl]; label colons are stripped.
 EmojiResult _recentEmojiResult(
     String e, Map<String, String> emojiToNames, CustomEmojiState custom) {
   final cm = _customEmojiTokenRe.firstMatch(e);
@@ -407,21 +339,15 @@ EmojiResult _recentEmojiResult(
     final code = cm.group(1)!;
     final url = custom.codeToUrl[code];
     if (url != null) {
-      // Image row: insert `:code:`, label `code` (rendered as `:code:`).
       return EmojiResult(name: code, emoji: e, customUrl: url);
     }
   }
-  // Unicode / unknown token: strip any wrapping colons from the resolved name.
+  // Unicode or unknown token: strip wrapping colons from the resolved name.
   final name = emojiToNames[e] ?? e;
   return EmojiResult(name: name.replaceAll(RegExp(r'^:+|:+$'), ''), emoji: e);
 }
 
-// ---------------------------------------------------------------------------
-// \ kaomoji (showKaomojiAutocomplete, autocomplete.js:192)
-// ---------------------------------------------------------------------------
-
-/// Kaomoji categories grouped by mood — verbatim from `kaomojiCategories`
-/// (commands.js:332).
+/// Kaomoji categories grouped by mood.
 const List<(String, List<String>)> kKaomojiCategories = [
   (
     'Joy',
@@ -437,17 +363,14 @@ const List<(String, List<String>)> kKaomojiCategories = [
   ('Misc', ['(☞ﾟヮﾟ)☞', 'ᕦ(ò_óˇ)ᕤ', '(⌐■_■)', '(◔_◔)', '~(˘▽˘~)']),
 ];
 
-/// A kaomoji category section (header + rows), used by the dropdown which, like
-/// the PWA, renders category headers interleaved with selectable rows.
+/// Category header plus rows, interleaved in the dropdown.
 class KaomojiSection {
   const KaomojiSection(this.label, this.items);
   final String label;
   final List<String> items;
 }
 
-/// Filters kaomoji categories by label substring (showKaomojiAutocomplete).
-/// Empty [search] returns all categories. Note: the PWA does NOT cap kaomoji to
-/// 8 (the cap is only on the flat result lists); we preserve that.
+/// Filters categories by label substring; unlike other lists, kaomoji aren't capped.
 List<KaomojiSection> queryKaomoji({required String search}) {
   final needle = search.toLowerCase();
   final cats = needle.isEmpty
@@ -458,5 +381,4 @@ List<KaomojiSection> queryKaomoji({required String search}) {
   return cats.map((c) => KaomojiSection(c.$1, c.$2)).toList();
 }
 
-/// Inserted text for a kaomoji: the kaomoji + a trailing space (selectKaomoji).
 String kaomojiInsertText(String kaomoji) => '$kaomoji ';

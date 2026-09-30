@@ -14,14 +14,7 @@ import '../../models/nostr_event.dart';
 import '../../services/nostr/event_provenance.dart';
 import '../../state/nostr_controller.dart';
 
-/// Everything known about the event behind a message: the signed JSON, and
-/// which relays delivered it.
-///
-/// Mirrors the PWA's event details modal. What it can show depends on where
-/// the message came from, so it shows what it has rather than nothing: the
-/// session's own record first, then the D1 archive for a message rendered from
-/// local storage on a later launch, and failing both the fields the rendered
-/// message itself carries.
+/// Shows a message's signed event JSON and relays, from the session, the D1 archive, or the message itself.
 Future<void> showEventDetails(
   BuildContext context, {
   required String eventId,
@@ -213,8 +206,7 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
       rows.add(_row(c, tr('Size'), '${_json.length} bytes, ${ev.tags.length} tags'));
     }
 
-    // Reported the way the filter counts it, not by leading zeros alone: the
-    // two disagree exactly when a sender got lucky under a cheap commitment.
+    // Uses the filter's PoW measure, not bare leading zeros; they differ under a cheap commitment.
     final actual = getPow(widget.eventId);
     final target = _committedTarget(ev) ?? widget.powTarget;
     rows.add(_row(

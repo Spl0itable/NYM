@@ -3,9 +3,7 @@ const ASSET_RE = /\/(js|css|data|images)\//;
 let PRECACHE = [];
 try { PRECACHE = JSON.parse('__PRECACHE_ASSETS__'); } catch (_) { }
 
-// Proxied media (avatars, banners, inline chat images, custom emoji) is served
-// from /api/proxy. It lives in its own cache that survives deploys so reloads
-// and cold webview launches reuse images instead of refetching every one.
+// Proxied media lives in its own cache that survives deploys.
 const MEDIA_CACHE = 'nym-media-v1';
 const MEDIA_MAX_ENTRIES = 600;
 const MEDIA_MAX_BYTES = 100 * 1024 * 1024;
@@ -109,8 +107,7 @@ self.addEventListener('fetch', (e) => {
     if (req.method !== 'GET') return;
     const url = new URL(req.url);
 
-    // Brand icons/images live on the marketing origin; cache-first so cold
-    // starts and offline launches don't refetch them on every load.
+    // Brand icons on the marketing origin: cache-first.
     if (url.origin === 'https://nymchat.app' && url.pathname.startsWith('/images/')) {
         e.respondWith((async () => {
             const cached = await caches.match(req);
@@ -127,9 +124,7 @@ self.addEventListener('fetch', (e) => {
 
     if (url.origin !== self.location.origin) return;
 
-    // Proxied media keyed by its source URL is effectively immutable, so serve
-    // cache-first and only refetch images the device hasn't seen. Range requests
-    // (video seeking) and non-image responses are passed through uncached.
+    // Proxied media is effectively immutable, so cache-first; range requests and non-images pass through.
     if (url.pathname === '/api/proxy' && url.searchParams.has('url') && !req.headers.has('range')) {
         if (!mediaStartupPruned) {
             mediaStartupPruned = true;
@@ -170,9 +165,7 @@ self.addEventListener('fetch', (e) => {
         return;
     }
 
-    // Pre-translated UI packs (/i18n/<lang>.json). Unhashed, so served from
-    // cache first and refreshed in the background: a language already used once
-    // keeps working offline, and a newer pack lands on the next switch.
+    // Unhashed i18n packs: cache first, refreshed in the background.
     if (url.origin === self.location.origin && url.pathname.startsWith('/i18n/')) {
         e.respondWith((async () => {
             const cache = await caches.open(CACHE);

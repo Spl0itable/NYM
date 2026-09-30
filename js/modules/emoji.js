@@ -1,5 +1,3 @@
-// emoji.js - NIP-30 custom emoji: pack discovery, storage, rendering
-
 const _RX_EMOJI_SHORTCODE = /^[a-zA-Z0-9_]+$/;
 const _RX_EMOJI_URL = /^https?:\/\//i;
 const _RX_REACTION_SHORTCODE = /^:[a-zA-Z0-9_]{1,64}:$/;
@@ -10,12 +8,9 @@ const _REACTION_EXTRA_SYMBOLS = new Set(['\u20BF', '+', '-']);
 Object.assign(NYM.prototype, {
 
     _loadCustomEmojiCache() {
-        // Loose shortcode→url map: covers emoji seen via message `emoji` tags
-        // that aren't part of any saved pack, so old messages still render
-        // their custom emoji after a reload.
+        // Loose shortcode→url map for emoji seen in message tags outside any saved pack.
         this._hydratingEmojiCache = true;
-        // finally, not a trailing assignment: leaving this flag stuck true would
-        // silently disable emoji persistence for the rest of the session.
+        // finally, so a stuck flag can't disable emoji persistence for the session.
         try {
             try {
                 const map = JSON.parse(localStorage.getItem('nym_custom_emojis') || '[]');
@@ -34,9 +29,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Same throttle-not-debounce reasoning as _saveCustomEmojiMap above. This
-    // one did not show up in the profile (packs arrive in far smaller numbers
-    // than loose shortcodes), but it is the identical hazard.
+    // Throttled, not debounced, for the same reason as _saveCustomEmojiMap.
     _saveCustomEmojiCache() {
         if (this._hydratingEmojiCache) return;
         if (this._emojiCacheSaveTimer) return;
@@ -75,8 +68,7 @@ Object.assign(NYM.prototype, {
         }, 3000);
     },
 
-    // Warm only images the user is likely to see first (recents, then
-    // favorited/own/subscribed packs); everything else loads lazily on open.
+    // Warm only images likely seen first; everything else loads lazily on open.
     _runEmojiPrefetch() {
         if (!this.customEmojis || this.customEmojis.size === 0) return;
         if (!this._prefetchedEmojiUrls) this._prefetchedEmojiUrls = new Set();
@@ -133,7 +125,6 @@ Object.assign(NYM.prototype, {
     registerCustomEmoji(shortcode, url) {
         if (!shortcode || !url || !this.customEmojis) return;
         if (!_RX_EMOJI_SHORTCODE.test(shortcode) || !_RX_EMOJI_URL.test(url)) return;
-        // Don't let custom emoji shadow built-in unicode shortcodes
         if (this.emojiMap && this.emojiMap[shortcode.toLowerCase()]) return;
         if (this.customEmojis.get(shortcode) === url) return;
         this.customEmojis.set(shortcode, url);
@@ -147,9 +138,7 @@ Object.assign(NYM.prototype, {
         this._prefetchCustomEmojiImages();
     },
 
-    // A custom emoji can register after messages have already rendered (packs
-    // and emoji lists arrive from relays asynchronously). Re-scan rendered
-    // message text so newly-known :shortcode: tokens become inline images.
+    // Emoji can register after messages render, so rescan rendered text for newly known shortcodes.
     _scheduleEmojiDomRefresh() {
         if (this._emojiDomRefreshTimer) return;
         this._emojiDomRefreshTimer = setTimeout(() => {
@@ -160,8 +149,7 @@ Object.assign(NYM.prototype, {
 
     _refreshCustomEmojiInDom() {
         if (!this.customEmojis || this.customEmojis.size === 0) return;
-        // Only shortcodes learned since the last refresh can turn rendered text
-        // into images; everything older was handled at message render time.
+        // Only shortcodes learned since the last refresh need rescanning.
         const pending = this._pendingEmojiRefreshCodes;
         if (!pending || pending.size === 0) return;
         this._pendingEmojiRefreshCodes = new Set();
@@ -212,7 +200,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Hydrate the deduped custom-emoji set from the D1 archive
     async _emojiRestoreFromD1() {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiStream !== 'function') return;
@@ -239,7 +226,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Ingest NIP-30 "emoji" tags from any incoming event
     ingestEmojiTags(tags) {
         if (!Array.isArray(tags)) return;
         for (const t of tags) {
@@ -261,7 +247,6 @@ Object.assign(NYM.prototype, {
         this._prefetchCustomEmojiImages();
     },
 
-    // kind 30030 - emoji set
     handleEmojiPackEvent(event) {
         if (!event || !Array.isArray(event.tags)) return;
         const dTag = event.tags.find(t => t[0] === 'd');
@@ -287,7 +272,6 @@ Object.assign(NYM.prototype, {
         }, true);
     },
 
-    // kind 10030 - user emoji list
     handleUserEmojiListEvent(event) {
         if (!event || event.pubkey !== this.pubkey || !Array.isArray(event.tags)) return;
         if (this._userEmojiListTs && (event.created_at || 0) < this._userEmojiListTs) return;
@@ -316,7 +300,6 @@ Object.assign(NYM.prototype, {
         return this.customEmojis ? this.customEmojis.get(shortcode) : null;
     },
 
-    // HTML for an inline custom emoji image, or null when the shortcode is unknown
     renderCustomEmojiImg(shortcode, extraClass = '') {
         const url = this.customEmojiUrl(shortcode);
         if (!url) return null;
@@ -326,7 +309,6 @@ Object.assign(NYM.prototype, {
         return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" width="30" height="30" decoding="async" loading="lazy" draggable="false">`;
     },
 
-    // Build NIP-30 emoji tags for every known custom shortcode used in content
     customEmojiTagsForContent(content) {
         const tags = [];
         if (!content || !this.customEmojis || this.customEmojis.size === 0) return tags;
@@ -345,7 +327,6 @@ Object.assign(NYM.prototype, {
         return tags;
     },
 
-    // True when content is solely 1-6 custom emoji tokens (and at least one)
     isCustomEmojiOnly(content) {
         if (!content || !this.customEmojis) return false;
         const tokens = content.trim().split(/\s+/);
@@ -356,7 +337,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Render a reaction's content (unicode emoji or :customshortcode:) as HTML
     renderReactionEmoji(emoji) {
         if (typeof emoji === 'string') {
             const m = emoji.match(/^:([a-zA-Z0-9_]+):$/);
@@ -388,7 +368,6 @@ Object.assign(NYM.prototype, {
         return out;
     },
 
-    // HTML for one emoji-picker option button (handles unicode and custom emoji)
     emojiOptionHtml(emoji, emojiToNames, btnClass = 'emoji-option') {
         if (typeof emoji === 'string') {
             const m = emoji.match(/^:([a-zA-Z0-9_]+):$/);
@@ -403,7 +382,6 @@ Object.assign(NYM.prototype, {
         return `<button class="${btnClass}" data-emoji="${safe}" data-names="${this.escapeHtml(names.join(' '))}" title="${this.escapeHtml(names.join(', '))}">${safe}</button>`;
     },
 
-    // Build the custom-emoji sections for an emoji modal, grouped by pack
     _emojiPackKey(pack) {
         if (!pack || !pack.pubkey) return '';
         return `${pack.pubkey}:${pack.identifier || ''}`;
@@ -443,8 +421,6 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') {
             try { nostrSettingsSave(); } catch (_) { }
         }
-        // Reorder default-category sections in any open emoji surface so the
-        // newly-favorited category moves to the top of the default block.
         const desiredOrder = this._getOrderedDefaultEmojiEntries().map(([c]) => c);
         const reorderIn = (root) => {
             if (!root) return;
@@ -469,8 +445,6 @@ Object.assign(NYM.prototype, {
         reorderIn(document.getElementById('emojiPicker'));
     },
 
-    // Sort default emoji categories: favorited first (in fav-list order),
-    // then the remainder in their declared order.
     _getOrderedDefaultEmojiEntries() {
         const favs = this._getDefaultCategoryFavorites();
         const entries = Object.entries(this.allEmojis);
@@ -568,8 +542,6 @@ Object.assign(NYM.prototype, {
         return this._emojiToNames;
     },
 
-    // Shared section markup for every emoji picker surface: recents, then
-    // custom packs, then default categories.
     _emojiSectionsHtml(opts = {}) {
         const sectionClass = opts.sectionClass || 'emoji-section';
         const titleClass = opts.titleClass || 'emoji-section-title';
@@ -595,7 +567,6 @@ Object.assign(NYM.prototype, {
         return html;
     },
 
-    // Replace :shortcode: tokens in already-HTML-escaped text with custom emoji
     renderCustomEmojiInEscapedText(escapedText) {
         if (!escapedText || !this.customEmojis || this.customEmojis.size === 0) return escapedText;
         return escapedText.replace(/:([a-zA-Z0-9_]+):/g, (match, code) => {

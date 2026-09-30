@@ -2,9 +2,7 @@
 
 const INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
 
-// Maps core settings keys to the settings-modal section that owns them, used to
-// split the synced settings into smaller per-section gift wraps. Unmapped keys
-// fall through to a "misc" section so future settings still sync.
+// Settings key -> modal section, for per-section gift wraps; unmapped keys fall through to "misc".
 const NYM_SETTINGS_SECTION_KEYS = {
     appearance: ['theme', 'sound', 'autoscroll', 'showTimestamps', 'timeFormat', 'dateFormat',
         'blurOthersImages', 'chatLayout', 'chatViewMode', 'columnsLayout', 'nickStyle', 'colorMode',
@@ -27,13 +25,10 @@ const NYM_SETTINGS_SECTION_KEYS = {
     data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt']
 };
 
-// The root's wraps. Sealed classically, NEVER to the root-derived key — that
-// would be a circular lock nothing could open. See spec §5.1.
+// Sealed classically, never to the root-derived key (a circular lock). Spec §5.1.
 const NYM_PQ_ROOT_CATEGORY = 'nymchat-pq-root';
 
-// pq2 framing, for the size budget below: `pq2.` plus a fixed 1088-byte ML-KEM
-// ciphertext, both base64url. Constants rather than a magic number so the
-// budget stays honest if the parameter set ever changes.
+// pq2 framing for the size budget: `pq2.` plus a fixed 1088-byte ML-KEM ciphertext, base64url.
 const PQ2_PREFIX_LEN = 4;
 const ML_KEM_CIPHERTEXT_BYTES = 1088;
 
@@ -67,7 +62,7 @@ Object.assign(NYM.prototype, {
     async saveSyncedSettings() {
         if (!this.pubkey) return;
 
-        // Skip sync for hardcore mode (keypair changes every message) and random-per-session
+        // Skip sync for hardcore mode (keypair changes every message) and random-per-session.
         if (this.connectionMode === 'ephemeral') {
             const keypairMode = localStorage.getItem('nym_keypair_mode') || (localStorage.getItem('nym_random_keypair_per_session') === 'true' ? 'random' : 'persistent');
             if (keypairMode === 'random' || keypairMode === 'hardcore') return;
@@ -100,7 +95,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { return []; }
     },
 
-    // Build the settings payload object shared by both save paths
     _buildSettingsPayload() {
         return {
             v: 2,
@@ -185,15 +179,12 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // d-tag for a per-group sync category (lowercased UUID is regex-safe).
+    // Lowercased UUID is regex-safe.
     _groupSyncDTag(prefix, groupId) {
         return `${prefix}-${String(groupId).toLowerCase()}`;
     },
 
-    // Opaque per-account token for the OUTER gift-wrap tags. The real routing
-    // d-tag stays in the encrypted seal; relays only see this digest, so two
-    // members' self-sync wraps for the same group do not share a d-tag that
-    // would expose group membership.
+    // Relays only see this digest, so members' self-sync wraps don't share a d-tag exposing group membership.
     async _syncOuterDTag(dTag) {
         const data = new TextEncoder().encode(`${this.pubkey}:${dTag}`);
         const buf = await crypto.subtle.digest('SHA-256', data);
@@ -203,21 +194,16 @@ Object.assign(NYM.prototype, {
         return s;
     },
 
-    // Opaque per-account D1 storage category so the row key can't be joined
-    // across members to reveal group membership.
+    // Opaque so the row key can't be joined across members to reveal group membership.
     async _d1Category(dTag) {
         return `nymchat-${await this._syncOuterDTag('d1:' + dTag)}`;
     },
 
-    // On leaving a group, clear its ephemeral keys blob (security-relevant) but
-    // keep the time-bucketed history wraps so the user's own backlog stays
-    // durable and isn't dropped from D1.
+    // Clear the ephemeral keys (security-relevant) but keep history wraps so the user's backlog stays in D1.
     _clearGroupSyncData(groupId) {
         try { this._saveSettingsBlobToD1(this._groupSyncDTag('nymchat-keys', groupId), JSON.stringify({})); } catch (_) { }
     },
 
-    // Partition the core settings payload into the settings-modal sections.
-    // Keys not in the map land in "misc" so newly added settings still sync.
     _splitSettingsBySection(settingsData) {
         const map = NYM_SETTINGS_SECTION_KEYS;
         const lookup = this._settingsSectionLookup || (this._settingsSectionLookup = (() => {
@@ -233,8 +219,7 @@ Object.assign(NYM.prototype, {
         return out;
     },
 
-    // Debounced nostrSettingsSave — coalesces rapid state changes (e.g. incoming
-    // group messages) into a single Nostr publish.  Delay defaults to 5 seconds.
+    // Coalesces rapid state changes (e.g. incoming group messages) into a single Nostr publish.
     _debouncedNostrSettingsSave(delayMs = 5000) {
         if (this._applyingRemoteSettings) return;
         if (this._restoreFromD1Depth > 0) return;
@@ -245,8 +230,7 @@ Object.assign(NYM.prototype, {
         }, delayMs);
     },
 
-    // Marks the initial settings load complete so saves may begin. Flushes one
-    // reconcile save if a save was suppressed while loading.
+    // Flushes one reconcile save if a save was suppressed while loading.
     _markSettingsHydrated() {
         if (this._settingsHydrated) return;
         this._settingsHydrated = true;
@@ -254,8 +238,7 @@ Object.assign(NYM.prototype, {
             this._settingsSavePending = false;
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         } else {
-            // Snapshot the just-loaded section content so a no-op background save
-            // won't re-publish it and trigger a self-echo that reloads the lists.
+            // Snapshot so a no-op background save won't re-publish and trigger a self-echo reload.
             try {
                 const sections = this._splitSettingsBySection(this._buildSettingsPayload());
                 this._publishedSectionJson = {};
@@ -269,16 +252,12 @@ Object.assign(NYM.prototype, {
             this._onHydratedCbs = null;
             for (const cb of cbs) { try { cb(); } catch (_) { } }
         }
-        // Synced prefs (incl. encryptAtRestPreferred) are now applied, so offer
-        // to set up identity encryption here if the user uses it elsewhere.
         if (typeof this.maybePromptEncryptAtRest === 'function') {
             setTimeout(() => { try { this.maybePromptEncryptAtRest(); } catch (_) { } }, 2500);
         }
     },
 
-    // Run cb once synced settings have loaded — so device-spanning flags
-    // (tutorial seen, bot welcome sent) are applied before we decide to
-    // trigger the tutorial or welcome PM.
+    // Device-spanning flags (tutorial seen, bot welcome sent) must apply before onboarding decides.
     _onSettingsHydrated(cb) {
         if (typeof cb !== 'function') return;
         if (this._settingsHydrated) { try { cb(); } catch (_) { } return; }
@@ -286,15 +265,11 @@ Object.assign(NYM.prototype, {
         this._onHydratedCbs.push(cb);
     },
 
-    // Apply only the newest buffered settings event from an initial REQ.
-    // Hydration (which fires onboarding) is deferred until the applied settings
-    // land so device-spanning flags are in place before the tutorial decides.
+    // Hydration waits for the applied settings so device-spanning flags land before the tutorial decides.
     _flushSettingsLoadBuffer(subId) {
         const buf = (this._settingsLoadBuffer && subId) ? this._settingsLoadBuffer.get(subId) : null;
         if (buf) this._settingsLoadBuffer.delete(subId);
-        // Sections are authoritative: drop the legacy monolithic blob whenever
-        // any section is present, falling back to it only when none exist. Apply
-        // oldest-to-newest so the newest section values win.
+        // Sections are authoritative; legacy blob only when none exist; apply oldest-to-newest.
         let tagged = (buf && buf.byTag) ? Object.entries(buf.byTag) : [];
         if (tagged.some(([t]) => t !== 'nymchat-settings')) {
             tagged = tagged.filter(([t]) => t !== 'nymchat-settings');
@@ -310,11 +285,9 @@ Object.assign(NYM.prototype, {
                 return;
             }
         }
-        // No newer settings to apply — resolve hydration now.
         this._markSettingsHydrated();
     },
 
-    // Serialize group conversation metadata for cross-device sync
     _buildGroupConversationsSync() {
         if (!this.groupConversations || this.groupConversations.size === 0) return null;
         const data = {};
@@ -344,9 +317,7 @@ Object.assign(NYM.prototype, {
         return data;
     },
 
-    // Serialize group message history for new-device recovery. No per-group
-    // cap: history is time-bucketed into month-sized gift wraps at publish time,
-    // so the full backlog is preserved across many small wraps in D1.
+    // No per-group cap: history is time-bucketed into month-sized gift wraps at publish time.
     _buildGroupHistorySync() {
         if (!this.pmMessages || this.pmMessages.size === 0) return null;
         const data = {};
@@ -366,14 +337,12 @@ Object.assign(NYM.prototype, {
         return Object.keys(data).length > 0 ? data : null;
     },
 
-    // YYYYMM bucket id for a unix-seconds timestamp, used to time-bucket
-    // group history so each gift wrap holds at most one month of messages.
+    // YYYYMM bucket id for a unix-seconds timestamp.
     _historyBucketId(tsSeconds) {
         const d = new Date((tsSeconds || 0) * 1000);
         return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
     },
 
-    // Publish one data category as its own self-addressed gift wrap
     _nip44PaddedLen(len) {
         if (len <= 32) return 32;
         const nextPower = 1 << (Math.floor(Math.log2(len - 1)) + 1);
@@ -381,30 +350,19 @@ Object.assign(NYM.prototype, {
         return chunk * (Math.floor((len - 1) / chunk) + 1);
     },
 
-    /// Length of a NIP-44 v2 payload: base64(version | nonce | ciphertext | mac).
+    // NIP-44 v2 payload length: base64(version | nonce | ciphertext | mac).
     _nip44PayloadLen(plaintextBytes) {
         const raw = 1 + 32 + (2 + this._nip44PaddedLen(plaintextBytes)) + 32;
         return Math.ceil(raw / 3) * 4;
     },
 
-    /// Length of a `pq2.` payload wrapping a NIP-44 payload of `innerLen`:
-    /// the prefix, the base64url KEM ciphertext (1088 bytes, fixed), the dot,
-    /// and the base64url AEAD output (inner + a 16-byte tag). Exact, not an
-    /// estimate — the KEM ciphertext is a constant size and base64url is a
-    /// pure function of length.
+    // Exact: prefix + base64url 1088-byte KEM ciphertext + dot + base64url AEAD (inner + 16-byte tag).
     _pq2PayloadLen(innerLen) {
         const b64u = (n) => Math.ceil(n * 4 / 3);
         return PQ2_PREFIX_LEN + b64u(ML_KEM_CIPHERTEXT_BYTES) + 1 + b64u(innerLen + 16);
     },
 
-    /// Size of the final `["EVENT", wrapped]` frame for a rumor of this size.
-    ///
-    /// `pq2` matters and is not a rounding error: the layer adds ~1.5 KB of KEM
-    /// ciphertext AND inflates what it wraps by a third, on BOTH layers, so a
-    /// rumor the classical model says fits in 65 KB can produce an event of
-    /// nearly 120 KB. Budgeting with the classical model and then publishing
-    /// post-quantum is what made every packed history shard overflow and fall
-    /// back to NIP-44.
+    // pq2 adds ~1.5 KB and inflates both layers by a third, so budget against it or shards overflow.
     _wrappedSizeForRumor(rumorBytes, pq2 = false) {
         const SEAL_OVERHEAD = 200;   // kind/created_at/tags/pubkey/id/sig
         const WRAP_OVERHEAD = 320;   // same, plus the p/d/k tags added here
@@ -415,8 +373,7 @@ Object.assign(NYM.prototype, {
         return layer(sealJson) + WRAP_OVERHEAD + 10;
     },
 
-    /// Largest rumor whose wrapped event still clears the relay gate. Memoised;
-    /// derived rather than hardcoded so it stays correct if the gate moves.
+    // Largest rumor whose wrapped event still clears the relay gate; memoized.
     _maxRumorBytesForWrap(limit = 65000, pq2 = false) {
         if (!this._maxRumorCache) this._maxRumorCache = {};
         const key = `${limit}:${pq2 ? 2 : 0}`;
@@ -432,8 +389,7 @@ Object.assign(NYM.prototype, {
         return best;
     },
 
-    /// Whether a self-addressed wrap published now will carry the pq2 layer,
-    /// which is what the size budget has to be computed against.
+    // Whether a self-addressed wrap published now will carry the pq2 layer.
     _selfWrapUsesPq2() {
         return !!(typeof this.pqSelfKeyFor === 'function' && this.pqSelfKeyFor()
             && typeof this.pqSelfUsesPq2 === 'function' && this.pqSelfUsesPq2());
@@ -465,40 +421,23 @@ Object.assign(NYM.prototype, {
             return false;
         }
 
-        // Skip republishing a wrap whose (post-trim) payload is byte-identical to
-        // the last one we sent for this d-tag. Without this, every settings save
-        // re-wraps and re-broadcasts unchanged groups/history/keys/notification
-        // state as fresh 1059 gift wraps, flooding relays with nym-sync events.
+        // Skip byte-identical republishes so unchanged sections don't flood relays with sync wraps.
         if (!this._publishedSectionJson) this._publishedSectionJson = {};
         const finalJson = JSON.stringify(payload);
         if (this._publishedSectionJson[dTag] === finalJson) return false;
 
-        // Record it as published only AFTER it actually is. Marking first meant
-        // a write that failed — a network blip, an oversized wrap, an encrypt
-        // that returned null — still counted as done, and because the marker
-        // lives for the whole session every later save short-circuited on it.
-        // The section was then never retried, so the change survived until the
-        // next reload and then reverted to whatever D1 still held.
+        // Mark as published only after it succeeds, so a failed write is retried.
         const ok = await this._publishWrappedNostrEvent(payload, dTag, createdAt);
         if (!ok) {
             delete this._publishedSectionJson[dTag];
             return false;
         }
         this._publishedSectionJson[dTag] = finalJson;
-        // Reports whether anything actually changed, so the caller only pings
-        // our other devices when there is something for them to re-read.
+        // Only ping other devices when something changed.
         return true;
     },
 
-    /// Overlays this client's own section payload onto the last one we read
-    /// for that category, so keys we do not know about survive our write.
-    ///
-    /// A write REPLACES the whole category row. The two clients do not build an
-    /// identical key set — each has settings the other has no concept of — so
-    /// whichever wrote last silently deleted the other's keys, and that setting
-    /// reverted to its default on the next launch. Only keys absent from our
-    /// own payload are carried forward; anything we own we overwrite, so this
-    /// can never resurrect a value the user just changed.
+    // A write replaces the whole row, so carry forward keys this client doesn't know about.
     _mergeUnknownSectionKeys(dTag, payload) {
         const prev = this._lastInboundSections && this._lastInboundSections[dTag];
         if (!prev || typeof prev !== 'object') return payload;
@@ -511,37 +450,29 @@ Object.assign(NYM.prototype, {
     },
 
     async _publishEncryptedSettings(settingsData) {
-        // Stored settings exist but this session could not read them, so what
-        // is in memory is defaults, not the user's state. Writing that back
-        // would destroy the rows we could not open.
+        // In-memory state is defaults when stored settings were unreadable; writing would destroy them.
         if (this._settingsRestoreUnreadable) return;
-        // Don't overwrite stored settings until we've loaded them. On a fresh
-        // device an early save (e.g. from an incoming group message) would
-        // otherwise clobber D1/relay with default state before the load lands.
+        // An early save on a fresh device would clobber D1/relay with defaults before the load lands.
         if (!this._settingsHydrated) {
             this._settingsSavePending = true;
             return;
         }
         const now = Math.floor(Date.now() / 1000);
 
-        // Category data is published separately, never bundled into core settings
+        // Category data is published separately, never bundled into core settings.
         delete settingsData.groupEphemeralKeys;
         delete settingsData.groupConversations;
         delete settingsData.groupMessageHistory;
         delete settingsData.notificationHistory;
         delete settingsData.notificationLastReadTime;
 
-        // Bump the sync timestamp before publishing
         if (now > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = now;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(now)); } catch (_) { }
         }
 
-        // Group ephemeral keys, published per group as nymchat-keys-<groupId> so
-        // one big group can't push the keys payload past the NIP-44 cap. Skips
-        // left groups and drops stale member entries.
+        // Published per group as nymchat-keys-<groupId> so one big group can't exceed the NIP-44 cap.
         if (this.groupEphemeralKeys && this.groupEphemeralKeys.size > 0) {
-            // Trim the oldest quarter of one group's prev keys when oversized.
             const trimEphemeralPrevKeys = (p) => {
                 const map = p.groupEphemeralKeys || {};
                 const entry = Object.values(map)[0];
@@ -561,7 +492,6 @@ Object.assign(NYM.prototype, {
                 if (this.leftGroups && this.leftGroups.has(groupId)) continue;
                 try {
                     const entry = this._serializeEphemeralKeys(ek);
-                    // Drop members not in the current member list to keep it bounded.
                     const group = this.groupConversations?.get(groupId);
                     if (group && Array.isArray(group.members) && entry.members) {
                         const memberSet = new Set(group.members);
@@ -640,23 +570,11 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Group message history → nymchat-history-<groupId>-<YYYYMM>-<shard>.
-        // Messages are bucketed by month (stable, intrinsic key) and, within a
-        // month, packed into byte-bounded shards so even a very busy period
-        // (hundreds of messages/day) splits into multiple small wraps instead of
-        // overflowing one. A past month's shards become immutable once its
-        // messages stop changing, so the backlog accumulates durably in D1.
+        // nymchat-history-<groupId>-<YYYYMM>-<shard>: month buckets packed into byte-bounded shards.
         try {
             const groupMessageHistory = this._buildGroupHistorySync();
             if (groupMessageHistory) {
-                // Message JSON per shard. The rumor carries this as an ESCAPED
-                // string, which inflates it, and the escaped total has to stay
-                // under the rumor ceiling for the encryption actually in play.
-                // Derived, not hardcoded: post-quantum lowers that ceiling from
-                // 28,672 to 16,384, and a fixed 18 KB budget overflowed EVERY
-                // packed shard — which is what made the whole history fall back
-                // to NIP-44. 0.628 is the share of the ceiling the raw JSON may
-                // occupy, leaving the rest for escaping and scaffolding.
+                // The rumor carries JSON escaped; 0.628 of the (PQ-dependent) rumor ceiling leaves room for escaping.
                 const SHARD_BUDGET = Math.floor(
                     this._maxRumorBytesForWrap(65000, this._selfWrapUsesPq2()) * 0.628);
                 // Last-resort guard if a single message is itself enormous.
@@ -672,7 +590,6 @@ Object.assign(NYM.prototype, {
                 for (const [convKey, arr] of Object.entries(groupMessageHistory)) {
                     const groupId = convKey.startsWith('group-') ? convKey.slice(6) : convKey;
                     const base = this._groupSyncDTag('nymchat-history', groupId);
-                    // Partition into month buckets.
                     const buckets = {};
                     for (const m of arr) {
                         const b = this._historyBucketId(m.created_at);
@@ -701,7 +618,7 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Notification history + seen keys → nymchat-notifications
+        // Notification history + seen keys -> nymchat-notifications.
         try {
             const notificationHistory = this._serialiseNotificationsForSync();
             const lastRead = this.notificationLastReadTime || 0;
@@ -710,14 +627,12 @@ Object.assign(NYM.prototype, {
                 ? Object.fromEntries(this.seenNotificationKeys)
                 : null;
             if (notificationHistory.length > 0 || lastRead > 0 || seenNotifications) {
-                // Drop the oldest 10% of notifications
                 const trimOldestNotifications = (p) => {
                     const arr = p.notificationHistory;
                     if (!Array.isArray(arr) || arr.length <= 1) return false;
                     p.notificationHistory = arr.slice(Math.max(1, Math.ceil(arr.length * 0.1)));
                     return true;
                 };
-                // Drop the oldest 25% of seen keys
                 const trimOldestSeen = (p) => {
                     const o = p.seenNotifications;
                     const keys = o ? Object.keys(o) : [];
@@ -749,7 +664,6 @@ Object.assign(NYM.prototype, {
         await this._publishSettingsChangedPing(changed, now);
     },
 
-    /// Handles a settings-changed ping from one of our other devices.
     _onSettingsChangedPing(ping, rumorTs) {
         if (!ping || typeof ping !== 'object') return;
         if (ping.src && ping.src === this._syncInstanceId()) return;
@@ -772,9 +686,7 @@ Object.assign(NYM.prototype, {
         }, 1200);
     },
 
-    /// A stable id for THIS client instance, so a device ignores the echo of
-    /// its own ping. Session-scoped: a reload is a new instance, which at worst
-    /// costs one redundant D1 read.
+    // Session-scoped id so a device ignores the echo of its own ping.
     _syncInstanceId() {
         if (!this.__syncInstanceId) {
             this.__syncInstanceId = Math.random().toString(36).slice(2) +
@@ -783,7 +695,6 @@ Object.assign(NYM.prototype, {
         return this.__syncInstanceId;
     },
 
-    /// Announces "settings changed, re-read D1" to our other devices.
     async _publishSettingsChangedPing(sections, createdAt) {
         if (!Array.isArray(sections) || sections.length === 0) return;
         if (!this.pubkey) return;
@@ -795,15 +706,12 @@ Object.assign(NYM.prototype, {
                 { skipD1: true }
             );
         } catch (_) {
-            // Best-effort: a failed ping just means the other device waits for
-            // its next D1 read, which is the behavior we had before.
+            // Best-effort: on failure the other device waits for its next D1 read.
         }
     },
 
-    // Drop the oldest entries from the channels section's auto-growing state so
-    // the payload fits instead of being skipped entirely.
+    // Trim auto-growing state so the payload fits instead of being skipped.
     _trimChannelsReadState(p) {
-        // 1. Least-recently-active joined channels.
         const joined = p.userJoinedChannels;
         if (Array.isArray(joined) && joined.length > 20) {
             const activity = this.channelLastActivity instanceof Map
@@ -816,7 +724,6 @@ Object.assign(NYM.prototype, {
             return true;
         }
 
-        // 2. Read-state maps, oldest first.
         const pairs = [['closedPMs', 'closedPMTimes'], ['leftGroups', 'leftGroupTimes']];
         for (const [setKey, timeKey] of pairs) {
             const arr = p[setKey];
@@ -833,7 +740,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // 3. Any time map that outgrew its set (or has no set at all).
         for (const key of ['closedPMTimes', 'leftGroupTimes']) {
             const m = p[key];
             if (m && typeof m === 'object' && !Array.isArray(m)) {
@@ -857,20 +763,11 @@ Object.assign(NYM.prototype, {
         this.sendDMToRelays(['EVENT', wrapped]);
     },
 
-    // Persist to D1 and publish a NIP-59 nym-sync gift wrap to relays.
-    // Returns whether the settings actually got somewhere durable — the D1 row
-    // or, in direct mode, the relay wrap. The caller uses it to decide whether
-    // this section may be marked published; a false answer must leave it dirty
-    // so the next save retries it.
+    // Returns whether settings reached a durable source; false leaves the section dirty for retry.
     async _publishWrappedNostrEvent(payload, dTag, createdAt, opts = {}) {
         const NT = window.NostrTools;
         const now = createdAt || Math.floor(Date.now() / 1000);
-        // The sync ping is a notification, not a settings category — writing it
-        // to D1 would add a row every save that no reader ever wants.
-        //
-        // AWAITED: this is the authoritative copy in proxy-pool mode (the relay
-        // wrap is a courtesy for direct-mode clients), so its outcome is what
-        // decides whether the section is durable.
+        // Pings aren't written to D1; awaited because D1 is authoritative in proxy-pool mode.
         let d1Ok = false;
         if (!opts.skipD1) {
             try { d1Ok = await this._saveSettingsBlobToD1(dTag, JSON.stringify(payload)); }
@@ -878,11 +775,7 @@ Object.assign(NYM.prototype, {
         } else {
             d1Ok = true;
         }
-        // Durable means "reached the source this client reads back from", not
-        // "reached something". Under D1 the restore reads D1 only
-        // (nostrSettingsLoad returns immediately in proxy mode), so a relay wrap
-        // that landed while the row failed is not a saved setting. In direct
-        // mode the relay wrap IS that source.
+        // Durable means the source this client reads back from: D1 under proxy mode, the relay wrap in direct mode.
         const d1Available = !!(this._getApiHost && this._getApiHost());
         const durable = () => (d1Available ? d1Ok : true);
 
@@ -905,9 +798,7 @@ Object.assign(NYM.prototype, {
         const outerTags = [['p', this.pubkey], ['d', await this._syncOuterDTag(dTag)], ['k', 'nym-sync']];
 
         if (this.privkey) {
-            // Build the pair of layers with `seal`/`wrap`, whichever encryption
-            // is in play. Returns null when the sealed plaintext outgrows what
-            // NIP-44 can carry.
+            // Returns null when the sealed plaintext outgrows what NIP-44 can carry.
             const build = (seal, wrap) => {
                 const sealUnsigned = { kind: 13, content: seal(rumorJson), created_at: this.randomNow(), tags: [] };
                 const sealed = NT.finalizeEvent(sealUnsigned, this.privkey);
@@ -925,20 +816,11 @@ Object.assign(NYM.prototype, {
                 (pt, ephSk) => NT.nip44.encrypt(pt, NT.nip44.getConversationKey(ephSk, this.pubkey))
             );
 
-            // Settings are a self-addressed gift wrap like any other, and they
-            // carry more about a user than most single messages do — the
-            // conversation list, the group keys, the history categories. Left
-            // classical they would be the weakest thing on the relay: readable
-            // by anyone who breaks secp256k1, regardless of how carefully the
-            // messages themselves were sealed.
+            // Settings reveal more than most messages, so seal them post-quantum too.
             const selfKemPk = typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
             if (selfKemPk) {
                 const NC = window.NymCrypto;
-                // Layered unless a device on this account can only open the
-                // combined form — the same question `pqSelfUsesPq2` answers
-                // for every other self-addressed copy. This used to be pq1
-                // unconditionally, so a signer login on another device could
-                // not read its own settings.
+                // Layered unless a device on this account can only open the combined form (pqSelfUsesPq2).
                 const pq2 = this.pqSelfUsesPq2();
                 const wrapped = pq2
                     ? build(
@@ -949,11 +831,7 @@ Object.assign(NYM.prototype, {
                         (pt) => NC.pqEncrypt(pt, this.privkey, this.pubkey, selfKemPk),
                         (pt, ephSk) => NC.pqEncrypt(pt, ephSk, this.pubkey, selfKemPk)
                     );
-                // The hybrid costs ~1.5 KB a layer for the KEM ciphertext, which
-                // a category already close to the relay cap cannot absorb.
-                // Losing the sync entirely would be a worse trade than losing
-                // the post-quantum layer, so an oversized one falls back rather
-                // than going unpublished.
+                // The ~1.5 KB/layer KEM overhead can exceed the relay cap; fall back rather than skip the sync.
                 if (wrapped && JSON.stringify(['EVENT', wrapped]).length <= 65000) {
                     this.sendDMToRelays(['EVENT', wrapped]);
                     return durable();
@@ -974,8 +852,7 @@ Object.assign(NYM.prototype, {
 
         const useExt = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
         const useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
-        // No signer that can seal a relay wrap. The D1 row is still the
-        // authoritative copy, so its result decides.
+        // No signer can seal a relay wrap; the D1 row is authoritative, so its result decides.
         if (!useExt && !useN46) return d1Ok;
 
         const sealContent = useExt
@@ -999,24 +876,11 @@ Object.assign(NYM.prototype, {
         return durable();
     },
 
-    // Encrypt a settings payload to the user themselves using whichever signer
-    // is active: local nsec, NIP-07 extension, or NIP-46 remote signer.
-    //
-    // With a local nsec this is post-quantum, for the same reason the settings
-    // gift wrap is: the D1 copy holds the same conversation list, group keys
-    // and history categories, so leaving it classical would put the whole of it
-    // behind secp256k1 alone. There is no size cap to work around here — D1
-    // takes the blob whatever it weighs.
-    //
-    // These are the artifacts a harvest-now-decrypt-later adversary most wants:
-    // a settings blob or an archive row sits in one place for years. Under the
-    // layered format a signer login can protect them too — the KEM layer needs
-    // only our own root-derived key, and the signer produces the NIP-44 inside
-    // it exactly as it already does.
+    // Encrypts to self via local nsec, NIP-07 or NIP-46; post-quantum where possible (harvest-now-decrypt-later).
     async _encryptSettingsBlob(plaintext, opts) {
         const NT = window.NostrTools;
         const NC = window.NymCrypto;
-        // Not a fallback — for the root category this is required (spec §5.1).
+        // Not a fallback: for the root category this is required (spec §5.1).
         const classicalOnly = !!(opts && opts.classical);
         const selfKemPk = (!classicalOnly && typeof this.pqSelfKeyFor === 'function')
             ? this.pqSelfKeyFor() : null;
@@ -1034,8 +898,7 @@ Object.assign(NYM.prototype, {
                 const ck = NT.nip44.getConversationKey(this.privkey, this.pubkey);
                 return NT.nip44.encrypt(plaintext, ck);
             }
-            // Signer logins: NIP-44 from the signer, then our own ML-KEM layer
-            // around it. Only the layered format can be built this way.
+            // Signer logins: NIP-44 from the signer, then our own ML-KEM layer around it.
             const inner = await this._signerEncryptToSelf(plaintext);
             if (inner == null) return null;
             if (!usePq2) return inner;
@@ -1046,7 +909,6 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    /// NIP-44 to ourselves via whichever signer is active.
     async _signerEncryptToSelf(plaintext) {
         if (window.nostr?.nip44?.encrypt) {
             return await window.nostr.nip44.encrypt(this.pubkey, plaintext);
@@ -1058,15 +920,12 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // Reads either form. A blob written before this device had a PQ key, or by
-    // a device signing with an extension, is still plain NIP-44 — the prefix
-    // says which, so both stay readable and no migration is needed.
+    // Reads both formats; the prefix says which, so no migration is needed.
     async _decryptSettingsBlob(ciphertext) {
         const NT = window.NostrTools;
         const NC = window.NymCrypto;
         try {
-            // The layered format first: it is the only one a signer can open,
-            // and a local key opens it too.
+            // The layered format first: it is the only one a signer can open.
             if (NC && NC.isPq2Payload(ciphertext)) {
                 const keys = typeof this.pqSelfKeys === 'function' ? this.pqSelfKeys() : null;
                 const cands = typeof this.pqSelfCandidates === 'function'
@@ -1094,9 +953,7 @@ Object.assign(NYM.prototype, {
             }
             if (this.privkey) {
                 if (NC && NC.isPqPayload(ciphertext)) {
-                    // Try every epoch we still hold keys for: a blob written
-                    // before a key rotation is decrypted by the older keypair,
-                    // which stays derivable from the nsec.
+                    // Try every epoch we hold keys for; pre-rotation blobs need the older keypair.
                     const keys = typeof this.pqSelfKeys === 'function' ? this.pqSelfKeys() : null;
                     const candidates = typeof this.pqUnwrapCandidates === 'function'
                         ? this.pqUnwrapCandidates([this.privkey])
@@ -1117,7 +974,6 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    /// NIP-44 from ourselves via whichever signer is active.
     async _signerDecryptFromSelf(ciphertext) {
         if (window.nostr?.nip44?.decrypt) {
             return await window.nostr.nip44.decrypt(this.pubkey, ciphertext);
@@ -1139,19 +995,16 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // pq root — the wraps that let the user's other devices recover it.
-    // docs/PQ-ROOT-SPEC.md §5–§7.
+    // pq root recovery wraps. docs/PQ-ROOT-SPEC.md §5–§7.
 
     PQ_ROOT_CATEGORY: NYM_PQ_ROOT_CATEGORY,
 
-    /// Checked by d-tag, before it is hashed into an opaque D1 column.
+    // Checked by d-tag, before it is hashed into an opaque D1 column.
     _isPqRootCategory(dTag) {
         return dTag === NYM_PQ_ROOT_CATEGORY;
     },
 
-    /// Whether the account HAS a pq-root row, from the cleartext column list —
-    /// under the hashed column or the bare routing name. Decided WITHOUT
-    /// decrypting: a row we cannot read is still proof a root exists.
+    // Decided without decrypting: a row we cannot read is still proof a root exists.
     async _pqRootRowPresent(cats) {
         return !!(await this._pqRootRowBlob(cats));
     },
@@ -1168,8 +1021,7 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    /// Runs spec §6 against the root record in a decrypted settings load.
-    /// `adopted` is the signal to retry the rows sealed to the root.
+    // Runs spec §6 against the root record; `adopted` signals retrying the rows sealed to the root.
     async _pqRootApplyFromDecoded(decoded, rowPresent, rowBlob) {
         if (typeof this.pqRootEnsure !== 'function') return { found: false, adopted: false };
         let record = null;
@@ -1181,19 +1033,13 @@ Object.assign(NYM.prototype, {
             }
         }
         const status = this.pqRootEnsure(record, rowPresent);
-        // A device that cannot open the record has to be told, and this is the
-        // moment we learn it — the boot notice fired long before the settings
-        // read came back.
+        // The boot notice fired before settings arrived, so tell the user now.
         if (status === 'locked' || status === 'generated') {
             if (typeof this.maybeShowPqUpgradeNotice === 'function') {
                 try { this.maybeShowPqUpgradeNotice(); } catch (_) { }
             }
         }
-        // Only §6.4 writes, plus the repair case: we hold the root and the
-        // account has no record row, which is what an earlier launch leaves
-        // behind when its record write failed. Without the retry every other
-        // device reads "no record" and mints a rival root. A locked device
-        // must never publish one.
+        // Only §6.4 writes, plus repairing a missing record row; a locked device must never publish one.
         const NC = window.NymCrypto;
         const hybridRow = status === 'adopted' && typeof rowBlob === 'string' && !!NC
             && ((typeof NC.isPqPayload === 'function' && NC.isPqPayload(rowBlob))
@@ -1201,20 +1047,18 @@ Object.assign(NYM.prototype, {
         if (status === 'generated' || status === 'publish-record' || hybridRow) {
             try { await this.pqRootPublishRecord(); } catch (_) { }
         }
-        // The boot announcement went out without a key, because until now we
-        // did not know whether one existed. Publish the real one.
+        // The boot announcement went out without a key; publish the real one.
         if (status === 'adopted' || status === 'generated' || status === 'publish-record') {
             try { await this.publishPqAnnouncement(); } catch (_) { }
         }
         return {
-            // A row we could not open still counts: the branch below destroys
-            // rows when it believes nothing opened.
+            // A row we could not open still counts: the branch below destroys rows when it believes nothing opened.
             found: !!record || !!rowPresent,
             adopted: status === 'adopted' || status === 'generated' || status === 'publish-record'
         };
     },
 
-    /// Writes the record; _saveSettingsBlobToD1 forces it classical.
+    // _saveSettingsBlobToD1 forces the record classical.
     async pqRootPublishRecord(wraps) {
         if (typeof this.pqRootBuildRecord !== 'function') return false;
         const carried = Array.isArray(wraps) ? wraps : this.pqRootRecordWraps();
@@ -1225,8 +1069,7 @@ Object.assign(NYM.prototype, {
         return this._saveSettingsBlobToD1(NYM_PQ_ROOT_CATEGORY, JSON.stringify(record));
     },
 
-    /// The passkey-PRF seam (spec §5). The UI layer does the WebAuthn call
-    /// and passes the raw PRF output; nothing else crosses this line.
+    // The passkey-PRF seam (spec §5): the UI passes the raw PRF output; nothing else crosses this line.
     async pqRootSetPrf(prfOutput) {
         const root = typeof this.pqRoot === 'function' ? this.pqRoot() : null;
         if (!root) throw new Error('This device does not hold the post-quantum root.');
@@ -1248,7 +1091,6 @@ Object.assign(NYM.prototype, {
             try { root = await open(w); } catch (_) { continue; }
             if (!root) continue;
             if (!this.pqRootAdopt(root)) continue;
-            // Rows we could not open a moment ago can be opened now.
             this._settingsRestoreUnreadable = false;
             return true;
         }
@@ -1264,8 +1106,7 @@ Object.assign(NYM.prototype, {
         return 'ok';
     },
 
-    /// The manual path: a pasted or scanned `nympq1...`, checked against the
-    /// record's fingerprint so a code from another identity is refused.
+    // Checked against the record's fingerprint so a code from another identity is refused.
     pqRootLinkWithCode(code) {
         const NC = window.NymCrypto;
         let bytes;
@@ -1304,14 +1145,7 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    /// Re-reads the encrypted settings after a link. Until the root arrived,
-    /// every root-sealed row failed to open and the session fell back to
-    /// defaults; nothing re-reads them on its own until a reconnect, so a user
-    /// who links sees the code accepted and the settings stay wrong.
-    ///
-    /// The per-category content hashes are dropped first: a row we publish
-    /// after linking can be byte-identical to what we last wrote under the
-    /// wrong key, and the "unchanged" short-circuit would skip it.
+    // Drops content hashes first so a byte-identical republish under the new key isn't skipped.
     async reloadSettingsAfterPqLink() {
         if (this._pqRootPendingPublish) {
             try { await this._pqRootPendingPublish; } catch (_) { }
@@ -1333,8 +1167,7 @@ Object.assign(NYM.prototype, {
         // See _publishEncryptedSettings: never write over rows we could not read.
         if (this._settingsRestoreUnreadable) return false;
         try {
-            // Embed the real category in the (encrypted) blob so the cleartext
-            // D1 column can be an opaque per-account hash.
+            // The real category rides in the encrypted blob so the D1 column can be an opaque hash.
             let toStore = plaintext;
             try {
                 const obj = JSON.parse(plaintext);
@@ -1346,11 +1179,7 @@ Object.assign(NYM.prototype, {
 
             const category = await this._d1Category(dTag);
             const classical = this._isPqRootCategory(dTag);
-            // The mode rides in the hash basis so a policy flip is a content
-            // change. Without it, a row stranded under the old policy — sealed
-            // hybrid while another device cannot open it — would keep matching
-            // the stored hash and never be rewritten in the form that device
-            // can read.
+            // The mode is in the hash basis so a policy flip forces a rewrite.
             const mode = (!classical && typeof this.pqSelfKeyFor === 'function' && this.pqSelfKeyFor())
                 ? 'pq' : 'c';
             const hash = await this._sha256Hex(`${this.pubkey}|${mode}|${toStore}`);
@@ -1372,7 +1201,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Persist read pointers (channels, PMs, and groups)
     _syncReadStateToD1(immediate = false) {
         if (!this.pubkey) return;
         if (!this._getApiHost || !this._getApiHost()) return;
@@ -1392,8 +1220,6 @@ Object.assign(NYM.prototype, {
             }
             const channelLastRead = {};
             for (const [k, v] of entries) channelLastRead[k] = v;
-            // _saveSettingsBlobToD1 encrypts, hashes the category name, and skips
-            // the write when the content hash is unchanged.
             this._saveSettingsBlobToD1('nymchat-readstate', JSON.stringify({ channelLastRead }));
         };
         if (immediate) {
@@ -1405,17 +1231,7 @@ Object.assign(NYM.prototype, {
         this._readStateSyncTimer = setTimeout(flush, 5000);
     },
 
-    // Load encrypted settings categories from D1 and apply them.
-    //
-    // Returns a STATUS, not a boolean: "no settings" and "could not read
-    // them" need opposite handling and used to be the same `false`, so a load
-    // that never answered ran on defaults and then saved them over the rows
-    // it had failed to read.
-    //
-    //   'loaded'  — rows read and applied.
-    //   'empty'   — the API answered and the account genuinely has no rows.
-    //   'failed'  — no answer, or rows we could not open. Saving must stay off
-    //               until a later attempt succeeds.
+    // Returns 'loaded', 'empty' (no rows), or 'failed' (no answer or unreadable; saving stays off).
     settingsLoadFromD1() {
         const pubkey = this.pubkey;
         if (!pubkey) return Promise.resolve('failed');
@@ -1441,9 +1257,7 @@ Object.assign(NYM.prototype, {
         const cats = data && data.categories;
         if (!cats || typeof cats !== 'object') return 'failed';
 
-        // Decrypt each category once. The real category name rides inside the
-        // encrypted blob as __cat (the D1 column is an opaque per-account hash);
-        // legacy rows fall back to the cleartext column name.
+        // Real category rides inside the blob as __cat; legacy rows fall back to the cleartext column.
         const decoded = [];
         let storedBlobs = 0;
         const pending = [];
@@ -1455,9 +1269,7 @@ Object.assign(NYM.prototype, {
                 if (!payload || typeof payload !== 'object') return false;
                 const realCat = typeof payload.__cat === 'string' ? payload.__cat : cat;
                 delete payload.__cat;
-                // Keep the raw inbound payload so a later write can carry
-                // forward keys THIS client does not know about — see
-                // _mergeUnknownSectionKeys.
+                // Kept so a later write can carry forward unknown keys (_mergeUnknownSectionKeys).
                 if (!this._lastInboundSections) this._lastInboundSections = {};
                 this._lastInboundSections[realCat] = { ...payload };
                 decoded.push({ realCat, payload, updatedAt: entry.updatedAt || 0 });
@@ -1472,9 +1284,7 @@ Object.assign(NYM.prototype, {
         }
         if (this.pubkey !== pubkey) return 'failed';
 
-        // Other categories may be sealed to the root-derived key, and D1's
-        // ordering is not ours to control. The root row is classical so it
-        // always opens; adopt it, then retry whatever failed.
+        // Other categories may be sealed to the root key; adopt the classical root row, then retry failures.
         const rootRow = await this._pqRootApplyFromDecoded(
             decoded, await this._pqRootRowPresent(cats), await this._pqRootRowBlob(cats));
         if (rootRow.adopted && pending.length) {
@@ -1483,22 +1293,14 @@ Object.assign(NYM.prototype, {
         }
 
         if (storedBlobs === 0) {
-            // The API answered and there is nothing stored. A fresh account has
-            // to be able to save, so this is not a failure.
+            // A fresh account has to be able to save, so this is not a failure.
             this._settingsRestoreUnreadable = false;
             return 'empty';
         }
 
-        // The root row is not in `decoded`, but it still counts as "something
-        // opened" — and this branch destroys rows when nothing did.
+        // The root row still counts as "something opened".
         if (decoded.length === 0 && !rootRow.found) {
-            // Rows exist and not one opened. With a local nsec that verdict is
-            // final: decryption is pure computation over keys derived from that
-            // nsec, and every epoch we can still derive has been tried. Rows we
-            // can never open protect nothing, so refusing to overwrite them
-            // only strands the account — the user changes a setting, nothing is
-            // written, and it reverts on the next launch, forever. Let the next
-            // save replace them.
+            // With a local nsec, unopenable rows are final; let the next save replace them.
             if (this.privkey) {
                 this._settingsRestoreUnreadable = false;
                 this._clearSettingsContentHashes(Object.keys(cats));
@@ -1506,9 +1308,7 @@ Object.assign(NYM.prototype, {
                     + 'with this identity; they will be replaced on the next save');
                 return 'empty';
             }
-            // Without a local key the signer answers for us, and a signer that
-            // is slow, locked or briefly unavailable looks exactly like this.
-            // That is transient, so keep saving off and let the caller retry.
+            // A signer may be slow or locked, so this is transient; keep saving off.
             this._settingsRestoreUnreadable = true;
             console.warn(`[NostrSync] ${storedBlobs} stored settings categories could not be decrypted; `
                 + 'saving is disabled until a load succeeds so they are not overwritten');
@@ -1518,9 +1318,7 @@ Object.assign(NYM.prototype, {
         // Something opened, so whatever blocked an earlier attempt is over.
         this._settingsRestoreUnreadable = false;
 
-        // ...unless what did not open is sealed to a root we cannot reach.
-        // That is recoverable by linking, so keep saving off rather than
-        // letting this session's defaults replace the account's settings.
+        // Rows sealed to an unreachable root are recoverable by linking, so keep saving off.
         if (pending.length && typeof this.pqRootLocked === 'function' && this.pqRootLocked()) {
             this._settingsRestoreUnreadable = true;
             console.warn(`[NostrSync] ${pending.length} settings categories are sealed to a `
@@ -1535,9 +1333,7 @@ Object.assign(NYM.prototype, {
             try { await applyNostrSettingsAdditive(d.payload); } catch (_) { }
         }
 
-        // Sections are authoritative: apply them oldest-to-newest so the most
-        // recently saved values win, and fall back to the legacy monolithic
-        // blob only when no section blobs exist.
+        // Apply sections oldest-to-newest; legacy monolithic blob only when no sections exist.
         const coreEntries = decoded.filter(d => isCore(d.realCat));
         const sectionEntries = coreEntries
             .filter(d => d.realCat !== 'nymchat-settings')
@@ -1545,51 +1341,36 @@ Object.assign(NYM.prototype, {
         const toApply = sectionEntries.length
             ? sectionEntries
             : coreEntries.filter(d => d.realCat === 'nymchat-settings');
-        // The additive pass is per-section on purpose: it merges lists by union,
-        // so it has to see each section's own payload.
+        // Per-section on purpose: it merges lists by union.
         let coreApplied = 0, newestCoreTs = 0;
         const merged = {};
         for (const d of toApply) {
             try {
                 await applyNostrSettingsAdditive(d.payload);
-                // _splitSettingsBySection routes every key to exactly ONE
-                // section, so the section payloads are disjoint (bar the shared
-                // `v`) and a newest-last merge reproduces exactly what applying
-                // them oldest-to-newest would leave behind.
+                // Sections are disjoint (bar `v`), so a newest-last merge equals applying them in order.
                 Object.assign(merged, d.payload);
                 coreApplied++;
                 const ts = d.updatedAt ? Math.floor(d.updatedAt / 1000) : Math.floor(Date.now() / 1000);
                 if (ts > newestCoreTs) newestCoreTs = ts;
             } catch (_) { }
         }
-        // ONE authoritative apply rather than one per section. applyNostrSettings
-        // is the most expensive function in the boot path — it rebuilds sidebar
-        // rows and does dozens of synchronous localStorage writes — and running
-        // it once per section made boot block for seconds with no gain, since
-        // every pass but the last was immediately superseded.
+        // One apply, not one per section: applyNostrSettings is the costliest boot-path call.
         if (coreApplied > 0) {
             try { await applyNostrSettings(merged); } catch (_) { coreApplied = 0; }
         }
 
-        // Non-core categories loaded but no core section — an older account, or
-        // one that only ever synced lists. We still READ the rows, so a save
-        // carries them forward rather than dropping them.
+        // Non-core rows were read, so a save carries them forward.
         if (coreApplied === 0) return 'empty';
         if (newestCoreTs > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = newestCoreTs;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(newestCoreTs)); } catch (_) { }
         }
-        // D1 had real settings and we applied them — safe to save from here.
+        // D1 had real settings and we applied them, so saving is safe from here.
         this._markSettingsHydrated();
         return 'loaded';
     },
 
-    /// Drops the local "this category is already written" content hashes.
-    ///
-    /// The hash gate skips a D1 write whose plaintext matches the last one this
-    /// device wrote. When the stored rows turn out to be unreadable that gate
-    /// is working from a record of a row we can no longer verify, so it could
-    /// skip the very write that recovers the account.
+    // Unreadable rows invalidate the hash gate, which could skip the recovering write.
     _clearSettingsContentHashes(categories) {
         if (!this.pubkey || !Array.isArray(categories)) return;
         for (const category of categories) {
@@ -1732,7 +1513,6 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Clear any stale inline theme vars from both documentElement and body
         ['--primary', '--secondary', '--text', '--text-dim', '--text-bright', '--lightning'].forEach(v => {
             document.documentElement.style.removeProperty(v);
             document.body.style.removeProperty(v);
@@ -1745,8 +1525,7 @@ Object.assign(NYM.prototype, {
                 const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`;
                 document.body.style.setProperty(cssVar, value);
             });
-            // Derive RGB components from the primary color so the built-in
-            // wallpaper patterns can tint themselves to match the active theme.
+            // Wallpaper patterns tint themselves from these RGB components.
             const rgb = this._hexToRgb(selectedTheme.primary);
             if (rgb) {
                 document.body.style.setProperty('--wp-r', rgb.r);
@@ -1777,7 +1556,6 @@ Object.assign(NYM.prototype, {
         const mode = this.getColorMode();
         if (mode === 'light') return 'light';
         if (mode === 'dark') return 'dark';
-        // auto: use system preference
         return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
     },
 
@@ -1788,20 +1566,17 @@ Object.assign(NYM.prototype, {
         } else {
             document.body.classList.remove('light-mode');
         }
-        // Re-apply current theme to pick up light/dark color variants
         this.applyTheme(this.settings.theme);
 
-        // Re-apply wallpaper so custom overlays match the new mode
         this.loadWallpaper();
 
-        // Update meta theme-color to match the mode
         const themeColor = resolved === 'light' ? '#f5f5f2' : '#000000';
         const metaTheme = document.querySelector('meta[name="theme-color"]');
         if (metaTheme) {
             metaTheme.content = themeColor;
         }
 
-        // Keep the Flutter shell's native status bar in sync with the app theme
+        // Keep the Flutter shell's native status bar in sync with the app theme.
         try {
             if (window.FlutterTheme && typeof window.FlutterTheme.postMessage === 'function') {
                 window.FlutterTheme.postMessage(JSON.stringify({
@@ -1809,7 +1584,7 @@ Object.assign(NYM.prototype, {
                     isLightMode: resolved === 'light'
                 }));
             }
-        } catch (_) { /* ignore */ }
+        } catch (_) {}
     },
 
     setupColorModeListener() {
@@ -1890,9 +1665,7 @@ Object.assign(NYM.prototype, {
     },
 
     loadImageBlurSettings() {
-        // Try per-pubkey key first, then fall back to global key (for ephemeral
-        // users whose pubkeys change each session).
-        // Returns true, false, or 'friends'
+        // Per-pubkey key first, then the global key (ephemeral pubkeys change each session); true, false, or 'friends'.
         if (this.pubkey) {
             const saved = localStorage.getItem(`nym_image_blur_${this.pubkey}`);
             if (saved !== null) {
@@ -1905,11 +1678,11 @@ Object.assign(NYM.prototype, {
             if (global === 'friends') return 'friends';
             return global === 'true';
         }
-        return true; // Default to blur
+        return true;
     },
 
     saveImageBlurSettings() {
-        // Always save a global key so ephemeral users keep their preference
+        // Always save a global key so ephemeral users keep their preference.
         const val = String(this.blurOthersImages);
         localStorage.setItem('nym_image_blur', val);
         if (this.pubkey) {
@@ -1920,8 +1693,7 @@ Object.assign(NYM.prototype, {
     reapplyImageBlur() {
         document.querySelectorAll('.message img').forEach(img => {
             if (img.classList.contains('custom-emoji')) return;
-            // Inline @mention / quoted-author avatars are UI chrome, not posted
-            // media — never blur them.
+            // Inline mention/quote avatars are UI chrome, not posted media; never blur them.
             if (img.classList.contains('avatar-message')) return;
             const messageEl = img.closest('.message');
             if (!messageEl) return;

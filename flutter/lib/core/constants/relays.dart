@@ -1,6 +1,5 @@
 import 'event_kinds.dart';
 
-/// Relay configuration ported from the PWA (docs/specs/01 §4).
 class RelayConfig {
   RelayConfig._();
 
@@ -9,7 +8,7 @@ class RelayConfig {
 
   /// Default relays, always connected first.
   static const List<String> defaultRelays = [
-    'wss://sendit.nosflare.com', // also the write-only publish relay
+    'wss://sendit.nosflare.com', // Also the write-only publish relay.
     'wss://relay.nymchat.app',
     'wss://relay.damus.io',
     'wss://offchain.pub',
@@ -31,10 +30,7 @@ class RelayConfig {
 
   static const String appRelayOnlyChannel = 'nymchat';
 
-  /// Every kind that names a channel and surfaces inside it: the message
-  /// itself, plus the reactions, polls, typing strips and read receipts that
-  /// hang off it. Gating only the messages would leave four other ways to put
-  /// a nym and a payload in front of everyone in the default channel.
+  /// Every kind that names a channel and surfaces inside it, not just messages.
   static const Set<int> appRelayOnlyKinds = {
     EventKind.namedChannel,
     EventKind.reaction,
@@ -43,22 +39,19 @@ class RelayConfig {
     EventKind.channelReceipt,
   };
 
-  /// Whether an event naming [gTag]/[dTag] is one only the app relay may
-  /// deliver. Channel derivation matches the worker's `channelFromTags`: a
-  /// named-channel message carries 'd', and the hangers-on may carry either.
+  /// Channel derivation matches the worker's `channelFromTags`.
   static bool isAppRelayOnly(int kind, String? gTag, String? dTag) {
     if (!appRelayOnlyKinds.contains(kind)) return false;
     final name = kind == EventKind.namedChannel ? dTag : (gTag ?? dTag);
     return name != null && name.toLowerCase() == appRelayOnlyChannel;
   }
 
-  /// Relays we only publish to (never REQ from).
+  /// Relays we only publish to, never REQ from.
   static const Set<String> writeOnlyRelays = {'wss://sendit.nosflare.com'};
 
   /// NIP-46 default signer relay.
   static const String nip46Relay = 'wss://relay.primal.net';
 
-  /// Tuning.
   static const int relaysPerWorker = 50;
   static const int maxRelaysForReq = 1000;
   static const int relayTimeoutMs = 2000;
@@ -67,7 +60,7 @@ class RelayConfig {
   static const int geoRelayCount = 5;
 }
 
-/// STUN/TURN servers used for WebRTC (calls + P2P). docs/specs/01 §3.3.
+/// STUN/TURN servers for WebRTC calls and P2P.
 class IceServers {
   IceServers._();
 

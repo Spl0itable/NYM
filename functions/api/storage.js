@@ -1,6 +1,3 @@
-// Cloudflare Pages Function: D1-backed user storage (flair shop, encrypted
-// settings, profile mirror, PM gift-wrap archive, public channel archive).
-
 import { ledgerCall } from "./_ledger.js";
 export { NymLedger } from "./_ledger.js";
 import {
@@ -108,29 +105,23 @@ var SHOP_CATALOG = {
   "cosmetic-aura-rainbow": { price: 11000, type: "cosmetic", tier: "legendary" },
   "cosmetic-frost": { price: 2600, type: "cosmetic" },
   "cosmetic-aura-cosmic": { price: 5000, type: "cosmetic" },
-  // Legendary tier — premium animated cosmetics
   "cosmetic-aura-phoenix": { price: 12000, type: "cosmetic", tier: "legendary" },
   "cosmetic-bubble-hologram": { price: 13500, type: "cosmetic", tier: "legendary" },
-  // Limited numbered editions
   "flair-genesis": { price: 25000, type: "nickname-flair", tier: "legendary", maxSupply: 100 },
   "style-eclipse": { price: 9000, type: "message-style", maxSupply: 1000, startsAt: 1735689600000, endsAt: 1798761600000 },
   "style-crt": { price: 12000, type: "message-style", tier: "legendary", maxSupply: 250, startsAt: 1735689600000, endsAt: 1798761600000 },
-  // Bundles (granted as their component items, at a discount)
   "bundle-starter": { price: 3000, type: "bundle", bundle: ["flair-flame", "style-ice", "cosmetic-frost"] },
   "bundle-legendary": { price: 30000, type: "bundle", bundle: ["cosmetic-aura-phoenix", "cosmetic-aura-rainbow", "cosmetic-bubble-hologram"] },
-  // Everything Pack: components filled in below from the full catalog.
   "bundle-everything": { price: 149999, type: "bundle", bundle: [] }
 };
 
-// The Everything Pack grants every non-limited, non-bundle item. Derive its
-// component list from the catalog so it can never drift out of sync.
+// Derived from the catalog so the Everything Pack can never drift out of sync.
 SHOP_CATALOG["bundle-everything"].bundle = Object.keys(SHOP_CATALOG).filter(function (id) {
   var c = SHOP_CATALOG[id];
   return c.type !== "bundle" && !c.maxSupply;
 });
 
-// Availability for a catalog entry given the current time. Returns null when
-// purchasable, or an { error, status } describing why it is not.
+// Returns null when purchasable, else { error, status }.
 function shopItemAvailability(cat, now) {
   if (!cat) return { error: "Unknown shop item.", status: 400 };
   if (typeof cat.startsAt === "number" && now < cat.startsAt) {
@@ -160,7 +151,7 @@ function shopGenerateCode() {
   return "NYM-" + bytesToHex(randomBytes(16)).toUpperCase();
 }
 
-// Generate a BOLT11 invoice from the bot's Lightning address (LUD-21)
+// BOLT11 invoice from the bot's Lightning address (LUD-21).
 async function botGenerateInvoice(env, sats, zapRequest, comment) {
   var addresses = botLightningAddresses(env);
   if (!addresses.length) return { error: "Bot Lightning address misconfigured.", status: 500 };
@@ -225,9 +216,7 @@ async function botInvoiceFromAddress(env, address, sats, zapRequest, comment) {
   };
 }
 
-// Private-action auth gate. Over the /api WebSocket the connection is
-// authenticated once and its pubkey is pinned to context._wsAuthedPubkey, so
-// per-request signatures are skipped. The HTTP path verifies each request.
+// The WebSocket authenticates once and pins context._wsAuthedPubkey; the HTTP path verifies each request.
 function clientAuthOk(context, body, userPubkey) {
   if (context && context._wsAuthedPubkey) return context._wsAuthedPubkey === userPubkey;
   return verifyClientAuth(body.auth, userPubkey, { url: context.request.url, action: body.action, body: body });
@@ -240,18 +229,13 @@ var STORAGE_PQ_RELAYS = [
   "wss://offchain.pub"
 ];
 
-// Builds a shop gift/transfer notification DM, hybrid post-quantum whenever the
-// recipient announced an ML-KEM key (the same PQ_CODE-derived bot identity the
-// premium chat uses); classical otherwise. Never throws — a lookup failure or
-// missing PQ_CODE falls back to a plain NIP-17 wrap.
+// PQ-wrapped when the recipient announced an ML-KEM key, else plain NIP-17; never throws.
 async function buildStoragePqDM(env, botPrivkey, botPubkey, recipient, msg) {
   try {
     var botPq = botPqSelfFromEnv(env);
     var recipKem = null;
     if (botPq) {
-      // D1 archive first — the same store the recipient's own client resolves
-      // keys from (their announcement rides the relay proxy, not necessarily
-      // any relay this worker polls). Signature-verified either way.
+      // D1 archive first, since the recipient's announcement may not be on any relay this worker polls.
       try {
         var db = hasD1(env.DB_CHANNELS) ? replica(env.DB_CHANNELS) : null;
         var d1Events = await pqAnnouncementEventsFromD1(db, recipient);
@@ -281,8 +265,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   };
   if (!hasD1(env.DB_SHOP)) return json({ error: "Shop is not configured (missing DB_SHOP binding)." }, 503);
 
-  // Public: look up other users' active items so clients can show their
-  // flair/style without a Nostr REQ. No auth — read-only and non-sensitive.
+  // Public, unauthenticated: read-only and non-sensitive.
   if (body.action === "shop-status") {
     var rawPks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
     var pks = [];
@@ -317,8 +300,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     return json({ statuses: statuses });
   }
 
-  // Public: remaining supply for limited (maxSupply) items so clients can show
-  // "X left" / "Sold out". No auth — read-only and non-sensitive.
+  // Public, unauthenticated: read-only and non-sensitive.
   if (body.action === "shop-supply") {
     var wantIds = Array.isArray(body.itemIds) ? body.itemIds.slice(0, 50) : [];
     var limitedIds = [];
@@ -350,9 +332,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   if (!clientAuthOk(context, body, userPubkey)) {
     return json({ error: "Authentication failed" }, 401);
   }
-  // The replay nonce protects per-request HTTP auth. Over the WebSocket the
-  // connection is authenticated once, so there is no per-request nonce; the
-  // Ledger Durable Object enforces double-spend safety server-side instead.
+  // WebSocket requests carry no per-request nonce; the Ledger DO enforces double-spend safety instead.
   var SHOP_MONEY_ACTIONS = { "shop-buy-invoice": 1, "shop-claim": 1, "shop-transfer": 1, "shop-redeem": 1 };
   if (!context._wsAuthedPubkey && SHOP_MONEY_ACTIONS[body.action]) {
     var rp = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
@@ -378,8 +358,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var nextCos = Array.isArray(want.cosmetics) ? want.cosmetics.filter(function (id) {
       return rec.owned[id] && SHOP_CATALOG[id] && SHOP_CATALOG[id].type === "cosmetic";
     }) : [];
-    // Authoritative edition numbers (from owned entries) for any active
-    // numbered-edition item, so other clients can render e.g. Genesis #42.
+    // Authoritative edition numbers from owned entries so other clients can render them.
     var nextEditions = {};
     [nextStyle].concat(nextFlair).forEach(function (id) {
       if (id && rec.owned[id] && rec.owned[id].edition) nextEditions[id] = rec.owned[id].edition;
@@ -409,8 +388,7 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     var inv = await botGenerateInvoice(env, cat.price, body.zapRequest, body.comment);
     if (inv.error) return json({ error: inv.error }, inv.status || 502);
     var invoiceId = bytesToHex(sha256(utf8ToBytes(inv.pr)));
-    // Limited editions: hold a supply slot for this invoice. The reservation
-    // expires (and frees the slot) if the invoice is never paid.
+    // Reserves a supply slot for this invoice; it expires if the invoice is never paid.
     if (cat.maxSupply) {
       var resv = await ledgerCall(env, { op: "shop-reserve", itemId: itemId, max: cat.maxSupply, invoiceId: invoiceId, user: userPubkey, ttl: 1800 });
       if (resv && resv._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
@@ -470,7 +448,6 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
       recipient = pending.recipientPubkey.toLowerCase();
       isGift = true;
     }
-    // Bundles grant each component item, each with its own recovery code.
     var bundleItems = null;
     if (Array.isArray(claimCat.bundle) && claimCat.bundle.length) {
       bundleItems = claimCat.bundle
@@ -522,7 +499,6 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!shopKnown(itemId)) return json({ error: "Unknown shop item." }, 400);
     if (!/^[0-9a-f]{64}$/.test(toPubkey)) return json({ error: "Invalid recipient pubkey." }, 400);
     if (toPubkey === userPubkey) return json({ error: "Cannot transfer to yourself." }, 400);
-    // Atomic transfer of the item between two shop records via the ledger DO.
     var xfer = await ledgerCall(env, { op: "shop-transfer", from: userPubkey, to: toPubkey, itemId: itemId });
     if (xfer && xfer._noLedger) return json({ error: "Service temporarily unavailable." }, 503);
     if (!xfer || xfer.error) return json({ error: (xfer && xfer.error) || "Transfer failed." }, 403);
@@ -547,7 +523,6 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
     if (!codeData) return json({ error: "Unknown recovery code." }, 404);
     var redeemItem = codeData.itemId;
     if (!shopKnown(redeemItem)) return json({ error: "Unknown shop item." }, 400);
-    // Atomic redeem (move item from prevOwner to redeemer) via the ledger DO.
     var redeemRes = await ledgerCall(env, {
       op: "shop-redeem", code: code, itemId: redeemItem, user: userPubkey
     });
@@ -567,18 +542,9 @@ async function handleShopAction(context, body, botPrivkey, botPubkey) {
   return json({ error: "Unknown action" }, 400);
 }
 
-// Encrypted user settings storage. The client encrypts each settings category
-// to itself (NIP-44) before upload, so the worker only ever stores opaque
-// ciphertext keyed by pubkey.
-// Categories are validated by prefix/charset so the client can split data into
-// many sub-category and per-group gift wraps (e.g. nymchat-settings-appearance,
-// nymchat-keys-<groupId>) without enumerating each one here.
-// Bound covers the longest dynamic category: nymchat-history-<64-hex groupId>-<YYYYMM>-<shard>.
-// Nymbot keeps its own rows here; the prefix only says which app's sync it is.
+// Settings are client-side NIP-44 ciphertext; categories are validated by prefix/charset to allow dynamic names.
 var SETTINGS_CATEGORY_RE = /^nym(?:chat|bot)-[a-z0-9-]{1,120}$/i;
-// Effectively unlimited: time-bucketed group history accumulates one category
-// per group per month, so the full backlog can span many thousands of wraps.
-// A very high ceiling is kept only as an abuse backstop.
+// Effectively unlimited since history accumulates per group per month; the ceiling is only an abuse backstop.
 var SETTINGS_MAX_CATEGORIES = 50000;
 var SETTINGS_MAX_BYTES = 256 * 1024 * 1024;
 var SETTINGS_MAX_BLOB = 512 * 1024;
@@ -626,7 +592,7 @@ async function handleSettingsAction(context, body) {
     if (contentHash && prevDoc && prevDoc.content_hash === contentHash) {
       return json({ ok: true, category: cat, updatedAt: prevDoc.updated_at || 0, unchanged: true });
     }
-    // Cap distinct categories per user to bound storage from runaway splitting.
+    // Caps distinct categories per user to bound storage.
     var prevLen = prevDoc ? (Number(prevDoc.len) || 0) : 0;
     if (!prevDoc || body.blob.length > prevLen) {
       try {
@@ -650,15 +616,7 @@ async function handleSettingsAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
-// Erases what this account left behind, when a device is wiped or panics.
-//
-// Scoped by app: a Nymbot wipe takes the `nymbot-` settings rows, a Nymchat one
-// takes everything else it owns. Deliberately NOT touched: credits and shop
-// items (value the key still holds), the free-tier counter (whose whole job is
-// to survive a wipe) and zap receipts (public records of public payments).
-//
-// The `nymchat-pq-root` record is a settings row, so a purged account mints a
-// fresh root — and a fresh nympq1 code — the next time it signs in.
+// App-scoped wipe; credits, shop items, the free-tier counter and zap receipts are deliberately kept.
 async function handleAccountAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -712,8 +670,7 @@ async function handleAccountAction(context, body) {
   return json({ ok: true, app: app, removed: removed });
 }
 
-// Public Nostr kind 0 profile mirror. Stored as the signed event so clients can
-// verify it and reconcile against live relay updates by created_at.
+// Public Nostr kind 0 profile mirror, stored as the signed event so clients can verify and reconcile it.
 var PROFILE_MAX_EVENT = 64 * 1024;
 
 function profileIsValidEvent(ev, pubkey) {
@@ -738,7 +695,6 @@ async function handleProfileAction(context, body) {
   };
   if (!hasD1(env.DB_PROFILES)) return json({ error: "Profile storage is not configured (missing DB_PROFILES binding)." }, 503);
 
-  // Public batch read so clients can fetch profiles without a Nostr REQ.
   // Per-pubkey edge cache: hits skip D1, misses read from a replica.
   if (body.action === "profile-get") {
     var rawPks = Array.isArray(body.pubkeys) ? body.pubkeys.slice(0, 100) : [];
@@ -800,7 +756,6 @@ async function handleProfileAction(context, body) {
     var ev = body.event;
     if (!profileIsValidEvent(ev, userPubkey)) return json({ error: "Invalid profile event." }, 400);
     if (JSON.stringify(ev).length > PROFILE_MAX_EVENT) return json({ error: "Profile too large." }, 413);
-    // Keep only the newest profile, ordered by the event's own created_at.
     try {
       var prev = await env.DB_PROFILES.prepare("SELECT created_at, updated_at FROM profiles WHERE pubkey = ?").bind(userPubkey).first();
       if (prev && (prev.created_at || 0) >= (ev.created_at || 0)) {
@@ -812,7 +767,6 @@ async function handleProfileAction(context, body) {
       "INSERT INTO profiles (pubkey, created_at, updated_at, event) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(pubkey) DO UPDATE SET created_at = excluded.created_at, updated_at = excluded.updated_at, event = excluded.event"
     ).bind(userPubkey, ev.created_at || 0, updatedAt, JSON.stringify(ev)).run();
-    // Refresh the edge cache so the new profile is served immediately.
     readCachePut(context, "/profile/" + userPubkey, { rec: { event: ev, updatedAt: updatedAt } }, PROFILE_READ_TTL);
     return json({ ok: true, updatedAt: updatedAt });
   }
@@ -837,8 +791,7 @@ function requestIp(context) {
   } catch (e) { return ""; }
 }
 
-// Read-through edge cache for PUBLIC reads (channel-get, profile-get) so many
-// stateless workers serve them from the per-colo cache instead of hitting D1.
+// Read-through per-colo edge cache for public reads.
 var READ_CACHE_HOST = "https://nymchat-read.invalid";
 var CHANNEL_READ_TTL = 45;
 var HIDDEN_LOOKBACK_MS = 60 * 60 * 1000;
@@ -868,9 +821,7 @@ async function badgeGateMode(env) {
   return mode === "challenged" || mode === "attested" ? mode : "off";
 }
 
-// A message the spam engine hid can still reach the archive when another pool
-// worker flushed it before the verdict landed. The read drops it and removes
-// the row so the next read, and the relay backfill, stay clean.
+// A spam-hidden message may be archived before the verdict lands, so the read drops and deletes it.
 function purgeHiddenRows(context, env, ids) {
   try {
     var stmts = [];
@@ -950,7 +901,6 @@ async function spamAwareActivityRows(db, innerWhere, binds, limit) {
   }
 }
 
-// Fold spamAwareActivityRows into { activity: {channel:[24 buckets]}, last: {channel:ts} }.
 function buildActivityResult(rows) {
   var activity = {};
   var last = {};
@@ -993,8 +943,7 @@ async function topChannelActivityRows(db, kind, now, minTs, channelLimit) {
   }
 }
 
-// A gift wrap is storable for a user only if it is a kind 1059/1060 event that
-// is cryptographically valid and addressed to that user via a `p` tag.
+// Storable only if it is a valid kind 1059/1060 event addressed to that user via a `p` tag.
 function pmIsValidWrapForUser(ev, pubkey) {
   try {
     if (!ev || typeof ev !== "object") return false;
@@ -1011,7 +960,6 @@ function pmIsValidWrapForUser(ev, pubkey) {
   } catch (e) { return false; }
 }
 
-// The recipient pubkey a gift wrap is addressed to (its `p` tag).
 function pmWrapRecipient(ev) {
   if (!ev || !Array.isArray(ev.tags)) return null;
   var p = ev.tags.find(function (t) {
@@ -1030,9 +978,7 @@ async function handlePmAction(context, body) {
   };
   if (!hasD1(env.DB_PM)) return json({ error: "PM storage is not configured (missing DB_PM binding)." }, 503);
 
-  // Public inbox read by pubkey list (e.g. our own ephemeral identities). Gift
-  // wraps are already public-by-recipient on relays and the payloads stay
-  // encrypted, so this exposes nothing new and needs no auth.
+  // Public, unauthenticated: wraps are public-by-recipient on relays and payloads stay encrypted.
   if (body.action === "pm-get" && Array.isArray(body.pubkeys)) {
     var inboxPks = [];
     var seenInbox = {};
@@ -1076,8 +1022,7 @@ async function handlePmAction(context, body) {
   userPubkey = userPubkey.toLowerCase();
   if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
 
-  // Upload one or more gift wraps addressed to the authenticated user. The
-  // primary key (pubkey, id) makes re-uploads free no-ops via INSERT OR IGNORE.
+  // The (pubkey, id) primary key makes re-uploads no-ops via INSERT OR IGNORE.
   if (body.action === "pm-put") {
     var events = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
@@ -1098,11 +1043,7 @@ async function handlePmAction(context, body) {
     return json({ ok: true, added: added });
   }
 
-  // Store-and-forward inbox: deposit a recipient-addressed gift wrap so the
-  // recipient can restore it even if they were offline when it was sent. Keyed
-  // by the wrap's `p`-tag recipient, not the authenticated sender. The wrap is
-  // validated (kind 1059, signature, addressed to that recipient) and the
-  // authenticated sender gates anonymous spam.
+  // Store-and-forward: keyed by the wrap's `p`-tag recipient, not the sender; the sender's auth gates spam.
   if (body.action === "pm-deposit") {
     var depEvents = Array.isArray(body.events) ? body.events.slice(0, 100)
       : (body.event ? [body.event] : []);
@@ -1166,8 +1107,7 @@ async function handlePmAction(context, body) {
     });
   }
 
-  // Delete the user's own stored wraps (e.g. after a NIP-09 kind 5). Rows live
-  // under the authenticated user's own pubkey, so ownership is implicit.
+  // Rows live under the authenticated user's pubkey, so ownership is implicit.
   if (body.action === "pm-delete") {
     var delIds = Array.isArray(body.ids) ? body.ids.slice(0, 200) : [];
     var clean = [];
@@ -1231,8 +1171,7 @@ async function handleChannelAction(context, body) {
     return json({ events: outEvents });
   }
 
-  // Public read: hydrate a channel's recent history. No auth (channels are
-  // public); the worker's origin gate already limits this to Nymchat clients.
+  // Public, unauthenticated; the origin gate already limits this to Nymchat clients.
   if (body.action === "channel-get") {
     var reqChannels = [];
     if (Array.isArray(body.channels)) {
@@ -1247,10 +1186,7 @@ async function handleChannelAction(context, body) {
     }
     if (!reqChannels.length) return json({ error: "Invalid channel." }, 400);
     var isSingle = reqChannels.length === 1;
-    // Optional author filter. Without it a channel read returns the newest 500
-    // events in the channel, which is the right shape for a feed and the wrong
-    // one for "what did THIS pubkey publish" — nym-pq holds one announcement
-    // per user, so the peer being asked about could be anywhere in the table.
+    // Author filter, needed for nym-pq lookups since the newest-500 window may not include the author.
     var reqAuthors = [];
     if (Array.isArray(body.authors)) {
       var seenA = {};
@@ -1262,20 +1198,14 @@ async function handleChannelAction(context, body) {
       }
       if (!reqAuthors.length) return json({ error: "Invalid authors." }, 400);
     }
-    // Post-quantum announcements are valid for seven days but only republished
-    // every twenty-four hours, so the default one-day floor would hide exactly
-    // the users who are not online right now — which is precisely when someone
-    // is looking their key up. Rows are not purged on that schedule; the floor
-    // is only a query bound, so widening it for this channel costs nothing.
+    // nym-pq announcements live seven days but republish daily, so the one-day floor would hide offline users.
     var ttlMs = (isSingle && reqChannels[0] === "nym-pq")
       ? 7 * 24 * 60 * 60 * 1000 : CHANNEL_TTL_MS;
     var minTsSec = Math.floor((Date.now() - ttlMs) / 1000);
     var since = Number(body.since) || 0;
     var floorSec = since > minTsSec ? since : minTsSec;
     var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS };
-    // Per-channel read cache only for the single, no-since, no-authors case:
-    // the key is the channel alone, so caching a filtered read would serve one
-    // author's events to everyone asking about the channel.
+    // Cache only the unfiltered case; the key is the channel alone.
     if (isSingle && !since && !reqAuthors.length) {
       var cachedBody = await readCacheGetRaw("/channel/" + reqChannels[0]);
       if (cachedBody !== null) {
@@ -1352,7 +1282,6 @@ async function handleChannelAction(context, body) {
     return new Response(stream, { status: 200, headers: ndjsonHeaders });
   }
 
-  // Public read: lightweight recent-activity counts for many channels at once.
   if (body.action === "channel-activity") {
     var reqNames = Array.isArray(body.channels) ? body.channels : [];
     var wanted = [];
@@ -1378,8 +1307,7 @@ async function handleChannelAction(context, body) {
     }));
     if (misses.length) {
       var ph3 = misses.map(function () { return "?"; }).join(",");
-      // Only channel messages (20000 geohash, 23333 named) count toward activity;
-      // reactions, polls, votes and other kinds are excluded.
+      // Only channel messages (20000 geohash, 23333 named) count toward activity.
       var innerWhereA = "channel IN (" + ph3 + ") AND kind IN (20000, 23333) AND created_at >= ?";
       var rowsA = await spamAwareActivityRows(replica(env.DB_CHANNELS), innerWhereA, [nowSecA].concat(misses, [minTsA]), 0);
       var builtA = buildActivityResult(rowsA);
@@ -1394,9 +1322,7 @@ async function handleChannelAction(context, body) {
     return json({ activity: activity, last: lastA });
   }
 
-  // Public read: discover recently-active geohash channels (kind 20000) so the
-  // explorer can plot channels the client has never opened. Returns 24 hourly
-  // buckets per channel, same shape as channel-activity.
+  // Returns 24 hourly buckets per channel, same shape as channel-activity.
   if (body.action === "channel-active") {
     var cachedActive = await readCacheGet("/channel-active");
     if (cachedActive && cachedActive.activity && typeof cachedActive.activity === "object") {
@@ -1410,9 +1336,6 @@ async function handleChannelAction(context, body) {
     return json({ activity: builtD.activity, last: builtD.last });
   }
 
-  // Public read: discover recently-active named channels (kind 23333) so the
-  // sidebar can list channels the client has never joined. Same shape as
-  // channel-active.
   if (body.action === "channel-active-named") {
     var cachedActiveN = await readCacheGet("/channel-active-named");
     if (cachedActiveN && cachedActiveN.activity && typeof cachedActiveN.activity === "object") {
@@ -1426,8 +1349,7 @@ async function handleChannelAction(context, body) {
     return json({ activity: builtN.activity, last: builtN.last });
   }
 
-  // NIP-09 deletion: the signed kind 5 event IS the authorization. We only
-  // delete an archived event when its author matches the deletion's signer.
+  // NIP-09: delete only when the archived event's author matches the deletion's signer.
   if (body.action === "channel-delete") {
     var name2 = archiveSanitizeChannel(body.channel);
     var del = body.deletionEvent;
@@ -1462,7 +1384,7 @@ async function handleChannelAction(context, body) {
 
 var EMOJI_READ_TTL = 300;
 
-// Sserve the deduped NIP-30 emoji set (kind 30030 packs)
+// Serves the deduped NIP-30 emoji set (kind 30030 packs).
 async function handleEmojiAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -1865,8 +1787,7 @@ async function handleZapAction(context, body) {
       if (!(await zapReceiptSignerOk(context, ev, zapProviders))) continue;
       var info = zapClassify(ev);
       if (!info) continue;
-      // Channel and profile zaps live in the channels DB (profile zaps keyed by
-      // recipient pubkey); PM zaps in the PM DB.
+      // Channel and profile zaps live in the channels DB; PM zaps in the PM DB.
       if (info.scope === "channel" || info.scope === "profile") chan.push({ ev: ev, targetId: info.targetId });
       else if (info.scope === "pm") pm.push({ ev: ev, targetId: info.targetId });
     }
@@ -1879,8 +1800,7 @@ async function handleZapAction(context, body) {
   return json({ error: "Unknown action" }, 400);
 }
 
-// Dispatch a parsed body to the matching action handler. Shared by the HTTP
-// endpoint and the /api WebSocket worker (which sets context._wsAuthedPubkey).
+// Shared by the HTTP endpoint and the /api WebSocket (which sets context._wsAuthedPubkey).
 async function routeStorageAction(context, body) {
   if (body && typeof body.action === "string" && body.action.indexOf("settings-") === 0) {
     try {

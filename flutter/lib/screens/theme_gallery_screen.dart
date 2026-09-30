@@ -7,9 +7,7 @@ import '../features/i18n/i18n.dart';
 import '../models/settings.dart';
 import '../state/settings_provider.dart';
 
-/// Temporary design-system validation screen: switch between the six themes /
-/// color modes and preview the core component styling. Will be replaced by the
-/// real chat shell as that subsystem is ported.
+/// Design-system preview screen for switching themes and color modes.
 class ThemeGalleryScreen extends ConsumerWidget {
   const ThemeGalleryScreen({super.key});
 
@@ -43,7 +41,6 @@ class ThemeGalleryScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 20),
 
-              // Theme selector
               _label(c, tr('THEME')),
               Wrap(
                 spacing: 8,
@@ -91,7 +88,6 @@ class ThemeGalleryScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 20),
 
-              // Color token swatches
               _label(c, tr('TOKENS')),
               Wrap(
                 spacing: 8,
@@ -113,7 +109,6 @@ class ThemeGalleryScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 24),
 
-              // Components preview
               _label(c, tr('COMPONENTS')),
               _surface(
                 c,
@@ -128,7 +123,6 @@ class ThemeGalleryScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 12),
 
-              // IRC message
               _surface(
                 c,
                 child: Column(
@@ -142,13 +136,11 @@ class ThemeGalleryScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 12),
 
-              // Bubble messages
               _bubble(c, 'gm! welcome to nymchat', self: false),
               const SizedBox(height: 4),
               _bubble(c, 'thanks, loving the native app', self: true),
               const SizedBox(height: 16),
 
-              // Buttons + badges
               Row(
                 children: [
                   _sendBtn(c),

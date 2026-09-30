@@ -1,13 +1,6 @@
 import '../../services/notification_service.dart' show NotificationKind;
 
-/// Where a notification came from, so tapping it can open that conversation.
-///
-/// This rides in the OS notification's tap payload. It is deliberately NOT a
-/// `nymchat://` deep link: `parseNymLink` only understands channels, geohashes
-/// and group invites, so a PM or an existing group conversation has no URL form
-/// — a tapped PM notification would open the app and land nowhere. The payload
-/// below carries what the bell history already stores (`type` / `route` /
-/// sender), which is exactly what the routing switch needs.
+/// Where a notification came from, carried in the tap payload; PMs and existing groups have no `nymchat://` URL form.
 class NotificationRoute {
   const NotificationRoute({
     required this.type,
@@ -16,42 +9,33 @@ class NotificationRoute {
     this.threadRoot = '',
   });
 
-  /// Bell-history category: 'pm' | 'group' | 'channel' | 'geohash' | 'mention'
-  /// | 'reaction' | 'call'.
+  /// Bell-history category: pm, group, channel, geohash, mention, reaction or call.
   final String type;
 
   /// Tap target: peer pubkey, group id, or bare channel name.
   final String route;
 
-  /// The sender, used as the fallback target for reactions/mentions.
+  /// Sender, the fallback target for reactions and mentions.
   final String senderPubkey;
 
-  /// The thread this notification came FROM, when it came from one. Empty for
-  /// an ordinary conversation message.
+  /// Originating thread root, or empty for an ordinary message.
   final String threadRoot;
 }
 
-/// The conversation-opening surface [openNotificationRoute] needs. Kept to
-/// three calls (rather than taking the controller directly) so the routing is
-/// unit-testable without a live NostrController.
+/// Minimal conversation-opening surface so routing is testable without a NostrController.
 abstract class NotificationRouteTarget {
   void openChannel(String channel);
   void openPM(String pubkey);
   void openGroup(String groupId);
 
-  /// Swaps the just-opened conversation to the thread rooted at [threadRoot].
-  /// Called only after one of the three opens above, so the conversation the
-  /// thread belongs to is already the current one.
+  /// Called only after an open above, so the thread's conversation is already current.
   void openThread(String threadRoot);
 }
 
-/// Payload prefix, so a tap payload can be told apart from the deep-link URLs
-/// the same handler also receives.
+/// Distinguishes tap payloads from deep-link URLs sent to the same handler.
 const String _kPayloadScheme = 'nymnotif:';
 
-/// Encodes a notification's origin into its tap payload. Fields are pipe-joined
-/// because none of them can contain a pipe (they are hex pubkeys, group ids and
-/// sanitized channel names).
+/// Pipe-joined; no field can contain a pipe.
 String encodeNotificationPayload({
   required String type,
   String? route,
@@ -61,9 +45,7 @@ String encodeNotificationPayload({
     '$_kPayloadScheme$type|${route ?? ''}|${senderPubkey ?? ''}'
     '|${threadRoot ?? ''}';
 
-/// Decodes a tap payload written by [encodeNotificationPayload]. Returns null
-/// for anything else (e.g. a deep-link URL), so the caller can fall through to
-/// its URL handler.
+/// Decodes a payload from [encodeNotificationPayload], or null so the caller falls through to URL handling.
 NotificationRoute? decodeNotificationPayload(String payload) {
   if (!payload.startsWith(_kPayloadScheme)) return null;
   final parts = payload.substring(_kPayloadScheme.length).split('|');
@@ -72,18 +54,16 @@ NotificationRoute? decodeNotificationPayload(String payload) {
     type: parts[0],
     route: parts.length > 1 ? parts[1] : '',
     senderPubkey: parts.length > 2 ? parts[2] : '',
-    // Absent from payloads written before threads carried their root, which is
-    // why this is read positionally rather than required.
+    // Read positionally because older payloads lack the thread root.
     threadRoot: parts.length > 3 ? parts[3] : '',
   );
 }
 
-/// True when [value] looks like a hex pubkey (the bell panel's `_isPubkey`).
+/// True when [value] looks like a hex pubkey.
 bool isPubkeyRoute(String value) =>
     value.length == 64 && RegExp(r'^[0-9a-fA-F]+$').hasMatch(value);
 
-/// The Android channel / alert weight a bell-history category posts under, so
-/// a user can silence reactions without silencing private messages.
+/// Android channel for a history category, so reactions can be silenced separately from PMs.
 NotificationKind notificationKindFor(String historyType) {
   switch (historyType) {
     case 'reaction':
@@ -97,32 +77,21 @@ NotificationKind notificationKindFor(String historyType) {
   }
 }
 
-/// The key that groups a conversation's notifications together, so a second
-/// message replaces the first instead of stacking, and opening the conversation
-/// can dismiss them ([NotificationService.cancelConversation]).
+/// Groups a conversation's notifications so new ones replace old and opening it can dismiss them.
 String notificationConversationKey({
   required String historyType,
   required String route,
 }) =>
     '$historyType:$route';
 
-/// Opens the conversation a notification came from.
-///
-/// Shared by the notifications modal (tapping a bell row) and the OS
-/// notification tap handler, so both land in the same place — mirrors the PWA's
-/// `notifications.js:559-585` (pm → `openUserPM`, group → `openGroup`,
-/// reaction/mention → the reactor's/author's PM, call → PM or group).
-///
-/// Returns whether it could route anywhere.
+/// Opens the originating conversation for both bell rows and OS taps; returns whether it routed anywhere.
 bool openNotificationRoute(
   NotificationRoute target,
   NotificationRouteTarget into,
 ) {
   final route = target.route;
   final sender = target.senderPubkey;
-  // A notification raised by a thread reply must land IN that thread. The
-  // conversation opens first (the thread view takes over its message list), so
-  // this runs on the way out of each branch that actually opened one.
+  // Thread-reply notifications land in the thread once the conversation has opened.
   bool opened(bool ok) {
     if (ok && target.threadRoot.isNotEmpty) into.openThread(target.threadRoot);
     return ok;
@@ -135,13 +104,12 @@ bool openNotificationRoute(
       return opened(true);
     case 'channel':
     case 'geohash':
-      // A channel/geohash mention switches to that channel (the route is the
-      // bare channel name; switchChannel auto-detects geohash).
+      // Route is the bare channel name; switchChannel detects geohashes.
       if (route.isEmpty) return false;
       into.openChannel(route);
       return opened(true);
     case 'call':
-      // Call routes carry a group id (group call) or a pubkey (1:1 call).
+      // Call routes carry a group id or a 1:1 pubkey.
       if (isPubkeyRoute(route)) {
         into.openPM(route);
         return true;
@@ -159,7 +127,7 @@ bool openNotificationRoute(
     case 'mention':
     case 'reaction':
     default:
-      // These route to the sender's PM (the avatar pubkey).
+      // These route to the sender's PM.
       final peer =
           sender.isNotEmpty ? sender : (isPubkeyRoute(route) ? route : '');
       if (peer.isEmpty) return false;

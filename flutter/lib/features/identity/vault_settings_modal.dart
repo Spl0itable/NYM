@@ -13,7 +13,6 @@ import 'biometric_secret_store.dart';
 import 'identity_vault.dart';
 import 'modal_chrome.dart';
 
-/// Provides the [IdentityVault] wired to the app key/value + secure stores.
 final identityVaultProvider = Provider<IdentityVault>((ref) {
   return IdentityVault(
     ref.watch(keyValueStoreProvider),
@@ -21,9 +20,7 @@ final identityVaultProvider = Provider<IdentityVault>((ref) {
   );
 });
 
-/// Settings modal for identity encryption-at-rest (`openVaultSettings`,
-/// `js/modules/key-vault.js`). Lets the user enable/disable per-device
-/// encryption and pick a factor: Password, PIN, or Biometric (`local_auth`).
+/// Identity encryption-at-rest settings: enable or disable, with a Password, PIN or Biometric factor.
 class VaultSettingsModal extends ConsumerStatefulWidget {
   const VaultSettingsModal({super.key});
 
@@ -74,7 +71,6 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
-          // `.nm-vault-box`: max-width 420, padding 32.
           constraints: const BoxConstraints(maxWidth: 420),
           child: Material(
             color: Colors.transparent,
@@ -99,7 +95,6 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _modalHeader(c, tr('Identity encryption')),
-        // `.nm-vault-text`: 13px, line-height 1.5.
         Text(
           tr('Your identity key is encrypted at rest ({method}).',
               {'method': vault.method}),
@@ -120,14 +115,12 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
           Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
         ],
         const SizedBox(height: 24),
-        // `.modal-actions`: center, gap 10.
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ModalChrome.iconButton(
                 c, tr('Close'), () => Navigator.of(context).pop()),
             const SizedBox(width: 10),
-            // `.send-btn.danger` (NOT a solid fill).
             ModalChrome.sendButton(
                 c, tr('Turn off'), _busy ? null : () => _disable(vault),
                 danger: true),
@@ -137,8 +130,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     );
   }
 
-  /// The `.modal-header` (22px primary UPPERCASE ls1.5 w700 + bottom rule),
-  /// rendered inline because the vault box has no separate header row.
+  /// Header rendered inline because the vault box has no separate header row.
   Widget _modalHeader(NymColors c, String title) => Container(
         padding: const EdgeInsets.only(bottom: 14),
         margin: const EdgeInsets.only(bottom: 24),
@@ -164,22 +156,18 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _modalHeader(c, tr('Encrypt identity key')),
-        // `.nm-vault-text`: 13px, line-height 1.5.
         Text(
           tr("Protect your saved identity so it can't be read from this device "
               'without unlocking.'),
           style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
         ),
         const SizedBox(height: 16),
-        // `.form-label`.
         ModalChrome.formLabel(c, tr('Method')),
         const SizedBox(height: 8),
         ModalChrome.focusRing(
           c,
           child: DropdownButtonFormField<String>(
-            // `value` over `initialValue`: the latter doesn't exist on the
-            // build toolchain's Flutter; `value` works on both (deprecated-only
-            // on newer SDKs).
+            // `value` over `initialValue`: the build toolchain's Flutter lacks the latter.
             // ignore: deprecated_member_use
             value: _method,
             dropdownColor: c.bgTertiary,
@@ -204,8 +192,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
               controller: _pw,
               obscureText: true,
               keyboardType: isPin ? TextInputType.number : TextInputType.text,
-              // PIN: hard-strip non-digits on every keystroke
-              // (key-vault.js:558).
+              // PIN: strip non-digits on every keystroke.
               inputFormatters:
                   isPin ? [FilteringTextInputFormatter.digitsOnly] : null,
               style: TextStyle(color: c.inputText, fontSize: 15),
@@ -252,7 +239,6 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
           Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
         ],
         const SizedBox(height: 24),
-        // `.modal-actions`: center, gap 10.
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -277,7 +263,6 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     );
   }
 
-  // `.form-input`/`.form-select`: radius 12, padding 11/14, font 15.
   InputDecoration _decoration(NymColors c, String hint) =>
       ModalChrome.inputDecoration(c, hint);
 
@@ -297,11 +282,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     }
     setState(() => _busy = true);
     try {
-      // The PWA collapses password + PIN to method `'password'`; only WebAuthn
-      // factors keep their own name (`_vaultIsWebAuthn(method) ? method :
-      // 'password'`, key-vault.js:180). So a PIN persists as `'password'`, never
-      // the literal `'pin'`. (Mirrored at the call site since identity_vault is
-      // shared core — see CROSS_FILE_NEEDS for the in-engine fix.)
+      // A PIN persists as method `'password'`, never `'pin'`; only WebAuthn factors keep their own name.
       if (_method == 'biometric') {
         await vault.enableBiometric();
       } else {
@@ -309,7 +290,6 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       }
       if (!mounted) return;
       Navigator.of(context).pop();
-      // PWA uses a modal `_vaultAlert`, not a transient toast (key-vault.js:599).
       await showAppAlert(
         context,
         tr("Identity encryption enabled and verified. You'll be asked to unlock "
@@ -328,9 +308,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     setState(() => _error = null);
     String password = '';
     if (vault.method != 'biometric') {
-      // Password/PIN: a separate "Confirm it's you" prompt before turning off,
-      // matching the PWA's `_vaultReauth` (key-vault.js:479-498) instead of an
-      // inline field. Verify the factor, then disable only on success.
+      // Re-verify the password or PIN in a separate prompt, then disable only on success.
       final entered = await showAppPrompt(
         context,
         tr('Enter your password or PIN to turn off identity encryption.'),
@@ -357,7 +335,6 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
       }
       if (!mounted) return;
       Navigator.of(context).pop();
-      // PWA modal `_vaultAlert` "Encryption turned off." (key-vault.js:527).
       await showAppAlert(context, tr('Encryption turned off.'));
     } catch (e) {
       if (!mounted) return;
@@ -371,17 +348,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   }
 }
 
-/// Cross-device "Protect your identity here too?" nudge — the native port of
-/// `maybePromptEncryptAtRest` (key-vault.js:415-437). Call once AFTER settings
-/// sync completes. If the user enabled identity encryption on another device
-/// (`encryptAtRestPref`), this device isn't encrypted yet, a secret is
-/// persisted, and the prompt wasn't dismissed, it offers to set encryption up
-/// here. "Set up" opens [VaultSettingsModal]; both choices persist the
-/// dismissed flag so it shows at most once.
-///
-/// Returns true when the prompt was shown. Safe to call when conditions aren't
-/// met (returns false without UI). The trigger (calling this after sync) lives
-/// in the controller — see this slice's CROSS-FILE NEEDS.
+/// Once after settings sync, offers to encrypt here too if enabled on another device; shows at most once, true if shown.
 Future<bool> maybePromptEncryptAtRest(
   BuildContext context,
   WidgetRef ref,
@@ -392,8 +359,7 @@ Future<bool> maybePromptEncryptAtRest(
   if (!kv.getBool(StorageKeys.encryptAtRestPref)) return false;
   if (kv.getBool(StorageKeys.encryptAtRestPromptDismissed)) return false;
 
-  // Only nudge if there's actually a persisted identity secret to protect
-  // (`_hasPersistedSecret`). Mirrors the PWA's guard.
+  // Only nudge when there is a persisted identity secret to protect.
   final secure = SecureStore();
   var hasSecret = false;
   for (final name in SecretKeys.all) {
@@ -405,7 +371,7 @@ Future<bool> maybePromptEncryptAtRest(
   if (!hasSecret) return false;
   if (!context.mounted) return false;
 
-  // Persist dismissed up-front (the PWA dismisses on either choice).
+  // Persist dismissed up front; either choice dismisses.
   await kv.setBool(StorageKeys.encryptAtRestPromptDismissed, true);
   if (!context.mounted) return true;
 

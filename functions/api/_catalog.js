@@ -1,11 +1,8 @@
-// Reads the live model catalog that Nymbot has access to
-
 import { hasD1, replica } from "./_d1.js";
 
 var CATALOG_BINDINGS = ["DB_MODELS", "DB_BOT", "DB_CREDITS", "DB_CHANNELS"];
 
-// Per-isolate memo of which binding actually holds ai_models, so the probe
-// runs once rather than on every message.
+// Per-isolate memo of which binding holds ai_models, so the probe runs once.
 var catalogBindingName = null;
 var catalogBindingChecked = false;
 
@@ -22,16 +19,14 @@ async function resolveCatalogDb(env) {
       catalogBindingName = name;
       catalogBindingChecked = true;
       return db;
-    } catch (e) { /* table not in this database — try the next binding */ }
+    } catch (e) {}
   }
   catalogBindingChecked = true;
   catalogBindingName = null;
   return null;
 }
 
-// A max-length reply costs base + one credit per outTokensPerCredit of output.
-// Mirrors the worker's own charge so the number the picker shows is the number
-// the user is actually billed.
+// Mirrors the worker's charge (base + one credit per outTokensPerCredit) so the picker shows the billed price.
 export function catalogMaxCredits(entry) {
   var base = entry.baseCredits || 1;
   var per = entry.outTokensPerCredit || 0;
@@ -43,8 +38,7 @@ function parseJson(s, fallback) {
   try { return s ? JSON.parse(s) : fallback; } catch (e) { return fallback; }
 }
 
-// One-line blurb for the picker. Cloudflare's descriptions run to three
-// sentences; a model list of this size only has room for the first.
+// Cloudflare's descriptions run to three sentences; the picker has room for the first.
 export function catalogBlurb(text, limit) {
   var s = String(text || "").replace(/\s+/g, " ").trim();
   if (!s) return "";
@@ -60,23 +54,16 @@ export function catalogBlurb(text, limit) {
 export function catalogTransport(id, requestFormats, stored) {
   var rf = String(requestFormats || "").toLowerCase();
   if (/^@(?:cf|hf)\//.test(id)) return "wai";
-  // Anthropic's own models, and only those, may take the gateway's Anthropic
-  // provider route — it forwards to Anthropic and demands an x-api-key.
+  // Only Anthropic's own models may use the gateway's Anthropic route; it demands an x-api-key.
   if (/^anthropic\//.test(id)) return "anthropic";
-  // request_formats is a LIST ("Responses, Chat Completions"), so pick the
-  // format we serve best rather than the first one that matches. Chat
-  // Completions wins wherever it is offered: it is the route the compat
-  // endpoint and the binding both speak, and most models list it alongside a
-  // second option they support equally.
+  // request_formats is a list; prefer Chat Completions, which both the compat endpoint and the binding speak.
   if (/chat completions/.test(rf)) return "compat";
-  // Anthropic's body shape from a vendor that is not Anthropic (Tinker's
-  // inkling): same body, unified endpoint.
+  // Anthropic body shape from a non-Anthropic vendor: same body, unified endpoint.
   if (/anthropic\s*messages/.test(rf)) return "anthropic-compat";
-  // Responses-only. /v1/chat/completions rejects these outright.
+  // Responses-only; /v1/chat/completions rejects these.
   if (/response/.test(rf)) return "responses";
   if (rf) return "compat";
-  // No request_formats on the row: fall back to whatever was stored, but
-  // never to a provider-specific route we can't justify from the id.
+  // No request_formats: use the stored value, but never a provider-specific route not justified by the id.
   var st = String(stored || "");
   if (st === "anthropic") return "compat";
   return st || "compat";
@@ -88,13 +75,11 @@ export function catalogMaxTokensField(paramsJson, id) {
     if (p.max_completion_tokens) return "max_completion_tokens";
     if (p.max_tokens) return "max_tokens";
   }
-  // Nothing declared: OpenAI's newer models reject max_tokens, everyone else
-  // still takes it.
+  // Nothing declared: OpenAI's newer models reject max_tokens, everyone else still takes it.
   return /^openai\//.test(String(id || "")) ? "max_completion_tokens" : "max_tokens";
 }
 
-// Recomputed on read like the transport, so rows stored before the column
-// existed still answer. Mirrors apiPathFor() in the catalog worker.
+// Recomputed on read so rows predating the column still answer; mirrors apiPathFor() in the catalog worker.
 export function catalogApiPath(transport) {
   if (transport === "responses") return "responses";
   if (transport === "anthropic" || transport === "anthropic-compat") return "messages";
@@ -104,8 +89,7 @@ export function catalogApiPath(transport) {
 var CACHE_MS = 5 * 60 * 1000;
 var cache = { at: 0, data: null };
 
-// Frontier (third-party) text models, keyed the way ?model expects. Returns
-// null when the catalog isn't reachable — the caller falls back.
+// Returns null when the catalog isn't reachable so the caller falls back.
 function catalogRate(override, stored) {
   var pick = override != null ? override : stored;
   var n = Number(pick);
@@ -137,7 +121,7 @@ export async function catalogProModels(env, opts) {
       var p = parseJson(r.patch, null);
       if (p && typeof p === "object") overrides[r.id] = p;
     });
-  } catch (e) { /* overrides are optional */ }
+  } catch (e) {}
 
   var models = {};
   var byModelId = {};
@@ -188,16 +172,12 @@ export async function catalogProModels(env, opts) {
       authorSlug: r.author_slug || "",
       hosting: r.hosting || "",
       description: catalogBlurb(patch.description || r.description),
-      // Which field this model's own docs page declares for the output cap.
-      // Guessing it from the provider prefix was wrong for anyone who does not
-      // follow their vendor's house style.
+      // The output-cap field this model's docs declare; the provider prefix is not a reliable guide.
       maxTokensField: catalogMaxTokensField(r.params, r.id),
-      // The path this model's request goes to under whichever base URL the
-      // worker picks, so the endpoint travels with the body shape.
+      // Per-model request path under whichever base URL the worker picks.
       apiPath: r.api_path || catalogApiPath(transport),
       params: parseJson(r.params, null),
-      // A model Cloudflare only prices in its dashboard is charged at the
-      // conservative default; the apps gray these rather than hide them.
+      // Dashboard-only-priced models are charged the conservative default; apps gray them rather than hide them.
       priced: (pc.basis || r.credit_basis) !== "default"
     };
     entry.max = catalogMaxCredits(entry);
@@ -205,9 +185,7 @@ export async function catalogProModels(env, opts) {
     byModelId[r.id] = key;
   });
 
-  // A redirect that names a model id rather than a key resolves here, once
-  // every key is known. One that names neither is dropped, so a typo in the
-  // D1 console cannot strand a pin on a key that resolves to nothing.
+  // Redirects naming a model id resolve once every key is known; unresolvable ones are dropped.
   Object.keys(redirects).forEach(function (k) {
     var target = redirects[k];
     if (models[target]) return;
@@ -235,8 +213,7 @@ function slugParts(key) {
   });
 }
 
-// Family alias -> newest member, e.g. "claude-opus" -> "claude-opus-5", so a
-// key a user pinned before a version bump keeps working.
+// Family alias -> newest member so keys pinned before a version bump keep working.
 function familyOf(key) {
   var kept = slugParts(key).filter(function (p) {
     return !/^v?[0-9]+$/.test(p) && !/^k[0-9]+$/.test(p);
@@ -249,7 +226,6 @@ function versionScore(key) {
   return nums.reduce(function (acc, n, i) { return acc + parseInt(n, 10) / Math.pow(1000, i); }, 0);
 }
 
-// Newest first, by version
 export function catalogSortKeys(models, keys) {
   var list = (keys || Object.keys(models)).slice();
   var meta = {};
@@ -279,8 +255,7 @@ export function catalogAliases(models, redirects) {
   Object.keys(byAuthor).forEach(function (a) {
     if (byAuthor[a].length === 1 && !models[a] && !aliases[a]) aliases[a] = byAuthor[a][0];
   });
-  // An explicit replacedBy from the overrides table outranks anything derived
-  // from the key names: it is the one alias a human wrote on purpose.
+  // An explicit overrides-table replacedBy outranks aliases derived from key names.
   Object.keys(redirects || {}).forEach(function (k) {
     if (models[redirects[k]] && !models[k]) aliases[k] = redirects[k];
   });

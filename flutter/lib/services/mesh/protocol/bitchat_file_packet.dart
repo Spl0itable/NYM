@@ -1,22 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// A TLV-encoded file transfer payload for the mesh — a byte-for-byte port of
-/// bitchat's v2 `BitchatFilePacket`. Used to send images, videos and files over
-/// Bluetooth (inside a Noise-encrypted DM, or as a public/channel broadcast).
-///
-/// TLV tags:
-/// * `0x01` fileName (UTF-8)   — 2-byte big-endian length
-/// * `0x02` fileSize           — 2-byte length, then a 4-byte (or legacy 8-byte)
-///   big-endian value; informational, recomputed from content on decode
-/// * `0x03` mimeType (UTF-8)   — 2-byte big-endian length
-/// * `0x04` content            — 4-byte big-endian length (bitchat "canonical
-///   v2"); a legacy 2-byte length is still accepted on decode, and may repeat.
-///
-/// The CONTENT length is the one field that differs from a plain 2-byte-length
-/// TLV: bitchat writes a 4-byte length there so a single content chunk can
-/// exceed 64 KiB. Reading it as 2 bytes (the old port) mis-parsed every
-/// bitchat image — the reason inbound images never decoded.
+/// bitchat v2 `BitchatFilePacket` TLV; CONTENT uses a 4-byte length so a chunk can exceed 64 KiB.
 class BitchatFilePacket {
   BitchatFilePacket({
     required this.fileName,
@@ -53,22 +38,20 @@ class BitchatFilePacket {
       out.addByte(v & 0xFF);
     }
 
-    // fileName: 2-byte length.
     out.addByte(_tName);
     u16(nameBytes.length);
     out.add(nameBytes);
 
-    // fileSize: 2-byte length (=4), 4-byte big-endian value (bitchat canonical).
+    // fileSize: 2-byte length (=4), then a 4-byte big-endian value.
     out.addByte(_tSize);
     u16(4);
     u32(content.length);
 
-    // mimeType: 2-byte length.
     out.addByte(_tMime);
     u16(mimeBytes.length);
     out.add(mimeBytes);
 
-    // content: 4-byte length (bitchat canonical), single chunk.
+    // content: 4-byte length, single chunk.
     out.addByte(_tContent);
     u32(content.length);
     out.add(content);
@@ -96,8 +79,7 @@ class BitchatFilePacket {
       final type = data[offset++];
       int? len;
       if (type == _tContent) {
-        // bitchat canonical: 4-byte length. Fall back to a legacy 2-byte length
-        // when the 4-byte read would overrun (an old sender's short chunk).
+        // Fall back to a legacy 2-byte length when the 4-byte read would overrun.
         final snapshot = offset;
         final canonical = u(4);
         if (canonical != null && offset + canonical <= data.length) {
@@ -124,9 +106,9 @@ class BitchatFilePacket {
           sawContent = true;
           break;
         case _tSize:
-          break; // informational; recomputed from content
+          break; // Informational; recomputed from content.
         default:
-          break; // unknown TLV — skip
+          break; // Unknown TLV: skip.
       }
     }
     if (!sawContent) return null;

@@ -6,7 +6,6 @@ import '../core/constants/event_kinds.dart';
 const String _geohashAlphabet = '0123456789bcdefghjkmnpqrstuvwxyz';
 final RegExp _geohashRe = RegExp(r'^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$');
 
-/// True if [s] is a valid geohash (docs/specs/03 §1.1).
 bool isValidGeohash(String s) => _geohashRe.hasMatch(s.toLowerCase());
 
 final RegExp _channelTagWhitespaceRe = RegExp(r'\s');
@@ -17,8 +16,7 @@ bool isValidChannelTag(String? s) =>
 /// The default channel, which cannot be left or blocked.
 const String kDefaultChannel = 'nymchat';
 
-/// Wire parameters for a channel key: whether it's a geohash channel, the event
-/// kind, and the identifier tag (`channelWire`, docs/specs/03 §1.1).
+/// Wire parameters for a channel key: geohash flag, event kind and identifier tag.
 class ChannelWire {
   const ChannelWire(this.isGeohash, this.kind, this.tag);
   final bool isGeohash;
@@ -27,36 +25,22 @@ class ChannelWire {
 }
 
 ChannelWire channelWire(String channelKey) {
-  // Mirrors PWA `channelWire`: a non-empty key that is a valid geohash uses the
-  // geohash transport (kind 20000 + `g` tag); everything else is a named
-  // channel (kind 23333 + `d` tag). ('nymchat' contains 'a', so it never passes
-  // isValidGeohash — no special-casing of the default channel is needed.)
+  // Valid geohash keys use kind 20000 + `g`; all else is kind 23333 + `d` ('nymchat' is never a geohash).
   if (channelKey.isNotEmpty && isValidGeohash(channelKey)) {
     return const ChannelWire(true, EventKind.geoChannel, 'g');
   }
   return const ChannelWire(false, EventKind.namedChannel, 'd');
 }
 
-/// A registered channel (`this.channels` entry).
 class ChannelEntry {
   ChannelEntry({required this.channel, this.geohash = ''});
 
-  /// Channel name (always present).
   final String channel;
 
-  /// Geohash as the caller supplied it; '' when they did not. Prefer
-  /// [geohashKey], which fills this in from the channel's own name.
+  /// Geohash as supplied, or ''; prefer [geohashKey].
   final String geohash;
 
-  /// The geohash this channel IS, or '' when it is a named channel.
-  ///
-  /// Validated, and derived from the name when [geohash] was not supplied.
-  /// Registration happens from a dozen places — a mesh delivery, a synced key
-  /// list, a column seed, a discovery pass — and several only ever have the
-  /// name while others pass it as a geohash whether or not it is one;
-  /// whichever landed first decided the row for the rest of the session, one
-  /// way or the other. [channelWire] picks the transport by this same test, so
-  /// the answer cannot disagree with what the channel is on the wire.
+  /// The validated geohash this channel is, or ''; uses the same test as [channelWire].
   String get geohashKey {
     if (geohash.isNotEmpty && isValidGeohash(geohash)) return geohash;
     return isValidGeohash(channel) ? channel : '';
@@ -64,7 +48,7 @@ class ChannelEntry {
 
   bool get isGeohash => geohashKey.isNotEmpty;
 
-  /// Storage key for messages: `#<geohash>` or `#<name>` (always `#`-prefixed).
+  /// Message storage key, always `#`-prefixed.
   String get storageKey => '#${isGeohash ? geohashKey : channel}';
 
   /// Lookup key in the `channels` map (geohash or name, lowercase).
@@ -79,7 +63,7 @@ class ChannelEntry {
       );
 }
 
-/// Decodes a geohash to its center lat/lng (docs/specs/03 §1.5).
+/// Decodes a geohash to its center lat/lng.
 ({double lat, double lng}) decodeGeohash(String geohash) {
   double latMin = -90, latMax = 90, lngMin = -180, lngMax = 180;
   bool isLng = true;
@@ -109,7 +93,6 @@ class ChannelEntry {
   return (lat: (latMin + latMax) / 2, lng: (lngMin + lngMax) / 2);
 }
 
-/// Encodes lat/lng to a geohash of [precision] chars.
 String encodeGeohash(double lat, double lng, {int precision = 9}) {
   double latMin = -90, latMax = 90, lngMin = -180, lngMax = 180;
   bool isLng = true;
@@ -145,7 +128,7 @@ String encodeGeohash(double lat, double lng, {int precision = 9}) {
   return out.toString();
 }
 
-/// Haversine distance in km (R=6371), as in `calculateDistance`.
+/// Haversine distance in km (R=6371).
 double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
   const r = 6371.0;
   double toRad(double d) => d * math.pi / 180.0;

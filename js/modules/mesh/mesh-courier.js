@@ -5,42 +5,28 @@
     const P = () => G.NymMeshProtocol;
     const C = () => G.NymMeshCrypto;
 
-    // Distinct from the interactive `Noise_XX_…` our sessions use, so an X
-    // transcript can never be confused with an XX one.
+    // Distinct from the interactive `Noise_XX_…` so an X transcript can never be confused with an XX one.
     const COURIER_PROTOCOL_NAME = 'Noise_X_25519_ChaChaPoly_SHA256';
     const COURIER_PROLOGUE = 'bitchat-courier-v1';
     const PREKEY_PROLOGUE = 'bitchat-prekey-v1';
     const TAG_CONTEXT = 'bitchat-courier-tag-v1';
 
     const TAG_LENGTH = 16;
-    // Couriered messages are text-sized; media is out of scope for mail a
-    // stranger carries.
+    // Text-sized only; media is out of scope for mail a stranger carries.
     const MAX_CIPHERTEXT_BYTES = 16 * 1024;
     // Matches the sender outbox's retention.
     const MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
-    // Cap on the budget a depositor can claim, so a malicious envelope cannot
-    // turn the courier network into an amplifier.
+    // Cap on a depositor's claimed budget so a malicious envelope can't turn couriers into an amplifier.
     const MAX_COPIES = 8;
-    // Someone else's mail taking up our storage and airtime, so: a small number.
+    // Someone else's mail costs our storage and airtime, so keep it small.
     const CARRY_CAPACITY = 100;
-    // Redundancy buys delivery odds; each extra copy also tells one more person
-    // that a message exists.
+    // Each extra copy improves delivery but tells one more person a message exists.
     const MAX_COURIERS_PER_DEPOSIT = 3;
 
     const enc = (s) => new TextEncoder().encode(s);
     const hex = (b) => [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 
-    /// Seals `payload` to `recipientStaticKey`.
-    ///
-    /// Deliberately NOT forward secret — that is what makes it usable at all:
-    /// the sender has no session with an offline peer to derive keys from, only
-    /// their long-term static key. A later compromise of that key exposes
-    /// envelopes captured in transit, which is why an established session is
-    /// always preferred when the peer is actually reachable.
-    /// `prologue` selects the seal format: omitted for a v1 envelope sealed to
-    /// the recipient's long-lived static key, or `prekeyPrologue(id)` for a v2
-    /// envelope sealed to a one-time prekey — which IS forward secret, because
-    /// the recipient deletes that key after use.
+    // Static-key seals aren't forward secret; a v2 `prekeyPrologue(id)` seal to a one-time prekey is.
     async function sealCourier(payload, recipientStaticKey, senderPriv, senderPub, prologue) {
         if (!recipientStaticKey || recipientStaticKey.length !== 32) {
             throw new Error('recipient static key must be 32 bytes');
@@ -66,14 +52,7 @@
         return C().concat(...parts);
     }
 
-    /// Opens an envelope addressed to our static key, returning
-    /// `{ payload, senderStaticKey }` with the sender AUTHENTICATED.
-    ///
-    /// Throws when the ciphertext is not ours — which is the normal case for a
-    /// courier testing mail it merely carries, so callers read a throw as "not
-    /// for me", never as an error.
-    /// `prologue` must match what the sender used, and for a v2 envelope
-    /// `localPriv`/`localPub` are the PREKEY halves, not the identity key.
+    // Returns `{ payload, senderStaticKey }` (authenticated); a throw means "not for me"; v2 uses the prekey halves.
     async function openCourier(ciphertext, localPriv, localPub, prologue) {
         // e (32) + encrypted static (32 + 16) + encrypted payload (>= 16).
         if (!ciphertext || ciphertext.length < 32 + 48 + 16) {
@@ -95,10 +74,7 @@
         return { payload, senderStaticKey: rs };
     }
 
-    /// Domain separation for a PREKEY-sealed (v2) envelope. Distinct from both
-    /// the interactive XX transcripts and the static-sealed courier prologue,
-    /// and bound to the specific prekey id — so a ciphertext cannot be replayed
-    /// against a different prekey than the one it was sealed to.
+    // Domain separation for v2 envelopes, bound to the prekey id so a ciphertext can't be replayed against another.
     function prekeyPrologue(prekeyId) {
         const id = new Uint8Array(4);
         new DataView(id.buffer).setUint32(0, prekeyId >>> 0, false);
@@ -108,9 +84,7 @@
     // recipient tags 
     const epochDayFor = (nowMs) => Math.floor(nowMs / 86400000);
 
-    /// The rotating hint for one day. Computable only by a party that already
-    /// knows the static key — which is the point: a courier holding the
-    /// envelope cannot work out who it is for.
+    // Computable only by someone who knows the static key, so couriers can't tell who it's for.
     async function recipientTagFor(noiseStaticKey, epochDay) {
         const day = new Uint8Array(4);
         new DataView(day.buffer).setUint32(0, epochDay >>> 0, false);
@@ -118,10 +92,7 @@
         return mac.subarray(0, TAG_LENGTH);
     }
 
-    /// The tags to test when asking "is this envelope for this peer?".
-    /// Spans the adjacent days so an envelope sealed near midnight — or under
-    /// clock skew between two phones that never synchronized with anything —
-    /// still matches while being carried.
+    // Spans adjacent days to tolerate midnight and clock skew.
     async function candidateTagsFor(noiseStaticKey, nowMs) {
         const day = epochDayFor(nowMs);
         const out = [];
@@ -134,9 +105,7 @@
     // the envelope 
     const clampCopies = (n) => Math.min(MAX_COPIES, Math.max(1, n | 0));
 
-    /// TLV (type, length16 BE, value): 0x01 tag, 0x02 expiry, 0x03 ciphertext,
-    /// 0x04 copies. Copies is omitted when 1, so a carry-only envelope stays
-    /// byte-identical to the pre-spray wire form.
+    // TLV (type, length16 BE, value): 0x01 tag, 0x02 expiry, 0x03 ciphertext, 0x04 copies (omitted when 1).
     function encodeEnvelope({ recipientTag, expiryMs, ciphertext, copies, prekeyId }) {
         if (!recipientTag || recipientTag.length !== TAG_LENGTH) return null;
         if (!ciphertext || !ciphertext.length || ciphertext.length > MAX_CIPHERTEXT_BYTES) return null;
@@ -150,8 +119,7 @@
         tlv(0x02, exp);
         tlv(0x03, ciphertext);
         if (n > 1) tlv(0x04, new Uint8Array([n]));
-        // Omitted for a v1 static-sealed envelope so it stays byte-identical
-        // to the pre-prekey wire form.
+        // Omitted for v1 envelopes so they stay byte-identical to the pre-prekey wire form.
         if (prekeyId != null) {
             const id = new Uint8Array(4);
             new DataView(id.buffer).setUint32(0, prekeyId >>> 0, false);
@@ -160,8 +128,7 @@
         return C().concat(...parts);
     }
 
-    /// Returns null for anything malformed. An unknown TLV is skipped so a
-    /// newer bitchat can extend the envelope without our refusing to carry it.
+    // Null for malformed input; unknown TLVs are skipped for forward compatibility.
     function decodeEnvelope(data) {
         let off = 0, tag = null, expiry = null, ciphertext = null, copies = 1, prekeyId = null;
         while (off < data.length) {
@@ -191,17 +158,7 @@
         return out;
     }
 
-    /// Whether a message to this recipient may be couriered at all.
-    ///
-    /// The privacy gate, and deliberately conservative:
-    ///  * ghost-pinned — NEVER. The peer met us as a ghost and knows us only as
-    ///    that; asking a stranger to carry mail for that conversation is
-    ///    exactly the link a ghost identity exists to prevent, and the same
-    ///    reason the sender outbox refuses to republish it to Nostr.
-    ///  * ghosted sender — NEVER. The deposit outlives the epoch: after we
-    ///    rotate, someone is still carrying a message that ties the throwaway
-    ///    identity to us.
-    ///  * no static key — nothing to seal to.
+    // Never for ghost-pinned peers or a ghosted sender (the deposit outlives the epoch), nor without a static key.
     function mayDeposit({ isGhostPinned, isGhostMode, hasRecipientStaticKey }) {
         if (isGhostPinned) return false;
         if (isGhostMode) return false;
@@ -209,18 +166,14 @@
         return true;
     }
 
-    /// Whether a peer may be handed mail to carry. Only a VERIFIED peer: an
-    /// unverified one is a radio claiming a name, and handing it an envelope
-    /// tells an unknown party that we are sending mail.
+    // Verified peers only: handing an envelope to an unverified radio reveals we are sending mail.
     function mayCourier({ isVerified, isSelf, isRecipient }) {
         if (isSelf) return false;
         if (isRecipient) return false; // Delivered directly, not couriered.
         return !!isVerified;
     }
 
-    /// The budget passed on at each hand-off — a binary split, keeping the
-    /// larger half. At 1 the holder keeps carrying and hands nothing on, which
-    /// is what makes it spray-and-WAIT rather than a flood.
+    // Binary split keeping the larger half; at 1 the holder keeps carrying (spray-and-wait, not flood).
     const sprayShare = (copies) => (copies <= 1 ? 0 : Math.floor(copies / 2));
     const keepShare = (copies) => copies - sprayShare(copies);
 
@@ -242,8 +195,7 @@
             if (now >= envelope.expiryMs) return false;
             if (this.carried.has(key)) return false;
             this.carried.set(key, { envelope, receivedAt: now, handedTo: new Set() });
-            // Oldest-received first: the newest mail has the best chance of
-            // still mattering to somebody.
+            // Evict oldest-received first; the newest mail is most likely still to matter.
             while (this.carried.size > this.capacity) {
                 this.carried.delete(this.carried.keys().next().value);
             }
@@ -269,15 +221,13 @@
             return this.carried.size !== before;
         }
 
-        /// The mail for a peer we have just met, matched on the rotating tag.
+        // Matched on the rotating tag.
         forTags(tags) {
             const wanted = new Set(tags.map(hex));
             return [...this.carried.entries()].filter(([, v]) => wanted.has(hex(v.envelope.recipientTag)));
         }
 
-        /// Mail that still has budget to hand on, excluding what this peer
-        /// already has — re-spraying the same peer burns budget without adding
-        /// a carrier.
+        // Excludes what this peer already has; re-spraying burns budget without adding a carrier.
         sprayableTo(peerID) {
             return [...this.carried.entries()]
                 .filter(([, v]) => v.envelope.copies > 1 && !v.handedTo.has(peerID));

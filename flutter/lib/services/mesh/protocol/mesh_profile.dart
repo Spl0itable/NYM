@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// What a [MeshMessageType.nymProfileRequest] is asking for.
 class MeshProfileRequest {
   const MeshProfileRequest({this.wantAvatar = true, this.wantBanner = false});
 
@@ -27,13 +26,7 @@ class MeshProfileRequest {
   }
 }
 
-/// A rich profile transferred directly over the mesh
-/// ([MeshMessageType.nymProfileResponse]) so a peer's real avatar/banner can be
-/// shown offline even when we've never seen them on Nostr. This is a
-/// Nymchat-only extension; bitchat ignores the carrying packet.
-///
-/// TLV stream with 2-byte big-endian lengths (images exceed the 255-byte
-/// single-byte field): `type:1 · length:2 · value`.
+/// Nymchat-only mesh profile TLV (`type:1 · length:2 BE · value`); bitchat ignores it.
 class MeshProfile {
   MeshProfile({
     required this.nickname,
@@ -113,7 +106,7 @@ class MeshProfile {
           bannerMime = utf8.decode(value, allowMalformed: true);
           break;
         default:
-          break; // forward-compatible: ignore unknown fields
+          break; // Forward-compatible: ignore unknown fields.
       }
     }
     if (nickname == null) return null;

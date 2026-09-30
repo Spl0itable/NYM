@@ -12,14 +12,9 @@ import '../api/api_config.dart';
 import 'relay_message.dart';
 import 'relay_stats.dart';
 
-/// Connection status of a single relay socket.
 enum RelayStatus { disconnected, connecting, connected, failed }
 
-/// Compute the reconnect backoff delay for [attempt] (0-based).
-///
-/// Mirrors the PWA direct-mode formula: `min(base * 1.5^attempt, cap)`.
-/// Pure and deterministic (no jitter) so it can be unit-tested. Apply
-/// [applyJitter] separately for live use.
+/// Reconnect delay `min(base * 1.5^attempt, cap)` without jitter, as in the PWA.
 Duration computeBackoff(
   int attempt, {
   Duration base = const Duration(milliseconds: 1000),
@@ -34,29 +29,17 @@ Duration computeBackoff(
   return Duration(milliseconds: ms.round());
 }
 
-/// Apply +/- [spread] jitter (default 25%) to a duration, never below zero.
+/// Applies +/- [spread] jitter to [d], never below zero.
 Duration applyJitter(Duration d, Random rng, {double spread = 0.25}) {
   final f = 1 - spread + rng.nextDouble() * spread * 2;
   final ms = (d.inMilliseconds * f).floor();
   return Duration(milliseconds: ms < 0 ? 0 : ms);
 }
 
-/// Factory used to open a [WebSocketChannel] for a relay URL. Overridable in
-/// tests to avoid real sockets.
+/// Opens a [WebSocketChannel] for a relay URL; overridable in tests.
 typedef WebSocketChannelFactory = WebSocketChannel Function(Uri url);
 
-/// The REAL/native channel factory used by every relay socket (direct relays,
-/// the relay-pool proxy shards, and the single-relay `/api/relay` path).
-///
-/// Routes through [IOWebSocketChannel] so we can attach a
-/// `User-Agent: ApiConfig.userAgent` header — the backend `isNymchatClient`
-/// gate (`functions/api/_client.js`: `/Nym(?:chat|bot)App\//i`) recognizes the
-/// native client by it
-/// (e.g. the app-relay `nymchat_proxy` perk, relay-pool.js:1124). The
-/// headers-less `WebSocketChannel.connect` would send a default Dart UA.
-///
-/// Tests inject their own [WebSocketChannelFactory] (a fake channel), so this
-/// native path — and dart:io — never runs under `flutter test`.
+/// Native factory that sends `User-Agent: ApiConfig.userAgent` so the backend `isNymchatClient` gate passes.
 WebSocketChannel defaultRelayChannelFactory(Uri url) =>
     IOWebSocketChannel.connect(
       url,
@@ -64,12 +47,7 @@ WebSocketChannel defaultRelayChannelFactory(Uri url) =>
       customClient: ApiConfig.socketClient(),
     );
 
-/// A single relay WebSocket connection with auto-reconnect, subscription
-/// re-sending, and publish acknowledgment tracking.
-///
-/// Transport only: it knows nothing about app state. Inbound frames are parsed
-/// into [RelayMessage]s and exposed via [messages]; status changes via
-/// [statusStream].
+/// One relay socket with reconnect, subscription re-send and publish OK tracking.
 class RelayConnection {
   RelayConnection(
     this.url, {
@@ -92,7 +70,7 @@ class RelayConnection {
   final Duration _backoffBase;
   final Duration _backoffCap;
 
-  /// appRelay reconnects forever; others cap attempts (§4.4).
+  /// appRelay reconnects forever; others cap attempts.
   static const int maxReconnectAttempts = 10;
 
   WebSocketChannel? _channel;
@@ -102,10 +80,10 @@ class RelayConnection {
   Timer? _reconnectTimer;
   bool _closedByUser = false;
 
-  /// subId -> filters of active subscriptions, re-sent on reconnect.
+  /// subId to filters of active subscriptions, re-sent on reconnect.
   final Map<String, List<NostrFilter>> _activeSubs = {};
 
-  /// event id -> completer awaiting a matching OK.
+  /// Event id to completer awaiting a matching OK.
   final Map<String, Completer<OkMessage>> _pendingPublishes = {};
 
   final StreamController<RelayMessage> _messages =
@@ -113,17 +91,12 @@ class RelayConnection {
   final StreamController<RelayStatus> _statusCtl =
       StreamController<RelayStatus>.broadcast();
 
-  /// Wall-clock time of the last inbound message, or null if none yet.
   DateTime? lastMessageAt;
 
-  /// Live traffic counters for this single socket (bytes in/out, events, and
-  /// REQ→EOSE latency). The pool aggregates these into one [RelayStats] for the
-  /// Network Stats modal. Mirrors the per-socket writes the PWA makes to
-  /// `nym.relayStats` in relays.js (ws.onmessage / `_safeWsSend`).
+  /// Per-socket traffic counters the pool aggregates into [RelayStats].
   final RelayStats stats = RelayStats();
 
-  /// subId → epoch-ms the REQ was sent, so EOSE can be stamped as
-  /// `latencyPerRelay[url] = now - reqSentAt`. Cleared on EOSE / unsubscribe.
+  /// subId to epoch-ms of the REQ, for REQ→EOSE latency; cleared on EOSE or unsubscribe.
   final Map<String, int> _reqSentAt = {};
 
   Stream<RelayMessage> get messages => _messages.stream;
@@ -137,7 +110,7 @@ class RelayConnection {
     if (!_statusCtl.isClosed) _statusCtl.add(s);
   }
 
-  /// Open the connection. Safe to call when already connecting/connected.
+  /// Opens the connection; safe when already connecting or connected.
   void connect() {
     _closedByUser = false;
     if (_status == RelayStatus.connecting || _status == RelayStatus.connected) {
@@ -157,17 +130,7 @@ class RelayConnection {
         onDone: _onDone,
         cancelOnError: false,
       );
-      // web_socket_channel does not expose a discrete "open" event; the first
-      // successful sink usage / inbound frame implies connectivity. Treat the
-      // listen as connected and (re)send our REQs so the relay starts streaming.
-      //
-      // NOTE: the exponential-backoff counter is intentionally NOT reset here.
-      // `listen()` returns synchronously even for an unreachable relay — the
-      // failure only surfaces asynchronously via `_onDone`/`_onError`. Resetting
-      // the attempt count at listen time defeated the backoff entirely: a dead
-      // relay reconnected on the ~1s floor forever and `maxReconnectAttempts`
-      // was never reached. We now reset only once a frame actually arrives (see
-      // `_onData`), so backoff escalates and the attempt cap can trip.
+      // Treat listen as connected, but reset backoff only on the first frame: listen succeeds even for dead relays.
       _setStatus(RelayStatus.connected);
       _resendActiveSubs();
     } catch (e) {
@@ -177,12 +140,9 @@ class RelayConnection {
 
   void _onData(dynamic data) {
     lastMessageAt = DateTime.now();
-    // First confirmed inbound frame proves the socket really connected — only
-    // now is it safe to clear the reconnect backoff (see `_openSocket`).
+    // Only the first real frame proves the socket connected, so reset backoff here.
     _reconnectAttempt = 0;
-    // Count every inbound frame's UTF-8 byte length (relays.js ws.onmessage:
-    // `relayStats.bytesReceived += dataLen`). Binary frames count their byte
-    // length directly; non-frame payloads are ignored below.
+    // Count inbound UTF-8 byte length, as the PWA's relayStats does.
     if (data is String) {
       stats.bytesReceived += utf8.encode(data).length;
     } else if (data is List<int>) {
@@ -193,19 +153,14 @@ class RelayConnection {
     if (msg == null) return;
     switch (msg) {
       case EventMessage(:final event):
-        // Unique inbound EVENT: bump the total, the per-second counter, and the
-        // per-relay tally (relays.js handleRelayMessage:3738-3746). Dedup is the
-        // pool's job; per-connection a frame arrives once.
+        // Dedup is the pool's job; per connection a frame arrives once.
         stats.totalEvents++;
         stats.eventsThisSecond++;
         stats.eventsPerRelay[url] = (stats.eventsPerRelay[url] ?? 0) + 1;
-        // Per-relay, per-kind breakdown for the expanded Network Stats row
-        // (`_trackRelayKindData`, relays.js:3750), sized by the event's frame
-        // length so the expanded view's bytes match what arrived.
+        // Per-relay, per-kind breakdown sized by the frame length.
         stats.recordRelayKind(url, event.kind, utf8.encode(data).length);
       case EoseMessage(:final subId):
-        // Stamp REQ→EOSE latency for this relay (ms). The REQ send time was
-        // recorded in [subscribe]; clear it so a later re-REQ re-measures.
+        // REQ→EOSE latency in ms; clearing the stamp lets a later re-REQ re-measure.
         final sentAt = _reqSentAt.remove(subId);
         if (sentAt != null) {
           final ms = DateTime.now().millisecondsSinceEpoch - sentAt;
@@ -268,7 +223,7 @@ class RelayConnection {
 
   void _resendActiveSubs() {
     for (final entry in _activeSubs.entries) {
-      // Re-stamp the REQ time so the next EOSE measures this fresh round-trip.
+      // Re-stamp so the next EOSE measures this round-trip.
       _reqSentAt[entry.key] = DateTime.now().millisecondsSinceEpoch;
       _send(RelayFrame.req(entry.key, entry.value));
     }
@@ -279,8 +234,6 @@ class RelayConnection {
     if (ch == null || _status != RelayStatus.connected) return false;
     try {
       ch.sink.add(frame);
-      // Count the outbound frame's UTF-8 byte length (relays.js `_safeWsSend`:
-      // `relayStats.bytesSent += msg.length`).
       stats.bytesSent += utf8.encode(frame).length;
       return true;
     } catch (_) {
@@ -288,16 +241,13 @@ class RelayConnection {
     }
   }
 
-  /// Subscribe with [subId] and [filters]. The subscription is tracked and
-  /// re-sent automatically on reconnect.
+  /// Subscribes; the subscription is re-sent automatically on reconnect.
   void subscribe(String subId, List<NostrFilter> filters) {
     _activeSubs[subId] = filters;
-    // Record the REQ send time so the matching EOSE can stamp REQ→EOSE latency.
     _reqSentAt[subId] = DateTime.now().millisecondsSinceEpoch;
     _send(RelayFrame.req(subId, filters));
   }
 
-  /// Close subscription [subId] (sends CLOSE) and stop tracking it.
   void unsubscribe(String subId) {
     _reqSentAt.remove(subId);
     if (_activeSubs.remove(subId) != null) {
@@ -305,8 +255,7 @@ class RelayConnection {
     }
   }
 
-  /// Publish [event]; completes with the matching OK, or times out with a
-  /// synthetic rejected [OkMessage] after [publishTimeout].
+  /// Completes with the matching OK, or a synthetic rejection after [publishTimeout].
   Future<OkMessage> publish(NostrEvent event) {
     final existing = _pendingPublishes[event.id];
     if (existing != null) return existing.future;
@@ -328,7 +277,6 @@ class RelayConnection {
     );
   }
 
-  /// Permanently close the connection and release resources.
   Future<void> close() async {
     _closedByUser = true;
     _reconnectTimer?.cancel();

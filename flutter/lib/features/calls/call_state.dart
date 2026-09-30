@@ -1,13 +1,8 @@
-// call_state.dart - Immutable snapshot of the active/incoming call for the UI.
-//
-// The CallService keeps the mutable WebRTC machinery (RTCPeerConnection map,
-// MediaStream renderers) internally and publishes this plain snapshot through
-// `callStateProvider` so widgets rebuild without touching plugin objects.
+// Immutable call snapshot for the UI; the WebRTC objects stay inside CallService.
 
 import 'call_signaling.dart';
 
-/// A remote participant's render state. The actual RTCVideoRenderer lives in
-/// the service (keyed by pubkey); the UI looks it up by [pubkey].
+/// Remote participant render state; the renderer lives in the service keyed by [pubkey].
 class CallParticipant {
   const CallParticipant({
     required this.pubkey,
@@ -26,7 +21,6 @@ class CallParticipant {
   /// The remote stream currently carries a live video track.
   final bool hasVideo;
 
-  /// The peer is screen-sharing (calls.js `sharingPeers`).
   final bool sharing;
 
   CallParticipant copyWith({
@@ -44,11 +38,9 @@ class CallParticipant {
       );
 }
 
-/// Per-message delivery state for a self call-chat row (calls.js
-/// `.call-chat-receipt`): `sent` until at least one peer reads it, then `read`.
+/// Self call-chat row delivery: `sent` until a peer reads it, then `read`.
 enum CallChatDelivery { sent, read }
 
-/// One in-call chat row (calls.js `ac.chatLog` entries).
 class CallChatMessage {
   const CallChatMessage({
     required this.pubkey,
@@ -65,15 +57,12 @@ class CallChatMessage {
   final bool isSelf;
   final String mid;
 
-  /// emoji → set of reactor pubkeys (calls.js `ac.chatReactions[mid]`). A
-  /// reaction is "self" when the set contains the local pubkey.
+  /// emoji -> reactor pubkeys.
   final Map<String, Set<String>> reactions;
 
-  /// pubkey → nym of peers that have read this self message (group calls render
-  /// reader avatars; 1:1 renders ✓/✓✓). calls.js `ac.chatReaders[mid]`.
+  /// pubkey -> nym of peers that read this self message.
   final Map<String, String> readers;
 
-  /// 1:1 receipt state for self rows (calls.js delivery-status sent|read).
   final CallChatDelivery delivery;
 
   CallChatMessage copyWith({
@@ -92,8 +81,7 @@ class CallChatMessage {
       );
 }
 
-/// One floating/flying in-call reaction (calls.js `.call-react-fly-item`). The
-/// overlay animates each from the bottom upward over ~3.1s, then drops it.
+/// One flying in-call reaction; the overlay animates it upward over ~3.1s.
 class CallFlyReaction {
   const CallFlyReaction({
     required this.id,
@@ -103,21 +91,20 @@ class CallFlyReaction {
     this.who,
   });
 
-  /// Stable key so the overlay can keep an [AnimationController] per item.
+  /// Stable key so the overlay can keep one [AnimationController] per item.
   final int id;
   final String emoji;
 
-  /// Horizontal position as a 0–100 percentage (calls.js `8 + random*74`).
+  /// Horizontal position as a 0–100 percentage.
   final double leftPercent;
 
-  /// The reactor's pubkey (decorated nym in the "who" pill); null for self.
+  /// Reactor pubkey for the decorated "who" pill; null for self.
   final String? pubkey;
 
-  /// A plain "who" label (e.g. "You") when [pubkey] is null.
+  /// Plain "who" label (e.g. "You") when [pubkey] is null.
   final String? who;
 }
 
-/// The whole call snapshot consumed by the overlay + incoming modal.
 class CallState {
   const CallState({
     this.phase = CallPhase.idle,
@@ -153,11 +140,11 @@ class CallState {
   final bool isGroup;
   final String? groupId;
 
-  /// For an incoming call / 1:1 call: the remote pubkey + nym (caller).
+  /// Remote pubkey and nym for an incoming or 1:1 call.
   final String? peerPubkey;
   final String? peerNym;
 
-  /// Connected/known remote participants (excludes self).
+  /// Remote participants, excluding self.
   final List<CallParticipant> participants;
 
   final bool muted;
@@ -165,43 +152,31 @@ class CallState {
   final bool sharing;
   final String facingMode; // 'user' | 'environment'
 
-  /// "Calling…" / "Connecting…" / "0:42" — mirrors calls.js `callStatus`.
+  /// "Calling…", "Connecting…" or elapsed time like "0:42".
   final String statusText;
   final int elapsedSeconds;
 
   final List<CallChatMessage> chatLog;
   final int chatUnread;
 
-  /// Pubkeys currently typing in call chat (decorated by the overlay). calls.js
-  /// `ac.chatTypers` keys.
   final List<String> typingPubkeys;
 
-  /// Active floating reactions (self + incoming) to animate over the grid.
   final List<CallFlyReaction> flyReactions;
 
-  // --- presenter / screen-share moderation (group calls, calls.js) ----------
-
-  /// Mid-switch-camera flag — disables the switch button (calls.js
-  /// `ac.switchingCamera`).
   final bool switchingCamera;
 
-  /// Number of video input devices (the switch-cam button hides unless > 1;
-  /// calls.js `_updateCameraSwitchBtn`).
+  /// Video input count; the switch-camera button hides unless more than one.
   final int videoInputCount;
 
-  /// "Only the presenter can share" is on (calls.js `ac.shareRestricted`).
+  /// "Only the presenter can share" is on.
   final bool shareRestricted;
 
-  /// The assigned presenter's pubkey, if any (calls.js `ac.presenter`).
   final String? presenter;
 
-  /// Pubkeys that requested to present (calls.js `ac.presentRequests`).
   final Set<String> presentRequests;
 
-  /// We can moderate this (group) call (calls.js `_isCallMod`).
   final bool isMod;
 
-  /// We are allowed to screen-share right now (calls.js `canShareScreen`).
   final bool canShareScreen;
 
   bool get isActiveCall =>

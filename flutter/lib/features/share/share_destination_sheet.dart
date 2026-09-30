@@ -7,7 +7,6 @@ import '../../state/app_state.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
 import '../i18n/i18n.dart';
 
-/// What the OS share sheet handed us: some text/URL, and/or local media paths.
 class SharedPayload {
   const SharedPayload({this.text, this.filePaths = const []});
   final String? text;
@@ -17,11 +16,7 @@ class SharedPayload {
       (text == null || text!.trim().isEmpty) && filePaths.isEmpty;
 }
 
-/// A bottom sheet that lets the user pick where a shared payload should go —
-/// a channel, a private message, or a group — then routes there and drops the
-/// payload into that conversation's composer (text is appended for review;
-/// media runs through the normal upload pipeline). Nothing is sent
-/// automatically: the user reviews and hits send.
+/// Picks a channel, PM or group for a shared payload and drops it into that composer; nothing auto-sends.
 Future<void> showShareDestinationSheet(
   BuildContext context,
   WidgetRef ref,
@@ -53,9 +48,7 @@ class _ShareDestinationSheetState
     final notifier = ref.read(appStateProvider.notifier);
     final hooks = ref.read(pendingComposerActionProvider.notifier);
     notifier.switchView(view);
-    // Post the payload to the (now-active) conversation's composer. Files first
-    // so an accompanying caption ends up below them, matching how a user would
-    // type after attaching.
+    // Files first so an accompanying caption lands below them.
     if (widget.payload.filePaths.isNotEmpty) {
       hooks.requestShareFiles(widget.payload.filePaths);
     }
@@ -89,7 +82,6 @@ class _ShareDestinationSheetState
       ));
     }
 
-    // Channels
     final chanMatches = [
       for (final ch in channels)
         if (_matches(ch.isGeohash ? ch.geohashKey : ch.channel)) ch
@@ -108,7 +100,6 @@ class _ShareDestinationSheetState
       }
     }
 
-    // Private messages
     final pmMatches = [
       for (final pm in pms)
         if (_matches(getNymFromPubkey(pm.nym, pm.pubkey))) pm
@@ -124,7 +115,6 @@ class _ShareDestinationSheetState
       }
     }
 
-    // Groups
     final groupMatches = [
       for (final g in groups)
         if (_matches(g.name.isEmpty ? tr('Group') : g.name)) g

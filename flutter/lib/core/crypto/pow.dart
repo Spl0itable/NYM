@@ -6,30 +6,19 @@ import '../../models/nostr_event.dart';
 import 'keys.dart';
 import 'schnorr.dart';
 
-/// NIP-13 proof of work.
-
-/// The Nymchat channel-message PoW floor in leading-zero bits (`nymchatPowFloor`,
-/// app.js:556). Every channel message carries at least this much work, which is
-/// what lets other clients treat the sender as a Nymchat client (the web-of-trust
-/// self-attestation) and gate un-attested spam.
+/// Minimum PoW bits on every Nymchat channel message; other clients treat it as a Nymchat self-attestation.
 const int kNymchatPowFloor = 16;
 
-/// Clamps a stored PoW-filter difficulty onto the options the UI offers.
-///
-/// This value FILTERS INBOUND messages; it does not set what we send, which is
-/// always at least [kNymchatPowFloor]. The old 8- and 12-bit options were dead
-/// — every Nymchat message already clears them, and a client doing no work at
-/// all is not caught by a threshold that low — so they were retired and a value
-/// stored from them is lifted to 16 rather than selecting nothing.
+/// Clamps a stored inbound PoW filter onto the UI options; retired 8/12-bit values lift to 16.
 int normalizePowDifficulty(int? raw) {
   final n = raw ?? 0;
-  if (n <= 0) return 0; // Disabled
-  if (n <= 16) return 16; // 8 / 12 -> the real floor
+  if (n <= 0) return 0; // Disabled.
+  if (n <= 16) return 16;
   if (n <= 20) return 20;
   return 24;
 }
 
-/// Counts the number of leading zero bits in the 32-byte event id [idHex].
+/// Leading zero bits of the event id [idHex].
 int getPow(String idHex) {
   var count = 0;
   for (var i = 0; i < idHex.length; i += 2) {
@@ -38,7 +27,6 @@ int getPow(String idHex) {
       count += 8;
       continue;
     }
-    // Leading zeros within this byte.
     count += _clz8(nibblePair);
     break;
   }
@@ -54,15 +42,7 @@ int _clz8(int b) {
   return n;
 }
 
-/// The work an event PROVES, which is not the same as the zeros on its id.
-///
-/// NIP-13 credits the target the sender committed to in the nonce tag, and only
-/// when the id actually meets it. Counting leading zeros alone waves through a
-/// spammer mining a cheap target every time luck hands them a high-zero id, and
-/// that is the whole cost difference between their traffic and ours.
-///
-/// No nonce tag means no commitment, which counts as nothing rather than as
-/// whatever the id happens to show.
+/// NIP-13 proven work: the committed nonce-tag target when the id meets it, else 0.
 int validatedPowBits(List<List<String>> tags, String id) {
   for (final t in tags) {
     if (t.isEmpty || t[0] != 'nonce' || t.length < 3) continue;
@@ -73,17 +53,10 @@ int validatedPowBits(List<List<String>> tags, String id) {
   return 0;
 }
 
-/// Mines a `['nonce', n, difficulty]` tag onto [ev], incrementing the nonce
-/// until the event id has at least [difficulty] leading zero bits, then
-/// finalizes (signs) the event with [privkey].
-///
-/// Mirrors nym-crypto.js `minePow`: a `nonce` tag is appended (or replaced),
-/// the second element grinds, the third holds the target difficulty as a
-/// commitment.
+/// Mines a NIP-13 `['nonce', n, difficulty]` tag onto [ev] and signs it with [privkey].
 NostrEvent minePow(UnsignedEvent ev, int difficulty, Uint8List privkey) {
   final pubkey = getPublicKeyHex(privkey);
 
-  // Copy tags, dropping any existing nonce tag, then append a fresh one.
   final tags = <List<String>>[
     for (final t in ev.tags)
       if (t.isEmpty || t[0] != 'nonce') List<String>.from(t),
@@ -124,12 +97,7 @@ NostrEvent minePow(UnsignedEvent ev, int difficulty, Uint8List privkey) {
   }
 }
 
-/// Grinds a `['nonce', n, difficulty]` tag onto [ev] until its id has at least
-/// [difficulty] leading zero bits, returning the UnsignedEvent ready to sign.
-/// Unlike [minePow] this does NOT need the private key — it grinds purely from
-/// the event's own [UnsignedEvent.pubkey], so it works for remote (NIP-46)
-/// signers too: mine here, then hand the result to the signer. The grind runs in
-/// a `compute` isolate so a 16-bit floor doesn't hitch the UI on send.
+/// Grinds a NIP-13 nonce in a `compute` isolate without the private key, so remote signers can use it.
 Future<UnsignedEvent> mineNonce(UnsignedEvent ev, int difficulty) async {
   if (difficulty <= 0) return ev;
   final minedTags = await compute(_powGrind, <String, Object?>{
@@ -149,7 +117,6 @@ Future<UnsignedEvent> mineNonce(UnsignedEvent ev, int difficulty) async {
   );
 }
 
-/// `compute` entry point for [mineNonce] — pure, isolate-safe nonce grind.
 List<List<String>> _powGrind(Map<String, Object?> args) {
   final pubkey = args['pubkey'] as String;
   final createdAt = args['createdAt'] as int;
@@ -181,13 +148,11 @@ List<List<String>> _powGrind(Map<String, Object?> args) {
   }
 }
 
-/// Validates that [ev]'s id meets [minDifficulty] leading zero bits and that
-/// the committed difficulty in its `nonce` tag is at least [minDifficulty].
+/// True when the id and the committed `nonce` target both meet [minDifficulty].
 bool validatePow(NostrEvent ev, int minDifficulty) {
   if (ev.id.length != 64) return false;
   if (getPow(ev.id) < minDifficulty) return false;
-  // The committed target (3rd nonce element) must also meet the requirement
-  // to prevent claiming accidental leading zeros (NIP-13).
+  // The committed target must also meet the requirement, so accidental zeros don't count (NIP-13).
   for (final t in ev.tags) {
     if (t.isNotEmpty && t[0] == 'nonce' && t.length >= 3) {
       final committed = int.tryParse(t[2]);
@@ -195,6 +160,6 @@ bool validatePow(NostrEvent ev, int minDifficulty) {
       return true;
     }
   }
-  // No commitment tag: fall back to raw leading-zero check already passed.
+  // No commitment tag: the raw leading-zero check already passed.
   return true;
 }

@@ -27,15 +27,13 @@ Object.assign(NYM.prototype, {
             if (wrap) wrap.classList.toggle('no-status', isHidden);
             dot.className = `user-status-dot status-${dotStatus}`;
         }
-        // Keep the "Last seen …" presence line in sync with the contact's status.
         const seenEl = channelEl.querySelector('.pm-last-seen .loc-country');
         if (seenEl) {
             seenEl.textContent = this._pmLastSeenText(this.currentPM);
         }
     },
 
-    // Human-readable presence line for a 1:1 PM header. Shows live status when
-    // the contact is active/away, otherwise the relative time we last saw them.
+    // Live status when active/away, otherwise the relative time we last saw them.
     _pmLastSeenText(pubkey) {
         if (this.isVerifiedBot(pubkey)) return 'Always at your service';
         const status = (typeof this.getEffectiveUserStatus === 'function')
@@ -62,7 +60,6 @@ Object.assign(NYM.prototype, {
         }, 30000);
     },
 
-    // Update the delivery checkmark on a PM message in-place
     _updateDeliveryStatusEl(messageId, receiptType) {
         const msgEl = this.findMessageElementAnywhere(messageId);
         if (!msgEl) return;
@@ -76,8 +73,7 @@ Object.assign(NYM.prototype, {
         statusEl.textContent = receiptType === 'read' ? '✓✓' : '✓';
     },
 
-    // Buffer a receipt that arrived before its message (keyed by uppercased
-    // nym/bitchat message id), keeping the highest status per id
+    // Keyed by uppercased nym/bitchat message id, keeping the highest status per id.
     _bufferEarlyReceipt(receiptId, receiptType, senderPubkey) {
         if (!this._earlyReceipts) this._earlyReceipts = new Map();
         const order = { sent: 0, delivered: 1, read: 2 };
@@ -91,7 +87,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Apply a buffered receipt to a just-added own message, if one is waiting
     _applyEarlyReceipt(msg, convKey) {
         if (!this._earlyReceipts || !this._earlyReceipts.size || !msg || !msg.isOwn) return;
         const order = { sent: 0, delivered: 1, read: 2 };
@@ -116,7 +111,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Track a sent DM for retry if delivery receipt is not received
     trackPendingDM(eventId, wrappedEvents, recipientPubkey, conversationKey) {
         this.pendingDMs.set(eventId, {
             wrappedEvents, // Array of ['EVENT', wrapped] messages to re-send
@@ -127,16 +121,13 @@ Object.assign(NYM.prototype, {
             maxAttempts: this.dmRetryMaxAttempts
         });
 
-        // Start the retry checker if not already running
         if (!this.dmRetryInterval) {
             this.dmRetryInterval = setInterval(() => this.retryPendingDMs(), this.dmRetryCheckMs);
         }
     },
 
-    // Retry sending DMs that haven't received a delivery receipt
     retryPendingDMs() {
         if (this.pendingDMs.size === 0) {
-            // No pending DMs, stop the interval
             if (this.dmRetryInterval) {
                 clearInterval(this.dmRetryInterval);
                 this.dmRetryInterval = null;
@@ -147,28 +138,23 @@ Object.assign(NYM.prototype, {
         const now = Date.now();
 
         for (const [eventId, pending] of this.pendingDMs) {
-            // Check if this message has been delivered (status upgraded from 'sent')
             const msgs = this.pmMessages.get(pending.conversationKey);
             if (msgs) {
                 const msg = msgs.find(m => m.id === eventId);
                 if (msg && msg.deliveryStatus !== 'sent') {
-                    // Delivered or read - remove from pending
                     this.pendingDMs.delete(eventId);
                     continue;
                 }
             }
 
-            // Only retry if enough time has passed since last attempt
             if (now - pending.lastAttempt < this.dmRetryCheckMs) continue;
 
-            // Max re-sends reached: stop retrying but stay 'sent' — a missing
-            // receipt means the recipient is offline, not a send failure
+            // Stay 'sent' after max re-sends: a missing receipt means the recipient is offline, not a failure.
             if (pending.attempts >= pending.maxAttempts) {
                 this.pendingDMs.delete(eventId);
                 continue;
             }
 
-            // Retry: re-send all wrapped events to relays
             pending.attempts++;
             pending.lastAttempt = now;
 
@@ -178,7 +164,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Manual retry for a failed DM: drop the failed bubble and re-send fresh
     manualRetryDM(eventId) {
         if (!this.currentPM) return;
         const conversationKey = this.getPMConversationKey(this.currentPM);
@@ -198,7 +183,6 @@ Object.assign(NYM.prototype, {
         this.sendPM(msg.content, recipient);
     },
 
-    // Persist the newest gift-wrap timestamp we've processed
     _persistLastPMSyncTime() {
         if (!this.pubkey || !this.lastPMSyncTime) return;
         if (this._lastPMSyncTimeWriteAt && Date.now() - this._lastPMSyncTimeWriteAt < 5000) return;
@@ -224,9 +208,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Called on relay reconnection to retry any pending DMs and catch missed gift wraps
     retryPendingDMsOnReconnect() {
-        // Re-request gift wraps since our last known PM to catch any missed during disconnect
         let resolveCatchup;
         this._dmCatchupReady = new Promise(r => { resolveCatchup = r; });
 
@@ -270,24 +252,19 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Allow 3 seconds for relays to deliver missed gift wraps (and update ephemeral keys)
-        // before allowing outbound group messages to proceed.
+        // Give relays 3s to deliver missed gift wraps (and ephemeral keys) before outbound group sends.
         setTimeout(() => resolveCatchup(), 3000);
 
-        // After catch-up, re-exchange group ephemeral keys if this client was
-        // offline long enough that missed rotations may have expired off relays.
+        // Re-exchange group ephemeral keys in case missed rotations expired off relays while offline.
         this._dmCatchupReady.then(() => {
             try { this._maybeSendGroupKeyResyncs(); } catch (_) { }
-            // (Re)advertise our capability announcement. connectToRelays does
-            // the same on a first connect — this function only ever runs on a
-            // RE-connect, so it cannot be the only place that announces.
+            // This only runs on re-connect; connectToRelays announces on the first connect.
             try { this.schedulePqAnnouncement(); } catch (_) { }
         });
 
         if (this.pendingDMs.size === 0) return;
 
         for (const [eventId, pending] of this.pendingDMs) {
-            // Check if already delivered
             const msgs = this.pmMessages.get(pending.conversationKey);
             if (msgs) {
                 const msg = msgs.find(m => m.id === eventId);
@@ -297,7 +274,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Re-send all wrapped events
             for (const wrappedMsg of pending.wrappedEvents) {
                 this.sendDMToRelays(wrappedMsg);
             }
@@ -305,18 +281,14 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Send PM using NIP-17 (GiftWrap 1059) and optional forward secrecy
     async sendNIP17PM(content, recipientPubkey, options = {}) {
         const nowMs = Date.now();
         const now = Math.floor(nowMs / 1000);
 
-        // Generate message ID for delivery receipts (Nymchat format)
         const nymMessageId = this._generateSharedEventId();
 
         const fileOffer = options.fileOffer || null;
-        // Thread reply marker rides inside the encrypted rumor. It references
-        // the root's shared nymMessageId (`x` tag) because gift wrap event ids
-        // differ per recipient (threads.js).
+        // Rides inside the rumor and references the root's shared nymMessageId, since wrap ids differ per recipient.
         const threadRoot = options.threadRoot || null;
 
         const rumor = {
@@ -335,7 +307,7 @@ Object.assign(NYM.prototype, {
             pubkey: this.pubkey
         };
 
-        // Optional expiration (NIP-40) on gift wrap level
+        // Optional NIP-40 expiration on the gift wrap.
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? Math.floor(Date.now() / 1000) + this.settings.dmTTLSeconds
             : null;
@@ -345,39 +317,28 @@ Object.assign(NYM.prototype, {
             return await this._sendAnonBotPM(content, recipientPubkey, options);
         }
 
-        // Local key available (ephemeral/nsec)
         if (this.privkey) {
             const NT = window.NostrTools;
-            // Make sure we have looked for their announcement at least once
-            // before deciding. Opening the conversation already kicks this off,
-            // so this normally resolves instantly off the cache; it matters for
-            // the paths that send without opening anything (a reply from a
-            // notification, the first message of a brand new thread).
+            // Ensure at least one announcement lookup, for sends that skip opening the conversation.
             if (typeof this.ensurePqAnnouncement === 'function') {
                 try { await this.ensurePqAnnouncement(recipientPubkey); } catch (_) { }
             }
-            // Which transports this recipient gets. See pqPmPlan (pq.js) for
-            // why post-quantum replaces rather than accompanies the others.
+            // See pqPmPlan (pq.js) for why post-quantum replaces rather than accompanies the others.
             const plan = this.pqPmPlan(recipientPubkey);
             const recipientKemPk = plan.kemPk;
             let wrapped;
             let bitchatMessageId = null;
             let pqEncrypted = false;
             let pqRoot = false;
-            const sentWrappedEvents = []; // Track wrapped events for retry
+            const sentWrappedEvents = [];
 
-            // For known bitchat users OR unknown peers, send bitchat-format wrap
-            // This ensures bitchat app users can always decrypt our messages
+            // Known bitchat users and unknown peers get a bitchat-format wrap so bitchat apps can decrypt.
             if (plan.bitchat) {
-                // One wrap per chunk. Bitchat caps a TLV value at 255 bytes and
-                // sends longer text as several messages; anything bigger in one
-                // packet is discarded whole on arrival. Short text — nearly
-                // everything — is a single chunk and behaves exactly as before.
+                // Bitchat caps a TLV value at 255 bytes, so send one wrap per chunk.
                 const chunks = this.chunkBitchatContent(content);
                 for (const chunk of chunks) {
                     const encoded = this.encodeBitchatMessage(chunk, recipientPubkey);
-                    // The first chunk's id is the one we keep, matching the mesh
-                    // path: it is what a bitchat receipt for this message refers to.
+                    // The first chunk's id is what a bitchat receipt refers to, matching the mesh path.
                     if (bitchatMessageId === null) bitchatMessageId = encoded.messageId;
 
                     const bitchatRumor = {
@@ -417,16 +378,14 @@ Object.assign(NYM.prototype, {
             }
 
             if (recipientPubkey !== this.pubkey) {
-                // Post-quantum whenever we are, or the archive becomes the
-                // weakest link. Opened by any device holding the root.
+                // Post-quantum when possible so the archive isn't the weakest link.
                 const selfKemPk = this.pqSelfKeyFor();
                 const selfWrapped = selfKemPk
                     ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
                     : await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
                 this.sendDMToRelays(['EVENT', selfWrapped]);
                 this._recordGiftWrapId(nymMessageId, selfWrapped.id);
-                // Archive our own self-addressed copy so sent messages also
-                // restore across devices, without waiting for the relay echo.
+                // Archive our self-addressed copy so sent messages restore across devices without the relay echo.
                 this._archivePMEvent(selfWrapped);
             }
 
@@ -460,13 +419,11 @@ Object.assign(NYM.prototype, {
             pmList.sort((a, b) => {
                 return this._compareMessages(a, b);
             });
-            // Cap PM conversations at pmStorageLimit messages
             if (pmList.length > this.pmStorageLimit) {
                 this.pmMessages.set(conversationKey, pmList.slice(-this.pmStorageLimit));
             }
             this.persistPMMessages(conversationKey);
 
-            // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
             this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
@@ -474,7 +431,6 @@ Object.assign(NYM.prototype, {
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
-                // Force auto-scroll to bottom after sending own PM
                 this._scheduleScrollToBottom();
             }
             return wrapped.id;
@@ -485,18 +441,13 @@ Object.assign(NYM.prototype, {
         const _useN46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
         if (_useExt || _useN46) {
             const NT = window.NostrTools;
-            // The seal is out of reach here — the signer returns a finished
-            // NIP-44 payload — but the WRAP is ours: we generate its ephemeral
-            // key on every send, so it can be hybridized even though the seal
-            // cannot. That is the layer that matters: the wrap is what a
-            // recorder stores, and reaching the seal means breaking it first.
-            // See pqSendCapable (pq.js).
+            // The signer seals, but the wrap is ours and can be hybridized; see pqSendCapable (pq.js).
             const plan = this.pqPmPlan(recipientPubkey);
             const recipientKemPk = plan.kemPk;
 
             rumor.id = NT.getEventHash(rumor);
 
-            // Seal (kind 13) signed by identity via extension or remote signer
+            // Seal (kind 13) signed by identity via extension or remote signer.
             const sealContent = _useExt
                 ? await window.nostr.nip44.encrypt(recipientPubkey, JSON.stringify(rumor))
                 : await _nip46Encrypt(recipientPubkey, JSON.stringify(rumor));
@@ -507,12 +458,9 @@ Object.assign(NYM.prototype, {
                 ? await window.nostr.signEvent(sealUnsigned)
                 : await _nip46SignEvent(sealUnsigned);
 
-            // GiftWrap (kind 1059) with local ephemeral
+            // GiftWrap (kind 1059) with local ephemeral key.
             const ephSk = NT.generateSecretKey();
-            // The format the RECIPIENT announced, never a fixed one. A peer
-            // that published only `pk2` — a signer login, or any v2-only
-            // client — cannot open a combined wrap at all, so sending one
-            // produced a message that silently never arrived.
+            // Use the format the recipient announced; a `pk2`-only peer can't open a combined wrap.
             const wrapContent = recipientKemPk
                 ? (plan.pq2
                     ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, recipientPubkey, recipientKemPk)
@@ -525,7 +473,6 @@ Object.assign(NYM.prototype, {
                 tags: [['p', recipientPubkey]]
             };
 
-            // Add expiration only if enabled
             if (expirationTs) {
                 wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
             }
@@ -536,7 +483,6 @@ Object.assign(NYM.prototype, {
             this.sendDMToRelays(['EVENT', wrapped]);
             this._depositPMEvent(wrapped);
 
-            // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                 const eventIdToDelete = wrapped.id;
                 setTimeout(() => {
@@ -544,7 +490,7 @@ Object.assign(NYM.prototype, {
                 }, 600000); // 10 minutes
             }
 
-            // Send a self-wrap so our own message is retrievable from relays after reload.
+            // Self-wrap so our own message is retrievable from relays after reload.
             if (recipientPubkey !== this.pubkey) {
                 try {
                     const selfSealContent = _useExt
@@ -605,13 +551,11 @@ Object.assign(NYM.prototype, {
             extPmList.sort((a, b) => {
                 return this._compareMessages(a, b);
             });
-            // Cap PM conversations at pmStorageLimit messages
             if (extPmList.length > this.pmStorageLimit) {
                 this.pmMessages.set(conversationKey, extPmList.slice(-this.pmStorageLimit));
             }
             this.persistPMMessages(conversationKey);
 
-            // Track for automatic retry if delivery receipt not received
             this.trackPendingDM(wrapped.id, sentWrappedEvents, recipientPubkey, conversationKey);
 
             this.addPMConversation(this.getNymFromPubkey(recipientPubkey), recipientPubkey, Date.now());
@@ -619,7 +563,6 @@ Object.assign(NYM.prototype, {
 
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(this.pmMessages.get(conversationKey).slice(-1)[0]);
-                // Force auto-scroll to bottom after sending own PM
                 this._scheduleScrollToBottom();
             }
             return wrapped.id;
@@ -628,7 +571,7 @@ Object.assign(NYM.prototype, {
         throw new Error('No signing/encryption available for NIP-17 (need local privkey, extension, or remote signer)');
     },
 
-    // Receive NIP-17 (GiftWrap 1059): unwrap, verify, store
+    // Receive NIP-17 (GiftWrap 1059): unwrap, verify, store.
     _isGiftWrapBacklog() {
         if (this._giftWrapInitialSyncDone) return false;
         if (this._appInitTime && Date.now() - this._appInitTime > 20000) {
@@ -643,7 +586,6 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Drop wraps with no valid 'p' tag or none addressed to us (NIP-59).
     // Whether a wrap's payload is post-quantum, in either framing.
     _isPqPayload(content) {
         const NC = window.NymCrypto;
@@ -693,17 +635,12 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    /// Records that `id` was decrypted in THIS session, so a second delivery of
-    /// the same wrap skips the unwrap. Only ever set after a decrypt actually
-    /// succeeded — marking on entry would make one failure permanent for the
-    /// session, and a wrap that failed under a signer that was not ready yet
-    /// has to stay retryable.
+    // Only set after a successful decrypt, so a wrap that failed (e.g. signer not ready) stays retryable.
     _noteWrapDecrypted(id) {
         if (!id) return;
         if (!this._decryptedWrapIds) this._decryptedWrapIds = new Set();
         this._decryptedWrapIds.add(id);
-        // The outcome the persisted set waits for: only reached after an
-        // unwrap returned, so a wrap we could not open stays retryable.
+        // Only reached after an unwrap returned, so a wrap we could not open stays retryable.
         if (this.processedPMEventIds) {
             this.processedPMEventIds.add(id);
             if (this.processedPMEventIds.size > 5000) {
@@ -712,12 +649,7 @@ Object.assign(NYM.prototype, {
             }
             if (typeof this.persistDedupSets === 'function') this.persistDedupSets();
         }
-        // Bounded well above processedPMEventIds' 5000, because this set is
-        // also seeded with the whole cached PM history on boot
-        // (_seedDecryptedWrapIds) and a cap that evicted most of that would
-        // give the archive replay its redundant decrypts straight back.
-        // Dropping an id costs one redundant decrypt, so the cheap halving is
-        // the right trade at the ceiling.
+        // Bounded well above 5000 because boot seeds the whole cached PM history; eviction only costs a decrypt.
         if (this._decryptedWrapIds.size > 50000) {
             this._decryptedWrapIds = new Set(Array.from(this._decryptedWrapIds).slice(-25000));
         }
@@ -744,23 +676,14 @@ Object.assign(NYM.prototype, {
 
             const fromD1 = !!(opts && opts.fromD1);
 
-            // Already decrypted this wrap THIS RUN, so whatever it carries is
-            // in memory and the message store already. Re-running the unwrap
-            // would repeat an ML-KEM decapsulation and a NIP-44 decrypt to
-            // arrive at bytes we are holding.
+            // Already decrypted this run; skip the redundant ML-KEM + NIP-44 work.
             if (!this._decryptedWrapIds) this._decryptedWrapIds = new Set();
             if (this._decryptedWrapIds.has(event.id)) return;
 
-            // Early deduplication before expensive decryption
             if (!fromD1 && this.processedPMEventIds.has(event.id)) {
                 return;
             }
-            // In-flight guard only, so several relays carrying the same wrap
-            // do not all decrypt it at once. The PERSISTED mark waits for an
-            // outcome: recording it here wrote a wrap that failed to open to
-            // disk as processed, and nothing ever retried it. Cleared below
-            // unless the unwrap succeeded, and skipped for a D1 replay, which
-            // is the retry.
+            // In-flight guard only; the persisted mark waits for success, and D1 replays (the retry) skip it.
             if (!this._pmWrapAttempted) this._pmWrapAttempted = new Set();
             if (!fromD1 && this._pmWrapAttempted.has(event.id)) return;
             this._pmWrapAttempted.add(event.id);
@@ -768,48 +691,40 @@ Object.assign(NYM.prototype, {
                 this._pmWrapAttempted = new Set(Array.from(this._pmWrapAttempted).slice(-25000));
             }
 
-            // Update lastPMSyncTime to track newest received PM
             if (event.created_at && event.created_at > this.lastPMSyncTime) {
                 this.lastPMSyncTime = event.created_at;
                 this._persistLastPMSyncTime();
             }
 
-            // Parse Bitchat message format: bitchat1:<base64url payload>
-            // Returns { type, content } where type is NoisePayloadType
-            // NoisePayloadType: 0x01=PRIVATE_MESSAGE, 0x02=READ_RECEIPT, 0x03=DELIVERED
+            // bitchat1:<base64url>; returns { type, content } with NoisePayloadType 0x01=MSG, 0x02=READ, 0x03=DELIVERED.
             const parseBitchatMessage = (content) => {
                 if (!content.startsWith('bitchat1:')) {
-                    return { type: 0x01, content }; // Not bitchat format, treat as message
+                    return { type: 0x01, content };
                 }
 
                 try {
-                    // Strip prefix and decode base64url
                     let b64 = content.slice(9); // Remove 'bitchat1:'
                     b64 = b64.replace(/-/g, '+').replace(/_/g, '/');
                     while (b64.length % 4) b64 += '=';
 
                     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
-                    // Parse BitchatPacket header to find NoisePayloadType
-                    // Header: version(1) + type(1) + TTL(1) + timestamp(8) + flags(1) + payloadLen(2) = 14 bytes
-                    // Then: senderID(8) + recipientID(8 if HAS_RECIPIENT) + payload
+                    // Header: version, type, TTL, timestamp(8), flags, payloadLen(2) = 14 bytes; then senderID(8), recipientID?(8).
                     const flags = bytes[11];
                     const hasRecipient = (flags & 0x01) !== 0;
                     const payloadStart = 14 + 8 + (hasRecipient ? 8 : 0); // header + senderID + recipientID?
 
                     const noisePayloadType = bytes[payloadStart];
 
-                    // For receipts (READ_RECEIPT=0x02, DELIVERED=0x03), extract messageId
-                    // Bitchat sends receipts as: [NoisePayloadType][raw messageId string] (no TLV!)
+                    // Bitchat sends receipts as [NoisePayloadType][raw messageId string] (no TLV).
                     if (noisePayloadType !== 0x01) {
                         let pos = payloadStart + 1;
                         let end = bytes.length;
                         while (end > 0 && bytes[end - 1] === 0xBE) end--;
 
                         let messageId = null;
-                        // Check if it's TLV format (starts with 0x00) or raw string
                         if (pos < end && bytes[pos] === 0x00 && pos + 2 < end) {
-                            // TLV format: [0x00][len][messageID]
+                            // TLV format: [0x00][len][messageID].
                             const idLen = bytes[pos + 1];
                             if (pos + 2 + idLen <= end) {
                                 try {
@@ -817,12 +732,10 @@ Object.assign(NYM.prototype, {
                                 } catch (e) { }
                             }
                         } else {
-                            // Raw string format (Bitchat sends UUIDs directly)
-                            // UUID format: 8-4-4-4-12 = 36 chars (e.g., "07DFE7B7-151D-40D8-BA38-B93...")
+                            // Raw UUID string (8-4-4-4-12, 36 chars), as Bitchat sends it.
                             try {
                                 const rawBytes = bytes.subarray(pos, Math.min(pos + 36, end));
                                 messageId = new TextDecoder().decode(rawBytes);
-                                // Validate it looks like a UUID
                                 if (!/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i.test(messageId)) {
                                     messageId = null;
                                 }
@@ -831,21 +744,15 @@ Object.assign(NYM.prototype, {
                         return { type: noisePayloadType, content: null, messageId };
                     }
 
-                    // For PRIVATE_MESSAGE, extract the content and messageId from TLV.
-                    // TLV format after NoisePayloadType: [type][len][value], repeated.
-                    // For values <= 255 bytes the length is 1 byte; for longer values
-                    // the type byte has its high bit set (0x80) and length is 2 bytes
-                    // big-endian. Without the extended-length form, content over 255
-                    // bytes wraps mod 256 and the message is silently truncated.
+                    // TLV [type][len][value]; a high-bit type (0x80) marks a 2-byte big-endian length.
                     let pos = payloadStart + 1; // Skip NoisePayloadType byte
                     let messageContent = null;
                     let messageId = null;
 
-                    // Strip trailing padding (0xBE bytes) for bounds checking
+                    // Strip trailing 0xBE padding for bounds checking.
                     let end = bytes.length;
                     while (end > 0 && bytes[end - 1] === 0xBE) end--;
 
-                    // Parse TLV fields
                     while (pos < end - 1) {
                         const rawType = bytes[pos];
                         const fieldType = rawType & 0x7F;
@@ -881,25 +788,18 @@ Object.assign(NYM.prototype, {
                 }
             };
 
-            // Check if content is Bitchat format (v2: prefix)
+            // Bitchat format uses the v2: prefix.
             const isBitchatFormat = (content) => content.startsWith('v2:');
 
-            // Remote-signer unwrap (NIP-07 extension or NIP-46): standard NIP-44
-            // only, not Bitchat (which needs raw ECDH only a local key can do).
+            // Remote signers get standard NIP-44 only; Bitchat needs raw ECDH that only a local key can do.
             const unwrapWithRemoteSigner = async (decryptFn) => {
                 if (isBitchatFormat(event.content)) {
                     throw new Error('Bitchat format requires local key');
                 }
                 const NC = window.NymCrypto;
-                // The layered format is exactly what lets a signer take part:
-                // the ML-KEM layer needs only our own decapsulation key, which
-                // comes from the root, and what is left inside is an ordinary
-                // NIP-44 payload the signer decrypts as it always has. The
-                // combined format cannot be done here at all — it mixes the raw
-                // ECDH output into the key, which no signer will hand back.
+                // Layered format works with a signer: ML-KEM uses our root-derived key, the inner NIP-44 goes to the signer.
                 const pTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
-                // Both layers were sealed to the p-tag target: our identity key
-                // for a PM or self-copy, one of our rotating keys for a group.
+                // Both layers were sealed to the p-tag target: identity key for PMs/self-copies, a rotating key for groups.
                 const recipPk = (pTag && pTag[1]) || this.pubkey;
                 let selfKems = null;
                 let usedPq = false;
@@ -945,9 +845,7 @@ Object.assign(NYM.prototype, {
             const anonCandidates = typeof this.botAnonCandidatesFor === 'function'
                 ? this.botAnonCandidatesFor(event) : [];
             let seal, rumor;
-            // Whether this wrap arrived over the hybrid post-quantum transport.
-            // Surfaced on the message so the UI can distinguish confidentiality
-            // (this) from authentication (senderVerified) — they are orthogonal.
+            // Confidentiality (this) is orthogonal to authentication (senderVerified).
             let isPqWrap = false;
             if (anonCandidates.length) {
                 const anonRes = await this._cryptoCall('unwrapGiftWrap', [event, anonCandidates],
@@ -960,16 +858,7 @@ Object.assign(NYM.prototype, {
             } else if (this.privkey) {
                 // Real key (Bitchat + NIP-44) first, then ephemeral keys (NIP-44).
                 const ephSks = this._ephemeralCandidateSks(event);
-                // Post-quantum candidates first, ordered so the common case
-                // costs exactly one ML-KEM decapsulation: whichever secret key
-                // the wrap's `p` tag points at leads. A 1:1 PM or self-wrap is
-                // addressed to our identity pubkey; a group wrap is addressed
-                // to one of our rotating ephemeral keys, and
-                // _ephemeralCandidateSks already puts that match first.
-                //
-                // A classical wrap simply falls through these to the classical
-                // candidates below, because unwrapGiftWrap picks the transport
-                // by inspecting the payload rather than trusting a tag.
+                // The p-tag match leads so the common case costs one ML-KEM decapsulation; classical wraps fall through.
                 const pTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
                 const addressedToSelf = pTag && pTag[1] === this.pubkey;
                 const orderedSks = addressedToSelf
@@ -982,9 +871,7 @@ Object.assign(NYM.prototype, {
                 ];
                 let res = await this._cryptoCall('unwrapGiftWrap', [event, candidates],
                     () => window.NymCrypto.unwrapGiftWrap(event, candidates));
-                // null means "no candidate matched" — and also what a worker
-                // without ML-KEM returns for a PQ wrap, which the pool reports
-                // as a success. This thread has ML-KEM, so ask it first.
+                // A worker without ML-KEM returns null for PQ wraps, so try this thread, which has it.
                 if (!res && this._isPqPayload(event.content)) {
                     try { res = window.NymCrypto.unwrapGiftWrap(event, candidates); }
                     catch (_) { res = null; }
@@ -999,8 +886,7 @@ Object.assign(NYM.prototype, {
                     ({ seal, rumor } = r);
                     isPqWrap = !!r.isPq;
                 } catch (_remErr) {
-                    // Remote signer can't use our locally-stored ephemeral keys, so
-                    // fall back to those for group messages addressed to them.
+                    // Remote signers can't use our local ephemeral keys, so try them here for group messages.
                     const ephResult = this._tryDecryptWithEphemeralKeys(event);
                     if (ephResult) {
                         ({ seal, rumor } = ephResult);
@@ -1010,22 +896,15 @@ Object.assign(NYM.prototype, {
                 }
                 this._noteWrapDecrypted(event.id);
             } else {
-                return; // no way to decrypt
+                return;
             }
 
-            // Validate rumor and identity
-            // Accept kind 14 (DM), kind 15 (file), kind 69420 (Nymchat receipt),
-            // kind 7 (reaction gift-wrapped to the conversation),
-            // kind 9735 (zap announcement gift-wrapped to the conversation),
-            // kind 30078 (encrypted settings sync), and CALL_SIGNALING_KIND (audio/video call signaling)
+            // Accept kinds 14, 15, 69420 (receipt), 7, 9735, 30078 (settings sync) and CALL_SIGNALING_KIND.
             if (!rumor || (rumor.kind !== 14 && rumor.kind !== 15 && rumor.kind !== 69420 && rumor.kind !== 7 && rumor.kind !== 9735 && rumor.kind !== 30078 && rumor.kind !== this.CALL_SIGNALING_KIND && rumor.kind !== this.FRIEND_PRESENCE_KIND)) {
                 return;
             }
 
-            // NIP-59 sender auth: a native seal is signed by the sender's
-            // identity key, so its signer must match the claimed author or the
-            // event is forged. Bitchat seals use a throwaway key and can't be
-            // authenticated — decrypt but flag unverified.
+            // NIP-59: the seal signer must match the claimed author; Bitchat seals use a throwaway key (unverified).
             if (!rumor.pubkey) return;
             const isBitchatWrap = isBitchatFormat(event.content);
             let senderVerified = true;
@@ -1037,14 +916,12 @@ Object.assign(NYM.prototype, {
             if (!senderVerified && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(rumor.pubkey)) return;
             if (!senderVerified && !this._unverifiedWrapAllowed(rumor, parseBitchatMessage)) return;
 
-            // Route private friend-presence rumors (status shared by a friend
-            // who runs in "Friends only" mode). Verified senders only.
+            // Friend-presence rumors ("Friends only" mode); verified senders only.
             if (rumor.kind === this.FRIEND_PRESENCE_KIND) {
                 if (senderVerified) this.handleFriendPresenceRumor(rumor, rumor.pubkey);
                 return;
             }
 
-            // Route audio/video call signaling rumors
             if (rumor.kind === this.CALL_SIGNALING_KIND) {
                 if (!senderVerified) return;
                 this.handleCallSignalingEvent({
@@ -1058,7 +935,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Route encrypted settings events to settings handler
             if (rumor.kind === 30078) {
                 if (!senderVerified) return;
                 const dTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'd' && t[1])?.[1];
@@ -1079,9 +955,7 @@ Object.assign(NYM.prototype, {
                 }
 
                 if (isOwn) {
-                    // Cross-device signal: another of our devices saved
-                    // settings and wrote them to D1. It carries no settings
-                    // content — pull the authoritative values instead.
+                    // Cross-device ping with no settings content: pull the authoritative values from D1.
                     if (dTag === 'nymchat-sync-ping') {
                         try {
                             const ping = JSON.parse(rumor.content);
@@ -1092,16 +966,14 @@ Object.assign(NYM.prototype, {
                     try {
                         const s = JSON.parse(rumor.content);
                         const rumorTs = rumor.created_at || 0;
-                        // Core settings now arrive split across nymchat-settings-<section>
-                        // gift wraps; treat every such section as core.
+                        // Core settings arrive split across nymchat-settings-<section> wraps.
                         const isCoreSettings = dTag === 'nymchat-settings' || dTag.startsWith('nymchat-settings-');
                         await applyNostrSettingsAdditive(s);
                         if (isCoreSettings) {
                             const subId = opts && opts.settingsLoadSubId;
                             const buf = subId && this._settingsLoadBuffer && this._settingsLoadBuffer.get(subId);
                             if (buf) {
-                                // Buffer the newest payload per d-tag so each section
-                                // applies once, after the initial REQ completes.
+                                // Buffer the newest payload per d-tag so each section applies once, after the initial REQ.
                                 if (!buf.byTag) buf.byTag = {};
                                 const prev = buf.byTag[dTag];
                                 if (!prev || rumorTs > prev.ts) buf.byTag[dTag] = { ts: rumorTs, settings: s };
@@ -1126,10 +998,10 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Register any NIP-30 custom emoji declared on this rumor
+            // NIP-30 custom emoji.
             this.ingestEmojiTags(rumor.tags);
 
-            // NIP-92: register Blossom mirror URLs for media in this rumor
+            // NIP-92 Blossom mirror URLs.
             if (typeof this.ingestImetaTags === 'function') {
                 this.ingestImetaTags(rumor.tags);
             }
@@ -1138,36 +1010,29 @@ Object.assign(NYM.prototype, {
                 ? this.pubkey : rumor.pubkey;
             const isOwn = !!this.pubkey && senderPubkey === this.pubkey;
 
-            // Track if this user uses Bitchat format (for replies)
             const isBitchatUser = isBitchatFormat(event.content) || rumor.content?.startsWith('bitchat1:');
             if (isBitchatUser && !isOwn) {
-                // WITH the time it happened: the post-quantum send plan weighs
-                // this against the peer's announcement, and the older evidence
-                // must not win (see `_pqPmPlan`).
+                // With a timestamp: the PQ send plan must not let older evidence win (see `_pqPmPlan`).
                 this.noteBitchatFormatSeen(senderPubkey,
                     (rumor && rumor.created_at) || (event && event.created_at) || 0);
             }
 
-            // Track if this user uses Nymchat format with delivery receipts (has 'x' tag)
             const isNymUser = this.isNymMessage(rumor) || this.isNymReceipt(rumor);
             if (isNymUser && !isOwn) {
                 this.nymUsers.add(senderPubkey);
             }
 
-            // Handle typing indicators immediately (lightweight, no profile fetch needed)
-            // Discard stale typing indicators — they are ephemeral signals, not historical data
+            // Typing indicators are ephemeral; discard stale ones.
             if (this.isTypingIndicator(rumor)) {
                 if (!senderVerified) return;
                 const rumorAge = Math.floor(Date.now() / 1000) - (rumor.created_at || 0);
-                if (rumorAge > this._typingExpireMs / 1000) return; // Older than expire window — stale
+                if (rumorAge > this._typingExpireMs / 1000) return;
                 const parsed = this.parseTypingIndicator(rumor);
                 this.handleTypingIndicatorEvent(parsed, senderPubkey, senderVerified);
                 return;
             }
 
-            // Handle Nymchat delivery/read receipts early — before creating any
-            // PM conversation state — so group receipts (which lack a 'g' tag)
-            // don't accidentally create phantom 1:1 PM entries.
+            // Before any PM state so group receipts (no 'g' tag) don't create phantom 1:1 PMs.
             if (this.isNymReceipt(rumor)) {
                 if (!senderVerified) return;
                 const nymReceipt = this.parseNymReceipt(rumor);
@@ -1192,16 +1057,12 @@ Object.assign(NYM.prototype, {
                                 this.persistPMMessages(convKey);
 
                                 if (msg.isGroup && msg.nymMessageId && receiptType === 'read') {
-                                    // Group read receipt: store the reader's avatar instead of checkmarks
                                     if (!this.groupMessageReaders.has(msg.nymMessageId)) {
                                         this.groupMessageReaders.set(msg.nymMessageId, new Map());
                                     }
                                     const readerNym = this.getNymFromPubkey(senderPubkey);
                                     this.groupMessageReaders.get(msg.nymMessageId).set(senderPubkey, readerNym);
-                                    // Invalidate the cached DOM so a later re-render rebuilds the
-                                    // waterfalled avatars, then refresh any live DOM. Both are keyed
-                                    // by this receipt's own conversation so it works regardless of
-                                    // which group is currently focused (e.g. in columns view).
+                                    // Keyed by the receipt's conversation so it works regardless of which group is focused.
                                     if (this.channelDOMCache) this.channelDOMCache.delete(convKey);
                                     this.updateGroupReaderAvatars(msg.nymMessageId, convKey);
                                 } else {
@@ -1212,15 +1073,13 @@ Object.assign(NYM.prototype, {
                             break;
                         }
                     }
-                    // Receipt decrypted before its message (backlog ordering) —
-                    // buffer it so the message picks it up when it arrives
+                    // Receipt decrypted before its message; buffer it for when the message arrives.
                     if (!receiptMatched) this._bufferEarlyReceipt(receiptId, receiptType, senderPubkey);
                     }
                 }
                 return;
             }
 
-            // Handle Bitchat delivery/read receipts early (same reason as above)
             if (rumor.content?.startsWith('bitchat1:')) {
                 const parsedEarly = parseBitchatMessage(rumor.content);
                 if (parsedEarly.type === 0x02 || parsedEarly.type === 0x03) {
@@ -1253,8 +1112,7 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Kind 69420 is exclusively for receipts and typing indicators (handled above).
-            // If it reaches here, it's malformed — drop it so it doesn't appear as a PM.
+            // Kind 69420 is only receipts and typing (handled above); anything else is malformed.
             if (rumor.kind === 69420) {
                 return;
             }
@@ -1264,12 +1122,11 @@ Object.assign(NYM.prototype, {
             // Archive only durable content; settings/signaling/typing/receipts already returned.
             if (!fromD1) this._archivePMEvent(event);
 
-            // Fetch profile for any PM sender we don't have (await to get nickname)
             if (!isOwn && !this.users.has(senderPubkey)) {
                 await this.fetchProfileDirect(senderPubkey);
             }
 
-            // Route group messages before 1:1 PM logic
+            // Route group messages before 1:1 PM logic.
             const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && typeof t[1] === 'string');
             if (groupTag) {
                 if (!senderVerified) return;
@@ -1277,7 +1134,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Handle 1:1 PM reactions (kind 7 gift-wrapped without group tag)
             if (rumor.kind === 7) {
                 if (!senderVerified) return;
                 const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
@@ -1288,7 +1144,6 @@ Object.assign(NYM.prototype, {
                     const actionTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'action');
                     const isRemoval = actionTag && actionTag[1] === 'remove';
 
-                    // Timestamp-based dedup for out-of-order delivery
                     const actionKey = `${reactionMessageId}:${emoji}:${senderPubkey}`;
                     const lastAction = this.reactionLastAction.get(actionKey);
                     const eventTs = rumor.created_at || 0;
@@ -1317,8 +1172,7 @@ Object.assign(NYM.prototype, {
                             this._notifyPmReactionToOurMessage(reactionMessageId, emoji, senderPubkey, event, rumor);
                         }
                     }
-                    // If the target bubble isn't in the current DOM, drop its
-                    // cached render so the reaction shows after channel switch.
+                    // Drop the cached render so the reaction shows after a channel switch.
                     if (!document.querySelector(`[data-message-id="${CSS.escape(reactionMessageId)}"]`)) {
                         for (const [key, msgs] of this.pmMessages.entries()) {
                             if (msgs.some(m => m.id === reactionMessageId || m.nymMessageId === reactionMessageId)) {
@@ -1331,7 +1185,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Handle 1:1 PM zaps (kind 9735 gift-wrapped without group tag)
             if (rumor.kind === 9735) {
                 if (!senderVerified) return;
                 const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
@@ -1354,7 +1207,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Determine the peer for the conversation
             const rumorPTags = (rumor.tags || []).filter(t => Array.isArray(t) && t[0] === 'p' && typeof t[1] === 'string').map(t => t[1]);
             let peerPubkey = null;
             if (isOwn) {
@@ -1369,9 +1221,7 @@ Object.assign(NYM.prototype, {
                 if (clearedAt && (rumor.created_at || 0) <= clearedAt) return;
             }
 
-            // Re-open closed PMs only when the incoming message is newer than
-            // the close timestamp. Stale relay backlog must not resurrect a
-            // conversation the user just deleted.
+            // Stale relay backlog must not resurrect a conversation the user just deleted.
             if (this.closedPMs.has(peerPubkey)) {
                 const closedAt = this.closedPMTimes?.get(peerPubkey) || 0;
                 const msgTs = Math.floor(rumor.created_at || 0);
@@ -1389,7 +1239,6 @@ Object.assign(NYM.prototype, {
             const conversationKey = this.getPMConversationKey(peerPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
 
-            // Deduplicate within the correct conversation
             let list = this.pmMessages.get(conversationKey);
             if (list.some(m => m.id === event.id)) return;
 
@@ -1397,29 +1246,24 @@ Object.assign(NYM.prototype, {
             const originalTsSec = Math.floor(rumor.created_at) || nowSec;
             let tsSec = originalTsSec;
 
-            // Guard against clock skew: cap at current time (no future messages)
+            // Guard against clock skew: no future messages.
             tsSec = Math.min(tsSec, nowSec);
 
-            // Parse bitchat1: format if present to extract actual message
             const parsed = parseBitchatMessage(rumor.content);
 
-            // Non-message bitchat types (receipts handled above, skip unknown types)
             if (parsed.type !== 0x01) return;
 
             let messageContent = parsed.content;
 
-            // Drop messages whose content is raw ciphertext from other NIP-17
-            // implementations. Exempt our own self-wraps
+            // Drop raw ciphertext from other NIP-17 implementations; exempt our own self-wraps.
             if (!isOwn && messageContent && messageContent.length > 80 &&
                 !/\s/.test(messageContent) && /^[A-Za-z0-9+/=_-]+$/.test(messageContent) &&
                 !/^(lnbc|lnurl|lntb|lntbs|cashu|npub1|nsec1|nprofile1|nevent1|naddr1|note1|bc1|tb1|bitcoin:)/i.test(messageContent)) {
                 return;
             }
 
-            // Block blank/empty PM content
             if (!messageContent || !messageContent.trim()) return;
 
-            // Check if this is an edit of a previous message (has 'edit' tag in rumor)
             const pmEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
             if (pmEditTag) {
                 if (!senderVerified) return;
@@ -1428,13 +1272,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Dedup for dual-wrapped messages: when nymchat sends both bitchat +
-            // nymchat format to unknown peers, the recipient may decrypt both.
-            // Match first on the shared nymMessageId from the `x` tag (set on
-            // both wraps), since older senders truncate bitchat content over
-            // 255 bytes and content-equality would miss those duplicates.
-            // Fall back to sender + content + close-timestamp for legacy events
-            // that lacked the `x` tag.
+            // Dual-wrapped duplicates: match on the shared `x` nymMessageId, else sender + content + close timestamp.
             const nymMsgIdFromRumor = this.getNymMessageId(rumor);
             let dupMsg = null;
             if (nymMsgIdFromRumor) {
@@ -1447,11 +1285,9 @@ Object.assign(NYM.prototype, {
                 let needsRerender = false;
                 const dupMayRewrite = senderVerified === true || dupMsg.senderVerified !== true;
                 if (dupMayRewrite && !dupMsg.nymMessageId && nymMsgIdFromRumor) {
-                    // Reactions stored under the event ID must follow the message
-                    // to its nymMessageId, which is the ID the DOM renders with.
+                    // Reactions follow the message to its nymMessageId, the ID the DOM renders with.
                     this._migrateReactionKey(dupMsg.id, nymMsgIdFromRumor);
                     dupMsg.nymMessageId = nymMsgIdFromRumor;
-                    // Update the DOM element's data-message-id to use nymMessageId
                     const oldEl = document.querySelector(`[data-message-id="${dupMsg.id}"]`);
                     if (oldEl) {
                         oldEl.dataset.messageId = nymMsgIdFromRumor;
@@ -1459,20 +1295,16 @@ Object.assign(NYM.prototype, {
                     this.updateMessageReactions(nymMsgIdFromRumor);
                     needsRerender = true;
                 }
-                // If the duplicate carries longer content, prefer it — the existing
-                // copy may be a bitchat wrap with content truncated by an older sender.
+                // Prefer longer content; an older sender may have truncated the bitchat copy.
                 if (dupMayRewrite && messageContent && messageContent.length > (dupMsg.content || '').length) {
                     dupMsg.content = messageContent;
                     needsRerender = true;
                 }
-                // Never for our OWN sent message
+                // Never for our own sent message.
                 if (isPqWrap && !dupMsg.pqEncrypted && !dupMsg.isOwn) {
                     dupMsg.pqEncrypted = true;
                     dupMsg.pqRoot = this.pqSealIsRootSeeded(peerPubkey);
-                    // Flip the on-screen shield immediately, exactly as the
-                    // lock below does: a message whose classical copy rendered
-                    // first would otherwise keep claiming it is not
-                    // quantum-resistant until something re-rendered the row.
+                    // Flip the shield immediately in case the classical copy rendered first.
                     if (typeof this.refreshMessagePqBadge === 'function') {
                         this.refreshMessagePqBadge(dupMsg.nymMessageId || dupMsg.id);
                     }
@@ -1480,8 +1312,7 @@ Object.assign(NYM.prototype, {
                 }
                 if (senderVerified === true && dupMsg.senderVerified !== true) {
                     dupMsg.senderVerified = true;
-                    // Flip the on-screen lock immediately so the verified copy
-                    // wins even when the unverified Bitchat copy rendered first.
+                    // Flip the lock immediately so the verified copy wins over an unverified Bitchat copy.
                     this._setMessageVerifiedDOM(dupMsg.nymMessageId || dupMsg.id, true);
                     this._recordMsgVerification(dupMsg.nymMessageId, true);
                     needsRerender = true;
@@ -1493,7 +1324,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Silently drop channel invitations for blocked channels
             if (messageContent && messageContent.includes('Channel Invitation:')) {
                 const inviteMatch = messageContent.match(/join\s+#([a-z0-9]+)/i);
                 if (inviteMatch) {
@@ -1504,18 +1334,14 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Filter PMs based on acceptPMs setting
             if (!isOwn && this.settings.acceptPMs !== 'enabled') {
                 if (this.settings.acceptPMs === 'disabled') return;
                 if (this.settings.acceptPMs === 'friends' && !this.isFriend(senderPubkey)) return;
             }
 
-            // Get sender name from kind 0 profile (not from rumor tags)
             const senderName = this.getNymFromPubkey(senderPubkey);
 
-            // Nymbot replies may lead with a <think> reasoning block — split it
-            // into its own field so previews/search see only the visible reply
-            // and the renderer can show it as a collapsible section.
+            // Split a leading <think> block into its own field for previews and a collapsible section.
             let botThinking = null;
             if (this.isVerifiedBot(senderPubkey)) {
                 const tm = /^\s*<think>([\s\S]*?)<\/think>\s*/i.exec(messageContent);
@@ -1525,24 +1351,15 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Use nymMessageId already extracted above (during dedup check)
             const nymMsgId = nymMsgIdFromRumor;
 
             const pmFileOffer = senderVerified ? this.parseFileOfferTag(rumor.tags, senderPubkey) : null;
 
-            // Our OWN message, rebuilt from a wrap. The only wrap of it we can
-            // receive is the self-addressed archive copy, sealed to OUR key —
-            // so `isPqWrap` describes our archive, never how the message
-            // reached the recipient. Ask the recipient instead, which is the
-            // question the send path asked. Without this, every message we sent
-            // to a Bitchat peer came back from the archive (cache cleared, a
-            // second device, a D1 restore) marked "quantum-resistant, legacy
-            // key": pqEncrypted true off our own key, pqRoot false because the
-            // PEER has none.
+            // Our own archive copy is sealed to our key, so ask the recipient's plan instead of trusting isPqWrap.
             const pmIsPq = isOwn ? !!this.pqLayeredKeyFor(peerPubkey) : isPqWrap;
 
             const msg = {
-                id: event.id,                                  // keep outer id for reactions/zaps
+                id: event.id,
                 author: isOwn ? this.nym : senderName,
                 pubkey: senderPubkey,
                 content: messageContent,
@@ -1558,9 +1375,7 @@ Object.assign(NYM.prototype, {
                 eventKind: 1059,
                 isHistorical: this._isGiftWrapBacklog(),
                 senderVerified,
-                // Confidentiality, not authentication: orthogonal to
-                // senderVerified, so it gets its own badge rather than folding
-                // into that tri-state lock.
+                // Confidentiality, orthogonal to senderVerified.
                 pqEncrypted: pmIsPq,
                 pqRoot: pmIsPq && this.pqSealRootVerdict(peerPubkey) === true,
                 isFileOffer: !!pmFileOffer,
@@ -1573,8 +1388,7 @@ Object.assign(NYM.prototype, {
                     ? this.threadRootFromRumorTags(rumor.tags) : null,
                 deliveryStatus: isOwn ? 'sent' : undefined
             };
-            // The announcement may still be in flight; fill the verdict in
-            // rather than leaving the opening message marked legacy.
+            // The announcement may still be in flight; fill the verdict in later.
             if (pmIsPq) {
                 this.pqResolveRootVerdict(peerPubkey, nymMsgId || msg.id,
                     (v) => { msg.pqRoot = v; });
@@ -1589,7 +1403,6 @@ Object.assign(NYM.prototype, {
             list.sort((a, b) => {
                 return this._compareMessages(a, b);
             });
-            // Cap PM conversations at pmStorageLimit messages to prevent memory bloat
             if (list.length > this.pmStorageLimit) {
                 list = list.slice(-this.pmStorageLimit);
             }
@@ -1598,22 +1411,18 @@ Object.assign(NYM.prototype, {
             this.persistPMMessages(conversationKey);
             if (isOwn) this._applyEarlyReceipt(msg, conversationKey);
 
-            // Send DELIVERED receipt back to Bitchat user
             if (!isOwn && parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
                 this.sendBitchatReceipt(parsed.messageId, 0x03, senderPubkey); // 0x03 = DELIVERED
             }
 
-            // Send DELIVERED receipt back to Nymchat user
             if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
                 this.sendNymReceipt(nymMsgId, 'delivered', senderPubkey);
             }
 
-            // Use sender's profile name for conversation
             const peerName = this.getNymFromPubkey(peerPubkey);
             this.addPMConversation(peerName, peerPubkey, tsSec * 1000);
             this.movePMToTop(peerPubkey, tsSec * 1000);
 
-            // Clear typing indicator for sender (they sent a message, so they stopped typing)
             if (!isOwn) {
                 const convTypers = this.typingUsers.get(conversationKey);
                 if (convTypers && convTypers.has(senderPubkey)) {
@@ -1624,18 +1433,12 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // A reply collapsed inside a thread is off screen even while its
-            // conversation is open: it must neither advance the read watermark
-            // nor be treated as seen by the notification gate below.
+            // Collapsed thread replies must neither advance the read watermark nor count as seen.
             const pmThreadHidden = typeof this._threadReplyHidden === 'function' &&
                 this._threadReplyHidden(msg);
-            // The bell/sound path, shared by the not-viewing branch and by a
-            // thread reply the open conversation keeps collapsed.
             const notifyForPM = () => {
                 if (this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author, peerPubkey)) return;
-                // `threadNotifyMentionsOnly`: a thread hanging off a PM is still
-                // a thread, so a reply in one that neither @mentions nor
-                // quote-replies the user is held back like a group's would be.
+                // `threadNotifyMentionsOnly` applies to PM threads too.
                 if (this._threadReplySuppressed(msg)) return;
                 const ageMs = Date.now() - (tsSec * 1000);
                 const treatAsHistorical = msg.isHistorical || ageMs > 30000;
@@ -1645,8 +1448,7 @@ Object.assign(NYM.prototype, {
                     pubkey: peerPubkey,
                     id: conversationKey,
                     eventId: event.id,
-                    // Names the thread in the bell footer ("PM thread"), so the
-                    // user knows to look inside one rather than at the flat PM.
+                    // Names the thread in the bell footer ("PM thread").
                     ...(msg.threadRoot && this.threadsEnabled()
                         ? { inThread: true, threadRoot: msg.threadRoot } : {})
                 };
@@ -1658,14 +1460,12 @@ Object.assign(NYM.prototype, {
             };
             if (this.inPMMode && this.currentPM === peerPubkey) {
                 this.displayMessage(msg);
-                // Force auto-scroll to bottom for PM messages
                 this._scheduleScrollToBottom();
                 if (typeof this._markChannelRead === 'function' && !pmThreadHidden) {
                     this._markChannelRead(conversationKey, msg.created_at);
                 }
                 if (!isOwn && pmThreadHidden) notifyForPM();
-                // Send READ receipt if viewing the conversation, and mark
-                // the message so openPM doesn't re-send on next open.
+                // Mark it so openPM doesn't re-send the receipt.
                 if (!isOwn) {
                     let sent = false;
                     if (parsed.messageId && this.bitchatUsers.has(senderPubkey)) {
@@ -1680,24 +1480,18 @@ Object.assign(NYM.prototype, {
                     this.recordOwnActivity();
                 }
             } else {
-                // Column view: render into the conversation's open column even
-                // when it isn't the focused one.
+                // Column view: render into the conversation's open column even when unfocused.
                 const cvShown = this._cvActive && this._cvListForKey(conversationKey);
                 if (cvShown) this.displayMessage(msg);
-                // Not viewing this conversation — leave the cached DOM in
-                // place. loadPMMessages does a partial-cache restore that
-                // appends the trailing new messages to the cached fragment,
-                // avoiding a full re-render of long PM threads.
+                // Leave the cached DOM; loadPMMessages appends new messages to the cached fragment.
                 if (!isOwn) {
                     if (!(cvShown && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey, msg.created_at);
                     notifyForPM();
                 }
             }
         } catch (err) {
-            // Log decryption failures for debugging
         } finally {
-            // Never reached _noteWrapDecrypted, so the wrap did not open.
-            // Release it for the next delivery.
+            // Never reached _noteWrapDecrypted, so release it for the next delivery.
             if (this._pmWrapAttempted && event && event.id
                 && !(this._decryptedWrapIds && this._decryptedWrapIds.has(event.id))) {
                 this._pmWrapAttempted.delete(event.id);
@@ -1706,7 +1500,6 @@ Object.assign(NYM.prototype, {
     },
 
     getPMConversationKey(otherPubkey) {
-        // Create a unique key for this PM conversation between two users
         const keys = [this.pubkey, otherPubkey].sort();
         return `pm-${keys.join('-')}`;
     },
@@ -1719,7 +1512,6 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Queue a gift wrap (kind 1059, addressed to us) for batched upload to D1.
     _archivePMEvent(event) {
         if (!event || typeof event.id !== 'string') return;
         if (!this._pmArchiveAllowed()) return;
@@ -1759,8 +1551,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Deposit a recipient-addressed gift wrap into the recipient's D1 inbox so
-    // they can restore it even if they were offline when we sent it.
+    // Deposited into the recipient's D1 inbox so they can restore it even if offline when sent.
     _depositPMEvent(event) {
         if (!event || typeof event.id !== 'string') return;
         if (!this._pmArchiveAllowed()) return;
@@ -1958,7 +1749,6 @@ Object.assign(NYM.prototype, {
             }
             return !!wrapped;
         } catch (error) {
-            // Store the failed message in pmMessages so it persists across navigation
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
             const failedId = 'failed-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
@@ -1985,10 +1775,8 @@ Object.assign(NYM.prototype, {
             failList.sort((a, b) => {
                 return this._compareMessages(a, b);
             });
-            // Invalidate cached DOM for this conversation
             this.channelDOMCache.delete(conversationKey);
             this.persistPMMessages(conversationKey);
-            // Display the failed message if currently viewing this PM
             if (this.inPMMode && this.currentPM === recipientPubkey) {
                 this.displayMessage(failedMsg);
             }
@@ -1996,15 +1784,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Sign a short-lived NIP-98-style auth event so the bot worker can verify
-    // that the caller actually controls the pubkey it claims (prevents draining
-    // someone else's credits or reading their balance).
-    // Sign a NIP-98-style (kind 27235) auth event BOUND to the specific
-    // endpoint + method + action so the worker can reject a captured signature
-    // replayed against a different request/action. Money actions are signed
-    // fresh each time (the worker enforces single-use for them); routine
-    // actions reuse a short-lived per-action signature so extension/remote
-    // signers aren't re-prompted on every write.
+    // NIP-98-style (kind 27235) auth bound to endpoint + method + action; money actions are signed fresh.
     async _authPayloadHash(body) {
         const canonical = {};
         for (const k of Object.keys(body || {}).filter((k) => k !== 'auth').sort()) canonical[k] = body[k];
@@ -2048,7 +1828,6 @@ Object.assign(NYM.prototype, {
         return auth;
     },
 
-    // Ask the worker to wipe the server-side gift-wrap thread it uses for AI context
     async _clearBotServerThread() {
         try {
             const apiHost = this._getApiHost();
@@ -2071,7 +1850,6 @@ Object.assign(NYM.prototype, {
         try { localStorage.setItem('nym_botpm_cleared_at', String(ts)); } catch { }
     },
 
-    // First-person Nymbot introduction shown when a user first opens the premium chat
     _botWelcomeHtml() {
         return [
             'Hey, I\'m <strong>Nymbot</strong> 👋 — your private, end-to-end encrypted 1:1 AI assistant.',
@@ -2098,14 +1876,11 @@ Object.assign(NYM.prototype, {
         ].join('<br>');
     },
 
-    // Free, fully client-side guide to the premium chat: standard vs Pro
-    // tiers, credits, and every ?command.
     _displayBotPmHelp() {
         const proModel = this._getBotProModel();
         const std = this._lastBotCredits;
         const pro = this._lastBotProCredits;
-        // ?help samples the catalog rather than printing all of it — the live
-        // list can run to dozens of models.
+        // Samples the catalog; the live list can run to dozens of models.
         const allProModels = this._botProModelList();
         const modelLines = allProModels.slice(0, 8).map(m =>
             `&nbsp;&nbsp;<code>${m.key}</code> — ${this.escapeHtml(m.label)}, ${this._botProPriceLabel(m)}`);
@@ -2139,9 +1914,7 @@ Object.assign(NYM.prototype, {
         ].join('<br>'), 'nymbot-help-' + Date.now());
     },
 
-    // Render transient bot-styled info bubbles (welcome, ?help guide, command
-    // outputs) that look like a message from Nymbot but are local-only and
-    // never persisted.
+    // Local-only, never persisted.
     _displayBotInfoMessage(html, messageId) {
         if (!messageId) messageId = 'nymbot-info-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7);
         const container = document.getElementById('messagesContainer');
@@ -2182,18 +1955,15 @@ Object.assign(NYM.prototype, {
         return el;
     },
 
-    // Render the Nymbot welcome as a message bubble from Nymbot itself
     _displayBotWelcomeMessage() {
         const html = this._botWelcomeHtml();
         const el = this._displayBotInfoMessage(html, 'nymbot-welcome');
-        // Translate the welcome into the user's chosen app language.
         if (el && typeof this.translateBotWelcomeBubble === 'function') {
             this.translateBotWelcomeBubble(el, html);
         }
     },
 
-    // Slightly-edited welcome used for the proactive first-contact PM that brand-new
-    // users receive. Written in markdown so it renders through the normal pipeline.
+    // Markdown so it renders through the normal pipeline.
     _botFirstContactText() {
         return [
             'Welcome to **Nymchat** 👋 — I\'m **Nymbot**, your built-in AI assistant.',
@@ -2210,8 +1980,7 @@ Object.assign(NYM.prototype, {
         ].join('\n');
     },
 
-    // Brand-new users get a proactive PM from Nymbot so a highlighted conversation
-    // appears in their sidebar from the start. Sent locally, once per device.
+    // Sent locally, once per device.
     _maybeSendBotWelcomePM() {
         try {
             if (localStorage.getItem('nym_botpm_welcomed') === 'true') return;
@@ -2253,8 +2022,6 @@ Object.assign(NYM.prototype, {
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
     },
 
-    // Best-effort removal of the Nymbot conversation's encrypted wraps from
-    // the D1 PM archive, so a cleared thread can't be restored on any device.
     async _purgeBotPMArchive(conversationKey) {
         const anonReady = typeof this.botAnonReady === 'function' && this.botAnonReady();
         const msgs = this.pmMessages.get(conversationKey) || [];
@@ -2282,7 +2049,6 @@ Object.assign(NYM.prototype, {
         if (this._pmArchiveAllowed() && ownIds.size) await send(ownIds, false);
     },
 
-    // Wipe the Nymbot conversation and start fresh (premium ?clear command)
     _clearBotPMHistory() {
         const pubkey = this.verifiedBot && this.verifiedBot.pubkey;
         if (!pubkey) return;
@@ -2290,8 +2056,7 @@ Object.assign(NYM.prototype, {
         this._setBotPmClearedAt(Math.floor(Date.now() / 1000));
         this._clearBotServerThread();
         this._purgeBotPMArchive(conversationKey);
-        // Sync the cleared-at marker so other devices filter the thread too,
-        // covering any archived wraps this device didn't know about.
+        // Sync the cleared-at marker so other devices filter archived wraps too.
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
         this.pmMessages.set(conversationKey, []);
         this.channelDOMCache.delete(conversationKey);
@@ -2458,7 +2223,6 @@ Object.assign(NYM.prototype, {
         else this.showNotification(reactorNym, body, channelInfo, ts);
     },
 
-    // Advance sent/read receipts for our messages in the Nymbot chat
     _markBotPMReceipts(status) {
         const convKey = this.getPMConversationKey(this.verifiedBot.pubkey);
         const messages = this.pmMessages.get(convKey);
@@ -2480,10 +2244,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Fallback Pro model catalog (mirrors BOT_PRO_MODELS in functions/api/bot.js).
-    // The live list comes from the `models` action, which reads the catalog the
-    // hourly worker mirrors into D1; this array is what renders before that
-    // lands and whenever it can't be reached.
+    // Mirrors BOT_PRO_MODELS in functions/api/bot.js; renders until the live D1-backed catalog loads.
     _botProModelsFallback: [
         { key: 'claude-fable', label: 'Claude Fable 5', credits: 2, max: 16 },
         { key: 'claude-opus', label: 'Claude Opus 5', credits: 1, max: 8 },
@@ -2502,12 +2263,11 @@ Object.assign(NYM.prototype, {
         { key: 'deepseek-r1-distill-qwen-32b', label: 'DeepSeek R1 Distill Qwen 32B', credits: 1, max: 3, hosting: 'cloudflare-hosted', reasoning: true }
     ],
 
-    // Live catalog, once fetched: { models: [...], groups: [...], aliases: {} }.
+    // { models: [...], groups: [...], aliases: {} }.
     _botProCatalog: null,
     _botProCatalogAt: 0,
 
-    // Every read of the model list goes through here, so a failed or pending
-    // fetch degrades to the built-in list instead of an empty picker.
+    // Degrades to the built-in list instead of an empty picker.
     _botProModelList() {
         const live = ((this._botProCatalog && this._botProCatalog.models) || [])
             .filter(m => m && (!m.kind || m.kind === 'chat') && !m.command);
@@ -2547,8 +2307,7 @@ Object.assign(NYM.prototype, {
         return Number.isFinite(n) && n > 0 ? n : null;
     },
 
-    // A key the user pinned before a version bump ("claude-opus") resolves to
-    // whatever the catalog now calls it ("claude-opus-5").
+    // Resolves a pre-bump pinned key ("claude-opus") to the current name ("claude-opus-5").
     _botProResolveKey(key) {
         const k = String(key || '').trim().toLowerCase();
         if (!k) return '';
@@ -2559,8 +2318,7 @@ Object.assign(NYM.prototype, {
         return '';
     },
 
-    // Cached for 6h in localStorage so the picker opens instantly and a cold
-    // start still has a list even offline.
+    // Cached for 6h in localStorage so the picker opens instantly and works offline.
     async _loadBotProCatalog(force) {
         const TTL = 6 * 60 * 60 * 1000;
         const now = Date.now();
@@ -2607,8 +2365,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // The per-million-token rates a reply is charged on, falling back to the flat
-    // per-reply price for a model the catalog has no published rate for.
+    // Falls back to the flat per-reply price when the catalog has no published rate.
     _replyBalance(data) {
         if (!data) return null;
         if (typeof data.balanceCredits === 'number') return data.balanceCredits;
@@ -2680,7 +2437,6 @@ Object.assign(NYM.prototype, {
         this._renderBotCreditMeta();
     },
 
-    // ?model — list, select, or turn off the Pro model for the private chat
     _handleBotModelCommand(trimmed) {
         const arg = trimmed.replace(/^\?model\b/i, '').trim().toLowerCase();
         const current = this._getBotProModel();
@@ -2688,9 +2444,7 @@ Object.assign(NYM.prototype, {
         if (!arg) {
             this._loadBotProCatalog();
             const all = this._botProModelList();
-            // The live catalog can run to dozens of models — too many for a
-            // chat bubble — so list a provider's worth at most and send the
-            // rest to the picker.
+            // List at most a provider's worth; the rest go to the picker.
             const groups = this._botProGroups();
             const lines = groups.length > 1
                 ? groups.map(g => {
@@ -2725,19 +2479,15 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(`Nymbot Pro model set to ${picked.label} — every reply now uses it (${this._botProPriceLabel(picked)}). Type ?model off to switch back.`);
     },
 
-    // A small inline check mark for the selected model / provider rows.
     _botCheckSvg() {
         return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
     },
 
-    // Reveal the control bar for the open Nymbot chat and refresh its labels.
     _showBotControlBar() {
         const bar = document.getElementById('botControlBar');
         if (!bar) return;
         bar.classList.remove('nm-hidden');
         this._refreshBotControlBar();
-        // Warm the model catalog while the user reads, so the picker and the
-        // pinned model's price are current by the time either is needed.
         this._loadBotProCatalog().then(() => this._refreshBotControlBar()).catch(() => { });
     },
 
@@ -2746,9 +2496,7 @@ Object.assign(NYM.prototype, {
         if (bar) bar.classList.add('nm-hidden');
     },
 
-    // Sync the control bar's tier switch + model chip labels with state.
-    // Never toggles visibility (that's _showBotControlBar / _hideBotControlBar),
-    // so it's safe to call from _renderBotCreditMeta after any state change.
+    // Never toggles visibility, so it's safe to call after any state change.
     _refreshBotControlBar() {
         const bar = document.getElementById('botControlBar');
         if (!bar) return;
@@ -2763,8 +2511,7 @@ Object.assign(NYM.prototype, {
         const modelLabel = document.getElementById('botModelBtnLabel');
         if (modelLabel) {
             modelLabel.textContent = proModel ? proModel.label : 'Auto-routed';
-            // A pinned model is a brand name — never localize it; "Auto-routed"
-            // is UI copy that should follow the app language.
+            // A pinned model is a brand name and is never localized.
             modelLabel.toggleAttribute('data-no-i18n', !!proModel);
         }
         if (modelBtn) modelBtn.classList.toggle('active', isPro);
@@ -2778,8 +2525,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Tier switch: Standard drops to multi-model routing; Pro opens the picker
-    // so the user chooses a specific frontier model (matches the Flutter tabs).
+    // Standard drops to multi-model routing; Pro opens the picker (matches the Flutter tabs).
     botSetTier(tier) {
         if (tier === 'pro') {
             this.openBotModelModal();
@@ -2792,14 +2538,10 @@ Object.assign(NYM.prototype, {
         this._refreshBotControlBar();
     },
 
-    // Buy/balance chip → the existing credit purchase modal, preselecting the
-    // Pro tier when a Pro model is pinned.
     openBotCreditsModal() {
         this.showBotCreditsModal(null, this._getBotProModel() ? 'pro' : 'standard');
     },
 
-    // Model picker modal — Standard (auto-routed) + every Pro model with its
-    // per-reply price and a check on the current selection.
     openBotModelModal() {
         const list = document.getElementById('botModelList');
         const modal = document.getElementById('botModelModal');
@@ -2821,8 +2563,7 @@ Object.assign(NYM.prototype, {
         }).catch(() => { });
     },
 
-    // Grouped by provider, each row carrying the model's one-line blurb and
-    // its per-reply price. `filter` matches name, key, provider and blurb.
+    // `filter` matches name, key, provider and blurb.
     _renderBotModelList(filter) {
         const list = document.getElementById('botModelList');
         if (!list) return;
@@ -2865,8 +2606,7 @@ Object.assign(NYM.prototype, {
                 if (m.vision) tags.push('vision');
                 if (m.reasoning) tags.push('reasoning');
                 if (m.tools) tags.push('tools');
-                // Cloudflare-hosted weights run on the AI binding: no gateway
-                // hop, no upstream provider to be down or reject the call.
+                // Cloudflare-hosted weights run on the AI binding with no gateway hop.
                 if (m.hosting === 'cloudflare-hosted') tags.push('cloudflare');
                 const meta = [this._botProPriceLabel(m)].concat(tags.length ? [tags.join(' · ')] : []).join(' — ');
                 rows.push(`<button class="bot-model-row bot-model-row-pro${sel ? ' selected' : ''}" type="button" data-action="botSelectModel" data-model="${this.escapeHtml(m.key)}">
@@ -2979,7 +2719,6 @@ Object.assign(NYM.prototype, {
         window.closeModal('botModelModal');
     },
 
-    // Update the cached Nymbot credit count and the chat-header indicator
     _setBotCreditDisplay(balance) {
         if (typeof balance === 'number') this._lastBotCredits = balance;
         this._renderBotCreditMeta();
@@ -2991,8 +2730,6 @@ Object.assign(NYM.prototype, {
     },
 
     _renderBotCreditMeta() {
-        // Keep the header control bar's chips in sync with any state change,
-        // whether it came from the GUI or a ?model text command.
         this._refreshBotControlBar();
         const el = document.getElementById('botCreditMeta');
         if (!el) return;
@@ -3011,7 +2748,6 @@ Object.assign(NYM.prototype, {
             : `${anonTag}${this._creditWord(std, 'credit')} left`;
     },
 
-    // Paint the header credit indicator for the open Nymbot chat, then refresh it
     async _refreshBotCreditMeta() {
         this._setBotCreditDisplay();
         const bal = await this._checkBotCredits(false);
@@ -3021,10 +2757,8 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Process a message the user sent to Nymbot in a private chat
     async _handleBotPM(content, wrapId) {
-        // A leading command typed in the user's language is folded back to its
-        // canonical English form before any of the ?command matching below.
+        // Fold a localized leading command back to English before ?command matching.
         const trimmed = this.canonicalizeCommandInput((content || '').trim());
         this._markBotPMReceipts('delivered');
         if (/^\?(help|commands)\b/i.test(trimmed)) {
@@ -3093,12 +2827,9 @@ Object.assign(NYM.prototype, {
             if (!apiHost) { this._setBotTyping(false); return; }
             const isFresh = /^\s*!\s*\S/.test(content);
             const proModel = this._getBotProModel();
-            // Send only the current message's wrap ID; the worker maintains the
-            // ordered thread server-side. fresh (!) tells it to skip history.
+            // The worker keeps the ordered thread server-side; fresh skips history.
             const reqExtra = { eventId: wrapId, fresh: isFresh };
-            // Our own signed nym-pq announcement rides along so the worker
-            // seals its reply post-quantum deterministically (it verifies the
-            // signature; no lookup race can leave the reply classical).
+            // Our signed nym-pq announcement lets the worker seal its reply post-quantum without a lookup.
             const anonRouted = typeof this.botAnonReady === 'function' && this.botAnonReady();
             const anonAnnouncement = anonRouted ? this._botAnonAnnouncement() : null;
             if (anonAnnouncement) {
@@ -3109,10 +2840,7 @@ Object.assign(NYM.prototype, {
             const cmdAlias = this.commandAliasHint(content);
             if (cmdAlias) reqExtra.cmdAlias = cmdAlias;
             if (proModel) reqExtra.proModel = proModel.key;
-            // `pending` means an earlier attempt at this same message is still
-            // generating (our socket dropped and this is the HTTP retry): ask
-            // again with the same event id to collect that reply, rather than
-            // have the worker generate — and charge for — a second one.
+            // `pending`: retry with the same event id to collect the in-flight reply instead of paying for a second.
             let status, data;
             for (let tries = 0; ; tries++) {
                 ({ status, data } = await this._botMoneyRequest('pm', reqExtra, { timeout: 180000 }));
@@ -3153,8 +2881,7 @@ Object.assign(NYM.prototype, {
                 this.sendDMToRelays(['EVENT', data.event]);
                 this.handleGiftWrapDM(data.event, {});
             }
-            // Publish the bot's self-addressed copy to the relays so the worker
-            // can re-fetch and decrypt its own reply as context on later turns.
+            // The worker re-fetches its own reply as context on later turns.
             if (data.selfEvent && /^[0-9a-f]{64}$/i.test(data.selfEvent.id || '')) {
                 this.sendDMToRelays(['EVENT', data.selfEvent]);
             }
@@ -3203,7 +2930,6 @@ Object.assign(NYM.prototype, {
         await this._handleBotPM(entry.content, entry.wrapId);
     },
 
-    // Check the user's Nymbot credit balance; optionally show it as a message
     async _checkBotCredits(display) {
         try {
             const apiHost = this._getApiHost();
@@ -3238,24 +2964,19 @@ Object.assign(NYM.prototype, {
         const pmItem = pmList.querySelector(`[data-pubkey="${pubkey}"]`);
 
         if (pmItem) {
-            // Use the message timestamp if provided, otherwise use current time
             const ts = messageTimestamp || Date.now();
             const currentTs = parseInt(pmItem.dataset.lastMessageTime || '0');
-            // Only update if the new timestamp is newer
             const newTs = Math.max(ts, currentTs);
             pmItem.dataset.lastMessageTime = newTs;
 
-            // Update in memory
             const conversation = this.pmConversations.get(pubkey);
             if (conversation) {
                 conversation.lastMessageTime = newTs;
             }
 
-            // Remove and re-insert in correct order
             pmItem.remove();
             this.insertPMInOrder(pmItem, pmList);
 
-            // Re-apply search filter if search is active
             const searchInput = document.getElementById('pmSearch');
             if (searchInput && searchInput.value.trim().length > 0) {
                 const term = searchInput.value.toLowerCase();
@@ -3269,9 +2990,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Rebuild the PM conversation header for a pubkey with the full set of
-    // badges. Shared so every caller produces identical markup/signature and
-    // no badge (verified/flair/friend) is dropped on a partial refresh.
+    // Shared so every caller produces identical markup and no badge is dropped.
     _renderPMHeaderForPubkey(pubkey, displayName) {
         if (!(this.inPMMode && this.currentPM === pubkey)) return;
         const channelEl = document.getElementById('currentChannel');
@@ -3305,20 +3024,15 @@ Object.assign(NYM.prototype, {
         if (!profileName) return;
         const clean = this.parseNymFromDisplay(profileName).substring(0, 20);
 
-        // Update memory
         if (this.pmConversations.has(pubkey)) {
             this.pmConversations.get(pubkey).nym = clean;
         }
 
-        // Column view composes its header title once, when the column is built,
-        // so without this a PM column opened before the peer's kind 0 landed
-        // kept showing the placeholder nym. Runs after the memory update above,
-        // which is where the title reads the name from.
+        // Column view composes its title once, so refresh it after the memory update above.
         if (typeof this._cvRefreshColumnTitles === 'function') {
             this._cvRefreshColumnTitles(pubkey);
         }
 
-        // Update sidebar DOM item if present
         const item = document.querySelector(`.pm-item[data-pubkey="${pubkey}"]`);
         if (item) {
             const suffix = this.getPubkeySuffix(pubkey);
@@ -3335,7 +3049,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Update displayed messages from this user
         const suffix = this.getPubkeySuffix(pubkey);
         const verifiedBadge = this.isVerifiedDeveloper(pubkey)
             ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
@@ -3348,18 +3061,15 @@ Object.assign(NYM.prototype, {
         const friendBadge = this.getFriendBadgeHtml(pubkey);
         const safePk = this._safePubkey(pubkey);
         let supporterBadge = userShopItems?.supporter ? this._supporterBadgeMarkup() : '';
-        // Shop data loads asynchronously; if it isn't ready yet, don't strip a
-        // supporter badge that's already on screen — preserve it until the
-        // fetch resolves and can authoritatively confirm or remove it.
+        // Shop data may not be loaded yet; keep an on-screen supporter badge until it confirms.
         if (!userShopItems && safePk &&
             document.querySelector(`.message[data-pubkey="${safePk}"] .author-clickable .supporter-badge`)) {
             supporterBadge = this._supporterBadgeMarkup();
         }
         const authorSig = `${clean}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterBadge}|${friendBadge}`;
         document.querySelectorAll(`.message[data-pubkey="${safePk}"] .message-author`).forEach(el => {
-            // Update only the author-clickable inner span to preserve bubble-time and click handler
+            // Update only the inner span to preserve bubble-time and the click handler.
             const clickable = el.querySelector('.author-clickable');
-            // Reuse the already-decoded avatar img across rewrites
             const avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
             if (clickable) {
                 if (clickable.dataset.authorSig === authorSig) return;
@@ -3370,7 +3080,7 @@ Object.assign(NYM.prototype, {
                 else clickable.insertAdjacentHTML('afterbegin', avatarHtml);
                 if (typeof this._dedupeAuthorBadges === 'function') this._dedupeAuthorBadges(el);
             } else {
-                // Fallback: full rewrite with author-clickable wrapper for older messages missing it
+                // Fallback: full rewrite for older messages missing the author-clickable wrapper.
                 const bubbleTime = el.querySelector('.bubble-time');
                 const bubbleHtml = bubbleTime ? bubbleTime.outerHTML : '';
                 const existingAvatar = el.querySelector('img.avatar-message');
@@ -3395,10 +3105,8 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Update PM header title if currently viewing this user's PM
         this._renderPMHeaderForPubkey(pubkey, clean);
 
-        // Update any visible notification banner from this user
         const notif = document.querySelector(`.notification[data-pubkey="${pubkey}"] .notification-title`);
         if (notif) {
             notif.textContent = `PM from ${clean}#${suffix}`;
@@ -3406,7 +3114,6 @@ Object.assign(NYM.prototype, {
     },
 
     addPMConversation(nym, pubkey, timestamp = Date.now()) {
-        // Prefer known profile name if available
         let baseNym = this.resolveDisplayNym(pubkey, nym);
 
         if (!this.pmConversations.has(pubkey)) {
@@ -3436,12 +3143,10 @@ Object.assign(NYM.prototype, {
                     ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                     : '';
 
-            // Get user's shop items for flair
             const userShopItems = this.getUserShopItems(pubkey);
             const flairHtml = this.getFlairForUser(pubkey);
             const friendBadge = this.getFriendBadgeHtml(pubkey);
 
-            // Clean the base nym of any HTML for display
             const cleanBaseNym = this.parseNymFromDisplay(baseNym);
 
             const pmAvatarSrc = this.getAvatarUrl(pubkey);
@@ -3459,12 +3164,10 @@ Object.assign(NYM.prototype, {
 
             this.insertPMInOrder(item, pmList);
 
-            // Show any unread count persisted from a previous session
             const convKey = this.getPMConversationKey(pubkey);
             const unread = this.unreadCounts.get(convKey) || 0;
             if (unread > 0) this._renderUnreadBadge(convKey, unread);
 
-            // Hide new item if it doesn't match active search filter
             const searchInput = document.getElementById('pmSearch');
             if (searchInput && searchInput.value.trim().length > 0) {
                 const term = searchInput.value.toLowerCase();
@@ -3478,33 +3181,23 @@ Object.assign(NYM.prototype, {
 
             this.updateViewMoreButton('pmList');
 
-            // Proactively request their profile. Unknown/nym contacts get
-            // an immediate fetch; known contacts go through the throttled
-            // refresh so we still pick up nickname/avatar updates without
-            // hammering relays on every PM message.
+            // Unknown contacts fetch immediately; known ones go through the throttled refresh.
             if (!this.users.has(pubkey) || /^nym$/i.test(cleanBaseNym)) {
                 this.requestUserProfile(pubkey);
             } else if (typeof this.refreshUserProfileThrottled === 'function') {
                 this.refreshUserProfileThrottled(pubkey);
             }
 
-            // The critical subscription includes a kind 0 filter scoped to
-            // PM contacts so nickname/avatar updates push in real-time. A
-            // new contact needs the subscription rebuilt so the relay starts
-            // forwarding their kind 0 events. Debounce against burst churn
-            // (e.g. hydration adding many PMs in quick succession).
+            // The critical subscription's kind 0 filter covers PM contacts, so rebuild it (debounced) for new ones.
             if (typeof this._scheduleCriticalResubscribe === 'function') {
                 this._scheduleCriticalResubscribe();
             }
         } else {
-            // PM already exists — sync the displayed nym from the users map
-            // in case the profile was updated after the entry was created.
             const cached = this.pmConversations.get(pubkey);
             if (cached && cached.nym !== baseNym) {
                 this.updatePMNicknameFromProfile(pubkey, baseNym);
             }
-            // Also poll for a fresh kind 0 since there is no ongoing
-            // subscription for contact profile updates.
+            // No ongoing subscription covers this contact's profile updates.
             if (typeof this.refreshUserProfileThrottled === 'function') {
                 this.refreshUserProfileThrottled(pubkey);
             }
@@ -3517,7 +3210,6 @@ Object.assign(NYM.prototype, {
         const existingItems = Array.from(pmList.querySelectorAll('.pm-item'));
         const viewMoreBtn = pmList.querySelector('.view-more-btn');
 
-        // Find the correct position to insert (most recent first)
         let insertBefore = null;
         for (const item of existingItems) {
             const itemTime = parseInt(item.dataset.lastMessageTime || '0');
@@ -3527,14 +3219,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // If we found a position, insert there
         if (insertBefore) {
             pmList.insertBefore(newItem, insertBefore);
         } else if (viewMoreBtn) {
-            // If no position found but there's a view more button, insert before it
             pmList.insertBefore(newItem, viewMoreBtn);
         } else {
-            // Otherwise append to the end
             pmList.appendChild(newItem);
         }
     },
@@ -3559,11 +3248,9 @@ Object.assign(NYM.prototype, {
         try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes))); } catch { }
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
-        // Remove from UI
         const item = document.getElementById('pmList')?.querySelector(`.pm-item[data-pubkey="${pubkey}"]`);
         if (item) item.remove();
 
-        // If currently viewing this PM, switch to bar
         if (this.inPMMode && this.currentPM === pubkey) {
             this.switchChannel('nymchat', 'nymchat');
         }
@@ -3595,8 +3282,6 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage('PM conversation deleted');
     },
 
-    // Render the PM conversation header into the shared chat header. Split out
-    // of openPM so column-view focus can show the same header.
     _renderPMHeader(nym, pubkey) {
         const baseNym = this.resolveDisplayNym(pubkey, nym);
         const suffix = this.getPubkeySuffix(pubkey);
@@ -3644,11 +3329,7 @@ Object.assign(NYM.prototype, {
     },
 
     openPM(nym, pubkey) {
-        // Before the column-view branch, so both layouts warm it. The standing
-        // subscription for these only covers contacts we already had when we
-        // connected, so without this a brand new conversation never learns the
-        // peer's ML-KEM key: every message to them falls back to classical and
-        // the shield never appears.
+        // Warm the peer's ML-KEM key; the standing subscription only covers contacts known at connect.
         if (typeof this.ensurePqAnnouncement === 'function') {
             this.ensurePqAnnouncement(pubkey);
         }
@@ -3668,29 +3349,21 @@ Object.assign(NYM.prototype, {
         this.userScrolledUp = false;
         if (this.pendingEdit) this.cancelEditMessage();
 
-        // Close the mobile sidebar as soon as the switch is committed so the
-        // UI feels responsive even while messages load.
         if (window.innerWidth <= 1024) {
             this.closeSidebar();
         }
 
-        // Pull a fresh kind 0 so the header/sidebar reflect any profile
-        // updates the contact has published since we last fetched.
         if (typeof this.refreshUserProfileThrottled === 'function') {
             this.refreshUserProfileThrottled(pubkey);
         }
 
 
-        // Track navigation history
         this._pushNavigation({ type: 'pm', nym, pubkey });
 
-        // Re-render typing indicator for the new conversation
         this.renderTypingIndicator();
 
-        // Render the conversation header (shared with column-view focus)
         this._renderPMHeader(nym, pubkey);
 
-        // Update active states
         document.querySelectorAll('.channel-item').forEach(item => {
             item.classList.remove('active');
         });
@@ -3698,17 +3371,12 @@ Object.assign(NYM.prototype, {
             item.classList.toggle('active', item.dataset.pubkey === pubkey);
         });
 
-        // Clear unread count
         const conversationKey = this.getPMConversationKey(pubkey);
         this.clearUnreadCount(conversationKey);
 
-        // Load PM messages
         this.loadPMMessages(conversationKey);
 
-        // Send READ receipts only for messages we haven't acknowledged.
-        // Gate on the ids stored with the message rather than the in-memory
-        // bitchatUsers/nymUsers sets — those are empty for messages hydrated
-        // from cache in a later session.
+        // Gate on ids stored with the message; bitchatUsers/nymUsers are empty for cache-hydrated messages.
         const pmMsgs = this.pmMessages.get(conversationKey) || [];
         for (const msg of pmMsgs) {
             if (msg.isOwn || msg.readReceiptSent) continue;
@@ -3725,7 +3393,6 @@ Object.assign(NYM.prototype, {
         }
         this.recordOwnActivity();
 
-        // Restore any unsent input previously typed for this conversation
         this._restoreDraftForContext();
 
         this.hideAutocomplete();
@@ -3737,26 +3404,21 @@ Object.assign(NYM.prototype, {
     loadPMMessages(conversationKey, skipBotWelcome = false) {
         const container = document.getElementById('messagesContainer');
 
-        // Skip reload if already viewing this PM conversation,
-        // but force re-render if DOM is empty while we have stored messages
         if (container.dataset.lastChannel === conversationKey) {
             const storedCount = (this.pmMessages.get(conversationKey) || []).length;
             const domCount = container.querySelectorAll('.message[data-message-id]').length;
             if (storedCount === 0 || domCount > 0) {
                 return;
             }
-            // Messages exist but DOM is empty — fall through to re-render
+            // Messages exist but the DOM is empty; fall through to re-render.
         }
 
-        // Cancel any loading shimmer from the conversation we're leaving.
         this._clearMessageSkeleton(container);
 
-        // Cache current channel/PM DOM before switching
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = conversationKey;
 
-        // Try to restore from DOM cache (compare against filtered set so the
-        // cached fragment and the current visible set stay aligned)
+        // Compare against the filtered set so the cached fragment stays aligned.
         const filteredMessages = this.getFilteredPMMessages(conversationKey);
         const cached = this.channelDOMCache.get(conversationKey);
 
@@ -3764,7 +3426,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Cache miss or stale - render fresh
         this.channelDOMCache.delete(conversationKey);
 
         if (filteredMessages.length === 0) {
@@ -3773,32 +3434,28 @@ Object.assign(NYM.prototype, {
             const renderEmpty = () => {
                 this.displaySystemMessage('Start of private message');
                 if (isBot) {
-                    // A ?clear-ed chat is empty but not new — don't re-welcome.
+                    // A ?clear-ed chat is empty but not new; don't re-welcome.
                     if (!skipBotWelcome && !this._getBotPmClearedAt()) {
                         this._displayBotWelcomeMessage();
                     }
                     this._checkBotCredits(false);
                 }
             };
-            // Bots greet immediately — no shimmer in front of the welcome.
-            // Other empty chats shimmer first, then settle into the header.
+            // Bots greet immediately; other empty chats shimmer first.
             if (isBot) renderEmpty();
             else this._showMessageSkeleton(container, renderEmpty);
             return;
         }
 
-        // Use virtual scrolling for efficient rendering (isPM = true)
         this.renderMessagesWithVirtualScroll(container, conversationKey, true, true);
     },
 
     openUserPM(nym, pubkey) {
-        // Don't open PM with yourself
         if (pubkey === this.pubkey) {
             this.displaySystemMessage("You can't send private messages to yourself");
             return;
         }
 
-        // Extract base nym if it has a suffix
         const baseNym = this.stripPubkeySuffix(nym);
 
         if (this.closedPMs.has(pubkey)) {
@@ -3809,12 +3466,9 @@ Object.assign(NYM.prototype, {
             this._debouncedNostrSettingsSave();
         }
 
-        // Add to PM conversations if not exists
         this.addPMConversation(baseNym, pubkey);
-        // Open the PM
         this.openPM(baseNym, pubkey);
 
-        // Proactively fetch kind 0 profile to update nickname/avatar
         const known = this.users.get(pubkey);
         if (!known || /^nym$/i.test(this.parseNymFromDisplay(known.nym))) {
             this.fetchProfileDirect(pubkey);
@@ -3826,7 +3480,6 @@ Object.assign(NYM.prototype, {
         const term = searchTerm.toLowerCase();
         const list = document.getElementById('pmList');
 
-        // Update wrapper has-value class for clear button visibility
         const wrapper = document.getElementById('pmSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', term.length > 0);
@@ -3844,7 +3497,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Hide view more button during search
         const viewMoreBtn = list.querySelector('.view-more-btn');
         if (viewMoreBtn) {
             viewMoreBtn.style.display = term ? 'none' : 'block';
@@ -3879,7 +3531,7 @@ Object.assign(NYM.prototype, {
 
             if (this.privkey) {
                 const NT = window.NostrTools;
-                // Same rule as the original send — see pqPmPlan (pq.js).
+                // Same rule as the original send; see pqPmPlan (pq.js).
                 const plan = this.pqPmPlan(recipientPubkey);
                 const recipientKemPk = plan.kemPk;
 
@@ -3907,11 +3559,7 @@ Object.assign(NYM.prototype, {
                 const enc44 = (peer, text) => _useExt ? window.nostr.nip44.encrypt(peer, text) : _nip46Encrypt(peer, text);
                 const signEvt = (u) => _useExt ? window.nostr.signEvent(u) : _nip46SignEvent(u);
 
-                // Hybrid on the wrap, which is ours to build even here — the
-                // seal is not. See pqSendCapable (pq.js).
-                // Its own plan: `plan` above is scoped to the local-key branch,
-                // so reading plan.pq2 from here threw ReferenceError and killed
-                // the edit outright on every signer login.
+                // Hybrid on the wrap only (see pqSendCapable); this branch needs its own plan.
                 const editPlan = this.pqPmPlan(recipientPubkey);
                 const editKemPk = editPlan.kemPk;
                 const sealContent = await enc44(recipientPubkey, JSON.stringify(rumor));
@@ -3930,7 +3578,7 @@ Object.assign(NYM.prototype, {
                 this.sendDMToRelays(['EVENT', wrapped]);
                 this._depositPMEvent(wrapped);
 
-                // Self-wrap so our own edit is retrievable from relays after reload
+                // Self-wrap so our own edit is retrievable from relays after reload.
                 if (recipientPubkey !== this.pubkey) {
                     try {
                         const selfSealContent = await enc44(this.pubkey, JSON.stringify(rumor));
@@ -3957,7 +3605,6 @@ Object.assign(NYM.prototype, {
                 timestamp: new Date(now * 1000)
             });
 
-            // Update stored PM messages
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             const msgs = this.pmMessages.get(conversationKey);
             if (msgs) {
@@ -3968,7 +3615,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Update DOM in-place
             this.updateMessageInDOM(lookupId, newContent);
 
             return true;
@@ -3984,8 +3630,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // A public key in either form — hex or npub (`normalizePubkeyInput`,
-        // users.js) — otherwise a nym to look up.
+        // Hex or npub (`normalizePubkeyInput`, users.js), otherwise a nym to look up.
         const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
 
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
@@ -3996,13 +3641,11 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Get nym from pubkey
             const targetNym = this.getNymFromPubkey(targetPubkey);
             this.openUserPM(targetNym, targetPubkey);
             return;
         }
 
-        // Handle both nym and nym#xxxx formats
         let searchNym = targetInput;
         let searchSuffix = null;
 
@@ -4012,18 +3655,15 @@ Object.assign(NYM.prototype, {
             searchSuffix = targetInput.substring(hashIndex + 1);
         }
 
-        // Find user by nym, considering suffix if provided
         const matches = [];
         this.users.forEach((user, pubkey) => {
             const baseNym = this.stripPubkeySuffix(user.nym);
             if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                 if (searchSuffix) {
-                    // If suffix provided, only match exact pubkey suffix
                     if (pubkey.endsWith(searchSuffix)) {
                         matches.push({ nym: user.nym, pubkey: pubkey });
                     }
                 } else {
-                    // No suffix provided, collect all matches
                     matches.push({ nym: user.nym, pubkey: pubkey });
                 }
             }
@@ -4035,7 +3675,6 @@ Object.assign(NYM.prototype, {
         }
 
         if (matches.length > 1 && !searchSuffix) {
-            // Multiple users with same nym, show them
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
@@ -4044,7 +3683,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Single match or exact suffix match
         const targetPubkey = matches[0].pubkey;
         const targetNym = matches[0].nym;
 
@@ -4087,7 +3725,6 @@ Object.assign(NYM.prototype, {
         if (window.innerWidth <= 1024) this.closeSidebar();
     },
 
-    // Open the recipient picker in "add members to an existing group" mode.
     openAddMembersModal(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -4119,8 +3756,7 @@ Object.assign(NYM.prototype, {
         this._updateNewPMModalTitle();
     },
 
-    // Group name + avatar/banner controls show only when composing a group
-    // (2+ recipients) and not when adding members to an existing group.
+    // Shown only when composing a new group (2+ recipients).
     _toggleNewGroupFields() {
         const groupMode = !this._addMembersGroupId && this._newPMRecipients.length >= 2;
         document.getElementById('pmGroupNameGroup').style.display = groupMode ? 'block' : 'none';
@@ -4129,7 +3765,6 @@ Object.assign(NYM.prototype, {
         document.getElementById('newGroupAllowInvitesGroup').style.display = groupMode ? 'block' : 'none';
     },
 
-    // Title reflects the current mode: add-members, group (2+), or 1:1.
     _updateNewPMModalTitle() {
         const el = document.getElementById('newPMModalTitle');
         if (!el) return;
@@ -4150,9 +3785,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Pick + upload a group avatar/banner from the New Group modal, showing the
-    // modal-local progress bar. The resulting URL is stored until the group is
-    // created.
+    // The uploaded URL is stored until the group is created.
     newGroupPickAvatar() { this._pickNewGroupMedia('avatar'); },
     newGroupPickBanner() { this._pickNewGroupMedia('banner'); },
 
@@ -4192,7 +3825,6 @@ Object.assign(NYM.prototype, {
         input.click();
     },
 
-    // Show recently seen users in the New Message modal (sorted most-recent first)
     _showRecentlySeenSuggestions(query) {
         const suggestions = document.getElementById('pmSuggestions');
         if (!suggestions) return;
@@ -4232,7 +3864,6 @@ Object.assign(NYM.prototype, {
         suggestions.style.display = 'block';
     },
 
-    // Build a pm-suggestion-item DOM node (no innerHTML).
     _buildPMSuggestionItem(pubkey, nym) {
         const safePk = this._safePubkey(pubkey);
         const item = document.createElement('div');
@@ -4298,7 +3929,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Group invite link/code paste (case-sensitive, parse the raw value)
         const invite = this.parseGroupInviteInput(value.trim());
         if (invite) {
             suggestions.textContent = '';
@@ -4307,7 +3937,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Direct public key paste, hex or npub
         const pastedPubkey = this.normalizePubkeyInput(query);
         if (pastedPubkey) {
             const pk = pastedPubkey;
@@ -4319,10 +3948,8 @@ Object.assign(NYM.prototype, {
                     suggestions.style.display = 'block';
                 };
                 renderPubkeySuggestion();
-                // If profile isn't cached yet, fetch kind:0 and refresh the suggestion
                 if (!this.users.has(pk)) {
                     this.fetchProfileDirect(pk).then(() => {
-                        // Only refresh if the input still shows this pubkey
                         const currentInput = document.getElementById('pmRecipientInput')?.value.trim().replace(/^@/, '').toLowerCase();
                         if (currentInput === pk) renderPubkeySuggestion();
                     }).catch(() => { });
@@ -4333,7 +3960,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Search recently seen / active users by nym substring
         this._showRecentlySeenSuggestions(query);
     },
 
@@ -4353,7 +3979,7 @@ Object.assign(NYM.prototype, {
 
     addNewPMRecipient(pubkey, nym) {
         if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
-        // Nymbot can be messaged 1:1 but never added to a group chat
+        // Nymbot can be messaged 1:1 but never added to a group chat.
         if (this.isVerifiedBot(pubkey) && this._newPMRecipients.length > 0) {
             this.displaySystemMessage("Nymbot can only be messaged 1:1, not added to a group chat.");
             return;
@@ -4371,8 +3997,6 @@ Object.assign(NYM.prototype, {
         document.getElementById('pmStartBtn').disabled = false;
         document.getElementById('pmRecipientInput').focus();
 
-        // If this user's kind:0 profile isn't cached yet, fetch it and refresh the
-        // chip once it arrives so the real display name and avatar appear.
         if (!this.users.has(pubkey)) {
             this.fetchProfileDirect(pubkey).then(() => {
                 const r = this._newPMRecipients.find(x => x.pubkey === pubkey);
@@ -4404,7 +4028,6 @@ Object.assign(NYM.prototype, {
     async startNewPMFromModal() {
         if (this._newPMRecipients.length === 0) return;
 
-        // Add-members mode: append the selected users to the existing group.
         if (this._addMembersGroupId) {
             const groupId = this._addMembersGroupId;
             const recipients = [...this._newPMRecipients];
@@ -4442,12 +4065,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Get filtered PM messages for a conversation key
     getFilteredPMMessages(conversationKey) {
         const pmMessages = this.pmMessages.get(conversationKey) || [];
 
-        // With threads enabled, replies collapse into their root's thread and
-        // are hidden from the flat view when the root exists locally.
+        // With threads enabled, replies are hidden from the flat view when the root exists locally.
         const _threadsOn = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
         let _threadRoots = null;
         if (_threadsOn) {
@@ -4471,15 +4092,12 @@ Object.assign(NYM.prototype, {
             if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author, msg.pubkey)) return false;
             if (!isOwn && this.isSpamMessage(msg.content)) return false;
             if (msg.conversationKey !== conversationKey) return false;
-            // For 1:1 PMs, restrict to the two participants. Derive the peer from
-            // the conversation key (not the focused conversation) so column view
-            // renders the right messages for every open PM column.
+            // Derive the peer from the conversation key so column view renders every PM column correctly.
             if (!msg.isGroup && msg.pubkey !== this.pubkey && this.getPMConversationKey(msg.pubkey) !== conversationKey) return false;
             return true;
         }).sort((a, b) => this._compareMessages(a, b));
     },
 
-    // Load older PM/group messages when user scrolls to top
     loadOlderPMMessages(conversationKey) {
         if (this.activeThread) return false;
         const container = this._cvLoadCtx?.container || document.getElementById('messagesContainer');
@@ -4566,7 +4184,6 @@ Object.assign(NYM.prototype, {
     },
 
     applyGroupChatPMOnlyMode(enabled) {
-        // Restrict relay connections to the default list (drop geo)
         if (enabled) {
             if (typeof this.stopGeoRelayKeepAlive === 'function') this.stopGeoRelayKeepAlive();
             if (this.useRelayProxy) {
@@ -4604,40 +4221,33 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Hide or show the channels section in the sidebar
         const channelsSection = document.querySelector('#channelList')?.closest('.nav-section');
         if (channelsSection) {
             channelsSection.style.display = enabled ? 'none' : '';
         }
 
         if (enabled) {
-            // Drop any public-channel columns from the columns view
             if (this._cvActive && Array.isArray(this._cvColumns)) {
                 for (const col of [...this._cvColumns]) {
                     if (col.type === 'channel') this.cvRemoveColumn(col.id);
                 }
             }
-            // Navigate to the latest PM/group chat, or show empty state
             this.navigateToLatestPMOrGroup();
         } else {
-            // Restore default channel view
             const pinned = this.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
             if (pinned.type === 'geohash' && pinned.geohash) {
                 this.switchChannel(pinned.geohash, pinned.geohash);
             } else {
                 this.switchChannel('nymchat', 'nymchat');
             }
-            // Re-discover and subscribe to channels
             this.discoverChannels();
             this.loadJoinedChannelsFromRelays();
         }
 
-        // Update active nyms list
         this.updateUserList();
     },
 
     navigateToLatestPMOrGroup() {
-        // Find the most recent PM or group chat by looking at the PM list DOM order
         const pmList = document.getElementById('pmList');
         if (pmList) {
             const firstItem = pmList.querySelector('.pm-item');
@@ -4654,7 +4264,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // No PM or group chat found - show empty state
         this.showPMOnlyEmptyState();
     },
 

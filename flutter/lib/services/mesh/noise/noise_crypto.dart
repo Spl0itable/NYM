@@ -5,13 +5,7 @@ import 'package:pointycastle/digests/sha256.dart';
 import 'package:pointycastle/macs/hmac.dart';
 import 'package:pointycastle/api.dart' show KeyParameter;
 
-/// Low-level cryptographic primitives for the Noise `XX_25519_ChaChaPoly_SHA256`
-/// suite, matched byte-for-byte to bitchat's southernstorm/Noise-Java backend so
-/// the two mesh implementations interoperate.
-///
-/// * DH: X25519 (Curve25519)
-/// * AEAD: ChaCha20-Poly1305 (IETF, 12-byte nonce)
-/// * Hash: SHA-256, with HKDF-SHA256 for key derivation
+/// Noise `XX_25519_ChaChaPoly_SHA256` primitives, byte-matched to bitchat's Noise-Java backend.
 class NoiseCrypto {
   NoiseCrypto._();
 
@@ -22,8 +16,6 @@ class NoiseCrypto {
 
   static final X25519 _x25519 = X25519();
   static final Chacha20 _aead = Chacha20.poly1305Aead();
-
-  // ---- Hashing / HMAC / HKDF -------------------------------------------------
 
   static Uint8List sha256(List<int> data) {
     final d = SHA256Digest();
@@ -47,9 +39,6 @@ class NoiseCrypto {
     return [out1, out2, out3];
   }
 
-  // ---- X25519 Diffie-Hellman -------------------------------------------------
-
-  /// Derives the 32-byte X25519 public key for a 32-byte [privateSeed].
   static Future<Uint8List> x25519PublicKey(Uint8List privateSeed) async {
     final kp = await _x25519.newKeyPairFromSeed(privateSeed);
     final pub = await kp.extractPublicKey();
@@ -64,7 +53,6 @@ class NoiseCrypto {
     return (Uint8List.fromList(priv), Uint8List.fromList(pub.bytes));
   }
 
-  /// X25519(localPrivateSeed, remotePublicKey) → 32-byte shared secret.
   static Future<Uint8List> dh(
       Uint8List localPrivateSeed, Uint8List remotePublic) async {
     final kp = await _x25519.newKeyPairFromSeed(localPrivateSeed);
@@ -75,11 +63,7 @@ class NoiseCrypto {
     return Uint8List.fromList(await shared.extractBytes());
   }
 
-  // ---- AEAD (ChaCha20-Poly1305, IETF) ---------------------------------------
-
-  /// Builds the 12-byte IETF nonce for Noise counter [n]: four zero bytes
-  /// followed by the little-endian 64-bit counter. This is exactly how
-  /// southernstorm lays the counter into ChaCha state words 13–15.
+  /// 12-byte IETF nonce: four zero bytes then the little-endian 64-bit counter, as southernstorm does.
   static Uint8List nonce12(int n) {
     final out = Uint8List(12);
     var v = n;
@@ -90,7 +74,7 @@ class NoiseCrypto {
     return out;
   }
 
-  /// Noise `ENCRYPT(k, n, ad, plaintext)` → ciphertext || 16-byte tag.
+  /// Noise `ENCRYPT(k, n, ad, plaintext)` returning ciphertext || 16-byte tag.
   static Future<Uint8List> aeadEncrypt(
       Uint8List key, int n, Uint8List ad, Uint8List plaintext) async {
     final box = await _aead.encrypt(
@@ -105,8 +89,7 @@ class NoiseCrypto {
     return out;
   }
 
-  /// Noise `DECRYPT(k, n, ad, ciphertext)` where [ciphertext] is
-  /// `ciphertext || 16-byte tag`. Throws if authentication fails.
+  /// Noise `DECRYPT` of `ciphertext || tag`; throws if authentication fails.
   static Future<Uint8List> aeadDecrypt(
       Uint8List key, int n, Uint8List ad, Uint8List ciphertext) async {
     if (ciphertext.length < tagLen) {

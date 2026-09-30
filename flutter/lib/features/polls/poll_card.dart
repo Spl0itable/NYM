@@ -27,21 +27,7 @@ import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import '../../widgets/anchored_popup.dart';
 
-/// An inline poll message (`displayPollMessage`, `polls.js:187-371`). The PWA
-/// renders a poll as a FULL `.message` row: `.message-time` (clickable full
-/// timestamp), a `.message-author` with `<nym#suffix>` brackets + flair +
-/// verified ✓ + supporter badges, then the `.message-content` holding the
-/// `.poll-container` (📊 Poll header + question + option rows with animated
-/// vote bars, `NN%`, voted highlight, voter-avatar stacks, and an "N votes"
-/// footer). The row carries the sender's shop classes — `style-*`,
-/// `supporter-style` and `cosmetic-aura-gold` ONLY (polls.js:190-198) — and
-/// desktop adds the `.msg-hover-buttons` react/translate pair.
-///
-/// Tapping an option casts a vote ([NostrController.votePoll]); tapping the
-/// footer opens the `.poll-voters-modal` (no-op with zero votes).
-///
-/// CSS source of truth: `styles-features.css:3992-4157`,
-/// `styles-themes-responsive.css:1510-1525`.
+/// Inline poll rendered as a full message row; tapping an option votes, the footer opens the voters list.
 class PollCard extends ConsumerStatefulWidget {
   const PollCard({super.key, required this.poll, required this.settings});
 
@@ -53,17 +39,11 @@ class PollCard extends ConsumerStatefulWidget {
 }
 
 class _PollCardState extends ConsumerState<PollCard> {
-  // Inline-translation state (mirrors `MessageRow._showTranslation` /
-  // `_translateLangOverride`, message_row.dart:179-180): rendered below the
-  // `.poll-container` once the user picks Translate from the author context
-  // menu (polls.js author click → showContextMenu Translate → `translatePoll`)
-  // or hits the hover translate button (`translateHoverMessage` routes a
-  // `.poll-message` to `translatePoll`, translate.js:408-416).
+  // Inline translation state, set from the author menu or hover translate button.
   bool _showTranslation = false;
   String? _translateLangOverride;
 
-  /// Desktop row hover (`@media(hover:hover) .message:hover`) — drives the row
-  /// hover tint and the `.msg-hover-buttons` opacity, like a regular message.
+  /// Desktop row hover, driving the tint and hover buttons.
   bool _hovered = false;
 
   @override
@@ -72,7 +52,7 @@ class _PollCardState extends ConsumerState<PollCard> {
     final settings = widget.settings;
     final c = context.nym;
     final controller = ref.read(nostrControllerProvider);
-    // Watch app state so a new vote re-tallies the bars live.
+    // Watch app state so new votes re-tally live.
     final appState = ref.watch(appStateProvider);
 
     final selfPubkey = appState.selfPubkey;
@@ -84,29 +64,20 @@ class _PollCardState extends ConsumerState<PollCard> {
 
     final users = ref.watch(usersProvider);
     final authorPic = users[poll.pubkey]?.profile?.picture;
-    // The LIVE profile wins over the nym stored on the poll, which was frozen
-    // when the poll event was ingested and is the literal "nym" when no profile
-    // was known yet. The PWA resolves this at render the same way
-    // (`user ? parseNymFromDisplay(user.nym) : 'nym'`, polls.js:519); only the
-    // fallback comes from the event.
+    // The live profile nym wins over the one frozen at ingest.
     final baseNym = pickDisplayNym(users[poll.pubkey]?.nym, poll.nym);
     final suffix = getPubkeySuffix(poll.pubkey);
 
-    // Clamp the timestamp to now so polls never appear in the future
-    // (polls.js:211-213).
+    // Clamp to now so polls never appear in the future.
     var dt = DateTime.fromMillisecondsSinceEpoch(poll.createdAt * 1000);
     final now = DateTime.now();
     if (dt.isAfter(now)) dt = now;
     final timeStr =
         poll.createdAt > 0 ? formatTime(dt, settings.timeFormat) : '';
-    // polls.js:270-278 hardcodes en-US "Mon D, YYYY, hh:mm:ss" (it ignores the
-    // dateFormat setting) — the '' dateFormat selects [formatFullTimestamp]'s
-    // short-month default branch.
+    // '' selects the short-month default, since polls ignore the dateFormat setting.
     final fullTimestamp = formatFullTimestamp(dt, settings.timeFormat, '');
 
-    // The sender's shop chrome (polls.js:190-198): the poll `.message` carries
-    // the style-* class, `supporter-style`, and `cosmetic-aura-gold` — ONLY
-    // gold; the other special cosmetics are never applied to poll messages.
+    // Only the gold aura applies to polls, not other special cosmetics.
     final cosmetics = ref.watch(userCosmeticsProvider(poll.pubkey));
     final styleDeco =
         messageStyleDecoration(cosmetics.styleId, isLight: c.isLight);
@@ -117,46 +88,33 @@ class _PollCardState extends ConsumerState<PollCard> {
         ? cosmeticAuraFor('cosmetic-aura-gold', isLight: c.isLight)
         : null;
 
-    // Row paint, mirroring the IRC `.message` rules (message_row._buildIrc):
-    // `.message.self` tints the row + paints the white/black accent bar; the
-    // desktop hover tint REPLACES the flat fill; the supporter/gold gradients
-    // (styles-features.css, loaded later) win over both.
+    // Self tint and accent bar, hover replaces the flat fill, and supporter/gold gradients win over both.
     Color? bg;
     Color? barColor;
     if (isOwn) {
       bg = c.secondaryA(0.05);
-      // `.message.self::before`: white@0.3 dark; light-mode black@0.25.
       barColor = c.isLight
-          ? const Color(0x40000000) // black @ 0.25
-          : const Color(0x4DFFFFFF); // white @ 0.30
+          ? const Color(0x40000000)
+          : const Color(0x4DFFFFFF);
     }
     if (_hovered) {
-      // `.message:hover { background: rgba(255,255,255,0.03) }`; light mode
-      // flips to black@0.03 (styles-themes-responsive.css:555-559).
       bg = c.isLight
           ? Colors.black.withValues(alpha: 0.03)
           : Colors.white.withValues(alpha: 0.03);
     }
     List<Color>? bgGradient;
     if (supporterDeco != null) {
-      // `body:not(.chat-bubbles) .message.supporter-style`: gold 135deg wash +
-      // gold left bar.
       barColor = supporterDeco.borderAccent ?? barColor;
       bgGradient = supporterDeco.backgroundGradient ?? bgGradient;
     }
     if (goldAura != null) {
-      // `.message.cosmetic-aura-gold` (IRC): gold left bar, gold wash, an
-      // inset 1px ring + an 18px (12px light) outer glow.
       barColor = goldAura.borderAccent ?? barColor;
       bgGradient = goldAura.gradient ?? bgGradient;
     }
     final rowRing = goldAura?.insetColor;
     final glowBlur = goldAura?.glowBlurFor(bubble: false) ?? 0;
 
-    // The author nym color: self → primary (`.message-author.self`), bitchat
-    // theme → the deterministic per-user hue (`getUserColorClass`, users.js:
-    // 11-18), else secondary. Genesis flair bolds the nym
-    // (`.has-genesis-flair`).
+    // Self uses primary, bitchat theme a per-user hue, else secondary; Genesis flair bolds.
     final bitchat = (!isOwn && settings.theme == NymThemeKey.bitchat)
         ? bitchatUserColor(poll.pubkey, isLight: c.isLight)
         : null;
@@ -166,17 +124,13 @@ class _PollCardState extends ConsumerState<PollCard> {
       fontSize: fontSize,
       fontWeight:
           hasGenesisFlair(cosmetics) ? FontWeight.w700 : FontWeight.w600,
-      // `.message-author { letter-spacing: 0.2px }`.
       letterSpacing: 0.2,
     );
     final isVerified = controller.isVerifiedDeveloper(poll.pubkey) ||
         controller.isVerifiedBot(poll.pubkey);
-    // `body.chat-bubbles .nym-bracket { display: none }`.
     final brackets = !settings.useBubbles;
 
-    // `.author-clickable` (polls.js:314-324): avatar + `<` + nym#suffix +
-    // flair + verified ✓ + supporter — that exact order (polls.js:281,301) —
-    // then the closing `>` bracket.
+    // Order: avatar, `<`, nym#suffix, flair, verified, supporter, `>`.
     final authorLine = GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () => _openAuthorMenu(context, selfPubkey),
@@ -194,7 +148,6 @@ class _PollCardState extends ConsumerState<PollCard> {
                 if (suffix.isNotEmpty)
                   TextSpan(
                     text: '#$suffix',
-                    // `.nym-suffix`: opacity 0.7, 0.9em, weight 100.
                     style: authorStyle.copyWith(
                       color: authorColor.withValues(alpha: 0.7),
                       fontSize: fontSize * 0.9,
@@ -205,7 +158,6 @@ class _PollCardState extends ConsumerState<PollCard> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          // `getFlairForUser` flair badge(s) — in-chat `.flair-badge` is 20px.
           if (cosmetics.flairId != null && cosmetics.flairId!.isNotEmpty)
             FlairBadge(
               flairId: cosmetics.flairId!,
@@ -214,12 +166,10 @@ class _PollCardState extends ConsumerState<PollCard> {
                   : null,
               size: 20,
             ),
-          // Blue ✓ for the verified developer / Nymbot (polls.js:230-234).
           if (isVerified) ...[
             const SizedBox(width: 4),
             const VerifiedBadge(size: 20),
           ],
-          // Gold "Supporter" pill (polls.js:228-229).
           if (cosmetics.supporter) const SupporterBadge(height: 20),
           if (brackets)
             Text('>', style: TextStyle(color: authorColor, fontSize: fontSize)),
@@ -227,14 +177,11 @@ class _PollCardState extends ConsumerState<PollCard> {
       ),
     );
 
-    // `.poll-container` (max-width 400, `margin: 8px 0` inside the content).
     final pollContainer = Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        // `body.light-mode .poll-container { background: rgba(0,0,0,0.03) }`
-        // (styles-themes-responsive.css:1510-1513); dark white@0.04.
         color: c.isLight
-            ? const Color(0x08000000) // black @ 0.03
+            ? const Color(0x08000000)
             : Colors.white.withValues(alpha: 0.04),
         border: Border.all(color: c.glassBorder),
         borderRadius: NymRadius.rmd,
@@ -243,7 +190,6 @@ class _PollCardState extends ConsumerState<PollCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // `.poll-header`.
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
@@ -256,7 +202,6 @@ class _PollCardState extends ConsumerState<PollCard> {
               ),
             ),
           ),
-          // `.poll-question`.
           Padding(
             padding: const EdgeInsets.only(bottom: 14),
             child: Text(
@@ -269,7 +214,6 @@ class _PollCardState extends ConsumerState<PollCard> {
               ),
             ),
           ),
-          // `.poll-options` (flex column, gap 8).
           for (var i = 0; i < poll.options.length; i++) ...[
             if (i > 0) const SizedBox(height: 8),
             _PollOption(
@@ -283,7 +227,6 @@ class _PollCardState extends ConsumerState<PollCard> {
                   : () => controller.votePoll(poll.id, poll.options[i].index),
             ),
           ],
-          // `.poll-footer` ("N vote(s)", margin-top 12) → voters modal.
           Padding(
             padding: const EdgeInsets.only(top: 12),
             child: _PollFooter(
@@ -295,9 +238,7 @@ class _PollCardState extends ConsumerState<PollCard> {
       ),
     );
 
-    // `.message-content`: the poll box (its 8px vertical margin lives OUTSIDE
-    // any style tint), tinted by `.message.style-X .message-content
-    // { background }` when the sender has a message style active.
+    // Style tint on the content box; the poll's 8px margin sits outside it.
     final styleBg = styleDeco?.contentBackgroundFor(bubble: false);
     Widget content = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 400),
@@ -309,20 +250,16 @@ class _PollCardState extends ConsumerState<PollCard> {
           : pollContainer,
     );
     content = Padding(
-      // `.poll-container { margin: 8px 0 }`.
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: content,
     );
 
-    // The `.message` flex-wrap row, in PWA DOM order (polls.js:299-311):
-    // `.message-time` FIRST, then `.message-author`, then `.message-content`.
+    // DOM order: time, author, content.
     final messageRow = Wrap(
       crossAxisAlignment: WrapCrossAlignment.start,
       spacing: 10, // `.message { gap: 10px }`
       runSpacing: 4,
       children: [
-        // `.message-time { font-size:12px; min-width:50px }` — the clickable
-        // timestamp opening the styled full-timestamp popup.
         if (settings.showTimestamps && timeStr.isNotEmpty)
           ConstrainedBox(
             constraints: const BoxConstraints(minWidth: 50),
@@ -350,9 +287,7 @@ class _PollCardState extends ConsumerState<PollCard> {
       mainAxisSize: MainAxisSize.min,
       children: [
         messageRow,
-        // Inline poll translation (`translatePoll`, translate.js:361-406): a
-        // `.message-translation` block appended AFTER `.message-content`
-        // (`contentEl.after`), so it spans the full message width.
+        // Appended after the content so it spans the full row width.
         if (_showTranslation)
           _PollTranslation(
             key: ValueKey(_translateLangOverride ?? ''),
@@ -362,11 +297,8 @@ class _PollCardState extends ConsumerState<PollCard> {
       ],
     );
 
-    // `--style-pattern` watermark behind the content (satoshi ₿ tile, matrix
-    // code, …), like the IRC message row.
     final watermark = styleDeco?.watermark;
     final body = Padding(
-      // `.message { padding: 10px 14px }`.
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       child: watermark != null
           ? Stack(
@@ -384,7 +316,6 @@ class _PollCardState extends ConsumerState<PollCard> {
       width: double.infinity,
       decoration: BoxDecoration(
         color: bgGradient == null ? bg : null,
-        // The 135deg supporter/gold gradient on the row.
         gradient: bgGradient != null
             ? LinearGradient(
                 begin: Alignment.topLeft,
@@ -393,8 +324,7 @@ class _PollCardState extends ConsumerState<PollCard> {
               )
             : null,
         borderRadius: (hasBg || rowRing != null) ? NymRadius.rsm : null,
-        // Gold aura inset ring, approximated as a 1px border (like the IRC
-        // message row).
+        // Gold aura inset ring approximated as a 1px border.
         border: rowRing != null ? Border.all(color: rowRing, width: 1) : null,
         boxShadow: (goldAura?.glowColor != null && glowBlur > 0)
             ? [BoxShadow(color: goldAura!.glowColor!, blurRadius: glowBlur)]
@@ -405,8 +335,7 @@ class _PollCardState extends ConsumerState<PollCard> {
           ? Stack(
               children: [
                 body,
-                // The 3px × ~60%-height rounded accent bar, vertically
-                // centered (`.message.self::before` / supporter / gold).
+                // 3px rounded accent bar at ~60% height, vertically centered.
                 Positioned(
                   left: 0,
                   top: 0,
@@ -432,11 +361,7 @@ class _PollCardState extends ConsumerState<PollCard> {
           : body,
     );
 
-    // Hover-capable (non-touch) devices: track `.message:hover` for the row
-    // tint and overlay the `.msg-hover-buttons` pair — quick-react + translate
-    // — at the row's top-right (`right:10; top:5`, styles-chat.css:357-364).
-    // Polls render the pair whenever `!isMobile` (innerWidth > 768,
-    // polls.js:283-297 — no event-id validity gate like regular messages).
+    // Non-touch devices track hover and show react/translate buttons; polls skip the event-id gate.
     final p = Theme.of(context).platform;
     final touchPlatform =
         p == TargetPlatform.android || p == TargetPlatform.iOS;
@@ -477,12 +402,7 @@ class _PollCardState extends ConsumerState<PollCard> {
     return row;
   }
 
-  /// `.author-clickable` click → the user context menu, mirroring a normal
-  /// message author (polls.js `displayPollMessage`: `showContextMenu(e,
-  /// displayAuthor, pubkey, '[Poll] '+question, pollId)`). The panel re-derives
-  /// friend/block/group-role flags itself (context_menu_panel.dart:113), so we
-  /// only supply identity + the poll body/id. The menu's Translate action then
-  /// renders the inline poll translation via [onTranslateInline].
+  /// Opens the user context menu for the author with the poll body; its Translate renders inline.
   void _openAuthorMenu(BuildContext context, String selfPubkey) {
     final poll = widget.poll;
     final isBot = ref.read(nostrControllerProvider).isVerifiedBot(poll.pubkey);
@@ -504,11 +424,7 @@ class _PollCardState extends ConsumerState<PollCard> {
     );
   }
 
-  /// The hover `.reaction-btn` (`reactionShowPicker` with the poll id,
-  /// polls.js:286): opens the enhanced reaction picker targeting the poll
-  /// event. The synthetic [Message] carries only identity fields — reaction
-  /// kind inference falls back to the active view, exactly like the PWA's
-  /// `sendReaction` (reactions.js:982-988).
+  /// Reaction picker targeting the poll; kind inference falls back to the active view.
   void _openReactionPicker(BuildContext context) {
     final poll = widget.poll;
     final selfPubkey = ref.read(appStateProvider).selfPubkey;
@@ -529,7 +445,7 @@ class _PollCardState extends ConsumerState<PollCard> {
 
   void _showVoters(BuildContext context, Rect anchorRect) {
     final poll = widget.poll;
-    // `showPollVotersModal` no-ops when there are no votes (polls.js:459).
+    // No-op without votes.
     if (poll.votes.isEmpty) return;
     final selfPubkey = ref.read(appStateProvider).selfPubkey;
     final controller = ref.read(nostrControllerProvider);
@@ -538,15 +454,13 @@ class _PollCardState extends ConsumerState<PollCard> {
       anchorRect: anchorRect,
       poll: poll,
       selfPubkey: selfPubkey,
-      // Tapping a voter opens a PM with them (polls.js:513-524); self rows
-      // just close.
+      // Tapping a voter opens a PM; self rows just close.
       onOpenPM: (pk) => controller.startPM(pk),
     );
   }
 }
 
-/// `.msg-hover-buttons` on a poll (polls.js:283-297): the reaction-picker and
-/// translate buttons shown at the row's top-right while hovered, 4px apart.
+/// Hover reaction and translate buttons at the row's top-right.
 class _PollHoverButtons extends StatelessWidget {
   const _PollHoverButtons({required this.onReact, required this.onTranslate});
 
@@ -558,10 +472,8 @@ class _PollHoverButtons extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // `.reaction-btn` — the 20×20 smiley-plus glyph.
         _PollHoverActionButton(svg: NymIcons.addReaction, onTap: onReact),
-        const SizedBox(width: 4), // `.msg-hover-buttons { gap: 4px }`
-        // `.translate-msg-btn` (`title="Translate"`).
+        const SizedBox(width: 4),
         _PollHoverActionButton(
           svg: NymIcons.translate,
           onTap: onTranslate,
@@ -572,11 +484,7 @@ class _PollHoverButtons extends StatelessWidget {
   }
 }
 
-/// One `.reaction-btn` / `.translate-msg-btn` (styles-chat.css:366-402): bg
-/// rgba(20,20,35,0.8), 1px `--glass-border`, radius-xs, padding 4px 8px,
-/// 16px glyph filled `--text`; hover → bg white@0.08 + border primary@0.3.
-/// Light mode flips the rest fill to white@0.85 with a black@0.08 border
-/// (styles-themes-responsive.css:1184-1187).
+/// Hover action button; light mode uses a white@0.85 fill and black@0.08 border.
 class _PollHoverActionButton extends StatefulWidget {
   const _PollHoverActionButton({
     required this.svg,
@@ -598,8 +506,8 @@ class _PollHoverActionButtonState extends State<_PollHoverActionButton> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final restFill = c.isLight
-        ? const Color(0xD9FFFFFF) // rgba(255,255,255,0.85)
-        : const Color(0xCC141423); // rgba(20,20,35,0.8)
+        ? const Color(0xD9FFFFFF)
+        : const Color(0xCC141423);
     final restBorder =
         c.isLight ? Colors.black.withValues(alpha: 0.08) : c.glassBorder;
     final btn = MouseRegion(
@@ -627,12 +535,7 @@ class _PollHoverActionButtonState extends State<_PollHoverActionButton> {
   }
 }
 
-/// The poll's tappable `.message-time.clickable-timestamp` (polls.js:300).
-/// Hover tints it `--primary` over 120ms (`.clickable-timestamp:hover`) and
-/// shows the glass full-timestamp tooltip (`.message-time:hover::after`);
-/// tapping opens the anchored `.timestamp-popup` (`showTimestampPopup`,
-/// messages.js:3367-3390) — right-aligned to the timestamp, flipped above/
-/// below by head-room, dismissed on the next tap.
+/// Tappable timestamp with a hover tooltip and an anchored full-timestamp popup.
 class _PollTimestampText extends StatefulWidget {
   const _PollTimestampText({
     required this.label,
@@ -664,8 +567,7 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
     _popup = null;
   }
 
-  /// `showTimestampPopup` placement (messages.js:3377-3384): right-aligned to
-  /// the timestamp, 6px above it when there is head-room, else 6px below.
+  /// Right-aligned to the timestamp, 6px above with head-room, else below.
   void _openPopup() {
     _closePopup();
     final box = context.findRenderObject() as RenderBox?;
@@ -690,7 +592,6 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
               child: Material(
                 type: MaterialType.transparency,
                 child: Container(
-                  // `.reactors-modal { min-width:160; max-width:240 }`.
                   constraints:
                       const BoxConstraints(minWidth: 160, maxWidth: 240),
                   padding:
@@ -703,8 +604,6 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
                           ? Colors.black.withValues(alpha: 0.08)
                           : c.glassBorder,
                     ),
-                    // dark: shadow-lg + shadow-glow + a 1px white@0.05 ring;
-                    // light: `0 8px 32px rgba(0,0,0,0.12)`.
                     boxShadow: c.isLight
                         ? const [
                             BoxShadow(
@@ -722,7 +621,6 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
                                 color: Color(0x0DFFFFFF), spreadRadius: 1),
                           ],
                   ),
-                  // `.timestamp-popup-body`: 13px --text, nowrap.
                   child: Text(
                     widget.fullTimestamp,
                     softWrap: false,
@@ -758,15 +656,14 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
             color: c.isLight
-                ? const Color(0xEBFFFFFF) // rgba(255,255,255,0.92)
-                : const Color(0xE6141423), // rgba(20,20,35,0.9)
+                ? const Color(0xEBFFFFFF)
+                : const Color(0xE6141423),
             borderRadius: NymRadius.rxs,
             border: Border.all(
               color: c.isLight
                   ? Colors.black.withValues(alpha: 0.08)
                   : c.glassBorder,
             ),
-            // `--shadow-sm: 0 2px 8px rgba(0,0,0,0.3)`.
             boxShadow: const [
               BoxShadow(
                   color: Color(0x4D000000),
@@ -777,7 +674,6 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
           textStyle:
               TextStyle(fontSize: 11, color: c.isLight ? c.text : c.textDim),
           child: AnimatedDefaultTextStyle(
-            // `.clickable-timestamp { transition: color 120ms ease }`.
             duration: const Duration(milliseconds: 120),
             curve: Curves.ease,
             style: TextStyle(
@@ -792,13 +688,7 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
   }
 }
 
-/// One `.poll-option` row: an absolutely-positioned gradient bar animating its
-/// width to `pct%` over 400ms, the option text + right-aligned `NN%`, and a
-/// voter-avatar stack (up to 8 + "+N"). Selected rows tint the border/bg
-/// primary; pointer hover tints the border primary + a subtle fill
-/// (`.poll-option:hover`, styles-features.css:4034-4037 / light
-/// styles-themes-responsive.css:1515-1517 — its specificity beats the
-/// selected fill).
+/// Option row: bar animating to `pct%` over 400ms, text and `NN%`, and up to 8 voter avatars; hover beats the selected fill.
 class _PollOption extends StatefulWidget {
   const _PollOption({
     required this.poll,
@@ -835,22 +725,19 @@ class _PollOptionState extends State<_PollOption> {
         poll.votes.entries.where((e) => e.value == option.index).toList();
 
     return MouseRegion(
-      // `.poll-option { cursor: pointer }` (unconditional).
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedContainer(
-          // `transition: all var(--transition)`.
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           decoration: BoxDecoration(
-            // Hover: white@0.03 dark / black@0.04 light — its specificity
-            // beats the selected white@0.06 fill.
+            // Hover specificity beats the selected fill.
             color: _hover
                 ? (c.isLight
-                    ? const Color(0x0A000000) // black @ 0.04
+                    ? const Color(0x0A000000)
                     : Colors.white.withValues(alpha: 0.03))
                 : (selected
                     ? Colors.white.withValues(alpha: 0.06)
@@ -862,8 +749,6 @@ class _PollOptionState extends State<_PollOption> {
           clipBehavior: Clip.antiAlias,
           child: Stack(
             children: [
-              // `.poll-option-bar`: full-height gradient fill whose WIDTH
-              // animates to `pct%` over 400ms (`transition: width 0.4s ease`).
               Positioned.fill(
                 child: AnimatedFractionallySizedBox(
                   duration: const Duration(milliseconds: 400),
@@ -874,10 +759,7 @@ class _PollOptionState extends State<_PollOption> {
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       borderRadius: NymRadius.rsm,
-                      // `body.light-mode .poll-option-bar` flips to black@.06→.02
-                      // and the selected bar to a blue rgb(0,100,200) tint
-                      // (styles-themes-responsive.css:1519-1525). Dark base is
-                      // white@.06→.02 / primary@.15→.05 (styles-features.css:4044).
+                      // Light mode uses a black bar and a blue selected tint.
                       gradient: LinearGradient(
                         begin: Alignment.centerLeft,
                         end: Alignment.centerRight,
@@ -896,7 +778,6 @@ class _PollOptionState extends State<_PollOption> {
                   ),
                 ),
               ),
-              // `.poll-option-content` + `.poll-voters`.
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -927,9 +808,7 @@ class _PollOptionState extends State<_PollOption> {
                           ),
                       ],
                     ),
-                    // `.poll-voters` is always emitted (polls.js:266), so every
-                    // option reserves the 20px min-height strip 6px below the
-                    // text even when nobody voted.
+                    // Always reserves the voter strip, even with no votes.
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
                       child: Container(
@@ -952,7 +831,7 @@ class _PollOptionState extends State<_PollOption> {
   }
 }
 
-/// `.poll-voters`: up to 8 × 20px round avatars (1px glass border) + "+N".
+/// Up to 8 20px avatars plus "+N".
 class _VoterStack extends StatelessWidget {
   const _VoterStack({required this.voters, required this.avatarFor});
   final List<String> voters;
@@ -989,11 +868,7 @@ class _VoterStack extends StatelessWidget {
   }
 }
 
-/// `.poll-footer` (styles-features.css:4105-4120): the raw "N vote(s)" count
-/// (polls.js:307 — NO abbreviation), text-dim 11px, padding 2px 6px with
-/// `margin-left: -6px` (so the text stays flush with the container), radius-xs.
-/// Hover turns it into a pill — bg white@0.06 + `--text` — over 150ms in BOTH
-/// themes (no light override). Tapping opens the voters modal anchored to it.
+/// Raw "N vote(s)" count (no abbreviation) that becomes a pill on hover; tapping opens the voters list.
 class _PollFooter extends StatefulWidget {
   const _PollFooter({required this.total, required this.onTap});
   final int total;
@@ -1017,11 +892,10 @@ class _PollFooterState extends State<_PollFooter> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}` — the raw integer.
+    // Raw integer, pluralized.
     final label =
         widget.total == 1 ? tr('1 vote') : tr('{n} votes', {'n': widget.total});
     return Transform.translate(
-      // `.poll-footer { margin-left: -6px }`.
       offset: const Offset(-6, 0),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -1030,7 +904,6 @@ class _PollFooterState extends State<_PollFooter> {
         child: GestureDetector(
           onTap: _handleTap,
           child: AnimatedContainer(
-            // `transition: background 0.15s, color 0.15s`.
             duration: const Duration(milliseconds: 150),
             curve: Curves.ease,
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -1056,14 +929,10 @@ class _PollFooterState extends State<_PollFooter> {
   }
 }
 
-/// Maximum voter rows before the "+N more" overflow line
-/// (`MAX_ROWS`, polls.js:464).
+/// Max voter rows before the "+N more" line.
 const int _kPollVotersMaxRows = 100;
 
-/// Shows the `.poll-voters-modal` (`showPollVotersModal`, polls.js:456-533):
-/// a `.reactors-modal`-chromed popup anchored to the tapped `.poll-footer` —
-/// left-aligned to it (clamped 10px from the viewport edges), 6px above when
-/// it fits, else 6px below — dismissed on outside tap.
+/// Voters popup left-aligned to the footer (10px from edges), above if it fits, else below; outside tap dismisses.
 void showPollVotersModal(
   BuildContext context, {
   required Rect anchorRect,
@@ -1081,7 +950,7 @@ void showPollVotersModal(
   entry = OverlayEntry(
     builder: (ctx) => Stack(
       children: [
-        // Outside-tap scrim (the PWA's document-level click closer).
+        // Outside-tap scrim.
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
@@ -1095,7 +964,6 @@ void showPollVotersModal(
             selfPubkey: selfPubkey,
             onTapRow: (pk) {
               close();
-              // `if (pk && pk !== this.pubkey) openUserPM(…)` (polls.js:517).
               if (pk != selfPubkey) onOpenPM(pk);
             },
           ),
@@ -1106,12 +974,7 @@ void showPollVotersModal(
   overlay.insert(entry);
 }
 
-/// The `.poll-voters-modal` body: a "📊 Voters" header with a 12px dim count
-/// badge (polls.js:488), then one `.poll-voters-row` per voter — 18px avatar,
-/// nym + `#suffix`, a "you" chip on the self row, and the chosen option in a
-/// right-aligned pill (`.poll-voters-choice`) — capped at 100 rows with a
-/// "+N more" overflow line. Nyms/avatars resolve live from `usersProvider`
-/// (the PWA's `ensureListProfiles`).
+/// Voters list with count, "you" chip and each voter's choice, capped at 100 rows; nyms resolve live.
 class _PollVotersModal extends ConsumerWidget {
   const _PollVotersModal({
     required this.poll,
@@ -1142,9 +1005,6 @@ class _PollVotersModal extends ConsumerWidget {
           color: c.bgSecondary,
           border: Border.all(color: borderColor),
           borderRadius: NymRadius.rmd,
-          // dark (styles-chat.css:495): shadow-lg + shadow-glow + a 1px
-          // white@0.05 ring; light (styles-themes-responsive.css:1196-1199):
-          // `0 8px 32px rgba(0,0,0,0.12)` only.
           boxShadow: c.isLight
               ? const [
                   BoxShadow(
@@ -1165,8 +1025,6 @@ class _PollVotersModal extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // `.reactors-modal-header` — "📊 Voters" + the count badge
-            // (`.reactors-modal-count`: 12px text-dim), gap 6.
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
@@ -1186,7 +1044,6 @@ class _PollVotersModal extends ConsumerWidget {
                 ],
               ),
             ),
-            // `.poll-voters-modal .reactors-modal-list { max-height: 320px }`.
             Flexible(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxHeight: 320),
@@ -1202,7 +1059,6 @@ class _PollVotersModal extends ConsumerWidget {
                         optionLabel[e.value] ??
                             tr('Option {n}', {'n': e.value + 1}),
                       ),
-                    // `.reactors-modal-more` — "+N more" (polls.js:482-483).
                     if (overflow > 0)
                       Padding(
                         padding: const EdgeInsets.symmetric(
@@ -1226,10 +1082,7 @@ class _PollVotersModal extends ConsumerWidget {
     );
   }
 
-  /// One `.poll-voters-row` (styles-features.css:4126-4157): gap 6, padding
-  /// 6px 8px, 18px avatar, ellipsized nym (suffix at opacity 0.5 / 0.9em), an
-  /// optional 10px primary@0.7 "you" chip, and the `.poll-voters-choice` pill
-  /// (0.85em text-dim on white@0.06, radius-xs, padding 2px 6px, max 140px).
+  /// Voter row: avatar, ellipsized nym, optional "you" chip, and the choice pill (max 140px).
   Widget _row(
     BuildContext context,
     Map<String, User> users,
@@ -1242,7 +1095,6 @@ class _PollVotersModal extends ConsumerWidget {
     final suffix = getPubkeySuffix(pk);
     return InkWell(
       onTap: () => onTapRow(pk),
-      // `.reactors-modal-user:hover` — white@0.06 dark / black@0.05 light.
       hoverColor: c.isLight
           ? Colors.black.withValues(alpha: 0.05)
           : Colors.white.withValues(alpha: 0.06),
@@ -1305,13 +1157,7 @@ class _PollVotersModal extends ConsumerWidget {
   }
 }
 
-/// The inline `.message-translation` block for a poll (`translatePoll`,
-/// translate.js:361-406). Translates the segment list `[question, …options]`
-/// (each via [TranslateService.translate], mirroring `_translatePreservingMentions`)
-/// and renders the translated question (`.poll-translation-question`, bold) over
-/// `• option` lines (`.poll-translation-option`, 0.95em opacity 0.9) plus the
-/// `source → target` label. Container styling matches [MessageTranslation]
-/// (`.message-translation`, styles-features.css:4310-4320).
+/// Inline poll translation of question and options, styled like [MessageTranslation].
 class _PollTranslation extends ConsumerStatefulWidget {
   const _PollTranslation({super.key, required this.poll, this.targetLang});
 
@@ -1335,7 +1181,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
   @override
   void initState() {
     super.initState();
-    // `[poll.question, ...poll.options.map(o => o.text)]` (translate.js:380).
+    // The question followed by each option's text.
     _segments = [
       widget.poll.question,
       for (final o in widget.poll.options) o.text,
@@ -1354,8 +1200,6 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
       margin: const EdgeInsets.only(top: 6),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        // `.message-translation` — bg white@0.04, left primary rule, right-only
-        // radius (styles-features.css:4310-4320).
         color: Colors.white.withValues(alpha: 0.04),
         border: Border(left: BorderSide(color: c.primary, width: 3)),
         borderRadius: const BorderRadius.only(
@@ -1367,8 +1211,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
         future: _future,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            // `.translation-loading`: static italic dim@0.6 (no pulse, matching
-            // the inline message translation, styles-features.css:4333).
+            // Static italic, no pulse.
             return Text(
               tr('Translating...'),
               style: TextStyle(
@@ -1388,8 +1231,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
           final translated = [
             for (final r in results) r.translatedText,
           ];
-          // `allNoop`: every segment came back blank or unchanged
-          // (translate.js:387).
+          // Every segment came back blank or unchanged.
           final allNoop = () {
             for (var i = 0; i < _segments.length; i++) {
               final t = (i < translated.length ? translated[i] : '').trim();
@@ -1409,7 +1251,7 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
               ]),
             );
           }
-          // First non-`auto` detected language wins (translate.js:385).
+          // First non-`auto` detected language wins.
           var detected = 'auto';
           for (final r in results) {
             if (r.detectedLanguage.isNotEmpty && r.detectedLanguage != 'auto') {
@@ -1425,7 +1267,6 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // `🌐` + `.poll-translation-question` (bold, margin-bottom 4).
               Text.rich(
                 TextSpan(
                   style: TextStyle(color: c.textDim, fontSize: 13, height: 1.4),
@@ -1439,7 +1280,6 @@ class _PollTranslationState extends ConsumerState<_PollTranslation> {
                 ),
               ),
               const SizedBox(height: 4),
-              // `.poll-translation-option` — "• {translated}" per option.
               for (var i = 0; i < widget.poll.options.length; i++)
                 Text(
                   '• ${(i + 1 < translated.length && translated[i + 1].isNotEmpty) ? translated[i + 1] : widget.poll.options[i].text}',

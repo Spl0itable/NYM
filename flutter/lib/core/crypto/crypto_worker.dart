@@ -9,60 +9,11 @@ import 'gift_wrap.dart' as giftwrap;
 import 'native_schnorr.dart';
 import 'keys.dart' as keys;
 
-/// Off-main-thread NIP-59 gift-wrap **wrap** + **unwrap** for the local-key
-/// paths. This is the Flutter analog of the PWA's `crypto-pool.js` (which pools
-/// Web Workers running `nip59Wrap` / `bitchatWrap` / `unwrapGiftWrap`): the
-/// secp256k1 ECDH + ChaCha20 + HMAC + JSON those ops do are CPU-bound and
-/// previously ran synchronously on the main isolate, stalling the render thread
-/// on PM backfill bursts (≤1000 wraps) and group send fan-out (one full wrap per
-/// recipient).
-///
-/// ## Why `compute` (and not a persistent SendPort isolate)
-/// [IsolateVerifier] — the existing template in this directory — batches inbound
-/// signature verification and runs ONE `compute(verifyEventsBatch, batch)` per
-/// event-loop turn, coalescing a whole burst into a single isolate hop. PoW
-/// (`pow.dart`) and the globe decoders likewise use `compute`. This worker
-/// follows that exact shape: a pending buffer that flushes on a microtask (or at
-/// `maxBatch`), one `compute` over the batch, positional result mapping, and a
-/// graceful **inline fallback** on web / on any isolate failure. `compute`
-/// spawns one short-lived isolate per batch, but because a burst coalesces into
-/// one batch that cost is amortized — the same trade-off `IsolateVerifier`
-/// already accepts. A long-lived SendPort isolate would buy no extra throughput
-/// here and is more invasive / riskier for crypto correctness, so we use the
-/// simpler `compute` equivalent the plan explicitly permits.
-///
-/// ## Correctness contract (byte-identical to the synchronous path)
-///   * The isolate entrypoints ([unwrapBatchIsolate], [wrapBatchIsolate]) call
-///     the SAME pure functions the main isolate used — [giftwrap.unwrapGiftWrap]
-///     for unwrap and [giftwrap.nip59Wrap] for wrap — so the produced bytes are
-///     identical (modulo the per-wrap random nonce + backdated timestamp, which
-///     are random on *both* paths anyway).
-///   * Unwrap preserves per-candidate try/next-candidate semantics and the
-///     "skip a wrap that fails to decrypt" (→ null) behavior, because that logic
-///     lives inside [giftwrap.unwrapGiftWrap] which is what the isolate runs.
-///   * Only the **local-key** path moves. The NIP-46 remote-signer seal/unwrap
-///     stays on its existing network path (the call sites branch before reaching
-///     this worker). Key BYTES are passed into the isolate as part of the
-///     payload (isolates do not share memory); no secure-storage / plugin call
-///     happens inside the isolate.
+/// Batched off-main NIP-59 wrap/unwrap for local keys, running the same pure functions as the inline path.
 
-// ---------------------------------------------------------------------------
-// Payload codec: (wrap, candidate keys) <-> a single sendable JSON-able map.
-// `compute` requires the argument + result be sendable across the isolate
-// boundary; we use plain maps / lists / hex strings (key bytes as hex) so the
-// payload survives the default message copy on every platform.
-// ---------------------------------------------------------------------------
+// Payloads are plain maps with hex keys so they survive the isolate message copy.
 
-/// One unwrap request: the kind-1059 wrap event JSON + the ordered candidate
-/// identities (secret-key hex, per-key bitchat flag, and the optional ML-KEM
-/// keypair for hybrid post-quantum wraps), exactly as
-/// [giftwrap.unwrapGiftWrap] consumes them.
-///
-/// ML-KEM keys are hex like the secp keys: isolates do not share memory, so
-/// every candidate's bytes are copied into the payload. The 2400-byte ML-KEM
-/// secret key makes each PQ candidate noticeably heavier than a classical one,
-/// which is why callers should pass PQ material only for identities that
-/// actually have it.
+/// One unwrap job: wrap JSON plus ordered candidates (sk hex, bitchat flag, optional ML-KEM keypair).
 Map<String, dynamic> _encodeUnwrapJob(
   NostrEvent wrap,
   List<giftwrap.UnwrapCandidate> candidates,
@@ -95,10 +46,7 @@ List<giftwrap.UnwrapCandidate> _decodeCandidates(Object? raw) {
   return out;
 }
 
-/// One wrap request: the rumor fields + sender secret-key hex + recipient +
-/// optional expiration. The ephemeral wrap key is generated INSIDE the isolate
-/// by [giftwrap.nip59Wrap] (via `generatePrivateKey`), so no key/randomness for
-/// the wrap layer ever crosses back to the main isolate.
+/// One wrap job; the ephemeral wrap key is generated inside the isolate.
 Map<String, dynamic> _encodeWrapJob({
   required UnsignedEvent rumor,
   required Uint8List senderPrivkey,
@@ -112,34 +60,17 @@ Map<String, dynamic> _encodeWrapJob({
       'sk': keys.bytesToHex(senderPrivkey),
       'rcpt': recipientPubkey,
       if (expiration != null) 'exp': expiration,
-      // Which payload format this recipient can open, from their announcement.
-      // Per-job like `rkem`, so one fan-out can mix both.
+      // Per-recipient payload format, so one fan-out can mix both.
       if (layered) 'l2': 1,
-      // Present only when this recipient has announced an ML-KEM key; its
-      // presence is what selects the hybrid post-quantum wrap inside the
-      // isolate. Per-job rather than per-batch so one group fan-out can mix
-      // post-quantum and classical recipients in a single hop.
+      // Present only when the recipient announced an ML-KEM key; selects the hybrid wrap per job.
       if (recipientKemPk != null) 'rkem': keys.bytesToHex(recipientKemPk),
     };
 
-// ---------------------------------------------------------------------------
-// Isolate entrypoints (top-level + single sendable arg, as `compute` requires).
-// These are also the unit-test seam: they are pure functions of their input and
-// can be driven directly without an isolate.
-// ---------------------------------------------------------------------------
-
-/// `compute` entry point for a batch of unwrap jobs. Returns one result per
-/// job, positionally aligned with the input: each entry is either the decoded
-/// `{seal, rumor, isBitchat, isPq}` (as a JSON-able map) or `null` when no candidate
-/// could decrypt that wrap (a skip — never a throw).
-///
-/// A failure in one job can only null *its own* slot: each job runs an
-/// independent [giftwrap.unwrapGiftWrap] in its own try/catch.
+/// `compute` entry for unwrap jobs: one positional `{seal, rumor, isBitchat, isPq}` or null per job.
 Future<List<Map<String, dynamic>?>> unwrapBatchIsolate(
   List<Map<String, dynamic>> jobs,
 ) async {
-  // Native libsecp256k1 for the per-wrap seal verify (and any signing) in
-  // THIS worker isolate; falls back to pure Dart when unavailable.
+  // Load native libsecp256k1 in this worker isolate; falls back to pure Dart.
   await NativeSchnorr.ensureLoaded();
   final out = List<Map<String, dynamic>?>.filled(jobs.length, null);
   for (var i = 0; i < jobs.length; i++) {
@@ -157,20 +88,15 @@ Future<List<Map<String, dynamic>?>> unwrapBatchIsolate(
         };
       }
     } catch (_) {
-      // A malformed job nulls only its own slot (treated as undecryptable),
-      // never another job's — mirrors the per-candidate skip semantics.
+      // A malformed job nulls only its own slot.
       out[i] = null;
     }
   }
   return out;
 }
 
-/// `compute` entry point for a batch of wrap jobs (e.g. a whole group-fanout
-/// recipient list shipped in one hop). Returns one signed kind-1059 wrap JSON
-/// per job, positionally aligned with the input. A job that throws yields a
-/// `null` slot so the caller can skip exactly that recipient.
-// Async because the layered format's ChaCha20-Poly1305 is: `compute` accepts a
-// Future-returning entry point, so this stays one isolate hop either way.
+/// `compute` entry for wrap jobs: one positional signed wrap JSON per job, or null if that job threw.
+// Async for the layered format's ChaCha20-Poly1305; still one isolate hop.
 Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
   List<Map<String, dynamic>> jobs,
 ) async {
@@ -227,8 +153,7 @@ Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
   return out;
 }
 
-/// The decoded result of one unwrap, in the same record shape
-/// [giftwrap.unwrapGiftWrap] returns, so call sites are drop-in.
+/// Same record shape as [giftwrap.unwrapGiftWrap] returns.
 typedef UnwrapResult = ({
   NostrEvent seal,
   Map<String, dynamic> rumor,
@@ -242,47 +167,32 @@ UnwrapResult? _decodeUnwrapResult(Map<String, dynamic>? m) {
     seal: NostrEvent.fromJson(m['seal'] as Map<String, dynamic>),
     rumor: (m['rumor'] as Map).cast<String, dynamic>(),
     isBitchat: m['isBitchat'] as bool,
-    // Older payloads (in flight across a hot reload) predate the PQ flag.
+    // Payloads from before the PQ flag default to false.
     isPq: m['isPq'] as bool? ?? false,
   );
 }
 
-// ---------------------------------------------------------------------------
-// CryptoWorker: the batched, lazily-spawned facade the service talks to.
-// ---------------------------------------------------------------------------
-
-/// Batched off-main-thread gift-wrap worker. Mirrors [IsolateVerifier]'s
-/// lifecycle: lazy (nothing spawns until the first call), coalesce every request
-/// submitted in a synchronous burst into one isolate hop, cap the per-hop batch
-/// size, and fall back to the inline synchronous path on web (where `compute`
-/// runs on the main isolate anyway) or if the isolate hop throws.
+/// Batched gift-wrap worker like [IsolateVerifier]; runs inline on web or when the isolate hop fails.
 class CryptoWorker {
   CryptoWorker({this.maxBatch = 128});
 
-  /// Process-wide instance, the direct analog of the PWA's single shared
-  /// `crypto-pool.js`. Both the inbound (unwrap) and outbound (wrap) paths route
-  /// through it so a burst across them coalesces.
+  /// Process-wide instance so inbound and outbound bursts coalesce.
   static final CryptoWorker instance = CryptoWorker();
 
-  /// Hard cap on jobs per `compute` payload; reaching it flushes immediately so
-  /// no single cross-isolate message grows unbounded under a large backfill.
+  /// Max jobs per `compute` payload; reaching it flushes immediately.
   final int maxBatch;
 
-  // --- unwrap (inbound) batching --------------------------------------------
   final List<Map<String, dynamic>> _unwrapPending = <Map<String, dynamic>>[];
   final List<Completer<UnwrapResult?>> _unwrapWaiters =
       <Completer<UnwrapResult?>>[];
   bool _unwrapFlushScheduled = false;
 
-  /// Unwraps [wrap] against [candidates] off the main thread, returning the
-  /// recovered `{seal, rumor, isBitchat, isPq}` or null if no candidate decrypts it
-  /// (a skip — identical to the synchronous [giftwrap.unwrapGiftWrap]).
+  /// Unwraps [wrap] off the main thread; null when no candidate decrypts it.
   Future<UnwrapResult?> unwrap(
     NostrEvent wrap,
     List<giftwrap.UnwrapCandidate> candidates,
   ) {
-    // On web `compute` has no real isolate (it runs on the main thread), so
-    // batching only adds latency — run the existing path inline.
+    // Web has no real isolate, so run inline.
     if (kIsWeb) {
       return giftwrap.unwrapGiftWrap(wrap, candidates);
     }
@@ -314,9 +224,7 @@ class CryptoWorker {
         }
       }
     }).catchError((Object _) {
-      // Isolate failure: fall back to the inline synchronous unwrap so a wrap is
-      // never silently dropped just because the isolate hop failed. Each job
-      // re-runs the SAME pure function the isolate would have.
+      // Isolate failure: fall back inline so a wrap is never silently dropped.
       _fallbackUnwrap(batch, waiters);
     });
   }
@@ -343,17 +251,7 @@ class CryptoWorker {
     }
   }
 
-  // --- wrap (outbound) ------------------------------------------------------
-  /// Wraps [rumor] to each pubkey in [recipientPubkeys] with the local
-  /// [senderPrivkey], shipping the WHOLE recipient list in one isolate hop and
-  /// looping inside the isolate (the group fan-out win). Returns the signed
-  /// kind-1059 wraps positionally aligned with [recipientPubkeys]; a slot is
-  /// null only if that recipient's wrap failed (so the caller skips it).
-  ///
-  /// The ephemeral wrap key for each recipient is generated inside the isolate.
-  /// [recipientKemPks], when supplied, maps a recipient pubkey to the ML-KEM
-  /// key to encapsulate to. Recipients absent from the map get a classical
-  /// wrap, so one group fan-out can mix both in a single isolate hop.
+  /// Wraps [rumor] for every recipient in one isolate hop; [recipientKemPks] selects hybrid wraps; null slots failed.
   Future<List<NostrEvent?>> wrapMany({
     required UnsignedEvent rumor,
     required Uint8List senderPrivkey,
@@ -383,7 +281,7 @@ class CryptoWorker {
       try {
         results = await compute(wrapBatchIsolate, jobs);
       } catch (_) {
-        // Isolate failure: produce the wraps inline (same pure function).
+        // Isolate failure: produce the wraps inline.
         results = await wrapBatchIsolate(jobs);
       }
     }
@@ -392,7 +290,6 @@ class CryptoWorker {
     ];
   }
 
-  /// Single-recipient convenience over [wrapMany].
   Future<NostrEvent?> wrapOne({
     required UnsignedEvent rumor,
     required Uint8List senderPrivkey,
@@ -414,8 +311,7 @@ class CryptoWorker {
   }
 }
 
-/// Exposed only so a unit test can exercise the JSON payload round-trip without
-/// reaching into private helpers. Not used in production code.
+/// Exposes the payload round-trip for tests.
 @visibleForTesting
 Map<String, dynamic> debugEncodeUnwrapJob(
   NostrEvent wrap,

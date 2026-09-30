@@ -11,26 +11,11 @@ import '../../state/nostr_controller.dart';
 import '../common/nym_avatar.dart';
 import '../context_menu/profile_badges.dart';
 
-/// The `.typing-indicator` row pinned at the bottom of the active conversation
-/// (`_renderTypingInto`, `styles-features.css:4227`): hidden (height 0 / opacity
-/// 0) until a peer is typing, then animates to a 24px row showing up to three
-/// overlapping 18px avatars + "X is typing" / "X and Y are typing" / "N people
-/// are typing".
-///
-/// Reads `AppState.typing` (`<storageKey>|<pubkey>` → expiry ms) directly with a
-/// live clock so the indicator self-expires even when no other state changes,
-/// matching the PWA's per-peer typing timeout.
-///
-/// By default it keys off the active view's storage key (`app.view.storageKey`).
-/// When [storageKey] is provided it keys off that instead, so the same canonical
-/// row can be hosted per-column inside the deck (`.cv-typing`, columns.js:410-412
-/// builds the identical `.typing-indicator` markup fed by `_renderTypingInto`),
-/// instead of a degraded re-implementation.
+/// Typing-indicator row for a conversation; reads `AppState.typing` against a live clock so it self-expires.
 class TypingIndicatorRow extends ConsumerStatefulWidget {
   const TypingIndicatorRow({super.key, this.storageKey});
 
-  /// The conversation storage key to watch (`<storageKey>|<pubkey>` in
-  /// `AppState.typing`). When null, the active view's key is used.
+  /// Conversation to watch; null uses the active view's key.
   final String? storageKey;
 
   @override
@@ -46,10 +31,6 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
     super.dispose();
   }
 
-  /// Pubkeys typing in the watched conversation (non-expired), computed against
-  /// `now` so the row hides the instant an indicator lapses. Keys off
-  /// [TypingIndicatorRow.storageKey] when provided (per-column reuse), else the
-  /// active view's storage key.
   List<String> _activeTypers(AppState app) {
     final prefix = '${widget.storageKey ?? app.view.storageKey}|';
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -69,8 +50,7 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
     final pubkeys = _activeTypers(app);
     final active = pubkeys.isNotEmpty;
 
-    // While anyone is typing, re-evaluate every second so the row animates out
-    // when the last indicator expires (no incoming event would otherwise tick).
+    // Tick every second while anyone types so the row hides when the last indicator expires.
     if (active) {
       _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() {});
@@ -87,13 +67,6 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
 
     final controller = ref.read(nostrControllerProvider);
 
-    // `fmtTyper` (nostr-core.js:1432-1437): the trailing `#xxxx` renders in a
-    // dimmed `.nym-suffix` span (opacity .7, 0.9em, weight 100); a nym with no
-    // trailing 4-hex suffix (or a '#' inside the name) renders whole. The PWA
-    // then appends `getFlairForUser(pk)` (nickname flair + supporter badge) and
-    // shows the verified ✓ for the developer / Nymbot — mirrored here via
-    // [CosmeticNymBadges] + [VerifiedBadge], inlined as WidgetSpans so they sit
-    // on the typing line.
     List<InlineSpan> typerSpans(String pk) {
       final split = splitNymSuffix(nymOf(pk));
       final isVerified =
@@ -109,7 +82,6 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
               fontWeight: FontWeight.w100,
             ),
           ),
-        // Nickname flair + supporter badge (self-hides when the user has none).
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: CosmeticNymBadges(
@@ -134,8 +106,7 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
       final visible = pubkeys.take(3).toList();
       final List<InlineSpan> spans;
       if (pubkeys.length == 1) {
-        // A bot "is thinking" rather than "is typing" (PWA `_renderTypingInto`
-        // `isVerifiedBot` → verb 'thinking').
+        // A verified bot is "thinking" rather than "typing".
         final isBot =
             ref.read(nostrControllerProvider).isVerifiedBot(pubkeys[0]);
         spans = [
@@ -153,19 +124,10 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
         spans = [TextSpan(text: '${pubkeys.length} people are typing')];
       }
       content = Padding(
-        // `.typing-indicator`: padding 4px 20px, gap 8.
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
         child: Row(
           children: [
-            // `.typing-indicator-avatars`: 18px round avatars overlapping by 6px
-            // (`img+img { margin-left: -6px }`, styles-features.css:4255-4265),
-            // each ringed by a 1.5px `--bg` border. Laid out in a FIXED-WIDTH
-            // Stack so the cluster collapses to its overlapped extent
-            // (18 + 12·(n−1)) exactly like the PWA's negative margin — a
-            // Transform-translate Row still reserves each avatar's full width
-            // (and the border box adds +3px), leaving the stack too wide. The
-            // border is a `foregroundDecoration` so it overlays the image edge
-            // (CSS border-box) rather than growing the 18px box.
+            // Fixed-width Stack so overlapping avatars collapse like the CSS negative margin; a Row would reserve full widths.
             if (visible.isNotEmpty) ...[
               SizedBox(
                 width: 18 + (visible.length - 1) * 12.0,
@@ -192,12 +154,10 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
                   ],
                 ),
               ),
-              const SizedBox(width: 8), // `.typing-indicator { gap: 8px }`
+              const SizedBox(width: 8),
             ],
-            // `.typing-indicator-dots`: three 5px dots bouncing in sequence.
             _TypingDots(color: c.textDim),
             const SizedBox(width: 8),
-            // `.typing-indicator-text`: nowrap + ellipsis, 12px text-dim.
             Expanded(
               child: Text.rich(
                 TextSpan(children: spans),
@@ -211,12 +171,9 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
       );
     }
 
-    // Animate the 0↔24 height + opacity, matching the CSS transition.
-    // `.typing-indicator` bg: rgba(0,0,0,0.15) dark; light-mode → rgba(0,0,0,
-    // 0.04).
     final bg = c.isLight
-        ? const Color(0x0A000000) // black @ 0.04
-        : const Color(0x26000000); // black @ 0.15
+        ? const Color(0x0A000000)
+        : const Color(0x26000000);
     return ClipRect(
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -234,9 +191,6 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
   }
 }
 
-/// `.typing-indicator-dots`: three 5px round dots that bounce in sequence
-/// (`@keyframes typingBounce`, 1.2s loop, delays 0 / 0.15s / 0.3s):
-/// opacity 0.3 → 1 and translateY 0 → −3 at the 30% mark, back by 60%.
 class _TypingDots extends StatefulWidget {
   const _TypingDots({required this.color});
   final Color color;
@@ -258,12 +212,7 @@ class _TypingDotsState extends State<_TypingDots>
     super.dispose();
   }
 
-  /// One dot's bounce factor (0..1) at phase [t] (0..1), peaking at the 30% mark
-  /// and resting (0) from 60% to 100% — the CSS keyframes (0%,60%,100% → rest;
-  /// 30% → peak) with the declared `ease-in-out` timing applied WITHIN each
-  /// keyframe segment (`animation: typingBounce 1.2s ease-in-out`,
-  /// styles-features.css:4278): slow-fast-slow up, slow-fast-slow down.
-  /// [Curves.easeInOut] is cubic-bezier(0.42,0,0.58,1) = CSS `ease-in-out`.
+  /// Bounce factor per phase [t]: peak at 30%, rest from 60%, with ease-in-out inside each keyframe segment.
   double _bounce(double t) {
     if (t < 0.3) return Curves.easeInOut.transform(t / 0.3);
     if (t < 0.6) return 1 - Curves.easeInOut.transform((t - 0.3) / 0.3);
@@ -272,9 +221,7 @@ class _TypingDotsState extends State<_TypingDots>
 
   @override
   Widget build(BuildContext context) {
-    // RepaintBoundary: the dots repaint every frame of the 1.2s loop for as
-    // long as anyone is typing; the boundary keeps that invalidation inside
-    // this tiny row instead of re-rasterizing the surrounding pane layer.
+    // Keeps the per-frame dot repaint inside this row instead of the surrounding pane.
     return RepaintBoundary(
         child: AnimatedBuilder(
       animation: _ctrl,
@@ -284,9 +231,8 @@ class _TypingDotsState extends State<_TypingDots>
           children: [
             for (var i = 0; i < 3; i++) ...[
               if (i > 0)
-                const SizedBox(width: 3), // `.typing-indicator-dots{gap:3}`
+                const SizedBox(width: 3),
               Builder(builder: (_) {
-                // Stagger each dot by 0.15s / 1.2s ≈ 0.125 of the loop.
                 final phase = (_ctrl.value - i * 0.125) % 1.0;
                 final b = _bounce(phase < 0 ? phase + 1 : phase);
                 return Transform.translate(

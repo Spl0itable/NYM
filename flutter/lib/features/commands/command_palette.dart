@@ -1,9 +1,4 @@
-// Command palette (`#commandPalette`) — the `/` autocomplete. Ports
-// `showCommandPalette` (commands.js:364): filters visible commands by the typed
-// `/needle` (canonical name OR alias prefix), groups them by category in the
-// fixed order, and renders a scrollable dropdown anchored above the input with
-// arrow-nav + Enter/Tab to complete. Completion inserts `"<command> "`
-// (selectCommand, commands.js:489) — i.e. the canonical name plus a space.
+// The `/` command palette: filters by name or alias prefix, groups by category, and completes `"<command> "`.
 
 import 'package:flutter/material.dart';
 
@@ -12,7 +7,7 @@ import '../i18n/i18n.dart';
 import 'command_i18n.dart';
 import 'command_registry.dart';
 
-/// A flat, navigable palette row (either a category header or a command).
+/// A flat, navigable palette row (category header or command).
 sealed class PaletteRow {
   const PaletteRow();
 }
@@ -27,10 +22,7 @@ class PaletteCommand extends PaletteRow {
   final CommandSpec spec;
 }
 
-/// Filters + groups commands for [input] (the raw `/needle`). Mirrors
-/// showCommandPalette: a command matches when its canonical name OR any alias
-/// starts with the needle. Returns the grouped rows (headers + commands) in the
-/// fixed category order, or an empty list when nothing matches (hide palette).
+/// Commands whose name or any alias starts with the needle, grouped in category order; empty hides the palette.
 List<PaletteRow> buildPaletteRows(String input) {
   final needle = input.toLowerCase();
   final matching = visibleCommands().where((spec) {
@@ -51,14 +43,11 @@ List<PaletteRow> buildPaletteRows(String input) {
   return rows;
 }
 
-/// The selectable command rows only (for index math / Enter selection).
+/// Selectable command rows only, for index math.
 List<CommandSpec> paletteCommands(List<PaletteRow> rows) =>
     rows.whereType<PaletteCommand>().map((r) => r.spec).toList();
 
-/// The `#commandPalette` dropdown. The parent owns the selected index and key
-/// handling so it can intercept arrows/Enter/Tab/Esc before the TextField; this
-/// widget is stateful only to hold a [ScrollController] that keeps the selected
-/// row visible as you arrow through it (`scrollIntoView`, commands.js).
+/// The parent owns selection and key handling so it can intercept keys before the TextField.
 class CommandPalette extends StatefulWidget {
   const CommandPalette({
     super.key,
@@ -67,13 +56,11 @@ class CommandPalette extends StatefulWidget {
     required this.onSelect,
   });
 
-  /// Grouped rows from [buildPaletteRows].
   final List<PaletteRow> rows;
 
-  /// Index into the SELECTABLE commands (not the flat rows).
+  /// Index into the selectable commands, not the flat rows.
   final int selectedIndex;
 
-  /// Completes the chosen command.
   final void Function(CommandSpec spec) onSelect;
 
   @override
@@ -135,10 +122,9 @@ class _CommandPaletteState extends State<CommandPalette> {
   Widget _header(NymColors c, String label) => Padding(
         padding: const EdgeInsets.fromLTRB(10, 6, 10, 2),
         child: Text(
-          // Category labels are UI copy — localize before upper-casing.
+          // Category labels are UI copy: localize before upper-casing.
           tr(label).toUpperCase(),
           style: TextStyle(
-            // `.command-category` — text-dim @0.7 opacity.
             color: c.textDim.withValues(alpha: 0.7),
             fontSize: 10,
             fontWeight: FontWeight.w700,
@@ -148,8 +134,6 @@ class _CommandPaletteState extends State<CommandPalette> {
       );
 
   Widget _commandItem(NymColors c, CommandSpec spec, {required bool selected}) {
-    // `.command-name` shows the canonical name + collapsed aliases; the shared
-    // row chrome (also used by the `?` bot palette) renders the rest.
     return commandItemRow(
       c,
       name: localizedCommandDisplay(spec),
@@ -161,11 +145,7 @@ class _CommandPaletteState extends State<CommandPalette> {
   }
 }
 
-/// The `#commandPalette` surface populated with the PUBLIC `?` Nymbot commands
-/// (`showBotCommandPalette`, commands.js:436). Reuses the EXACT same chrome and
-/// `.command-item` rows as [CommandPalette], but the bot list is FLAT (no
-/// category headers — commands.js renders one `<div class="command-item">` per
-/// entry) with the first row pre-selected. Completion inserts `"?<name> "`.
+/// Public `?` Nymbot palette with the same chrome, flat (no headers), first row preselected; completes `"?<name> "`.
 class BotCommandPalette extends StatefulWidget {
   const BotCommandPalette({
     super.key,
@@ -174,13 +154,10 @@ class BotCommandPalette extends StatefulWidget {
     required this.onSelect,
   });
 
-  /// Filtered bot rows from [buildBotPaletteRows], in catalog order.
   final List<BotPaletteCommand> rows;
 
-  /// Index of the selected row.
   final int selectedIndex;
 
-  /// Completes the chosen bot command (inserts `"?<name> "`).
   final void Function(BotPaletteCommand cmd) onSelect;
 
   @override
@@ -235,17 +212,7 @@ class _BotCommandPaletteState extends State<BotCommandPalette> {
   }
 }
 
-/// Shared `.command-palette` container decoration for both palettes. In
-/// solid-ui (the PWA default) `body.solid-ui .command-palette` is overridden to
-/// the opaque `--glass-bg` — #14141e dark / #ffffff light
-/// (themes-responsive.css:1593-1627); NymColors carries no solid flag, but
-/// solid-ui is the only mode whose --glass-bg is fully opaque, so detect it
-/// from the resolved token. In glass mode the base fill applies:
-/// `rgba(20,20,35,.9)` dark (styles-components.css:849-854), flipping to
-/// `rgba(255,255,255,.92)` in light mode (themes-responsive.css:1155-1158).
-/// The `--shadow-lg` is `0 8px 32px rgba(0,0,0,.5)` dark, overridden to
-/// `rgba(0,0,0,.12)` light (themes-responsive.css:1149-1153). The glass border
-/// is already mode-aware.
+/// Shared palette decoration; solid-ui is detected by its fully opaque glass background token.
 BoxDecoration commandPaletteDecoration(NymColors c) => BoxDecoration(
       color: c.glassBg.a == 1.0
           ? c.glassBg
@@ -263,9 +230,7 @@ BoxDecoration commandPaletteDecoration(NymColors c) => BoxDecoration(
       ],
     );
 
-/// Scrolls the selected palette row (tagged with [selectedKey]) into view after
-/// the next frame, mirroring the PWA's `scrollIntoView({block:'nearest'})` on
-/// arrow-nav (commands.js navigate path).
+/// Scrolls the selected row into view after the next frame.
 void scrollPaletteSelectedIntoView(
     ScrollController controller, GlobalKey selectedKey) {
   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -280,11 +245,7 @@ void scrollPaletteSelectedIntoView(
   });
 }
 
-/// A single `.command-item` row — the shared chrome used by BOTH the `/`
-/// ([CommandPalette]) and `?` ([BotCommandPalette]) surfaces: a bold primary
-/// `.command-name` on the left and a `.command-desc` (text-dim, brightening to
-/// `--text` when selected/hovered) on the right. `:hover` → white/0.08,
-/// `:active` → white/0.12, `.selected` → white/0.08.
+/// Shared command row for both palettes: bold primary name on the left, description on the right.
 Widget commandItemRow(
   NymColors c, {
   required String name,
@@ -299,9 +260,7 @@ Widget commandItemRow(
     child: InkWell(
       onTap: onTap,
       borderRadius: const BorderRadius.all(Radius.circular(8)),
-      // `.command-item` hover/selected = white@0.08, :active = white@0.12. On the
-      // white@0.92 light surface those white overlays are invisible, so flip to
-      // the mode-aware overlay tokens (hoverOverlay = white@0.08 / black@0.06).
+      // White overlays vanish on the light surface, so use the mode-aware overlay tokens.
       hoverColor: c.hoverOverlay,
       highlightColor:
           c.isLight ? const Color(0x14000000) : const Color(0x1FFFFFFF),
@@ -311,18 +270,11 @@ Widget commandItemRow(
           color: selected ? c.hoverOverlay : null,
           borderRadius: const BorderRadius.all(Radius.circular(8)),
         ),
-        // Top-aligned so a wrapped multi-line description keeps the command
-        // name pinned to the first line (the PWA row is a single flex line, but
-        // on a narrow phone the description must WRAP to stay fully readable
-        // rather than ellipsize down to a stub).
+        // Top-aligned so a wrapped description keeps the name on the first line.
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // The command token (`?ask`, `/help`) is syntax — never localized.
-            // It sizes to its CONTENT (capped so a long alias list ellipsizes
-            // rather than starving the description) so the description gets ALL
-            // the remaining width — not just half, which is what an equal-flex
-            // Flexible/Expanded pair would force.
+            // Command tokens are syntax and never localized; sized to content so the description gets the remaining width.
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 175),
               child: Text(
@@ -336,10 +288,7 @@ Widget commandItemRow(
               ),
             ),
             const SizedBox(width: 12),
-            // The description fills ALL remaining width and is right-anchored
-            // like the PWA's space-between `.command-desc`, wrapping so the
-            // whole localized text shows. Localized via `tr()` here (both
-            // palettes' catalogs store English source).
+            // Description fills the remaining width and wraps; localized here since catalogs store English source.
             Expanded(
               child: Text(
                 tr(desc),
@@ -359,7 +308,7 @@ Widget commandItemRow(
   );
 }
 
-/// Index navigation with wrap-around (navigateCommandPalette).
+/// Index navigation with wrap-around.
 int wrapIndex(int index, int direction, int length) {
   if (length == 0) return -1;
   var next = index + direction;

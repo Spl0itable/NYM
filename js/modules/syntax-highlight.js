@@ -1,5 +1,4 @@
 // syntax-highlight.js - Tiny built-in code highlighter for fenced markdown blocks.
-// Tokens: comment, string, number, keyword, builtin, type, function.
 
 (function () {
     const KW = {
@@ -190,7 +189,6 @@
         return highlightGeneric(code, l);
     }
 
-    // Attach to whichever global is available so the same code runs both on the
-    // main thread (window) and inside the highlight Web Worker (self).
+    // Runs on the main thread (window) and inside the highlight Web Worker (self).
     (typeof self !== 'undefined' ? self : window).NymHighlight = { highlight: highlight, normalize: normalizeLang };
 })();

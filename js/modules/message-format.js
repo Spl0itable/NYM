@@ -1,5 +1,3 @@
-// message-format.js - Pure content->HTML formatter shared by the main thread
-
 (function () {
     const G = (typeof self !== 'undefined' ? self : window);
 
@@ -86,13 +84,11 @@
         } catch (_) { return null; }
     }
 
-    // NIP-19 entities and bare 64-hex ids, matched only at a word boundary
-    // that isn't part of a URL, so a link to a viewer keeps its own markup.
+    // NIP-19 entities and bare 64-hex ids at a word boundary outside URLs.
     const NOSTR_BECH32 = /(?<![\w/:.#=&?"'-])(nostr:)?((?:nevent|naddr|nprofile|note|npub)1[023456789acdefghjklmnpqrstuvwxyz]{20,})(?![\w-])(?![^<]*>)/gi;
     const NOSTR_HEX_ID = /(?<![\w/:.#=&?"'-])([0-9a-f]{64})(?![\w-])(?![^<]*>)/gi;
 
-    // A pasted NIP-19 entity is all letters and digits, so it trips none of
-    // RX_FORMAT_TRIGGERS and the fast path below would skip it entirely.
+    // NIP-19 entities trip none of RX_FORMAT_TRIGGERS, so the fast path must check them separately.
     const NOSTR_TRIGGER = /(?:nevent|naddr|nprofile|note|npub)1[023456789acdefghjklmnpqrstuvwxyz]{20,}|[0-9a-f]{64}/i;
 
     function shortenNostrRef(token) {
@@ -168,10 +164,7 @@
             const list = mirrors.map(m => proxied(m, ctx.proxyBase));
             return ` data-media-fallbacks="${escapeHtml(list.join('|'))}"`;
         };
-        // Audio gets a player rather than a bare link. Its own placeholder
-        // markers keep it out of the image/video gallery grouping below — a
-        // full-width player has no business in a photo grid. `.ogg`/`.webm`
-        // stay with video, which already claims them and can be either.
+        // Audio uses its own placeholder so it stays out of image/video gallery grouping; .ogg/.webm stay video.
         const audioPlaceholders = [];
         formatted = formatted.replace(
             /(https?:\/\/[^\s<>"\uFDD0-\uFDD5]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s<>"\uFDD0-\uFDD5]*)?)/gi,
@@ -183,9 +176,7 @@
                 };
                 const type = audioTypes[ext.toLowerCase()] || 'audio/mpeg';
                 const proxiedUrl = proxied(url, ctx.proxyBase);
-                // The proxied URL is same-origin, so `download` actually
-                // downloads instead of navigating away like it would
-                // cross-origin.
+                // The proxied URL is same-origin, so `download` works instead of navigating away.
                 let name = '';
                 try {
                     name = decodeURIComponent((new URL(url).pathname.split('/').pop() || '')).slice(0, 60);
@@ -356,10 +347,7 @@
         formatted = formatted.replace(/\n\[gc:([A-Za-z0-9+/=]+)\]/g, '<span class="game-token" aria-hidden="true">[gc:$1]</span>');
         formatted = formatted.replace(/\n/g, '<br>');
 
-        // Enrich @name#suffix mentions with the mentioned user's avatar (prefix)
-        // and flair (suffix) as a final pass, so this HTML isn't touched by the
-        // emoji/shortcode passes above. Both are resolved on the main thread into
-        // ctx.mentionInfo (keyed by suffix), mirroring how quoted authors render.
+        // Runs last so the emoji/shortcode passes don't touch the mention avatar/flair HTML.
         if (ctx.mentionInfo) {
             formatted = formatted.replace(
                 /(<span class="nm-mention">)(@[^<]*?<span class="nym-suffix">#([0-9a-f]{4})<\/span>)(<\/span>)/gi,
@@ -436,8 +424,6 @@
         return html;
     }
 
-    // Quoted-author names (at every quote depth, matching formatWithQuotes) whose
-    // flair must be resolved on the main thread.
     function extractQuoteAuthors(content, depth, out, seen) {
         depth = depth || 0;
         if (depth === 0) { out = []; seen = new Set(); }
@@ -467,8 +453,6 @@
         return out;
     }
 
-    // Suffixes (the 4 hex chars of @name#xxxx mentions) whose flair must be
-    // resolved on the main thread, mirroring extractQuoteAuthors for quotes.
     function extractMentions(content) {
         if (!content || content.indexOf('@') === -1) return [];
         const out = [];

@@ -13,26 +13,7 @@ import 'identity_vault.dart' show SecureStoreLike;
 import 'modal_chrome.dart';
 import 'vault_settings_modal.dart' show identityVaultProvider;
 
-/// Boot-time identity-vault unlock gate, mirroring `unlockVaultAtBoot` +
-/// `_vaultPromptModal` / `_vaultErrorModal` in `js/modules/key-vault.js`.
-///
-/// When the vault is enabled this screen blocks the app at launch — exactly
-/// like the PWA, where `await nym.unlockVaultAtBoot()` runs *before*
-/// `initialize()` so the decrypted identity secret is available before any
-/// identity-restore code reads it. On success the decrypted secrets are written
-/// back to secure storage as plaintext (the native equivalent of the PWA's
-/// in-memory `_vaultMem`, which `secretGet` returns post-unlock), then
-/// [onUnlocked] fires so the caller can boot the controller / proceed to the
-/// shell.
-///
-/// Adapts to `nym_vault_method`:
-///  * `password` / `pin` — a password/PIN field + "Unlock" button.
-///  * `biometric` — a "Unlock" button that triggers `local_auth`; the derived
-///    PBKDF2 password is the per-device biometric secret (same scheme as
-///    [VaultSettingsModal]).
-///
-/// On repeated failure the user can "Forget identity" — the PWA's reset path
-/// (`resetVault` → discard the encrypted identity, start fresh).
+/// Blocks launch until the identity vault unlocks, so secrets are decrypted before identity restore reads them.
 class VaultBootUnlock extends ConsumerStatefulWidget {
   const VaultBootUnlock({
     super.key,
@@ -41,17 +22,13 @@ class VaultBootUnlock extends ConsumerStatefulWidget {
     this.secureStore,
   });
 
-  /// Called once the vault is unlocked, with the decrypted secrets (kept in
-  /// memory by the caller — the native analog of the PWA's `_vaultMem`).
+  /// Called with the decrypted secrets, which the caller keeps in memory.
   final void Function(Map<String, String> secrets) onUnlocked;
 
-  /// Called when the user chooses to forget the identity (vault reset). The
-  /// caller should drop login pointers and proceed to a clean first-run, the
-  /// way `_forgetIdentityAndReload` reloads to a bare app.
+  /// Called on vault reset; the caller drops login pointers and proceeds to a clean first run.
   final VoidCallback onForget;
 
-  /// Secure store the decrypted secrets are written back to. Defaults to the
-  /// real platform keystore; tests inject an in-memory fake so no plugin is hit.
+  /// Defaults to the platform keystore; tests inject an in-memory fake.
   final SecureStoreLike? secureStore;
 
   @override
@@ -77,8 +54,7 @@ class VaultLockedApp extends StatelessWidget {
 class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   final _pw = TextEditingController();
 
-  /// Non-null while the `_vaultErrorModal` state is showing — the card swaps
-  /// from the unlock prompt to the "Unlock failed" chrome with this message.
+  /// Non-null while the "Unlock failed" card is showing this message.
   String? _failMessage;
   bool _busy = false;
 
@@ -91,8 +67,6 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     super.dispose();
   }
 
-  /// Mirrors `_vaultPromptModal` "Unlock" → `unlockVault` → on success return,
-  /// on failure show `_vaultErrorModal` (Try again / Forget identity).
   Future<void> _unlock() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -103,8 +77,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         secrets = await vault.unlockBiometric();
       } else {
         final password = _pw.text;
-        // `unlockVault`'s own guard (key-vault.js:257) — like every unlock
-        // failure it surfaces through the "Unlock failed" card, not inline.
+        // Like every unlock failure, this surfaces through the "Unlock failed" card, not inline.
         if (password.isEmpty) {
           throw StateError(tr('Enter your password or PIN.'));
         }
@@ -112,9 +85,6 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
       }
       if (mounted) widget.onUnlocked(secrets);
     } catch (e) {
-      // `unlockVaultAtBoot`'s retry loop: `_vaultErrorModal(e.message ||
-      // 'Unlock failed.')` (key-vault.js:344) — swap the card to the separate
-      // "Unlock failed" state carrying the thrown message.
       if (mounted) {
         setState(() {
           _busy = false;
@@ -124,7 +94,6 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     }
   }
 
-  /// `e && e.message ? e.message : 'Unlock failed.'` (key-vault.js:344).
   static String _messageOf(Object e) {
     final m = e is BiometricVaultException
         ? e.message
@@ -138,16 +107,13 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     return (m == null || m.isEmpty) ? tr('Unlock failed.') : m;
   }
 
-  /// "Try again" on the error modal — the boot loop prompts again with a fresh
-  /// (empty) field (`_vaultPromptModal` rebuilds the input each time).
+  /// "Try again" re-prompts with a fresh empty field.
   void _retry() {
     _pw.clear();
     setState(() => _failMessage = null);
   }
 
-  /// "Forget identity" on the ERROR modal resolves `'reset'` straight into
-  /// `_forgetIdentityAndReload` — no second confirmation (key-vault.js:345,398),
-  /// unlike the prompt's Forget which confirms first.
+  /// "Forget identity" from the error card resets without a second confirmation.
   Future<void> _forgetFromError() async {
     await _resetIdentity();
     if (mounted) widget.onForget();
@@ -159,8 +125,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     unawaited(forgetAtRestData(kv));
   }
 
-  /// "Forget identity" — confirm, then reset the vault (`resetVault`) and hand
-  /// control back so the caller starts a clean first-run.
+  /// Confirms, then resets the vault and hands control back for a clean first run.
   Future<void> _forget() async {
     final confirmed = await _confirmForget();
     if (!confirmed) return;
@@ -169,7 +134,6 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   }
 
   Future<bool> _confirmForget() {
-    // Shared danger-confirm (`.app-dialog`, the F6 component).
     return showAppConfirm(
       context,
       tr('This permanently deletes the encrypted identity on this device and '
@@ -206,7 +170,6 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     );
   }
 
-  /// The `.modal-header` (no lock glyph in the PWA prompt).
   Widget _header(NymColors c, String text) {
     return Container(
       padding: const EdgeInsets.only(bottom: 14),
@@ -226,12 +189,9 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     );
   }
 
-  /// `_vaultPromptModal` — "Unlock your identity" with the factor field.
   List<Widget> _promptChildren(NymColors c, bool isBio) {
     return [
       _header(c, tr('Unlock your identity')),
-      // `.form-hint.nm-vault-text`: 13px, line-height 1.5, left,
-      // `margin: 0 0 16px`.
       Text(
         isBio
             ? tr('Your Nymchat identity key is encrypted on this device. '
@@ -254,16 +214,9 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
             style: TextStyle(color: c.inputText, fontSize: 15),
           ),
         ),
-      // Body → actions gap: the password `.form-group` carries
-      // `margin-bottom: 20px` and `.modal-body` another 20px
-      // (40 total); the biometric prompt has no field, so only
-      // the text's 16px margin + the body's 20px apply.
+      // Body-to-actions gap: 40 with the password field, 20 for the biometric prompt.
       SizedBox(height: isBio ? 20 : 40),
-      // `.modal-actions`: flex row, gap 10, justify center; no
-      // `align-items`, so the default stretch sizes the
-      // `.icon-btn` to the 42px `.send-btn` beside it. CSS flex items
-      // SHRINK when the row is tight — mirror that with loose Flexibles so a
-      // narrow viewport compresses the buttons instead of overflowing.
+      // Loose Flexibles so a narrow viewport compresses the buttons instead of overflowing.
       Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -292,9 +245,6 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     ];
   }
 
-  /// `_vaultErrorModal` — the separate "Unlock failed" card: the thrown
-  /// message as the `.form-hint.nm-vault-text` body, "Forget identity"
-  /// (`.icon-btn`, no re-confirm) / "Try again" (`.send-btn`).
   List<Widget> _errorChildren(NymColors c) {
     return [
       _header(c, tr('Unlock failed')),
@@ -302,7 +252,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         _failMessage!,
         style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
       ),
-      // The p's 16px bottom margin collapses into `.modal-body`'s 20px.
+      // The paragraph's 16px margin collapses into the body's 20px.
       const SizedBox(height: 20),
       Row(
         mainAxisAlignment: MainAxisAlignment.center,

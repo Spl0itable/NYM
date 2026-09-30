@@ -1,10 +1,6 @@
-// event-details.js — the raw event behind a message, and where it came from.
-
 (function () {
-    /// Raw events are held for the panel and nothing else, so the cap is about
-    /// what a person might scroll back and inspect, not about correctness.
+    // Raw events are held only for this panel.
     const MAX_EVENTS = 1500;
-    /// A single event seen on more relays than this is not more informative.
     const MAX_RELAYS_PER_EVENT = 40;
     const PANEL_KINDS = new Set([20000, 23333]);
     const ARCHIVE_MISS_RETRY_MS = 20000;
@@ -12,9 +8,7 @@
 
     Object.assign(NYM.prototype, {
 
-        /// Records the event and the relay it arrived on. Called once per
-        /// delivery — including the deliveries that are about to be deduped
-        /// away, which is the entire point.
+        // Called once per delivery, including those about to be deduped.
         recordEventProvenance(event, relayUrl) {
             if (!event || typeof event.id !== 'string' || event.id.length !== 64) return;
             if (!PANEL_KINDS.has(event.kind)) return;
@@ -24,8 +18,6 @@
             let rec = store.get(event.id);
             if (!rec) {
                 if (store.size >= MAX_EVENTS) {
-                    // Insertion order is arrival order; the oldest is the one
-                    // least likely to still be on screen.
                     const oldest = store.keys().next();
                     if (!oldest.done) store.delete(oldest.value);
                 }
@@ -43,15 +35,11 @@
                 rec.relays.push(url);
             } else if (!url && !rec.relays.includes('(UNATTRIBUTED)')
                 && rec.relays.length < MAX_RELAYS_PER_EVENT) {
-                // A frame the proxy did not tag, or a mesh/backfill delivery.
-                // Named rather than dropped: "we do not know" is a different
-                // answer from "no relay", and the panel should not imply the
-                // second when it means the first.
+                // Untagged or mesh/backfill deliveries are named, since "unknown" differs from "no relay".
                 rec.relays.push('(UNATTRIBUTED)');
             }
         },
 
-        /// Records a delivery that did not come off a relay socket at all.
         recordEventProvenanceSource(event, label) {
             if (!event || typeof event.id !== 'string') return;
             this.recordEventProvenance(event, null);
@@ -62,9 +50,7 @@
             if (!rec.relays.includes(label)) rec.relays.push(label);
         },
 
-        /// Adds a relay to an event already recorded. The proxy reports the
-        /// relays it deduped away as bare notes rather than re-sending the
-        /// event, so this is the other half of that.
+        // The proxy reports deduped relays as bare notes, so they are added here.
         noteEventRelay(eventId, relayUrl) {
             if (!this._eventProvenance) return;
             const rec = this._eventProvenance.get(eventId);
@@ -79,8 +65,6 @@
             return (this._eventProvenance && this._eventProvenance.get(eventId)) || null;
         },
 
-        // -------------------------------------------------------------------
-
         openEventDetails(eventId) {
             const modal = document.getElementById('eventDetailsModal');
             const body = document.getElementById('eventDetailsBody');
@@ -93,17 +77,11 @@
                 this._fetchEventFromRelays(eventId);
             }
 
-            // Copy lives in the modal's own footer, like every other modal in
-            // the app, so the payload is handed to that button rather than to
-            // one built inside the body. Nothing to copy when the event is no
-            // longer held, and a button that silently copies '' is worse than
-            // one that is not there.
+            // Copy lives in the modal footer; omit it when the event is no longer held.
             const copyBtn = document.getElementById('eventDetailsCopyBtn');
             if (copyBtn) {
                 const rec = this.eventProvenance(eventId);
-                // nm-hidden, not the hidden attribute: .icon-btn sets
-                // display:inline-flex, which outranks the UA rule for [hidden]
-                // and would leave the button on screen.
+                // nm-hidden, not [hidden]: .icon-btn's display:inline-flex outranks the UA [hidden] rule.
                 if (rec) {
                     copyBtn.dataset.nostrCopy = JSON.stringify(rec.event, null, 2);
                     copyBtn.classList.remove('nm-hidden');
@@ -299,10 +277,7 @@
             frag.appendChild(this._edRow('Signature', ev.sig || '', { mono: true }));
             frag.appendChild(this._edRow('Size', `${json.length} bytes, ${(ev.tags || []).length} tags`));
 
-            // Proof of work, reported the way the filter counts it rather than
-            // by leading zeros alone — the two disagree exactly when a sender
-            // got lucky under a cheap commitment, which is worth being able to
-            // see on a specific message.
+            // Proof of work as the filter counts it, not just leading zeros.
             if (typeof this.validatedPowBits === 'function') {
                 const nonce = (ev.tags || []).find(t => Array.isArray(t) && t[0] === 'nonce');
                 const target = nonce && nonce[2] ? parseInt(nonce[2], 10) : 0;
@@ -322,7 +297,6 @@
                     tier ? tier : 'present but does not verify'));
             }
 
-            // ---- relays ----
             const h2 = document.createElement('div');
             h2.className = 'event-detail-section';
             h2.textContent = `Received from ${rec.relays.length} `
@@ -352,7 +326,6 @@
             }
             frag.appendChild(list);
 
-            // ---- raw ----
             const h3 = document.createElement('div');
             h3.className = 'event-detail-section';
             h3.textContent = 'Raw event';

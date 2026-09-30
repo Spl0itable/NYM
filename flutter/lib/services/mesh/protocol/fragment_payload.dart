@@ -2,16 +2,7 @@ import 'dart:typed_data';
 
 import '../../../core/crypto/keys.dart' show randomBytes;
 
-/// A single fragment of a larger mesh packet — a byte-for-byte port of bitchat's
-/// `FragmentPayload`. Packets whose serialized size exceeds the fragment
-/// threshold (512 bytes) are split; each fragment is carried as the payload of a
-/// [MeshMessageType.fragment] packet and reassembled by the receiver.
-///
-/// Layout (13-byte header + data):
-/// ```
-/// fragmentID:8 (random) | index:2 (u16 BE) | total:2 (u16 BE) |
-/// originalType:1 | data:variable
-/// ```
+/// bitchat `FragmentPayload`: `fragmentID:8 | index:2 BE | total:2 BE | originalType:1 | data`.
 class FragmentPayload {
   FragmentPayload({
     required this.fragmentID,
@@ -24,13 +15,12 @@ class FragmentPayload {
   static const int headerSize = 13;
   static const int fragmentIdSize = 8;
 
-  final Uint8List fragmentID; // 8 bytes
-  final int index; // 0-based
-  final int total; // >= 1
-  final int originalType; // pre-fragmentation packet type
+  final Uint8List fragmentID;
+  final int index;
+  final int total;
+  final int originalType;
   final Uint8List data;
 
-  /// A random 8-byte fragment set identifier.
   static Uint8List generateFragmentID() => randomBytes(fragmentIdSize);
 
   Uint8List encode() {

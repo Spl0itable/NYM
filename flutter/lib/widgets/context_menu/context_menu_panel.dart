@@ -32,16 +32,7 @@ import 'interaction_hooks.dart';
 import 'profile_badges.dart';
 import 'report_modal.dart';
 
-/// The right-side `#contextMenu` slide-in panel (styles `.context-menu`,
-/// width 320, `translateX(100%)→0` over 150ms, dimmed overlay). Mirrors
-/// ui-context.js `showContextMenu` / `closeContextMenu`: avatar header (avatar,
-/// nym + suffix, status, full pubkey + copy, bio) then the action list built by
-/// [buildContextMenuActions].
-///
-/// Open it with [ContextMenuPanel.show], passing a [CtxTarget]. Actions are
-/// wired to the engine (toggleReaction, startPM), the zap modal, the report
-/// modal, translation, and the mention/quote hook
-/// ([pendingComposerActionProvider]).
+/// Right-side profile context-menu panel: avatar header then the actions from [buildContextMenuActions].
 class ContextMenuPanel extends ConsumerWidget {
   const ContextMenuPanel({
     super.key,
@@ -58,24 +49,17 @@ class ContextMenuPanel extends ConsumerWidget {
   final Animation<double> animation;
   final VoidCallback onClose;
 
-  /// When set (or carried on [target]), a top-left "back" chevron returns to
-  /// that group's context menu (PWA `ctxBackToGroup`, ui-context.js:369-373).
+  /// When set (or on [target]), a back chevron returns to that group's context menu.
   final String? backToGroupId;
 
-  /// The originating message (used to infer kind for reactions/zaps).
+  /// Used to infer the kind for reactions and zaps.
   final Message? message;
 
-  /// Opens the reaction picker for this message (host supplies it).
   final VoidCallback? onReact;
 
-  /// Requests an inline translation render below the message (host supplies it).
-  /// The argument is the chosen target language code, or null to use the
-  /// `settings.translateLanguage` default.
+  /// Receives the chosen target language code, or null for the default.
   final ValueChanged<String?>? onTranslateInline;
 
-  /// Presents the panel in the root overlay with the slide-in transition.
-  /// [backToGroupId] (or `target.backToGroupId`) makes the panel show a back
-  /// chevron that returns to that group's context menu.
   static Future<void> show(
     BuildContext context, {
     required CtxTarget target,
@@ -89,7 +73,7 @@ class ContextMenuPanel extends ConsumerWidget {
       context: context,
       barrierDismissible: true,
       barrierLabel: tr('context menu'),
-      barrierColor: const Color(0x99000000), // rgba(0,0,0,0.6)
+      barrierColor: const Color(0x99000000),
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim, _) => const SizedBox.shrink(),
       transitionBuilder: (ctx, anim, _, __) {
@@ -111,10 +95,7 @@ class ContextMenuPanel extends ConsumerWidget {
     );
   }
 
-  /// Re-derives the live friend / block / group-role flags from app_state so the
-  /// action list + labels reflect current state without the caller (message_row)
-  /// having to thread them through. Mirrors the flags ui-context.js
-  /// `showContextMenu` computes (friends/blockedUsers + group owner/mod roles).
+  /// Re-derives live friend/block/group-role flags so callers need not thread them through.
   CtxTarget _enrichTarget(WidgetRef ref) {
     final s = ref.read(appStateProvider);
     final self = s.selfPubkey;
@@ -167,18 +148,12 @@ class ContextMenuPanel extends ConsumerWidget {
     final cosmetics = ref.watch(userCosmeticsProvider(target.pubkey));
     final user = ref.watch(usersProvider)[target.pubkey];
     final about = user?.profile?.about ?? '';
-    // A mesh peer's presence is "Mesh" (reachable over Bluetooth), not the
-    // Nostr online/away/offline word — it has no relay presence.
+    // A mesh peer's presence is "Mesh" (Bluetooth), not a Nostr status.
     final isMeshPeer = ref.watch(meshControllerProvider
         .select((s) => s.meshPmPubkeys.contains(target.pubkey)));
 
     final panel = Material(
-      // `.context-menu` is `var(--bg-tertiary)` by default, but `body.solid-ui`
-      // (default ON) overrides it to `var(--glass-bg)` — the same opaque surface
-      // as the sidebar / chat-header (#14141e dark, #ffffff light). The bg is
-      // painted on the full-height outer Container below so it fills the whole
-      // viewport (`.context-menu { height: 100vh }`); the Material itself stays
-      // transparent and only provides ink/scroll for the (content-height) body.
+      // The opaque bg is painted on the full-height Container below; this Material only provides ink.
       type: MaterialType.transparency,
       child: SafeArea(
         child: SingleChildScrollView(
@@ -198,8 +173,6 @@ class ContextMenuPanel extends ConsumerWidget {
                     .addSystemMessage(tr('Copied pubkey to clipboard')),
                 isMeshPeer,
               ),
-              // Bio block (`.context-menu-bio`) — sibling below the header, its
-              // own bottom border; collapses when empty (:empty).
               if (about.isNotEmpty)
                 Container(
                   width: double.infinity,
@@ -218,8 +191,6 @@ class ContextMenuPanel extends ConsumerWidget {
                     ),
                   ),
                 ),
-              // `.context-menu-actions`: 6px padding + a 1px white@0.06 top
-              // hairline separating the list from the header/bio.
               Container(
                 padding: const EdgeInsets.all(6),
                 decoration: BoxDecoration(
@@ -246,13 +217,10 @@ class ContextMenuPanel extends ConsumerWidget {
       ),
     );
 
-    // Width 320, clamped to 85vw on very narrow screens (`max-width:85vw`,
-    // styles-shell.css:611). The active panel carries a `-4px 0 24px` drop
-    // shadow for edge separation (F11).
+    // Width 320, clamped to 85% of narrow screens.
     final screenW = MediaQuery.of(context).size.width;
     final panelW = math.min(320.0, screenW * 0.85);
 
-    // translateX(100%) → 0 over 150ms (linear).
     return SlideTransition(
       position: Tween<Offset>(
         begin: const Offset(1, 0),
@@ -263,13 +231,11 @@ class ContextMenuPanel extends ConsumerWidget {
         height: double.infinity,
         child: Container(
           decoration: BoxDecoration(
-            // Opaque solid-ui surface filling the FULL viewport height (not just
-            // the content), matching `.context-menu` + the normal sidebar.
             color: c.glassBg,
             border: Border(left: BorderSide(color: c.glassBorder)),
             boxShadow: const [
               BoxShadow(
-                color: Color(0x66000000), // rgba(0,0,0,0.4)
+                color: Color(0x66000000),
                 blurRadius: 24,
                 offset: Offset(-4, 0),
               ),
@@ -278,16 +244,7 @@ class ContextMenuPanel extends ConsumerWidget {
           child: Stack(
             children: [
               panel,
-              // Back chevron (top-left) → return to the originating group menu
-              // (`.context-menu-back`, ui-context.js:369-373). Hidden otherwise.
-              // 28×28 at top/left 10, black 0.4 bg (hover 0.6), white chevron.
-              //
-              // Both floating buttons offset by the status-bar inset: the
-              // PWA's `top:14px` is measured from a web viewport that already
-              // starts BELOW the system chrome, while this Stack spans the full
-              // screen — without the inset the buttons render under the status
-              // bar (visibly misplaced AND un-tappable). The panel body handles
-              // its own inset via SafeArea.
+              // Floating buttons are offset by the status-bar inset, since this Stack spans the full screen.
               if (backToGroupId != null)
                 Positioned(
                   top: MediaQuery.of(context).padding.top + 10,
@@ -326,24 +283,16 @@ class ContextMenuPanel extends ConsumerWidget {
     final isDeveloper = controller.isVerifiedDeveloper(target.pubkey);
     final isBot = controller.isVerifiedBot(target.pubkey);
     final showFriendBadge = target.isFriend && !target.isSelf;
-    // Owner/Mod label, only when viewing the target's group (ui-context.js:422).
+    // Owner/Mod label only when viewing the target's group.
     final String? ownerModLabel = target.inGroup
         ? (target.targetIsOwner
             ? tr('Group Owner')
             : (target.targetIsMod ? tr('Moderator') : null))
         : null;
 
-    // Avatar — real picture (proxied/cached) with identicon fallback. With a
-    // banner: a 3px rgba(20,20,35,0.95) ring, no glow (`.has-banner
-    // .avatar-context`). Without a banner: a 2px `--glass-border` ring + a cyan
-    // glow `0 0 15px rgba(0,255,255,0.15)` (`.avatar-context`,
-    // styles-features.css:2621-2628).
-    // With a banner: a 3px ring matching the surface (`rgba(20,20,35,0.95)`
-    // dark; `body.light-mode .has-banner .avatar-context` → `rgba(255,255,255,
-    // 0.95)`).
     final bannerRing = c.isLight
-        ? const Color(0xF2FFFFFF) // rgba(255,255,255,0.95)
-        : const Color(0xF2141423); // rgba(20,20,35,0.95)
+        ? const Color(0xF2FFFFFF)
+        : const Color(0xF2141423);
     final avatar = Container(
       decoration: hasBanner
           ? BoxDecoration(
@@ -357,15 +306,12 @@ class ContextMenuPanel extends ConsumerWidget {
               border: Border.all(color: c.glassBorder, width: 2),
               boxShadow: const [
                 BoxShadow(
-                  color: Color(0x2600FFFF), // rgba(0,255,255,0.15)
+                  color: Color(0x2600FFFF),
                   blurRadius: 15,
                 ),
               ],
             ),
-      // The PWA avatar carries `data-action="expandImageFromSrcStop"` →
-      // `expandImage(getAvatarUrl)` + `closeContextMenu` (inline-bindings.js:244).
-      // Only a real (remote) picture is worth expanding; the identicon fallback
-      // (`avatarUrl` null/empty) stays inert.
+      // Only a real remote picture expands; the identicon fallback stays inert.
       child: _ExpandableProfileImage(
         imageUrl: proxiedAvatarUrl(avatarUrl),
         onClose: onClose,
@@ -382,20 +328,14 @@ class ContextMenuPanel extends ConsumerWidget {
       ),
       child: Column(
         children: [
-          // Without a banner the avatar sits at the top of the header; with a
-          // banner it is hoisted into the Stack overlap below.
           if (!hasBanner) ...[
             avatar,
             const SizedBox(height: 6),
           ],
-          // Nym row: base#suffix + flair/supporter + verified ✓ + friend badge.
           Row(
             mainAxisSize: MainAxisSize.min,
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // base#suffix: base is secondary/13/w600; the `#suffix` is dimmed
-              // (`.context-menu-avatar-nym .nym-suffix`: 0.9em / w100 / opacity
-              // 0.7).
               Flexible(
                 child: Text.rich(
                   TextSpan(
@@ -424,20 +364,16 @@ class ContextMenuPanel extends ConsumerWidget {
                 flairSize: 15,
                 supporterHeight: 15,
               ),
-              // Verified ✓ badge — 20px (`.verified-badge`), left gap 4px (nm-ctx-1).
               if (isDeveloper || isBot) ...[
                 const SizedBox(width: 4),
                 const VerifiedBadge(size: 20),
               ],
-              // Friend badge — 12px @ opacity 0.7, left gap 3px (nm-ctx-2 +
-              // inline width/height=12 overriding the 20px standalone rule).
               if (showFriendBadge) ...[
                 const SizedBox(width: 3),
                 const Opacity(opacity: 0.7, child: FriendBadge(size: 12)),
               ],
             ],
           ),
-          // Dev / Bot text label (`.context-menu-dev-label`).
           if (isDeveloper || isBot)
             Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -451,7 +387,6 @@ class ContextMenuPanel extends ConsumerWidget {
                 ),
               ),
             ),
-          // Group Owner / Moderator label (`.context-menu-owner-label`).
           if (ownerModLabel != null)
             Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -465,9 +400,6 @@ class ContextMenuPanel extends ConsumerWidget {
                 ),
               ),
             ),
-          // Status row (`.ctx-status-row`): dot + word, hidden when status is
-          // hidden (ui-context.js:445-464). A mesh peer always shows a "Mesh"
-          // presence (reachable over Bluetooth) instead of the Nostr status.
           if (isMeshPeer) ...[
             const SizedBox(height: 6),
             Row(
@@ -498,9 +430,7 @@ class ContextMenuPanel extends ConsumerWidget {
             ),
           ],
           const SizedBox(height: 6),
-          // Full public key block — shown as npub by default with a one-tap
-          // switch to hex, since bitchat speaks hex only over the mesh
-          // (`.ctx-full-pubkey` + `.ctx-pubkey-actions`, ui-context.js).
+          // npub by default with a switch to hex, since bitchat speaks hex only over the mesh.
           _PubkeyBlock(
             pubkey: target.pubkey,
             onCopied: onCopied,
@@ -512,11 +442,8 @@ class ContextMenuPanel extends ConsumerWidget {
 
     if (!hasBanner) return header;
 
-    // Banner (`.context-menu-banner`: 140px, cover) with the avatar straddling
-    // its bottom edge (`margin-top:-36px`): the avatar is hoisted into a Stack
-    // so the header content below starts directly under it (no dead gap). The
-    // header carries extra top padding to clear the avatar's lower half.
-    const avatarBox = 70.0; // 64 + 3px ring on each side
+    // Banner with the avatar straddling its bottom edge, hoisted into a Stack so no gap opens below.
+    const avatarBox = 70.0; // 64 + 3px ring on each side.
     final bannerHeader = Padding(
       padding: EdgeInsets.only(top: avatarBox - 36),
       child: header,
@@ -527,8 +454,6 @@ class ContextMenuPanel extends ConsumerWidget {
         Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // The PWA banner also carries `expandImageFromSrcStop` → opens the
-            // banner fullscreen + closes the menu (index.html:74).
             SizedBox(
               height: 140,
               width: double.infinity,
@@ -546,9 +471,7 @@ class ContextMenuPanel extends ConsumerWidget {
                     : CachedNetworkImage(
                         imageUrl: bannerUrl,
                         fit: BoxFit.cover,
-                        // Profile banners are frequently multi-MB photos;
-                        // decode at the ~menu-width 140px strip (the
-                        // fullscreen expand loads its own full-res copy).
+                        // Banners are often multi-MB; decode at strip width (fullscreen loads its own copy).
                         memCacheWidth:
                             (480 * MediaQuery.devicePixelRatioOf(context))
                                 .ceil(),
@@ -559,7 +482,6 @@ class ContextMenuPanel extends ConsumerWidget {
             bannerHeader,
           ],
         ),
-        // Avatar centered on the banner/header seam (140 - 36 from the top).
         Positioned(
           top: 140 - 36,
           left: 0,
@@ -582,12 +504,8 @@ class ContextMenuPanel extends ConsumerWidget {
     }
   }
 
-  /// `.context-menu-back` chevron — pops this panel and re-opens the originating
-  /// group context menu (PWA `ctxBackToGroup`: closeContextMenu →
-  /// showGroupContextMenu(groupId)).
   void _onBack(BuildContext context, String groupId) {
-    // Capture the root navigator's (stable) context before popping — this
-    // panel's own context is defunct after onClose().
+    // Capture the root navigator's context before popping; this panel's context is defunct after onClose().
     final rootContext = Navigator.of(context, rootNavigator: true).context;
     onClose();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -622,8 +540,7 @@ class ContextMenuPanel extends ConsumerWidget {
   ) async {
     final controller = ref.read(nostrControllerProvider);
     final hooks = ref.read(pendingComposerActionProvider.notifier);
-    // Actions that need the BuildContext after an await (confirm dialogs / edit
-    // prompt) close the panel themselves; the rest close immediately.
+    // Actions needing the context after an await close the panel themselves; the rest close immediately.
     switch (a) {
       case CtxAction.mention:
         onClose();
@@ -664,8 +581,7 @@ class ContextMenuPanel extends ConsumerWidget {
             context,
             targetNym: fullNym,
             hasMessage: t.messageId != null,
-            // Build + sign + publish the NIP-56 kind-1984 report (F2). When
-            // "report specific message" is checked we attach the `e` tag.
+            // Publishes the NIP-56 kind-1984 report, with an `e` tag when a specific message is reported.
             onSubmit: (type, details, reportMessage) {
               controller.submitReport(
                 pubkey: t.pubkey,
@@ -678,61 +594,43 @@ class ContextMenuPanel extends ConsumerWidget {
         }
         break;
       case CtxAction.friend:
-        // toggleFriend — label already reflects state (Add/Remove Friend).
         onClose();
         controller.toggleFriend(t.pubkey);
         break;
       case CtxAction.block:
-        // Block/Unblock toggle (cmdBlock user path / unblockByPubkey).
         onClose();
         controller.toggleBlockUser(t.pubkey);
         break;
       case CtxAction.slap:
-        // ui-context.js:153-159 → cmdSlap(pubkey). The PWA builds a full
-        // @nym#suffix mention so the renderer attaches avatar/flair, then sends
-        // the `/me …` line through the rate-limited action path. Routing the
-        // built `/me …` text through sendCurrent re-enters the command
-        // dispatcher, sharing the composer's action rate limiter — the same net
-        // effect as cmdSlap.
+        // Sending the `/me …` line through sendCurrent shares the composer's action rate limiter, like `cmdSlap`.
         onClose();
         unawaited(controller.sendCurrent(
             '/me slaps @$fullNym around a bit with a large trout 🐟'));
         break;
       case CtxAction.hug:
-        // ui-context.js:162-167 → cmdHug(pubkey).
         onClose();
         unawaited(controller.sendCurrent('/me gives @$fullNym a warm hug 🫂'));
         break;
       case CtxAction.addToGroup:
-        // ui-context.js:575-580 "Create Group Chat" → startGroupFromPM. Here we
-        // seed a new group with just this peer (createGroup mirrors the PWA's
-        // group-from-context flow once a name is chosen; an empty name lets the
-        // groups slice fall back to its default naming).
+        // An empty name lets the groups slice fall back to its default naming.
         onClose();
         unawaited(controller.createGroup('', [t.pubkey]));
         break;
       case CtxAction.giftCredits:
-        // ui-context.js:102-107 "Gift Nymbot Credits" → showBotCreditsModal.
-        // Post the recipient to the gift-credits mailbox; the nymbot slice opens
-        // its gift-credit modal (CROSS-FILE NEED — see giftCreditsRequestProvider).
         onClose();
         ref
             .read(giftCreditsRequestProvider.notifier)
             .request(pubkey: t.pubkey, nym: t.nym);
         break;
       case CtxAction.editProfile:
-        // ui-context.js:587-594 "Edit Profile" → editNick(). Open the nick/
-        // profile editor modal directly (its public entry point).
         onClose();
         if (context.mounted) await NickEditModal.open(context);
         break;
       case CtxAction.edit:
-        // Own message: seed the composer with the original content
-        // (startEditMessage) so the next send publishes the edit.
         await _edit(context, ref, t);
         break;
       case CtxAction.delete:
-        // Own → deletion request; mod/owner → group mod-delete. Both confirm.
+        // Own message sends a deletion request; mod/owner uses group mod-delete. Both confirm.
         await _delete(context, ref, t);
         break;
       case CtxAction.makeMod:
@@ -781,12 +679,7 @@ class ContextMenuPanel extends ConsumerWidget {
     return view.kind == ViewKind.group ? view.id : '';
   }
 
-  /// Edit own message — seed the composer with the original content and enter
-  /// pending-edit mode: the amber "Editing message" chip shows above the input
-  /// and the NEXT send publishes the edit. Mirrors `ctxEditMessage` →
-  /// `startEditMessage` (ui-context.js:261-266, messages.js:1861-1919), which
-  /// populates `#messageInput` rather than opening a prompt. `startEditMessage`
-  /// bails without messageId/content or on someone else's message.
+  /// Seeds the composer with the original content and enters pending-edit mode, so the next send publishes the edit.
   Future<void> _edit(BuildContext context, WidgetRef ref, CtxTarget t) async {
     final messageId = t.messageId;
     final content = t.content ?? '';
@@ -799,8 +692,6 @@ class ContextMenuPanel extends ConsumerWidget {
     onClose();
   }
 
-  /// Delete — own messages send a kind-5 deletion (confirm); a mod/owner
-  /// deleting another member's group message uses modDeleteGroupMessage.
   Future<void> _delete(BuildContext context, WidgetRef ref, CtxTarget t) async {
     final messageId = t.messageId;
     if (messageId == null) {
@@ -828,10 +719,7 @@ class ContextMenuPanel extends ConsumerWidget {
     }
   }
 
-  /// Shows the `.app-dialog` confirm (the PWA routes all context-menu
-  /// confirmations through `showAppConfirm` with `{danger, okLabel}`,
-  /// inline-bindings.js:479-520); on confirm, closes the panel and runs
-  /// [action].
+  /// Confirms via `.app-dialog`, then closes the panel and runs [action].
   Future<void> _confirmThen(
     BuildContext context,
     String message, {
@@ -852,24 +740,18 @@ class ContextMenuPanel extends ConsumerWidget {
   Future<void> _translate(BuildContext context, WidgetRef ref) async {
     final content = target.content;
     if (content == null) return;
-    // No language prompt: the target resolves from the language chosen at
-    // first run (see manualTranslateTargetFor). Null lets the inline render
-    // resolve it itself, which is the same answer.
+    // No language prompt; null lets the inline render resolve the target language chosen at first run.
     onTranslateInline?.call(null);
   }
 
   Future<void> _zap(BuildContext context, WidgetRef ref) async {
-    // Fresh LN-address resolve (cache-first, then kind-0 fetch) so a target
-    // whose profile hasn't been ingested yet can still be zapped — consistent
-    // with the quick-zap (+) button (zap_badge.dart:209). PWA: cmdZap awaits
-    // fetchLightningAddressForUser (zaps.js:1955/2015) before deciding.
+    // Fresh LN-address resolve so a target whose profile isn't ingested yet can still be zapped.
     final lnAddr =
         await ref.read(nostrControllerProvider).resolveLightningAddressForZap(
               target.pubkey,
             );
     if (lnAddr == null || lnAddr.isEmpty) {
-      // No lightning address — mirror the PWA's "cannot receive zaps" notice
-      // (zaps.js:1960/2021); a bare return left the user with zero feedback.
+      // Tell the user the target cannot receive zaps rather than failing silently.
       ref.read(appStateProvider.notifier).addSystemMessage(
             tr('@{nym} cannot receive zaps (no lightning address set)',
                 {'nym': stripPubkeySuffix(target.nym)}),
@@ -891,13 +773,7 @@ class ContextMenuPanel extends ConsumerWidget {
   }
 }
 
-/// `.context-menu-copy-pubkey`: 3×8 padding, radius 6, hover `rgba(255,255,255,
-/// 0.08)` bg + primary text; copy glyph + label. Confirms + closes on tap (F12).
-/// The context menu's full public key, plus Copy and an npub⇄hex switch.
-///
-/// The chosen format is a single app-wide preference (`nym_pubkey_format`,
-/// shared with the PWA), so flipping it here also flips the nick-edit modal's
-/// slide-out. Copy always yields whatever is on screen.
+/// Full public key with Copy and an npub/hex switch; the format is an app-wide preference shared with the PWA.
 class _PubkeyBlock extends StatefulWidget {
   const _PubkeyBlock({
     required this.pubkey,
@@ -968,14 +844,11 @@ class _PubkeyBlockState extends State<_PubkeyBlock> {
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Copy — confirm + close (F12); hover tint
-            // (`.context-menu-copy-pubkey`).
             _CopyPubkeyRow(
               icon: Icons.copy,
               label: isNpub ? tr('Copy npub') : tr('Copy hex pubkey'),
               onTap: () async {
                 await Clipboard.setData(ClipboardData(text: shown));
-                // System-message confirmation (displaySystemMessage) + close.
                 widget.onCopied();
                 widget.onClose();
               },
@@ -1042,7 +915,6 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
   }
 }
 
-/// `.context-menu-item`: 10×14 padding, radius 8, hover tint, leading 16px icon.
 class _ActionItem extends StatefulWidget {
   const _ActionItem({
     required this.svg,
@@ -1066,11 +938,7 @@ class _ActionItemState extends State<_ActionItem> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final isNeutral = widget.color == c.text;
-    // Neutral rows show a dimmed icon; colored rows (danger/lightning/warning)
-    // tint the icon to match the label (mirrors the PWA's `currentColor` SVGs).
-    // On hover, a neutral row's label + icon shift to `--primary`
-    // (`.context-menu-item:hover { color: var(--primary) }`); colored rows keep
-    // their resting tint.
+    // Neutral rows dim the icon and hover to primary; colored rows keep their tint.
     final Color labelColor = isNeutral && _hover ? c.primary : widget.color;
     final Color iconColor =
         isNeutral ? (_hover ? c.primary : c.textDim) : widget.color;
@@ -1093,7 +961,6 @@ class _ActionItemState extends State<_ActionItem> {
           child: Row(
             children: [
               NymSvgIcon(widget.svg, size: 16, color: iconColor),
-              // `.nm-ico8` → margin-right:8px on the leading SVG.
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -1113,10 +980,7 @@ class _ActionItemState extends State<_ActionItem> {
   }
 }
 
-/// The `.context-menu-close` ✕ button: 32×32 circle, white@0.05 bg + glassBorder
-/// at rest; on hover turns danger-red (bg `rgba(255,68,68,0.12)`, icon
-/// `--danger`, border `rgba(255,68,68,0.3)`) per styles-shell.css:674-678.
-/// Shared by the user + group context panels.
+/// The ✕ close button shared by the user and group context panels; turns danger-red on hover.
 class CtxCloseButton extends StatefulWidget {
   const CtxCloseButton({super.key, required this.onTap});
   final VoidCallback onTap;
@@ -1144,23 +1008,18 @@ class _CtxCloseButtonState extends State<CtxCloseButton> {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            // Light: `body.light-mode .context-menu-close` → black@0.05 fill,
-            // black@0.08 border, black@0.5 icon. Hover (both modes) → danger red.
             color: _hover
-                ? const Color(0x1FFF4444) // rgba(255,68,68,0.12)
+                ? const Color(0x1FFF4444)
                 : (c.isLight
-                    ? const Color(0x0D000000) // black @ 0.05
+                    ? const Color(0x0D000000)
                     : Colors.white.withValues(alpha: 0.05)),
             border: Border.all(
               color: _hover
-                  ? const Color(0x4DFF4444) // rgba(255,68,68,0.3)
+                  ? const Color(0x4DFF4444)
                   : (c.isLight ? const Color(0x14000000) : c.glassBorder),
             ),
           ),
-          // `.context-menu-close` is a literal "✕" char (`&#x2715;`) — styled
-          // text, not an SVG glyph. This button floats in the Stack OUTSIDE the
-          // menu card's Material, so an explicit `decoration: none` is required
-          // or the raw Text paints Flutter's debug yellow underline.
+          // Outside the card's Material, so explicit `decoration: none` avoids the debug yellow underline.
           child: Text('✕',
               style: TextStyle(
                   fontSize: 16,
@@ -1175,8 +1034,6 @@ class _CtxCloseButtonState extends State<CtxCloseButton> {
   }
 }
 
-/// The `.context-menu-back` chevron: 28×28 circle at top/left 10, black 0.4 bg
-/// (hover 0.6), border-none, white chevron (styles-features.css:5393-5411).
 class _BackButton extends StatefulWidget {
   const _BackButton({required this.onTap});
   final VoidCallback onTap;
@@ -1204,10 +1061,9 @@ class _BackButtonState extends State<_BackButton> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: _hover
-                ? const Color(0x99000000) // rgba(0,0,0,0.6)
-                : const Color(0x66000000), // rgba(0,0,0,0.4)
+                ? const Color(0x99000000)
+                : const Color(0x66000000),
           ),
-          // `.context-menu-back` — feather chevron-left (index.html:71).
           child: const NymSvgIcon(NymIcons.chevronLeft,
               size: 18, color: Colors.white),
         ),
@@ -1216,15 +1072,7 @@ class _BackButtonState extends State<_BackButton> {
   }
 }
 
-/// Wraps the profile-card avatar / banner so a tap opens the image fullscreen
-/// and closes the context menu — the PWA's `data-action="expandImageFromSrcStop"`
-/// (inline-bindings.js:244 → `expandImage(src)` + `closeContextMenu()`).
-///
-/// When [imageUrl] is null/empty (e.g. the identicon-only avatar) the child is
-/// rendered inert, matching the PWA which only expands a real remote image.
-/// A self-contained fullscreen viewer is used here because the message-format
-/// viewer (`_FullscreenImageViewer`) is private to that file; the behavior
-/// (rootNavigator push, black@0.92 barrier, pinch-zoom, tap-to-close) mirrors it.
+/// Tap opens the image fullscreen and closes the menu; inert when [imageUrl] is empty.
 class _ExpandableProfileImage extends StatelessWidget {
   const _ExpandableProfileImage({
     required this.imageUrl,
@@ -1243,8 +1091,7 @@ class _ExpandableProfileImage extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
-        // Capture the root navigator before closing this panel (its own context
-        // is defunct after onClose()).
+        // Capture the root navigator before closing; this panel's context is defunct after onClose().
         final rootContext = Navigator.of(context, rootNavigator: true).context;
         onClose();
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1256,10 +1103,7 @@ class _ExpandableProfileImage extends StatelessWidget {
   }
 }
 
-/// Self-contained fullscreen image viewer for the profile card's avatar/banner.
-/// Mirrors `_FullscreenImageViewer` (message_content.dart:1345 — `expandImage`):
-/// opaque:false route over the root navigator, black@0.92 barrier, pinch-zoom
-/// via [InteractiveViewer], tap the backdrop or the ✕ to close.
+/// Fullscreen viewer for the profile avatar/banner, since the message viewer is private to its file.
 class _ProfileImageViewer extends StatelessWidget {
   const _ProfileImageViewer({required this.url});
   final String url;
@@ -1280,7 +1124,6 @@ class _ProfileImageViewer extends StatelessWidget {
       backgroundColor: Colors.transparent,
       body: Stack(
         children: [
-          // Tap anywhere on the backdrop to dismiss.
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,

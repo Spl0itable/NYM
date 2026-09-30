@@ -1,17 +1,4 @@
-// local_prekeys.dart - The one-time keys this device publishes and consumes.
-//
-// The half of the prekey story that lives on the recipient's side. We mint a
-// small batch of X25519 keypairs, publish the public halves in a signed
-// [PrekeyBundle], and delete each private half once mail sealed to it has been
-// opened. That deletion is the whole point: after it, an envelope captured in
-// transit cannot be opened by anyone, including us.
-//
-// Deletion is not immediate, and the delay is deliberate. Spray-and-wait means
-// several couriers may be carrying copies of the SAME envelope, and they arrive
-// whenever their carriers happen to meet us. Deleting the key on first open
-// would make every later copy undecryptable — the message would look lost even
-// though it arrived. So a consumed key survives a grace window, long enough for
-// the redeliveries, and is then gone for good.
+// This device's one-time prekeys; a consumed private half survives a grace window for spray-and-wait redeliveries.
 
 import 'dart:convert';
 import 'dart:math';
@@ -20,7 +7,6 @@ import 'dart:typed_data';
 import '../noise/noise_crypto.dart';
 import 'prekey_bundle.dart';
 
-/// One minted keypair and its lifecycle.
 class LocalPrekey {
   LocalPrekey({
     required this.id,
@@ -33,8 +19,7 @@ class LocalPrekey {
   final Uint8List publicKey;
   final Uint8List privateKey;
 
-  /// When mail sealed to this key was first opened, or null while unused.
-  /// After [LocalPrekeys.graceMs] past this, the private half is deleted.
+  /// When mail sealed to this key was first opened; the private half is deleted [LocalPrekeys.graceMs] later.
   int? consumedAtMs;
 
   bool get isConsumed => consumedAtMs != null;
@@ -65,7 +50,6 @@ class LocalPrekey {
   }
 }
 
-/// The device's own prekeys.
 class LocalPrekeys {
   LocalPrekeys({int Function()? nowMs, Random? random})
       : _now = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch),
@@ -74,12 +58,10 @@ class LocalPrekeys {
   final int Function() _now;
   final Random _random;
 
-  /// How long a consumed key's private half survives, so spray-and-wait
-  /// redeliveries of the same envelope still open. 48h, matching bitchat.
+  /// Consumed-key survival for redeliveries of the same envelope; 48h, matching bitchat.
   static const int graceMs = 48 * 60 * 60 * 1000;
 
-  /// How many unused keys to keep published. Small: each is another key an
-  /// attacker could try to obtain, and the batch is cheap to refresh.
+  /// Kept small: each published key is another key an attacker could try to obtain.
   static const int batchSize = PrekeyBundle.maxPrekeys;
 
   final List<LocalPrekey> _keys = <LocalPrekey>[];
@@ -87,12 +69,10 @@ class LocalPrekeys {
 
   List<LocalPrekey> get keys => List.unmodifiable(_keys);
 
-  /// The unused keys, which are what a bundle publishes.
   List<LocalPrekey> get available =>
       _keys.where((k) => !k.isConsumed).toList(growable: false);
 
-  /// Mints keys until [batchSize] unused ones exist. Returns whether anything
-  /// was minted, so the caller only re-gossips a bundle that actually changed.
+  /// Mints keys up to [batchSize]; returns whether any were minted, so only changed bundles re-gossip.
   Future<bool> replenish() async {
     var minted = false;
     while (available.length < batchSize) {
@@ -103,8 +83,7 @@ class LocalPrekeys {
     return minted;
   }
 
-  /// The private half for [id], or null when it was never ours or its grace
-  /// window has lapsed.
+  /// The private half for [id], or null when never ours or past its grace window.
   Uint8List? privateKeyFor(int id) {
     for (final k in _keys) {
       if (k.id != id) continue;
@@ -115,7 +94,7 @@ class LocalPrekeys {
     return null;
   }
 
-  /// The public half for [id] — needed as the "responder static" when opening.
+  /// The public half for [id], needed as the responder static when opening.
   Uint8List? publicKeyFor(int id) {
     for (final k in _keys) {
       if (k.id == id) return k.publicKey;
@@ -123,9 +102,7 @@ class LocalPrekeys {
     return null;
   }
 
-  /// Marks [id] used. Returns true only when this was the FIRST open, so the
-  /// caller re-gossips the shrunken bundle once rather than on every
-  /// redelivery of the same message.
+  /// Marks [id] used; true only on the first open, so the bundle re-gossips once.
   bool markConsumed(int id) {
     for (final k in _keys) {
       if (k.id != id) continue;
@@ -136,8 +113,7 @@ class LocalPrekeys {
     return false;
   }
 
-  /// Deletes consumed keys whose grace window has lapsed. This is where
-  /// forward secrecy actually happens — everything before it is bookkeeping.
+  /// Deletes consumed keys past their grace window; this is where forward secrecy happens.
   bool prune() {
     final now = _now();
     final before = _keys.length;
@@ -148,11 +124,7 @@ class LocalPrekeys {
     return _keys.length != before;
   }
 
-  /// A prekey to seal to, chosen at random from a peer's published batch.
-  ///
-  /// Random rather than first: two senders picking the same key would burn it
-  /// twice, and the second envelope would then depend on the grace window to
-  /// open at all.
+  /// Random rather than first, so two senders rarely burn the same key.
   Prekey? chooseFrom(List<Prekey> published) {
     if (published.isEmpty) return null;
     return published[_random.nextInt(published.length)];
@@ -179,12 +151,10 @@ class LocalPrekeys {
         if (k != null) _keys.add(k);
       }
     } catch (_) {
-      // A corrupt blob costs the batch, which is replenished on next use —
-      // never the launch.
+      // A corrupt blob costs the batch, which is replenished on next use.
       _keys.clear();
     }
-    // Never re-issue an id: a repeated id would let a new key be sealed to
-    // under an id whose private half we already deleted.
+    // Never re-issue an id whose private half may already be deleted.
     for (final k in _keys) {
       if (k.id >= _nextId) _nextId = k.id + 1;
     }

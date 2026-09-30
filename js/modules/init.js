@@ -1,5 +1,3 @@
-// init.js - App initialization
-
 Object.assign(NYM.prototype, {
 
     _setManagedInterval(key, fn, ms) {
@@ -41,17 +39,14 @@ Object.assign(NYM.prototype, {
 
     async initialize() {
         try {
-            // Check if nostr-tools is loaded
             if (typeof window.NostrTools === 'undefined') {
                 throw new Error('nostr-tools not loaded');
             }
 
             this._appInitTime = Date.now();
 
-            // Warm up the crypto worker pool (no-op fallback if unsupported)
             if (typeof this._ensureCryptoPool === 'function') this._ensureCryptoPool();
 
-            // Setup event listeners
             this.setupEventListeners();
             this.setupCommands();
             this.setupContextMenu();
@@ -69,7 +64,6 @@ Object.assign(NYM.prototype, {
             this.setupSidebarItemMenus();
             this.bindNymPanicGesture();
 
-            // Load saved preferences
             this.applyColorMode();
             this.setupColorModeListener();
             this.loadBlockedUsers();
@@ -80,8 +74,7 @@ Object.assign(NYM.prototype, {
             this.loadWallpaper();
             if (typeof this._hydrateUnreadCounts === 'function') this._hydrateUnreadCounts();
             if (typeof this.initMeshUI === 'function') this.initMeshUI();
-            // Coming back to the app is the natural moment to retry a place
-            // name that failed earlier, including ones the sweep gave up on.
+            // Returning to the app is when to retry place names that failed earlier, including abandoned ones.
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'visible' &&
                     typeof this.refreshUnresolvedPlaces === 'function') {
@@ -94,22 +87,14 @@ Object.assign(NYM.prototype, {
             });
             applyMessageLayout(this.settings.chatLayout);
 
-            // Column view: paint placeholder columns now so the strip isn't blank
-            // until the real columns activate after connection.
+            // Paint placeholder columns now so the strip isn't blank until columns activate.
             if (localStorage.getItem('nym_chat_view_mode') === 'columns' && typeof this._renderColumnSkeletons === 'function') {
                 this._renderColumnSkeletons();
             }
 
-            // Restore the dedup/skip meta sets FIRST, unraced — one small
-            // IndexedDB read. These (processedPMEventIds, deletedEventIds,
-            // verifiedEventIds, pq keys, trust sets) are what stop the relay
-            // replay after connect from re-decrypting, re-VERIFYING and
-            // re-UPLOADING history this client has already handled; they used
-            // to load at the END of hydrateFromCache, so a heavy account that
-            // lost the 1500ms race below connected with them still empty.
+            // Restore dedup/skip meta sets first, unraced, so the post-connect relay replay doesn't reprocess history.
             try { await this._hydrateDedupSets(); } catch (_) { }
 
-            // Hydrate channel/PM/profile/reaction caches from IndexedDB
             try {
                 await Promise.race([
                     this.hydrateFromCache(),
@@ -117,19 +102,14 @@ Object.assign(NYM.prototype, {
                 ]);
             } catch (_) { }
 
-            // Load lightning address
             await this.loadLightningAddress();
 
-            // Clean up old localStorage format
             this.cleanupOldLightningAddress();
 
-            // Network change detection
             this.setupNetworkMonitoring();
 
-            // Visibility change detection
             this.setupVisibilityMonitoring();
 
-            // Drop any sidebar shimmer that never got cleared by real content.
             this._sidebarSkelTimer = setTimeout(() => this._clearAllSidebarSkel(), 8000);
 
         } catch (error) {

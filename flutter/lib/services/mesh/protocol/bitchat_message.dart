@@ -1,20 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// The payload of a public [MeshMessageType.message] packet — a byte-for-byte
-/// port of bitchat's `BitchatMessage.toBinaryPayload` / `fromBinaryPayload`.
-/// These are unencrypted broadcast messages (nearby public chat / geohash-style
-/// channels); authenticity comes from the enclosing packet's Ed25519 signature.
-///
-/// Layout (big-endian):
-/// ```
-/// flags:1 | timestamp:8 (u64 ms) | idLen:1 + id | senderLen:1 + sender |
-/// contentLen:2 + content | [originalSender:1+utf8] | [recipientNick:1+utf8] |
-/// [senderPeerID:1+utf8] | [mentionCount:1, (len:1+utf8)*n] | [channel:1+utf8]
-/// ```
-/// Flag bits: 0x01 relay, 0x02 private, 0x04 hasOriginalSender,
-/// 0x08 hasRecipientNickname, 0x10 hasSenderPeerID, 0x20 hasMentions,
-/// 0x40 hasChannel, 0x80 isEncrypted.
+/// Public mesh message payload, a byte-for-byte port of bitchat's `BitchatMessage` binary format.
 class BitchatMessage {
   BitchatMessage({
     required this.id,
@@ -220,7 +207,6 @@ class _Reader {
     return out;
   }
 
-  /// Reads a 1-byte-length-prefixed UTF-8 string, or null if truncated.
   String? str8() {
     if (!hasRemaining) return null;
     final len = u8();

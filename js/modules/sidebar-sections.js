@@ -24,7 +24,6 @@ Object.assign(NYM.prototype, {
         const sidebar = document.getElementById('sidebar');
         if (!sidebar || !Array.isArray(order)) return;
         const byId = new Map(this._getSidebarSectionEls().map(el => [el.dataset.section, el]));
-        // Keep any sections missing from the saved order at their tail position.
         const finalOrder = order.filter(id => byId.has(id));
         for (const id of this._sidebarSectionIds) {
             if (!finalOrder.includes(id) && byId.has(id)) finalOrder.push(id);
@@ -53,7 +52,6 @@ Object.assign(NYM.prototype, {
         this._saveSidebarSectionOrder();
     },
 
-    // Disable the up arrow on the first section and the down arrow on the last.
     _refreshSidebarReorderButtons() {
         const els = this._getSidebarSectionEls();
         els.forEach((el, idx) => {
@@ -107,7 +105,6 @@ Object.assign(NYM.prototype, {
         this._applySidebarSectionCollapse();
     },
 
-    // Render a generic long-press action menu (reuses the message context menu styling).
     _showSidebarActionMenu(items, clientX, clientY) {
         document.querySelectorAll('.quick-context-menu').forEach(el => el.remove());
         if (!items.length) return;
@@ -166,13 +163,11 @@ Object.assign(NYM.prototype, {
         const leaveSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>';
         const homeSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.6V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.6"/><path d="M9.5 21v-6h5v6"/></svg>';
 
-        // Public channel
         if (itemEl.classList.contains('channel-item')) {
             const channel = itemEl.dataset.channel;
             const geohash = itemEl.dataset.geohash;
             const key = geohash || channel;
-            // #nymchat is the built-in home row: it can't be favorited, hidden
-            // or blocked, so its menu carries the one setting that governs it.
+            // #nymchat is the built-in home row: it can't be favorited, hidden or blocked.
             if (key === 'nymchat') {
                 return [
                     {
@@ -210,7 +205,6 @@ Object.assign(NYM.prototype, {
             ];
         }
 
-        // Group conversation
         if (itemEl.classList.contains('group-item')) {
             const groupId = itemEl.dataset.groupId;
             return [
@@ -223,7 +217,6 @@ Object.assign(NYM.prototype, {
             ];
         }
 
-        // 1:1 private message
         if (itemEl.classList.contains('pm-item')) {
             const pubkey = itemEl.dataset.pubkey;
             if (!pubkey) return [];
@@ -247,8 +240,6 @@ Object.assign(NYM.prototype, {
         return [];
     },
 
-    // Open Settings with the Default Landing Channel field expanded, scrolled
-    // to and focused, so the sidebar menu lands on the control itself.
     openLandingChannelSetting() {
         if (typeof this.closeSidebar === 'function') this.closeSidebar();
         if (typeof window.showSettings === 'function') window.showSettings();
@@ -285,7 +276,6 @@ Object.assign(NYM.prototype, {
         };
 
         const onStart = (itemEl, x, y, target) => {
-            // Pressing the overflow button is not a long-press on the row.
             if (target && target.closest && target.closest('.row-menu-btn')) return;
             startX = x; startY = y;
             fired = false;
@@ -347,7 +337,6 @@ Object.assign(NYM.prototype, {
                 const items = this._buildSidebarMenuItems(itemEl);
                 if (!items.length) return;
                 const r = btn.getBoundingClientRect();
-                // Anchor under the button, matching where a long-press lands.
                 this._showSidebarActionMenu(items, r.left + r.width / 2, r.bottom);
             }, true);
         };
@@ -360,7 +349,6 @@ Object.assign(NYM.prototype, {
         const els = this._getSidebarSectionEls();
         if (!els.length) return;
 
-        // Restore a previously saved order
         try {
             const stored = JSON.parse(localStorage.getItem('nym_sidebar_section_order') || 'null');
             if (Array.isArray(stored)) this._applySidebarSectionOrder(stored);

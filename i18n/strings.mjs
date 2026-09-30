@@ -7,8 +7,7 @@ const HTML = new URL('../index.html', import.meta.url);
 const COMMANDS = new URL('../js/modules/commands.js', import.meta.url);
 const COMMAND_I18N = new URL('../js/modules/command-i18n.js', import.meta.url);
 
-/// The command phrases, read from the two modules that define them. Missing
-/// files are not fatal — the corpus simply loses that section.
+// Missing files are not fatal; the corpus simply loses that section.
 async function loadCommandVocabulary() {
   try {
     const [commands, i18n] = await Promise.all([
@@ -21,13 +20,7 @@ async function loadCommandVocabulary() {
   }
 }
 
-/// Where the Flutter catalog is read from, best first. A sibling checkout of
-/// the flutter-app repository is the authoring layout and always wins; the
-/// release mirror in this repository is the fallback, because a build machine
-/// (CI, Cloudflare Pages) only ever checks out this repository — and a build
-/// that cannot see a catalog used to ship NO packs at all, which is far worse
-/// than shipping ones a release behind. Override either with
-/// NYM_FLUTTER_CATALOG.
+// Sibling flutter-app checkout first, then the in-repo mirror CI can see; NYM_FLUTTER_CATALOG overrides.
 export function catalogCandidates() {
   const out = [];
   if (process.env.NYM_FLUTTER_CATALOG) {
@@ -46,20 +39,16 @@ export function catalogCandidates() {
   return out;
 }
 
-/// The catalog the next [loadSources] would read. Kept for callers that only
-/// want to name the file.
+// The catalog the next [loadSources] would read.
 export const flutterCatalogPath = () => catalogCandidates()[0].path;
 
-/// Elements whose contents are never prose. Mirrors the runtime's skip list
-/// (`NYM_I18N_SKIP_SELECTOR`, js/modules/i18n.js) for the cases a regex can see.
+// Mirrors the runtime's skip list (`NYM_I18N_SKIP_SELECTOR`, js/modules/i18n.js).
 const SKIP_ELEMENTS = ['script', 'style', 'svg', 'pre', 'code', 'kbd', 'samp'];
 
-/// Attributes carrying visible UI text. Same list the runtime translates
-/// (`NYM_I18N_ATTRS`).
+// Same list the runtime translates (`NYM_I18N_ATTRS`).
 const TEXT_ATTRIBUTES = ['placeholder', 'data-placeholder', 'title', 'aria-label'];
 
-/// The runtime's own test for whether a string is worth translating
-/// (`_i18nTextTranslatable`): real words, not just digits or punctuation.
+// Mirrors the runtime's `_i18nTextTranslatable`: real words, not just digits or punctuation.
 export function isTranslatable(text) {
   if (typeof text !== 'string') return false;
   const t = text.trim();
@@ -68,9 +57,7 @@ export function isTranslatable(text) {
   return true;
 }
 
-/// The `kAppStringsCatalog` entries. Parsed rather than evaluated: the file is a
-/// flat list of single-quoted Dart literals, and running a Dart toolchain to
-/// read a list of strings would be a lot of machinery for no more accuracy.
+// Parsed rather than evaluated: the file is a flat list of single-quoted Dart literals.
 export function parseDartCatalog(source) {
   const start = source.indexOf('kAppStringsCatalog = <String>[');
   if (start < 0) throw new Error('kAppStringsCatalog not found');
@@ -79,8 +66,7 @@ export function parseDartCatalog(source) {
   const body = source.slice(start, end);
 
   const out = [];
-  // A single-quoted Dart literal, honoring \' escapes. Comment lines have no
-  // quoted literal on them, so they fall out for free.
+  // A single-quoted Dart literal, honoring \' escapes; comment lines fall out for free.
   const rx = /'((?:[^'\\]|\\.)*)'/g;
   let m;
   while ((m = rx.exec(body)) !== null) {
@@ -95,18 +81,12 @@ export function parseDartCatalog(source) {
   return out;
 }
 
-/// The visible text and translatable attributes in the app shell's markup.
 export function parseHtml(source) {
   let html = source;
-  // Skipped elements become a TAG, not a space. A space merged the text on
-  // either side into one source string, but the browser sees two text nodes —
-  // so a sentence with an inline <code> in it ("… two spellings — <code>npub1…
-  // </code> and hex — …") was extracted as one string the DOM could never ask
-  // for, and every fragment of it was translated live, forever.
+  // Skipped elements become a tag, not a space, since the browser sees separate text nodes.
   for (const tag of SKIP_ELEMENTS) {
     html = html.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>`, 'gi'), '<skipped/>');
-    // Self-closing / unterminated forms leave the opening tag behind; the tag
-    // stripper below removes it.
+    // Self-closing / unterminated forms leave the opening tag behind; the tag stripper removes it.
   }
   html = html.replace(/<!--[\s\S]*?-->/g, '<skipped/>');
 
@@ -122,9 +102,7 @@ export function parseHtml(source) {
     }
   }
 
-  // Then the text between tags. Split on tags rather than parsing: this is one
-  // hand-written document, and each run between two tags is what the runtime
-  // sees as a text node.
+  // Each run between two tags is what the runtime sees as a text node.
   for (const chunk of html.split(/<[^>]*>/)) {
     const value = decodeEntities(chunk).trim();
     if (isTranslatable(value)) out.push(value);
@@ -132,14 +110,7 @@ export function parseHtml(source) {
   return out;
 }
 
-/// The slash/question command vocabulary, as the runtime asks for it.
-///
-/// `cmdI18nEnsure` (js/modules/command-i18n.js) translates one short phrase per
-/// canonical command to build typeable aliases — "help", "private message",
-/// "nickname". Sixty-odd of them, and nothing pre-translated them, so choosing a
-/// language fired sixty requests at the proxy before the app had said anything.
-/// Mirrors `_cmdI18nCanonical`: alias entries and one-character tokens are not
-/// translated, and NYM_CMD_SOURCE decides the phrase (null means "leave it").
+// Pre-translates `cmdI18nEnsure`'s phrases; mirrors `_cmdI18nCanonical` (aliases and 1-char tokens skipped).
 export function parseCommandVocabulary(commandsSource, commandI18nSource) {
   const overrides = new Map();
   const start = commandI18nSource.indexOf('const NYM_CMD_SOURCE = {');
@@ -156,8 +127,7 @@ export function parseCommandVocabulary(commandsSource, commandI18nSource) {
     const at = commandsSource.indexOf(`this.${table} = {`);
     if (at < 0) continue;
     const block = commandsSource.slice(at, commandsSource.indexOf('\n        };', at));
-    // One entry per line, anchored at the indentation, so a token that appears
-    // inside a handler body is not mistaken for a command.
+    // Anchored at the indentation so tokens inside handler bodies aren't mistaken for commands.
     for (const m of block.matchAll(/^\s+'([/?][^']+)':(.*)$/gm)) {
       const [, token, rest] = m;
       if (/\baliasOf\b/.test(rest)) continue;
@@ -171,11 +141,7 @@ export function parseCommandVocabulary(commandsSource, commandI18nSource) {
   return out;
 }
 
-/// Named entities, decoded so the extracted string matches what the runtime
-/// sees. This is the one place a mistake is silent rather than loud: an entity
-/// left encoded produces a source string no DOM text node will ever equal, so
-/// that string is never found in the pack and is quietly translated one request
-/// at a time forever. [undecodedEntities] exists to make that loud instead.
+// An entity left encoded silently never matches the DOM; [undecodedEntities] makes that loud.
 const ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0',
   copy: '\u00a9', reg: '\u00ae', trade: '\u2122', deg: '\u00b0', plusmn: '\u00b1',
@@ -184,7 +150,7 @@ const ENTITIES = {
   laquo: '\u00ab', raquo: '\u00bb', lsquo: '\u2018', rsquo: '\u2019',
   ldquo: '\u201c', rdquo: '\u201d', larr: '\u2190', rarr: '\u2192', harr: '\u2194',
   check: '\u2713', euro: '\u20ac', pound: '\u00a3', yen: '\u00a5', cent: '\u00a2',
-  // Latin-1 letters — the ones a UI string realistically carries.
+  // Latin-1 letters, the ones a UI string realistically carries.
   agrave: '\u00e0', aacute: '\u00e1', acirc: '\u00e2', atilde: '\u00e3',
   auml: '\u00e4', aring: '\u00e5', aelig: '\u00e6', ccedil: '\u00e7',
   egrave: '\u00e8', eacute: '\u00e9', ecirc: '\u00ea', euml: '\u00eb',
@@ -202,9 +168,7 @@ const ENTITIES = {
   Uacute: '\u00da', Ucirc: '\u00db', Uuml: '\u00dc', Yacute: '\u00dd',
 };
 
-/// Named entities present in [text] that this file does not know how to decode.
-/// The sync reports them so an unfamiliar entity is caught when it is added,
-/// rather than by nobody noticing one string is never translated.
+// The sync reports them so an unfamiliar entity is caught when it is added.
 export function undecodedEntities(text) {
   const out = new Set();
   for (const m of text.matchAll(/&([a-zA-Z][a-zA-Z0-9]*);/g)) {
@@ -220,25 +184,13 @@ function decodeEntities(text) {
     .replace(/&([a-z]+);/gi, (whole, name) => ENTITIES[name] ?? whole);
 }
 
-/// Whitespace, as the runtime sees it. The served markup is minified with
-/// `collapseWhitespace`, so a string the author wrapped over three source lines
-/// reaches the DOM as one space-separated run. Extracting it verbatim produced a
-/// key no text node could ever equal, so those strings — the long onboarding
-/// paragraphs, mostly — were never found in the pack.
+// Served markup is minified with `collapseWhitespace`, so keys must match.
 export const collapseSpace = (text) => String(text).replace(/\s+/g, ' ').trim();
 
-/// Placeholders and embedded numbers, matched in ONE pass so a sentinel this
-/// replacement just wrote is never itself tokenised — two passes turned
-/// "+{n} more" into "+PLHPLH1PLHPLH more", which no fill could put a number
-/// back into. Mirrors NYM_I18N_TOKEN_RE in js/modules/i18n.js.
+// One pass so a just-written sentinel is never re-tokenized; mirrors NYM_I18N_TOKEN_RE in js/modules/i18n.js.
 const TOKEN_RE = /\{[^}]+\}|\d[\d.,:/%+-]*/g;
 
-/// A source string as the runtime KEYS it (`_i18nMakeKey`, js/modules/i18n.js):
-/// whitespace collapsed, then {placeholders} and embedded numbers swapped for
-/// PLH sentinels so "42 active nyms" and "43 active nyms" share one entry.
-/// The cache is keyed by the raw English string — that is what the Flutter app
-/// and the sync both use — so the conversion happens here, when the pack is
-/// built, rather than in either client.
+// Matches `_i18nMakeKey` (js/modules/i18n.js): whitespace collapsed, placeholders/numbers become PLH sentinels.
 export function makeKey(core) {
   const tokens = [];
   const key = collapseSpace(core).replace(TOKEN_RE, (m) => {
@@ -248,12 +200,7 @@ export function makeKey(core) {
   return { key, tokens };
 }
 
-/// One cache entry as the pack ships it: `[key, template]`, both in the form the
-/// runtime looks up and fills in. Returns null when the translation cannot be
-/// templated — a translator that localized a numeral or dropped a {placeholder}
-/// leaves nothing to substitute back, and a template that renders a sentinel or
-/// a stale number on screen is worse than the live translation the client falls
-/// back to.
+// `[key, template]`; null when the translation can't be templated, so the client translates live instead.
 export function packEntry(source, translated) {
   if (typeof source !== 'string' || typeof translated !== 'string') return null;
   const { key, tokens } = makeKey(source);
@@ -261,12 +208,7 @@ export function packEntry(source, translated) {
   if (!key || !value) return null;
   if (tokens.length === 0) return [key, value];
 
-  // Find each of the source's tokens in the translation and put a sentinel where
-  // it sits. Matching the literal token rather than re-tokenising the
-  // translation keeps the near misses a translator introduces — a trailing full
-  // stop on a year, an ellipsis after a number — and the digit guard stops a
-  // short token from being found inside a longer number. Position is not
-  // assumed: a translation is free to reorder what it was given.
+  // Match the literal tokens (digit-guarded); translations may reorder them.
   const claimed = [];
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
@@ -280,11 +222,7 @@ export function packEntry(source, translated) {
       if (!splitsANumber && !taken) { at = found; break; }
       from = found + 1;
     }
-    // Nowhere to substitute back into: the translator dropped the placeholder
-    // ("Added {nym} as a friend" -> "Agregado como un amigo") or localized it
-    // ("{options}" -> "{opciones}"). Shipping that would put a name-less or
-    // sentinel-carrying string on screen, so the client translates it live —
-    // where the sentinel form is what gets sent, and survives.
+    // The translator dropped or localized a placeholder; let the client translate live.
     if (at < 0) return null;
     claimed.push({ at, end: at + token.length, index: i });
   }
@@ -299,14 +237,7 @@ export function packEntry(source, translated) {
   return [key, template + value.slice(cursor)];
 }
 
-/// Every source string, deduped and sorted so a re-run produces no spurious
-/// diff in the committed cache.
-///
-/// The Flutter catalog is looked for in each of [catalogCandidates] in turn.
-/// Missing entirely, this returns the markup's strings alone rather than
-/// throwing: a pack covering half the app still spares every user half the
-/// translation requests, and `counts.dartKind` tells the caller what it got so
-/// it can say so.
+// Deduped and sorted for stable diffs; without a Flutter catalog, markup strings only (`counts.dartKind`).
 export async function loadSources({ catalogPath } = {}) {
   const candidates = catalogPath
     ? [{ kind: 'override', path: catalogPath }]

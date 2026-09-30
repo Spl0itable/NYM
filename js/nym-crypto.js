@@ -1,5 +1,3 @@
-// NostrTools crypto shared by the main thread and the crypto worker
-
 (function (root) {
     const NT = () => root.NostrTools;
     const MK = () => root.NymMlKem && root.NymMlKem.ml_kem768;
@@ -17,7 +15,6 @@
     const PQ_KEM_CT_LEN = 1088;
     const PQ_KEM_PK_LEN = 1184;
 
-    // v2 root secret
     const PQ_ROOT_SEED_SALT = 'nym-pq-root-v2';
     const PQ_ROOT_LEN = 32;
     const PQ_ROOT_HRP = 'nympq';
@@ -57,18 +54,12 @@
         return out;
     }
 
-    // secp256k1 ECDH exactly as NIP-44 does it: lift the x-only pubkey to the
-    // even-y point and take the 32-byte big-endian x of the shared point.
+    // secp256k1 ECDH as NIP-44 does it: even-y lift, 32-byte big-endian x of the shared point.
     function ecdhSharedX(sk, pubkeyHex) {
         return NT()._secp256k1.getSharedSecret(sk, '02' + pubkeyHex).subarray(1, 33);
     }
 
-    // The hybrid conversation key. Feeds straight into the UNMODIFIED
-    // nip44.encrypt/decrypt, which take a 32-byte conversation key.
-    //
-    // ck = HKDF-Extract(salt="nymchat-pq-v1",
-    //                   IKM = ecdh_x || kem_ss || kem_ct || recip_kem_pk
-    //                      || sender_secp_pk || recip_secp_pk)
+    // ck = HKDF-Extract(salt="nymchat-pq-v1", IKM = ecdh_x || kem_ss || kem_ct || recip_kem_pk || sender_secp_pk || recip_secp_pk)
     function pqConversationKey(ecdhX, kemSs, kemCt, recipKemPk, senderSecpPkHex, recipSecpPkHex) {
         const T = NT();
         const ikm = concatBytes(
@@ -82,10 +73,7 @@
         return typeof content === 'string' && content.startsWith(PQ_PREFIX);
     }
 
-    // Encrypt `plaintext` to a recipient holding (recipSecpPkHex, recipKemPk).
-    // `senderSk` supplies the classical leg; the KEM leg is freshly encapsulated
-    // per call, so every message gets an independent PQ shared secret even
-    // though the recipient's ML-KEM key is long-lived.
+    // The KEM leg is encapsulated per call, so every message gets an independent PQ shared secret.
     function pqEncrypt(plaintext, senderSk, recipSecpPkHex, recipKemPk) {
         const T = NT(), kem = MK();
         if (!kem) throw new Error('ml-kem unavailable');
@@ -100,9 +88,7 @@
         return PQ_PREFIX + b64uEncode(cipherText) + '.' + T.nip44.encrypt(plaintext, ck);
     }
 
-    // Inverse of pqEncrypt. `self` is the recipient's own key material:
-    // { sk, kemSk, kemPk }. Throws on any malformed input so callers can treat
-    // a throw as "not for us / not decryptable" exactly as they do for NIP-44.
+    // `self` is { sk, kemSk, kemPk }; throws on malformed input, like NIP-44 decrypt.
     function pqDecrypt(content, senderSecpPkHex, self) {
         const T = NT(), kem = MK();
         if (!kem) throw new Error('ml-kem unavailable');
@@ -111,10 +97,7 @@
         if (dot < 0) throw new Error('malformed pq payload');
         const cipherText = b64uDecode(content.slice(PQ_PREFIX.length, dot));
         if (cipherText.length !== PQ_KEM_CT_LEN) throw new Error('bad ml-kem ciphertext');
-        // ML-KEM decapsulation is designed never to fail: on a malformed
-        // ciphertext the FO transform returns an implicit-rejection secret, so a
-        // wrong key surfaces as an HMAC failure inside nip44.decrypt below
-        // rather than as a distinguishable error here.
+        // ML-KEM implicit rejection means a wrong key surfaces as an HMAC failure in nip44.decrypt.
         const sharedSecret = kem.decapsulate(cipherText, self.kemSk);
         const ck = pqConversationKey(
             ecdhSharedX(self.sk, senderSecpPkHex), sharedSecret, cipherText, self.kemPk,
@@ -123,18 +106,13 @@
         return T.nip44.decrypt(content.slice(dot + 1), ck);
     }
 
-    // pq2: layered, so a signer login can take part 
-    // pq1 mixes the ECDH secret and the KEM secret into one key. An extension
-    // or NIP-46 signer never returns the raw ECDH x, so it could not join.
-    // Here NIP-44 is the inner layer (any signer does it) and the KEM keys an
-    // outer AEAD (needs only the root). Both must break. See PQ-ROOT-SPEC A2.
+    // pq2: NIP-44 inner layer (any signer) plus a KEM-keyed outer AEAD, so signer logins work (PQ-ROOT-SPEC A2).
 
     function isPq2Payload(content) {
         return typeof content === 'string' && content.startsWith(PQ2_PREFIX);
     }
 
-    /// Outer-layer key, nonce and AAD. `ss` is fresh per message so the key is
-    /// never reused and a derived nonce is safe.
+    // `ss` is fresh per message, so the key is never reused and a derived nonce is safe.
     function pq2LayerKeys(ss, kemCt, recipKemPk, senderPkHex, recipPkHex) {
         const T = NT();
         const info = concatBytes(
@@ -149,8 +127,7 @@
         };
     }
 
-    /// Wraps an already-encrypted NIP-44 payload in the post-quantum layer.
-    /// The caller produced `inner` however it can — local key or signer.
+    // Wraps an already-encrypted NIP-44 payload in the post-quantum layer.
     function pq2Seal(inner, senderPkHex, recipSecpPkHex, recipKemPk) {
         const kem = MK();
         if (!kem) throw new Error('ml-kem unavailable');
@@ -164,8 +141,7 @@
         return PQ2_PREFIX + b64uEncode(cipherText) + '.' + b64uEncode(outer);
     }
 
-    /// Strips the post-quantum layer, returning the NIP-44 payload inside.
-    /// `self` is { kemSk, kemPk }; no secp key is needed here.
+    // Strips the post-quantum layer; `self` is { kemSk, kemPk }.
     function pq2Open(content, senderPkHex, recipPkHex, self) {
         const kem = MK();
         if (!kem) throw new Error('ml-kem unavailable');
@@ -180,7 +156,6 @@
         return dec.decode(NT()._chacha20poly1305(k.key, k.nonce, k.aad).decrypt(outer));
     }
 
-    /// Local-key convenience: both layers here.
     function pq2Encrypt(plaintext, senderSk, recipSecpPkHex, recipKemPk) {
         const T = NT();
         const inner = T.nip44.encrypt(plaintext, T.nip44.getConversationKey(senderSk, recipSecpPkHex));
@@ -194,9 +169,7 @@
         return T.nip44.decrypt(inner, T.nip44.getConversationKey(self.sk, senderSecpPkHex));
     }
 
-    /// pq2 gift wrap: both NIP-59 layers, each layered rather than combined.
-    /// The seal's inner NIP-44 is the only part a signer must perform; the
-    /// wrap's is keyed to an ephemeral key we mint here.
+    // The seal's inner NIP-44 is the only part a signer must perform; the wrap uses an ephemeral key.
     function pq2Nip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
@@ -219,13 +192,7 @@
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    // Deterministic ML-KEM identity key.
-    //
-    // ML-KEM keygen is a pure function of a 64-byte seed, so the keypair is
-    // re-derivable from the nsec on any device: nothing new to back up, and
-    // every device sharing an nsec derives the SAME key (which is what makes a
-    // single replaceable announcement per identity correct). `epoch` bumps to
-    // rotate.
+    // Deterministic from the nsec, so every device derives the same ML-KEM key; `epoch` bumps to rotate.
     function pqDeriveSeed(privkey, epoch) {
         const T = NT();
         const prk = T._hkdfExtract(T._sha256, privkey, enc.encode(PQ_SEED_SALT));
@@ -242,8 +209,7 @@
         return pqKeygen(pqDeriveSeed(privkey, epoch));
     }
 
-    // v2 root secret. The v1 pair above is never removed — spec §4 keeps it
-    // for the life of the identity.
+    // v2 root secret; the v1 pair is kept for the life of the identity (spec §4).
 
     function pqIsRoot(bytes) {
         return bytes instanceof Uint8Array && bytes.length === PQ_ROOT_LEN;
@@ -254,13 +220,12 @@
         return bytes;
     }
 
-    /// 32 CSPRNG bytes, generated once per identity.
+    // 32 CSPRNG bytes, generated once per identity.
     function pqGenerateRoot() {
         return crypto.getRandomValues(new Uint8Array(PQ_ROOT_LEN));
     }
 
-    /// seed = HKDF-Expand(HKDF-Extract(salt="nym-pq-root-v2", IKM=pqRoot),
-    ///                    info="mlkem768/epoch/" || epoch, 64)
+    // seed = HKDF-Expand(HKDF-Extract(salt="nym-pq-root-v2", IKM=pqRoot), info="mlkem768/epoch/" || epoch, 64)
     function pqRootDeriveSeed(rootBytes, epoch) {
         const T = NT();
         pqAssertRoot(rootBytes);
@@ -272,8 +237,7 @@
         return pqKeygen(pqRootDeriveSeed(rootBytes, epoch));
     }
 
-    /// Public, non-invertible tag: "is the root I hold the one this record
-    /// is about?", answerable without any wrap.
+    // Public, non-invertible tag identifying which root a record is about.
     function pqRootFingerprint(rootBytes) {
         const T = NT();
         pqAssertRoot(rootBytes);
@@ -282,9 +246,7 @@
         return Array.from(out).map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
-    // bech32 with a custom HRP. Encoding is nip19.encodeBytes per the spec;
-    // decoding is not, because nip19.decode throws `unknown prefix nympq`
-    // (checked, see the bech32 tests). So: plain BIP-173 below.
+    // Plain BIP-173 decoding, since nip19.decode rejects the custom `nympq` prefix.
     const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
 
     function bech32Polymod(values) {
@@ -306,8 +268,7 @@
         return out;
     }
 
-    /// { prefix, words }, checksum words stripped. Throws on anything
-    /// malformed: a bad checksum must never surface as key material.
+    // Throws on malformed input; a bad checksum must never surface as key material.
     function bech32Decode(str, limit) {
         if (typeof str !== 'string') throw new Error('bech32: not a string');
         const s = str.trim();
@@ -333,7 +294,7 @@
         return { prefix: hrp, words: words.slice(0, words.length - 6) };
     }
 
-    /// 5-bit words back to bytes, rejecting non-canonical padding.
+    // Rejects non-canonical padding.
     function bech32FromWords(words) {
         let acc = 0, bits = 0;
         const out = [];
@@ -348,7 +309,7 @@
         return new Uint8Array(out);
     }
 
-    /// The user-visible form: `nympq1...`. Handled like the nsec.
+    // The user-visible `nympq1...` form, handled like the nsec.
     function pqRootEncode(rootBytes) {
         pqAssertRoot(rootBytes);
         const T = NT();
@@ -366,8 +327,7 @@
         return bytes;
     }
 
-    // Root wraps (spec §5). AES-GCM-256 either way; the paths differ only in
-    // where the 256-bit key comes from.
+    // Root wraps (spec §5): AES-GCM-256, differing only in where the key comes from.
 
     async function aesGcmKey(raw, usages) {
         return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, usages);
@@ -395,8 +355,7 @@
         return b;
     }
 
-    /// AES-GCM(HKDF(prf_output), pqRoot). The caller passes the raw PRF
-    /// output; the WebAuthn plumbing stays in the UI layer.
+    // AES-GCM(HKDF(prf_output), pqRoot); the WebAuthn plumbing stays in the UI layer.
     function prfKeyRaw(prfOutput, salt) {
         const T = NT();
         if (!(prfOutput instanceof Uint8Array) || prfOutput.length < 16) {
@@ -425,8 +384,7 @@
         return aesGcmOpen(prfKeyRaw(prfOutput, salt), iv, ct);
     }
 
-    // ±2h jitter for NIP-59 metadata protection. Uses a CSPRNG so the jitter
-    // can't be predicted/stripped by an observer 
+    // ±2h NIP-59 timestamp jitter from a CSPRNG so observers can't predict or strip it.
     function randomNow() {
         const r = crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
         return Math.round(Date.now() / 1000 - r * 7200);
@@ -470,7 +428,6 @@
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    // Hybrid post-quantum NIP-59 gift wrap.
     function pqNip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
@@ -493,7 +450,6 @@
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    // NIP-13 miner. Off-thread it can grind without yielding.
     function minePow(event, difficulty) {
         if (!difficulty || difficulty <= 0) return event;
         const T = NT();
@@ -509,7 +465,7 @@
         }
     }
 
-    // NIP-44 conversation key, cached by sender pubkey for the real key (selfId set).
+    // NIP-44 conversation key, cached by sender pubkey only for the real key (selfId set).
     function convKey(sk, pubkey, selfId) {
         const T = NT();
         if (!selfId) return T.nip44.getConversationKey(sk, pubkey);
@@ -541,14 +497,7 @@
         throw new Error('bitchat decrypt failed');
     }
 
-    // Decrypt + verify a gift wrap against ordered candidate keys
-    // [{ sk, bitchat, selfId?, kemSk?, kemPk? }]. Returns
-    // { seal, rumor, isBitchat, isPq, idx } or null.
-    //
-    // Transport is selected by inspecting the payload, not by trusting a tag:
-    // 'pq1.' -> hybrid post-quantum, 'v2:' -> bitchat, otherwise plain NIP-44.
-    // A candidate without ML-KEM material simply fails the PQ branch and falls
-    // through to the next candidate, so mixed-capability key sets are safe.
+    // Transport is chosen from the payload prefix ('pq1.', 'v2:', else NIP-44), never from a tag.
     function unwrapGiftWrap(event, candidates) {
         const T = NT();
         const isV2 = (c) => typeof c === 'string' && c.startsWith('v2:');
@@ -569,9 +518,7 @@
                     if (!kemSk || !kemPk) continue;
                     const self = { sk, kemSk, kemPk };
                     seal = JSON.parse(pqDecrypt(event.content, event.pubkey, self));
-                    // The seal is expected to be PQ too (pqNip59Wrap writes
-                    // both layers), but accept a NIP-44 seal so a future
-                    // wrap-only variant stays readable.
+                    // Accept a NIP-44 seal too so a future wrap-only PQ variant stays readable.
                     rumor = JSON.parse(isPqPayload(seal.content)
                         ? pqDecrypt(seal.content, seal.pubkey, self)
                         : T.nip44.decrypt(seal.content, convKey(sk, seal.pubkey, selfId)));
@@ -594,12 +541,10 @@
 
     root.NymCrypto = {
         randomNow, encryptBitchat, bitchatWrap, nip59Wrap, minePow, unwrapGiftWrap,
-        // Hybrid post-quantum surface.
         pqNip59Wrap, pqEncrypt, pqDecrypt, pqConversationKey, isPqPayload,
         isPq2Payload, pq2Seal, pq2Open, pq2Encrypt, pq2Decrypt, pq2LayerKeys,
         pq2Nip59Wrap,
         pqDeriveSeed, pqKeygen, pqKeypairFromPrivkey,
-        // v2 root secret; v1 above stays forever (spec §4).
         pqGenerateRoot, pqRootDeriveSeed, pqKeypairFromRoot, pqRootFingerprint,
         pqRootEncode, pqRootDecode, pqIsRoot,
         pqRootWrapPrf, pqRootUnwrapPrf,

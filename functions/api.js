@@ -1,14 +1,4 @@
-// Cloudflare Pages Function: D1 storage over a single WebSocket (wss://<host>/api).
-// The connection authenticates once (one signed kind 27235 event), then carries
-// every storage op so the client doesn't open an HTTP request per fetch/put.
-//
-// Protocol (client -> worker):
-//   ["AUTH", <signed 27235 event>]        - authenticate the socket once
-//   ["REQ", id, action, payload]          - run a storage action
-// Protocol (worker -> client):
-//   ["AUTH_OK"] / ["AUTH_ERR", reason]
-//   ["RES", id, status, data]             - JSON result
-//   ["ITEM", id, obj] ... ["END", id, status] - streamed (ndjson) result
+// D1 storage over one authenticated WebSocket: AUTH once (kind 27235), then REQ/RES/ITEM/END frames per op.
 
 import { routeStorageAction } from './api/storage.js';
 import { handleBotPMAction, botReleaseStrandedTurn } from './api/bot.js';
@@ -16,7 +6,6 @@ import { verifyClientAuth, getPublicKey, AUTH_REPLAY_TTL_S } from './api/_shared
 import { ledgerCall } from './api/_ledger.js';
 import { isNymchatClient, servedHostAllowed } from './api/_client.js';
 
-// Actions handled by the bot worker (Nymbot PM, credits, invoices, Ledger).
 const BOT_ACTIONS = {
   'pm': 1, 'clear-history': 1, 'balance': 1,
   'create-invoice': 1, 'check-invoice': 1, 'claim-credits': 1, 'transfer-credits': 1,
@@ -59,10 +48,10 @@ async function forwardResponse(id, resp, send) {
       while ((nl = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
-        if (line) { try { send(['ITEM', id, JSON.parse(line)]); } catch { /* skip */ } }
+        if (line) { try { send(['ITEM', id, JSON.parse(line)]); } catch {} }
       }
     }
-    if (buf.trim()) { try { send(['ITEM', id, JSON.parse(buf)]); } catch { /* skip */ } }
+    if (buf.trim()) { try { send(['ITEM', id, JSON.parse(buf)]); } catch {} }
     const hdrs = {};
     resp.headers.forEach((v, k) => { hdrs[k.toLowerCase()] = v; });
     send(['END', id, status, hdrs]);
@@ -94,12 +83,12 @@ export async function onRequest(context) {
   let authedPubkey = null;
 
   const send = (arr) => {
-    try { if (server.readyState === 1) server.send(JSON.stringify(arr)); } catch { /* closed */ }
+    try { if (server.readyState === 1) server.send(JSON.stringify(arr)); } catch {}
   };
 
   const waitUntil = context.waitUntil
     ? context.waitUntil.bind(context)
-    : (p) => { try { if (p && p.catch) p.catch(() => {}); } catch { /* noop */ } };
+    : (p) => { try { if (p && p.catch) p.catch(() => {}); } catch {} };
 
   server.addEventListener('message', async (ev) => {
     let msg;
@@ -113,7 +102,7 @@ export async function onRequest(context) {
         !verifyClientAuth(auth, auth.pubkey, { action: 'api-ws' }) ||
         !wsAuthHostOk(auth, reqUrl) || !(await wsAuthFresh(env, auth))) {
         send(['AUTH_ERR', 'Authentication failed']);
-        try { server.close(4001, 'auth'); } catch { /* noop */ }
+        try { server.close(4001, 'auth'); } catch {}
         return;
       }
       authedPubkey = auth.pubkey.toLowerCase();
@@ -147,7 +136,7 @@ export async function onRequest(context) {
           resp = await routeStorageAction(ctx, body);
         }
       } catch (e) {
-        // Don't leave a crashed turn holding its de-duplication claim.
+        // Release a crashed turn's de-duplication claim.
         await botReleaseStrandedTurn(ctx);
         send(['RES', id, 500, { error: 'Internal server error' }]);
         return;
@@ -161,11 +150,10 @@ export async function onRequest(context) {
     }
   });
 
-  // Hold the invocation open for the socket's lifetime; an idle WS worker with
-  // no pending task is otherwise reaped and reported as "hung".
+  // Keep the invocation open for the socket's lifetime; an idle WS worker is otherwise reaped as "hung".
   let endLifetime;
   const lifetime = new Promise((resolve) => { endLifetime = resolve; });
-  const closeLifetime = () => { try { endLifetime(); } catch { /* noop */ } };
+  const closeLifetime = () => { try { endLifetime(); } catch {} };
   server.addEventListener('close', closeLifetime);
   server.addEventListener('error', closeLifetime);
   setTimeout(closeLifetime, 280000);

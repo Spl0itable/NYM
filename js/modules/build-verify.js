@@ -1,8 +1,4 @@
-// Re-hashes the running HTML and JS/CSS bundle against /build-manifest.json, recomputes the
-// bundleHash from those locally computed hashes, and anchors it to the official repo by looking
-// up the digest of the canonical bundle-hash artifact in GitHub's signed build attestations, so
-// the About dialog can prove the served code matches the published, reproducible build from the
-// official repo rather than whatever the serving origin claims.
+// Verifies the served bundle against /build-manifest.json and the repo's signed build attestations.
 
 (function () {
     const MANIFEST_URL = '/build-manifest.json';
@@ -171,11 +167,7 @@
         return pending;
     };
 
-    // Hashes a named subset of the running bundle, in the manifest's own
-    // format. Attestation enrollment probes a handful of paths the server
-    // picks per challenge rather than the whole set, so this exists next to
-    // run() instead of inside it: the About dialog wants all 87 assets, an
-    // enrollment wants four and should not pay for the rest.
+    // Hashes only a named subset of the bundle, for attestation enrollment challenges.
     window.hashRunningAssets = async function (paths) {
         const out = {};
         if (!Array.isArray(paths)) return out;
@@ -183,7 +175,7 @@
             if (typeof path !== 'string' || path[0] !== '/') continue;
             try {
                 out[path] = await sha256b64((await servedBytes(path)).buf);
-            } catch (_) { /* a path we cannot read is simply absent */ }
+            } catch (_) { }
         }
         return out;
     };

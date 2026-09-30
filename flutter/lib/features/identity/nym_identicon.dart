@@ -1,15 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Pure-Dart port of `generateAvatarSvg(seed)` from the PWA
-/// (`js/modules/users.js` 318-376).
-///
-/// Deterministic 5x5 horizontally-mirrored identicon derived from the seed
-/// (the nym / pubkey). Same hashing (FNV-1a 32-bit), same PRNG (Mulberry32),
-/// same color rules and grid layout as the web version, so a given seed yields
-/// an identical pattern on both platforms.
-///
-/// The web renders an 80x80 SVG (5 cols x 16px cells). [NymIdenticon] paints the
-/// same grid via a [CustomPainter] and scales it to fit [size].
+/// Deterministic 5x5 mirrored identicon (FNV-1a + Mulberry32) matching the PWA's `generateAvatarSvg` exactly.
 class IdenticonSpec {
   IdenticonSpec({
     required this.seed,
@@ -18,24 +9,21 @@ class IdenticonSpec {
     required this.cells,
   });
 
-  /// The seed this spec was derived from.
   final String seed;
 
-  /// Foreground (rect) color — `hsl(hue, sat%, light%)`.
+  /// Foreground color: `hsl(hue, sat%, light%)`.
   final Color fg;
 
-  /// Background color — `hsl((hue+180)%360, 25%, 18%)`.
+  /// Background color: `hsl((hue+180)%360, 25%, 18%)`.
   final Color bg;
 
-  /// 5x5 grid of filled cells, row-major (`cells[y*5 + x]`). Already mirrored.
+  /// Row-major 5x5 filled cells, already mirrored.
   final List<bool> cells;
 
   static const int cols = 5;
   static const int rows = 5;
 
-  /// A stable, comparable descriptor of the rendered identicon. Two seeds that
-  /// produce the same image share this string; different seeds (almost always)
-  /// differ. Used by tests to assert determinism.
+  /// Stable descriptor of the rendered image; tests assert determinism on it.
   String get descriptor {
     final buf = StringBuffer()
       ..write(_hex(fg))
@@ -55,12 +43,10 @@ class IdenticonSpec {
         '${ch(c.b).toRadixString(16).padLeft(2, '0')}';
   }
 
-  /// Derives the deterministic identicon spec for [seed], mirroring
-  /// `generateAvatarSvg` exactly.
   factory IdenticonSpec.fromSeed(String? seed) {
     final key = seed ?? '';
 
-    // FNV-1a-ish 32-bit hash (JS: h = Math.imul(h, 16777619) >>> 0).
+    // FNV-1a-style 32-bit hash matching the JS `Math.imul` version.
     var h = 2166136261;
     for (var i = 0; i < key.length; i++) {
       h ^= key.codeUnitAt(i);
@@ -68,11 +54,7 @@ class IdenticonSpec {
     }
     var s = h != 0 ? h : 1;
 
-    // Mulberry32 PRNG, identical to the JS `rand()` closure:
-    //   s = (s + 0x6D2B79F5) >>> 0;
-    //   let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    //   t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    //   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    // Mulberry32 PRNG, identical to the JS `rand()`.
     double next() {
       s = (s + 0x6D2B79F5) & 0xffffffff;
       var t = _imul(s ^ (s >>> 15), 1 | s) & 0xffffffff;
@@ -111,21 +93,17 @@ int _imul(int a, int b) {
   final aLo = a & 0xffff;
   final bHi = (b >>> 16) & 0xffff;
   final bLo = b & 0xffff;
-  // (aLo*bLo) + (((aHi*bLo + aLo*bHi) << 16)) | 0
   final lo = aLo * bLo;
   final mid = (aHi * bLo + aLo * bHi) & 0xffffffff;
   return (lo + ((mid << 16) & 0xffffffff)) & 0xffffffff;
 }
 
-/// HSL → RGB Color (h in [0,360), s/l in [0,1]).
+/// HSL to RGB (h in [0,360), s/l in [0,1]).
 Color _hsl(double h, double s, double l) {
   return HSLColor.fromAHSL(1, h % 360, s, l).toColor();
 }
 
-/// Renders the deterministic [IdenticonSpec] for [seed] as a square avatar.
-///
-/// Drop-in fallback avatar matching the PWA's generated SVG. Optionally clipped
-/// to a circle via [circle]; defaults to the web's square crisp-edges look.
+/// Square identicon avatar for [seed], optionally clipped to a circle.
 class NymIdenticon extends StatelessWidget {
   const NymIdenticon({
     super.key,
@@ -157,7 +135,7 @@ class _IdenticonPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 80x80 logical grid (5 cols, 16px cells) scaled to the requested size.
+    // 80x80 logical grid (5 cols of 16px) scaled to size.
     final cell = size.width / IdenticonSpec.cols;
     canvas.drawRect(
       Offset.zero & size,
@@ -176,13 +154,7 @@ class _IdenticonPainter extends CustomPainter {
     }
   }
 
-  // Compares the SEED, not the descriptor. Every field of a spec is derived
-  // deterministically from `seed` in IdenticonSpec.fromSeed — the only place a
-  // spec is ever constructed — so equal seeds mean an identical image. Building
-  // the descriptor here instead cost two StringBuffers and two ~60-char strings
-  // per check: measured 1.83us versus 0.0016us for the seed compare, about
-  // 1,100x, and shouldRepaint runs for every avatar on every rebuild. The
-  // descriptor getter stays; it is what the determinism tests assert on.
+  // Compare seeds, not descriptors: specs derive only from the seed, and descriptors cost ~1000x more per repaint check.
   @override
   bool shouldRepaint(_IdenticonPainter old) => old.spec.seed != spec.seed;
 }

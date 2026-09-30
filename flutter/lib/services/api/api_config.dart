@@ -1,42 +1,16 @@
 import 'dart:io';
 
-/// Centralized backend API host + headers for the native app.
-///
-/// The PWA derives its API host from `window.location.host` (`_getApiHost`),
-/// which only resolves when served over http(s). A native Flutter app has no
-/// page origin, so per spec §4.2 (Flutter note) it targets a FIXED host and
-/// always sends a `User-Agent` that satisfies the backend `isNymchatClient`
-/// gate (`functions/api/_client.js`: `/Nym(?:chat|bot)App\//i` OR
-/// `/\bNYMApp\b/`).
-///
-/// That gate moved out of `_shared.js` and widened when the standalone Nymbot
-/// service was given access to the same worker — one key is one account across
-/// both products. Widened, not changed: `NymchatApp/<ver>` is matched by the
-/// same alternation, and nym-staging's `npm run test:client-origin` asserts
-/// that every request the old gate accepted still gets through.
+/// Fixed backend host and a User-Agent that passes the backend `isNymchatClient` gate.
 class ApiConfig {
   ApiConfig._();
 
-  /// Fixed API host the native app targets (spec §4.2 Flutter note).
-  ///
-  /// Mirrors the PWA's `_getApiHost()` result, but hardcoded because there is
-  /// no `window.location.host` natively.
-  ///
-  /// Confirmed against the PWA's own canonical-host assertion: `build-verify.js`
-  /// declares `OFFICIAL_HOSTS = ['web.nymchat.app']` (the host the served build
-  /// attestation is anchored to), and `bot.js` documents the PWA at
-  /// `web.nymchat.app`. This is the host the relay-pool / proxy / storage / bot
-  /// workers are deployed under.
+  /// Fixed API host, since a native app has no page origin.
   static const String apiHost = 'web.nymchat.app';
 
-  /// App version, used in the User-Agent. Keep in sync with pubspec `version`.
+  /// Keep in sync with pubspec `version`.
   static const String appVersion = '3.75.545';
 
-  /// User-Agent that passes the backend `isNymchatClient` UA gate.
-  ///
-  /// `_client.js:isNymchatClient` matches `/Nym(?:chat|bot)App\//i`. We send
-  /// `NymchatApp/<ver>`; the standalone Nymbot app sends `NymbotApp/<ver>` to
-  /// the same worker.
+  /// Matches the backend's `/Nym(?:chat|bot)App\//i` client gate.
   static const String appUserAgent = 'NymchatApp/$appVersion';
 
   static final String dartUserAgent = HttpOverrides.runWithHttpOverrides(
@@ -60,21 +34,17 @@ class ApiConfig {
   static Map<String, String> socketHeadersFor(Uri url) =>
       {'User-Agent': userAgentFor(url)};
 
-  /// `wss://<host>/api/relay-pool` — the multiplexed relay-pool socket
-  /// (`_getRelayPoolUrl`, spec §4.2).
+  /// Multiplexed relay-pool socket.
   static String relayPoolUrl() => 'wss://$apiHost/api/relay-pool';
 
-  /// `wss://<host>/api/relay?relay=<encoded wss url>` — single-relay privacy
-  /// proxy (`_getProxiedRelayUrl`, spec §4.2). Provided for completeness.
+  /// Single-relay privacy proxy.
   static String singleRelayUrl(String relayUrl) =>
       'wss://$apiHost/api/relay?relay=${Uri.encodeComponent(relayUrl)}';
 
-  /// `https://<host>/api/proxy` — HTTP proxy base used by the API client
-  /// (`_getProxyBaseUrl`, spec §4.2 / §6).
+  /// HTTP proxy base used by the API client.
   static String proxyBaseUrl() => 'https://$apiHost/api/proxy';
 
-  /// Default headers sent on every backend API request. The UA header is what
-  /// satisfies the `isNymchatClient` gate.
+  /// The UA header is what satisfies the `isNymchatClient` gate.
   static Map<String, String> get defaultHeaders => {'User-Agent': userAgent};
 }
 

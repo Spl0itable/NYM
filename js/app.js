@@ -1,4 +1,3 @@
-// Guided Tutorial
 (function () {
     const state = {
         steps: [],
@@ -102,10 +101,8 @@
         const overlay = $('#mobileOverlay');
         if (!sidebar) return Promise.resolve();
 
-        // Already open
         if (sidebar.classList.contains('open')) return Promise.resolve();
 
-        // Open it and wait for transition to complete
         sidebar.classList.add('open');
         overlay && overlay.classList.add('active');
 
@@ -117,7 +114,6 @@
                 settled = true;
                 sidebar.removeEventListener('transitionend', onEnd);
                 clearTimeout(timer);
-                // small delay to allow layout to settle before measuring
                 setTimeout(() => resolve(), 30);
             };
 
@@ -128,12 +124,11 @@
             };
 
             sidebar.addEventListener('transitionend', onEnd, { once: true });
-            // Fallback timeout in case transitionend doesn’t fire
+            // Fallback timeout in case transitionend doesn't fire.
             const timer = setTimeout(done, 400);
         });
     }
 
-    // Close the sidebar on mobile and wait for transition
     function ensureSidebarClosedOnMobile() {
         if (window.innerWidth > 1024) return Promise.resolve();
 
@@ -141,13 +136,11 @@
         const overlay = $('#mobileOverlay');
         if (!sidebar) return Promise.resolve();
 
-        // Already closed
         if (!sidebar.classList.contains('open')) {
             overlay && overlay.classList.remove('active');
             return Promise.resolve();
         }
 
-        // Close it and wait for transition to complete
         sidebar.classList.remove('open');
         overlay && overlay.classList.remove('active');
 
@@ -159,7 +152,6 @@
                 settled = true;
                 sidebar.removeEventListener('transitionend', onEnd);
                 clearTimeout(timer);
-                // small delay to allow layout to settle before measuring
                 setTimeout(() => resolve(), 30);
             };
 
@@ -170,7 +162,6 @@
             };
 
             sidebar.addEventListener('transitionend', onEnd, { once: true });
-            // Fallback timeout
             const timer = setTimeout(done, 400);
         });
     }
@@ -184,7 +175,6 @@
             const initiallyOpen = !!state.sidebarInitiallyOpen;
             const currentlyOpen = sidebar.classList.contains('open');
 
-            // Restore to the initial open/closed state
             if (initiallyOpen && !currentlyOpen) {
                 sidebar.classList.add('open');
                 overlay && overlay.classList.add('active');
@@ -210,14 +200,11 @@
         const highlight = state.highlight;
         const card = state.card;
 
-        // Reset display
         highlight.style.display = 'none';
 
-        // If there is a target, try to highlight and position near it
         if (target && target.getBoundingClientRect) {
             const rect = target.getBoundingClientRect();
 
-            // If target is off-screen, scroll into view then re-position
             const fullyOutVert = rect.bottom < 0 || rect.top > window.innerHeight;
             const fullyOutHorz = rect.right < 0 || rect.left > window.innerWidth;
             if (fullyOutVert || fullyOutHorz) {
@@ -240,12 +227,10 @@
             highlight.style.width = `${hlWidth}px`;
             highlight.style.height = `${hlHeight}px`;
 
-            // Place card relative to target
             card.style.visibility = 'hidden';
             card.style.left = '12px';
             card.style.top = '12px';
 
-            // Wait a frame to measure
             requestAnimationFrame(() => {
                 const cRect = card.getBoundingClientRect();
                 const spaceBelow = window.innerHeight - rect.bottom;
@@ -257,7 +242,6 @@
                 } else if (spaceAbove > cRect.height + 16) {
                     top = rect.top - cRect.height - 12;
                 } else {
-                    // fallback: bottom area
                     top = Math.min(window.innerHeight - cRect.height - 12, Math.max(12, rect.bottom + 12));
                 }
 
@@ -269,7 +253,6 @@
                 card.style.visibility = 'visible';
             });
         } else {
-            // Center the card for generic/welcome/final steps
             highlight.style.display = 'none';
             card.style.visibility = 'hidden';
             requestAnimationFrame(() => {
@@ -283,9 +266,7 @@
         }
     }
 
-    /// The nsec and the nympq1 code, on the first step, so they are saved before
-    /// anything else. An extension or remote signer holds the key, so there is
-    /// only ever a recovery code to show there.
+    // The nsec and nympq1 code on the first step; signer logins only have a recovery code to show.
     function renderKeys(show) {
         const panel = document.getElementById('tutorialKeys');
         if (!panel) return;
@@ -378,8 +359,7 @@
             state.btnPrev.disabled = state.idx === 0;
             state.btnNext.textContent = (step.final || state.idx === state.steps.length - 1) ? 'Done' : 'Next';
 
-            // Swap in cached translations for this step immediately (no flash of
-            // English) when the app UI is being translated.
+            // Swap in cached translations immediately so there's no flash of English.
             try {
                 if (window.nym && typeof nym.i18nApplyNow === 'function') nym.i18nApplyNow(state.card);
             } catch (_) { }
@@ -394,7 +374,6 @@
                     return maybe.then(updateAndPosition);
                 }
             } catch (_) {
-                // fall through to update
             }
         }
         updateAndPosition();
@@ -407,7 +386,6 @@
             return;
         }
         state.idx++;
-        // Skip steps if target not found
         skipIfTargetMissingForward();
     }
 
@@ -421,7 +399,6 @@
     }
 
     function skipIfTargetMissingForward() {
-        // Move forward to first step that has a valid target (or no selector)
         let guard = 0;
         while (guard++ < state.steps.length) {
             const step = state.steps[state.idx];
@@ -434,7 +411,6 @@
     }
 
     function skipIfTargetMissingBackward() {
-        // Move backward to first step that has a valid target (or no selector)
         let guard = 0;
         while (guard++ < state.steps.length) {
             const step = state.steps[state.idx];
@@ -448,14 +424,12 @@
 
     function startTutorial() {
         if (state.started) return;
-        // Don’t start while the initial setup modal is open
+        // Don't start while the initial setup modal is open.
         const setupActive = document.getElementById('setupModal')?.classList.contains('active');
         if (setupActive) return;
 
         buildSteps();
 
-        // If the UI is being translated, pre-translate the whole tutorial script
-        // at high priority so each step is ready as the user advances.
         try {
             if (window.nym && typeof nym.i18nPrioritize === 'function' && Array.isArray(state.steps)) {
                 const strings = [];
@@ -482,7 +456,6 @@
         state.started = true;
         state.idx = 0;
 
-        // Wire events
         state.btnPrev.onclick = prevStep;
         state.btnNext.onclick = () => {
             const isFinal = state.idx === state.steps.length - 1 || state.steps[state.idx].final;
@@ -512,7 +485,6 @@
     }
 
     function endTutorial(markSeen) {
-        // Hide
         if (state.overlay && state.overlay.contains(document.activeElement)) {
             document.activeElement.blur();
         }
@@ -525,13 +497,12 @@
         state._keysTries = 0;
         renderKeys(false);
 
-        // Save flag and sync it so other devices won't re-prompt
+        // Synced so other devices won't re-prompt.
         if (markSeen) {
             try { localStorage.setItem('nym_tutorial_seen', 'true'); } catch (_) { }
             try { if (typeof nostrSettingsSave === 'function') nostrSettingsSave(); } catch (_) { }
         }
 
-        // Clean up
         window.removeEventListener('resize', state._onResize);
         window.removeEventListener('scroll', state._onScroll, true);
         document.removeEventListener('keydown', keyHandler);
@@ -541,9 +512,7 @@
         state.started = false;
     }
 
-    // All tutorial step strings (title + body), so the i18n layer can
-    // pre-translate the whole tour at high priority as soon as a language is
-    // chosen — even though the tutorial is lazy-rendered later.
+    // Every step string, so i18n can pre-translate the lazily rendered tour.
     window.nymTutorialStrings = function () {
         try {
             buildSteps();
@@ -553,7 +522,6 @@
         } catch (_) { return []; }
     };
 
-    // Expose helper to app
     window.maybeStartTutorial = function (force = false) {
         try {
             if (!force) {
@@ -581,34 +549,7 @@
 })();
 
 class NYM {
-    /*
-     * NYM is split across module files for maintainability.
-     * Each module attaches its methods to NYM.prototype via Object.assign.
-     * The constructor and instance state remain here in app.js.
-     * Module files are loaded by index.html in dependency order.
-     *
-     * Modules (see js/modules/):
-     *   relays               Relay pool, connection lifecycle, proxy worker, geo-relays, stats, retries
-     *   nostr-core           Event signing, NIP-44/59 encryption, gift wraps, profile fetch, presence, typing indicators
-     *   users                User identities, blocked users/keywords, friends, avatars, banners, wallpaper, uploads
-     *   channels             Channel switch/add/remove, joined/pinned/hidden channels, navigation history, unread counts
-     *   messages             Message rendering, formatting, sending, edits, quotes, swipe-to-reply, virtual scroll
-     *   reactions            Reaction sending/removal, reactor lists, emoji picker
-     *   pms                  Private messages: send, open, conversation list, gift wrap DMs, new-PM modal, retry queue
-     *   groups               NIP-17 group chats: create, send, ephemeral keys, members, readers, history
-     *   commands             Slash-command parsing and handlers (cmdJoin, cmdNick, cmdZap, ...) plus bot commands and palette
-     *   autocomplete         Emoji, channel, mention, and command autocomplete UI
-     *   shop                 Shop UI: cosmetics, flair, special items, purchases, transfers, recovery codes
-     *   zaps                 Lightning zaps: invoices, modals, receipts, message/profile zaps, wallets
-     *   p2p                  Peer-to-peer file sharing: WebRTC data channels, WebTorrent, transfers UI
-     *   translate            Message and input translation (auto-detect, language selection)
-     *   polls                Poll creation, voting, display, channel poll list
-     *   geohash-globe        Geohash channels and world map explorer
-     *   notifications        Notification history, badges, sounds, settings
-     *   settings             User settings: load/save, sync to Nostr, theme/color mode, image blur
-     *   ui-context           Context menus, modals, gestures, sidebar, GIF picker, link previews, zap modals, event listeners
-     *   init                 App initialization, device capability detection, performance mode
-     */
+    // NYM methods live in js/modules/*, attached via Object.assign and loaded by index.html in dependency order.
 
     constructor() {
         this.relayPool = new Map();
@@ -634,7 +575,6 @@ class NYM {
         this._relayStatsInterval = null;
         this._relayStatsAnimFrame = null;
         this.writeOnlyRelays = new Set(['wss://sendit.nosflare.com']);
-        // Core default relays - always connected first for fast startup
         this.defaultRelays = [
             'wss://sendit.nosflare.com',
             'wss://relay.nymchat.app',
@@ -655,7 +595,6 @@ class NYM {
             'wss://relay.fountain.fm',
             'wss://nostr.mom'
         ];
-        // Geo-located relays populated from bitchat CSV (fallback empty)
         this.geoRelays = [];
         this.geoRelayConnections = new Map();
         this.currentGeoRelays = new Set();
@@ -711,8 +650,7 @@ class NYM {
         this._scrollRAF = null;
         this.pmMessages = new Map();
         this.processedPMEventIds = new Set();
-        // Session-scoped, and deliberately never persisted — see
-        // _noteWrapDecrypted.
+        // Session-scoped and deliberately never persisted; see _noteWrapDecrypted.
         this._decryptedWrapIds = new Set();
         this.deletedEventIds = new Set();
         this._pendingDeletions = new Map();
@@ -726,9 +664,7 @@ class NYM {
         this.lastPMSyncTime = Math.floor(Date.now() / 1000) - 604800;
         this.bitchatUsers = new Set();
         this.nymUsers = new Set();
-        // pubkey -> { pk: Uint8Array, exp, epoch } from kind-30078 'nym-pq'
-        // announcements. Holding an entry is what makes a peer post-quantum
-        // capable; see js/modules/pq.js.
+        // pubkey -> { pk: Uint8Array, exp, epoch } from kind-30078 'nym-pq' announcements; see js/modules/pq.js.
         this.pqKeys = new Map();
         this.users = new Map();
         this.channelUsers = new Map();
@@ -739,9 +675,7 @@ class NYM {
         this.EPHEMERAL_PREV_KEYS_MAX = 30;
         this.GROUP_META_PIGGYBACK_WINDOW = 7 * 24 * 60 * 60;
         this.MAX_GROUP_MEMBERS = 100;
-        // Key-resync heartbeat: after being offline this long, our stored view
-        // of other members' rotating ephemeral keys may have expired off relays,
-        // so we proactively re-exchange current keys (per-group cooldown).
+        // After this long offline, peers' rotating ephemeral keys may have expired off relays, so re-exchange them.
         this.GROUP_RESYNC_OFFLINE_GAP_SEC = 3 * 24 * 60 * 60;
         this.GROUP_RESYNC_COOLDOWN_SEC = 24 * 60 * 60;
         this.GROUP_ADMIT_BACKOFF_MS = 4000;
@@ -801,13 +735,7 @@ class NYM {
         applyColumnsWallpaper(this.settings.columnsWallpaper === true);
         this.channelSubscriptionBatchSize = 15;
         this.channelMessageLimit = 1000;
-        // Public channel history is a rolling 24-hour window, matching what the
-        // rest of the stack will actually give back: the D1 archive read floors
-        // `channel-get` at CHANNEL_TTL_MS (functions/api/storage.js) and the
-        // relay filters ask for `since: now - 86400` (relays.js). Anything older
-        // that survives locally can never be re-fetched, so it is history only
-        // this one device has — it is pruned from memory and from the cache
-        // rather than shown indefinitely on one client and nowhere else.
+        // 24h window matching the D1 channel-get floor and relay `since`; older local history is pruned.
         this.channelHistoryMaxAgeMs = 24 * 60 * 60 * 1000;
         this.channelPageSize = 50;
         this.channelLoadMoreSize = 50;
@@ -820,7 +748,6 @@ class NYM {
         this.pmDomNodeLimit = 200;
         this.pinnedLandingChannel = this.settings.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
         if (this.settings.groupChatPMOnlyMode) {
-            // In PM-only mode, don't default to a geohash channel
             this.currentChannel = null;
             this.currentGeohash = null;
         } else if (this.pinnedLandingChannel.type === 'geohash' && this.pinnedLandingChannel.geohash) {
@@ -874,7 +801,7 @@ class NYM {
         this.p2pReceivedChunks = new Map();
         this.p2pSignalingSubscriptions = new Set();
         this.p2pIceServers = [
-            // 0xchat public relay (enables calls/transfers behind symmetric NATs)
+            // 0xchat public relay (enables calls/transfers behind symmetric NATs).
             { urls: 'stun:rtc.0xchat.com:5349' },
             { urls: 'turn:rtc.0xchat.com:5349', username: '0xchat', credential: 'Prettyvs511' },
             { urls: 'stun:stun.l.google.com:19302' },
@@ -962,7 +889,6 @@ class NYM {
             'flags': ['🏳️', '🏴', '🏁', '🚩', '🏳️‍🌈', '🏳️‍⚧️', '🏴‍☠️', '🇺🇸', '🇬🇧', '🇨🇦', '🇦🇺', '🇩🇪', '🇫🇷', '🇯🇵', '🇰🇷', '🇨🇳', '🇮🇳', '🇧🇷', '🇲🇽', '🇪🇸', '🇮🇹', '🇷🇺', '🇸🇪', '🇳🇴', '🇩🇰', '🇫🇮', '🇳🇱', '🇧🇪', '🇦🇹', '🇨🇭', '🇵🇱', '🇺🇦', '🇹🇷', '🇬🇷', '🇵🇹', '🇮🇪', '🇿🇦', '🇳🇬', '🇪🇬', '🇰🇪', '🇦🇷', '🇨🇱', '🇨🇴', '🇵🇪', '🇻🇪', '🇹🇭', '🇻🇳', '🇮🇩', '🇵🇭', '🇲🇾', '🇸🇬', '🇳🇿', '🇸🇦', '🇦🇪', '🇮🇱', '🇵🇰', '🇧🇩', '🇭🇰', '🇹🇼', '🇨🇿', '🇭🇺', '🇷🇴', '🇭🇷', '🇷🇸', '🇧🇬', '🇸🇰', '🇸🇮', '🇱🇹', '🇱🇻', '🇪🇪', '🇮🇸', '🇱🇺', '🇲🇹', '🇨🇾', '🇯🇲', '🇹🇹', '🇧🇸', '🇧🇧', '🇵🇷', '🇨🇺', '🇩🇴', '🇭🇹', '🇵🇦', '🇨🇷', '🇬🇹', '🇭🇳', '🇸🇻', '🇳🇮', '🇧🇴', '🇪🇨', '🇺🇾', '🇵🇾', '🇬🇾']
         };
         this.emojiMap = {
-            // Smileys & faces
             'grinning': '😀', 'smiley': '😃', 'grin': '😄', 'beaming': '😁', 'laughing': '😆',
             'sweat_smile': '😅', 'rofl': '🤣', 'laugh': '😂', 'slightly_smiling': '🙂', 'upside_down': '🙃',
             'wink': '😉', 'smile': '😊', 'innocent': '😇', 'heart_eyes': '🥰', 'love': '😍',
@@ -987,7 +913,6 @@ class NYM {
             'ghost': '👻', 'alien': '👽', 'space_invader': '👾', 'robot': '🤖', 'jack': '🎃',
             'cat_smile': '😺', 'cat_grin': '😸', 'cat_joy': '😹', 'cat_love': '😻', 'cat_smirk': '😼',
             'cat_kiss': '😽', 'cat_scream': '🙀', 'cat_cry': '😿', 'cat_angry': '😾',
-            // People
             'baby': '👶', 'child': '🧒', 'boy': '👦', 'girl': '👧', 'person': '🧑',
             'blond': '👱', 'man': '👨', 'bearded': '🧔', 'woman': '👩', 'older_person': '🧓',
             'old_man': '👴', 'old_woman': '👵', 'frowning_person': '🙍', 'pouting_person': '🙎', 'no_good': '🙅',
@@ -1006,7 +931,6 @@ class NYM {
             'meditating': '🧘', 'bath': '🛀', 'sleeping_person': '🛌', 'women_holding_hands': '👭', 'couple': '👫',
             'men_holding_hands': '👬', 'kiss_couple': '💏', 'couple_heart': '💑', 'family': '👪',
             'speaking_head': '🗣️', 'silhouette': '👤', 'silhouettes': '👥', 'people_hugging': '🫂',
-            // Gestures & body
             'thumbsup': '👍', 'thumbsdown': '👎', 'ok_hand': '👌', 'pinched': '🤌', 'pinch': '🤏',
             'peace': '✌️', 'crossed': '🤞', 'hand_with_fingers': '🫰', 'rock': '🤟', 'metal': '🤘',
             'call': '🤙', 'left': '👈', 'right': '👉', 'up': '👆', 'middle_finger': '🖕',
@@ -1018,13 +942,11 @@ class NYM {
             'leg': '🦵', 'foot': '🦶', 'ear': '👂', 'hearing_aid': '🦻', 'nose': '👃',
             'brain': '🧠', 'anatomical_heart': '🫀', 'lungs': '🫁', 'tooth': '🦷', 'bone': '🦴',
             'eyes': '👀', 'eye': '👁️', 'tongue': '👅', 'lips': '👄', 'biting_lip': '🫦', 'kiss_mark': '💋',
-            // Hearts
             'heart': '❤️', 'orange_heart': '🧡', 'yellow_heart': '💛', 'green_heart': '💚',
             'blue_heart': '💙', 'purple_heart': '💜', 'black_heart': '🖤', 'white_heart': '🤍',
             'brown_heart': '🤎', 'heart_on_fire': '❤️‍🔥', 'mending_heart': '❤️‍🩹', 'broken': '💔',
             'exclamation_heart': '❣️', 'two_hearts': '💕', 'revolving': '💞', 'heartbeat': '💓',
             'growing': '💗', 'sparkling': '💖', 'cupid': '💘', 'gift_heart': '💝', 'heart_decoration': '💟',
-            // Symbols & misc
             '100': '💯', 'anger': '💢', 'boom': '💥', 'dizzy_symbol': '💫', 'sweat_drops': '💦',
             'dash': '💨', 'hole': '🕳️', 'bomb': '💣', 'speech': '💬', 'eye_speech': '👁️‍🗨️',
             'left_speech': '🗨️', 'right_anger': '🗯️', 'thought': '💭', 'zzz': '💤',
@@ -1044,7 +966,6 @@ class NYM {
             'peace_symbol': '☮️', 'cross': '✝️', 'star_crescent': '☪️', 'om': '🕉️', 'wheel_dharma': '☸️',
             'star_david': '✡️', 'yin_yang': '☯️', 'atom': '⚛️', 'radioactive': '☢️', 'biohazard': '☣️',
             'recycle': '♻️',
-            // Objects
             'watch': '⌚', 'phone': '📱', 'calling': '📲', 'computer': '💻', 'keyboard': '⌨️',
             'desktop': '🖥️', 'printer': '🖨️', 'mouse': '🖱️', 'trackball': '🖲️', 'cd': '💿',
             'dvd': '📀', 'vhs': '📼', 'camera': '📷', 'camera_flash': '📸', 'video': '📹',
@@ -1074,7 +995,6 @@ class NYM {
             'pushpin': '📌', 'paperclip': '📎', 'link': '🔗', 'lock': '🔒', 'unlock': '🔓',
             'key': '🔑', 'old_key': '🗝️', 'mag': '🔍', 'bell': '🔔', 'no_bell': '🔕',
             'speaker': '🔊', 'mute': '🔇',
-            // Clothing
             'glasses': '👓', 'sunglasses_obj': '🕶️', 'goggles': '🥽', 'lab_coat': '🥼', 'safety_vest': '🦺',
             'necktie': '👔', 'tshirt': '👕', 'jeans': '👖', 'scarf': '🧣', 'gloves': '🧤',
             'coat': '🧥', 'socks': '🧦', 'dress': '👗', 'kimono': '👘', 'sari': '🥻',
@@ -1084,7 +1004,6 @@ class NYM {
             'heel': '👠', 'sandal': '👡', 'ballet': '🩰', 'boot': '👢', 'crown': '👑',
             'womans_hat': '👒', 'top_hat': '🎩', 'graduation': '🎓', 'cap': '🧢', 'helmet': '🪖',
             'rescue_helmet': '⛑️', 'lipstick': '💄', 'ring': '💍',
-            // Nature & animals
             'monkey_face': '🐵', 'monkey': '🐒', 'gorilla': '🦍', 'orangutan': '🦧', 'dog': '🐶',
             'dog2': '🐕', 'guide_dog': '🦮', 'service_dog': '🐕‍🦺', 'poodle': '🐩', 'wolf': '🐺',
             'fox': '🦊', 'raccoon': '🦝', 'cat': '🐱', 'cat2': '🐈', 'black_cat': '🐈‍⬛',
@@ -1115,7 +1034,6 @@ class NYM {
             'evergreen': '🌲', 'deciduous': '🌳', 'palm': '🌴', 'cactus': '🌵', 'rice': '🌾',
             'herb': '🌿', 'shamrock': '☘️', 'four_leaf': '🍀', 'maple_leaf': '🍁', 'fallen_leaf': '🍂',
             'leaves': '🍃', 'nest': '🪹', 'nest_eggs': '🪺', 'mushroom': '🍄', 'rock': '🪨', 'wood': '🪵',
-            // Food & drink
             'green_apple': '🍏', 'apple': '🍎', 'pear': '🍐', 'orange': '🍊', 'lemon': '🍋',
             'banana': '🍌', 'watermelon': '🍉', 'grapes': '🍇', 'strawberry': '🍓', 'blueberries': '🫐',
             'melon': '🍈', 'cherry': '🍒', 'peach': '🍑', 'mango': '🥭', 'pineapple': '🍍',
@@ -1141,7 +1059,6 @@ class NYM {
             'clinking': '🥂', 'wine': '🍷', 'tumbler': '🥃', 'cocktail': '🍸', 'tropical': '🍹',
             'mate': '🧉', 'champagne': '🍾', 'ice_cube': '🧊', 'spoon': '🥄', 'fork_knife': '🍴',
             'plate': '🍽️', 'bowl_spoon': '🥣', 'takeout': '🥡', 'chopsticks': '🥢',
-            // Activities & sports
             'soccer': '⚽', 'basketball': '🏀', 'football': '🏈', 'baseball': '⚾', 'softball': '🥎',
             'tennis': '🎾', 'volleyball': '🏐', 'rugby': '🏉', 'flying_disc': '🥏', 'pool': '🎱',
             'yo_yo': '🪀', 'ping_pong': '🏓', 'badminton': '🏸', 'hockey': '🏒', 'field_hockey': '🏑',
@@ -1153,7 +1070,6 @@ class NYM {
             'drum': '🥁', 'long_drum': '🪘', 'sax': '🎷', 'trumpet': '🎺', 'accordion': '🪗',
             'guitar': '🎸', 'banjo': '🪕', 'violin': '🎻', 'flute': '🪈', 'dart': '🎯',
             'bowling': '🎳',
-            // Travel & places
             'car': '🚗', 'taxi': '🚕', 'suv': '🚙', 'bus': '🚌', 'trolleybus': '🚎',
             'racing': '🏎️', 'police_car': '🚓', 'ambulance': '🚑', 'firetruck': '🚒', 'minibus': '🚐',
             'pickup_truck': '🛻', 'truck': '🚚', 'articulated': '🚛', 'tractor': '🚜', 'scooter': '🛴',
@@ -1175,7 +1091,6 @@ class NYM {
             'classical': '🏛️', 'church': '⛪', 'mosque': '🕌', 'synagogue': '🕍', 'hindu_temple': '🛕',
             'kaaba': '🕋', 'shinto_shrine': '⛩️', 'railway_track': '🛤️', 'road': '🛣️',
             'sunrise': '🌅', 'sunrise_city': '🌄', 'night': '🌃', 'milky_way': '🌌', 'bridge_night': '🌉',
-            // Weather
             'sun': '☀️', 'sun_clouds': '🌤️', 'partly_cloudy': '⛅', 'sun_behind_cloud': '🌥️', 'cloud': '☁️',
             'sun_rain': '🌦️', 'rain': '🌧️', 'thunder': '⛈️', 'lightning_cloud': '🌩️', 'snow_cloud': '🌨️',
             'snow': '❄️', 'snowman_snow': '☃️', 'snowman': '⛄', 'wind_face': '🌬️', 'wind': '💨',
@@ -1184,7 +1099,6 @@ class NYM {
             'full_moon': '🌕', 'waning_gibbous': '🌖', 'last_quarter': '🌗', 'waning_crescent': '🌘',
             'new_moon': '🌑', 'waxing_crescent': '🌒', 'first_quarter': '🌓', 'waxing_gibbous': '🌔',
             'earth_africa': '🌍', 'earth_americas': '🌎', 'earth_asia': '🌏', 'ringed_planet': '🪐',
-            // Flags
             'white_flag': '🏳️', 'black_flag': '🏴', 'checkered_flag': '🏁', 'triangular_flag': '🚩',
             'rainbow_flag': '🏳️‍🌈', 'transgender_flag': '🏳️‍⚧️', 'pirate_flag': '🏴‍☠️',
             'us': '🇺🇸', 'gb': '🇬🇧', 'ca': '🇨🇦', 'au': '🇦🇺', 'de': '🇩🇪',
@@ -1196,7 +1110,7 @@ class NYM {
             'ar': '🇦🇷', 'th': '🇹🇭', 'vn': '🇻🇳', 'id': '🇮🇩', 'ph': '🇵🇭',
             'sg': '🇸🇬', 'nz': '🇳🇿', 'sa': '🇸🇦', 'ae': '🇦🇪', 'il': '🇮🇱',
             'tw': '🇹🇼', 'hk': '🇭🇰', 'pr': '🇵🇷', 'cu': '🇨🇺', 'jm': '🇯🇲',
-            // Aliases (restore original shortcodes that were renamed during expansion)
+            // Aliases restore original shortcodes renamed during expansion.
             'ok': '👌', 'money': '🤑', 'hearts': '💕', 'celebrate': '🙌',
             'sunglasses': '😎', 'nauseous': '🤢', 'cold_sweat': '😰',
             'scream_cat': '🙀', 'exploding': '🤯', 'clock': '🕐', 'sunset': '🌆',
@@ -1270,7 +1184,7 @@ class NYM {
         this.verifiedBotPubkeys = new Set([this.verifiedBot.pubkey]);
         this.nymchatPubkeys.add(this.verifiedDeveloper.pubkey);
         this.nymchatPubkeys.add(this.verifiedBot.pubkey);
-        // Seed nymbot into users map so it always appears in sidebar and mention autocomplete
+        // Seed nymbot so it always appears in the sidebar and mention autocomplete.
         this.users.set(this.verifiedBot.pubkey, {
             nym: 'Nymbot',
             pubkey: this.verifiedBot.pubkey,
@@ -2229,8 +2143,7 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Everything Pack">
             ]
         };
 
-        // The Everything Pack grants every non-limited, non-bundle item. Build
-        // its component list from the catalog so it can't drift out of sync.
+        // Built from the catalog so the Everything Pack can't drift out of sync.
         const _everythingIds = [
             ...this.shopItems.styles,
             ...this.shopItems.flair,
@@ -2253,14 +2166,9 @@ vector-effect="non-scaling-stroke" role="img" aria-label="Everything Pack">
 
 }
 
-// Global instance.
-// Instantiated inside DOMContentLoaded so that all module files (which attach
-// methods to NYM.prototype via Object.assign) have been parsed first.
-// The constructor invokes methods like _getApiHost() and fetchGeoRelays(),
-// so those methods must be present on the prototype before `new NYM()` runs.
+// Instantiated in DOMContentLoaded so module methods the constructor calls are on the prototype first.
 let nym;
 
-// Global functions for onclick handlers
 function toggleSidebar() {
     nym.toggleSidebar();
 }
@@ -2273,11 +2181,9 @@ function toggleSearch(inputId) {
         if (wrapper.classList.contains('active')) {
             search.focus();
         } else {
-            // Clear search when hiding
             clearSearch(inputId);
         }
     } else {
-        // Fallback for inputs without wrapper
         search.classList.toggle('active');
         if (search.classList.contains('active')) {
             search.focus();
@@ -2299,7 +2205,6 @@ function clearSearch(inputId) {
         if (wrapper) {
             wrapper.classList.remove('has-value', 'active');
         }
-        // Trigger the appropriate filter to reset the list
         if (inputId === 'pmSearch') {
             nym.filterPMs('');
         } else if (inputId === 'channelSearch') {
@@ -2321,7 +2226,6 @@ function scrollToBottom() {
         nym._scrollRAF = null;
     }
 
-    // Trim any lazy-loaded older history so the DOM bottom is the real latest.
     if (nym.inPMMode) {
         const convKey = nym.currentGroup
             ? nym.getGroupConversationKey(nym.currentGroup)
@@ -2391,7 +2295,6 @@ function onColumnsWallpaperChange(value) {
 window.onColumnsWallpaperChange = onColumnsWallpaperChange;
 window.applyColumnsWallpaper = applyColumnsWallpaper;
 
-// Message threads (Slack-style reply threads) on/off
 function onThreadsEnabledChange(value) {
     const enabled = value === 'true' || value === true;
     nym.settings.threadsEnabled = enabled;
@@ -2406,8 +2309,7 @@ function onTransparencyChange(value) {
     nym.settings.transparencyEnabled = enabled;
     localStorage.setItem('nym_transparency_enabled', String(enabled));
     applyTransparency(enabled);
-    // Block stale settings echoes from older relay-cached events from
-    // overriding the user's new choice and causing the UI to flicker.
+    // Block stale relay-cached settings echoes from overriding the user's new choice.
     nym._lastSettingsSyncTs = Math.floor(Date.now() / 1000);
     try { localStorage.setItem('nym_last_settings_sync_ts', String(nym._lastSettingsSyncTs)); } catch (_) { }
     nostrSettingsSave();
@@ -2476,12 +2378,10 @@ function downloadModalMedia(event) {
             URL.revokeObjectURL(url);
         })
         .catch(() => {
-            // Fallback: open in new tab
             window.open(src, '_blank');
         });
 }
 
-// Image modal pinch-to-zoom and swipe-to-close gestures
 (function () {
     const MIN_SCALE = 1;
     const MAX_SCALE = 5;
@@ -2707,20 +2607,14 @@ function submitPoll() {
 }
 
 function editNick() {
-    // Only show the base nym (without #suffix) in the editable field
     const baseNym = nym.parseNymFromDisplay(nym.nym);
     document.getElementById('newNickInput').value = baseNym;
     updateFieldCharCount(document.getElementById('newNickInput'));
-    // Show the non-editable suffix next to the input
     const suffix = nym.getPubkeySuffix(nym.pubkey);
     const suffixEl = document.getElementById('nickSuffixDisplay');
     suffixEl.textContent = `#${suffix}`;
 
-    // The pubkey panel is open from the start — it is the "view" half of this
-    // modal, and hiding it behind a click on four characters was a thing to
-    // discover rather than a thing to read. Copy and the format switch follow
-    // the one shared npub/hex preference (see the notes in users.js), so
-    // switching here switches the context menu too.
+    // Copy and the format switch follow the shared npub/hex preference (see users.js).
     const copyBtn = document.getElementById('pubkeySlideoutCopy');
     const formatBtn = document.getElementById('pubkeySlideoutFormat');
     nym._refreshPubkeySlideoutFormat();
@@ -2741,7 +2635,6 @@ function editNick() {
         };
     }
 
-    // Show current avatar in edit modal and reset upload UI state
     const preview = document.getElementById('nickEditAvatarPreview');
     if (preview) {
         preview.src = nym.getAvatarUrl(nym.pubkey);
@@ -2752,7 +2645,6 @@ function editNick() {
         btnText: 'Change photo', btnDisabled: false, showRemove: hasCustom
     });
 
-    // Show current banner in edit modal
     const bannerPreview = document.getElementById('nickEditBannerPreview');
     const bannerPlaceholder = document.getElementById('nickEditBannerPlaceholder');
     const bannerUrl = nym.getBannerUrl(nym.pubkey);
@@ -2772,7 +2664,6 @@ function editNick() {
         });
     }
 
-    // Show current bio in edit modal
     const bioInput = document.getElementById('nickEditBioInput');
     if (bioInput) {
         const currentBio = nym.getBio(nym.pubkey);
@@ -2780,13 +2671,11 @@ function editNick() {
         updateBioCharCount();
     }
 
-    // Show current lightning address in edit modal
     const lnInput = document.getElementById('nickEditLightningInput');
     if (lnInput) {
         lnInput.value = nym.lightningAddress || '';
     }
 
-    // Reset private key reveal state
     const privkeySlideout = document.getElementById('privkeySlideout');
     if (privkeySlideout) privkeySlideout.style.display = 'none';
     const privkeyArrow = document.getElementById('revealPrivkeyArrow');
@@ -2801,8 +2690,7 @@ function editNick() {
     if (replaceInput) replaceInput.value = '';
     const replaceStatus = document.getElementById('pqRootReplaceStatus');
     if (replaceStatus) replaceStatus.textContent = '';
-    // An extension login has no nsec to show — but it does have a recovery
-    // code, and is the login that most needs it, so only the nsec half goes.
+    // Extension logins have no nsec but still have a recovery code, so only the nsec half is hidden.
     const signerOnly = nym.nostrLoginMethod === 'extension';
     const nsecBlock = document.getElementById('nsecRevealBlock');
     if (nsecBlock) nsecBlock.style.display = signerOnly ? 'none' : 'block';
@@ -2850,14 +2738,13 @@ function updateFieldCharCount(input) {
 
 async function changeNick() {
     const newNick = document.getElementById('newNickInput').value.trim();
-    // Strip any # suffix the user may have typed - the suffix is derived from pubkey
+    // The suffix is derived from the pubkey, so strip any typed one.
     const baseNick = nym.parseNymFromDisplay(newNick);
     const currentBase = nym.parseNymFromDisplay(nym.nym);
 
     const nickAlsoChanging = baseNick && baseNick !== currentBase;
     let profileDirty = false;
 
-    // Save bio regardless of nick change
     const bioInput = document.getElementById('nickEditBioInput');
     if (bioInput) {
         const newBio = bioInput.value.trim().substring(0, 150);
@@ -2869,7 +2756,6 @@ async function changeNick() {
         }
     }
 
-    // Save lightning address regardless of nick change
     const lnInput = document.getElementById('nickEditLightningInput');
     if (lnInput) {
         const newLn = lnInput.value.trim();
@@ -2889,19 +2775,16 @@ async function changeNick() {
     }
 
     if (nickAlsoChanging) {
-        // cmdNick will publish the kind 0 profile (which includes bio + lightning changes)
+        // cmdNick publishes the kind 0 profile, including bio and lightning changes.
         closeModal('nickEditModal');
         const cmdResult = await nym.cmdNick(baseNick);
-        // If auto-ephemeral is enabled, persist the new nickname so it's reused on next session
         if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
             localStorage.setItem('nym_auto_ephemeral_nick', baseNick);
-            // For reserved (developer) nicks, also save the verified nsec for auto-login
             if (cmdResult && cmdResult.nsec) {
                 nymSecretSet('nym_dev_nsec', nym.nsecFromPrivkeyInput(cmdResult.nsec) || cmdResult.nsec);
             }
         }
-        // If cmdNick was canceled (e.g. reserved nick) but bio/lightning changed,
-        // still publish those changes to relays
+        // If cmdNick was canceled but bio/lightning changed, still publish those.
         if (!cmdResult && profileDirty) {
             await nym.saveToNostrProfile();
         }
@@ -2909,8 +2792,6 @@ async function changeNick() {
         return;
     }
 
-    // Always publish profile to nostr relays when user clicks Change,
-    // so avatar, banner, bio, and lightning changes are all persisted
     await nym.saveToNostrProfile();
     closeModal('nickEditModal');
     nym.displaySystemMessage("Nym's profile changes saved");
@@ -2918,12 +2799,10 @@ async function changeNick() {
 
 function randomizeNick() {
     const generated = nym.generateRandomNym();
-    // Extract base name without #suffix
     const baseName = nym.stripPubkeySuffix(generated);
     document.getElementById('newNickInput').value = baseName;
     updateFieldCharCount(document.getElementById('newNickInput'));
 
-    // Randomize the generated avatar preview if no custom avatar is set
     if (!nym.userAvatars.has(nym.pubkey)) {
         const preview = document.getElementById('nickEditAvatarPreview');
         if (preview) {
@@ -2932,11 +2811,10 @@ function randomizeNick() {
     }
 }
 
-// Pre-generated keypair from setup modal avatar upload (reused in initializeNym)
+// Pre-generated keypair from setup modal avatar upload (reused in initializeNym).
 let setupKeypair = null;
-// Uploaded avatar URL from setup modal (applied to profile in initializeNym)
+// Uploaded avatar URL from setup modal (applied to profile in initializeNym).
 let setupAvatarUrl = null;
-// Uploaded banner URL from setup modal
 let setupBannerUrl = null;
 
 function setAvatarUploadState(prefix, { spinning, statusText, statusType, btnText, btnDisabled, showRemove }) {
@@ -2973,12 +2851,10 @@ async function handleSetupAvatarSelect(event) {
 
     const preview = document.getElementById('setupAvatarPreview');
 
-    // Show local preview immediately using object URL (like wallpaper uploader)
     if (preview) {
         preview.src = URL.createObjectURL(file);
     }
 
-    // Show uploading state
     setAvatarUploadState('setup', {
         spinning: true,
         statusText: 'Uploading avatar...',
@@ -2988,7 +2864,6 @@ async function handleSetupAvatarSelect(event) {
         showRemove: false
     });
 
-    // Generate keypair in background if not already done
     if (!setupKeypair) {
         setupKeypair = await nym.generateKeypair();
     }
@@ -3018,7 +2893,6 @@ async function handleSetupAvatarSelect(event) {
         });
     }
 
-    // Reset file input
     event.target.value = '';
 }
 
@@ -3038,7 +2912,6 @@ function removeSetupAvatar() {
     });
 }
 
-// Banner upload handler for setup modal
 async function handleSetupBannerSelect(event) {
     const file = event?.target?.files?.[0];
     if (!file) return;
@@ -3070,7 +2943,6 @@ async function handleSetupBannerSelect(event) {
         showRemove: false
     });
 
-    // Generate keypair in background if not already done
     if (!setupKeypair) {
         setupKeypair = await nym.generateKeypair();
     }
@@ -3144,7 +3016,6 @@ function updateSetupBioCharCount() {
     }
 }
 
-// Reveal private key functions for nick edit modal
 function toggleRevealPrivkey() {
     const slideout = document.getElementById('privkeySlideout');
     const arrow = document.getElementById('revealPrivkeyArrow');
@@ -3155,7 +3026,6 @@ function toggleRevealPrivkey() {
     if (arrow) arrow.innerHTML = isHidden ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 3 6 L 8 11 L 13 6 Z"/></svg>' : '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" class="nm-vam"><path d="M 6 3 L 11 8 L 6 13 Z"/></svg>';
 
     if (isHidden) {
-        // Populate the nsec value
         const nsecInput = document.getElementById('revealedNsecValue');
         if (nsecInput && nym.privkey) {
             try {
@@ -3171,8 +3041,7 @@ function toggleRevealPrivkey() {
     }
 }
 
-// The recovery code sits in the same slideout as the nsec: same handling, same
-// warning, and the pair is what a device actually needs to be fully you.
+// The recovery code sits beside the nsec with the same handling and warning.
 function refreshPqRootReveal() {
     const reveal = document.getElementById('pqRootReveal');
     const link = document.getElementById('pqRootLink');
@@ -3193,8 +3062,7 @@ function refreshPqRootReveal() {
     const fp = document.getElementById('pqRootFingerprint');
     if (fp) {
         const f = nym.pqRootFingerprint();
-        // The fingerprint lets two devices be compared without either showing
-        // the code itself.
+        // The fingerprint lets two devices be compared without showing the code.
         fp.textContent = f ? `Fingerprint: ${f}` : '';
     }
 }
@@ -3257,9 +3125,7 @@ function linkPqRootCode(code) {
     if (typeof nym.publishPqAnnouncement === 'function') {
         try { nym.publishPqAnnouncement(); } catch (_) { }
     }
-    // The categories sealed to the root-derived key could not be opened until
-    // now, so this session is running on whatever defaults it fell back to.
-    // Re-read them, or the link appears to work and the settings stay stuck.
+    // Categories sealed to the root-derived key couldn't be opened until now, so re-read them.
     if (typeof nym.reloadSettingsAfterPqLink === 'function') {
         nym.reloadSettingsAfterPqLink();
     }
@@ -3348,7 +3214,7 @@ function copyRevealedNsec() {
     }).catch(() => { });
 }
 
-// Avatar upload handler for nick edit modal (uploads immediately since keypair exists)
+// Uploads immediately since the keypair exists.
 async function handleNickEditAvatarSelect(event) {
     const file = event?.target?.files?.[0];
     if (!file) return;
@@ -3364,12 +3230,10 @@ async function handleNickEditAvatarSelect(event) {
 
     const preview = document.getElementById('nickEditAvatarPreview');
 
-    // Show local preview immediately using object URL (like wallpaper uploader)
     if (preview) {
         preview.src = URL.createObjectURL(file);
     }
 
-    // Show uploading state
     setAvatarUploadState('nickEdit', {
         spinning: true,
         statusText: 'Uploading avatar...',
@@ -3402,7 +3266,6 @@ async function handleNickEditAvatarSelect(event) {
         });
     }
 
-    // Reset file input
     event.target.value = '';
 }
 
@@ -3418,7 +3281,6 @@ function removeNickEditAvatar() {
     });
 }
 
-// Banner upload handler for nick edit modal
 async function handleNickEditBannerSelect(event) {
     const file = event?.target?.files?.[0];
     if (!file) return;
@@ -3509,7 +3371,6 @@ function removeNickEditBanner() {
     });
 }
 
-// Developer nsec verification modal state
 let devNsecResolve = null;
 let devNsecContext = null;
 
@@ -3555,7 +3416,6 @@ async function showSettings() {
     window.filterSettings('');
     window.restoreSettingsSectionState();
 
-    // Load color mode setting (auto-save and auto-apply on click)
     const colorModeGroup = document.getElementById('colorModeGroup');
     if (colorModeGroup) {
         const currentMode = nym.getColorMode();
@@ -3571,30 +3431,27 @@ async function showSettings() {
         });
     }
 
-    // Load proximity sorting setting
     const proximitySelect = document.getElementById('proximitySelect');
     if (proximitySelect) {
         proximitySelect.value = nym.settings.sortByProximity ? 'true' : 'false';
     }
 
-    // Load blur settings
     const blurSelect = document.getElementById('blurImagesSelect');
     if (blurSelect) {
         blurSelect.value = nym.blurOthersImages === 'friends' ? 'friends' : (nym.blurOthersImages ? 'true' : 'false');
     }
 
-    // Load auto-ephemeral setting (hidden, kept for compatibility)
+    // Hidden, kept for compatibility.
     const autoEphemeralSelect = document.getElementById('autoEphemeralSelect');
     if (autoEphemeralSelect) {
         const autoEphemeral = localStorage.getItem('nym_auto_ephemeral') === 'true';
         autoEphemeralSelect.value = autoEphemeral ? 'true' : 'false';
     }
 
-    // Load random keypair per session setting
     const randomKeypairSelect = document.getElementById('randomKeypairSelect');
     if (randomKeypairSelect) {
         if (isNostrLoggedIn()) {
-            // Disable keypair rotation for logged-in users — it would conflict with their identity
+            // Keypair rotation would conflict with a logged-in identity.
             randomKeypairSelect.value = 'persistent';
             randomKeypairSelect.disabled = true;
             randomKeypairSelect.title = 'Not available while logged in with a Nostr identity';
@@ -3605,7 +3462,7 @@ async function showSettings() {
             if (keypairMode) {
                 randomKeypairSelect.value = keypairMode;
             } else {
-                // Migrate legacy boolean setting
+                // Migrate legacy boolean setting.
                 const randomKeypair = localStorage.getItem('nym_random_keypair_per_session') === 'true';
                 randomKeypairSelect.value = randomKeypair ? 'random' : 'persistent';
             }
@@ -3614,13 +3471,11 @@ async function showSettings() {
         if (hardcoreWarning) hardcoreWarning.style.display = randomKeypairSelect.value === 'hardcore' ? 'block' : 'none';
     }
 
-    // Load translation language setting
     const translateLangSelect = document.getElementById('translateLanguageSelect');
     if (translateLangSelect) {
         translateLangSelect.value = nym.settings.translateLanguage || '';
     }
 
-    // App-wide UI language selector
     if (typeof nym.populateUiLanguageSelect === 'function') nym.populateUiLanguageSelect();
     const uiLangSelect = document.getElementById('uiLanguageSelect');
     if (uiLangSelect) {
@@ -3707,34 +3562,27 @@ async function showSettings() {
         swipeRightSelect.onchange = () => handleSwipeActionChange(swipeRightSelect);
     }
 
-    // Load nickname style setting
     const nickStyleSelect = document.getElementById('nickStyleSelect');
     if (nickStyleSelect) {
         nickStyleSelect.value = nym.settings.nickStyle || 'fancy';
     }
 
-    // Load hide non-pinned channels setting
     const hideNonPinnedSelect = document.getElementById('hideNonPinnedSelect');
     if (hideNonPinnedSelect) {
         hideNonPinnedSelect.value = nym.hideNonPinned ? 'true' : 'false';
     }
 
-    // Populate hidden channels list
     nym.updateHiddenChannelsList();
 
-    // Initialize pinned landing channel searchable dropdown
     const pinnedSearchInput = document.getElementById('pinnedLandingChannelSearch');
     const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
     const pinnedDropdown = document.getElementById('pinnedLandingChannelDropdown');
 
     if (pinnedSearchInput && pinnedValueInput && pinnedDropdown) {
-        // Get current pinned value
         const currentPinned = nym.pinnedLandingChannel || { type: 'geohash', geohash: 'nymchat' };
 
-        // Build geohash channel options only
         const channelOptions = [];
 
-        // Add common geohashes
         nym.commonGeohashes.forEach(geohash => {
             const location = nym.getGeohashLocation(geohash);
             channelOptions.push({
@@ -3745,7 +3593,6 @@ async function showSettings() {
             });
         });
 
-        // Add user's joined geohash channels (excluding already listed ones)
         Array.from(nym.channels.entries())
             .filter(([key, val]) => nym.isValidGeohash(key) && !nym.commonGeohashes.includes(key))
             .forEach(([geohash]) => {
@@ -3758,7 +3605,6 @@ async function showSettings() {
                 });
             });
 
-        // Set current value
         const currentOption = channelOptions.find(opt =>
             JSON.stringify(opt.value) === JSON.stringify(currentPinned)
         );
@@ -3770,7 +3616,6 @@ async function showSettings() {
             pinnedValueInput.value = JSON.stringify({ type: 'geohash', geohash: 'nymchat' });
         }
 
-        // Function to render filtered options
         const renderOptions = (filter = '') => {
             const filterLower = filter.toLowerCase().replace(/^#/, '');
             const filtered = filter
@@ -3782,14 +3627,12 @@ async function showSettings() {
                 return;
             }
 
-            // Group options
             const grouped = {};
             filtered.forEach(opt => {
                 if (!grouped[opt.group]) grouped[opt.group] = [];
                 grouped[opt.group].push(opt);
             });
 
-            // Render grouped options
             let html = '';
             Object.keys(grouped).forEach(groupName => {
                 html += `<div class="nm-app-2">${groupName}</div>`;
@@ -3800,7 +3643,6 @@ async function showSettings() {
 
             pinnedDropdown.innerHTML = html;
 
-            // Add click handlers
             pinnedDropdown.querySelectorAll('.channel-dropdown-option').forEach(option => {
                 option.addEventListener('mouseenter', function () {
                     this.style.background = 'var(--background)';
@@ -3817,26 +3659,23 @@ async function showSettings() {
             });
         };
 
-        // Show dropdown on focus
         pinnedSearchInput.addEventListener('focus', () => {
             renderOptions(pinnedSearchInput.value);
             pinnedDropdown.style.display = 'block';
         });
 
-        // Filter on input
         pinnedSearchInput.addEventListener('input', () => {
             renderOptions(pinnedSearchInput.value);
             pinnedDropdown.style.display = 'block';
         });
 
-        // Hide dropdown on blur (with delay for click to register)
+        // Delay so a click on an option registers first.
         pinnedSearchInput.addEventListener('blur', () => {
             setTimeout(() => {
                 pinnedDropdown.style.display = 'none';
             }, 200);
         });
 
-        // Prevent dropdown from closing when clicking inside it
         pinnedDropdown.addEventListener('mousedown', (e) => {
             e.preventDefault();
         });
@@ -3854,7 +3693,7 @@ async function showSettings() {
     const soundSelect = document.getElementById('soundSelect');
     soundSelect.value = nym.settings.sound;
     soundSelect.onchange = function () {
-        // Preview the selected sound, bypassing the replay dedupe window
+        // Preview bypasses the replay dedupe window.
         nym._lastSoundPlayedAt = 0;
         nym.playSound(this.value);
     };
@@ -3866,7 +3705,6 @@ async function showSettings() {
     const dateFormatSelectEl = document.getElementById('dateFormatSelect');
     if (dateFormatSelectEl) dateFormatSelectEl.value = nym.settings.dateFormat || 'default';
 
-    // Show/hide time format option based on timestamp visibility
     const dateFormatGroup = document.getElementById('dateFormatGroup');
     if (dateFormatGroup) {
         dateFormatGroup.style.display = nym.settings.showTimestamps ? 'block' : 'none';
@@ -3881,7 +3719,6 @@ async function showSettings() {
     nym.updateKeywordList();
     nym.updateBlockedChannelsList();
 
-    // Fill in accept PMs setting
     const acceptPMsSel = document.getElementById('acceptPMsSelect');
     if (acceptPMsSel) {
         acceptPMsSel.value = nym.settings.acceptPMs || 'enabled';
@@ -3892,17 +3729,11 @@ async function showSettings() {
         acceptCallsSel.value = nym.settings.acceptCalls || 'enabled';
     }
 
-    // Quantum-resistant encryption is automatic — no setting. This is a
-    // read-only status line so the security posture is still visible, and so a
-    // device that cannot yet decapsulate can be told WHY it is receiving
-    // classical rather than being left to wonder. Sending needs only the
-    // peer's key; receiving needs the root, which is what the code carries.
+    // Read-only PQ status line, so users can see why a device receives classical encryption.
     const pqStatus = document.getElementById('pqStatus');
     if (pqStatus) {
         const capable = typeof nym.pqCapable === 'function' && nym.pqCapable();
-        // Root-seeded is the only state that earns the unqualified "Active".
-        // Saying it without a code contradicts the panel that says there is
-        // none, and overstates what is protecting the messages.
+        // Only root-seeded earns the unqualified "Active".
         const rootHeld = typeof nym.pqHasRoot === 'function' && nym.pqHasRoot();
         const sendOnly = !capable && typeof nym.pqEnabled === 'function' && nym.pqEnabled();
 
@@ -3912,8 +3743,7 @@ async function showSettings() {
             : ' No contact has published a post-quantum key yet, so messages are'
               + ' still going out on standard encryption. This turns on by itself'
               + ' as soon as one does.';
-        // Green only when it is genuinely on end to end — the same signal the
-        // mobile apps give, and never for the send-only or unavailable states.
+        // Green only when on end to end, matching the mobile apps.
         pqStatus.classList.toggle('pq-status-active', !!(capable && rootHeld));
         pqStatus.innerHTML = (capable && rootHeld)
             ? '<strong>Active</strong> for messages with other Nymchat users.' + reach
@@ -3932,9 +3762,7 @@ async function showSettings() {
                     + (d.ver ? ' (' + d.ver + ')' : '')).join(', ') + '.'
                 : '';
         }
-        // Only the state the user can act on. A device that already holds the
-        // code has nothing to do here, and the line telling it so sat above a
-        // button that led nowhere.
+        // Only shown when the user can act on it.
         const rootHint = document.getElementById('pqRootSettingsHint');
         if (rootHint) {
             const has = typeof nym.pqHasRoot === 'function' && nym.pqHasRoot();
@@ -3943,7 +3771,6 @@ async function showSettings() {
         }
     }
 
-    // Fill in disappearing message controls
     const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
     const dmTtlSel = document.getElementById('dmTTLSelect');
     const dmTtlGroup = document.getElementById('dmTTLGroup');
@@ -3971,35 +3798,29 @@ async function showSettings() {
         typingIndicatorsSel.value = VALID_INDICATOR_SCOPES.includes(scope) ? scope : 'everywhere';
     }
 
-    // Fill in show-status toggle
     const showStatusSel = document.getElementById('showStatusSelect');
     if (showStatusSel) {
         showStatusSel.value = nym.settings.showStatus === false ? 'false'
             : (nym.settings.showStatus === 'friends' ? 'friends' : 'true');
     }
 
-    // Fill in cache-PMs toggle
     const cachePMsSel = document.getElementById('cachePMsSelect');
     if (cachePMsSel) {
         cachePMsSel.value = nym.settings.cachePMs !== false ? 'true' : 'false';
     }
 
-    // Initialize wallpaper UI selection
     initWallpaperUI();
 
-    // Initialize message layout selection
     const currentLayout = nym.settings.chatLayout || 'irc';
     document.querySelectorAll('.layout-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.layout === currentLayout);
     });
 
-    // Initialize chat view selection
     const currentView = nym.settings.chatViewMode === 'columns' ? 'columns' : 'single';
     document.querySelectorAll('.view-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.view === currentView);
     });
 
-    // Initialize transparency toggle
     const transparencySel = document.getElementById('transparencySelect');
     if (transparencySel) {
         transparencySel.value = nym.settings.transparencyEnabled === true ? 'true' : 'false';
@@ -4010,7 +3831,6 @@ async function showSettings() {
         columnsWallpaperSel.value = nym.settings.columnsWallpaper === true ? 'true' : 'false';
     }
 
-    // Initialize text size slider
     const textSizeSlider = document.getElementById('textSizeSlider');
     const textSizeValue = document.getElementById('textSizeValue');
     if (textSizeSlider) {
@@ -4019,11 +3839,9 @@ async function showSettings() {
         if (textSizeValue) textSizeValue.textContent = currentSize + 'px';
     }
 
-    // Initialize group chat & PM only mode toggle
     const gcPmOnlySelect = document.getElementById('groupChatPMOnlySelect');
     if (gcPmOnlySelect) {
         gcPmOnlySelect.value = nym.settings.groupChatPMOnlyMode ? 'true' : 'false';
-        // Show/hide geohash-related settings based on current mode
         const geohashSettings = document.querySelectorAll('[data-geohash-setting]');
         geohashSettings.forEach(el => {
             el.style.display = nym.settings.groupChatPMOnlyMode ? 'none' : '';
@@ -4036,7 +3854,6 @@ async function showSettings() {
         };
     }
 
-    // Initialize low data mode select
     const lowDataSelect = document.getElementById('lowDataModeSelect');
     if (lowDataSelect) {
         lowDataSelect.value = nym.settings.lowDataMode ? 'true' : 'false';
@@ -4057,10 +3874,8 @@ async function showSettings() {
         box.checked = active.has(box.dataset.filterPack);
     });
 
-    // Render pending settings transfers
     nym.renderPendingSettingsTransfers();
 
-    // Refresh the app cache size display
     refreshAppCacheSize();
 
     document.getElementById('settingsModal').classList.add('active');
@@ -4076,7 +3891,6 @@ function formatCacheBytes(bytes) {
     return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-// Update the cache size readout in the settings modal
 async function countAppCacheItems() {
     const counts = { profiles: 0, channels: 0, pms: 0, reactions: 0, totalBytes: 0 };
     if (!nym || typeof nym._cacheGetAll !== 'function') return counts;
@@ -4116,7 +3930,6 @@ async function probeAppCacheWritable() {
     }
 }
 
-// Update the cache size readout in the settings modal
 async function refreshAppCacheSize() {
     const el = document.getElementById('appCacheSizeDisplay');
     if (!el) return;
@@ -4156,7 +3969,6 @@ async function refreshAppCacheSize() {
 
 
 async function saveSettings() {
-    // Get all settings values
     const theme = document.getElementById('themeSelect').value;
     const sound = document.getElementById('soundSelect').value;
     const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
@@ -4169,18 +3981,15 @@ async function saveSettings() {
     const blurImages = blurImagesVal === 'friends' ? 'friends' : blurImagesVal === 'true';
     const nickStyle = document.getElementById('nickStyleSelect').value;
 
-    // Save color mode
     const colorModeGroup = document.getElementById('colorModeGroup');
     const activeColorBtn = colorModeGroup ? colorModeGroup.querySelector('.color-mode-btn.active') : null;
     const colorMode = activeColorBtn ? activeColorBtn.dataset.mode : 'auto';
     localStorage.setItem('nym_color_mode', colorMode);
     nym.applyColorMode();
 
-    // Save nickname style
     nym.settings.nickStyle = nickStyle;
     localStorage.setItem('nym_nick_style', nickStyle);
 
-    // Apply all settings
     nym.settings.theme = theme;
     nym.settings.sound = sound;
     nym.settings.autoscroll = autoscroll;
@@ -4188,11 +3997,9 @@ async function saveSettings() {
     nym.settings.timeFormat = timeFormat;
     nym.settings.dateFormat = dateFormat;
 
-    // Apply blur settings
     nym.blurOthersImages = blurImages;
     nym.saveImageBlurSettings();
 
-    // Read and save accept PMs setting
     const acceptPMsEl = document.getElementById('acceptPMsSelect');
     if (acceptPMsEl) {
         nym.settings.acceptPMs = acceptPMsEl.value;
@@ -4205,15 +4012,12 @@ async function saveSettings() {
         localStorage.setItem('nym_accept_calls', acceptCallsEl.value);
     }
 
-    // Read disappearing message controls
     const dmEnabled = document.getElementById('dmForwardSecrecySelect').value === 'true';
     const dmTTL = parseInt(document.getElementById('dmTTLSelect').value || '86400', 10);
 
-    // Apply in memory
     nym.settings.dmForwardSecrecyEnabled = dmEnabled;
     nym.settings.dmTTLSeconds = isFinite(dmTTL) && dmTTL > 0 ? dmTTL : 86400;
 
-    // Persist locally
     localStorage.setItem('nym_dm_fwdsec_enabled', String(nym.settings.dmForwardSecrecyEnabled));
     localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
 
@@ -4225,15 +4029,13 @@ async function saveSettings() {
     localStorage.setItem('nym_read_receipts_scope', readReceiptsScope);
     localStorage.setItem('nym_read_receipts_enabled', String(readReceiptsScope !== 'disabled'));
 
-    // Read and save translation language
     const translateLangEl = document.getElementById('translateLanguageSelect');
     if (translateLangEl) {
         nym.settings.translateLanguage = translateLangEl.value;
         localStorage.setItem('nym_translate_language', translateLangEl.value);
     }
 
-    // Read and save app-wide UI language (already applied live via onchange,
-    // this just guarantees persistence if the select changed programmatically)
+    // Already applied live via onchange; this guarantees persistence for programmatic changes.
     const uiLangEl = document.getElementById('uiLanguageSelect');
     if (uiLangEl) {
         const uiLang = uiLangEl.value || '';
@@ -4271,10 +4073,7 @@ async function saveSettings() {
             localStorage.setItem('nym_swipe_threshold', String(t));
         }
     }
-    // No default is materialised here on Save: writing ❤️ into localStorage
-    // would turn "never picked one" into a real pick, which then publishes and
-    // overwrites the emoji chosen on another device. The live default lives in
-    // the loader (`localStorage.getItem(...) || '❤️'`) instead.
+    // No default is written on Save, or it would sync and overwrite another device's pick.
 
     const tiRaw = document.getElementById('typingIndicatorsSelect').value;
     const typingIndicatorsScope = SAVE_INDICATOR_SCOPES.includes(tiRaw) ? tiRaw : 'everywhere';
@@ -4283,8 +4082,7 @@ async function saveSettings() {
     localStorage.setItem('nym_typing_indicators_scope', typingIndicatorsScope);
     localStorage.setItem('nym_typing_indicators_enabled', String(typingIndicatorsScope !== 'disabled'));
 
-    // Read and save status indicator visibility setting. When changed,
-    // broadcast to other clients so they suppress this user's status dot.
+    // Broadcast changes so other clients suppress this user's status dot.
     const showStatusEl = document.getElementById('showStatusSelect');
     if (showStatusEl) {
         const val = showStatusEl.value; // 'true' | 'friends' | 'false'
@@ -4299,8 +4097,7 @@ async function saveSettings() {
         }
     }
 
-    // Read and save PM/group cache opt-out. When the user turns it off,
-    // wipe the existing cache so we don't leave decrypted content at rest.
+    // Turning the cache off wipes it so decrypted content isn't left at rest.
     const cachePMsEl = document.getElementById('cachePMsSelect');
     if (cachePMsEl) {
         const wasOn = nym.settings.cachePMs !== false;
@@ -4312,7 +4109,7 @@ async function saveSettings() {
         }
     }
 
-    // Handle auto-ephemeral setting (hidden, kept for compatibility)
+    // Hidden, kept for compatibility.
     const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
     if (autoEphemeral) {
         localStorage.setItem('nym_auto_ephemeral', 'true');
@@ -4322,18 +4119,15 @@ async function saveSettings() {
         localStorage.removeItem('nym_auto_ephemeral_channel');
     }
 
-    // Handle random keypair per session setting (skip for logged-in users)
     const randomKeypairEl = document.getElementById('randomKeypairSelect');
     if (randomKeypairEl && !isNostrLoggedIn()) {
         const keypairMode = randomKeypairEl.value; // 'persistent', 'random', or 'hardcore'
         localStorage.setItem('nym_keypair_mode', keypairMode);
         if (keypairMode === 'random' || keypairMode === 'hardcore') {
             localStorage.setItem('nym_random_keypair_per_session', 'true');
-            // Clear saved session keypair so next reload generates fresh one
             nymSecretRemove('nym_session_nsec');
         } else {
             localStorage.removeItem('nym_random_keypair_per_session');
-            // Save current keypair for reuse if not already saved
             if (nym.privkey && !nymSecretGet('nym_session_nsec')) {
                 try {
                     const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
@@ -4343,13 +4137,11 @@ async function saveSettings() {
         }
     }
 
-    // Handle hide non-pinned channels setting
     const hideNonPinned = document.getElementById('hideNonPinnedSelect').value === 'true';
     nym.hideNonPinned = hideNonPinned;
     localStorage.setItem('nym_hide_non_pinned', String(hideNonPinned));
     nym.applyHiddenChannels();
 
-    // Save pinned landing channel
     const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
     if (pinnedValueInput && pinnedValueInput.value) {
         try {
@@ -4358,7 +4150,6 @@ async function saveSettings() {
             nym.settings.pinnedLandingChannel = pinnedLandingChannel;
             localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(pinnedLandingChannel));
         } catch (e) {
-            // Fallback to default
             const defaultChannel = { type: 'geohash', geohash: 'nymchat' };
             nym.pinnedLandingChannel = defaultChannel;
             nym.settings.pinnedLandingChannel = defaultChannel;
@@ -4366,10 +4157,8 @@ async function saveSettings() {
         }
     }
 
-    // Handle proximity sorting
     if (sortByProximity) {
         if (!nym.userLocation) {
-            // Request location permission
             navigator.geolocation.getCurrentPosition(
                 async (position) => {
                     nym.userLocation = {
@@ -4379,7 +4168,6 @@ async function saveSettings() {
                     nym.settings.sortByProximity = true;
                     localStorage.setItem('nym_sort_proximity', 'true');
 
-                    // Re-sort immediately after getting location
                     nym.sortChannelsByActivity();
 
                     nym.displaySystemMessage('Location access granted. Geohash channels sorted by proximity.');
@@ -4392,35 +4180,29 @@ async function saveSettings() {
                 }
             );
         } else {
-            // Already have location
             nym.settings.sortByProximity = true;
             localStorage.setItem('nym_sort_proximity', 'true');
-            nym.sortChannelsByActivity(); // Re-sort
+            nym.sortChannelsByActivity();
         }
     } else {
-        // Disabling
         nym.settings.sortByProximity = false;
         localStorage.setItem('nym_sort_proximity', 'false');
         nym.userLocation = null;
-        nym.sortChannelsByActivity(); // Re-sort to default
+        nym.sortChannelsByActivity();
     }
 
-    // Save theme and other settings
     nym.applyTheme(theme);
     nym.saveSettings();
     localStorage.setItem('nym_time_format', timeFormat);
     localStorage.setItem('nym_date_format', dateFormat);
 
-    // Refresh messages to apply new time format
     nym.refreshMessageTimestamps();
 
-    // Save text size
     const textSize = parseInt(document.getElementById('textSizeSlider').value || '15', 10);
     nym.settings.textSize = textSize;
     localStorage.setItem('nym_text_size', String(textSize));
     document.documentElement.style.setProperty('--user-text-size', textSize + 'px');
 
-    // Save group chat & PM only mode
     const gcPmOnlySelect = document.getElementById('groupChatPMOnlySelect');
     if (gcPmOnlySelect) {
         const gcPmOnlyMode = gcPmOnlySelect.value === 'true';
@@ -4433,7 +4215,6 @@ async function saveSettings() {
         }
     }
 
-    // Save low data mode
     const lowDataMode = document.getElementById('lowDataModeSelect').value === 'true';
     const wasLowData = nym.settings.lowDataMode;
     nym.settings.lowDataMode = lowDataMode;
@@ -4444,27 +4225,24 @@ async function saveSettings() {
 
     nym.displaySystemMessage('Settings saved');
 
-    // Sync settings to Nostr relays if logged in
     nostrSettingsSave();
 
     closeModal('settingsModal');
 }
 
-// Clears the on-device app cache only
+// Clears the on-device app cache only.
 async function clearLocalStorageCache() {
     if (!(await window.showAppConfirm('Clear cached channel history, PMs, group chats, profiles, and reactions? This will not log you out or change your settings.', { danger: true, okLabel: 'Clear' }))) {
         return;
     }
 
-    // Wipe the IndexedDB-backed app cache
     try {
         if (typeof nym.resetCache === 'function') {
             await nym.resetCache();
         }
     } catch (_) { }
 
-    // Mirror the wipe in-memory so the UI immediately reflects the cleared
-    // state instead of showing stale data until the next reload.
+    // Mirror the wipe in memory so the UI reflects it without a reload.
     try {
         if (nym.messages && typeof nym.messages.clear === 'function') nym.messages.clear();
         if (nym.pmMessages && typeof nym.pmMessages.clear === 'function') nym.pmMessages.clear();
@@ -4472,16 +4250,11 @@ async function clearLocalStorageCache() {
         if (nym.userBios && typeof nym.userBios.clear === 'function') nym.userBios.clear();
         if (nym.channelDOMCache && typeof nym.channelDOMCache.clear === 'function') nym.channelDOMCache.clear();
         if (nym.processedPMEventIds && typeof nym.processedPMEventIds.clear === 'function') nym.processedPMEventIds.clear();
-        // The store is now empty, so the "already decrypted this run" set is
-        // claiming something that is no longer true. Left standing it would
-        // suppress the unwrap of every wrap re-fetched after this, and the
-        // messages the user just cleared would never come back.
+        // Reset the decrypted-this-run set, or re-fetched wraps would never be unwrapped again.
         if (nym._decryptedWrapIds && typeof nym._decryptedWrapIds.clear === 'function') nym._decryptedWrapIds.clear();
         if (nym.deletedEventIds && typeof nym.deletedEventIds.clear === 'function') nym.deletedEventIds.clear();
     } catch (_) { }
 
-    // Force the currently-rendered conversation to re-render from the now-empty
-    // in-memory store so the user sees the cache cleared.
     try {
         const messagesEl = document.getElementById('messages');
         if (messagesEl) messagesEl.innerHTML = '';
@@ -4491,12 +4264,7 @@ async function clearLocalStorageCache() {
     closeModal('settingsModal');
 }
 
-// Resets user preferences/settings to defaults. Preserves identity (login
-// keys, nicknames), group memberships, PM history, ephemeral keys, and the
-// app cache. Useful when the user wants to start over visually without
-// nuking conversations.
-/// The settings-modal twin of the press-and-hold panic gesture: the same wipe,
-/// reached deliberately rather than by accident.
+// Preserves identity, groups, PM history, ephemeral keys and cache; the settings-modal twin of the panic wipe.
 async function wipeThisDevice() {
     const ok = await window.showAppConfirm(
         'Wipe this device? Your key, your settings, your message history and your post-quantum recovery code go — here and on our servers. Credits on your key are not touched. This cannot be undone.',
@@ -4510,9 +4278,7 @@ async function resetSettings() {
         return;
     }
 
-    // Settings keys that should be wiped on a settings reset. Anything not
-    // in this list (identity, login, group metadata, ephemeral keys, PMs,
-    // shop purchases, nicknames, profile fields, etc.) is preserved.
+    // Keys not listed here (identity, login, groups, PMs, purchases, profile) are preserved.
     const SETTINGS_KEY_EXACT = new Set([
         'nym_theme', 'nym_color_mode',
         'nym_chat_layout',
@@ -4551,7 +4317,6 @@ async function resetSettings() {
     }
     keysToRemove.forEach(key => localStorage.removeItem(key));
 
-    // Reset in-memory settings state to defaults
     nym.pinnedChannels = new Set();
     nym.hiddenChannels = new Set();
     nym.hideNonPinned = false;
@@ -4560,7 +4325,6 @@ async function resetSettings() {
     nym.blockedKeywords = new Set();
     nym.settings = nym.loadSettings();
 
-    // Re-apply defaults visually
     nym.applyColorMode();
     nym.applyWallpaper('none');
     applyMessageLayout('bubbles');
@@ -4571,7 +4335,6 @@ async function resetSettings() {
     closeModal('settingsModal');
 }
 
-// Chat View (single vs columns)
 function selectChatView(view) {
     const mode = view === 'columns' ? 'columns' : 'single';
     document.querySelectorAll('.view-option').forEach(opt => {
@@ -4584,7 +4347,6 @@ function selectChatView(view) {
 }
 window.selectChatView = selectChatView;
 
-// Message Layout Functions
 function selectMessageLayout(layout) {
     document.querySelectorAll('.layout-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.layout === layout);
@@ -4615,14 +4377,11 @@ function applyMessageLayout(layout) {
     }
 }
 
-// Wallpaper Functions
 function selectWallpaper(type) {
-    // Update selection UI
     document.querySelectorAll('.wallpaper-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.wallpaper === type);
     });
 
-    // If it's not custom, apply immediately
     if (type !== 'custom') {
         nym.applyWallpaper(type);
         nym.saveWallpaper(type);
@@ -4646,7 +4405,6 @@ async function handleWallpaperUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
 
-    // Show uploading state
     const customOption = document.getElementById('customWallpaperOption');
     const customPreview = document.getElementById('customWallpaperPreview');
     const originalContent = customPreview.innerHTML;
@@ -4655,11 +4413,9 @@ async function handleWallpaperUpload(event) {
     const url = await nym.uploadWallpaper(file);
 
     if (url) {
-        // Update the custom preview thumbnail
         customPreview.innerHTML = '';
         customPreview.style.backgroundImage = `url('${nym.wallpaperBlobUrl || url}')`;
 
-        // Select custom wallpaper
         document.querySelectorAll('.wallpaper-option').forEach(opt => {
             opt.classList.toggle('selected', opt.dataset.wallpaper === 'custom');
         });
@@ -4672,19 +4428,16 @@ async function handleWallpaperUpload(event) {
         customPreview.innerHTML = originalContent;
     }
 
-    // Reset file input
     event.target.value = '';
 }
 
 function initWallpaperUI() {
     const { type, customUrl } = nym.loadWallpaper();
 
-    // Highlight saved selection in settings grid
     document.querySelectorAll('.wallpaper-option').forEach(opt => {
         opt.classList.toggle('selected', opt.dataset.wallpaper === type);
     });
 
-    // If custom, update the preview thumbnail
     if (type === 'custom' && customUrl) {
         const customPreview = document.getElementById('customWallpaperPreview');
         if (customPreview) {
@@ -4924,24 +4677,20 @@ async function sendAboutContact() {
     }
 }
 
-// Function to check for saved connection on page load
 async function checkSavedConnection() {
-    // Clear any legacy persistent login data
     localStorage.removeItem('nym_connection_mode');
     localStorage.removeItem('nym_nsec');
     localStorage.removeItem('nym_bunker_uri');
     localStorage.removeItem('nym_relay_url');
 
-    // Nostr login takes priority — auto-connect with stored persistent identity
-    // so the user doesn't have to go through the setup modal again.
+    // Nostr login takes priority, auto-connecting with the stored persistent identity.
     if (isNostrLoggedIn()) {
         try {
             const method = localStorage.getItem('nym_nostr_login_method');
             const pubkey = localStorage.getItem('nym_nostr_login_pubkey');
             if (!pubkey) throw new Error('No stored pubkey');
 
-            // Set login method early so UI features (e.g. long-press nym send)
-            // recognize the user as logged in even if later async steps fail
+            // Set early so logged-in UI features work even if later async steps fail.
             nym.nostrLoginMethod = method;
 
             let secretKey = null;
@@ -4950,7 +4699,6 @@ async function checkSavedConnection() {
                 if (nsec) secretKey = nym.decodeNsec(nsec);
             }
 
-            // For extension login, wait for NIP-07 extension to inject window.nostr
             if (method === 'extension') {
                 for (let attempt = 0; attempt < 10; attempt++) {
                     if (window.nostr?.getPublicKey) break;
@@ -4958,31 +4706,27 @@ async function checkSavedConnection() {
                 }
             }
 
-            // For NIP-46 remote signer, restore the WebSocket session
             if (method === 'nip46') {
                 await _nip46RestoreSession();
             }
 
-            // Hide setup modal
             const setupModal = document.getElementById('setupModal');
             setupModal.classList.remove('active');
 
-            // Generate base ephemeral keypair (needed for internal crypto ops),
-            // then immediately override with the nostr identity BEFORE connecting
+            // Override the base ephemeral keypair with the nostr identity before connecting.
             await nym.generateKeypair();
             nym.pubkey = pubkey;
             if (secretKey) {
                 nym.privkey = secretKey;
             } else {
-                // Extension login — clear ephemeral privkey so signEvent() uses the extension
+                // Extension login: clear the ephemeral privkey so signEvent() uses the extension.
                 nym.privkey = null;
             }
             nym.nostrLoginPubkey = pubkey;
             nym.nostrLoginSecretKey = secretKey;
             nym.nostrLoginMethod = method;
 
-            // Apply cached profile immediately for instant UI (name + avatar)
-            // before relays connect; fresh data will overwrite later
+            // Apply the cached profile before relays connect; fresh data overwrites later.
             nym.nym = 'nym'; // fallback until kind 0 profile is fetched
             try {
                 const cached = JSON.parse(localStorage.getItem('nym_nostr_login_profile') || '{}');
@@ -4996,27 +4740,20 @@ async function checkSavedConnection() {
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
 
-            // Connect to relays using the nostr identity (correct pubkey for DM subs)
             await nym.connectToRelays();
 
-            // Apply cached shop items
             nym.applyCachedShopItemsToNewIdentity();
 
-            // Fetch kind 0 profile and settings now that relays are connected
             applyNostrLogin(pubkey, secretKey, method);
 
-            // Request notification permission
             if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
                 Notification.requestPermission();
             }
 
-            // Start tutorial / send the Nymbot welcome once synced settings load,
-            // so a returning user logging in elsewhere isn't re-prompted.
+            // Wait for synced settings so a returning user isn't re-prompted.
             startOnboardingWhenHydrated();
 
-            // Resume to last channel from previous session (skip in PM-only mode)
             if (nym.settings.groupChatPMOnlyMode) {
-                // In PM-only mode, navigate to latest PM/group after relays settle
                 setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
             } else {
                 const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
@@ -5031,31 +4768,26 @@ async function checkSavedConnection() {
                 }
             }
 
-            // Route to channel from URL if present (overrides saved channel)
+            // A URL channel overrides the saved one.
             await routeToUrlChannel();
 
-            return; // Exit early — nostr login handled
+            return;
         } catch (error) {
-            // Nostr login restoration failed, fall through to auto-ephemeral or setup modal
             nym.nostrLoginMethod = null;
         }
     }
 
-    // Auto-ephemeral preference (or saved session keypair)
     const autoEphemeral = localStorage.getItem('nym_auto_ephemeral');
     if (autoEphemeral === 'true') {
         try {
-            // Hide setup modal
             const setupModal = document.getElementById('setupModal');
             setupModal.classList.remove('active');
 
             let isDeveloperLogin = false;
             const randomKeypairPerSession = localStorage.getItem('nym_random_keypair_per_session') === 'true';
 
-            // Use saved custom nickname if available, otherwise random
             const savedNick = localStorage.getItem('nym_auto_ephemeral_nick');
             if (savedNick && nym.isReservedNick(savedNick)) {
-                // Reserved nick - check for saved nsec to auto-verify
                 const savedNsec = nymSecretGet('nym_dev_nsec');
                 if (savedNsec) {
                     const result = nym.verifyDeveloperNsec(savedNsec);
@@ -5064,7 +4796,6 @@ async function checkSavedConnection() {
                         isDeveloperLogin = true;
                         nym.displaySystemMessage('Auto-starting verified session...');
                     } else {
-                        // Invalid saved nsec - clear it and use random nym
                         nymSecretRemove('nym_dev_nsec');
                         await nym.generateKeypair();
                         nym.nym = nym.generateRandomNym();
@@ -5076,7 +4807,6 @@ async function checkSavedConnection() {
                     nym.connectionMode = 'ephemeral';
                 }
             } else if (!randomKeypairPerSession) {
-                // Reuse saved keypair if available (persistent session)
                 const savedNsec = nymSecretGet('nym_session_nsec');
                 if (savedNsec) {
                     try {
@@ -5087,31 +4817,26 @@ async function checkSavedConnection() {
                         nym.nym = savedNick || nym.generateRandomNym();
                         nym.connectionMode = 'ephemeral';
                     } catch (e) {
-                        // Saved keypair invalid, generate fresh
                         nymSecretRemove('nym_session_nsec');
                         await nym.generateKeypair();
                         nym.nym = savedNick || nym.generateRandomNym();
                         nym.connectionMode = 'ephemeral';
                     }
                 } else {
-                    // No saved keypair yet, generate and save
                     await nym.generateKeypair();
                     nym.nym = savedNick || nym.generateRandomNym();
                     nym.connectionMode = 'ephemeral';
                     if (typeof nym.pqRootPresetNew === 'function') nym.pqRootPresetNew();
-                    // Save the generated keypair for reuse
                     try {
                         const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
                         nymSecretSet('nym_session_nsec', nsec);
                     } catch (e) { }
                 }
-                // Persist the auto-generated nick so it survives reload
                 if (!savedNick && nym.nym) {
                     try { localStorage.setItem('nym_auto_ephemeral_nick', nym.nym); } catch (e) { }
                 }
             } else {
-                // Generate fresh ephemeral keypair each session (random/hardcore keypair mode).
-                // Rotate the nick too — users opted in to a fresh identity each session.
+                // Random/hardcore keypair modes rotate the nick too.
                 await nym.generateKeypair();
                 nym.nym = nym.generateRandomNym();
                 nym.connectionMode = 'ephemeral';
@@ -5119,27 +4844,22 @@ async function checkSavedConnection() {
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
 
-            // Connect to relays
             await nym.connectToRelays();
 
-            // Apply cached shop items (styles/flairs) to the new ephemeral identity
             nym.applyCachedShopItemsToNewIdentity();
 
-            // Restore persisted group conversations and ephemeral keys for this keypair
             nym._loadGroupConversations();
             nym._loadEphemeralKeys();
             nym._loadBotAnonState();
             nym._loadLastPMSyncTime();
             nym._loadLeftGroups();
 
-            // Load synced settings from D1 (encrypted), falling back to relays
+            // Load synced settings from D1 (encrypted), falling back to relays.
             settingsLoad();
 
             if (isDeveloperLogin) {
-                // Developer login - load lightning address from their kind 0 profile
                 await nym.loadLightningAddress();
             } else {
-                // Restore lightning address from global localStorage to new session
                 const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
                 if (globalLnAddress) {
                     nym.lightningAddress = globalLnAddress;
@@ -5147,7 +4867,6 @@ async function checkSavedConnection() {
                     nym.updateLightningAddressDisplay();
                 }
 
-                // Restore avatar from localStorage for ephemeral sessions
                 const savedAvatarUrl = localStorage.getItem('nym_avatar_url');
                 if (savedAvatarUrl) {
                     nym.userAvatars.set(nym.pubkey, savedAvatarUrl);
@@ -5155,35 +4874,28 @@ async function checkSavedConnection() {
                     nym.updateSidebarAvatar();
                 }
 
-                // Restore banner from localStorage for ephemeral sessions
                 const savedBannerUrl = localStorage.getItem('nym_banner_url');
                 if (savedBannerUrl) {
                     nym.userBanners.set(nym.pubkey, savedBannerUrl);
                 }
 
-                // Restore bio from localStorage for ephemeral sessions
                 const savedBio = localStorage.getItem('nym_bio');
                 if (savedBio) {
                     nym.userBios.set(nym.pubkey, savedBio);
                 }
 
-                // Publish profile with restored avatar and lightning address
                 await nym.saveToNostrProfile();
 
-                // Re-publish profile after more relays connect
                 setTimeout(() => { nym.saveToNostrProfile(); }, 5000);
             }
 
-            // Request notification permission
             if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
                 Notification.requestPermission();
             }
 
-            // Start tutorial / send the Nymbot welcome once synced settings load,
-            // so a returning user logging in elsewhere isn't re-prompted.
+            // Wait for synced settings so a returning user isn't re-prompted.
             startOnboardingWhenHydrated();
 
-            // Resume to last channel from previous auto-ephemeral session (skip in PM-only mode)
             if (nym.settings.groupChatPMOnlyMode) {
                 setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
             } else {
@@ -5201,12 +4913,11 @@ async function checkSavedConnection() {
                 }
             }
 
-            // Route to channel from URL if present (overrides saved channel)
+            // A URL channel overrides the saved one.
             await routeToUrlChannel();
 
-            return; // Exit early
+            return;
         } catch (error) {
-            // Clear the preference and show setup modal
             localStorage.removeItem('nym_auto_ephemeral');
             localStorage.removeItem('nym_auto_ephemeral_nick');
             document.getElementById('setupModal').classList.add('active');
@@ -5214,7 +4925,6 @@ async function checkSavedConnection() {
             return;
         }
     }
-    // No saved connection (or restoration failed) — show the setup modal.
     document.getElementById('setupModal').classList.add('active');
     updateSetupInviteBanner();
 }
@@ -5225,18 +4935,15 @@ async function initializeNym() {
         if (!window.nym) return;
     }
 
-    // Show loading state on button
     const enterBtn = document.getElementById('enterNymBtn');
     const originalBtnText = enterBtn.innerHTML;
     enterBtn.disabled = true;
     enterBtn.innerHTML = '<span class="loader"></span> Connecting...';
 
     try {
-        // Get or generate nym first
         const nymInput = document.getElementById('nymInput').value.trim();
         let isDeveloperLogin = false;
 
-        // Check if reserved nickname
         if (nymInput && nym.isReservedNick(nymInput)) {
             const result = await showDevNsecModal('init');
             if (!result) {
@@ -5244,14 +4951,14 @@ async function initializeNym() {
                 enterBtn.innerHTML = originalBtnText;
                 return;
             }
-            // Verified developer - use their persistent keypair (discard any setup modal keypair)
+            // Verified developer uses their persistent keypair, discarding any setup modal keypair.
             setupKeypair = null;
             setupAvatarUrl = null;
             nym.applyDeveloperIdentity(result.secretKey, result.pubkey);
             isDeveloperLogin = true;
             localStorage.removeItem('nym_connection_mode');
         } else {
-            // Generate ephemeral keypair (reuse if already created from avatar upload)
+            // Reuse the keypair if one was already created from avatar upload.
             nym.connectionMode = 'ephemeral';
             if (!setupKeypair) {
                 await nym.generateKeypair();
@@ -5263,23 +4970,20 @@ async function initializeNym() {
             localStorage.removeItem('nym_connection_mode');
         }
 
-        // Always enable auto-login on next session (replaces old auto-ephemeral checkbox)
         localStorage.setItem('nym_auto_ephemeral', 'true');
         if (nymInput) {
             localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
-            // Mark this as a user-chosen nick so it qualifies for D1 mirroring
+            // Mark as user-chosen so it qualifies for D1 mirroring.
             try { localStorage.setItem('nym_custom_nick', nym.parseNymFromDisplay(nymInput)); } catch (e) { }
-            // If developer verified, also save nsec for auto-login
             if (nym.isReservedNick(nymInput)) {
                 const nsecVal = document.getElementById('devNsecInput').value.trim();
                 if (nsecVal) {
-                    // Canonicalise: the field accepts a hex private key too.
+                    // Canonicalize: the field accepts a hex private key too.
                     nymSecretSet('nym_dev_nsec', nym.nsecFromPrivkeyInput(nsecVal) || nsecVal);
                 }
             }
         }
 
-        // Save the generated keypair for reuse across sessions (unless random keypair mode enabled)
         if (!isDeveloperLogin && nym.privkey) {
             try {
                 const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
@@ -5287,14 +4991,12 @@ async function initializeNym() {
             } catch (e) { }
         }
 
-        // Save bio from setup modal
         const setupBioVal = document.getElementById('setupBioInput');
         if (setupBioVal && setupBioVal.value.trim()) {
             localStorage.setItem('nym_bio', setupBioVal.value.trim());
         }
 
-        // If nostr logged in, apply identity keys BEFORE connecting to relays
-        // so that relay subscriptions (especially DMs) use the correct pubkey.
+        // Apply identity keys before connecting so relay subscriptions (especially DMs) use the right pubkey.
         const nostrLoginActive = isNostrLoggedIn();
         let nostrPubkey = null, nostrSecretKey = null, nostrMethod = null;
         if (nostrLoginActive) {
@@ -5311,7 +5013,7 @@ async function initializeNym() {
                 if (nostrSecretKey) {
                     nym.privkey = nostrSecretKey;
                 } else {
-                    // Extension login — clear ephemeral privkey so signEvent() uses the extension
+                    // Extension login: clear the ephemeral privkey so signEvent() uses the extension.
                     nym.privkey = null;
                 }
                 nym.nostrLoginPubkey = nostrPubkey;
@@ -5320,27 +5022,22 @@ async function initializeNym() {
             }
         }
 
-        // Connect to relays
         await nym.connectToRelays();
 
-        // Apply cached shop items (styles/flairs) to the new ephemeral identity
         nym.applyCachedShopItemsToNewIdentity();
 
-        // Restore persisted group conversations and ephemeral keys for this keypair
         nym._loadGroupConversations();
         nym._loadEphemeralKeys();
         nym._loadBotAnonState();
         nym._loadLastPMSyncTime();
         nym._loadLeftGroups();
 
-        // Load synced settings from D1 (encrypted), falling back to relays
+        // Load synced settings from D1 (encrypted), falling back to relays.
         settingsLoad();
 
         if (isDeveloperLogin) {
-            // Developer login - load lightning address from their kind 0 profile
             await nym.loadLightningAddress();
         } else if (!nostrLoginActive) {
-            // Restore lightning address from global localStorage to new session
             const globalLnAddress = localStorage.getItem('nym_lightning_address_global');
             if (globalLnAddress) {
                 nym.lightningAddress = globalLnAddress;
@@ -5348,7 +5045,6 @@ async function initializeNym() {
                 nym.updateLightningAddressDisplay();
             }
 
-            // Apply avatar: either from setup modal upload or from localStorage
             if (setupAvatarUrl) {
                 nym.userAvatars.set(nym.pubkey, setupAvatarUrl);
                 nym.cacheAvatarImage(nym.pubkey, setupAvatarUrl);
@@ -5365,7 +5061,6 @@ async function initializeNym() {
                 }
             }
 
-            // Apply banner: either from setup modal upload or from localStorage
             if (setupBannerUrl) {
                 nym.userBanners.set(nym.pubkey, setupBannerUrl);
                 localStorage.setItem('nym_banner_url', setupBannerUrl);
@@ -5377,7 +5072,6 @@ async function initializeNym() {
                 }
             }
 
-            // Apply bio: either from setup modal or from localStorage
             const setupBioInput = document.getElementById('setupBioInput');
             if (setupBioInput && setupBioInput.value.trim()) {
                 nym.userBios.set(nym.pubkey, setupBioInput.value.trim());
@@ -5389,47 +5083,36 @@ async function initializeNym() {
                 }
             }
 
-            // Publish profile
             await nym.saveToNostrProfile();
 
-            // Re-publish profile after more relays connect
             setTimeout(() => { nym.saveToNostrProfile(); }, 5000);
         }
 
-        // Request notification permission
         if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
             Notification.requestPermission();
         }
 
-        // Restore button state
         enterBtn.disabled = false;
         enterBtn.innerHTML = originalBtnText;
 
-        // Close setup modal
         closeModal('setupModal');
 
-        // Now that relays are connected, fetch kind 0 profile and load settings
         if (nostrLoginActive && nostrPubkey) {
             applyNostrLogin(nostrPubkey, nostrSecretKey, nostrMethod);
         }
 
-        // Route to channel from URL if present
         await routeToUrlChannel();
 
-        // Start tutorial / send the Nymbot welcome once synced settings load,
-        // so a returning user logging in elsewhere isn't re-prompted.
+        // Wait for synced settings so a returning user isn't re-prompted.
         startOnboardingWhenHydrated();
 
     } catch (error) {
-        // Restore button state on error
         enterBtn.disabled = false;
         enterBtn.innerHTML = originalBtnText;
         window.showAppAlert('Failed to initialize: ' + error.message);
     }
 }
 
-// Disconnect/logout function
-// Nostr Login
 function isNymchatApp() {
     return /NymchatApp\//i.test(navigator.userAgent);
 }
@@ -5438,9 +5121,8 @@ function isNostrLoggedIn() {
     return localStorage.getItem('nym_nostr_login_method') !== null;
 }
 
-// Reset the Nostr login form (extension visibility, inputs, remote signer UI)
 function prepareNostrLoginUI() {
-    // Hide extension option when inside the NymchatApp webview shell
+    // Hide the extension option inside the NymchatApp webview shell.
     const extOption = document.getElementById('nostrLoginExtensionOption');
     const divider = document.getElementById('nostrLoginDivider');
     if (isNymchatApp()) {
@@ -5450,12 +5132,10 @@ function prepareNostrLoginUI() {
         if (extOption) extOption.style.display = '';
         if (divider) divider.style.display = '';
     }
-    // Reset state
     const nsecInput = document.getElementById('nostrLoginNsecInput');
     if (nsecInput) nsecInput.value = '';
     const errorEl = document.getElementById('nostrLoginError');
     if (errorEl) errorEl.style.display = 'none';
-    // Reset remote signer UI
     const rsConnect = document.getElementById('nostrLoginRemoteSignerConnect');
     if (rsConnect) rsConnect.style.display = 'none';
     const rsBtn = document.getElementById('nostrLoginRemoteSignerBtn');
@@ -5468,13 +5148,11 @@ function prepareNostrLoginUI() {
     if (bunkerInput) bunkerInput.value = '';
     const bunkerBtn = document.getElementById('nostrLoginBunkerConnectBtn');
     if (bunkerBtn) { bunkerBtn.disabled = false; bunkerBtn.textContent = 'Connect'; }
-    // The connection-string block is hidden by the bunker flow; restore it so a
-    // later nostrconnect (QR) attempt shows it again.
+    // Restore the block the bunker flow hid so a later nostrconnect attempt shows it.
     const connStringGroup = document.getElementById('nostrLoginConnectStringGroup');
     if (connStringGroup) connStringGroup.style.display = '';
 }
 
-// Switch between the "Sign up" and "Login" tabs in the setup/welcome modal
 function switchSetupTab(tab) {
     const isLogin = tab === 'login';
     document.querySelectorAll('#setupTabs .setup-tab').forEach(btn => {
@@ -5503,7 +5181,6 @@ async function openNostrLogin() {
         }
         return;
     }
-    // Post-setup (already connected): re-open the setup modal on the Login tab.
     // Show a close button so the user isn't trapped in the welcome screen.
     if (nym.connected) {
         const closeBtn = document.getElementById('setupCloseBtn');
@@ -5527,7 +5204,6 @@ async function nostrLoginWithExtension() {
         if (!pubkey || typeof pubkey !== 'string' || pubkey.length !== 64) {
             throw new Error('Extension returned an invalid public key.');
         }
-        // Store login state
         localStorage.setItem('nym_nostr_login_method', 'extension');
         localStorage.setItem('nym_nostr_login_pubkey', pubkey);
         try {
@@ -5535,7 +5211,6 @@ async function nostrLoginWithExtension() {
             localStorage.setItem('nym_nostr_login_npub', npub);
         } catch (_) { }
 
-        // Apply identity to current session
         applyNostrLogin(pubkey, null, 'extension');
 
         await finishNostrLogin('Logged in with Nostr extension.');
@@ -5559,7 +5234,7 @@ async function nostrLoginWithNsec() {
     }
     let secretKey, pubkey;
     try {
-        // Accepts either form — `nsec1…` or a bare 64-char hex private key.
+        // Accepts either `nsec1…` or a bare 64-char hex private key.
         secretKey = nym.decodeNsec(nsecInput);
         pubkey = window.NostrTools.getPublicKey(secretKey);
     } catch (err) {
@@ -5578,9 +5253,7 @@ async function nostrLoginImportKey(privkeyInput) {
 }
 
 async function nostrLoginApplyKey(nsecInput, secretKey, pubkey) {
-    // Store login state (nsec stored so we can sign events and sync settings).
-    // Always the canonical nsec, whichever form was pasted — it's what the
-    // reveal/copy UI in Settings hands back to the user.
+    // Always store the canonical nsec, since Settings reveals it back to the user.
     localStorage.setItem('nym_nostr_login_method', 'nsec');
     localStorage.setItem('nym_nostr_login_pubkey', pubkey);
     nymSecretSet('nym_nostr_login_nsec', nym.nsecFromPrivkeyInput(nsecInput) || nsecInput);
@@ -5594,7 +5267,6 @@ async function nostrLoginApplyKey(nsecInput, secretKey, pubkey) {
     await finishNostrLogin('Logged in with Nostr identity.');
 }
 
-// NIP-46 Remote Signer (Nostr Connect) Support
 let _nip46State = null; // holds active connection state during login flow
 
 function nostrLoginStartRemoteSigner() {
@@ -5605,39 +5277,32 @@ function nostrLoginStartRemoteSigner() {
     btn.textContent = 'Connecting...';
 
     try {
-        // Generate ephemeral keypair for NIP-46 communication
         const clientSecretKey = window.NostrTools.generateSecretKey();
         const clientPubkey = window.NostrTools.getPublicKey(clientSecretKey);
 
-        // Generate a random secret for the connection
         const secretBytes = new Uint8Array(32);
         crypto.getRandomValues(secretBytes);
         const secret = Array.from(secretBytes).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
 
-        // Use a well-known relay for NIP-46 communication
         const relayUrl = 'wss://relay.primal.net';
 
-        // Build nostrconnect:// URI per NIP-46
+        // Build nostrconnect:// URI per NIP-46.
         const params = new URLSearchParams();
         params.set('relay', relayUrl);
         params.set('metadata', JSON.stringify({ name: 'Nymchat' }));
         params.set('secret', secret);
         const connectURI = `nostrconnect://${clientPubkey}?${params.toString()}`;
 
-        // Show the connection UI
         btn.style.display = 'none';
         const connectDiv = document.getElementById('nostrLoginRemoteSignerConnect');
         connectDiv.classList.remove('nm-hidden');
         connectDiv.style.display = '';
-        // Ensure the connection-string block is visible (a prior bunker attempt
-        // may have hidden it).
+        // A prior bunker attempt may have hidden the connection-string block.
         const connStringGroup = document.getElementById('nostrLoginConnectStringGroup');
         if (connStringGroup) connStringGroup.style.display = '';
 
-        // Set connection string
         document.getElementById('nostrLoginBunkerURI').value = connectURI;
 
-        // Generate QR code
         const qrContainer = document.getElementById('nostrLoginRemoteSignerQR');
         qrContainer.innerHTML = '';
         (async () => {
@@ -5656,7 +5321,6 @@ function nostrLoginStartRemoteSigner() {
             }
         })();
 
-        // Store state for the connection flow
         _nip46State = {
             clientSecretKey,
             clientPubkey,
@@ -5669,7 +5333,6 @@ function nostrLoginStartRemoteSigner() {
             connected: false
         };
 
-        // Open WebSocket to relay and listen for the signer's connect response
         _nip46OpenRelay();
     } catch (err) {
         errorEl.textContent = 'Failed to start remote signer connection: ' + err.message;
@@ -5680,12 +5343,7 @@ function nostrLoginStartRemoteSigner() {
     }
 }
 
-// Resolve the WebSocket URL for the signer relay. In the default relay-proxy
-// pool mode the browser talks to relays through the app's proxy
-// (wss://<host>/api/relay?relay=...) rather than opening a raw connection, so
-// the NIP-46 socket must go through the same proxy or it may never connect in
-// deployments where direct relay connections are unavailable. Falls back to a
-// direct connection when the proxy isn't in use or a proxied attempt failed.
+// In proxy pool mode the NIP-46 socket goes through the app relay proxy; falls back to direct.
 function _nip46WsUrl(state) {
     if (state && state._useDirectRelay) return state.relayUrl;
     try {
@@ -5708,7 +5366,6 @@ function _nip46OpenRelay() {
 
     ws.onopen = () => {
         opened = true;
-        // Subscribe to kind 24133 events addressed to our client pubkey
         const filter = {
             kinds: [24133],
             '#p': [state.clientPubkey],
@@ -5733,14 +5390,12 @@ function _nip46OpenRelay() {
 
     ws.onclose = () => {
         if (!_nip46State || _nip46State.connected) return;
-        // A proxied socket that never opened means the proxy couldn't reach the
-        // signer relay — retry once directly before the normal reconnect loop.
+        // A proxied socket that never opened means the proxy couldn't reach the signer relay, so retry directly once.
         if (usingProxy && !opened && !_nip46State._useDirectRelay) {
             _nip46State._useDirectRelay = true;
             _nip46OpenRelay();
             return;
         }
-        // Reconnect if still waiting for signer
         setTimeout(() => {
             if (_nip46State && !_nip46State.connected) {
                 _nip46OpenRelay();
@@ -5749,8 +5404,7 @@ function _nip46OpenRelay() {
     };
 }
 
-// Throttle repeated "authorize in your signer app" prompts so a single group
-// send (which fans out one signer request per member) can't spam the timeline.
+// Throttle "authorize in your signer app" prompts, since group sends fan out one request per member.
 let _nip46AuthPromptTs = 0;
 function _nip46NotifyAuthNeeded(url) {
     try {
@@ -5772,7 +5426,6 @@ async function _nip46HandleEvent(event) {
 
     try {
         if (!window.NostrTools.verifyEvent(event)) return;
-        // Decrypt the NIP-44 encrypted content from the remote signer
         const { nip44 } = window.NostrTools;
         const ck = nip44.getConversationKey(state.clientSecretKey, event.pubkey);
         const decrypted = nip44.decrypt(event.content, ck);
@@ -5780,22 +5433,14 @@ async function _nip46HandleEvent(event) {
 
         if (response.result === 'auth_url') {
             if (!state.remotePubkey || event.pubkey !== state.remotePubkey) return;
-            // The signer needs the user to authorize this request before it will
-            // service it (common with Amber / nsecbunker the first time a given
-            // permission — sign_event, nip44_encrypt, nip44_decrypt — is used).
-            // The signer keeps the request queued on its side and sends the real
-            // result once approved, so we must NOT settle the pending promise
-            // here — just surface the auth URL and keep waiting.
+            // The signer queues the request until approved, so don't settle here; surface the auth URL and wait.
             const rawUrl = (response.error && /^https?:\/\//i.test(response.error)) ? response.error : null;
             const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
             if (statusEl) {
                 const safeUrl = rawUrl ? rawUrl.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' })[m]) : '#';
                 statusEl.innerHTML = `Signer requires authorization. <a href="${safeUrl}" target="_blank" rel="noopener" class="nm-secondary">Open auth page</a>`;
             } else {
-                // Post-login (e.g. sending a PM or group message) the login modal
-                // is gone, so there's no status element. Without a prompt the
-                // send would appear to hang until timeout — tell the user to
-                // approve the request in their signer app.
+                // Post-login there's no status element, so tell the user to approve in their signer app.
                 _nip46NotifyAuthNeeded(rawUrl);
             }
             return;
@@ -5828,10 +5473,7 @@ async function _nip46HandleEvent(event) {
         }
 
         if (response.id) {
-            // Response to a pending request (sign_event, nip44_encrypt/decrypt).
-            // Settle on either a result OR an error so callers fail fast instead
-            // of hanging until the 60s timeout — important for PM/group sends,
-            // which fan out one signer request per recipient.
+            // Settle on a result or an error so callers fail fast instead of waiting out the 60s timeout.
             const pending = state.pendingRequests.get(response.id);
             if (pending && (response.result !== undefined || response.error)) {
                 state.pendingRequests.delete(response.id);
@@ -5855,17 +5497,14 @@ async function _nip46CompleteLogin(remotePubkey) {
     if (statusEl) statusEl.textContent = 'Connected! Fetching public key...';
 
     try {
-        // Request the signer's public key via get_public_key
         const pubkey = await _nip46SendRequest('get_public_key', []);
 
         if (!pubkey || typeof pubkey !== 'string' || pubkey.length !== 64) {
             throw new Error('Remote signer returned an invalid public key.');
         }
 
-        // Store login state
         localStorage.setItem('nym_nostr_login_method', 'nip46');
         localStorage.setItem('nym_nostr_login_pubkey', pubkey);
-        // Store NIP-46 connection details for session restoration
         nymSecretSet('nym_nip46_client_secret', Array.from(state.clientSecretKey).map(b => b.toString(16).padStart(2, '0')).join(''));
         localStorage.setItem('nym_nip46_remote_pubkey', remotePubkey);
         localStorage.setItem('nym_nip46_relay', state.relayUrl);
@@ -5874,10 +5513,9 @@ async function _nip46CompleteLogin(remotePubkey) {
             localStorage.setItem('nym_nostr_login_npub', npub);
         } catch (_) { }
 
-        // Close the subscription but keep the WebSocket alive for signing
+        // Close the subscription but keep the WebSocket alive for signing.
         if (state.ws && state.ws.readyState === WebSocket.OPEN) {
             state.ws.send(JSON.stringify(['CLOSE', state.subId]));
-            // Resubscribe with a persistent filter for ongoing NIP-46 communication
             const persistentSubId = 'nip46-session-' + Date.now();
             state.subId = persistentSubId;
             state.ws.send(JSON.stringify(['REQ', persistentSubId, {
@@ -5887,7 +5525,6 @@ async function _nip46CompleteLogin(remotePubkey) {
             }]));
         }
 
-        // Apply identity to current session (no local secret key)
         applyNostrLogin(pubkey, null, 'nip46');
 
         await finishNostrLogin('Logged in with remote signer (NIP-46).');
@@ -5899,9 +5536,7 @@ async function _nip46CompleteLogin(remotePubkey) {
     }
 }
 
-// Wait (up to ~timeoutMs) for the signer WebSocket to be open and the remote
-// pubkey to be known. On a page reload the session is restored asynchronously,
-// so a PM/group action fired right away would otherwise fail instantly.
+// After a reload the session restores asynchronously, so wait for it rather than failing instantly.
 async function _nip46WaitReady(timeoutMs = 8000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -5919,7 +5554,6 @@ async function _nip46SendRequest(method, params) {
         return Promise.reject(new Error('NIP-46 remote signer not connected'));
     }
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-        // Socket may still be (re)connecting after a reload — give it a moment.
         const ready = await _nip46WaitReady();
         state = _nip46State;
         if (!ready || !state || !state.ws || state.ws.readyState !== WebSocket.OPEN || !state.remotePubkey) {
@@ -5930,12 +5564,10 @@ async function _nip46SendRequest(method, params) {
     const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
     const request = JSON.stringify({ id, method, params });
 
-    // Encrypt with NIP-44 to the remote signer
     const { nip44 } = window.NostrTools;
     const ck = nip44.getConversationKey(state.clientSecretKey, state.remotePubkey);
     const encrypted = nip44.encrypt(request, ck);
 
-    // Build and sign the event with our ephemeral client key
     const event = {
         kind: 24133,
         created_at: Math.floor(Date.now() / 1000),
@@ -5949,7 +5581,7 @@ async function _nip46SendRequest(method, params) {
 
     return new Promise((resolve, reject) => {
         state.pendingRequests.set(id, { resolve, reject });
-        // Timeout after 60 seconds (remote signer may prompt user)
+        // Timeout after 60 seconds (remote signer may prompt user).
         setTimeout(() => {
             if (state.pendingRequests.has(id)) {
                 state.pendingRequests.delete(id);
@@ -5959,7 +5591,6 @@ async function _nip46SendRequest(method, params) {
     });
 }
 
-// Send a sign_event request to the remote signer
 async function _nip46SignEvent(event) {
     const unsigned = {
         kind: event.kind,
@@ -5969,17 +5600,15 @@ async function _nip46SignEvent(event) {
         pubkey: event.pubkey || localStorage.getItem('nym_nostr_login_pubkey')
     };
     const resultStr = await _nip46SendRequest('sign_event', [JSON.stringify(unsigned)]);
-    // The result is the signed event JSON string
+    // The result is the signed event JSON string.
     const signed = typeof resultStr === 'string' ? JSON.parse(resultStr) : resultStr;
     return signed;
 }
 
-// NIP-44 encrypt via remote signer
 async function _nip46Encrypt(thirdPartyPubkey, plaintext) {
     return await _nip46SendRequest('nip44_encrypt', [thirdPartyPubkey, plaintext]);
 }
 
-// NIP-44 decrypt via remote signer
 async function _nip46Decrypt(thirdPartyPubkey, ciphertext) {
     return await _nip46SendRequest('nip44_decrypt', [thirdPartyPubkey, ciphertext]);
 }
@@ -5994,21 +5623,18 @@ function nostrLoginCopyBunkerURI() {
             setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
         }
     }).catch(() => {
-        // Fallback: select and copy
         input.select();
         document.execCommand('copy');
     });
 }
 
 function nostrLoginCancelRemoteSigner() {
-    // Clean up WebSocket and state
     if (_nip46State) {
         if (_nip46State.ws) {
             try { _nip46State.ws.close(); } catch (_) { }
         }
         _nip46State = null;
     }
-    // Reset UI
     document.getElementById('nostrLoginRemoteSignerConnect').style.display = 'none';
     document.getElementById('nostrLoginRemoteSignerBtn').style.display = '';
     document.getElementById('nostrLoginRemoteSignerBtn').disabled = false;
@@ -6019,9 +5645,7 @@ function nostrLoginCancelRemoteSigner() {
     if (connStringGroup) connStringGroup.style.display = '';
 }
 
-// Parse a bunker:// connection string (NIP-46, signer-initiated flow):
-//   bunker://<remote-signer-pubkey-hex>?relay=wss://...&relay=...&secret=...
-// Returns { remotePubkey, relays, secret } or null if malformed.
+// bunker://<remote-signer-pubkey-hex>?relay=wss://...&relay=...&secret=...; returns { remotePubkey, relays, secret } or null.
 function _parseBunkerUri(uri) {
     if (typeof uri !== 'string' || !/^bunker:\/\//i.test(uri.trim())) return null;
     const rest = uri.trim().slice('bunker://'.length);
@@ -6043,9 +5667,7 @@ function _parseBunkerUri(uri) {
     return { remotePubkey, relays, secret };
 }
 
-// Connect to a signer via a pasted bunker:// string. Unlike the nostrconnect://
-// flow (where the signer initiates), here the client knows the signer's pubkey
-// and relay up front and sends the connect request itself.
+// Signer-initiated flow: we know the signer's pubkey and relay and send the connect request ourselves.
 async function nostrLoginConnectBunker() {
     const errorEl = document.getElementById('nostrLoginError');
     if (errorEl) errorEl.style.display = 'none';
@@ -6064,7 +5686,6 @@ async function nostrLoginConnectBunker() {
     if (btn) { btn.disabled = true; btn.textContent = 'Connecting...'; }
 
     try {
-        // Ephemeral client keypair for NIP-46 transport.
         const clientSecretKey = window.NostrTools.generateSecretKey();
         const clientPubkey = window.NostrTools.getPublicKey(clientSecretKey);
 
@@ -6081,9 +5702,7 @@ async function nostrLoginConnectBunker() {
             isBunker: true
         };
 
-        // Surface progress in the shared remote-signer status area. The bunker
-        // flow doesn't generate an outgoing connection string / QR, so hide that
-        // block and just show the status line.
+        // The bunker flow has no outgoing connection string or QR, so hide that block.
         const connectDiv = document.getElementById('nostrLoginRemoteSignerConnect');
         if (connectDiv) { connectDiv.classList.remove('nm-hidden'); connectDiv.style.display = ''; }
         const connStringGroup = document.getElementById('nostrLoginConnectStringGroup');
@@ -6093,15 +5712,9 @@ async function nostrLoginConnectBunker() {
         const statusEl = document.getElementById('nostrLoginRemoteSignerStatus');
         if (statusEl) statusEl.textContent = 'Connecting to remote signer...';
 
-        // Open the (proxy-aware) relay socket and subscribe for responses.
         _nip46OpenRelay();
 
-        // We initiate the handshake. _nip46SendRequest waits for the socket to be
-        // ready; the signer may respond with auth_url first (surfaced by the
-        // handler) and the real ack resolves this once the user approves. Only
-        // include the secret when the bunker URI carried one (Amber's bunker://
-        // string often omits it) — sending an empty string can read as a
-        // mismatched secret to some signers.
+        // Only include the secret when the bunker URI carried one; an empty string can read as a mismatch.
         const connectParams = parsed.secret ? [parsed.remotePubkey, parsed.secret] : [parsed.remotePubkey];
         await _nip46SendRequest('connect', connectParams);
 
@@ -6121,7 +5734,6 @@ async function nostrLoginConnectBunker() {
     }
 }
 
-// Restore NIP-46 session from localStorage on page reload
 async function _nip46RestoreSession() {
     const clientSecretHex = nymSecretGet('nym_nip46_client_secret');
     const remotePubkey = localStorage.getItem('nym_nip46_remote_pubkey');
@@ -6129,7 +5741,6 @@ async function _nip46RestoreSession() {
     if (!clientSecretHex || !remotePubkey || !relayUrl) return false;
 
     try {
-        // Reconstruct the secret key from hex
         const clientSecretKey = new Uint8Array(clientSecretHex.match(/.{1,2}/g).map(b => parseInt(b, 16)));
         const clientPubkey = window.NostrTools.getPublicKey(clientSecretKey);
 
@@ -6145,8 +5756,7 @@ async function _nip46RestoreSession() {
             connected: true
         };
 
-        // Open WebSocket for ongoing signing requests — routed through the app
-        // relay proxy when pool mode is active (see _nip46WsUrl).
+        // Routed through the app relay proxy in pool mode (see _nip46WsUrl).
         const ws = new WebSocket(_nip46WsUrl(_nip46State));
         _nip46State.ws = ws;
 
@@ -6168,7 +5778,6 @@ async function _nip46RestoreSession() {
         };
 
         ws.onclose = () => {
-            // Reconnect if session is still active
             if (_nip46State && _nip46State.connected) {
                 setTimeout(() => {
                     if (_nip46State && _nip46State.connected) {
@@ -6193,45 +5802,38 @@ async function nostrLoginBypassSetup() {
     await initializeNym();
 }
 
-// Shared completion after a successful Nostr login from the setup/welcome modal.
-// During the initial welcome flow (not yet connected) it runs the full setup
-// bypass; post-setup (sidebar easter egg) it just closes the modal.
+// Runs the full setup bypass during the welcome flow; post-setup it just closes the modal.
 async function finishNostrLogin(message) {
     const closeBtn = document.getElementById('setupCloseBtn');
     if (closeBtn) closeBtn.classList.add('nm-hidden');
     if (!nym.connected) {
-        // initializeNym() closes the setup modal once relays are connected
+        // initializeNym() closes the setup modal once relays are connected.
         await nostrLoginBypassSetup();
     } else {
         closeModal('setupModal');
-        // Return the welcome modal to the Sign up tab for next time
         switchSetupTab('signup');
         nym.displaySystemMessage(message);
     }
 }
 
 function applyNostrLogin(pubkey, secretKey, method) {
-    // Store on the nym instance for settings sync
     nym.nostrLoginPubkey = pubkey;
     nym.nostrLoginSecretKey = secretKey; // null for extension
     nym.nostrLoginMethod = method;
 
-    // Clear ephemeral profile data so it doesn't overwrite the persistent identity
     localStorage.removeItem('nym_avatar_url');
     localStorage.removeItem('nym_banner_url');
 
-    // Switch the active keypair to the persistent identity
     const identitySwitched = nym.pubkey !== pubkey;
     if (secretKey) {
         nym.privkey = secretKey;
     } else {
-        // Extension login — clear ephemeral privkey so signEvent() uses the extension
+        // Extension login: clear the ephemeral privkey so signEvent() uses the extension.
         nym.privkey = null;
     }
     nym.pubkey = pubkey;
     if (identitySwitched && typeof nym.pqResetIdentityState === 'function') nym.pqResetIdentityState();
 
-    // Helper to update sidebar with profile name/avatar and load lightning address
     function updateSidebarFromProfile() {
         const user = nym.users.get(pubkey);
         if (user && user.nym) {
@@ -6241,10 +5843,8 @@ function applyNostrLogin(pubkey, secretKey, method) {
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
         }
         nym.updateSidebarAvatar();
-        // Pull lightning address from the kind 0 profile into settings
         nym.loadLightningAddress();
 
-        // Cache profile data for instant restore on next refresh
         const avatarUrl = nym.userAvatars.get(pubkey);
         if (nym.nym || avatarUrl) {
             try {
@@ -6258,7 +5858,6 @@ function applyNostrLogin(pubkey, secretKey, method) {
 
     nym.fetchProfileDirect(pubkey).then(() => {
         updateSidebarFromProfile();
-        // If profile wasn't found on first try, retry after more relays have connected
         if (!nym.hasResolvedNym(pubkey)) {
             setTimeout(() => {
                 nym.fetchProfileDirect(pubkey).then(() => {
@@ -6270,7 +5869,6 @@ function applyNostrLogin(pubkey, secretKey, method) {
         }
     }).catch(() => {
         updateSidebarFromProfile();
-        // Retry after delay on failure
         setTimeout(() => {
             nym.fetchProfileDirect(pubkey).then(() => {
                 updateSidebarFromProfile();
@@ -6280,29 +5878,24 @@ function applyNostrLogin(pubkey, secretKey, method) {
         }, 3000);
     });
 
-    // The batched profile path above is D1-only in relay proxy pool mode, so a
-    // Nostr user new to Nymchat (kind 0 on relays but not yet in D1) wouldn't get
-    // their nickname/avatar. Do a one-shot relay fetch for our own profile that
-    // works in both modes and mirrors the result to D1.
+    // The batched profile path is D1-only in pool mode, so fetch our own profile from relays and mirror it to D1.
     if (typeof nym.fetchOwnProfileFromRelaysOneShot === 'function') {
         nym._ownProfileFetchRetries = 0;
         nym.fetchOwnProfileFromRelaysOneShot().catch(() => { });
     }
 
-    // Reload blur setting now that pubkey is known
     nym.blurOthersImages = nym.loadImageBlurSettings();
 
-    // Restore persisted groups and ephemeral keys for this identity before relay history arrives
+    // Restore groups and ephemeral keys before relay history arrives.
     nym._loadGroupConversations();
     nym._loadEphemeralKeys();
     nym._loadBotAnonState();
     nym._loadLastPMSyncTime();
     nym._loadLeftGroups();
 
-    // Update notification badge from persisted history
     nym._updateNotificationBadge();
 
-    // Update isOwn for messages that were loaded before this identity was applied
+    // Update isOwn for messages loaded before this identity was applied.
     nym.messages.forEach(channelMessages => {
         channelMessages.forEach(msg => {
             const shouldBeOwn = msg.pubkey === pubkey;
@@ -6325,21 +5918,15 @@ function applyNostrLogin(pubkey, secretKey, method) {
         });
     });
 
-    // Refresh relay subscriptions with the new pubkey so purchase/flair
-    // events for this identity flow through the main event handler
+    // Refresh subscriptions so purchase/flair events for this identity reach the main handler.
     nym.resubscribeAllRelays();
 
-    // Load settings (D1-first, relay fallback) and shop purchases for this identity
     settingsLoad();
     nym.loadShopFromServer();
-    // Restore PMs archived in D1 so private messages reappear across devices.
     if (typeof nym.pmRestoreFromD1 === 'function') {
         nym.pmRestoreFromD1().catch(() => { });
     }
-    // Group messages other members sent are gift-wrapped to our per-group
-    // ephemeral keys (not our real pubkey), so pmRestoreFromD1 never sees them.
-    // Pull them from their ephemeral D1 inboxes — the keys were just loaded
-    // above — so group chats rehydrate like they do over relays.
+    // Group messages are wrapped to our per-group ephemeral keys, so pull those D1 inboxes too.
     if (typeof nym._recoverEphemeralHistory === 'function' &&
         typeof nym._getAllSelfEphemeralPubkeys === 'function') {
         const ephPks = nym._getAllSelfEphemeralPubkeys();
@@ -6355,11 +5942,9 @@ function nostrLogout() {
     nymSecretRemove('nym_nostr_login_nsec');
     localStorage.removeItem('nym_nostr_login_npub');
     localStorage.removeItem('nym_nostr_login_profile');
-    // Clean up NIP-46 remote signer state
     nymSecretRemove('nym_nip46_client_secret');
     localStorage.removeItem('nym_nip46_remote_pubkey');
     localStorage.removeItem('nym_nip46_relay');
-    // Wipe profile fields that aren't pubkey-scoped
     localStorage.removeItem('nym_bio');
     localStorage.removeItem('nym_lightning_address_global');
     localStorage.removeItem('nym_avatar_url');
@@ -6387,8 +5972,7 @@ function nostrLogout() {
 }
 
 
-// Defer the tutorial and the proactive Nymbot welcome PM until synced settings
-// have loaded, then let each self-gate on its (now device-spanning) flag.
+// Defer the tutorial and Nymbot welcome until synced settings load; each self-gates on its flag.
 function startOnboardingWhenHydrated() {
     const run = () => {
         window.maybeStartTutorial(false);
@@ -6401,7 +5985,6 @@ function startOnboardingWhenHydrated() {
 async function nostrSettingsSave() {
     if (nym && nym._applyingRemoteSettings) return;
     if (nym && nym._restoreFromD1Depth > 0) return;
-    // For ephemeral users, delegate to the instance method which handles all modes
     if (!isNostrLoggedIn()) {
         if (nym && typeof nym.saveSyncedSettings === 'function') {
             nym.saveSyncedSettings();
@@ -6417,10 +6000,7 @@ async function nostrSettingsSave() {
     }
 }
 
-// Load settings from D1 first, falling back to the Nostr
-// gift-wrap load only when D1 can't be read or has no record yet.
-// How many times a D1 settings read is retried before the session gives up,
-// and the backoff between attempts (2s, 4s, 8s, 16s).
+// D1 settings read retry count and backoff (2s, 4s, 8s, 16s).
 const SETTINGS_LOAD_MAX_RETRIES = 4;
 
 async function settingsLoad(attempt = 0) {
@@ -6430,18 +6010,13 @@ async function settingsLoad(attempt = 0) {
     }
     if (status !== 'loaded') nostrSettingsLoad();
 
-    // Under the relay proxy, D1 is the only source — nostrSettingsLoad returns
-    // immediately. So a read that never answered leaves memory holding
-    // DEFAULTS, and arming the hydration net on that would declare those
-    // defaults loaded and let the next save write them over the rows we never
-    // read. Retry instead; saving stays blocked in the meantime.
+    // Under the relay proxy D1 is the only source, so retry rather than let defaults overwrite unread rows.
     if (status === 'failed' && nym && nym.useRelayProxy) {
         if (attempt < SETTINGS_LOAD_MAX_RETRIES) {
             setTimeout(() => settingsLoad(attempt + 1), 2000 * Math.pow(2, attempt));
             return;
         }
-        // Out of retries. The session runs on defaults, which is survivable —
-        // persisting them is not.
+        // Out of retries: run on defaults, but never persist them.
         nym._settingsRestoreUnreadable = true;
         return;
     }
@@ -6453,9 +6028,7 @@ async function settingsLoad(attempt = 0) {
 }
 
 function nostrSettingsLoad() {
-    // In relay-proxy mode the D1 database is the source of truth for settings,
-    // so we don't subscribe to nym-sync wraps over relays — only do so in
-    // direct connection mode.
+    // In relay-proxy mode D1 is the source of truth, so only subscribe to nym-sync wraps in direct mode.
     if (nym && nym.useRelayProxy) return;
 
     const pubkey = isNostrLoggedIn()
@@ -6464,8 +6037,7 @@ function nostrSettingsLoad() {
     if (!pubkey) return;
 
     const subId = Math.random().toString(36).substring(2);
-    // Match every settings gift wrap via the shared 'k' marker so dynamic
-    // per-group and per-section d-tags are all covered by one filter.
+    // Match via the shared 'k' marker so dynamic per-group and per-section d-tags share one filter.
     const filter = {
         kinds: [1059],
         '#p': [pubkey],
@@ -6473,11 +6045,9 @@ function nostrSettingsLoad() {
         limit: 200
     };
 
-    // Buffer settings events during the initial REQ
     nym._settingsLoadBuffer = nym._settingsLoadBuffer || new Map();
     nym._settingsLoadBuffer.set(subId, { newestSettings: null, newestTs: 0 });
 
-    // Direct relay mode: try to load from any connected relay
     nym.relayPool.forEach((relay, url) => {
         if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) return;
 
@@ -6497,7 +6067,6 @@ function nostrSettingsLoad() {
         relay.ws.addEventListener('message', handler);
         relay.ws.send(JSON.stringify(['REQ', subId, filter]));
 
-        // Cleanup after 10s
         setTimeout(() => {
             relay.ws.removeEventListener('message', handler);
             try { relay.ws.send(JSON.stringify(['CLOSE', subId])); } catch (_) { }
@@ -6508,14 +6077,12 @@ function nostrSettingsLoad() {
 
 async function applyNostrSettingsAdditive(s) {
     if (!s || typeof s !== 'object') return;
-    // Depth counter, not save/restore: these applies run concurrently
-    // (one per incoming gift wrap), so a captured boolean would corrupt.
+    // Depth counter, not save/restore: these applies run concurrently.
     nym._applyRemoteDepth = (nym._applyRemoteDepth || 0) + 1;
     nym._applyingRemoteSettings = true;
     try {
 
-    // Cross-device seen-notification keys: merge additively, then retroactively
-    // mark any matching local entries viewed so the badge clears.
+    // Merge seen-notification keys additively, then mark matching local entries viewed.
     if (s.seenNotifications && typeof s.seenNotifications === 'object') {
         try {
             if (!nym.seenNotificationKeys) nym.seenNotificationKeys = new Map();
@@ -6546,7 +6113,6 @@ async function applyNostrSettingsAdditive(s) {
         } catch (_) { }
     }
 
-    // Notification read-state
     if (typeof s.notificationLastReadTime === 'number'
         && s.notificationLastReadTime > (nym.notificationLastReadTime || 0)) {
         nym.notificationLastReadTime = s.notificationLastReadTime;
@@ -6570,9 +6136,7 @@ async function applyNostrSettingsAdditive(s) {
         if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
     }
 
-    // Cross-device notification sync. Match on eventId when available,
-    // otherwise on (senderPubkey, body, ~minute timestamp) so duplicates
-    // across devices and live/replay paths collapse into one entry.
+    // Match on eventId, else on (senderPubkey, body, ~minute timestamp), so duplicates collapse.
     if (Array.isArray(s.notificationHistory) && s.notificationHistory.length > 0) {
         try {
             const cutoff = Date.now() - 24 * 60 * 60 * 1000;
@@ -6596,13 +6160,7 @@ async function applyNostrSettingsAdditive(s) {
             let seenAdded = false;
             for (const n of s.notificationHistory) {
                 if (!n || typeof n.timestamp !== 'number') continue;
-                // A device with a fast clock (or one running a build without the
-                // clamp) syncs future-dated entries; adopting one pins it to the
-                // top of this device's bell too. Clamp to the ORIGIN device's
-                // recorded observation time, which rides along in the payload —
-                // clamping to our own "now" would re-stamp the entry later on
-                // every sync round, which is the re-stamping loop this whole
-                // fix exists to end.
+                // Clamp future-dated entries to the origin device's observation time, not our own now.
                 if (typeof n.receivedAt === 'number' && n.receivedAt > 0
                     && n.timestamp > n.receivedAt) {
                     n.timestamp = n.receivedAt;
@@ -6625,14 +6183,11 @@ async function applyNostrSettingsAdditive(s) {
                 }
                 const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
                 if (pk && nym.blockedUsers && nym.blockedUsers.has(pk)) continue;
-                // Don't re-add a missed-call entry for a call that's been
-                // answered (here or elsewhere); the answered status is the tombstone.
+                // The answered status is the tombstone for a missed-call entry.
                 const evId = n.eventId || n.channelInfo?.eventId || '';
                 if (evId.indexOf('missed-call-') === 0 && typeof nym._callStatus === 'function'
                     && nym._callStatus(evId.slice(12)) === 'answered') continue;
-                // Use receivedAt when present (set on the device that observed
-                // the notification) so synced notifications keep their original
-                // unread status. Fall back to timestamp for legacy entries.
+                // Use receivedAt when present so synced notifications keep their unread status.
                 const observedAt = (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : n.timestamp;
                 const viewedFromLastRead = observedAt <= (nym.notificationLastReadTime || 0);
                 const entry = {
@@ -6705,7 +6260,6 @@ async function applyNostrSettingsAdditive(s) {
         }
     }
 
-    // Group conversations
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
             // A group the user has left must never come back from synced data.
@@ -6732,8 +6286,6 @@ async function applyNostrSettingsAdditive(s) {
                     g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
                 }
             } else {
-                // Merge role data so a moderator change made on another device
-                // becomes visible without a full reload.
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (!g.createdBy && group.createdBy) g.createdBy = group.createdBy;
@@ -6746,9 +6298,7 @@ async function applyNostrSettingsAdditive(s) {
                         if (group.allowMemberInvites !== undefined) g.allowMemberInvites = group.allowMemberInvites !== false;
                         g.inviteEnabled = group.inviteEnabled === true;
                         g.inviteEpoch = group.inviteEpoch || 0;
-                        // Absence-safe like allowMemberInvites: a blob from an
-                        // older client has no shareHistory key and must not
-                        // flip the owner's setting off.
+                        // Absence-safe: older clients' blobs have no shareHistory key.
                         if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
@@ -6811,8 +6361,7 @@ async function applyNostrSettingsAdditive(s) {
         } catch (_) { }
     }
 
-    // Ephemeral keys — always merge from every settings event so no device's
-    // keys are silently dropped when events arrive out of timestamp order
+    // Always merge so no device's keys are dropped when events arrive out of order.
     if (s.groupEphemeralKeys && typeof s.groupEphemeralKeys === 'object') {
         try {
             const beforePks = new Set(nym._getAllKnownEphemeralPubkeys());
@@ -6829,8 +6378,7 @@ async function applyNostrSettingsAdditive(s) {
         } catch (_) { }
     }
 
-    // Group message history — always merge from every settings event so older
-    // device saves that contain unique messages are never discarded
+    // Always merge so older device saves with unique messages are never discarded.
     if (s.groupMessageHistory && typeof s.groupMessageHistory === 'object') {
         try {
             const refreshedConvKeys = new Set();
@@ -6896,77 +6444,65 @@ async function applyNostrSettings(s) {
     nym._applyingRemoteSettings = true;
     try {
 
-    // Tutorial / bot-welcome state — only ever flip on, so once a user has
-    // seen them on any device they stay suppressed everywhere.
+    // Only ever flip on, so once seen on any device they stay suppressed everywhere.
     if (s.tutorialSeen === true) {
         try { localStorage.setItem('nym_tutorial_seen', 'true'); } catch (_) { }
     }
     if (s.botPmWelcomed === true) {
         try { localStorage.setItem('nym_botpm_welcomed', 'true'); } catch (_) { }
     }
-    // ?clear marker is monotonic: take the newest clear time seen on any
-    // device so a cleared Nymbot thread stays cleared everywhere.
+    // ?clear marker is monotonic: take the newest clear time seen on any device.
     if (typeof s.botPmClearedAt === 'number' && s.botPmClearedAt > 0 &&
         typeof nym._getBotPmClearedAt === 'function' &&
         s.botPmClearedAt > nym._getBotPmClearedAt()) {
         try { nym._setBotPmClearedAt(s.botPmClearedAt); } catch (_) { }
     }
 
-    // Cross-device preference for identity-encryption-at-rest
     if (s.encryptAtRestPreferred === true) {
         try { localStorage.setItem('nym_encrypt_at_rest_pref', '1'); } catch (_) { }
     }
 
-    // Theme
     if (s.theme && typeof s.theme === 'string') {
         nym.settings.theme = s.theme;
         nym.applyTheme(s.theme);
         localStorage.setItem('nym_theme', s.theme);
     }
 
-    // Color mode
     if (s.colorMode) {
         localStorage.setItem('nym_color_mode', s.colorMode);
         nym.applyColorMode();
     }
 
-    // Sound
     if (s.sound) {
         nym.settings.sound = s.sound;
         localStorage.setItem('nym_sound', s.sound);
     }
 
-    // Autoscroll
     if (typeof s.autoscroll === 'boolean') {
         nym.settings.autoscroll = s.autoscroll;
         localStorage.setItem('nym_autoscroll', String(s.autoscroll));
     }
 
-    // Timestamps
     if (typeof s.showTimestamps === 'boolean') {
         nym.settings.showTimestamps = s.showTimestamps;
         localStorage.setItem('nym_timestamps', String(s.showTimestamps));
     }
 
-    // Time format
     if (s.timeFormat) {
         nym.settings.timeFormat = s.timeFormat;
         localStorage.setItem('nym_time_format', s.timeFormat);
     }
 
-    // Date format
     if (s.dateFormat) {
         nym.settings.dateFormat = s.dateFormat;
         localStorage.setItem('nym_date_format', s.dateFormat);
     }
 
-    // Sort by proximity
     if (typeof s.sortByProximity === 'boolean') {
         nym.settings.sortByProximity = s.sortByProximity;
         localStorage.setItem('nym_sort_proximity', String(s.sortByProximity));
     }
 
-    // DM forward secrecy
     if (typeof s.dmForwardSecrecyEnabled === 'boolean') {
         nym.settings.dmForwardSecrecyEnabled = s.dmForwardSecrecyEnabled;
         localStorage.setItem('nym_dm_fwdsec_enabled', String(s.dmForwardSecrecyEnabled));
@@ -7003,13 +6539,11 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_typing_indicators_enabled', String(s.typingIndicatorsEnabled));
     }
 
-    // Show status indicators
     if (typeof s.showStatus === 'boolean' || s.showStatus === 'friends') {
         nym.settings.showStatus = s.showStatus;
         localStorage.setItem('nym_show_status', String(s.showStatus));
     }
 
-    // Nick style
     if (s.nickStyle) {
         nym.settings.nickStyle = s.nickStyle;
         localStorage.setItem('nym_nick_style', s.nickStyle);
@@ -7037,7 +6571,6 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_swipe_react_emoji', s.swipeReactEmoji);
     }
 
-    // Wallpaper
     if (s.wallpaperCustomUrl) {
         localStorage.setItem('nym_wallpaper_custom_url', s.wallpaperCustomUrl);
     }
@@ -7058,7 +6591,6 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Chat layout
     if (s.chatLayout) {
         nym.settings.chatLayout = s.chatLayout;
         localStorage.setItem('nym_chat_layout', s.chatLayout);
@@ -7067,13 +6599,11 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Saved column layout (applied when chat view mode is columns)
     if (Array.isArray(s.columnsLayout)) {
         nym.columnsLayout = s.columnsLayout;
         try { localStorage.setItem('nym_columns_layout', JSON.stringify(s.columnsLayout)); } catch (e) { }
     }
 
-    // Message threads on/off
     if (typeof s.threadsEnabled === 'boolean') {
         const prevThreads = nym.settings.threadsEnabled !== false;
         nym.settings.threadsEnabled = s.threadsEnabled;
@@ -7085,7 +6615,6 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Chat view mode (single vs columns)
     if (s.chatViewMode === 'single' || s.chatViewMode === 'columns') {
         nym.settings.chatViewMode = s.chatViewMode;
         localStorage.setItem('nym_chat_view_mode', s.chatViewMode);
@@ -7095,13 +6624,11 @@ async function applyNostrSettings(s) {
         if (typeof nym.applyChatViewMode === 'function') nym.applyChatViewMode(s.chatViewMode);
     }
 
-    // Lightning address
     if (s.lightningAddress) {
         localStorage.setItem('nym_lightning_address_global', s.lightningAddress);
         nym.lightningAddress = s.lightningAddress;
     }
 
-    // PoW difficulty
     if (typeof s.powDifficulty === 'number') {
         nym.powDifficulty = s.powDifficulty;
         nym.enablePow = normalizePowDifficulty(s.powDifficulty) > 0;
@@ -7118,13 +6645,12 @@ async function applyNostrSettings(s) {
         else nym.filterPacks = normalizeFilterPacks(s.filterPacks);
     }
 
-    // Hide non-pinned
     if (typeof s.hideNonPinned === 'boolean') {
         nym.hideNonPinned = s.hideNonPinned;
         localStorage.setItem('nym_hide_non_pinned', String(s.hideNonPinned));
     }
 
-    // Blur images (supports boolean or 'friends')
+    // Supports boolean or 'friends'.
     if (typeof s.blurOthersImages === 'boolean' || s.blurOthersImages === 'friends') {
         nym.blurOthersImages = s.blurOthersImages;
         localStorage.setItem('nym_image_blur', String(s.blurOthersImages));
@@ -7133,7 +6659,6 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Pinned landing channel
     if (s.pinnedLandingChannel && typeof s.pinnedLandingChannel === 'object') {
         const landing = s.pinnedLandingChannel.geohash === 'nym'
             ? { type: 'geohash', geohash: 'nymchat' }
@@ -7143,14 +6668,12 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_pinned_landing_channel', JSON.stringify(landing));
     }
 
-    // Text size
     if (typeof s.textSize === 'number' && s.textSize >= 12 && s.textSize <= 28) {
         nym.settings.textSize = s.textSize;
         localStorage.setItem('nym_text_size', String(s.textSize));
         document.documentElement.style.setProperty('--user-text-size', s.textSize + 'px');
     }
 
-    // Visual transparency
     if (typeof s.transparencyEnabled === 'boolean') {
         nym.settings.transparencyEnabled = s.transparencyEnabled;
         localStorage.setItem('nym_transparency_enabled', String(s.transparencyEnabled));
@@ -7165,15 +6688,12 @@ async function applyNostrSettings(s) {
         applyColumnsWallpaper(s.columnsWallpaper);
     }
 
-    // Low data mode
     if (typeof s.lowDataMode === 'boolean') {
         nym.settings.lowDataMode = s.lowDataMode;
         localStorage.setItem('nym_low_data_mode', String(s.lowDataMode));
     }
 
-    // Group chat & PM only mode — only apply navigation side-effects when
-    // the mode actually changes, to avoid kicking the user out of the
-    // channel they just navigated to (settings sync is async).
+    // Only apply navigation side effects when the mode actually changes; settings sync is async.
     if (typeof s.groupChatPMOnlyMode === 'boolean') {
         const changed = nym.settings.groupChatPMOnlyMode !== s.groupChatPMOnlyMode;
         nym.settings.groupChatPMOnlyMode = s.groupChatPMOnlyMode;
@@ -7183,25 +6703,20 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Pinned channels
     if (Array.isArray(s.pinnedChannels)) {
         nym.pinnedChannels = new Set(s.pinnedChannels);
         localStorage.setItem('nym_pinned_channels', JSON.stringify(s.pinnedChannels));
     }
 
-    // Blocked channels
     if (Array.isArray(s.blockedChannels)) {
         nym.blockedChannels = new Set(s.blockedChannels);
         localStorage.setItem('nym_blocked_channels', JSON.stringify(s.blockedChannels));
     }
 
-    // User joined channels
     if (Array.isArray(s.userJoinedChannels)) {
         // Migrate the legacy default channel key to the renamed default.
         const joined = [...new Set(s.userJoinedChannels.map(key => key === 'nym' ? 'nymchat' : key))];
-        // Bulk-guarded: this restores up to MAX_JOINED_CHANNELS rows, and
-        // addChannel's per-add pin/hidden sweeps make that O(n^2) in DOM
-        // queries — the multi-second blocked task on every settings restore.
+        // Bulk-guarded to avoid O(n^2) DOM sweeps from per-add refreshes.
         const addJoined = () => joined.forEach(key => {
             nym.userJoinedChannels.add(key);
             if (!nym.channels.has(key)) {
@@ -7221,7 +6736,6 @@ async function applyNostrSettings(s) {
         ));
     }
 
-    // Hidden channels
     if (Array.isArray(s.hiddenChannels)) {
         nym.hiddenChannels = new Set(s.hiddenChannels);
         localStorage.setItem('nym_hidden_channels', JSON.stringify(s.hiddenChannels));
@@ -7230,13 +6744,11 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Blocked users
     if (Array.isArray(s.blockedUsers)) {
         nym.blockedUsers = new Set(s.blockedUsers);
         localStorage.setItem('nym_blocked', JSON.stringify(s.blockedUsers));
     }
 
-    // Friends
     if (Array.isArray(s.friends)) {
         nym.friends = new Set(s.friends);
         localStorage.setItem('nym_friends', JSON.stringify(s.friends));
@@ -7246,13 +6758,11 @@ async function applyNostrSettings(s) {
         if (typeof nym.updateUserList === 'function') nym.updateUserList();
     }
 
-    // Accept PMs setting
     if (s.acceptPMs) {
         nym.settings.acceptPMs = s.acceptPMs;
         localStorage.setItem('nym_accept_pms', s.acceptPMs);
     }
 
-    // Accept calls setting
     if (s.acceptCalls) {
         nym.settings.acceptCalls = s.acceptCalls;
         localStorage.setItem('nym_accept_calls', s.acceptCalls);
@@ -7260,32 +6770,27 @@ async function applyNostrSettings(s) {
         if (acceptCallsSel) acceptCallsSel.value = s.acceptCalls;
     }
 
-    // Seen calls (cross-device call dedup)
     if (s.seenCalls && typeof nym._mergeSeenCalls === 'function') {
         nym._mergeSeenCalls(s.seenCalls);
     }
 
-    // Blocked keywords
     if (Array.isArray(s.blockedKeywords)) {
         nym.blockedKeywords = new Set(s.blockedKeywords);
         localStorage.setItem('nym_blocked_keywords', JSON.stringify(s.blockedKeywords));
     }
 
-    // Translation language
     if (typeof s.translateLanguage === 'string') {
         nym.settings.translateLanguage = s.translateLanguage;
         localStorage.setItem('nym_translate_language', s.translateLanguage);
         if (typeof nym.populateTranslateLanguageSelect === 'function') nym.populateTranslateLanguageSelect();
     }
 
-    // Favorite translation languages
     if (Array.isArray(s.translateFavoriteLanguages)) {
         nym._translateFavorites = s.translateFavoriteLanguages.slice();
         localStorage.setItem('nym_translate_favorites', JSON.stringify(nym._translateFavorites));
         if (typeof nym._renderTranslateDropdownList === 'function') nym._renderTranslateDropdownList();
     }
 
-    // App-wide UI language — adopt a language chosen on another device.
     if (typeof s.uiLanguage === 'string' && s.uiLanguage !== (nym.getUiLanguage ? nym.getUiLanguage() : '')) {
         if (typeof nym.applyUiLanguage === 'function') {
             nym.applyUiLanguage(s.uiLanguage).catch(() => { });
@@ -7297,14 +6802,12 @@ async function applyNostrSettings(s) {
     }
 
 
-    // Favorite custom emoji packs
     if (Array.isArray(s.emojiPackFavorites)) {
         nym._emojiPackFavorites = s.emojiPackFavorites.filter(k => typeof k === 'string');
         localStorage.setItem('nym_emoji_pack_favorites', JSON.stringify(nym._emojiPackFavorites));
     }
 
-    // Favorite GIFs — merge the remote set into the local one so favorites sync
-    // across devices without an empty or stale remote list wiping local picks.
+    // Merge so an empty or stale remote list can't wipe local picks.
     if (Array.isArray(s.favoriteGifs) && s.favoriteGifs.length) {
         const remote = s.favoriteGifs
             .filter(g => g && typeof g.url === 'string')
@@ -7321,8 +6824,7 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_favorite_gifs', JSON.stringify(nym._favoriteGifs));
     }
 
-    // Favorited default emoji categories — replace with remote set so an
-    // unfavorite on one device propagates to others.
+    // Replace with the remote set so an unfavorite propagates.
     if (Array.isArray(s.emojiCategoryFavorites)) {
         const allCats = nym.allEmojis ? new Set(Object.keys(nym.allEmojis)) : null;
         nym._defaultCategoryFavorites = s.emojiCategoryFavorites
@@ -7330,18 +6832,15 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_emoji_category_favorites', JSON.stringify(nym._defaultCategoryFavorites));
     }
 
-    // Recently used emoji — merge most-recent-first, dedupe by emoji
     if (Array.isArray(s.recentEmojis) && s.recentEmojis.length > 0) {
         nym.recentEmojis = nym.sanitizeRecentEmojis([...s.recentEmojis, ...(nym.recentEmojis || [])]);
         try { localStorage.setItem('nym_recent_emojis', JSON.stringify(nym.recentEmojis)); } catch (_) { }
     }
 
-    // Sidebar section order
     if (Array.isArray(s.sidebarSectionOrder) && typeof nym._applySidebarSectionOrder === 'function') {
         nym._applySidebarSectionOrder(s.sidebarSectionOrder);
     }
 
-    // Cache PMs & group chats on device
     if (typeof s.cachePMs === 'boolean') {
         const wasOn = nym.settings.cachePMs !== false;
         nym.settings.cachePMs = s.cachePMs;
@@ -7351,13 +6850,11 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // MLS history sync preference
     if (typeof s.syncMLSHistory === 'boolean') {
         nym.settings.syncMLSHistory = s.syncMLSHistory;
         localStorage.setItem('nym_sync_mls_history', String(s.syncMLSHistory));
     }
 
-    // Notifications enabled
     if (typeof s.notificationsEnabled === 'boolean') {
         nym.notificationsEnabled = s.notificationsEnabled;
         localStorage.setItem('nym_notifications_enabled', String(s.notificationsEnabled));
@@ -7375,7 +6872,7 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_notify_friends_only', String(s.notifyFriendsOnly));
     }
 
-    // Notification last read time (take the later of local vs relay)
+    // Take the later of local vs relay.
     if (typeof s.notificationLastReadTime === 'number' && s.notificationLastReadTime > nym.notificationLastReadTime) {
         nym.notificationLastReadTime = s.notificationLastReadTime;
         localStorage.setItem('nym_notification_last_read', String(s.notificationLastReadTime));
@@ -7410,8 +6907,7 @@ async function applyNostrSettings(s) {
         try { localStorage.setItem('nym_left_group_times', JSON.stringify(Object.fromEntries(nym.leftGroupTimes))); } catch { }
     }
 
-    // Channel read state — keep the later timestamp per channel so badges
-    // on a new device don't surface messages already read elsewhere.
+    // Keep the later timestamp per channel so badges don't resurface messages read elsewhere.
     if (s.channelLastRead && typeof s.channelLastRead === 'object') {
         if (!nym.channelLastRead) nym.channelLastRead = new Map();
         let lrChanged = false;
@@ -7426,12 +6922,9 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Group conversations encrypted inside a gift wrap
     const applyGroupData = (groupData) => {
         for (const [groupId, group] of Object.entries(groupData)) {
-            // Same guard as the additive path. The retroactive sweep further
-            // down would eventually delete it again, but not before the row
-            // flashes into the sidebar and its messages are ingested.
+            // Same left-group guard as the additive path, to avoid a sidebar flash.
             if (nym.leftGroups && nym.leftGroups.has(groupId)) continue;
             if (!nym.groupConversations.has(groupId)) {
                 nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { banner: group.banner, avatar: group.avatar, description: group.description });
@@ -7459,8 +6952,7 @@ async function applyNostrSettings(s) {
                         if (group.allowMemberInvites !== undefined) g.allowMemberInvites = group.allowMemberInvites !== false;
                         g.inviteEnabled = group.inviteEnabled === true;
                         g.inviteEpoch = group.inviteEpoch || 0;
-                        // Absence-safe like allowMemberInvites (older clients'
-                        // blobs have no shareHistory key).
+                        // Absence-safe: older clients' blobs have no shareHistory key.
                         if (group.shareHistory !== undefined) g.shareHistory = group.shareHistory === true;
                         g.metaUpdatedAt = incomingMetaTs;
                         if (group.metaUpdatedBy) g.metaUpdatedBy = group.metaUpdatedBy;
@@ -7519,15 +7011,13 @@ async function applyNostrSettings(s) {
         } catch (_) { }
     }
 
-    // Restore chat history backup from encrypted settings sync
     if (s.groupMessageHistory && typeof s.groupMessageHistory === 'object') {
         try {
             const refreshedConvKeys = new Set();
             for (const [groupConvKey, backupMessages] of Object.entries(s.groupMessageHistory)) {
                 if (!Array.isArray(backupMessages) || backupMessages.length === 0) continue;
 
-                // Inflate stripped backup messages with the fields required for
-                // display and filtering (conversationKey, isGroup, isPM, timestamp, author)
+                // Inflate stripped backup messages with the fields needed for display and filtering.
                 const inflated = backupMessages.map(m => {
                     if (m.conversationKey && m.isPM) return m; // already full-fidelity
                     return Object.assign({
@@ -7544,14 +7034,12 @@ async function applyNostrSettings(s) {
                 const existing = nym.pmMessages.get(groupConvKey) || [];
                 const existingIds = new Set(existing.map(m => m.id));
 
-                // Find backup messages that are genuinely new to this device
                 const newMsgs = inflated.filter(m => m.id && !existingIds.has(m.id));
 
-                if (newMsgs.length === 0) continue; // nothing to merge
+                if (newMsgs.length === 0) continue;
 
                 const merged = [...existing, ...newMsgs];
                 merged.sort((a, b) => nym._compareMessages(a, b));
-                // Cap to storage limit after merge
                 const capped = merged.length > nym.pmStorageLimit
                     ? merged.slice(-nym.pmStorageLimit)
                     : merged;
@@ -7561,8 +7049,6 @@ async function applyNostrSettings(s) {
                 refreshedConvKeys.add(groupConvKey);
             }
 
-            // If the user is currently viewing a group that received new backup
-            // messages, re-render it so the merged messages appear immediately.
             if (refreshedConvKeys.size > 0 && nym.inPMMode && nym.currentGroup) {
                 const activeKey = nym.getGroupConversationKey(nym.currentGroup);
                 if (refreshedConvKeys.has(activeKey)) {
@@ -7572,8 +7058,7 @@ async function applyNostrSettings(s) {
         } catch (_) { }
     }
 
-    // Retroactively remove left groups that were re-added by early-arriving
-    // gift-wrapped messages before this settings sync completed (e.g. new device)
+    // Remove left groups re-added by gift wraps that arrived before this sync completed.
     if (nym.leftGroups.size > 0) {
         let groupsChanged = false;
         for (const gid of nym.leftGroups) {
@@ -7594,8 +7079,7 @@ async function applyNostrSettings(s) {
         }
     }
 
-    // Retroactively remove closed PMs that were re-added by early-arriving
-    // gift-wrapped messages before this settings sync completed (e.g. new device)
+    // Remove closed PMs re-added by gift wraps that arrived before this sync completed.
     if (nym.closedPMs.size > 0) {
         for (const pk of nym.closedPMs) {
             if (nym.pmConversations.has(pk)) {
@@ -7619,10 +7103,8 @@ async function applyNostrSettings(s) {
     }
 }
 
-// Sign-out button
 async function signOut() {
     if (!(await window.showAppConfirm('Sign out and disconnect from Nymchat?', { okLabel: 'Sign out', danger: true }))) return;
-    // Clear auto-ephemeral preferences on logout
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
     localStorage.removeItem('nym_auto_ephemeral_channel');
@@ -7633,7 +7115,6 @@ async function signOut() {
     localStorage.removeItem('nym_purchases_cache');
     localStorage.removeItem('nym_active_style');
     localStorage.removeItem('nym_active_flair');
-    // Clear Nostr login state
     localStorage.removeItem('nym_nostr_login_method');
     localStorage.removeItem('nym_nostr_login_pubkey');
     nymSecretRemove('nym_nostr_login_nsec');
@@ -7645,33 +7126,29 @@ async function signOut() {
     nym.cmdQuit();
 }
 
-// Native-app "Open Wallet" compatibility
+// Native-app "Open Wallet" compatibility.
 function installNativeWalletBridgeCompat(n) {
     if (!n || typeof n.openInWallet !== 'function') return;
     try {
         if (n._openInWalletOverridden) {
-            // Bridge already wrapped it — restore the real launcher it saved.
+            // Bridge already wrapped it; restore the real launcher it saved.
             if (typeof n._originalOpenInWallet === 'function') {
                 n.openInWallet = n._originalOpenInWallet;
             }
         } else {
-            // Pre-empt the bridge: expose the real launcher and mark the wrap as
-            // already done so the bridge calls through instead of re-wrapping.
+            // Pre-empt the bridge so it calls through instead of re-wrapping.
             n._originalOpenInWallet = n.openInWallet.bind(n);
             n._openInWalletOverridden = true;
         }
     } catch (e) { /* non-fatal: fall back to native bridge behavior */ }
 }
 
-// Initialize on load
 document.addEventListener('DOMContentLoaded', async () => {
-    // Construct the NYM instance now that all module scripts have been parsed
-    // and their methods have been attached to NYM.prototype.
+    // Construct now that all module scripts have attached their methods to NYM.prototype.
     nym = new NYM();
     window.nym = nym;
     installNativeWalletBridgeCompat(nym);
 
-    // Reveal scrollbars only while scrolling, then fade them back out.
     let _scrollHideTimer = null;
     document.addEventListener('scroll', () => {
         document.body.classList.add('is-scrolling');
@@ -7679,50 +7156,43 @@ document.addEventListener('DOMContentLoaded', async () => {
         _scrollHideTimer = setTimeout(() => document.body.classList.remove('is-scrolling'), 900);
     }, { passive: true, capture: true });
 
-    // If the user enabled identity encryption, unlock (decrypt the stored
-    // secrets into memory) before any identity-restore code reads them.
+    // Unlock the key vault before any identity-restore code reads secrets.
     try { await nym.unlockVaultAtBoot(); } catch (e) { /* proceed; secrets read as absent */ }
 
-    // Parse URL for channel routing BEFORE initialization
+    // Parse URL for channel routing before initialization.
     parseUrlChannel();
-    // Surface the group on the setup modal right away if this is an invite link.
     updateSetupInviteBanner();
 
     await nym.initialize();
     startRelayStatsSampling();
 
-    // Apply group chat & PM only mode on startup (hide channels section)
     if (nym.settings.groupChatPMOnlyMode) {
         const channelsSection = document.querySelector('#channelList')?.closest('.nav-section');
         if (channelsSection) channelsSection.style.display = 'none';
     }
 
-    // Pre-select auto-ephemeral checkbox if previously enabled
     if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
         const cb = document.getElementById('autoEphemeralCheckbox');
         if (cb) cb.checked = true;
     }
 
-    // Pre-connect to a broadcast relay for instant connection
     async function preConnect() {
-        // Pool mode: pool handles all connections after login
+        // Pool mode: the pool handles all connections after login.
         if (nym.useRelayProxy) return;
         for (const relayUrl of nym.defaultRelays) {
             await nym.connectToRelay(relayUrl, 'relay');
             const r = nym.relayPool.get(relayUrl);
             if (r && r.ws && r.ws.readyState === WebSocket.OPEN) {
                 nym.updateConnectionStatus('Ready');
-                return; // Stop after first successful connection
+                return;
             }
         }
     }
 
     preConnect();
 
-    // Auto-focus nickname input
     document.getElementById('nymInput').focus();
 
-    // Add listener to show/hide time format option
     document.getElementById('timestampSelect').addEventListener('change', (e) => {
         const timeFormatGroup = document.getElementById('timeFormatGroup');
         if (timeFormatGroup) {
@@ -7734,7 +7204,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    // Check if proximity sorting was enabled
     setTimeout(() => {
         if (nym.settings.sortByProximity === true) {
             navigator.geolocation.getCurrentPosition(
@@ -7743,7 +7212,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                         lat: position.coords.latitude,
                         lng: position.coords.longitude
                     };
-                    // Re-sort channels with location
                     nym.sortChannelsByActivity();
                 },
                 (error) => {
@@ -7754,7 +7222,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }, 1000);
 
-    // Wake the page once per second while visible
     nym._setManagedInterval('connectionHealth', () => {
         if (document.hidden) return;
         if (nym.initialConnectionInProgress) return;
@@ -7766,12 +7233,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }, 1000);
 
-    // Check for saved connection AFTER initialization is complete
     setTimeout(() => {
         checkSavedConnection();
     }, 100);
 
-    // Periodically update user list (visible foreground only)
     nym._setManagedInterval('userListRefresh', () => {
         if (document.hidden) return;
         if (nym.connected) {
@@ -7779,7 +7244,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }, 5000);
 
-    // Once connected, broadcast our status-visibility preference
     nym._initialStatusVisibilityBroadcast = false;
     nym._setManagedInterval('initialStatusVisibility', () => {
         if (nym._initialStatusVisibilityBroadcast) return;
@@ -7790,10 +7254,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }, 2000);
 
-    // Override the existing search functions to handle collapsed lists properly
+    // Wrap the search functions to expand collapsed lists while searching.
     const originalHandleChannelSearch = nym.handleChannelSearch;
     nym.handleChannelSearch = function (searchTerm) {
-        // First expand the list to make all items searchable
         const channelList = document.getElementById('channelList');
         const wasCollapsed = channelList.classList.contains('list-collapsed');
 
@@ -7802,10 +7265,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             channelList.classList.add('list-expanded');
         }
 
-        // Call original search function
         originalHandleChannelSearch.call(this, searchTerm);
 
-        // Restore collapsed state if search is cleared
         if (wasCollapsed && searchTerm.length === 0) {
             channelList.classList.add('list-collapsed');
             channelList.classList.remove('list-expanded');
@@ -7814,7 +7275,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const originalFilterPMs = nym.filterPMs;
     nym.filterPMs = function (searchTerm) {
-        // First expand the list to make all items searchable
         const pmList = document.getElementById('pmList');
         const wasCollapsed = pmList.classList.contains('list-collapsed');
 
@@ -7823,10 +7283,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             pmList.classList.add('list-expanded');
         }
 
-        // Call original filter function
         originalFilterPMs.call(this, searchTerm);
 
-        // Restore collapsed state if search is cleared
         if (wasCollapsed && searchTerm.length === 0) {
             pmList.classList.add('list-collapsed');
             pmList.classList.remove('list-expanded');
@@ -7835,7 +7293,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const originalFilterUsers = nym.filterUsers;
     nym.filterUsers = function (searchTerm) {
-        // First expand the list to make all items searchable
         const userList = document.getElementById('userListContent');
         const wasCollapsed = userList.classList.contains('list-collapsed');
 
@@ -7844,19 +7301,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             userList.classList.add('list-expanded');
         }
 
-        // Call original filter function
         originalFilterUsers.call(this, searchTerm);
 
-        // Restore collapsed state if search is cleared
         if (wasCollapsed && searchTerm.length === 0) {
             userList.classList.add('list-collapsed');
             userList.classList.remove('list-expanded');
         }
     };
 
-    // Background message cleanup
     nym._setManagedInterval('messageCleanup', () => {
-        // Clean up stored messages for inactive channels
         const currentKey = nym.currentGeohash ? `#${nym.currentGeohash}` : nym.currentChannel;
 
         nym.messages.forEach((messages, channel) => {
@@ -7866,7 +7319,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
-        // Prune inactive PM conversations to pmStorageLimit messages max
         const currentPMKey = nym.currentPM ? nym.getPMConversationKey(nym.currentPM) : null;
         const currentGroupKey = nym.currentGroup ? nym.getGroupConversationKey(nym.currentGroup) : null;
         nym.pmMessages.forEach((messages, convKey) => {
@@ -7876,7 +7328,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
 
-        // Prune event deduplication if too large (keep recent entries for proper deduplication)
         if (nym.eventDeduplication.size > 10000) {
             const entriesToDelete = nym.eventDeduplication.size - 7500;
             let deleted = 0;
@@ -7888,10 +7339,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }, 60000);
 
-    // Periodically check and clear expired blacklists
     nym._setManagedInterval('blacklistExpiry', () => {
         if (nym.connected) {
-            // Check all blacklisted relays for expiration
             const expiredRelays = [];
             nym.blacklistedRelays.forEach(relayUrl => {
                 if (nym.isBlacklistExpired(relayUrl)) {
@@ -7899,7 +7348,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             });
 
-            // Try to reconnect to expired blacklisted relays (direct mode only)
             if (!nym.useRelayProxy) {
                 expiredRelays.forEach(relayUrl => {
                     if (nym.defaultRelays.includes(relayUrl) && !nym.relayPool.has(relayUrl)) {
@@ -7914,22 +7362,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
             }
         }
-    }, 60000); // Check every minute
+    }, 60000);
 
-    // Scroll-to-bottom button and mobile input-buttons hide on scroll
     const messageInput = document.getElementById('messageInput');
     const messagesContainer = document.getElementById('messagesContainer');
     const messagesScroller = document.getElementById('messagesScroller');
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
     if (messagesScroller && scrollToBottomBtn) {
-        // rAF-coalesce: scroll fires up to the display refresh rate; doing the
-        // layout reads (scrollTop/scrollHeight/clientHeight) + branching once per
-        // frame avoids forced reflows on every tick during fast mobile scrolling.
+        // rAF-coalesce layout reads to avoid forced reflows on every scroll tick.
         let _scrollRafPending = false;
         const processScroll = () => {
             _scrollRafPending = false;
-            // Reverse-column container: scrollTop is 0 at the bottom (newest)
-            // and negative scrolling up. Math.abs gives distance from bottom.
+            // Reverse-column container: scrollTop is 0 at the bottom, negative scrolling up.
             const distanceFromBottom = Math.abs(messagesScroller.scrollTop);
             const distanceFromTop = (messagesScroller.scrollHeight - messagesScroller.clientHeight) - distanceFromBottom;
 
@@ -8000,7 +7444,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 }
             }
 
-            // Show/hide scroll-to-bottom button
             if (distanceFromBottom > 150) {
                 scrollToBottomBtn.classList.add('visible');
             } else {
@@ -8014,7 +7457,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, { passive: true });
     }
 
-    // Auto-scroll to bottom when input is focused on mobile (only if near bottom)
     if (messageInput && messagesScroller) {
         messageInput.addEventListener('focus', function () {
             if (window.innerWidth > 768) return;
@@ -8027,10 +7469,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
-// Parse URL for channel routing
-// When a brand-new user opens an invite link, surface the group on the setup
-// modal so the reason for signing up is clear.
-/// Clamps a stored PoW-filter difficulty onto the offered options.
+// Clamps a stored PoW-filter difficulty onto the offered options.
 function normalizePowDifficulty(raw) {
     const n = parseInt(raw, 10);
     if (!Number.isFinite(n) || n <= 0) return 0;   // Disabled
@@ -8072,8 +7511,7 @@ function updateSetupInviteBanner() {
 }
 window.updateSetupInviteBanner = updateSetupInviteBanner;
 
-// An invite link opened while the app is already loaded only changes the hash
-// (no reload), so route it live here in addition to the on-load path.
+// Invite links opened while loaded only change the hash, so route them live here too.
 window.addEventListener('hashchange', () => {
     const m = window.location.hash.match(/^#gjoin=([A-Za-z0-9_-]+)/);
     if (!m) return;
@@ -8089,23 +7527,20 @@ window.addEventListener('hashchange', () => {
 function parseUrlChannel() {
     const hash = window.location.hash;
     if (hash && hash.length > 1) {
-        // Group invite links carry a case-sensitive base64url token; never lowercase.
+        // Group invite tokens are case-sensitive base64url; never lowercase.
         const inviteMatch = hash.match(/^#gjoin=([A-Za-z0-9_-]+)/);
         if (inviteMatch) {
             window.pendingGroupInvite = inviteMatch[1];
-            // Persist so a brand-new user who completes setup (or reloads) still
-            // resumes the join once they have an identity.
+            // Persist so a new user still resumes the join after setup or reload.
             try { localStorage.setItem('nym_pending_group_invite', inviteMatch[1]); } catch (e) { }
             return;
         }
         const channelFromUrl = hash.substring(1).toLowerCase();
 
-        // Store for use after initialization
         window.pendingChannel = channelFromUrl;
     }
 }
 
-// Handle channel routing after initialization
 async function routeToUrlChannel() {
     let pendingInvite = window.pendingGroupInvite;
     if (!pendingInvite) {
@@ -8122,12 +7557,11 @@ async function routeToUrlChannel() {
         const channelInput = window.pendingChannel;
         delete window.pendingChannel;
 
-        // Strip legacy g: prefix from old shared URLs
+        // Strip legacy g: prefix from old shared URLs.
         let channelName = channelInput;
         if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
         }
-        // Sanitize channel name
         channelName = nym.sanitizeChannelName(channelName);
         if (nym.isValidGeohash(channelName)) {
             nym.addChannel(channelName, channelName);
@@ -8139,12 +7573,10 @@ async function routeToUrlChannel() {
             nym.displaySystemMessage(`Invalid geohash channel: ${channelName}`);
         }
 
-        // Clear the URL hash to clean up
         history.replaceState(null, null, window.location.pathname);
     }
 }
 
-// Relay Stats Modal
 function openRelayStats() {
     const modal = document.getElementById('relayStatsModal');
     if (!modal) return;
@@ -8182,32 +7614,27 @@ function closeRelayStatsModal() {
     closeModal('relayStatsModal');
 }
 
-// Wire up close button and backdrop click
 (function () {
     const observer = new MutationObserver(() => {
         const modal = document.getElementById('relayStatsModal');
         if (!modal) return;
         observer.disconnect();
 
-        // Close when clicking backdrop
         modal.addEventListener('click', (e) => {
             if (e.target === modal) closeRelayStatsModal();
         });
 
-        // Override close button
         const closeBtn = modal.querySelector('.modal-close');
         if (closeBtn) {
             closeBtn.onclick = (e) => { e.stopPropagation(); closeRelayStatsModal(); };
         }
 
-        // Stop stats loop when modal is hidden
         const mo = new MutationObserver(() => {
             if (!modal.classList.contains('active')) stopRelayStatsLoop();
         });
         mo.observe(modal, { attributes: true, attributeFilter: ['class'] });
     });
     observer.observe(document.body, { childList: true, subtree: true });
-    // Also try immediately
     const modal = document.getElementById('relayStatsModal');
     if (modal) {
         modal.addEventListener('click', (e) => {
@@ -8259,15 +7686,13 @@ function formatBytes(b) {
 
 function renderRelayStats() {
     if (typeof nym === 'undefined') return;
-    // Skip the per-second DOM reads + canvas redraw while the tab is hidden; the
-    // loop is already modal-scoped, but a backgrounded tab need not wake the CPU.
+    // Skip per-second DOM reads and redraws while the tab is hidden.
     if (document.hidden) return;
     syncLowDataToggleFromState();
     const s = nym.relayStats;
     const pool = nym.relayPool;
     const writeOnly = nym.writeOnlyRelays || new Set();
 
-    // Count connected — pool mode uses poolConnectedRelays count
     let connected = 0;
     if (nym.useRelayProxy && nym._isAnyPoolOpen()) {
         connected = nym.poolConnectedRelays.filter(u => !writeOnly.has(u)).length;
@@ -8278,7 +7703,6 @@ function renderRelayStats() {
         });
     }
 
-    // Average latency
     let latSum = 0, latCount = 0;
     s.latencyPerRelay.forEach((ms, url) => {
         if (writeOnly.has(url)) return;
@@ -8308,7 +7732,6 @@ function renderRelayStats() {
         if (modeHint && modeHint.textContent !== hint) modeHint.textContent = hint;
     }
 
-    // Update summary cards
     const elConn = document.getElementById('rsConnected');
     const elLat = document.getElementById('rsLatency');
     const elEvt = document.getElementById('rsEventsTotal');
@@ -8321,10 +7744,9 @@ function renderRelayStats() {
     if (elData) elData.textContent = formatBytes(s.bytesReceived);
     if (elDataOut) elDataOut.textContent = formatBytes(s.bytesSent || 0);
 
-    // Draw throughput graph
     drawThroughputGraph(s.throughputHistory);
 
-    // Shard fan-in summary (how many shard workers, relays connected each)
+    // Shard fan-in summary: worker count and relays connected to each.
     const listEl = document.getElementById('rsRelayList');
     if (listEl && listEl.parentNode) {
         let shardLine = document.getElementById('rsShardLine');
@@ -8345,7 +7767,6 @@ function renderRelayStats() {
         }
     }
 
-    // Relay list
     renderRelayList(pool, s);
 }
 
@@ -8372,10 +7793,8 @@ function drawThroughputGraph(history) {
     const points = 60;
     const stepX = w / (points - 1);
 
-    // Get the primary color from CSS
     const primaryColor = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#00ff00';
 
-    // Fill gradient
     const grad = ctx.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, hexToRgba(primaryColor, 0.25));
     grad.addColorStop(1, hexToRgba(primaryColor, 0.02));
@@ -8394,7 +7813,6 @@ function drawThroughputGraph(history) {
     ctx.fillStyle = grad;
     ctx.fill();
 
-    // Line
     ctx.beginPath();
     for (let i = 0; i < data.length; i++) {
         const x = (startIdx + i) * stepX;
@@ -8407,7 +7825,6 @@ function drawThroughputGraph(history) {
     ctx.lineJoin = 'round';
     ctx.stroke();
 
-    // Scale labels
     ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim() || '#8a8a9a';
     ctx.font = '9px monospace';
     ctx.textAlign = 'right';
@@ -8416,7 +7833,6 @@ function drawThroughputGraph(history) {
 }
 
 function hexToRgba(hex, alpha) {
-    // Handle common CSS color values
     if (hex.startsWith('rgb')) {
         const match = hex.match(/[\d.]+/g);
         if (match && match.length >= 3) {
@@ -8487,8 +7903,7 @@ function renderRelayList(pool, stats) {
     const entries = [];
 
     if (typeof nym !== 'undefined' && nym.useRelayProxy && nym._isAnyPoolOpen()) {
-        // Pool mode: render every known relay (connected + recently-seen) so
-        // a single shard hiccup doesn't make rows disappear and reappear.
+        // Render every known relay so a shard hiccup doesn't make rows flicker.
         const connectedSet = new Set(nym.poolConnectedRelays);
         const known = new Set([...connectedSet]);
         if (nym._poolRelayLastSeen) {

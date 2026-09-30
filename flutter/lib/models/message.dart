@@ -1,16 +1,6 @@
-/// Delivery state for a PM/group message.
 enum DeliveryStatus { sending, sent, delivered, read, failed }
 
-/// What kind of row a [Message] renders as.
-///
-/// * [normal] — an ordinary chat message (bubble / IRC row).
-/// * [system] — a centered muted `.system-message` pill injected into the
-///   conversation flow (command feedback, P2P/call status, flood notices).
-/// * [action] — the purple-italic `.action-message` variant of a system message.
-/// * [me] — a `/me …` emote rendered as an italic `* author action *` line.
-///
-/// Mirrors the PWA's `displaySystemMessage(content, type)` (`messages.js:1511`)
-/// and the `/me` branch (`messages.js:662`).
+/// Row type: ordinary message, system pill, action pill, or `/me` emote.
 enum MessageKind { normal, system, action, me }
 
 MessageKind messageKindFromString(String? s) {
@@ -41,14 +31,7 @@ DeliveryStatus deliveryStatusFromString(String? s) {
   }
 }
 
-/// An optional inline action button carried by a [MessageKind.system] row.
-///
-/// The PWA renders some system lines with an embedded `<button>` — e.g. the
-/// spam false-positive notice has `data-action="reportSpamFalsePositive"` with
-/// the flagged message stashed in a `data-spam-content` attribute
-/// (messages.js:645). Native rows can't embed HTML, so the button is modeled
-/// here: a [label] plus a [kind] discriminator and the [payload] the handler
-/// needs (the flagged content for [SystemActionKind.reportSpamFalsePositive]).
+/// Discriminator for an inline action button on a system row.
 enum SystemActionKind { reportSpamFalsePositive }
 
 class SystemAction {
@@ -60,15 +43,13 @@ class SystemAction {
 
   final SystemActionKind kind;
 
-  /// Button text (`Report false positive`).
   final String label;
 
-  /// Action data — the flagged message body for the spam false-positive report.
+  /// Action data, e.g. the flagged body for a spam false-positive report.
   final String payload;
 }
 
-/// Unified message model covering channel, PM and group messages, mirroring the
-/// IndexedDB-serialized record the PWA uses (docs/specs/01 §1.4, 03 §2.1/§3.4).
+/// Unified channel, PM and group message model, mirroring the PWA's IndexedDB record.
 class Message {
   Message({
     required this.id,
@@ -126,11 +107,7 @@ class Message {
   int createdAt;
   int? originalCreatedAt;
 
-  /// Full millisecond timestamp from the `['ms', …]` tag (`Date.now()` when the
-  /// event was stamped), used as the sub-second ordering tiebreak. Mirrors the
-  /// PWA `_ms`: it is an absolute ms value (`created_at * 1000 + sub-second`),
-  /// NOT a 0-999 offset. A value `<= created_at * 1000` is treated as the
-  /// floor-to-second fallback and ignored for ordering (see `_hasRealMsTag`).
+  /// Absolute ms from the `ms` tag, the sub-second tiebreak; values <= created_at*1000 are ignored.
   int ms;
 
   /// Local monotonic arrival sequence (final ordering tiebreak).
@@ -151,45 +128,21 @@ class Message {
 
   bool isHistorical;
 
-  /// Tri-state cryptographic verification of a sealed (NIP-17/NIP-59) sender,
-  /// mirroring the PWA's `senderVerified` (`messages.js:736`): `true` when the
-  /// seal's signer matches the claimed author, `false` for a throwaway-key
-  /// (Bitchat) seal, `null` when the seal isn't available to verify (restored
-  /// history, or a public channel message that carries no seal). Drives the
-  /// `.crypto-verified-badge` lock shown on PM/group messages.
+  /// Seal verification: true when signer matches author, false for a throwaway-key seal, null if unavailable.
   bool? senderVerified;
 
-  /// True when this message arrived over (or was sent on) the hybrid
-  /// post-quantum transport. Deliberately SEPARATE from [senderVerified]:
-  /// that is authentication, this is confidentiality, and the two are
-  /// orthogonal — a message can be post-quantum encrypted yet unverified, or
-  /// verified yet classically encrypted. Drives the `.crypto-pq-badge` shield
-  /// rendered beside the verification lock.
+  /// Post-quantum transport; confidentiality, orthogonal to [senderVerified].
   bool pqEncrypted;
 
-  /// Whether every ML-KEM key involved was seeded from an identity root
-  /// rather than derived from a Nostr identity key. Only this earns the full
-  /// shield: a legacy key falls with the nsec it came from.
-  ///
-  /// Defaults false, which is what history deserves — messages sent before
-  /// the root existed were sealed to nsec-derived keys.
+  /// Whether every ML-KEM key was root-seeded; defaults false, as history used nsec-derived keys.
   bool pqRoot;
 
-  /// For a group message we sent: how many of the members got a post-quantum
-  /// wrap, out of how many. Lets the badge say "8 of 10 members" instead of
-  /// implying all-or-nothing, and OVERRIDES [pqEncrypted] when present — an
-  /// optimistic per-message flag must never outrank what actually went on the
-  /// wire.
+  /// PQ wraps out of total members for a group message we sent; overrides [pqEncrypted].
   ({int pq, int total})? pqCoverage;
   String? bitchatMessageId;
   String? nymMessageId;
 
-  /// Thread root this message replies to (Slack-style threads), or null for a
-  /// top-level message. Channel replies reference the root's EVENT id via a
-  /// NIP-10 marked `['e', rootId, '', 'root']` tag; PM/group replies reference
-  /// the root's shared `nymMessageId` via a `['nymthread', rootId]` rumor tag
-  /// (gift wrap ids differ per recipient, so the `x`-tag id is the only one
-  /// every member shares). Mirrors the PWA's `message.threadRoot`.
+  /// Thread root, via NIP-10 `e` root tag for channels or `nymthread` for PMs/groups; null at top level.
   String? threadRoot;
   DeliveryStatus deliveryStatus;
   bool isEdited;
@@ -200,10 +153,7 @@ class Message {
   bool isFileOffer;
   Map<String, dynamic>? fileOffer;
 
-  /// On-disk path of a locally-stored attachment (Bluetooth-mesh media/file
-  /// transfer), rendered inline in place of the text body. Session-local — not
-  /// serialized. [localMediaMime] selects the presentation (an `image/*` mime
-  /// renders the picture inline; anything else renders a file card).
+  /// Session-local path of a mesh attachment; [localMediaMime] selects image or file card.
   String? localMediaPath;
   String? localMediaMime;
   String? localMediaName;
@@ -212,58 +162,38 @@ class Message {
       localMediaPath != null && localMediaPath!.isNotEmpty;
   bool get isLocalImage => localMediaMime?.startsWith('image/') ?? false;
 
-  /// True when this message was delivered over the Bluetooth mesh rather than
-  /// the internet (Nostr relays). Drives the small Bluetooth glyph shown beside
-  /// the padlock on mesh PMs/group messages. Session-local — not serialized.
+  /// Delivered over the Bluetooth mesh; session-local.
   bool viaMesh;
 
   bool isBot;
 
-  /// NIP-13 difficulty the sender COMMITTED to, from the event's `nonce` tag,
-  /// or null when the event carried no nonce tag at all.
-  ///
-  /// Presence of the tag is what separates "mined" from "never mined": leading
-  /// zero bits on an id happen by chance (1 in 2^n), so the bits alone cannot
-  /// show a sender did any work. Messages from other Nostr clients have no tag.
-  /// The work actually PROVEN is recomputed from [id] on demand
-  /// ([powBitsForId]) rather than trusted from the tag. Session-local — the
-  /// timestamp popup recomputes it, so it is not serialized.
+  /// NIP-13 committed difficulty, or null without a nonce tag; session-local.
   int? powTarget;
 
-  /// Nymbot reasoning block (collapsed "💭 Reasoning").
+  /// Nymbot reasoning block.
   String? thinking;
 
   /// Pre-sign placeholder; cleared when the signed event arrives.
   bool optimistic;
 
-  /// Held until sender becomes trusted.
+  /// Held until the sender becomes trusted.
   bool spamGated;
 
   /// Flagged from a blocked user.
   bool blocked;
 
-  /// What kind of row this renders as (normal / system / action / `/me`).
-  /// Defaults to [MessageKind.normal]; a system/action message is one injected
-  /// by [Message.system] (`displaySystemMessage`).
   MessageKind kind;
 
-  /// Optional inline action button for a [MessageKind.system] row (e.g. the
-  /// spam false-positive "Report false positive" affordance). Null for ordinary
-  /// system lines. Not serialized — these notices are session-local.
+  /// Optional session-local action button for a system row.
   SystemAction? systemAction;
 
-  /// Read-receipt readers for own channel/group messages: `pubkey → nym`. Drives
-  /// the stacked reader-avatar delivery indicator (`group-readers`/
-  /// `channel-readers`, `groups.js:2624`). Empty for everyone else.
+  /// Read-receipt readers of own channel/group messages: pubkey to nym.
   final Map<String, String> readers;
 
-  /// True for the centered system/action pill rows (not an ordinary message).
   bool get isSystemRow =>
       kind == MessageKind.system || kind == MessageKind.action;
 
-  /// True when this is a `/me` emote (rendered as an italic action line). The
-  /// PWA keys this off the raw content prefix (`messages.js:662`), so we accept
-  /// either an explicit [MessageKind.me] or the `/me ` content prefix.
+  /// True for `/me` emotes, by kind or by the `/me ` content prefix as the PWA does.
   bool get isMeAction => kind == MessageKind.me || content.startsWith('/me ');
 
   DateTime get dateTime => DateTime.fromMillisecondsSinceEpoch(timestamp);
@@ -306,10 +236,7 @@ class Message {
         if (powTarget != null) 'powTarget': powTarget,
       };
 
-  /// Builds a centered system/action pill row for the conversation flow,
-  /// mirroring `displaySystemMessage(content, type)` (`messages.js:1511`). Pass
-  /// [action] for the purple-italic `.action-message` variant. The id is
-  /// synthetic (`sys-…`) and the row is flagged so the list renders the pill.
+  /// Centered system pill like `displaySystemMessage`; [action] selects the italic action variant.
   factory Message.system(
     String content, {
     bool action = false,
@@ -327,9 +254,7 @@ class Message {
     );
   }
 
-  /// A [MessageKind.system] pill that carries an inline action [SystemAction]
-  /// button (e.g. the spam false-positive notice with its "Report false
-  /// positive" affordance, messages.js:645).
+  /// A system pill carrying an inline [SystemAction] button.
   factory Message.systemWithAction(
     String content,
     SystemAction action, {
@@ -392,29 +317,20 @@ class Message {
   }
 }
 
-/// True if [m] carries a genuine sub-second `ms` tag, mirroring the PWA's
-/// `_hasRealMsTag`: the ms value must be finite, positive, and strictly greater
-/// than the whole-second base (`created_at * 1000`) so it adds real sub-second
-/// precision rather than echoing the second-granularity timestamp.
+/// True when `ms` adds real sub-second precision over `created_at * 1000`.
 bool _hasRealMsTag(Message m) {
   if (m.ms <= 0) return false;
   final base = m.createdAt * 1000;
   return m.ms > base;
 }
 
-/// Ordering comparator mirroring `_compareMessages`: primary created_at (sec);
-/// secondary `ms` only when both carry a real ms tag; tertiary seq.
-/// Leading zero BITS of an event id — the work actually proven (NIP-13).
-///
-/// Returns 0 for anything that is not a 64-char hex id (PM/group rows are keyed
-/// by a rumor id that carries no mined work, and optimistic rows have no id
-/// yet).
+/// Leading zero bits of a 64-hex event id (NIP-13 proven work); 0 for anything else.
 int powBitsForId(String? id) {
   if (id == null || id.length != 64) return 0;
   var bits = 0;
   for (var i = 0; i < id.length; i++) {
     final nibble = int.tryParse(id[i], radix: 16);
-    if (nibble == null) return 0; // not hex — not an event id
+    if (nibble == null) return 0; // Not hex, so not an event id.
     if (nibble == 0) {
       bits += 4;
       continue;

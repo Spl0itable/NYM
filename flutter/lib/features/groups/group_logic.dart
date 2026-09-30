@@ -10,11 +10,10 @@ import '../../models/group.dart';
 import '../../models/nostr_event.dart';
 import '../pms/pm_logic.dart';
 
-/// Max retained previous ephemeral keys per group (post-compromise recovery).
+/// Max retained previous ephemeral keys per group, for post-compromise recovery.
 const int kEphemeralPrevKeysMax = 30;
 
-/// Membership cap: every group message costs one gift wrap per member, so
-/// membership is bounded to keep per-message fan-out (encrypt + publish work)
+/// Every group message costs one gift wrap per member, so membership is bounded.
 const int kMaxGroupMembers = 100;
 
 const int kPmDepositQueueMax =
@@ -36,16 +35,13 @@ const int kGroupRosterRepairCooldownMs = 300000;
 
 const int kGroupReactionBatchMs = 1500;
 
-/// Key-resync heartbeat: after being offline this long, our stored view of
-/// other members' rotating ephemeral keys may have expired off relays, so we
-/// proactively re-exchange current keys (PWA `GROUP_RESYNC_OFFLINE_GAP_SEC`).
+/// After this long offline, members' stored ephemeral keys may have expired off relays, so re-exchange them.
 const int kGroupResyncOfflineGapSec = 3 * 24 * 60 * 60;
 
-/// Per-group cooldown between key-resync requests (PWA
-/// `GROUP_RESYNC_COOLDOWN_SEC`).
+/// Per-group cooldown between key-resync requests.
 const int kGroupResyncCooldownSec = 24 * 60 * 60;
 
-/// An ephemeral keypair (raw 32-byte sk + 64-hex x-only pk).
+/// Ephemeral keypair: raw 32-byte sk plus 64-hex x-only pk.
 class EphemeralKey {
   EphemeralKey({required this.sk, required this.pk});
   final Uint8List sk;
@@ -56,12 +52,10 @@ class EphemeralKey {
     return EphemeralKey(sk: sk, pk: getPublicKeyHex(sk));
   }
 
-  /// Serializes to `{sk: <hex>, pk}` for cross-device sync, mirroring the PWA's
-  /// `{ sk: this._skToHex(k.sk), pk: k.pk }` (groups.js:196-197).
+  /// `{sk: <hex>, pk}` for cross-device sync.
   Map<String, dynamic> toJson() => {'sk': bytesToHex(sk), 'pk': pk};
 
-  /// Rebuilds a key from its `{sk: <hex>, pk}` sync form (`_hexToSk`,
-  /// groups.js:209-210). Returns null when the `sk` isn't a valid hex string.
+  /// Rebuilds from `{sk: <hex>, pk}`; null when `sk` isn't valid hex.
   static EphemeralKey? tryFromJson(Map<String, dynamic> j) {
     final skHex = j['sk'];
     final pk = j['pk'];
@@ -74,24 +68,20 @@ class EphemeralKey {
   }
 }
 
-/// Per-group rotating ephemeral key state. Mirrors the PWA's
-/// `groupEphemeralKeys[groupId] = { self:{current,prev[]}, members:{pk→ephPk},
-/// _memberKeyTs:{pk→ts} }` (docs/specs/03 §4.3).
+/// Per-group rotating ephemeral key state: self current/prev and members' advertised keys.
 class GroupEphemeralKeys {
   EphemeralKey? selfCurrent;
   final List<EphemeralKey> selfPrev = [];
 
-  /// member real pubkey → their advertised ephemeral pubkey.
+  /// member real pubkey -> advertised ephemeral pubkey.
   final Map<String, String> members = {};
 
-  /// member real pubkey → timestamp of the advertised key (out-of-order guard).
+  /// member real pubkey -> advertised key timestamp (out-of-order guard).
   final Map<String, int> memberKeyTs = {};
 
-  /// Ensures a current self key exists, generating one if needed.
   EphemeralKey ensureSelf() => selfCurrent ??= EphemeralKey.generate();
 
-  /// Rotates the self key: pushes current → prev (cap 30) and generates a fresh
-  /// current. Returns the new current key. (docs/specs/03 §4.3)
+  /// Pushes current to prev (cap 30) and generates a fresh current.
   EphemeralKey rotateSelf() {
     if (selfCurrent == null) {
       ensureSelf();
@@ -105,8 +95,7 @@ class GroupEphemeralKeys {
     return selfCurrent!;
   }
 
-  /// Updates a member's advertised ephemeral pubkey, ignoring stale (older-ts)
-  /// updates.
+  /// Ignores stale (older-timestamp) updates.
   void updateMemberKey(String realPubkey, String ephemeralPk, int messageTs) {
     final prevTs = memberKeyTs[realPubkey] ?? 0;
     if (messageTs >= prevTs) {
@@ -115,8 +104,7 @@ class GroupEphemeralKeys {
     }
   }
 
-  /// The pubkey to encrypt TO for [realPubkey]: their advertised ephemeral key
-  /// if known (or our own current key for the self-copy), else the real pubkey.
+  /// Their advertised ephemeral key if known (our own current for the self-copy), else the real pubkey.
   String encryptionPubkeyFor(String realPubkey, String selfPubkey) {
     if (realPubkey == selfPubkey && selfCurrent != null) {
       return selfCurrent!.pk;
@@ -124,16 +112,13 @@ class GroupEphemeralKeys {
     return members[realPubkey] ?? realPubkey;
   }
 
-  /// All ephemeral secret keys we own (current + prev), for unwrap candidates.
+  /// Every ephemeral secret key we own, for unwrap candidates.
   List<Uint8List> selfSecretKeys() => [
         if (selfCurrent != null) selfCurrent!.sk,
         for (final k in selfPrev) k.sk,
       ];
 
-  /// Serializes this entry for the `nymchat-keys-<groupId>` cross-device sync
-  /// category, byte-matching the PWA's `_serializeEphemeralKeys` (groups.js:191):
-  /// `{ members, memberKeyTs?, self?: { current, prev[] } }`. `memberKeyTs` is
-  /// only emitted when non-empty (the PWA gates it on `ek._memberKeyTs`).
+  /// `nymchat-keys-<groupId>` sync form, byte-matching the PWA; `memberKeyTs` only when non-empty.
   Map<String, dynamic> toSyncJson() {
     final entry = <String, dynamic>{
       'members': Map<String, String>.from(members)
@@ -150,15 +135,7 @@ class GroupEphemeralKeys {
     return entry;
   }
 
-  /// Merges a synced ephemeral-key [entry] (as produced by [toSyncJson] on
-  /// another device) into this state, mirroring the PWA's `_mergeEphemeralKeys`
-  /// (groups.js:221): member keys keep whichever device saw the more recent
-  /// advertisement (by `memberKeyTs`); self keys ACCUMULATE across devices
-  /// (deduped by pubkey, prev window capped at [kEphemeralPrevKeysMax]) so either
-  /// device can decrypt a gift wrap addressed to any of our ephemeral pubkeys.
-  /// The local current key is never replaced — a synced current is folded into
-  /// prev — so on a fresh device (no local self) the synced current becomes the
-  /// current and immediately unwraps live/backfilled group wraps.
+  /// Member keys keep the newest advertisement; self keys accumulate across devices.
   void mergeSyncJson(Map<String, dynamic> entry) {
     final syncedMembers = entry['members'];
     final syncedTs = entry['memberKeyTs'];
@@ -193,8 +170,7 @@ class GroupEphemeralKeys {
     }
 
     if (selfCurrent == null) {
-      // No local self — adopt the synced keys wholesale (PWA `local.self =
-      // synced.self`). The synced current becomes our current so it decrypts.
+      // No local self: adopt the synced keys wholesale so the synced current decrypts.
       selfCurrent = syncedCurrent;
       selfPrev
         ..clear()
@@ -218,8 +194,7 @@ class GroupEphemeralKeys {
   }
 }
 
-/// Pure, socket-free group logic: rumor construction, role checks, control
-/// event application + stale guard. (docs/specs/03 §4)
+/// Pure, socket-free group logic: rumors, role checks, control events and the stale guard.
 class GroupRoleSpec {
   const GroupRoleSpec({
     required this.tag,
@@ -260,24 +235,10 @@ class GroupLogic {
 
   static String generateGroupId() => PmLogic.generateSharedEventId();
 
-  /// AppState storage key for a group thread (`group-<id>`), matching
-  /// `ChatView.group(id)`.
+  /// Storage key matching `ChatView.group(id)`.
   static String groupStorageKey(String groupId) => 'group-$groupId';
 
-  /// Builds the kind-14 group-message rumor with common tags + the rotated
-  /// [ephemeralPk] advertisement (docs/specs/03 §4.2). [nymMessageId] is the
-  /// shared id across per-member copies.
-  ///
-  /// A plain group message carries NO `['type', …]` tag — groups.js
-  /// `sendGroupMessage` (1686-1707) pushes only `p`/`g`/`subject`/`x`/meta/
-  /// `ephemeral_pk`/`ms` (+ optional emoji/imeta/offer); the inbound filter
-  /// treats a null `type` as a message (F04-M4).
-  ///
-  /// [extraTags] threads the optional NIP-30 custom-emoji, NIP-92 imeta, and
-  /// `['offer', JSON]` file-offer tags (groups.js 1699-1707) plus the
-  /// `_attachGroupMetaTags` meta piggyback (groups.js 1690); they are appended
-  /// after `ms`, matching the PWA push order (F04-M5/L4). The caller builds them
-  /// from provider/controller state (e.g. `customEmojiTagsForContent`).
+  /// Kind-14 group message rumor advertising [ephemeralPk]; no `type` tag, and [extraTags] follow `ms` in PWA order.
   static UnsignedEvent buildGroupMessageRumor({
     required Group group,
     required String selfPubkey,
@@ -308,26 +269,7 @@ class GroupLogic {
     );
   }
 
-  /// The owner's current group metadata as message tags — the PWA's
-  /// `_attachGroupMetaTags` piggyback (groups.js). Appended to outbound group
-  /// messages so a member who missed the ephemeral `group-metadata` control
-  /// event still converges on the custom name/avatar/banner/description + invite
-  /// policy. This is the ONLY carrier that reaches a DIFFERENT member: the
-  /// per-account `nymchat-groups` D1 sync restores your OWN devices' group state
-  /// but can never cross into another member's account, so in relay-proxy mode a
-  /// member who rehydrates the group backlog from the D1 gift-wrap archive gets
-  /// the custom avatar solely from these tags on the archived messages (their
-  /// absence is the reported "group avatar not coming from D1" symptom). The
-  /// inbound side already reads it ([_applyMetadata] via the `meta_ts`
-  /// piggyback handler). Only the OWNER attaches it, and only once metadata has
-  /// been set (`metaUpdatedAt > 0`); `meta_ts` is the group's real metadata
-  /// timestamp so the inbound monotonic guard makes re-application idempotent.
-  /// Rides EVERY owner message: the PWA gates on a `GROUP_META_PIGGYBACK_WINDOW`,
-  /// but that constant is never actually defined in the PWA source — so
-  /// `now - metaTs > undefined` is always false and the window is a dead no-op,
-  /// i.e. the PWA piggybacks unconditionally too (owner + metaTs). Tag order
-  /// mirrors `_attachGroupMetaTags` (groups.js:2135-2141): meta_ts, banner,
-  /// avatar, description, allow_invites, invite_enabled, invite_epoch.
+  /// Owner metadata as tags on every owner message, the only way other members (e.g. D1-archive rehydrators) converge on it.
   static List<List<String>> groupMetaPiggybackTags(Group g, String selfPubkey) {
     if (!canAdminister(g, selfPubkey) || g.metaUpdatedAt <= 0) return const [];
     if (g.metaUpdatedBy != null && g.metaUpdatedBy != selfPubkey) return const [];
@@ -343,13 +285,7 @@ class GroupLogic {
     ];
   }
 
-  /// Builds the bootstrap `group-invite` rumor for a freshly created group.
-  ///
-  /// The optional metadata tags (`avatar`, `banner`, `description`) are only
-  /// emitted when the group carries a non-empty value, byte-matching groups.js
-  /// `createGroup` (which pushes each tag only `if (groupAvatar)` etc., 1382-1384)
-  /// so the rumor shape stays identical to the PWA. `allow_invites` /
-  /// `invite_enabled` / `invite_epoch` are always present.
+  /// Bootstrap `group-invite` rumor; avatar/banner/description only when non-empty, invite-policy tags always.
   static UnsignedEvent buildGroupInviteRumor({
     required Group group,
     required String selfPubkey,
@@ -390,14 +326,7 @@ class GroupLogic {
     );
   }
 
-  /// Builds the owner-issued `group-metadata` rumor that propagates the group's
-  /// current name/avatar/banner/description + invite policy to the other members
-  /// (groups.js `_broadcastGroupMetadata`, 2102). Content is empty (it's a
-  /// control event, never a chat bubble). The banner/avatar/description tags are
-  /// always present (empty string clears the field, matching the PWA's
-  /// `group.banner || ''`). [createdAtSec] is the group's `metaUpdatedAt` so a
-  /// redelivered metadata event keeps its monotonic stamp; [recipients] should be
-  /// the other members (self is excluded by the caller).
+  /// Owner-issued `group-metadata` control rumor; empty values clear fields and [createdAtSec] keeps the monotonic stamp.
   static UnsignedEvent buildGroupMetadataRumor({
     required Group group,
     required String selfPubkey,
@@ -432,11 +361,7 @@ class GroupLogic {
     );
   }
 
-  /// Builds a `group-add-member` rumor announcing [group]'s (already-updated)
-  /// member list, carrying the full group metadata + owner/mod roster + the
-  /// adder's rotated [ephemeralPk] so the new members learn the group's
-  /// appearance and key state from the first wrap (groups.js `addMemberToGroup`,
-  /// 1457). [content] is the "X was added by Y." system line.
+  /// `group-add-member` rumor with full metadata, roster and the adder's rotated [ephemeralPk].
   static UnsignedEvent buildAddMemberRumor({
     required Group group,
     required String selfPubkey,
@@ -480,8 +405,7 @@ class GroupLogic {
     );
   }
 
-  /// Builds a moderation/control rumor of [type] with the supplied [extraTags]
-  /// (e.g. `['kick', target]`, `['mod', target]`, `['owner', newOwner]`).
+  /// Moderation/control rumor of [type] with [extraTags] like `['kick', target]`.
   static UnsignedEvent buildControlRumor({
     required Group group,
     required String selfPubkey,
@@ -510,8 +434,6 @@ class GroupLogic {
       content: content,
     );
   }
-
-  // ---- role checks ---------------------------------------------------------
 
   static bool isOwner(Group g, String pubkey) => g.createdBy == pubkey;
   static bool isAdmin(Group g, String pubkey) => g.admins.contains(pubkey);
@@ -656,23 +578,11 @@ class GroupLogic {
     return genesisId(owner, nonce) == groupId;
   }
 
-  // ---- stale guard ---------------------------------------------------------
-
-  /// Stable identifier for a moderation rumor, used for exact-replay dedup.
-  /// Prefers the shared `x` tag id (identical across every member's wrap),
-  /// falling back to the local wrap [eventId].
+  /// Dedup id for a moderation rumor: the shared `x` tag, else the local wrap [eventId].
   static String? modEventKey(List<List<String>> tags, String? eventId) =>
       tagValue(tags, 'x') ?? eventId;
 
-  /// Rejects an out-of-order moderation rumor.
-  ///
-  /// Moderation events are ordered PER TARGET pubkey, not globally: relays can
-  /// deliver distinct mod events out of order (promote A @100 after kick B
-  /// @105) and a single global timestamp gate silently drops the older one
-  /// even though it was never seen. Exact replays are caught by the seen-id
-  /// set. Events without a target ([targetPubkey] null — ownership transfers)
-  /// keep the global gate, since authority for later events was already
-  /// derived from the current owner.
+  /// Orders moderation per target pubkey so out-of-order relay delivery isn't dropped.
   static bool isStaleModEvent(Group g, int ts, String? modKey,
       {String? targetPubkey}) {
     if (modKey != null && g.modSeenIds.contains(modKey)) return true;
@@ -687,8 +597,7 @@ class GroupLogic {
     return false;
   }
 
-  /// Records an applied moderation event's ts/id (clamped to now+300s):
-  /// seen-id dedup, the target's moderation clock, and the global watermark.
+  /// Records an applied moderation event (ts clamped to now+300s) for dedup, the target clock and the global watermark.
   static void recordModEvent(Group g, int ts, String? modKey,
       {String? targetPubkey}) {
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -706,9 +615,7 @@ class GroupLogic {
     }
   }
 
-  /// Advances a target's moderation clock (also used when a member is
-  /// re-added, so a replayed pre-re-add kick can't remove them again).
-  /// Bounded to the most recent 200 targets.
+  /// Also used on re-add so a replayed older kick can't remove them again; keeps the latest 200 targets.
   static void bumpModTargetTs(Group g, String targetPubkey, int ts) {
     if (targetPubkey.isEmpty) return;
     if (ts >= (g.modTsByTarget[targetPubkey] ?? 0)) {
@@ -723,10 +630,7 @@ class GroupLogic {
     }
   }
 
-  /// Appends a moderation-log entry stamped with the wall-clock receive time
-  /// (groups.js `_appendModLog`: `{ ...entry, ts: Math.floor(Date.now()/1000) }`
-  /// — the log records when the action was applied, not the event's claimed ts),
-  /// capped at the most recent 50 entries.
+  /// Log entries are stamped with receive time, not the claimed ts; latest 50 kept.
   static void _modLog(
     Group g, {
     required String type,
@@ -746,7 +650,6 @@ class GroupLogic {
     }
   }
 
-  /// Reads the first value of tag [name] from a parsed rumor's tag list.
   static String? tagValue(List<List<String>> tags, String name) {
     for (final t in tags) {
       if (t.isNotEmpty && t[0] == name && t.length > 1) return t[1];
@@ -757,13 +660,7 @@ class GroupLogic {
   static bool _hasTag(List<List<String>> tags, String name, String value) =>
       tags.any((t) => t.length > 1 && t[0] == name && t[1] == value);
 
-  /// Applies a verified group control rumor of [type] to [group] in place,
-  /// enforcing role checks and the stale-event guard. Returns the outcome.
-  ///
-  /// Role rules (docs/specs/03 §4.4–§4.5):
-  /// - kick/ban: owner or mod; mods cannot act on the owner or other mods.
-  /// - leave: the sender removes only themselves (no role required).
-  /// - delete-message: owner or mod; mods cannot delete the owner's messages.
+  /// Applies a verified control rumor in place with role checks and the stale guard.
   static GroupControlResult applyControlEvent({
     required Group group,
     required String type,
@@ -781,8 +678,7 @@ class GroupLogic {
         if (isStaleModEvent(group, ts, modKey, targetPubkey: target)) {
           return GroupControlResult.stale;
         }
-        // A member removing *themselves* is a voluntary leave — always allowed,
-        // no role required, and never bans (groups.js `leaveGroup`).
+        // Removing yourself is a voluntary leave: always allowed, never bans.
         if (senderPubkey == target) {
           recordModEvent(group, ts, modKey, targetPubkey: target);
           group.members.remove(target);
@@ -851,8 +747,7 @@ class GroupLogic {
       case GroupControlType.transferOwner:
         final newOwner = tagValue(tags, 'owner');
         if (newOwner == null) return GroupControlResult.invalid;
-        // Ownership transfers keep GLOBAL ordering (no targetPubkey): later
-        // events' authority was already derived from the current owner.
+        // Ownership transfers keep global ordering.
         if (isStaleModEvent(group, ts, modKey)) {
           return GroupControlResult.stale;
         }
@@ -873,7 +768,7 @@ class GroupLogic {
         return GroupControlResult.applied;
 
       case GroupControlType.addMember:
-        // Adder must be owner, or a member when member-invites are allowed.
+        // Adder must be owner, or a member when member invites are allowed.
         if (!canAddMembers(group, senderPubkey)) {
           return GroupControlResult.unauthorized;
         }
@@ -892,8 +787,7 @@ class GroupLogic {
           }
         }
         if (added.isEmpty) return GroupControlResult.noop;
-        // Advance each (re-)added member's moderation clock so a replayed
-        // pre-re-add kick arriving later can't remove them again.
+        // Advance each re-added member's clock so a replayed older kick can't remove them.
         final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
         final addTs = ts < nowSec + 300 ? ts : nowSec + 300;
         for (final pk in added) {
@@ -907,9 +801,7 @@ class GroupLogic {
             : GroupControlResult.noop;
 
       case GroupControlType.leave:
-        // A member announcing their own departure (groups.js:765-781). No role
-        // required and never bans; the sender removes only themselves. The PWA
-        // doesn't stale-guard a leave, so neither do we.
+        // Self-announced departure: no role needed, never bans, not stale-guarded.
         if (!group.members.contains(senderPubkey)) {
           return GroupControlResult.noop;
         }
@@ -920,13 +812,7 @@ class GroupLogic {
         return GroupControlResult.applied;
 
       case GroupControlType.deleteMessage:
-        // Owner/mod deletes another member's message (groups.js:1171-1197). The
-        // target message id lives in the `e` tag, the original author in
-        // `target_pubkey`. Per-message + idempotent, so the PWA applies NO
-        // stale-mod-event guard and does NOT advance lastModTs. Returns
-        // `applied` when authorized; the actual message removal is performed by
-        // the caller (app_state `applyGroupControl`, which owns the message
-        // store) by reading the `e` tag and calling `removeMessage`.
+        // Idempotent per message, so no stale guard or lastModTs bump; the caller removes the message.
         final targetMessageId = tagValue(tags, 'e');
         if (targetMessageId == null) return GroupControlResult.invalid;
         final targetAuthor = tagValue(tags, 'target_pubkey');
@@ -954,21 +840,10 @@ class GroupLogic {
 
   static bool _applyMetadata(
       Group g, List<List<String>> tags, String senderPubkey, int ts) {
-    // A falsy/zero metadata timestamp is rejected, mirroring groups.js
-    // `_applyGroupMetadataTags`: `if (!metaTs || metaTs < grp.metaUpdatedAt)`.
+    // A zero metadata timestamp is rejected.
     if (ts <= 0) return false;
     var changed = false;
-    // BARE-SHELL HEAL: a member who learned this group from a backfilled MESSAGE
-    // (relay-proxy / D1 gift-wrap archive) has no known owner — `mergeGroupFromMessage`
-    // plants `createdBy: null`. The owner metadata (a `group-metadata` control OR
-    // the `meta_ts` piggyback, both attached ONLY by the owner on the wire — see
-    // [groupMetaPiggybackTags]) is the sole signal that can establish the owner
-    // for such a member, so on a still-ownerless group adopt the sender as owner
-    // and let the appearance converge. This is the documented purpose of the
-    // piggyback (the "group avatar not coming from D1" symptom): without it a
-    // D1-only member's custom avatar/banner stays stuck on the stacked-member
-    // default forever. It intentionally diverges from the PWA's strict
-    // `createdBy === senderPubkey` reject, which leaves that member broken.
+    // Ownerless shell from a backfilled message: adopt the owner-only metadata sender as owner (deliberately looser than the PWA).
     if (g.createdBy == null || g.createdBy!.isEmpty) {
       g.createdBy = senderPubkey;
       changed = true;
@@ -1045,16 +920,16 @@ enum GroupControlResult {
   /// Applied and mutated the group.
   applied,
 
-  /// Valid but produced no change (e.g. duplicate add).
+  /// Valid but changed nothing (e.g. duplicate add).
   noop,
 
-  /// Rejected: stale / out-of-order.
+  /// Rejected as stale or out of order.
   stale,
 
   /// Rejected: sender lacks the required role.
   unauthorized,
 
-  /// Rejected: malformed (missing required tag).
+  /// Rejected: missing a required tag.
   invalid,
 
   /// Not a recognized control type.

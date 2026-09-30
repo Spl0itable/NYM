@@ -1,7 +1,4 @@
-// incoming_call.dart - #incomingCallModal port. Auto-shows when an inbound
-// call offer arrives (callStateProvider phase == incoming) and offers
-// Accept / Reject, honoring the acceptCalls preference (the gate itself lives
-// in CallService._onInvite — by the time this renders, ringing was allowed).
+// Incoming-call modal with Accept/Reject; the acceptCalls gate already ran in CallService._onInvite.
 
 import 'dart:math' as math;
 
@@ -17,8 +14,7 @@ import 'call_nym.dart';
 import 'call_providers.dart';
 import 'call_signaling.dart';
 
-/// Drop this once near the app root (e.g. in a Stack over the main scaffold).
-/// It renders nothing unless an incoming call is being presented.
+/// Mount once near the app root; renders nothing unless an incoming call is presented.
 class IncomingCallModal extends ConsumerWidget {
   const IncomingCallModal({super.key});
 
@@ -31,11 +27,8 @@ class IncomingCallModal extends ConsumerWidget {
     final service = ref.read(callServiceProvider);
     final nym = call.peerNym ?? tr('Someone');
     final hasPubkey = call.peerPubkey != null && call.peerPubkey!.isNotEmpty;
-    // Identicon seed is the caller PUBKEY (stable across nym changes, matches
-    // the PWA `generateAvatarSvg(pubkey)`); fall back to the nym only when no
-    // pubkey is known for the inbound call.
+    // Seed by pubkey so the identicon is stable across nym changes; nym only when no pubkey is known.
     final avatarSeed = hasPubkey ? call.peerPubkey! : nym;
-    // Real caller avatar (Rule 4).
     final picture = hasPubkey
         ? ref.watch(usersProvider)[call.peerPubkey!]?.profile?.picture
         : null;
@@ -45,47 +38,39 @@ class IncomingCallModal extends ConsumerWidget {
         : tr('Incoming {kind} call', {'kind': kind});
 
     return Material(
-      // `.modal` backdrop: solid-ui (default) dark `rgba(0,0,0,0.75)` →
-      // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-      // (styles-themes-responsive.css:1630-1635). This Material IS the overlay
-      // fill (not a barrier), so gate it on the resolved mode.
+      // This Material is the overlay fill, not a barrier, so it is gated on the resolved light/dark mode.
       color: c.isLight
-          ? const Color(0x73000000) // black @ 0.45
-          : const Color(0xBF000000), // black @ 0.75
+          ? const Color(0x73000000)
+          : const Color(0xBF000000),
       child: Center(
         child: Container(
-          // `.incoming-call-content`: max-width 320, padding 28/24, over
-          // `.modal-content` (radius 24 + shadow-lg + shadow-glow + 1px ring).
           width: 320,
           padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
           decoration: BoxDecoration(
             color: c.bgSecondary,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: c.glassBorder),
-            // `body.light-mode .modal-content { box-shadow: 0 8px 40px
-            // rgba(0,0,0,0.12) }` — one soft shadow, no glow, no white ring in
-            // light (styles-themes-responsive.css:1050-1052).
             boxShadow: c.isLight
                 ? const [
                     BoxShadow(
-                      color: Color(0x1F000000), // black @ 0.12
+                      color: Color(0x1F000000),
                       blurRadius: 40,
                       offset: Offset(0, 8),
                     ),
                   ]
                 : [
                     const BoxShadow(
-                      color: Color(0x80000000), // shadow-lg 0 8 32 black/0.5
+                      color: Color(0x80000000),
                       blurRadius: 32,
                       offset: Offset(0, 8),
                     ),
                     BoxShadow(
-                      color: c.primary.withValues(alpha: 0.1), // shadow-glow
+                      color: c.primary.withValues(alpha: 0.1),
                       blurRadius: 20,
                     ),
                     BoxShadow(
                       color: Colors.white
-                          .withValues(alpha: 0.05), // 1px white ring
+                          .withValues(alpha: 0.05),
                       spreadRadius: 1,
                     ),
                   ],
@@ -93,15 +78,9 @@ class IncomingCallModal extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Pulsing avatar ring (`.incoming-call-avatar` incomingCallPulse:
-              // a 1.6s primary box-shadow ring expanding 0→12px).
-              // `.incoming-call-avatar-wrap { margin-bottom: 14px }`.
               _PulsingAvatar(
                   seed: avatarSeed, primary: c.primary, imageUrl: picture),
               const SizedBox(height: 14),
-              // Decorated caller name (#suffix + badges/flair), `_callNymHtml`.
-              // `.incoming-call-name`: 1.2rem (19.2px), weight 600,
-              // margin-bottom 4.
               DefaultTextStyle(
                 style: TextStyle(
                   color: c.textBright,
@@ -126,11 +105,8 @@ class IncomingCallModal extends ConsumerWidget {
                       ),
               ),
               const SizedBox(height: 4),
-              // `.incoming-call-sub`: 0.85rem (13.6px), margin-bottom 22.
               Text(label, style: TextStyle(color: c.textDim, fontSize: 13.6)),
               const SizedBox(height: 22),
-              // Buttons: 58px, fixed 36px gap, decline=danger (icon rotated
-              // 135°), accept=primary bg with bg-colored icon (PWA, not green).
               Row(
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -138,7 +114,6 @@ class IncomingCallModal extends ConsumerWidget {
                   _RoundActionButton(
                     color: c.danger,
                     iconColor: Colors.white,
-                    // `.incoming-call-btn.decline` — feather phone rotated 135°.
                     svg: NymIcons.phone,
                     rotation: 0.375,
                     tooltip: tr('Decline'),
@@ -148,7 +123,6 @@ class IncomingCallModal extends ConsumerWidget {
                   _RoundActionButton(
                     color: c.primary,
                     iconColor: c.bg,
-                    // `.incoming-call-btn.accept` — feather phone, primary bg.
                     svg: NymIcons.phone,
                     tooltip: tr('Accept'),
                     onTap: () => service.answer(),
@@ -163,8 +137,6 @@ class IncomingCallModal extends ConsumerWidget {
   }
 }
 
-/// The 88px avatar wrapped in a repeating primary box-shadow ring that expands
-/// 0→12px and fades over 1.6s (`@keyframes incomingCallPulse`).
 class _PulsingAvatar extends StatefulWidget {
   const _PulsingAvatar({
     required this.seed,
@@ -197,9 +169,8 @@ class _PulsingAvatarState extends State<_PulsingAvatar>
     return AnimatedBuilder(
       animation: _ctrl,
       builder: (context, child) {
-        // CSS keyframe: 0/100% → spread 0 @ alpha .4; 50% → spread 12 @ alpha 0.
+        // Keyframes: spread 0 at alpha .4 at 0/100%, spread 12 at alpha 0 at 50%.
         final t = _ctrl.value;
-        // Triangular 0→1→0 envelope so the ring grows then resets each cycle.
         final p = t < 0.5 ? t * 2 : (1 - t) * 2;
         final spread = 12.0 * p;
         final alpha = 0.4 * (1 - p);
@@ -239,8 +210,7 @@ class _RoundActionButton extends StatefulWidget {
   final String tooltip;
   final VoidCallback onTap;
 
-  /// Glyph rotation in turns (`.incoming-call-btn.decline svg` is rotated 135°
-  /// in the PWA: 135/360 = 0.375).
+  /// Glyph rotation in turns (0.375 = 135°).
   final double rotation;
 
   @override
@@ -250,7 +220,7 @@ class _RoundActionButton extends StatefulWidget {
 class _RoundActionButtonState extends State<_RoundActionButton> {
   bool _hover = false;
 
-  /// CSS `filter: brightness(1.1)` — multiply the RGB channels by 1.1.
+  /// CSS `brightness(1.1)`: multiply RGB channels by 1.1.
   Color _brighten(Color color) => Color.from(
         alpha: color.a,
         red: math.min(1, color.r * 1.1),
@@ -260,8 +230,6 @@ class _RoundActionButtonState extends State<_RoundActionButton> {
 
   @override
   Widget build(BuildContext context) {
-    // `.incoming-call-btn:hover { transform: scale(1.08); filter:
-    // brightness(1.1); }` with `transition: transform 0.15s, filter 0.15s`.
     final bg = _hover ? _brighten(widget.color) : widget.color;
     final fg = _hover ? _brighten(widget.iconColor) : widget.iconColor;
     Widget glyph = NymSvgIcon(widget.svg, color: fg, size: 26);

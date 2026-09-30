@@ -44,11 +44,7 @@ import UniformTypeIdentifiers
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
-  /// The sqflite message store (nym_cache.db + WAL/SHM sidecars) mirrors
-  /// end-to-end encrypted conversations locally; it must not ride iCloud or
-  /// Finder/iTunes backups. Identity secrets live in the Keychain (protected
-  /// separately); this covers the Documents-directory database files. Applied
-  /// on every launch so files recreated after a wipe are re-excluded.
+  /// The sqflite message store (and WAL/SHM) must not ride iCloud or device backups; re-applied every launch.
   private func excludeMessageStoreFromBackup() {
     guard let docs = FileManager.default.urls(
       for: .documentDirectory, in: .userDomainMask).first else { return }
@@ -174,13 +170,7 @@ import UniformTypeIdentifiers
     }
   }
 
-  // MARK: - App attestation
-
-  /// Dart side: `lib/services/attest/attest_service.dart`.
-  ///
-  /// Hands back an App Attest key id and attestation object for the server's
-  /// challenge, or nil on a device that cannot attest — which Dart reads as
-  /// "no proof" and enrolls nothing.
+  /// App Attest key id and attestation for the server's challenge, or nil when the device can't attest.
   private func registerAttestChannel() {
     guard let controller = window?.rootViewController as? FlutterViewController else { return }
     let channel = FlutterMethodChannel(
@@ -206,17 +196,7 @@ import UniformTypeIdentifiers
     }
   }
 
-  // MARK: - Stay Connected in Background
-
-  /// Dart side: `lib/services/platform/background_connectivity.dart`.
-  ///
-  /// iOS gives no way to simply keep running, so this does the two things it
-  /// does allow. The Bluetooth mesh continues on its own under the
-  /// `bluetooth-central` / `bluetooth-peripheral` background modes declared in
-  /// Info.plist — CoreBluetooth wakes the app for its events. The rest of the
-  /// app, relay sockets included, is held out of suspension by an open
-  /// background task for as long as the system is willing to grant, instead of
-  /// being suspended the instant the app leaves the screen.
+  /// Holds a background task as long as iOS allows; the BLE mesh uses its own background modes.
   private func registerBackgroundConnectivityChannel() {
     guard let controller = window?.rootViewController as? FlutterViewController else { return }
     let channel = FlutterMethodChannel(
@@ -242,8 +222,7 @@ import UniformTypeIdentifiers
   }
 
   private func beginBackgroundTask() {
-    // Replace any task already open so we never leak identifiers across
-    // successive background transitions.
+    // Replace any open task so identifiers never leak across transitions.
     endBackgroundTask()
     backgroundTaskID = UIApplication.shared.beginBackgroundTask(
       withName: "app.nymchat.background-connectivity"
@@ -258,15 +237,7 @@ import UniformTypeIdentifiers
     backgroundTaskID = .invalid
   }
 
-  // MARK: - Background catch-up (BGAppRefresh)
-
-  /// iOS will not wake a suspended app for network data without APNs, and
-  /// Nymchat's only APNs use is a content-free heartbeat sent to every device
-  /// alike — a push per message would tell the provider who is messaging whom.
-  /// `BGAppRefresh` is the other wake the system offers: a short run at a
-  /// time of its choosing, which Dart uses to pull what arrived and raise
-  /// notifications for it. Minutes-to-hours late, never
-  /// real-time, and entirely at the scheduler's discretion.
+  /// BGAppRefresh catch-up window for Dart; APNs sends only a content-free heartbeat.
   private func registerBackgroundRefreshChannel() {
     guard let controller = window?.rootViewController as? FlutterViewController else { return }
     let channel = FlutterMethodChannel(
@@ -304,15 +275,13 @@ import UniformTypeIdentifiers
   }
 
   private func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
-    // Queue the next window first: a task request is consumed by firing, and an
-    // early return below would otherwise end the chain permanently.
+    // Queue the next window first, or an early return below would end the chain.
     scheduleBackgroundRefresh(earliest: Self.refreshInterval)
 
     let finish = runDartRefresh { outcome in
       task.setTaskCompleted(success: outcome != .failed)
     }
-    // iOS kills the app if a task overruns, so both the OS deadline and a
-    // self-imposed cap end the window even if Dart never answers.
+    // iOS kills an overrunning task, so both the deadline and a self-imposed cap end the window.
     task.expirationHandler = { finish(.failed) }
   }
 
@@ -351,14 +320,12 @@ import UniformTypeIdentifiers
   private func scheduleBackgroundRefresh(earliest: TimeInterval) {
     let request = BGAppRefreshTaskRequest(identifier: Self.refreshTaskIdentifier)
     request.earliestBeginDate = Date(timeIntervalSinceNow: max(earliest, 60))
-    // Replace rather than stack: only one pending request per identifier is
-    // allowed, and submitting over an existing one throws.
+    // Only one pending request per identifier is allowed; submitting over one throws.
     BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.refreshTaskIdentifier)
     do {
       try BGTaskScheduler.shared.submit(request)
     } catch {
-      // Background App Refresh switched off by the user, or the scheduler is
-      // unavailable — nothing to recover, the app simply catches up on resume.
+      // Background App Refresh is off or unavailable; the app catches up on resume.
       NSLog("[BackgroundRefresh] submit failed: \(error.localizedDescription)")
     }
   }

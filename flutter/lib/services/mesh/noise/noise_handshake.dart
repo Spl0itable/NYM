@@ -3,13 +3,10 @@ import 'dart:typed_data';
 
 import 'noise_crypto.dart';
 
-/// The Noise protocol name for the suite bitchat uses. Exactly 32 bytes, so the
-/// initial handshake hash is the name itself (no hashing/padding needed).
+/// Exactly 32 bytes, so the initial handshake hash is the name itself.
 const String kNoiseProtocolName = 'Noise_XX_25519_ChaChaPoly_SHA256';
 
-/// A Noise `CipherState`: a symmetric key [k] plus a monotonic nonce counter.
-/// When [k] is null the state has no key and encrypt/decrypt are pass-through
-/// (used before the first `MixKey`).
+/// A Noise `CipherState`; with a null [k], encrypt/decrypt pass through.
 class NoiseCipherState {
   NoiseCipherState([this._k]);
 
@@ -43,8 +40,6 @@ class NoiseCipherState {
   }
 }
 
-/// A Noise `SymmetricState`: the chaining key [_ck], handshake hash [_h] and the
-/// running [CipherState]. Implements MixKey/MixHash/EncryptAndHash/Split.
 class NoiseSymmetricState {
   NoiseSymmetricState._(this._ck, this._h, this._cipher);
 
@@ -89,7 +84,6 @@ class NoiseSymmetricState {
     return pt;
   }
 
-  /// Derives the two transport [CipherState]s at the end of the handshake.
   (NoiseCipherState, NoiseCipherState) split() {
     final out = NoiseCrypto.hkdf(_ck, Uint8List(0), 2);
     return (NoiseCipherState(out[0]), NoiseCipherState(out[1]));
@@ -98,24 +92,18 @@ class NoiseSymmetricState {
 
 enum _Token { e, s, ee, es, se }
 
-/// A Noise `HandshakeState` specialised to the `XX` pattern:
-/// ```
-/// -> e
-/// <- e, ee, s, es
-/// -> s, se
-/// ```
-/// Empty prologue and no pre-message keys, matching bitchat.
+/// Noise `XX` handshake with an empty prologue and no pre-message keys, matching bitchat.
 class NoiseHandshakeState {
   NoiseHandshakeState._(this.isInitiator, this._sym, this._sPriv, this._sPub);
 
   final bool isInitiator;
   final NoiseSymmetricState _sym;
 
-  final Uint8List _sPriv; // local static private seed
-  final Uint8List _sPub; // local static public
-  Uint8List? _ePriv; // local ephemeral private seed
-  Uint8List? _re; // remote ephemeral public
-  Uint8List? _rs; // remote static public
+  final Uint8List _sPriv; // Local static private seed.
+  final Uint8List _sPub;
+  Uint8List? _ePriv; // Local ephemeral private seed.
+  Uint8List? _re;
+  Uint8List? _rs;
 
   int _msgIndex = 0;
 
@@ -129,21 +117,18 @@ class NoiseHandshakeState {
   Uint8List? get remoteStaticPublicKey => _rs;
   bool get isComplete => _msgIndex >= _xxPatterns.length;
 
-  /// Initializes an XX handshake. [staticPrivate] is the 32-byte X25519 static
-  /// private seed; [staticPublic] its public key.
   factory NoiseHandshakeState.xx({
     required bool initiator,
     required Uint8List staticPrivate,
     required Uint8List staticPublic,
   }) {
     final sym = NoiseSymmetricState.initialize(kNoiseProtocolName);
-    // MixHash(prologue) with an empty prologue — mandatory even when empty.
+    // MixHash(prologue) is mandatory even when the prologue is empty.
     sym.mixHash(Uint8List(0));
     return NoiseHandshakeState._(initiator, sym, staticPrivate, staticPublic);
   }
 
-  /// Writes the next handshake message (empty Noise payload), advancing the
-  /// pattern. Returns the bytes to transmit.
+  /// Writes the next handshake message (empty Noise payload) and returns the bytes to transmit.
   Future<Uint8List> writeMessage() async {
     final pattern = _xxPatterns[_msgIndex];
     final buf = BytesBuilder();
@@ -178,8 +163,7 @@ class NoiseHandshakeState {
     return buf.toBytes();
   }
 
-  /// Reads a received handshake message, advancing the pattern. Returns the
-  /// decrypted Noise payload (empty for bitchat).
+  /// Reads a handshake message and returns its payload (empty for bitchat).
   Future<Uint8List> readMessage(Uint8List message) async {
     final pattern = _xxPatterns[_msgIndex];
     var offset = 0;

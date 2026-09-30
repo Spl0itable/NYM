@@ -7,39 +7,13 @@ import 'package:crypto/crypto.dart' as crypto;
 import '../../core/crypto/native_schnorr.dart';
 
 /// Clamps a stored verified-app filter onto the options the UI offers.
-/// The older three-way values both map onto the single enabled state.
 String normalizeAppVerifiedFilter(String? raw) =>
     (raw == 'on' || raw == 'verified' || raw == 'any') ? 'on' : 'off';
 
-/// Tier a badge asserts about the client that holds it.
-///
-/// [attested] is backed by Apple App Attest or Google Play Integrity — a blob
-/// the platform's own root signs, covering the app's identity and the device's
-/// state. [origin] is the web app, which cannot attest itself and is verified
-/// only by request origin. The distinction is kept all the way to the UI
-/// because calling both "verified" would overstate the second.
-/// What a badge proves, strongest first.
-///
-/// [attested] is hardware-backed — Apple App Attest or Play Integrity — and no
-/// third party can mint one. [challenged] is a browser that solved a
-/// domain-bound challenge for its own enrollment: a real cost, but a
-/// transferable one, so it is named apart rather than folded into [attested].
-/// [origin] is a browser and nothing more.
+/// What a badge proves, strongest first: hardware attestation, browser challenge, origin only.
 enum AttestTier { attested, challenged, origin }
 
-/// A badge issued by the attestation authority: a BIP340 signature over
-/// (pubkey, expiry-day, tier), carried in a `nymattest` tag on channel
-/// messages.
-///
-/// Verification is local and costs one schnorr verify, which is what makes
-/// this usable as a per-message filter. The pubkey is inside the signed
-/// digest, so a badge lifted from someone else's message verifies for them and
-/// not for whoever copied it.
-///
-/// The wire format, and every rule below, mirrors `verifyBadge` in
-/// nym-staging's `functions/api/_attest.js` and `verifyAttestBadge` in its
-/// `js/modules/attest.js`. All three must agree or a badge minted for one
-/// client reads as forged by another.
+/// Authority BIP340 signature over (pubkey, expiry-day, tier); must match nym-staging's `verifyBadge` rules.
 class AttestBadge {
   const AttestBadge({required this.tier, required this.expiryDay});
 
@@ -77,8 +51,7 @@ class AttestBadge {
     return sb.toString();
   }
 
-  /// Verifies [badge] for [pubkey] against [authorityPubkey], returning null
-  /// when it does not hold. [now] is injectable so expiry is testable.
+  /// Returns the badge when it verifies for [pubkey], else null.
   static AttestBadge? verify({
     required String badge,
     required String pubkey,
@@ -130,7 +103,6 @@ class AttestBadge {
     }
   }
 
-  /// Reads the `nymattest` tag off an event's [tags], returning its raw value.
   static String? badgeFromTags(List<List<String>> tags) {
     for (final t in tags) {
       if (t.length >= 2 && t[0] == tagName) return t[1];

@@ -1,13 +1,4 @@
-// GIF picker — 1:1 port of the PWA's composer `#gifPicker .gif-picker`
-// surface (ui-context.js `showGifPicker`/`displayGifs`, lines 2003-2167;
-// markup index.html:792; styles styles-features.css:1562-1717).
-//
-// Layout: header (search input), 2-column grid of GIFs, "Powered by GIPHY"
-// attribution. Trending loads on open; typing (debounced 500ms, ui-context.js
-// :2045) switches to search; clearing returns to trending. Favorites
-// (`nym_favorite_gifs`, ≤100) show as a "Favorites" section above trending,
-// each GIF has a star toggle (ui-context.js `toggleFavoriteGif`). Selecting a
-// GIF inserts its URL into the composer (ui-context.js `insertGif`).
+// GIF picker: trending on open, 500ms-debounced search, starred favorites, and selection inserts the GIF URL.
 
 import 'dart:async';
 import 'dart:convert';
@@ -28,17 +19,14 @@ import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import 'modal_close_chip.dart';
 
-/// Giphy API key — same key the PWA uses (`this.giphyApiKey`, app.js:679).
-/// Requests are routed through the backend `/api/proxy?action=giphy` worker
-/// (the proxy attaches the key + `limit=20&rating=g` upstream), so the user's
-/// IP is never exposed to Giphy — matching the PWA.
+/// Requests go through the backend proxy, which attaches the key, so the user's IP never reaches Giphy.
 const String kGiphyApiKey = kApiGiphyApiKey;
 
-/// localStorage key for favorite GIFs (ui-context.js:2091), ≤100.
+/// Favorite GIFs storage key (max 100).
 const String kFavoriteGifsKey = 'nym_favorite_gifs';
 const int kFavoriteGifsCap = 100;
 
-/// One GIF result: the `fixed_height` image url + title (ui-context.js:2154).
+/// One GIF result: the `fixed_height` image url and title.
 class GifItem {
   const GifItem({required this.url, required this.title});
   final String url;
@@ -47,11 +35,7 @@ class GifItem {
   Map<String, Object> toJson() => {'url': url, 'title': title};
 }
 
-/// Giphy client routed through the backend proxy. Trending + search go to
-/// `/api/proxy?action=giphy` (relays.js `fetchGiphy`, lines 3221-3238); the
-/// proxy returns the same Giphy JSON shape (`{data:[{images:{fixed_height:
-/// {url}}, title}]}`) so parsing is identical to the direct path. The
-/// [ApiClient] is injectable for tests (mock `http.Client`).
+/// Giphy client via the backend proxy, which returns Giphy's JSON shape unchanged.
 class GiphyService {
   GiphyService({ApiClient? api}) : _api = api ?? ApiClient();
 
@@ -68,7 +52,6 @@ class GiphyService {
     final out = <GifItem>[];
     for (final g in data) {
       if (g is! Map) continue;
-      // images.fixed_height.url (ui-context.js:2154).
       final images = g['images'];
       final fixed = images is Map ? images['fixed_height'] : null;
       final url = fixed is Map ? fixed['url'] : null;
@@ -79,12 +62,10 @@ class GiphyService {
   }
 }
 
-/// Provider for the Giphy client (overridable in tests; network is only ever
-/// touched when the picker is actually mounted).
+/// Overridable in tests; network is only touched once the picker mounts.
 final giphyServiceProvider = Provider<GiphyService>((ref) => GiphyService());
 
-/// Favorites store, persisted under [kFavoriteGifsKey] as a JSON array of
-/// `{url,title}` (ui-context.js `_getFavoriteGifs`/`saveFavoriteGifs`).
+/// Favorites persisted as a JSON array of `{url,title}`.
 class FavoriteGifsStore {
   FavoriteGifsStore(this._prefs);
   final SharedPreferences _prefs;
@@ -108,8 +89,7 @@ class FavoriteGifsStore {
     return <GifItem>[];
   }
 
-  /// Toggle favorite for [url] (ui-context.js `toggleFavoriteGif`): remove if
-  /// present, else prepend; cap at 100. Returns the new list.
+  /// Removes [url] if present, else prepends; capped at 100.
   Future<List<GifItem>> toggle(String url, String title) async {
     final favs = load();
     final idx = favs.indexWhere((g) => g.url == url);
@@ -127,8 +107,7 @@ class FavoriteGifsStore {
   }
 }
 
-/// The GIF picker panel. [favoritesStore] persists favorites; [onSelect]
-/// receives the chosen GIF url to insert into the composer.
+/// [onSelect] receives the chosen GIF url.
 class GifPicker extends ConsumerStatefulWidget {
   const GifPicker({
     super.key,
@@ -141,11 +120,10 @@ class GifPicker extends ConsumerStatefulWidget {
   final FavoriteGifsStore favoritesStore;
   final ValueChanged<String> onSelect;
 
-  /// Dismisses the picker (`.gif-modal-close` ✕). When null the ✕ falls back to
-  /// `Navigator.maybePop` (dialog usage).
+  /// When null, close falls back to `Navigator.maybePop`.
   final VoidCallback? onClose;
 
-  /// Optional media proxy base (unused on native — GIFs load directly).
+  /// Optional media proxy base; unused on native.
   final String? proxyBase;
 
   @override
@@ -169,16 +147,13 @@ class _GifPickerState extends ConsumerState<GifPicker>
   @override
   void initState() {
     super.initState();
-    // The panel lifts above the keyboard by reading View.viewInsets (see
-    // build); that read establishes no rebuild dependency, so observe metrics
-    // changes to repaint as the keyboard animates in/out.
+    // `View.viewInsets` sets up no rebuild dependency, so observe metrics to follow the keyboard.
     WidgetsBinding.instance.addObserver(this);
     _favorites = widget.favoritesStore.load();
-    // Rebuild on focus to apply the `.gif-search-input:focus` fill + glow ring.
     _searchFocus.addListener(() {
       if (mounted) setState(() {});
     });
-    // Lazy: network only fires here, once the picker is mounted.
+    // Lazy: network fires only once the picker mounts.
     _loadTrending();
   }
 
@@ -215,7 +190,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
       if (!mounted) return;
       setState(() {
         _loading = false;
-        // On failure, still show favorites if any (ui-context.js:2063).
+        // On failure, still show favorites if any.
         _error = _favorites.isEmpty;
         _gifs = const [];
       });
@@ -257,7 +232,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
       _loadTrending();
       return;
     }
-    // 500ms debounce (ui-context.js:2045).
     _debounce = Timer(const Duration(milliseconds: 500), () => _runSearch(q));
   }
 
@@ -274,19 +248,11 @@ class _GifPickerState extends ConsumerState<GifPicker>
     final c = context.nym;
     final transparency =
         ref.watch(settingsProvider.select((s) => s.transparencyEnabled));
-    // Keyboard-aware, like the PWA riding the visual viewport: overlay hosts
-    // anchor the panel to the SCREEN bottom, so the panel itself pads up by
-    // the keyboard height and shrinks to the space left above it — keeping
-    // the search field + results visible while typing. We read the inset from
-    // the raw FlutterView rather than MediaQuery: inside an OverlayPortal that
-    // sits under a resizing Scaffold, MediaQuery.viewInsets is already
-    // consumed (reports 0), so the panel would never lift. View.viewInsets is
-    // in physical px and is never consumed by an ancestor.
+    // Pad up by the keyboard via raw `View.viewInsets`; MediaQuery's insets are already consumed under a resizing Scaffold.
     final view = View.of(context);
     final keyboardInset = view.viewInsets.bottom / view.devicePixelRatio;
     final maxPanelHeight = keyboardInset > 0
-        // Screen minus keyboard, status bar, and the 60px bottom-bar offset
-        // the phone popover anchors at (+8 breathing room).
+        // Screen minus keyboard, status bar and the 60px bottom-bar anchor (+8).
         ? (MediaQuery.sizeOf(context).height -
                 keyboardInset -
                 MediaQuery.paddingOf(context).top -
@@ -297,26 +263,17 @@ class _GifPickerState extends ConsumerState<GifPicker>
     return Padding(
       padding: EdgeInsets.only(bottom: keyboardInset),
       child: Container(
-        // .gif-picker: 350 wide, max 450 tall, glass, radius md, padding 12.
         constraints: BoxConstraints(maxWidth: 350, maxHeight: maxPanelHeight),
         width: 350,
         decoration: BoxDecoration(
-          // `.gif-picker` bg: with Transparency ON (no `solid-ui` body class) the
-          // PWA hardcodes rgba(20,20,35,0.9) dark (styles-features.css:1565) /
-          // rgba(255,255,255,0.92) light (styles-themes-responsive.css:1173-1177);
-          // with Transparency OFF (`solid-ui`, the default) it's the opaque
-          // `var(--glass-bg)` (#14141e dark / #ffffff light,
-          // styles-themes-responsive.css:1583-1600) — exactly `c.glassBg`.
+          // Transparency on uses fixed translucent fills; solid-ui (default) is the opaque glass background.
           color: transparency
               ? (c.isLight
-                  ? const Color(0xEBFFFFFF) // rgba(255,255,255,0.92)
-                  : const Color(0xE6141423)) // rgba(20,20,35,0.9)
+                  ? const Color(0xEBFFFFFF)
+                  : const Color(0xE6141423))
               : c.glassBg,
           border: Border.all(color: c.glassBorder),
           borderRadius: NymRadius.rmd,
-          // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5); light mode redefines it to
-          // rgba(0,0,0,0.12) (styles-themes-responsive.css:537, and explicitly on
-          // `body.light-mode .gif-picker` at :1173-1177).
           boxShadow: [
             BoxShadow(
               color:
@@ -341,9 +298,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
     );
   }
 
-  /// `.gif-modal-header` (search input + close ✕, bottom-divider, gap 10) +
-  /// `.gif-search-input` (styles-features.css:1582-1608). On focus the input
-  /// fills `white@0.07`, border → primary@0.3, with a 3px primary@0.06 glow.
   Widget _header(NymColors c) {
     final focused = _searchFocus.hasFocus;
     final field = DecoratedBox(
@@ -360,10 +314,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
         controller: _searchController,
         focusNode: _searchFocus,
         onChanged: _onSearchChanged,
-        // `color: var(--text-bright)`; light mode overrides it to `var(--text)`
-        // (`body.light-mode .gif-search-input { color: var(--text) !important }`,
-        // styles-themes-responsive.css:1063-1068 — more specific than the
-        // generic `body.light-mode input { color: #000000 !important }`).
+        // Light mode overrides the text color to `--text`.
         style:
             TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
         cursorColor: c.isLight ? Colors.black : Colors.white,
@@ -401,7 +352,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
         children: [
           Expanded(child: field),
           const SizedBox(width: 10),
-          // `.modal-close.gif-modal-close` ✕ chip.
           ModalCloseChip(
             onTap: widget.onClose ?? () => Navigator.of(context).maybePop(),
           ),
@@ -412,8 +362,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
 
   Widget _results(NymColors c) {
     if (_loading) {
-      // Per-mode loading copy: trending → "Loading trending GIFs..."
-      // (ui-context.js:2056); search → "Searching GIFs..." (:2073).
       return _centered(
         c,
         _searchMode ? tr('Searching GIFs...') : tr('Loading trending GIFs...'),
@@ -422,8 +370,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
     }
     final showFavs = _showFavorites && _favorites.isNotEmpty;
     if (_error && !showFavs) {
-      // Trending fail → "Failed to load GIFs" (:2066); search empty → "No GIFs
-      // found" (:2079); search FAIL → "Failed to search GIFs" (:2084).
       final msg = _searchMode
           ? (_searchFailed ? tr('Failed to search GIFs') : tr('No GIFs found'))
           : tr('Failed to load GIFs');
@@ -445,8 +391,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
     );
   }
 
-  /// `.gif-section-label` (styles-features.css:1674-1683): 10/w700/upper/
-  /// ls0.06em/text-dim/opacity 0.8/padding 4px 2px 0.
   Widget _sectionLabel(NymColors c, String text) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(2, 4, 2, 0),
@@ -462,17 +406,13 @@ class _GifPickerState extends ConsumerState<GifPicker>
     );
   }
 
-  /// `.gif-grid`: 2 columns, gap 8, square items (styles-features.css:1610).
   Widget _grid(List<GifItem> gifs) {
     if (gifs.isEmpty) return const SizedBox.shrink();
     return GridView.count(
       crossAxisCount: 2,
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
-      // Without an explicit padding, GridView absorbs the ambient
-      // MediaQuery.padding (the status-bar inset inside the overlay) as its
-      // default sliver padding — a phantom empty band above the GIFs. The
-      // PWA's `.gif-grid` has no padding.
+      // Explicit zero padding, or GridView absorbs the status-bar inset as a phantom band.
       padding: EdgeInsets.zero,
       mainAxisSpacing: 8,
       crossAxisSpacing: 8,
@@ -480,7 +420,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
     );
   }
 
-  /// `.gif-item` with image + `.gif-fav-btn` star (styles-features.css:1616).
   Widget _gifTile(GifItem gif) {
     return _GifTile(
       gif: gif,
@@ -490,7 +429,6 @@ class _GifPickerState extends ConsumerState<GifPicker>
     );
   }
 
-  /// `.gif-attribution` (styles-features.css:1701).
   Widget _attribution(NymColors c) {
     return Padding(
       padding: const EdgeInsets.only(top: 10),
@@ -543,9 +481,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
   }
 }
 
-/// `.gif-item`: a square thumbnail with a `.gif-fav-btn` star. On hover the
-/// border goes primary@0.3, a `--shadow-md` (0 4px 16px rgba(0,0,0,0.4)) lifts
-/// it, and it scales to 1.03 (styles-features.css:1616-1638).
+/// Square thumbnail with a favorite star; hover lifts, outlines and scales it to 1.03.
 class _GifTile extends StatefulWidget {
   const _GifTile({
     required this.gif,
@@ -573,9 +509,7 @@ class _GifTileState extends State<_GifTile> {
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
-      // `.gif-item { transition: all var(--transition) }` — 0.25s
-      // cubic-bezier(0.4,0,0.2,1) (styles-core.css:95), which is exactly
-      // Flutter's [Curves.fastOutSlowIn].
+      // CSS `--transition` is exactly [Curves.fastOutSlowIn].
       child: AnimatedScale(
         scale: _hover ? 1.03 : 1.0,
         duration: const Duration(milliseconds: 250),
@@ -584,13 +518,11 @@ class _GifTileState extends State<_GifTile> {
           duration: const Duration(milliseconds: 250),
           curve: Curves.fastOutSlowIn,
           decoration: BoxDecoration(
-            // `.gif-item`: 2px transparent border (→ primary@0.3 on hover).
             border: Border.all(
                 color: _hover ? c.primaryA(0.3) : Colors.transparent, width: 2),
             borderRadius: NymRadius.rsm,
             boxShadow: _hover
                 ? const [
-                    // `--shadow-md`: 0 4px 16px rgba(0,0,0,0.4).
                     BoxShadow(
                         color: Color(0x66000000),
                         blurRadius: 16,
@@ -612,11 +544,7 @@ class _GifTileState extends State<_GifTile> {
                     Container(
                       color: Colors.white.withValues(alpha: 0.03),
                       child: PausableAnimatedImage(
-                        // Route Giphy GIFs through the media proxy so the user's
-                        // IP is never exposed to the CDN (PWA getProxiedMediaUrl).
-                        // A gridful of ANIMATED GIFs decodes every frame; the
-                        // decode is capped to the ~half-width cell AND playback
-                        // pauses whenever the cell is off screen.
+                        // Proxied so the user's IP never reaches the CDN; decode is capped to the cell and playback pauses offscreen.
                         image: CachedNetworkImageProvider(
                           proxiedMedia(widget.gif.url),
                           maxWidth:
@@ -642,9 +570,6 @@ class _GifTileState extends State<_GifTile> {
                           child: SizedBox(
                             width: 24,
                             height: 24,
-                            // `.gif-fav-btn` (ui-context.js:2133) — the custom
-                            // 5-point star: outline by default, filled gold
-                            // (`--warning`) when `.active`.
                             child: Center(
                               child: NymSvgIcon(
                                 widget.favorite

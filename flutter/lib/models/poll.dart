@@ -1,11 +1,10 @@
-/// A poll option.
 class PollOption {
   PollOption({required this.index, required this.text});
   final int index;
   final String text;
 }
 
-/// A poll (kind 30078, `nym-poll`), channel-only (docs/specs/03 §6).
+/// A channel poll (kind 30078, `nym-poll`).
 class Poll {
   Poll({
     required this.id,
@@ -22,7 +21,7 @@ class Poll {
   final String question;
   final List<PollOption> options;
 
-  /// voter pubkey → option index (one vote each).
+  /// Voter pubkey to option index, one vote each.
   final Map<String, int> votes;
 
   final String pubkey;

@@ -1,8 +1,4 @@
-/// Custody of the post-quantum root secret: display form, the wraps that move
-/// it between devices, the settings record they live in, and the §6 adoption
-/// decision. Deriving keys FROM the root is in `lib/core/crypto/pq.dart`.
-///
-/// Spec: docs/PQ-ROOT-SPEC.md §1, §5, §6.
+/// Custody of the post-quantum root secret: display form, device wraps, settings record, and adoption (docs/PQ-ROOT-SPEC.md).
 library;
 
 import 'dart:convert';
@@ -12,19 +8,16 @@ import 'dart:typed_data';
 import '../../core/crypto/bech32_codec.dart';
 import '../../core/crypto/pq.dart' as pq;
 
-/// The settings category the wraps live in. The ONE category that may never be
-/// sealed to the root-derived key — spec §5.1, it would be a circular lock.
+/// Settings category for the wraps; never sealed to the root-derived key, which would be a circular lock (spec §5.1).
 const String pqRootCategory = 'nymchat-pq-root';
 
 /// Wrap salt: 16 random bytes, stored in the clear beside the wrap.
 const int pqRootSaltLength = 16;
 
-// Only the manual code path is implemented on mobile; a passkey wrap needs
-// platform PRF APIs. Records carrying one are parsed and ignored.
+// Mobile implements only the manual code path; passkey wraps need platform PRF and are parsed but ignored.
 const String pqRootWrapPasskey = 'passkey';
 
-/// The root as its `nympq1…` display / clipboard / QR form (spec §1). Key
-/// material: treat it exactly as the nsec is treated.
+/// The root's `nympq1…` display form; key material, treat it like the nsec.
 String pqRootToCode(Uint8List root) => encodeNymPq(root);
 
 const String pqRootLegacySlot = 'legacy';
@@ -92,8 +85,7 @@ class PqRootStore {
   }
 }
 
-/// Parses a pasted `nympq1…` code, or null on a wrong HRP, bad checksum or
-/// wrong length. Adopting a wrong root is worse than adopting none.
+/// Parses a `nympq1…` code, or null on wrong HRP, checksum or length.
 Uint8List? pqRootFromCode(String code) {
   try {
     final bytes = decodeNymPq(code);
@@ -104,8 +96,7 @@ Uint8List? pqRootFromCode(String code) {
   }
 }
 
-/// Whether [root] reproduces the identity's announced key at [epoch] or one of
-/// the three before it. Verifies a pasted code against signed data.
+/// Whether [root] reproduces the announced key at [epoch] or one of the three before it.
 bool pqRootMatchesAnnouncedKey(
   Uint8List root,
   Uint8List announcedKemPublicKey,
@@ -126,12 +117,7 @@ bool pqRootMatchesAnnouncedKey(
   return false;
 }
 
-// -----------------------------------------------------------------------------
-// Wrap format
-// -----------------------------------------------------------------------------
-
-/// One recovery path for the root: an AES-GCM-256 ciphertext plus its public
-/// KDF parameters. [blob] reuses the identity vault's `enc:v1:` envelope.
+/// One recovery path: AES-GCM-256 ciphertext plus public KDF parameters in the vault's `enc:v1:` envelope.
 class PqRootWrap {
   const PqRootWrap({
     required this.type,
@@ -147,13 +133,13 @@ class PqRootWrap {
   /// `enc:v1:<b64 iv>:<b64 ciphertext||tag>`.
   final String blob;
 
-  /// Base64 of the 16 random KDF salt bytes. Public (spec §5).
+  /// Base64 of the 16 KDF salt bytes; public (spec §5).
   final String? salt;
 
   /// Explicit so a future raise stays readable by an older build.
   final int? iterations;
 
-  /// Unknown fields, kept so a rewrite cannot drop another client's path.
+  /// Unknown fields, kept so a rewrite can't drop another client's path.
   final Map<String, dynamic> extra;
 
   Map<String, dynamic> toJson() => {
@@ -186,8 +172,7 @@ class PqRootWrap {
   }
 }
 
-/// The `nymchat-pq-root` payload. Its EXISTENCE is what stops a second device
-/// generating a rival root (spec §6), so an empty [wraps] is still valid.
+/// Its existence stops a second device generating a rival root (spec §6), so empty [wraps] is still valid.
 class PqRootRecord {
   const PqRootRecord({this.wraps = const [], this.version = 2, this.fp});
 
@@ -199,16 +184,12 @@ class PqRootRecord {
   final List<PqRootWrap> wraps;
   final int version;
 
-  /// Fingerprint of the root this record belongs to. The PWA REQUIRES it: a
-  /// record without one reads there as no record, and a device that believes
-  /// there is no record generates a second root and splits the account.
+  /// Root fingerprint; required, since the PWA treats a record without one as absent and would fork the root.
   final String? fp;
 
-  /// Whether this record identifies a root at all. Matches the PWA's
-  /// `_pqRootValidRecord`, so both apps accept and reject the same payloads.
+  /// Matches the PWA's `_pqRootValidRecord`, so both apps accept the same payloads.
   bool get isValid => version == 2 && fp != null && fp!.isNotEmpty;
 
-  /// Whether [root] is the one this record belongs to.
   bool matches(Uint8List root) =>
       fp != null && pq.pqRootFingerprint(root) == fp;
 
@@ -239,8 +220,7 @@ class PqRootRecord {
         'ts': DateTime.now().millisecondsSinceEpoch ~/ 1000,
       };
 
-  /// Null only when the payload is not a record at all — a record with no
-  /// usable wraps still parses, since its existence is what matters.
+  /// Null only when the payload isn't a record; a record with no usable wraps still parses.
   static PqRootRecord? fromJson(dynamic raw) {
     if (raw is! Map) return null;
     final rawWraps = raw['wraps'];
@@ -273,47 +253,25 @@ class PqRootRecord {
   }
 }
 
-// -----------------------------------------------------------------------------
-// Generation and adoption (spec §6)
-// -----------------------------------------------------------------------------
-
 /// What a booting device should do about the root (spec §6).
 enum PqRootAction {
-  /// Nothing, and specifically NOT generate.
+  /// Nothing, and specifically not generate.
   wait,
 
   /// We hold the root and the record is in place.
   ready,
 
-  /// We hold the root but no record exists — republish it.
+  /// We hold the root but no record exists; republish it.
   publishRecord,
 
-  /// A record exists and nothing we hold opens it: stay silent (§7), prompt.
+  /// A record exists that nothing we hold opens: stay silent (§7) and prompt.
   awaitLink,
 
   /// No record exists: generate, publish, adopt, announce.
   generate,
 }
 
-/// The §6 decision. Pure and separate because the ORDER of these questions is
-/// the whole safety property.
-///
-/// Deliberately not gated on holding a local nsec: for a signer login the root
-/// is the thing that makes the account post-quantum at all, so requiring one
-/// first is a deadlock — no key, so no root, so no key. The PWA's
-/// `pqRootEnsure` gates on support rather than capability for the same reason,
-/// and the two must reach the same verdict from the same inputs.
-///
-/// Nor on the identity being a "durable login". The standard onboarding does
-/// not log anyone in: it persists a nick and boots the auto-ephemeral
-/// identity, so `loginMethod` is null for the overwhelming majority of
-/// accounts even though the keypair is kept across launches and the account is
-/// durable in every sense the user cares about. Requiring a durable login here
-/// meant those accounts NEVER generated a root and silently stayed on the
-/// nsec-derived key. The PWA has no such gate — `settingsLoadFromD1` falls
-/// back to `this.pubkey` and runs `pqRootEnsure` regardless — which is why
-/// this worked there and not here. [throwawayKeypair] is the one identity that
-/// genuinely has nothing to protect: a new keypair every launch.
+/// The §6 decision, where question order is the safety property; not gated on a local nsec or durable login, matching the PWA.
 PqRootAction pqRootDecide({
   required bool recordLoadSucceeded,
   required bool recordPresent,
@@ -322,19 +280,17 @@ PqRootAction pqRootDecide({
   bool recordMatchesHeldRoot = true,
   bool recordReadable = true,
 }) {
-  // A keypair that is regenerated every launch has nothing to carry forward.
+  // A keypair regenerated every launch has nothing to carry forward.
   if (throwawayKeypair) return PqRootAction.wait;
-  // A read that did not complete proves nothing either way.
+  // A read that didn't complete proves nothing either way.
   if (!recordLoadSucceeded) return PqRootAction.wait;
   if (recordPresent) {
     if (!recordReadable) return PqRootAction.awaitLink;
-    // Holding *a* root is not holding *this account's* root. A stale one from
-    // a reset identity opens nothing the record points at, so it is the §6.3
-    // case exactly as an empty device is.
+    // A stale root from a reset identity opens nothing, so it is the §6.3 case like an empty device.
     if (holdRoot && recordMatchesHeldRoot) return PqRootAction.ready;
     return PqRootAction.awaitLink;
   }
-  // No record. Ours has not landed yet, or there is none to land.
+  // No record: ours hasn't landed yet, or there is none.
   if (holdRoot) return PqRootAction.publishRecord;
   return PqRootAction.generate;
 }

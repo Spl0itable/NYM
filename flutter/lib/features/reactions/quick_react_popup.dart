@@ -7,13 +7,10 @@ import '../../widgets/nym_icons.dart';
 import '../messages/format/message_content.dart';
 import '../../widgets/anchored_popup.dart';
 
-/// The six default quick-react emojis (calls.js `_messageQuickReactDefaults`,
-/// line 1491: `['👍', '❤️', '😂', '🔥', '👎', '😮']`). The PWA pads the user's
-/// recent reactions up to six with these and drops duplicates.
+/// Default quick-react emojis, used to pad recents to six.
 const List<String> kQuickReactDefaults = ['👍', '❤️', '😂', '🔥', '👎', '😮'];
 
-/// Builds the six-emoji quick-react row: recents first, padded with the
-/// defaults, deduped, capped at six (mirrors calls.js lines 1488-1499).
+/// Recents first, padded with defaults, deduped, capped at six.
 List<String> quickReactEmojis(List<String> recents) {
   final out = <String>[];
   for (final e in recents) {
@@ -27,9 +24,7 @@ List<String> quickReactEmojis(List<String> recents) {
   return out.take(6).toList();
 }
 
-/// One row in the long-press quick-context-menu (`.quick-context-item`,
-/// ui-context.js:1358-1450): a leading 16px icon + label, optionally tinted
-/// (lightning / danger). [onTap] runs the action after the popup closes.
+/// One long-press quick-context row; [onTap] runs after the popup closes.
 class QuickContextItem {
   const QuickContextItem({
     required this.label,
@@ -40,21 +35,15 @@ class QuickContextItem {
 
   final String label;
 
-  /// The leading glyph as a [NymIcons] SVG string.
   final String svg;
   final VoidCallback onTap;
   final QuickContextItemColor color;
 }
 
-/// Color variants for [QuickContextItem] (`.lightning` #f7931a, `.report`
-/// `--warning`, `.danger`).
+/// Color variants: lightning #f7931a, report `--warning`, danger.
 enum QuickContextItemColor { normal, lightning, report, danger }
 
-/// The inline quick-context-menu (`.quick-context-menu`, styles-features.css
-/// :2778-2845): a vertical card (`min-width:200px`, radius 14, `rgba(20,20,35,
-/// 0.92)`, 4px padding) of labeled icon rows, shown below the quick-react pill
-/// on long-press. Built from a gated item list mirroring ui-context.js
-/// :1358-1450 (Slap/Hug/Zap/Quote/Copy/Translate/Edit/Delete).
+/// Long-press quick-context card shown below the quick-react pill.
 class QuickContextMenu extends StatelessWidget {
   const QuickContextMenu({super.key, required this.items});
 
@@ -69,15 +58,10 @@ class QuickContextMenu extends StatelessWidget {
         constraints: const BoxConstraints(minWidth: 200),
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
-          // `.quick-context-menu` is `rgba(20,20,35,0.92)` by default, but
-          // `body.solid-ui` (default ON) overrides it to `var(--glass-bg)` — the
-          // opaque sidebar/header surface (#14141e dark, #ffffff light). Use the
-          // mode-aware token so the menu is a light card in light mode instead of
-          // a hardcoded dark slab.
+          // Solid-ui (default) uses the opaque, mode-aware glass background.
           color: c.glassBg,
           border: Border.all(color: c.glassBorder),
           borderRadius: const BorderRadius.all(Radius.circular(14)),
-          // `--shadow-lg` softens in light mode (rgba(0,0,0,0.15) vs 0.4).
           boxShadow: [
             BoxShadow(
                 color: c.isLight
@@ -128,13 +112,11 @@ class _QuickContextRowState extends State<_QuickContextRow> {
         break;
       case QuickContextItemColor.normal:
         fg = c.text;
-        iconColor = c.textDim; // `.quick-context-item svg { color: text-dim }`
+        iconColor = c.textDim;
         break;
     }
     final hoverBg = widget.item.color == QuickContextItemColor.danger
-        ? const Color(0x1FFF4444) // rgba(255,68,68,0.12) — both modes
-        // `.quick-context-item:hover`: white@0.08 dark → black@0.06 light
-        // (`body.light-mode .quick-context-item:hover`).
+        ? const Color(0x1FFF4444)
         : c.hoverOverlay;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -152,7 +134,6 @@ class _QuickContextRowState extends State<_QuickContextRow> {
           child: Row(
             children: [
               NymSvgIcon(widget.item.svg, size: 16, color: iconColor),
-              // `.nm-ico8` → margin-right:8px on the leading SVG.
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -168,12 +149,7 @@ class _QuickContextRowState extends State<_QuickContextRow> {
   }
 }
 
-/// The quick-react popup (`.quick-react-popup`, styles-features.css
-/// :2712-2776): a pill of emoji buttons (28px) plus exactly one trailing "more"
-/// chevron with a left divider (`.quick-react-expand`) that opens the full
-/// picker. Shown on long-press. The PWA pill carries no other affordance — the
-/// labeled actions live in the separate `.quick-context-menu` card rendered
-/// below (ui-context.js:1312-1323, 1452-1475).
+/// Long-press pill of emoji buttons plus one trailing chevron that opens the full picker.
 class QuickReactPopup extends StatelessWidget {
   const QuickReactPopup({
     super.key,
@@ -194,14 +170,9 @@ class QuickReactPopup extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
-          // `.quick-react-popup` is `rgba(20,20,35,0.92)` by default, but
-          // `body.solid-ui` (default ON) overrides it to `var(--glass-bg)`
-          // (#14141e dark, #ffffff light) — mode-aware so the pill is a light
-          // surface in light mode.
           color: c.glassBg,
           border: Border.all(color: c.glassBorder),
           borderRadius: const BorderRadius.all(Radius.circular(24)),
-          // `--shadow-lg` softens in light mode (rgba(0,0,0,0.15) vs 0.4).
           boxShadow: [
             BoxShadow(
                 color: c.isLight
@@ -216,17 +187,14 @@ class QuickReactPopup extends StatelessWidget {
           children: [
             for (final e in emojis)
               _EmojiButton(emoji: e, onTap: () => onReact(e)),
-            // `.quick-react-expand`: chevron with a 1px left divider
-            // (white@0.1 dark → black@0.1 light,
-            // `body.light-mode .quick-react-expand`).
             Container(
               margin: const EdgeInsets.only(left: 2),
               decoration: BoxDecoration(
                 border: Border(
                   left: BorderSide(
                       color: c.isLight
-                          ? const Color(0x1A000000) // rgba(0,0,0,0.1)
-                          : const Color(0x1AFFFFFF)), // rgba(255,255,255,0.1)
+                          ? const Color(0x1A000000)
+                          : const Color(0x1AFFFFFF)),
                 ),
               ),
               child: _btn(
@@ -253,8 +221,6 @@ class QuickReactPopup extends StatelessWidget {
   }
 }
 
-/// A single 28px emoji button with hover-scale 1.3 / active-scale 0.95
-/// (`.quick-react-emoji`, F13).
 class _EmojiButton extends StatefulWidget {
   const _EmojiButton({required this.emoji, required this.onTap});
   final String emoji;
@@ -286,19 +252,13 @@ class _EmojiButtonState extends State<_EmojiButton> {
           duration: const Duration(milliseconds: 120),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            // An exact `:shortcode:` recent renders as its custom-emoji image
-            // (PWA ui-context.js:1313-1316 `renderCustomEmojiImg`, 30×30 via
-            // `.quick-react-emoji .custom-emoji`, margin 0); unicode stays a
-            // 28px text on the fast path. Reused by the call-chat quick-react
-            // (surface #19).
+            // An exact `:shortcode:` recent renders as its custom-emoji image; unicode stays text.
             child: InlineEmojiText(
               text: widget.emoji,
               style: const TextStyle(fontSize: 28, height: 1),
               wholeStringOnly: true,
               emojiSize: 30,
               emojiMargin: EdgeInsets.zero,
-              // `.quick-react-emoji .custom-emoji { vertical-align: middle }`
-              // (styles-features.css:2747-2752).
               emojiAlignment: PlaceholderAlignment.middle,
             ),
           ),
@@ -308,11 +268,7 @@ class _EmojiButtonState extends State<_EmojiButton> {
   }
 }
 
-/// Shows [QuickReactPopup] near [anchorRect] (global coords). The pressed
-/// message is spotlit by dimming the rest of the screen (F9) and the popup
-/// scales/rises in over 150ms (F13). When [contextItems] is non-empty an inline
-/// [QuickContextMenu] is rendered just below the pill (F3, ui-context.js
-/// :1452-1475); it is positioned below the pill, flipping above on overflow.
+/// Shows the pill near [anchorRect], dimming everything but the pressed message, with [contextItems] below it.
 void showQuickReactPopup(
   BuildContext context, {
   required Rect anchorRect,
@@ -361,10 +317,7 @@ void showQuickReactPopup(
   overlay.insert(entry);
 }
 
-/// The animated overlay body: an animated dim scrim (F9) + the pill + an
-/// optional quick-context-menu, both entering with the PWA's scale/translate
-/// transitions (F13). Positions the pill above/below the anchor and the menu
-/// below the pill (flipping above on overflow).
+/// Dim scrim, pill and optional context menu, which flips above the pill on overflow.
 class _QuickReactOverlay extends StatefulWidget {
   const _QuickReactOverlay({
     required this.anchorRect,
@@ -378,12 +331,7 @@ class _QuickReactOverlay extends StatefulWidget {
 
   final Rect anchorRect;
 
-  /// The pressed MESSAGE's global bounds — the dim-scrim spotlight cutout (the
-  /// PWA's `.long-press-highlight` row stays bright while the scroller dims,
-  /// styles-features.css:2848-2863). Distinct from [anchorRect], which is a
-  /// zero-size press-point rect the pill positions against (`left = clientX −
-  /// w/2, top = clientY − 55`, ui-context.js:1330-1347). Null → the whole
-  /// screen dims uniformly.
+  /// Pressed message bounds for the spotlight cutout; [anchorRect] is the zero-size press point; null dims everything.
   final Rect? spotlightRect;
   final List<String> emojis;
   final ValueChanged<String> onReact;
@@ -421,9 +369,7 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
 
     return Stack(
       children: [
-        // Spotlight scrim (F9 `.has-long-press-highlight`): dim everything EXCEPT
-        // the pressed message, which shows through a rounded cutout so it reads as
-        // highlighted while the rest fades. Tap anywhere to dismiss.
+        // Dim everything except the pressed message; tap anywhere to dismiss.
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -432,17 +378,13 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
               opacity: _c,
               child: CustomPaint(
                 size: Size.infinite,
-                // The cutout is the pressed MESSAGE's rect (F9), not the
-                // zero-size press-point anchor the pill lays out against.
                 painter:
                     _SpotlightPainter(hole: widget.spotlightRect ?? Rect.zero),
               ),
             ),
           ),
         ),
-        // Pill + (optional) quick-context-menu, anchored at the press point and
-        // clamped fully on-screen (PWA `showQuickReactPopup`: centered on clientX,
-        // top ≈ pressY − 55, never off the top/bottom/sides).
+        // Anchored at the press point and clamped fully on-screen.
         CustomSingleChildLayout(
           delegate: PointPopupLayout(
             anchor: r.center,
@@ -454,7 +396,6 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Pill: scale 0.8 / +8px → 1, opacity 0→1 (F13).
               _Enter(
                 controller: _c,
                 beginScale: 0.8,
@@ -467,7 +408,6 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
               ),
               if (widget.contextItems.isNotEmpty) ...[
                 const SizedBox(height: 8),
-                // Menu: scale 0.9 / -6px → 1, opacity 0→1 (F13).
                 _Enter(
                   controller: _c,
                   beginScale: 0.9,
@@ -487,9 +427,7 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
   }
 }
 
-/// Paints the dim scrim with a rounded-rect cutout over the pressed message, so
-/// it stays bright (spotlit) while everything else dims — the native equivalent
-/// of the PWA's `.long-press-highlight` raising the message above the dim layer.
+/// Dim scrim with a rounded cutout so the pressed message stays bright.
 class _SpotlightPainter extends CustomPainter {
   _SpotlightPainter({required this.hole});
 
@@ -497,7 +435,7 @@ class _SpotlightPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = const Color(0x59000000); // black @ 0.35
+    final paint = Paint()..color = const Color(0x59000000);
     if (hole == Rect.zero || hole.isEmpty) {
       canvas.drawRect(Offset.zero & size, paint);
       return;
@@ -516,8 +454,7 @@ class _SpotlightPainter extends CustomPainter {
   bool shouldRepaint(_SpotlightPainter old) => old.hole != hole;
 }
 
-/// Wraps [child] with the PWA's enter transition: a scale + vertical translate
-/// driven by [controller] plus an opacity fade.
+/// Scale, vertical translate and opacity enter transition driven by [controller].
 class _Enter extends StatelessWidget {
   const _Enter({
     required this.controller,

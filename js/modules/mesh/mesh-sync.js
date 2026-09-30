@@ -3,21 +3,17 @@
 (function () {
     const G = typeof globalThis !== 'undefined' ? globalThis : self;
 
-    // 6h: how long a public message stays sync-able. This is the window that
-    // makes a device a town crier rather than a live relay.
+    // 6h sync window: what makes a device a town crier rather than a live relay.
     const PUBLIC_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-    // Announces are presence, not history — a stale one advertises a peer who
-    // walked away 20 minutes ago.
+    // Announces are presence, not history.
     const ANNOUNCE_MAX_AGE_MS = 15 * 60 * 1000;
-    // Prekey bundles live longest — 24h, matching bitchat. Their whole
-    // purpose is to be available while the owner is away.
+    // 24h, matching bitchat: bundles must be available while the owner is away.
     const PREKEY_BUNDLE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
     const CAPACITY = 1000;
     const GCS_MAX_BYTES = 400;
     const GCS_TARGET_FPR = 0.01;
     const SYNC_INTERVAL_MS = 15 * 1000;
-    // A response can replay the whole store, so this bounds what one peer can
-    // make us spend however fast it asks.
+    // A response can replay the whole store, so bound what one peer can make us spend.
     const RESPONSE_RATE_LIMIT_MS = 30 * 1000;
     const MAX_ACCEPT_FILTER_BYTES = 1024;
     const MAX_P = 32;
@@ -67,9 +63,7 @@
         }
     }
 
-    // SHA-256 has to be async in the browser (WebCrypto), so ids are computed
-    // once when a packet is stored and carried alongside it — never recomputed
-    // inside the encode loop.
+    // Async in the browser, so ids are computed once at store time, never inside the encode loop.
     async function sha256(bytes) {
         const d = await crypto.subtle.digest('SHA-256', bytes);
         return new Uint8Array(d);
@@ -94,8 +88,7 @@
         return (await sha256(buf)).slice(0, 16);
     }
 
-    /// First 8 bytes of SHA-256 over the id, top bit cleared so the value stays
-    /// positive in every language's signed 64-bit integer.
+    // Top bit cleared so the value stays positive in every language's signed 64-bit integer.
     async function h64(id16) {
         const d = await sha256(id16);
         let x = 0n;
@@ -130,9 +123,7 @@
         return prod === 0 ? 1 : (prod > 0xFFFFFFFF ? 0xFFFFFFFF : prod);
     }
 
-    // Clamps into range and drops duplicates so the sequence is strictly
-    // increasing — the encoder emits deltas, and a zero delta is not
-    // representable.
+    // Strictly increasing: the encoder emits deltas and a zero delta isn't representable.
     function normalize(values, modulo) {
         if (modulo <= 1n || !values.length) return [];
         const out = [];
@@ -161,16 +152,7 @@
         return w.bytes();
     }
 
-    /// Builds a filter over `mapped` hashes, passed NEWEST-FIRST.
-    ///
-    /// The modulus is fixed to the initial candidate count so `m` stays stable
-    /// while the tail is trimmed to fit the byte budget — a peer decoding the
-    /// filter must compute the same buckets, and all it has is `m`.
-    ///
-    /// `includedCount` is how many inputs the filter actually covers. Trimming
-    /// drops from the tail, so with ids newest-first the covered set is always
-    /// a contiguous newest-prefix — which is what makes a since-cursor exact
-    /// rather than an arbitrary hash-order subset.
+    // Pass hashes newest-first; `m` stays fixed while trimming, so the covered set is a contiguous newest prefix.
     function buildFilter(hashes, maxBytes, targetFpr) {
         const p = deriveP(targetFpr);
         if (!hashes.length) return { p, m: 1, data: new Uint8Array(0), includedCount: 0 };
@@ -192,12 +174,7 @@
         return { p, m: range, data: enc, includedCount: enc.length ? count : 0 };
     }
 
-    /// Decodes a wire filter to its sorted bucket values.
-    ///
-    /// Out-of-range parameters are REFUSED rather than decoded into garbage:
-    /// callers read an empty result as "the peer holds nothing" and send
-    /// everything, which is the safe direction — wasted airtime, never a
-    /// silently dropped message.
+    // Out-of-range params are refused; an empty result means "send everything", the safe direction.
     function decodeToSortedSet(p, m, data) {
         if (p < 1 || p > MAX_P || m <= 1) return [];
         const out = [];
@@ -228,16 +205,10 @@
         return false;
     }
 
-    // Bit index → mesh packet type, matching bitchat exactly. The types NOT
-    // listed are deliberate: anything directed (handshakes, encrypted
-    // transport, courier envelopes) must never spread by gossip, REQUEST_SYNC
-    // itself would loop, and our 0x5x extensions have no bit bitchat agrees on.
+    // Matches bitchat exactly; directed types, REQUEST_SYNC and our 0x5x extensions are deliberately absent.
     const SYNC_BIT_TO_TYPE = { 0: 0x01, 1: 0x02, 2: 0x03, 3: 0x10, 4: 0x11, 5: 0x20, 6: 0x21, 7: 0x22, 9: 0x24 };
     const SYNC_KNOWN_MASK = Object.keys(SYNC_BIT_TO_TYPE).reduce((m, b) => m | (1 << Number(b)), 0);
-    // Announces (which carry the signing keys everything else is verified
-    // against) plus public messages, plus prekey bundles — which have to travel
-    // while their owner is AWAY, since that is precisely when their mail is
-    // being couriered.
+    // Announces (the signing keys), public messages, and prekey bundles (needed while their owner is away).
     const SYNC_PUBLIC = (1 << 0) | (1 << 1) | (1 << 9);
 
     function syncFlagsContains(raw, meshType) {
@@ -282,9 +253,7 @@
         return out;
     }
 
-    // Returns null for a payload that is malformed, or claims parameters a
-    // decoder would have to guess at. Unknown TLVs are skipped, not fatal —
-    // that is what lets a newer bitchat widen the format without cutting us off.
+    // Null for malformed or guessed parameters; unknown TLVs are skipped for forward compatibility.
     function decodeRequestSync(data, maxAcceptBytes = MAX_ACCEPT_FILTER_BYTES) {
         let off = 0, p = null, m = null, payload = null, types = null, since = null;
         while (off + 3 <= data.length) {
@@ -309,13 +278,11 @@
         return type === 0x01 /* announce */
             || type === 0x02 /* public message */
             || type === 0x54 /* nymChannelMessage */
-            // A bundle has to reach senders while its owner is away — the one
-            // time it matters. Signed, so gossip cannot forge one.
+            // Bundles must reach senders while the owner is away; they're signed, so gossip can't forge one.
             || type === 0x24 /* prekeyBundle */;
     }
 
-    /// A bounded, freshness-filtered store of recent public packets, plus the
-    /// reconciliation over it. Kept free of the radio: the caller owns sending.
+    // Kept free of the radio: the caller owns sending.
     class GossipSync {
         constructor(opts) {
             opts = opts || {};
@@ -323,9 +290,7 @@
             this.capacity = opts.capacity || CAPACITY;
             this.publicMaxAgeMs = opts.publicMaxAgeMs || PUBLIC_MAX_AGE_MS;
             this.announceMaxAgeMs = opts.announceMaxAgeMs || ANNOUNCE_MAX_AGE_MS;
-            // A bundle stays useful far longer than a message: its owner is
-            // away, and stale prekeys are refused by the owner rather than
-            // being dangerous.
+            // Stale prekeys are refused by the owner rather than being dangerous.
             this.prekeyBundleMaxAgeMs = opts.prekeyBundleMaxAgeMs || PREKEY_BUNDLE_MAX_AGE_MS;
             this.gcsMaxBytes = opts.gcsMaxBytes || GCS_MAX_BYTES;
             this.gcsTargetFpr = opts.gcsTargetFpr || GCS_TARGET_FPR;
@@ -335,8 +300,7 @@
             this.messages = new Map();
             // senderHex -> { packet, hash }
             this.announces = new Map();
-            // senderHex -> { packet, hash }; at most one bundle per device, and
-            // only the newest is kept.
+            // senderHex -> { packet, hash }; one bundle per device, newest only.
             this.prekeyBundles = new Map();
             this.lastAsked = new Map();
             this.lastAnswered = new Map();
@@ -347,15 +311,12 @@
                 : packet.type === 0x24 ? this.prekeyBundleMaxAgeMs
                     : this.publicMaxAgeMs;
             const age = this.now() - packet.timestamp;
-            // A packet stamped in the future is clock skew, not a time
-            // traveler: keep it rather than discard a good message.
+            // Future stamps are clock skew; keep the message.
             if (age < 0) return true;
             return age <= maxAge;
         }
 
-        /// Records a public packet seen on the air (received OR sent by us).
-        /// Directed packets are refused — this store is public history, never
-        /// anybody's private mail.
+        // Directed packets are refused: this store is public history only.
         async onPublicPacketSeen(packet, isBroadcastFn) {
             if (isBroadcastFn && !isBroadcastFn(packet)) return false;
             if (!isSyncable(packet.type)) return false;
@@ -367,8 +328,7 @@
                 return true;
             }
             if (packet.type === 0x24) {
-                // Newest wins: an older bundle would resurrect keys its owner
-                // has already deleted.
+                // Newest wins: an older bundle would resurrect deleted keys.
                 const key = hexOf(packet.senderID);
                 const held = this.prekeyBundles.get(key);
                 if (held && held.packet.timestamp >= packet.timestamp) return false;
@@ -432,9 +392,7 @@
             const nMax = estimateMaxElements(this.gcsMaxBytes, p);
             const included = candidates.slice(0, Math.min(candidates.length, nMax));
             const params = buildFilter(included.map(v => v.hash), this.gcsMaxBytes, this.gcsTargetFpr);
-            // When the filter cannot cover everything, tell the responder how
-            // far back it reaches. Without the cursor the responder re-sends
-            // that whole tail every round, forever.
+            // The cursor stops the responder re-sending the uncovered tail every round.
             const covered = params.includedCount;
             const since = (covered < candidates.length && covered > 0)
                 ? included[covered - 1].packet.timestamp : null;
@@ -443,13 +401,7 @@
             });
         }
 
-        /// The packets a requester is missing — the whole reconciliation, as a
-        /// pure function of the store and the request.
-        ///
-        /// Announces are exempt from the since-cursor: they carry the signing
-        /// keys everything else is verified against, there is at most one per
-        /// peer, and a peer that cannot verify anything is worse off than the
-        /// negligible cost of resending them.
+        // Announces skip the since-cursor: they carry the signing keys and there's one per peer.
         packetsMissingFrom(request) {
             const want = request.types === null || request.types === undefined ? SYNC_PUBLIC : request.types;
             const sorted = decodeToSortedSet(request.p, request.m, request.data);
@@ -472,10 +424,7 @@
                 }
             }
             if (syncFlagsContains(want, 0x24)) {
-                // Exempt from the cursor, like announces: there is at most one
-                // per device, and a sender without it falls back to the
-                // non-forward-secret static seal — a real loss for a
-                // negligible resend.
+                // Also cursor-exempt: one per device, and without it senders fall back to the non-forward-secret seal.
                 for (const v of this.prekeyBundles.values()) {
                     if (!this._fresh(v.packet)) continue;
                     if (mightContain(v.hash)) continue;

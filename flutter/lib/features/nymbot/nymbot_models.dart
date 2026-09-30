@@ -1,7 +1,4 @@
-/// Data models for the Nymbot client surface.
-///
-/// Field names mirror the `functions/api/bot.js` worker response shapes and the
-/// client contract in `docs/specs/04-features.md` §11.2-11.5.
+/// Nymbot client data models; field names mirror the bot worker's response shapes.
 library;
 
 import '../i18n/i18n.dart' show creditFigure;
@@ -34,12 +31,7 @@ const List<BulkBonus> kBulkBonusFallback = [
   BulkBonus(bonus: 0.20, standardSats: 5000, proSats: 50000),
 ];
 
-/// The Pro frontier models selectable with `?model <name>`.
-///
-/// Exact list + ids verified against `functions/api/bot.js` `BOT_PRO_MODELS`
-/// (and README line 172 / spec §11.3). [key] is the value sent as `proModel`;
-/// [label] is the README's display name; [baseCredits] is the per-call base
-/// Pro-credit cost (1, except Fable = 2).
+/// A Pro model selectable with `?model <name>`; [key] is sent as `proModel`.
 class ProModel {
   const ProModel({
     required this.key,
@@ -61,15 +53,13 @@ class ProModel {
     this.priced = true,
   });
 
-  /// One entry from the worker's `models` action, which serves the live
-  /// Cloudflare catalog (mirrored hourly into D1) rather than [kProModels].
+  /// One entry from the worker's live `models` catalog.
   factory ProModel.fromJson(Map<String, dynamic> j) {
     int? asInt(Object? v) => v is num ? v.toInt() : int.tryParse('${v ?? ''}');
     return ProModel(
       key: (j['key'] ?? '').toString(),
       label: (j['label'] ?? j['key'] ?? '').toString(),
-      // The live catalog keys by slug and carries the id separately; older
-      // payloads may omit it.
+      // The live catalog keys by slug with the id separate; older payloads may omit it.
       modelId: (j['model'] ?? j['modelId'] ?? '').toString(),
       baseCredits: asInt(j['credits']) ?? asInt(j['baseCredits']) ?? 1,
       inUsdPerMTok: (j['inUsdPerMTok'] as num?)?.toDouble(),
@@ -84,7 +74,7 @@ class ProModel {
       tools: j['tools'] == true,
       context: asInt(j['context']),
       hosting: (j['hosting'] ?? '').toString(),
-      // Absent means "assume priced" so an older worker doesn't gray the list.
+      // Absent means priced, so an older worker doesn't gray out the list.
       priced: j['priced'] != false,
     );
   }
@@ -109,22 +99,15 @@ class ProModel {
         'priced': priced,
       };
 
-  /// Value passed to the worker as `proModel`, e.g. `claude-opus`.
+  /// Sent to the worker as `proModel`, e.g. `claude-opus`.
   final String key;
 
-  /// README display label, e.g. `Claude Opus 5`.
   final String label;
 
-  /// Internal model id, mirroring `BOT_PRO_MODELS[key].model` in
-  /// `functions/api/bot.js`. A `provider/…` slug is third-party: `anthropic/…`
-  /// goes to Anthropic's native endpoint through the AI Gateway, everything
-  /// else to the gateway's unified-billing one. A `@cf/…` prefix is
-  /// Cloudflare-hosted and runs on the worker's AI binding directly — no
-  /// gateway hop and no upstream credential, which is why DeepSeek's working
-  /// entries are the `@cf/` ones. Documentation only: the client sends [key].
+  /// Internal model id, for documentation only; the client sends [key].
   final String modelId;
 
-  /// Base Pro credits charged per model call (before length scaling).
+  /// Base Pro credits per call, before length scaling.
   final int baseCredits;
 
   final double? inUsdPerMTok;
@@ -133,17 +116,13 @@ class ProModel {
 
   bool get metered => (inUsdPerMTok ?? 0) > 0 && (outUsdPerMTok ?? 0) > 0;
 
-  /// Max Pro credits a single (max-length) reply can scale to (PWA
-  /// `_botProModels[].max`, pms.js:2085-2091). Null/<= [baseCredits] means the
-  /// model is flat-priced. Optional so existing call sites are unaffected.
+  /// Max Pro credits a max-length reply can scale to; null or <= [baseCredits] means flat-priced.
   final int? max;
 
-  /// One-line blurb from the model's Cloudflare page. Empty for the built-in
-  /// fallback entries, which predate the live catalog.
+  /// One-line blurb; empty on built-in fallback entries.
   final String description;
 
-  /// Provider display name (`Anthropic`) and slug (`anthropic`), used to group
-  /// the picker. Empty on the built-in fallback entries.
+  /// Provider name and slug for grouping; empty on built-in fallback entries.
   final String author;
   final String authorSlug;
 
@@ -152,20 +131,17 @@ class ProModel {
   final bool reasoning;
   final bool tools;
 
-  /// Context window in tokens, when the catalog knows it.
+  /// Context window in tokens, when known.
   final int? context;
 
-  /// `cloudflare-hosted` or `third-party`, from the catalog. Empty when the
-  /// worker predates the field. Only used to badge the row.
+  /// `cloudflare-hosted` or `third-party`; empty on older workers; only used for a badge.
   final String hosting;
 
-  /// Whether Cloudflare runs the weights itself, so the call needs no gateway
-  /// and no upstream provider credential.
+  /// Cloudflare runs the weights, so no gateway or upstream credential is needed.
   bool get cloudflareHosted =>
       hosting == 'cloudflare-hosted' || modelId.startsWith('@cf/');
 
-  /// False when Cloudflare publishes no price for the model, so the worker is
-  /// charging its conservative default. Shown as a caveat rather than hidden.
+  /// False when Cloudflare publishes no price and the worker charges its conservative default.
   final bool priced;
 
   double? turnCredits(double usdPerCredit, double minChargeCredits) {
@@ -207,10 +183,7 @@ class ProModel {
   String get priceLabel => ratesLabel() ?? turnLabel(0.0, 0.0);
 }
 
-/// The built-in Pro models, in README order (line 172): Claude Fable 5, Claude
-/// Opus 5, Claude Sonnet 5, Claude Haiku 4.5, GPT-5.6 Sol, GPT-5.4 mini, Gemini
-/// 3.1 Pro, Gemini 3.6 Flash, Grok 4.6, Kimi K3, Qwen 3.5, MiniMax M3, then the
-/// Cloudflare-hosted DeepSeek entries.
+/// Built-in Pro models in README order.
 const List<ProModel> kProModels = [
   ProModel(
     key: 'claude-fable',
@@ -296,8 +269,7 @@ const List<ProModel> kProModels = [
     baseCredits: 1,
     max: 3,
   ),
-  // Cloudflare-hosted. DeepSeek's third-party route is rejected by its
-  // upstream provider; these run on the worker's AI binding and answer.
+  // Cloudflare-hosted; DeepSeek's third-party route is rejected upstream.
   ProModel(
     key: 'deepseek-v4-pro',
     label: 'DeepSeek V4 Pro',
@@ -335,10 +307,7 @@ const List<ProModel> kProModels = [
   ),
 ];
 
-/// Retired `?model` keys, mapped to their replacements. Mirrors
-/// `BOT_PRO_MODEL_ALIASES` in `functions/api/bot.js` so a preference persisted
-/// by an older build still resolves instead of silently reverting to standard
-/// routing.
+/// Retired `?model` keys mapped to replacements, so older persisted preferences still resolve.
 const Map<String, String> kProModelAliases = {
   'codex': 'gpt-5',
   'claude-opus-4.8': 'claude-opus',
@@ -347,7 +316,7 @@ const Map<String, String> kProModelAliases = {
   'deepseek-v4': 'deepseek-v4-pro',
 };
 
-/// One provider's models in the picker, in the order the worker returned them.
+/// One provider's models, in worker order.
 class ProModelGroup {
   const ProModelGroup({
     required this.author,
@@ -474,12 +443,7 @@ class ProGenerator {
           : '$command --res $res ';
 }
 
-/// The Pro model list the picker renders.
-///
-/// [kProModelCatalogFallback] is [kProModels] — what ships in the binary and
-/// what renders whenever the live catalog can't be reached. A fetched catalog
-/// replaces it wholesale; nothing merges, so the worker stays the single
-/// source of truth for what a reply costs.
+/// The picker's model list; a fetched catalog replaces the built-in one wholesale, keeping the worker authoritative on cost.
 class ProModelCatalog {
   const ProModelCatalog({
     required this.models,
@@ -497,8 +461,7 @@ class ProModelCatalog {
   });
 
   factory ProModelCatalog.fromJson(Map<String, dynamic> j) {
-    // Every field is type-checked rather than cast: a malformed response has
-    // to degrade to the built-in list, not throw out of a background refresh.
+    // Type-check every field so a malformed response degrades to the built-in list instead of throwing.
     final rawModels = j['models'];
     final rawGroups = j['groups'];
     final rawAliases = j['aliases'];
@@ -572,12 +535,10 @@ class ProModelCatalog {
   final double? standardUsdPerCredit;
   final List<ProModelGroup> groups;
 
-  /// Retired/short keys mapped to a current one, so a model pinned before a
-  /// version bump (`claude-opus` → `claude-opus-5`) keeps resolving.
+  /// Retired or short keys mapped to current ones.
   final Map<String, String> aliases;
 
-  /// `catalog` when the worker served the live list, `builtin` when it fell
-  /// back to its own table.
+  /// `catalog` for the worker's live list, `builtin` for its fallback table.
   final String source;
   final int fetchedAt;
 
@@ -628,10 +589,7 @@ class ProModelCatalog {
     final direct = exact(k);
     if (direct != null) return direct;
 
-    // Aliases chain: a retired built-in key ("claude-opus-4.8") maps to a
-    // family name ("claude-opus"), which the live map maps to the current
-    // model ("claude-opus-5"). Bounded, and it never revisits a key, so a
-    // cycle in the served map can't hang the picker.
+    // Aliases chain (retired key -> family -> current); bounded and cycle-safe.
     var cur = k;
     final seen = <String>{cur};
     for (var hop = 0; hop < 4; hop++) {
@@ -642,15 +600,14 @@ class ProModelCatalog {
       cur = next;
     }
 
-    // A full model id also resolves, for a preference stored by id.
+    // A full model id also resolves.
     for (final m in models) {
       if (m.modelId.isNotEmpty && m.modelId == key) return m;
     }
     return null;
   }
 
-  /// Groups as the picker draws them: the worker's grouping when present,
-  /// otherwise one unnamed group holding everything.
+  /// The worker's grouping when present, else one unnamed group.
   List<MapEntry<String, List<ProModel>>> grouped() {
     if (groups.isEmpty) {
       return [MapEntry('', List<ProModel>.unmodifiable(models))];
@@ -689,26 +646,21 @@ class ProModelCatalog {
   }
 }
 
-/// The catalog that ships in the binary — used until a live one arrives, and
-/// whenever the worker is unreachable.
+/// Built-in catalog used until a live one arrives or when the worker is unreachable.
 const ProModelCatalog kProModelCatalogFallback =
     ProModelCatalog(models: kProModels);
 
-/// A single PM-only Nymbot command, surfaced by the `?…` suggestion palette
-/// inside the private bot chat (PWA `botPMCommands`, commands.js:272-281).
+/// A PM-only Nymbot command for the private bot chat's `?` palette.
 class BotPMCommand {
   const BotPMCommand({required this.name, required this.desc});
 
   /// The command including its leading `?`, e.g. `?model`.
   final String name;
 
-  /// One-line description shown beneath the command name.
   final String desc;
 }
 
-/// The PM-only commands the PWA shows in the Nymbot private chat, in order
-/// (commands.js `botPMCommands`). NOTE: this is the *PM* set — distinct from the
-/// public-channel `?` commands (`kBotCommands`), which are not wired here.
+/// PM-only commands in order, distinct from the public `?` set.
 const List<BotPMCommand> kBotPMCommands = [
   BotPMCommand(
     name: '?help',
@@ -748,10 +700,7 @@ const List<BotPMCommand> kBotPMCommands = [
   ),
 ];
 
-/// Deeper completions surfaced after `?model ` (commands.js
-/// `_botPMSubcommands`). Returns the rows to show for a base command once a
-/// trailing space has been typed, with each row's full insertion text.
-/// Returns null when [cmd] has no subcommands.
+/// Completions after `?model `, with each row's full insertion text; null without subcommands.
 List<BotPMCommand>? botPMSubcommands(String cmd) {
   if (cmd == '?model') {
     return [
@@ -765,18 +714,12 @@ List<BotPMCommand>? botPMSubcommands(String cmd) {
   return null;
 }
 
-/// Filters [kBotPMCommands] (and subcommands) for the `?…` palette given the
-/// current input. Mirrors `showBotCommandPalette` (commands.js:436-468):
-///  * a bare prefix (`?mo`) filters the 10 base commands by `startsWith`;
-///  * a base command plus a space (`?model `) surfaces its subcommands filtered
-///    by the remaining text.
+/// `?mo` filters base commands by prefix; `?model ` lists its subcommands filtered by the rest.
 List<BotPMCommand> filterBotPMCommands(String input) {
-  // Preserve a trailing space (it's meaningful: `?model ` → show subcommands),
-  // but ignore leading whitespace.
+  // Keep a trailing space (it triggers subcommands) but ignore leading whitespace.
   final needle = input.trimLeft().toLowerCase();
   if (needle.isEmpty || !needle.startsWith('?')) return const [];
 
-  // Base-command prefix match (no space typed yet).
   if (!needle.contains(' ')) {
     return [
       for (final c in kBotPMCommands)
@@ -784,8 +727,7 @@ List<BotPMCommand> filterBotPMCommands(String input) {
     ];
   }
 
-  // `?<cmd> <rest>` → subcommands of <cmd> filtered by <rest> (empty `rest`,
-  // i.e. just-typed trailing space, lists them all).
+  // Empty rest lists every subcommand.
   final sp = needle.indexOf(' ');
   final base = needle.substring(0, sp);
   final rest = needle.substring(sp + 1).trimLeft();
@@ -802,9 +744,7 @@ List<BotPMCommand> filterBotPMCommands(String input) {
   ];
 }
 
-/// Looks up a Pro model by its `?model` argument. Accepts the canonical [key]
-/// as well as a loose match on the label (case-insensitive). Returns null for
-/// unknown names or the literal `off`.
+/// Looks up a Pro model by key or loose label match; null for unknown names or `off`.
 ProModel? lookupProModel(String name) {
   var n = name.trim().toLowerCase();
   if (n.isEmpty || n == 'off') return null;
@@ -813,15 +753,14 @@ ProModel? lookupProModel(String name) {
     if (m.key == n) return m;
     if (m.label.toLowerCase() == n) return m;
   }
-  // Loose contains match (e.g. "opus" -> Claude Opus 5).
+  // Loose contains match, e.g. "opus".
   for (final m in kProModels) {
     if (m.label.toLowerCase().contains(n) || m.key.contains(n)) return m;
   }
   return null;
 }
 
-/// Result of splitting a bot reply into its visible text and optional
-/// `<think>…</think>` reasoning (spec §11.5; worker `sanitizeBotResponse`).
+/// A bot reply split into visible text and optional `<think>` reasoning.
 class BotReply {
   const BotReply({
     required this.text,
@@ -836,47 +775,37 @@ class BotReply {
     this.lowBalance = false,
   });
 
-  /// The reply body with any reasoning block stripped out.
   final String text;
 
-  /// The extracted reasoning (contents of `<think>…</think>`), or null.
+  /// Contents of `<think>…</think>`, or null.
   final String? reasoning;
 
-  /// Auto-router classification, e.g. `coding`/`reasoning`/`creative`/
-  /// `translation`/`general`/`pro` (worker `taskType`).
+  /// Auto-router classification, e.g. `coding`, `reasoning`, `pro`.
   final String? taskType;
 
-  /// Number of model calls made.
   final int? modelCalls;
 
-  /// Output tokens generated by the reply.
   final int? outputTokens;
 
   /// Credits charged for this reply.
   final double? cost;
 
-  /// Remaining balance after the reply (tier depends on [pro]).
+  /// Remaining balance after the reply; tier depends on [pro].
   final double? balance;
 
-  /// True when answered by a pinned Pro model.
   final bool pro;
 
-  /// The Pro model key used, when [pro].
   final String? proModel;
 
-  /// Worker hint that the balance is now low.
   final bool lowBalance;
 
   bool get hasReasoning => reasoning != null && reasoning!.trim().isNotEmpty;
 
-  /// Cap mirrors the worker's `BOT_THINKING_MAX_CHARS` (4000) — the client
-  /// should not render more reasoning than the worker would send.
+  /// Matches the worker's reasoning cap.
   static const int kReasoningMaxChars = 4000;
 }
 
-/// Standard + Pro credit balances (`action: balance`).
-/// Field names verified against worker response (lines 1254-1260) and spec §11.5
-/// `BotBalance`.
+/// Standard and Pro credit balances.
 class BotBalance {
   const BotBalance({
     required this.balance,
@@ -913,18 +842,16 @@ class BotBalance {
   );
 }
 
-/// Credit tier for buys/balances.
 enum CreditTier { standard, pro }
 
 extension CreditTierWire on CreditTier {
   String get wire => this == CreditTier.pro ? 'pro' : 'standard';
 
-  /// Sats per credit (README line 170): Standard = 10, Pro = 100.
+  /// Standard = 10, Pro = 100.
   int get satsPerCredit => this == CreditTier.pro ? 100 : 10;
 }
 
-/// A Lightning invoice returned by `action: create-invoice`.
-/// Fields verified against worker (lines 1347-1353) + spec §11.2.
+/// A Lightning invoice from `action: create-invoice`.
 class BotInvoice {
   const BotInvoice({
     required this.pr,
@@ -936,16 +863,16 @@ class BotInvoice {
     this.amountSats = 0,
   });
 
-  /// BOLT11 invoice string (render as QR + copyable text).
+  /// BOLT11 invoice string.
   final String pr;
 
-  /// SHA256 of [pr]; used to poll `check-invoice` / `claim-credits`.
+  /// SHA256 of [pr], used to poll `check-invoice` / `claim-credits`.
   final String invoiceId;
 
   /// LUD-21 verify URL, when the wallet supports it.
   final String? verify;
 
-  /// True when the server can verify the payment itself (NWC).
+  /// True when the server can verify payment itself (NWC).
   final bool serverVerify;
 
   /// True when the client must supply a NIP-57 receipt to claim.
@@ -983,12 +910,7 @@ int _int(Object? v) {
   return 0;
 }
 
-/// Splits a raw model reply into visible text + `<think>…</think>` reasoning.
-///
-/// Mirrors the worker's `<think>` convention (`sanitizeBotResponse`, bot.js
-/// lines 2397-2432): one or more `<think>…</think>` blocks are removed from the
-/// body and concatenated (newline-separated) into [BotReply.reasoning]. The
-/// match is case-insensitive and dot-all (spans newlines). Pure — no network.
+/// Moves every case-insensitive `<think>…</think>` block out of the body into [BotReply.reasoning], newline-joined.
 BotReply splitReasoning(
   String raw, {
   String? taskType,

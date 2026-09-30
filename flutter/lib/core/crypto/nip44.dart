@@ -10,26 +10,17 @@ import 'package:pointycastle/api.dart' show KeyParameter, ParametersWithIV;
 import 'keys.dart';
 import 'native_ecdh.dart';
 
-/// NIP-44 v2 implementation (HKDF-SHA256 + ChaCha20 + HMAC-SHA256).
-///
-/// Wire format of a payload:
-///   base64( 0x02 || nonce[32] || ciphertext || mac[32] )
-/// where ciphertext = ChaCha20(plaintext padded with a 2-byte BE length
-/// prefix), mac = HMAC-SHA256(hmac_key, aad = nonce || ciphertext).
+/// NIP-44 v2: base64(0x02 || nonce[32] || ChaCha20(padded) || HMAC-SHA256(nonce || ct)).
 
 final _secp = ECCurve_secp256k1();
-
-// --- HMAC / HKDF primitives -------------------------------------------------
 
 Uint8List _hmacSha256(Uint8List key, Uint8List data) {
   final mac = HMac(SHA256Digest(), 64)..init(KeyParameter(key));
   return mac.process(data);
 }
 
-/// HKDF-Extract(salt, ikm) -> PRK.
 Uint8List _hkdfExtract(Uint8List salt, Uint8List ikm) => _hmacSha256(salt, ikm);
 
-/// HKDF-Expand(prk, info, length) -> OKM.
 Uint8List _hkdfExpand(Uint8List prk, Uint8List info, int length) {
   final hashLen = 32;
   final n = (length + hashLen - 1) ~/ hashLen;
@@ -48,16 +39,7 @@ Uint8List _hkdfExpand(Uint8List prk, Uint8List info, int length) {
   return okm.sublist(0, length);
 }
 
-// --- ECDH -------------------------------------------------------------------
-
-/// secp256k1 ECDH on x-only pubkeys: lift [pubkeyHex] to the point with even
-/// y, multiply by [privkey], and return the 32-byte big-endian x coordinate.
-///
-/// Native libsecp256k1 when it loads in this isolate (~50 µs — see
-/// [NativeEcdh]); otherwise the pure-Dart pointycastle multiply below (~15 ms
-/// of BigInt math, which a CPU profile showed dominating the main isolate
-/// during settings-sync and gift-wrap publishes). Both agree on every result
-/// and on rejecting invalid inputs.
+/// x-only secp256k1 ECDH returning shared X; native when loaded in this isolate, else pointycastle.
 Uint8List _ecdhSharedX(Uint8List privkey, String pubkeyHex) {
   final native = NativeEcdh.sharedX(privkey: privkey, pubkeyHex: pubkeyHex);
   if (native != null) return native;
@@ -73,8 +55,7 @@ Uint8List _ecdhSharedX(Uint8List privkey, String pubkeyHex) {
   return _bigIntTo32(x);
 }
 
-/// Derives the NIP-44 v2 conversation key:
-/// HKDF-Extract(salt="nip44-v2", ikm = ecdh_shared_x).
+/// NIP-44 v2 conversation key: HKDF-Extract(salt="nip44-v2", ecdh_shared_x).
 Uint8List getConversationKey(Uint8List privkey, String pubkeyHex) {
   final sharedX = _ecdhSharedX(privkey, pubkeyHex);
   return _hkdfExtract(
@@ -83,25 +64,15 @@ Uint8List getConversationKey(Uint8List privkey, String pubkeyHex) {
   );
 }
 
-// The hybrid post-quantum key agreement in pq.dart reuses NIP-44's exact ECDH
-// and HKDF primitives — it swaps only how the 32-byte conversation key is
-// derived, leaving the payload format below untouched. These thin wrappers
-// expose them rather than duplicating the definitions, so the two schemes can
-// never drift apart.
+// Exposed for pq.dart so the hybrid scheme reuses NIP-44's exact primitives.
 
-/// NIP-44's secp256k1 ECDH: lift [pubkeyHex] to the even-y point, multiply by
-/// [privkey], return the 32-byte big-endian x coordinate.
 Uint8List ecdhSharedX(Uint8List privkey, String pubkeyHex) =>
     _ecdhSharedX(privkey, pubkeyHex);
 
-/// HKDF-Extract-SHA256(salt, ikm) -> 32-byte PRK.
 Uint8List hkdfExtract(Uint8List salt, Uint8List ikm) => _hkdfExtract(salt, ikm);
 
-/// HKDF-Expand-SHA256(prk, info, length) -> OKM.
 Uint8List hkdfExpand(Uint8List prk, Uint8List info, int length) =>
     _hkdfExpand(prk, info, length);
-
-// --- Per-message keys / padding ---------------------------------------------
 
 ({Uint8List chachaKey, Uint8List chachaNonce, Uint8List hmacKey}) _messageKeys(
     Uint8List conversationKey, Uint8List nonce) {
@@ -158,18 +129,13 @@ String _unpad(Uint8List padded) {
   return utf8.decode(unpadded);
 }
 
-// --- ChaCha20 (RFC 7539, 12-byte nonce) -------------------------------------
-
 Uint8List _chacha20(Uint8List key, Uint8List nonce12, Uint8List data) {
   final cipher = ChaCha7539Engine()
     ..init(true, ParametersWithIV(KeyParameter(key), nonce12));
   return cipher.process(data);
 }
 
-// --- Public encrypt/decrypt -------------------------------------------------
-
-/// Encrypts [plaintext] under [conversationKey]. A random 32-byte nonce is
-/// generated unless [nonce] is supplied (used for test vectors).
+/// Encrypts under [conversationKey]; [nonce] is only supplied for test vectors.
 String encrypt(String plaintext, Uint8List conversationKey,
     {Uint8List? nonce}) {
   final n = nonce ?? randomBytes(32);
@@ -189,8 +155,7 @@ String encrypt(String plaintext, Uint8List conversationKey,
   return base64.encode(payload);
 }
 
-/// Decrypts a NIP-44 v2 [payload] under [conversationKey]. Throws on a bad
-/// version byte, malformed length, or MAC mismatch.
+/// Throws on a bad version byte, malformed length or MAC mismatch.
 String decrypt(String payload, Uint8List conversationKey) {
   if (payload.isNotEmpty && payload[0] == '#') {
     throw FormatException('unsupported version');
@@ -216,8 +181,6 @@ String decrypt(String payload, Uint8List conversationKey) {
   final padded = _chacha20(mk.chachaKey, mk.chachaNonce, ciphertext);
   return _unpad(padded);
 }
-
-// --- helpers ----------------------------------------------------------------
 
 bool _constantTimeEquals(List<int> a, List<int> b) {
   if (a.length != b.length) return false;

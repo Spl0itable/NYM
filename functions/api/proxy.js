@@ -1,16 +1,4 @@
-// Cloudflare Pages Function: HTTP proxy for privacy-preserving fetches
-// Routes media, translation requests, and URL unfurling through Cloudflare
-// so the user's real IP is never exposed to third-party services.
-//
-// Endpoints:
-//   GET  /api/proxy?url=<encoded-url>            — Proxy any allowed media/resource
-//   POST /api/proxy?action=translate             — Translate text
-//   GET  /api/proxy?action=unfurl&url=<url>      — Fetch Open Graph metadata for URL preview
-//   PUT  /api/proxy?action=upload&server=<host>  — Upload a blob to a Blossom host (Nostr auth header)
-//   PUT  /api/proxy?action=mirror&server=<host>  — Ask a Blossom host to mirror a blob from a source URL
-//   GET  /api/proxy?action=geo-relays            — Fetch bitchat geo-relay CSV (edge-cached)
-//   GET/POST /api/proxy?action=json&url=<url>    — Proxy a JSON request (LNURL, Nominatim, etc.)
-//   POST /api/proxy?action=zap-verify            — Confirm a zap invoice (LUD-21 verify URL / NIP-57 receipt / NIP-47 wallet lookup)
+// HTTP proxy for media, translation, unfurl, Blossom, geo-relays, JSON and zap-verify so user IPs stay hidden.
 
 import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked, ipv6NetKey, cacheRateTake } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
@@ -24,27 +12,25 @@ const ALLOWED_MEDIA_TYPES = new Set([
   'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm',
 ]);
 
-// No hard size limit — rely on Cloudflare's streaming and Range request support
-// to handle large files without buffering the entire response into memory.
+// No hard size limit; rely on Cloudflare streaming and Range support.
 
 // Custom emoji images are effectively immutable, so cache them for 30 days.
 const EMOJI_CACHE_TTL = 2592000;
 
-// Max size for unfurl HTML fetch (512 KB)
+// 512 KB
 const MAX_UNFURL_SIZE = 512 * 1024;
 
-// Max size for JSON proxy responses (512 KB)
+// 512 KB
 const MAX_JSON_SIZE = 512 * 1024;
 
-// Max size for proxied media (100 MB) — caps bandwidth/memory amplification.
+// 100 MB; caps bandwidth/memory amplification.
 const MAX_MEDIA_SIZE = 100 * 1024 * 1024;
 
-// The two geo-relay directories bitchat's own clients read
+// The two geo-relay directories bitchat's own clients read.
 const GEO_RELAYS_URL = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
 const GEO_RELAYS_VETTED_URL = 'https://raw.githubusercontent.com/permissionlesstech/bitchat/refs/heads/main/relays/online_relays_gps.csv';
 const GEO_RELAYS_CACHE_TTL = 300;
 
-// Translate endpoints, tried in order.
 const TRANSLATE_CACHE_TTL = 86400;
 const TRANSLATE_IP_RATE = 600;
 const TRANSLATE_RATE_WINDOW_MS = 60000;
@@ -75,7 +61,6 @@ export async function onRequest(context) {
     return jsonResponse({ error: 'Origin not allowed' }, 403);
   }
 
-  // Handle CORS preflight
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
   }
@@ -135,9 +120,7 @@ function writeEdgeCache(context, path, body, contentType, ttl) {
   return resp;
 }
 
-// Geo-relay CSV proxy with Cloudflare edge cache.
-// Parses the bitchat CSV server-side and returns JSON so the client doesn't
-// have to do the work and the cached payload stays compact.
+// Parsed server-side into compact JSON so the cached payload stays small.
 async function handleGeoRelays(context) {
   const cacheKey = new Request(GEO_RELAYS_URL + '#json', { method: 'GET' });
   const cache = caches.default;
@@ -163,11 +146,10 @@ async function handleGeoRelays(context) {
   const csv = await upstream.text();
   const relays = parseGeoRelaysCsv(csv);
 
-  // `relays` keeps its existing meaning (the upstream list) so older clients
-  // are unaffected; `vetted` is additive.
+  // `relays` keeps its meaning for older clients; `vetted` is additive.
   let vettedRelays = [];
   if (vetted && vetted.ok) {
-    try { vettedRelays = parseGeoRelaysCsv(await vetted.text()); } catch (_) { /* additive only */ }
+    try { vettedRelays = parseGeoRelaysCsv(await vetted.text()); } catch (_) {}
   }
 
   const headers = new Headers(CORS_HEADERS);
@@ -200,16 +182,13 @@ function parseGeoRelaysCsv(csv) {
     const lat = parseFloat(parts[1]);
     const lng = parseFloat(parts[2]);
     if (!host || isNaN(lat) || isNaN(lng)) continue;
-    // Only emit plausible hostnames (optionally :port) — reject embedded paths,
-    // credentials, query strings, whitespace or control chars that could inject
-    // an attacker-chosen relay endpoint into every client's relay set.
+    // Emit only plausible host[:port] values so no attacker-chosen endpoint reaches clients' relay sets.
     if (!/^[a-z0-9.-]+(:\d{1,5})?$/i.test(host)) continue;
     parsed.push({ url: `wss://${host}`, lat, lng });
   }
   return parsed;
 }
 
-// Generic JSON proxy for external HTTP APIs (LNURL, Nominatim, Giphy, NIP-11, etc.)
 async function handleJsonProxy(targetUrl, request) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
@@ -267,7 +246,6 @@ async function handleJsonProxy(targetUrl, request) {
   return new Response(text, { status: resp.status, headers });
 }
 
-// Server-side confirmation that a zap invoice was paid
 async function handleZapVerify(request, context) {
   if (request.method !== 'POST') return jsonResponse({ error: 'POST required' }, 405);
   let body;
@@ -280,10 +258,10 @@ async function handleZapVerify(request, context) {
   if (body.receipt && pr && /^[0-9a-f]{64}$/.test(providerPubkey)) {
     try {
       if (!validateZapReceipt(body.receipt, { providerPubkey, pr })) return jsonResponse({ paid: true });
-    } catch { /* fall through to the verify URL */ }
+    } catch { /* Fall through to the verify URL. */ }
   }
 
-  // LUD-21 verify URL: poll it through the redirect-revalidating SSRF guard.
+  // LUD-21 verify URL, polled through the redirect-revalidating SSRF guard.
   const verifyUrl = typeof body.verifyUrl === 'string' ? body.verifyUrl : '';
   if (verifyUrl && /^https:\/\//i.test(verifyUrl) && !isPrivateUrl(verifyUrl)) {
     try {
@@ -302,7 +280,7 @@ async function handleZapVerify(request, context) {
   if (nwcUri && pr) {
     try {
       if (await nwcInvoicePaid(nwcUri, pr, 6000)) return jsonResponse({ paid: true });
-    } catch { /* fall through to unpaid */ }
+    } catch { /* Fall through to unpaid. */ }
   }
 
   return jsonResponse({ paid: false });
@@ -321,8 +299,7 @@ function resolveBlossomBase(serverParam) {
   if (!serverParam) return DEFAULT_BLOSSOM_HOST;
   try {
     const u = new URL(serverParam);
-    // Require HTTPS — the client's Nostr auth header is forwarded upstream and
-    // must never travel over cleartext HTTP.
+    // HTTPS only: the client's Nostr auth header is forwarded upstream.
     if (u.protocol !== 'https:') return null;
     if (!ALLOWED_BLOSSOM_HOSTS.has(u.hostname)) return null;
     return `https://${u.hostname}`;
@@ -422,7 +399,7 @@ async function handleBlossomMirror(request, serverParam) {
   return new Response(resp.body, { status: resp.status, headers: blossomResponseHeaders(resp) });
 }
 
-// Media Proxy — supports Range requests for video/audio streaming
+// Supports Range requests for video/audio streaming.
 async function handleMediaProxy(targetUrl, request, isEmoji = false) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
@@ -434,7 +411,6 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
     return jsonResponse({ error: 'Invalid URL' }, 400);
   }
 
-  // Block local/private IPs
   if (isPrivateUrl(targetUrl)) {
     return jsonResponse({ error: 'Blocked: private/local addresses not allowed' }, 403);
   }
@@ -446,7 +422,6 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
     return new Response(null, { status: 302, headers });
   }
 
-  // Forward Range header to upstream if present (for video/audio streaming)
   const upstreamHeaders = {
     'User-Agent': BROWSER_USER_AGENT,
     'Accept': 'image/*, video/*, audio/*',
@@ -456,16 +431,13 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
     upstreamHeaders['Range'] = rangeHeader;
   }
 
-  // Cache full-body fetches on Cloudflare's edge so the same avatar/banner/
-  // upload is served cross-user without re-hitting the origin. Skip caching
-  // for Range requests since partial responses cache poorly and need streaming.
+  // Edge-cache full bodies for cross-user reuse; Range requests skip the cache.
   const fetchInit = {
     headers: upstreamHeaders,
   };
   if (!rangeHeader) {
     if (isEmoji) {
-      // Long-lived edge cache for custom emoji. cacheTtlByStatus keeps failed
-      // fetches uncached so a missing image is retried until it delivers.
+      // cacheTtlByStatus keeps failed fetches uncached so a missing image is retried.
       fetchInit.cf = {
         cacheEverything: true,
         cacheTtlByStatus: { '200-299': EMOJI_CACHE_TTL, '300-399': 0, '400-599': 0 },
@@ -474,8 +446,7 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
       fetchInit.cf = { cacheTtl: 604800, cacheEverything: true };
     }
   }
-  // Follow redirects manually so an allowed public URL can't 30x-redirect into
-  // an internal/private address after the initial isPrivateUrl check.
+  // Follow redirects manually so a public URL can't redirect into a private address after isPrivateUrl.
   let resp;
   try {
     resp = await ssrfSafeFetch(targetUrl, fetchInit);
@@ -491,13 +462,11 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
   const contentType = (resp.headers.get('content-type') || '').split(/[;,]/)[0].trim().toLowerCase();
   const contentRange = resp.headers.get('content-range');
 
-  // Reject responses larger than MAX_MEDIA_SIZE (bandwidth/memory amplification)
   const declaredLen = parseInt(resp.headers.get('content-length') || '', 10);
   if (Number.isFinite(declaredLen) && declaredLen > MAX_MEDIA_SIZE) {
     return jsonResponse({ error: 'Upstream media too large' }, 413);
   }
 
-  // Allow media types and also common types that might serve images/video
   const isAllowed = ALLOWED_MEDIA_TYPES.has(contentType) ||
     contentType.startsWith('image/') ||
     contentType.startsWith('video/') ||
@@ -510,9 +479,7 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
 
   const headers = new Headers(CORS_HEADERS);
   headers.set('Content-Type', contentType || 'application/octet-stream');
-  // The proxy is served from the app's own origin, so prevent any proxied
-  // body from being interpreted as an executable document (SVG/HTML script,
-  // MIME sniffing) when navigated to directly.
+  // Served from our own origin, so neutralize proxied bodies that could execute (SVG/HTML, MIME sniffing).
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
   if (contentType === 'image/svg+xml') {
@@ -530,7 +497,6 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
     headers.set('Content-Length', resp.headers.get('content-length'));
   }
 
-  // Pass through range response headers for 206 Partial Content
   if (resp.status === 206) {
     if (contentRange) {
       headers.set('Content-Range', contentRange);
@@ -541,17 +507,7 @@ async function handleMediaProxy(targetUrl, request, isEmoji = false) {
   return new Response(resp.body, { status: 200, headers });
 }
 
-// Translation
-//
-// One call to one Google endpoint, with a retry against a second one and a
-// day of edge cache in front. The retry and the cache both exist for the same
-// reason: the endpoint rate-limits by caller IP, and every Worker in a colo
-// shares one.
-//
-// Every failure path logs WHY. A 502 out of here used to be indistinguishable
-// in the Workers log from any other 502 — `outcome: ok`, no exceptions, an
-// empty `logs` array — because the reason only ever reached the response body,
-// which the log does not record.
+// Google endpoint with a retry and a day of edge cache (it rate-limits per colo IP); every failure logs why.
 function translateIpKey(request) {
   let ip = '';
   try { ip = (request && request.headers && request.headers.get('CF-Connecting-IP')) || ''; } catch { ip = ''; }
@@ -605,11 +561,7 @@ async function handleTranslate(request, context) {
   if (!target) {
     return jsonResponse({ error: 'Missing target language' }, 400);
   }
-  // A batch. The apps translate one message at a time, but the build-time
-  // interface sync has ~1500 strings per language across 132 languages, and one
-  // HTTP round trip each would be most of the wall clock. Each string is still
-  // its own inference call — the models take one input — so this saves the
-  // network, not the work.
+  // Batching saves round trips for the build-time sync; each string is still its own inference call.
   if (Array.isArray(texts)) {
     return await handleTranslateBatch(texts, source || 'auto', target, context, request);
   }
@@ -620,8 +572,7 @@ async function handleTranslate(request, context) {
   const q = String(text).slice(0, MAX_CHARS);
   const sl = source || 'auto';
 
-  // Same text, same pair, same answer. Keyed by a hash so the path stays a sane
-  // length and the cache key can't be steered by the text itself.
+  // Keyed by a hash so the path stays short and can't be steered by the text.
   const cachePath = `/translate?k=${await sha256Hex(`${sl}\u0000${target}\u0000${q}`)}`;
   const cached = await readEdgeCache(cachePath);
   if (cached) return cached;
@@ -633,13 +584,7 @@ async function handleTranslate(request, context) {
       text: q, source: sl, target,
     });
   } catch (err) {
-    // The detail — which model refused and why — goes to the log, where it is
-    // the whole diagnosis: a failure on one language code with others working
-    // is a coverage gap, while a failure on every code is the binding or the
-    // account. It does NOT go to the client. Model identifiers name the
-    // infrastructure vendor, which this project deliberately never does in
-    // user-facing text, and "m2m100-1.2b: unsupported language" is not a
-    // sentence that helps whoever pressed translate.
+    // Details go to the log only; user-facing text never names the infrastructure vendor.
     console.error(`[translate] failed (tl=${target}, len=${q.length}): ${err.message}`);
     return jsonResponse({ error: 'Translation is unavailable for this language right now', target }, 502);
   }
@@ -657,17 +602,7 @@ async function handleTranslate(request, context) {
   );
 }
 
-/// Translates a list of strings in one request.
-///
-/// Bounded on both count and total size so a single call cannot tie up a
-/// worker indefinitely, and run a few at a time rather than all at once —
-/// these are inference calls, and firing 25 in parallel is how you find the
-/// account's concurrency limit rather than the fast path.
-///
-/// Partial success is a real outcome and is reported as one: a null in the
-/// results array means that string failed, and the caller decides what to do
-/// about it. Failing the whole batch because one string could not be
-/// translated would throw away 24 good translations.
+// Bounded in count and size with limited concurrency; a null result marks a failed string rather than failing the batch.
 const TRANSLATE_BATCH_MAX = 25;
 const TRANSLATE_BATCH_BYTES = 20000;
 const TRANSLATE_BATCH_CONCURRENCY = 4;
@@ -709,8 +644,7 @@ async function handleTranslateBatch(texts, source, target, context, request) {
   if (failures.length) {
     console.error(`[translate] batch tl=${target}: ${failures.length}/${items.length} failed: ${failures.slice(0, 3).join('; ')}`);
   }
-  // Not edge-cached: a batch is a different list every time, so the key would
-  // never be hit twice. The single-string path is the one that caches.
+  // Not edge-cached: batches never repeat, so only the single-string path caches.
   return jsonResponse({ translations: out, failed: failures.length });
 }
 
@@ -719,7 +653,7 @@ async function sha256Hex(input) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// URL Unfurling (Open Graph), edge-cached for 1 hour
+// URL unfurling (Open Graph), edge-cached for 1 hour.
 async function handleUnfurl(targetUrl, context) {
   if (!targetUrl) {
     return jsonResponse({ error: 'Missing url parameter' }, 400);
@@ -779,8 +713,7 @@ async function handleUnfurl(targetUrl, context) {
   return writeEdgeCache(context, cachePath, JSON.stringify(meta), 'application/json', 3600);
 }
 
-// Reverse-geocode lat/lng via Nominatim, edge-cached for 1 day. Results are
-// always requested in English so address fields stay consistent for users.
+// Requested in English so address fields stay consistent; edge-cached for 1 day.
 async function handleGeocode(searchParams, context) {
   const lat = parseFloat(searchParams.get('lat'));
   const lng = parseFloat(searchParams.get('lng'));
@@ -813,7 +746,7 @@ async function handleGeocode(searchParams, context) {
   return writeEdgeCache(context, cachePath, text, 'application/json', 86400);
 }
 
-// Giphy trending/search proxy, edge-cached for 60s
+// Edge-cached for 60s.
 async function handleGiphy(searchParams, context) {
   const apiKey = searchParams.get('api_key');
   const q = searchParams.get('q') || '';
@@ -842,15 +775,12 @@ async function handleGiphy(searchParams, context) {
   return writeEdgeCache(context, cachePath, text, 'application/json', 60);
 }
 
-// Extract Open Graph and fallback meta tags from HTML head
 function extractOpenGraph(html, pageUrl) {
   const get = (property) => {
-    // Try og: tags first
     const ogMatch = html.match(new RegExp(`<meta[^>]+property=["']og:${property}["'][^>]+content=["']([^"']+)["']`, 'i'))
       || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:${property}["']`, 'i'));
     if (ogMatch) return ogMatch[1];
 
-    // Try twitter: tags
     const twMatch = html.match(new RegExp(`<meta[^>]+name=["']twitter:${property}["'][^>]+content=["']([^"']+)["']`, 'i'))
       || html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:${property}["']`, 'i'));
     if (twMatch) return twMatch[1];
@@ -870,11 +800,9 @@ function extractOpenGraph(html, pageUrl) {
   const siteName = get('site_name') || '';
   const type = get('type') || '';
 
-  // Resolve relative image URLs. The page controls these strings, so the
-  // result is re-checked: only http(s) survives, never javascript:/data:.
+  // Page-controlled, so re-checked: only http(s) survives.
   const resolvedImage = resolveHttpUrl(image, pageUrl);
 
-  // Extract favicon
   const faviconMatch = html.match(/<link[^>]+rel=["'](?:icon|shortcut icon)["'][^>]+href=["']([^"']+)["']/i)
     || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:icon|shortcut icon)["']/i);
   const favicon = faviconMatch ? resolveHttpUrl(faviconMatch[1], pageUrl) : '';
@@ -890,8 +818,7 @@ function extractOpenGraph(html, pageUrl) {
   };
 }
 
-// Resolve a page-supplied URL against the page and keep it only if it is
-// http(s). Anything else is dropped rather than handed to a client.
+// Keeps the resolved URL only if it is http(s).
 function resolveHttpUrl(raw, pageUrl) {
   if (!raw) return '';
   try {
@@ -911,9 +838,7 @@ function decodeEntities(str) {
     .replace(/&#x2F;/g, '/');
 }
 
-// Parse a hostname that may be an IPv4 address in dotted/decimal/octal/hex
-// form (inet_aton semantics, as browsers and fetch resolvers accept) into a
-// canonical 32-bit integer, or null if it is not an IPv4 literal.
+// Parses dotted/decimal/octal/hex IPv4 (inet_aton semantics) into a 32-bit integer, or null.
 function ipv4ToInt(host) {
   const parts = host.split('.');
   if (parts.length === 0 || parts.length > 4) return null;
@@ -924,7 +849,7 @@ function ipv4ToInt(host) {
     if (/^0x[0-9a-f]+$/i.test(p)) n = parseInt(p, 16);
     else if (/^0[0-7]+$/.test(p)) n = parseInt(p, 8);
     else if (/^[0-9]+$/.test(p)) n = parseInt(p, 10);
-    else return null; // not a pure-numeric component => not an IPv4 literal
+    else return null; // Not an IPv4 literal.
     if (!Number.isFinite(n) || n < 0) return null;
     nums.push(n);
   }
@@ -957,7 +882,6 @@ function ipv4IntIsPrivate(v) {
 function ipv6IsPrivate(host) {
   let h = host.toLowerCase();
   if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1);
-  // Strip zone id
   const pct = h.indexOf('%');
   if (pct !== -1) h = h.slice(0, pct);
   if (h === '::1' || h === '::' || h === '0:0:0:0:0:0:0:1') return true;
@@ -989,11 +913,10 @@ function isOwnMediaHost(urlStr, request) {
 function isPrivateUrl(urlStr) {
   try {
     const parsed = new URL(urlStr);
-    // Block non-http(s) schemes (file:, gopher:, ftp:, data:, etc.)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return true;
-    // Reject embedded credentials (userinfo@host smuggling)
+    // Reject embedded credentials (userinfo@host smuggling).
     if (parsed.username || parsed.password) return true;
-    let host = parsed.hostname.toLowerCase().replace(/\.$/, ''); // strip trailing dot
+    let host = parsed.hostname.toLowerCase().replace(/\.$/, '');
     if (!host) return true;
     if (host === 'localhost' || host.endsWith('.localhost')) return true;
     if (host.endsWith('.local') || host.endsWith('.internal')) return true;
@@ -1029,10 +952,10 @@ async function hostResolvesPrivate(host) {
     for (const ans of [...answers[0], ...answers[1]]) {
       if (!ans || typeof ans.data !== 'string') continue;
       const record = ans.data.trim();
-      if (ans.type === 1) { // A
+      if (ans.type === 1) {
         const v = ipv4ToInt(record);
         if (v !== null && ipv4IntIsPrivate(v)) isPrivate = true;
-      } else if (ans.type === 28) { // AAAA
+      } else if (ans.type === 28) {
         if (ipv6IsPrivate(record)) isPrivate = true;
       }
     }
@@ -1049,12 +972,11 @@ async function hostResolvesPrivate(host) {
   return isPrivate;
 }
 
-// True when the URL's host is a name (not an IP literal) that needs resolving.
 function hostNeedsDnsCheck(urlStr) {
   try {
     const host = new URL(urlStr).hostname.toLowerCase().replace(/\.$/, '');
-    if (!host || host.includes(':')) return false; // IPv6 literal: string-checked
-    return ipv4ToInt(host) === null; // IPv4 literal: string-checked
+    if (!host || host.includes(':')) return false; // IPv6 literal: string-checked.
+    return ipv4ToInt(host) === null; // IPv4 literal: string-checked.
   } catch {
     return false;
   }
@@ -1094,8 +1016,7 @@ async function ssrfSafeFetch(targetUrl, init = {}, maxRedirects = 4) {
   throw e;
 }
 
-// Read a response body as text, aborting once maxBytes is exceeded instead of
-// buffering the entire (potentially huge) body into memory first.
+// Aborts once maxBytes is exceeded instead of buffering the whole body.
 async function readBounded(resp, maxBytes) {
   const cl = parseInt(resp.headers.get('content-length') || '', 10);
   if (Number.isFinite(cl) && cl > maxBytes) return null;
@@ -1108,7 +1029,7 @@ async function readBounded(resp, maxBytes) {
     if (done) break;
     total += value.length;
     if (total > maxBytes) {
-      try { reader.cancel(); } catch { /* noop */ }
+      try { reader.cancel(); } catch {}
       return null;
     }
     out += decoder.decode(value, { stream: true });

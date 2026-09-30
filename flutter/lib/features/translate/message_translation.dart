@@ -11,10 +11,7 @@ import 'translate_languages.dart';
 import 'translate_service.dart';
 import 'translation_cache.dart';
 
-/// Inline `.message-translation` block shown below a message after the user
-/// taps "Translate" (translate.js `translateMessage`). A left-accented panel
-/// with a 🌐 icon, the translated text, and a dim `source → target` label.
-/// While loading it shows an italic "Translating…" with a translate pulse.
+/// Inline translation block shown below a message after "Translate".
 class MessageTranslation extends ConsumerStatefulWidget {
   const MessageTranslation({
     super.key,
@@ -23,13 +20,13 @@ class MessageTranslation extends ConsumerStatefulWidget {
     this.service,
   });
 
-  /// The (quote-stripped) text to translate.
+  /// The quote-stripped text to translate.
   final String content;
 
   /// Override target language; defaults to `settings.translateLanguage`.
   final String? targetLang;
 
-  /// Injectable for tests; defaults to a live [TranslateService].
+  /// Injectable for tests.
   final TranslateService? service;
 
   @override
@@ -37,18 +34,14 @@ class MessageTranslation extends ConsumerStatefulWidget {
 }
 
 class _MessageTranslationState extends ConsumerState<MessageTranslation> {
-  /// Null until a target language is resolved (either it was already set, or
+  /// Null until a target language is resolved.
   Future<TranslationResult>? _future;
 
-  /// The already-finished translation, when the cache has one. Seeds the
-  /// builder so a row rebuilt from scratch paints it immediately instead of a
-  /// frame of "Translating..." for work that is long done.
+  /// Finished cached translation, so a rebuilt row paints it without a "Translating..." frame.
   TranslationResult? _seed;
 
   late final TranslateService _service = widget.service ?? TranslateService();
 
-  /// Never empty — see [manualTranslateTargetFor]. The language was chosen at
-  /// first run, so there is nothing left to ask.
   String get _target =>
       widget.targetLang ?? manualTranslateTargetFor(ref.read(settingsProvider));
 
@@ -61,21 +54,13 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
   void _start(String target) {
     final plain = TranslateService.stripQuotes(widget.content);
     _seed = ref.read(translationCacheProvider).settled(plain, target);
-    // Through the cache, so a row rebuilt because a message arrived above it
-    // reuses the request it already made instead of flashing "Translating..."
-    // and spending another API call on text it has already translated.
+    // Through the cache, so a rebuilt row reuses its request instead of re-calling the API.
     _future = ref.read(translationCacheProvider).resolve(
       plain,
       target,
       () => _service.translate(plain, target),
       onStarted: (future) {
-        // On failure the PWA shows the inline `.translation-error` AND posts a
-        // system chat message with the error detail
-        // (translate.js:269 `displaySystemMessage('Translation failed: ' + ...)`).
-        // Capture the notifier now so the message still lands even if this
-        // widget is disposed before the request settles, like the PWA's
-        // detached async. Attached per REQUEST, not per widget, so a rebuild
-        // cannot post the same failure twice.
+        // Capture the notifier so the failure message lands even if disposed; attached per request so it posts once.
         final notifier = ref.read(appStateProvider.notifier);
         future.then<void>((_) {}, onError: (Object err) {
           final msg = err is TranslateException ? err.message : err.toString();
@@ -90,9 +75,7 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `.message-translation { font-size: 0.9em }` — em of the `.message` font,
-    // which is `var(--user-text-size)` (styles-chat.css:54), so the block
-    // scales with the text-size setting (styles-features.css:4316).
+    // 0.9em of the user text size, so the block scales with that setting.
     final baseSize =
         ref.watch(settingsProvider.select((s) => s.textSize)).toDouble() * 0.9;
     final future = _future;
@@ -114,8 +97,7 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
         initialData: _seed,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done && !snap.hasData) {
-            // `.translation-loading`: STATIC italic dim@0.6 — the PWA has NO
-            // pulse on the inline message translation (styles-features.css:4333).
+            // Static italic; the inline translation has no pulse.
             return Text(
               tr('Translating...'),
               style: TextStyle(
@@ -127,7 +109,6 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
             );
           }
           if (snap.hasError) {
-            // `.translation-error { font-size: 0.85em }` of the block base.
             return Text(
               tr('Translation failed'),
               style: TextStyle(
@@ -148,7 +129,6 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
                   TextSpan(
                     text: tr('Already in {lang} (nothing to translate)',
                         {'lang': languageName(_target)}),
-                    // `.translation-error`: 0.85em of the block base.
                     style:
                         TextStyle(color: c.danger, fontSize: baseSize * 0.85),
                   ),
@@ -167,7 +147,6 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
                 TextSpan(text: res.translatedText),
                 if (showLang)
                   TextSpan(
-                    // `.translation-lang`: 0.8em of the block base.
                     text:
                         '  ${languageName(res.detectedLanguage)} → ${languageName(_target)}',
                     style: TextStyle(

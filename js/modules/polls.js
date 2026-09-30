@@ -33,7 +33,6 @@ Object.assign(NYM.prototype, {
         this.sendToRelay(["EVENT", signedEvent]);
         this.ensureGeoRelayDelivery(signedEvent, this.currentGeohash);
 
-        // Store poll locally
         this.polls.set(signedEvent.id, {
             question,
             options: options.map((text, i) => ({ index: i, text })),
@@ -44,7 +43,6 @@ Object.assign(NYM.prototype, {
             created_at: now
         });
 
-        // Display poll as a message
         this.displayPollMessage(signedEvent.id, this.nym, this.pubkey, question, options.map((text, i) => ({ index: i, text })), new Map(), now, true);
     },
 
@@ -57,7 +55,6 @@ Object.assign(NYM.prototype, {
         const poll = this.polls.get(pollId);
         if (!poll) return;
 
-        // Check if user already voted
         if (poll.votes.has(this.pubkey)) {
             this.displaySystemMessage('You have already voted on this poll.');
             return;
@@ -85,18 +82,16 @@ Object.assign(NYM.prototype, {
         this.sendToRelay(["EVENT", signedEvent]);
         this.ensureGeoRelayDelivery(signedEvent, poll.geohash);
 
-        // Update local state
         poll.votes.set(this.pubkey, optionIndex);
         this.updatePollDisplay(pollId);
     },
 
     handlePollEvent(event) {
-        // Check expiration tag - skip expired polls
         const expirationTag = event.tags.find(t => t[0] === 'expiration');
         if (expirationTag) {
             const expiresAt = parseInt(expirationTag[1]);
             if (expiresAt && expiresAt < Math.floor(Date.now() / 1000)) {
-                return; // Poll has expired
+                return;
             }
         }
 
@@ -124,7 +119,6 @@ Object.assign(NYM.prototype, {
             };
             this.polls.set(event.id, poll);
 
-            // Replay any buffered votes that arrived before this poll
             if (this.pendingPollVotes.has(event.id)) {
                 for (const vote of this.pendingPollVotes.get(event.id)) {
                     if (!poll.votes.has(vote.pubkey)) {
@@ -134,7 +128,6 @@ Object.assign(NYM.prototype, {
                 this.pendingPollVotes.delete(event.id);
             }
 
-            // Only display if it's for the current channel
             if (geohash === this.currentGeohash) {
                 this.displayPollMessage(event.id, nym, event.pubkey, question, options, poll.votes, event.created_at, event.pubkey === this.pubkey);
             }
@@ -145,7 +138,6 @@ Object.assign(NYM.prototype, {
         if (this.processedPollVoteIds.has(event.id)) return;
         this.processedPollVoteIds.add(event.id);
 
-        // Check expiration tag - skip expired poll votes
         const expirationTag = event.tags.find(t => t[0] === 'expiration');
         if (expirationTag) {
             const expiresAt = parseInt(expirationTag[1]);
@@ -154,7 +146,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Prune if too large
         if (this.processedPollVoteIds.size > 3000) {
             const arr = Array.from(this.processedPollVoteIds);
             this.processedPollVoteIds = new Set(arr.slice(-2000));
@@ -169,7 +160,6 @@ Object.assign(NYM.prototype, {
 
         const poll = this.polls.get(pollId);
         if (!poll) {
-            // Poll hasn't arrived yet — buffer the vote for when it does
             if (!this.pendingPollVotes.has(pollId)) {
                 this.pendingPollVotes.set(pollId, []);
             }
@@ -177,7 +167,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Don't allow double-voting
         if (poll.votes.has(event.pubkey)) return;
 
         poll.votes.set(event.pubkey, optionIndex);
@@ -208,12 +197,11 @@ Object.assign(NYM.prototype, {
 
         const pollCreatedAt = Math.floor(created_at) || 0;
         const timestamp = new Date(pollCreatedAt * 1000);
-        // Clamp timestamp to now so polls never appear in the future
         const displayTimestamp = new Date(this._stableClampMs(pollId, timestamp.getTime()));
         messageEl.dataset.timestamp = displayTimestamp.getTime();
         messageEl.dataset.createdAt = pollCreatedAt;
-        messageEl.dataset.ms = pollCreatedAt * 1000; // no millisecond stamp; sort at the second boundary
-        messageEl.dataset.seq = 0; // polls have no arrival sequence; use 0 for consistent tiebreaking
+        messageEl.dataset.ms = pollCreatedAt * 1000;
+        messageEl.dataset.seq = 0;
 
         const timeStr = displayTimestamp.toLocaleTimeString([], {
             hour: '2-digit',
@@ -221,7 +209,6 @@ Object.assign(NYM.prototype, {
             hour12: this.settings?.timeFormat === '12hr'
         });
 
-        // Get user's shop items for styling (badges, flair, etc.)
         const userShopItems = this.getUserShopItems(pubkey);
         const flairHtml = this.getFlairForUser(pubkey);
         const supporterBadge = userShopItems?.supporter ?
@@ -241,7 +228,6 @@ Object.assign(NYM.prototype, {
             const count = optVotes.length;
             const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
 
-            // Voter avatars
             const voterAvatars = optVotes.slice(0, 8).map(([vpk]) => {
                 const sk = this._safePubkey(vpk);
                 const vAvatar = this.getAvatarUrl(vpk);
@@ -265,7 +251,6 @@ Object.assign(NYM.prototype, {
             `;
         }).join('');
 
-        // Prepare full timestamp for tooltip
         const fullTimestamp = displayTimestamp.toLocaleString('en-US', {
             year: 'numeric',
             month: 'short',
@@ -310,7 +295,6 @@ Object.assign(NYM.prototype, {
         `;
         messageEl.querySelectorAll('.poll-option-bar[data-pct]').forEach(b => { b.style.width = b.dataset.pct + '%'; });
 
-        // Add context menu to poll author (same as regular messages)
         const authorClickable = messageEl.querySelector('.author-clickable');
         if (authorClickable) {
             authorClickable.style.cursor = 'pointer';
@@ -322,9 +306,7 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Walk all timestamped descendants; in bubble mode messages live inside
-        // .message-group > .message-group-stack, so the target may not be a
-        // direct child of container — insert against the target's parent.
+        // In bubble mode messages sit inside .message-group-stack, so insert against the target's parent.
         {
             const existingMessages = Array.from(container.querySelectorAll('[data-created-at]'));
             const msgMs = pollCreatedAt * 1000;
@@ -358,8 +340,7 @@ Object.assign(NYM.prototype, {
             this.ensureListProfiles(messageEl, [pubkey, ...votes.keys()]);
         }
 
-        // In bubble layout polls need their own .message-group wrapper to get
-        // the side avatar; the rewrap also splits adjacent same-author groups.
+        // In bubble layout polls need their own .message-group wrapper to get the side avatar.
         if (!this._suppressBubbleRewrap
             && typeof this._rewrapBubbleGroups === 'function'
             && document.body.classList.contains('chat-bubbles')) {
@@ -379,8 +360,7 @@ Object.assign(NYM.prototype, {
         const totalVotes = poll.votes.size;
         const hasVoted = poll.votes.has(this.pubkey);
 
-        // Update each option in place so existing voter <img> nodes aren't
-        // destroyed (an innerHTML rebuild made every avatar flicker on each vote).
+        // Update options in place so existing voter <img> nodes aren't rebuilt (avoids avatar flicker).
         for (const opt of poll.options) {
             const optionEl = container.querySelector(`.poll-option[data-option-index="${opt.index}"]`);
             if (!optionEl) continue;

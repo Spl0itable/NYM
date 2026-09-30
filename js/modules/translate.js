@@ -1,17 +1,11 @@
 // translate.js - Message and input translation (auto-detect, language selection)
 
-// Material "translate" glyph (same icon as the composer translate button),
-// used for the translation footer to match the native app.
 const NYM_TRANSLATE_ICON_SVG = '<svg class="autotr-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>';
 
-// What one batched translate request may carry. Mirrors the backend's own
-// limits (TRANSLATE_BATCH_MAX / TRANSLATE_BATCH_BYTES in functions/api/proxy.js)
-// and sits under them, so an over-large batch is a bug here rather than a 400
-// from there.
+// Mirrors and stays under the backend limits (TRANSLATE_BATCH_MAX / _BYTES in functions/api/proxy.js).
 const NYM_TRANSLATE_BATCH_MAX = 25;
 const NYM_TRANSLATE_BATCH_CHARS = 16000;
 
-// Full set of languages supported by Google Translate.
 const NYM_TRANSLATE_LANGUAGES = [
     { code: 'af', name: 'Afrikaans' }, { code: 'sq', name: 'Albanian' },
     { code: 'am', name: 'Amharic' }, { code: 'ar', name: 'Arabic' },
@@ -82,9 +76,7 @@ const NYM_TRANSLATE_LANGUAGES = [
     { code: 'zu', name: 'Zulu' },
 ];
 
-// What speakers call their own language (CLDR endonyms via Intl.DisplayNames,
-// baked in so the list is identical on every platform). Only codes whose
-// endonym differs from the English name are listed; the rest fall back.
+// CLDR endonyms baked in so the list is identical everywhere; only those differing from English are listed.
 const NYM_TRANSLATE_LANG_NATIVE = (() => {
     const map = {
     'sq': "shqip", 'am': "አማርኛ", 'ar': "العربية",
@@ -132,7 +124,6 @@ const NYM_TRANSLATE_LANG_NATIVE = (() => {
     return map;
 })();
 
-// Lookup from language code (case-insensitive) to display name.
 const NYM_TRANSLATE_LANG_NAMES = (() => {
     const map = {};
     for (const l of NYM_TRANSLATE_LANGUAGES) map[l.code.toLowerCase()] = l.name;
@@ -144,40 +135,32 @@ const NYM_TRANSLATE_LANG_NAMES = (() => {
 
 Object.assign(NYM.prototype, {
 
-    // Resolve a language code (e.g. "en", "zh-CN") to its full display name.
     _languageName(code) {
         if (!code) return '';
         return NYM_TRANSLATE_LANG_NAMES[String(code).toLowerCase()] || code;
     },
 
-    // What a speaker of the language calls it, falling back to the English
-    // name. A picker labeled only in English is unusable to the very people
-    // looking for their own language in it.
     _languageNative(code) {
         if (!code) return '';
         const key = String(code).toLowerCase();
         return NYM_TRANSLATE_LANG_NATIVE[key] || NYM_TRANSLATE_LANG_NAMES[key] || code;
     },
 
-    // The English name, but only when it adds something to the endonym.
     _languageSubtitle(code) {
         const native = this._languageNative(code);
         const english = this._languageName(code);
         return native === english ? '' : english;
     },
 
-    // Everything a search over the language list should match.
     _languageSearchKey(code, name) {
         return `${name} ${this._languageNative(code)}`.toLowerCase();
     },
 
-    // One-line label for a <select>, which cannot show a second line.
     _languageOptionLabel(l) {
         const sub = this._languageSubtitle(l.code);
         return sub ? `${this._languageNative(l.code)} — ${sub}` : l.name;
     },
 
-    // A button in one of the language-picker grids.
     _languageOptionButton(l, currentCode) {
         const selected = currentCode === l.code ? ' selected' : '';
         const sub = this._languageSubtitle(l.code);
@@ -187,7 +170,6 @@ Object.assign(NYM.prototype, {
             `${sub ? `<span class="translate-lang-sub">${this.escapeHtml(sub)}</span>` : ''}</button>`;
     },
 
-    // Favorite languages are kept at the top of the translate input dropdown.
     _getTranslateFavorites() {
         if (!this._translateFavorites) {
             let stored = [];
@@ -206,7 +188,6 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
-    // Languages sorted with favorites first, the rest alphabetically.
     _sortedTranslateLanguages() {
         const favs = this._getTranslateFavorites();
         const favSet = new Set(favs);
@@ -219,14 +200,7 @@ Object.assign(NYM.prototype, {
         return favList.concat(rest);
     },
 
-    // The language messages get translated into.
-    //
-    // There is no "pick a language" prompt any more. Every user chooses one at
-    // first run (the UI-language picker, i18n.js), and that pick is adopted as
-    // the translation target — so asking again on the first translation was
-    // asking a question already answered, and it interrupted the very action
-    // the user had just taken. The UI language is the fallback for anyone whose
-    // setting predates that, and English the fallback for that.
+    // Falls back to the UI language, then English.
     _effectiveTranslateLanguage() {
         const saved = this.settings && this.settings.translateLanguage;
         if (saved) return saved;
@@ -234,22 +208,12 @@ Object.assign(NYM.prototype, {
         return ui || 'en';
     },
 
-    // Translate a message and show the result inline below the original message.
-    // Uses the CF proxy when available, falls back to calling Google Translate directly.
-    // Manual translations, keyed by message id, so a full container re-render
-    // can put them back. The DOM was the only record: opening a conversation, a
-    // column repaint or any other fresh render rebuilds the row WITHOUT its
-    // `.message-translation`, and the user's translation was simply gone —
-    // silently, since nothing re-issued it either.
-    //
-    // In-memory only: it survives re-renders, not reloads.
+    // Manual translations by message id so re-renders can restore them; in-memory only.
     _manualTrCache() {
         return this._manualTranslations || (this._manualTranslations = new Map());
     },
 
-    // Bounded, least-recently-rendered evicted first — a long session in a busy
-    // channel would otherwise hold one entry per translation for the life of
-    // the page.
+    // Bounded LRU so a long session doesn't hold every translation.
     _recordManualTranslation(msgId, rec) {
         if (!msgId) return;
         const cache = this._manualTrCache();
@@ -262,17 +226,14 @@ Object.assign(NYM.prototype, {
         if (msgId && this._manualTranslations) this._manualTranslations.delete(msgId);
     },
 
-    // The text `translateMessage` would send for this row, recomputed from the
-    // REBUILT element so an edited message doesn't get its old translation back.
+    // Recomputed from the rebuilt element so an edited message doesn't get its old translation back.
     _manualTrSourceFor(messageEl) {
         const contentEl = messageEl && messageEl.querySelector('.message-content');
         if (!contentEl) return null;
         return this._manualTrPlainText(this._extractNonQuotedText(contentEl));
     },
 
-    // Put a recorded translation back on a row that was just (re)built. Safe to
-    // call for every message on every render: no record, or one already on
-    // screen, is a no-op.
+    // Safe to call for every message on every render.
     _reapplyManualTranslation(messageEl) {
         if (!messageEl || !this._manualTranslations || !this._manualTranslations.size) return;
         const msgId = messageEl.getAttribute('data-message-id');
@@ -280,17 +241,13 @@ Object.assign(NYM.prototype, {
         const rec = this._manualTranslations.get(msgId);
         if (!rec) return;
         if (messageEl.querySelector(':scope > .message-translation')) return;
-        // An edit replaced the text this translation was of — drop it rather
-        // than show a translation of something the message no longer says.
+        // The message was edited; drop the stale translation.
         const source = this._manualTrSourceFor(messageEl);
         if (source !== rec.source) { this._forgetManualTranslation(msgId); return; }
         this._manualTrElement(messageEl).innerHTML = rec.html;
-        // Touch for LRU: a translation still on screen is the last one to evict.
         this._recordManualTranslation(msgId, rec);
     },
 
-    // The row's `.message-translation` block, created below the content if the
-    // row doesn't have one yet.
     _manualTrElement(msgEl) {
         let el = msgEl.querySelector('.message-translation');
         if (!el) {
@@ -302,20 +259,13 @@ Object.assign(NYM.prototype, {
         return el;
     },
 
-    // What actually gets sent for a manual translation. Extracted so the
-    // re-apply path can recompute it from a rebuilt row and compare.
     _manualTrPlainText(content) {
-        // Strip HTML blockquote tags entirely (with their contents) so the
-        // quoted reply doesn't pollute language detection. The quote may be in
-        // the user's own language while the new reply is in another, and Google
-        // would otherwise detect the dominant language and skip the reply.
+        // Drop quoted blocks so they don't skew Google's language detection.
         let plainText = String(content || '').replace(/<blockquote\b[^>]*>[\s\S]*?<\/blockquote>/gi, ' ');
-        // Strip remaining HTML tags
         plainText = plainText.replace(/<[^>]+>/g, '');
-        // Strip plain-text quote lines ("> ..." style) for the same reason
         plainText = plainText.split('\n').filter(line => !line.trim().startsWith('>')).join('\n').trim();
         if (!plainText) return '';
-        // Strip trailing timestamp (e.g. "12:34 PM", "3:05 AM", "23:59")
+        // Strip trailing timestamp (e.g. "12:34 PM", "3:05 AM", "23:59").
         return plainText.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
     },
 
@@ -328,17 +278,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Resolved fresh each time it is needed rather than captured once: a
-        // render during the request (a conversation reopening, a column
-        // repainting) replaces the row, and the captured node would be detached
-        // by the time the answer arrived — the translation went nowhere.
+        // Resolved fresh: a render during the request can replace the row.
         const rowFor = () => (messageId
             ? document.querySelector(`[data-message-id="${String(messageId).replace(/"/g, '\\"')}"]`)
             : null);
 
-        // Recorded as it is rendered, so any later render can put it back. The
-        // loading state is recorded too — a row rebuilt mid-request comes back
-        // saying "Translating..." rather than blank.
+        // Loading state is recorded too so a mid-request rebuild shows "Translating...".
         const paint = (html) => {
             this._recordManualTranslation(messageId, { lang: targetLang, source: plainText, html });
             const row = rowFor();
@@ -352,8 +297,7 @@ Object.assign(NYM.prototype, {
             const { translatedText, detectedLanguage: detectedLang } =
                 await this._translatePreservingMentions(plainText, targetLang);
 
-            // Google returns the input unchanged (or empty) when the detected
-            // language already matches the target.
+            // Google returns the input unchanged (or empty) when already in the target language.
             const isNoop = !translatedText || !translatedText.trim() || translatedText.trim() === plainText.trim();
 
             if (hadRow || rowFor()) {
@@ -372,9 +316,7 @@ Object.assign(NYM.prototype, {
                 this.displaySystemMessage(`Translation: ${translatedText}`);
             }
         } catch (err) {
-            // A failure is NOT recorded: the next render should leave the row
-            // clean so the user can ask again, not replay a stale error for the
-            // rest of the session.
+            // Failures aren't recorded so the user can ask again.
             this._forgetManualTranslation(messageId);
             const row = rowFor();
             const translationEl = row && row.querySelector('.message-translation');
@@ -383,8 +325,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Protect emoji from being stripped by translation APIs.
-    // Returns { text, emojis } where text has placeholders and emojis is the map to restore them.
+    // Returns { text, emojis } where text has placeholders and emojis restores them.
     _shieldEmojis(text) {
         const emojis = [];
         const shielded = text.replace(
@@ -402,16 +343,13 @@ Object.assign(NYM.prototype, {
         return text.replace(/EMJ(\d+)EMJ/g, (_, idx) => emojis[parseInt(idx)] || '');
     },
 
-    // Translate text while keeping @mentions intact in their original positions
     async _translatePreservingMentions(text, targetLang) {
         const { text: emojiShielded, emojis: savedEmojis } = this._shieldEmojis(text);
 
-        // split() with a capturing group keeps the matches in the array.
         // Even indices are non-mention text, odd indices are mentions.
         const parts = emojiShielded.split(/(@[^\s@]+)/);
 
-        // Capture leading/trailing whitespace per chunk so we can restore it
-        // after translation — Google Translate strips edge whitespace.
+        // Google Translate strips edge whitespace, so restore it per chunk.
         const translatable = [];
         parts.forEach((part, index) => {
             if (index % 2 !== 0 || !part.trim()) return;
@@ -440,8 +378,6 @@ Object.assign(NYM.prototype, {
         return { translatedText, detectedLanguage };
     },
 
-    // Single translation call that picks the proxy when available and falls
-    // back to a direct Google Translate request on proxy failure.
     async _doTranslate(text, targetLang) {
         const base = this._getProxyBaseUrl();
         if (!base) throw new Error('Translation is unavailable: no API host configured');
@@ -457,8 +393,7 @@ Object.assign(NYM.prototype, {
         const data = await resp.json();
         if (data.error) throw new Error(data.error);
         const translatedText = data.translatedText || '';
-        // An empty body with a 200 is a failure wearing a success's clothes: it
-        // would replace the message with nothing.
+        // An empty 200 body would replace the message with nothing.
         if (!translatedText.trim()) throw new Error('Translation failed: empty result');
         return {
             translatedText,
@@ -466,14 +401,7 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Several strings in one request. The proxy takes `texts` and answers with
-    // `translations` in the same order (TRANSLATE_BATCH_MAX / _BYTES in
-    // functions/api/proxy.js bound the size). Used where a whole vocabulary is
-    // fetched at once — choosing a language used to fire one request per command
-    // and trickle through sixty of them.
-    //
-    // The single-string path is the one the edge caches, so this is for lists a
-    // client fetches once, not for message translation.
+    // Proxy takes `texts` and answers `translations` in order; not for message translation (not edge-cached).
     async _doTranslateBatch(texts, targetLang) {
         const base = this._getProxyBaseUrl();
         if (!base) throw new Error('Translation is unavailable: no API host configured');
@@ -492,8 +420,7 @@ Object.assign(NYM.prototype, {
         return data.translations;
     },
 
-    // Split a list into requests the proxy will accept: at most
-    // NYM_TRANSLATE_BATCH_MAX strings and NYM_TRANSLATE_BATCH_CHARS characters.
+    // At most NYM_TRANSLATE_BATCH_MAX strings and NYM_TRANSLATE_BATCH_CHARS characters.
     _translateBatches(texts) {
         const out = [];
         let batch = [];
@@ -567,25 +494,18 @@ Object.assign(NYM.prototype, {
         }
         const contentEl = msgEl.querySelector('.message-content');
         if (!contentEl) return;
-        // Extract only the non-quoted text (skip blockquote content)
         const content = this._extractNonQuotedText(contentEl);
         if (content) this.translateMessage(content, messageId);
     },
 
-    // Extract only the user's own reply text from a message element,
-    // excluding any quoted/blockquoted content.
     _extractNonQuotedText(contentEl) {
         const clone = contentEl.cloneNode(true);
-        // Remove all blockquote elements (quoted replies)
         clone.querySelectorAll('blockquote').forEach(bq => bq.remove());
-        // Remove bubble-time-inner elements (timestamp inside bubble)
         clone.querySelectorAll('.bubble-time-inner').forEach(bt => bt.remove());
-        // Remove "Read more" / "Show less" toggle buttons
         clone.querySelectorAll('.read-more-btn').forEach(btn => btn.remove());
         return clone.textContent.trim();
     },
 
-    // Translate text from the message input and replace it with the translation.
     async translateInputText(targetLang) {
         const input = document.getElementById('messageInput');
         const text = input.value.trim();
@@ -596,9 +516,7 @@ Object.assign(NYM.prototype, {
 
         try {
             const { translatedText } = await this._translatePreservingMentions(text, targetLang);
-            // Don't clobber the input if the translation came back empty or
-            // echoed the original (e.g. the detected language already matches
-            // the target).
+            // Don't clobber the input if the translation is empty or echoes the original.
             if (!translatedText || !translatedText.trim() || translatedText.trim() === text.trim()) {
                 this.displaySystemMessage('Nothing to translate (text may already be in the target language).');
                 return;
@@ -612,7 +530,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Populate the settings-modal translation language select with the full list.
     populateTranslateLanguageSelect() {
         const select = document.getElementById('translateLanguageSelect');
         if (!select) return;
@@ -625,8 +542,6 @@ Object.assign(NYM.prototype, {
         select.value = current;
     },
 
-    // Render the language list inside the translate input dropdown, applying
-    // the search filter and keeping favorites pinned to the top.
     _renderTranslateDropdownList(filter = '') {
         const list = document.getElementById('translateDropdownList');
         if (!list) return;
@@ -645,7 +560,6 @@ Object.assign(NYM.prototype, {
         }).join('') || `<div class="translate-dropdown-empty">No languages found</div>`;
     },
 
-    // Set up the translate input button and dropdown in the message input area.
     setupTranslateInput() {
         const btn = document.getElementById('translateInputBtn');
         const dropdown = document.getElementById('translateInputDropdown');
@@ -682,8 +596,6 @@ Object.assign(NYM.prototype, {
             if (star) {
                 const code = star.dataset.favLang;
                 this._toggleTranslateFavorite(code);
-                // Update the clicked star in place for instant feedback —
-                // the list order updates the next time the dropdown opens.
                 const nowFav = this._getTranslateFavorites().includes(code);
                 star.classList.toggle('favorited', nowFav);
                 star.title = nowFav ? 'Unfavorite' : 'Favorite';
@@ -698,7 +610,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Close dropdown when clicking outside
         document.addEventListener('click', (e) => {
             if (!e.target.closest('#translateInputBtn') && !e.target.closest('#translateInputDropdown')) {
                 dropdown.classList.remove('active');
@@ -706,12 +617,7 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Nymbot's first-contact PM is written in English and stored that way, but a
-    // user who picked a language in the signup modal has not asked for an
-    // English welcome. It is translated on render into the APP language — not
-    // the translate-language, which is a separate setting and off by default —
-    // the same way the premium chat's welcome bubble already is, with the same
-    // "Show original" toggle.
+    // The first-contact PM is translated on render into the app language (not the translate language).
     _isBotWelcomePM(message) {
         return !!(message && message.isBot && typeof message.id === 'string'
             && message.id.startsWith('nymbot-welcome-'));
@@ -723,7 +629,6 @@ Object.assign(NYM.prototype, {
             if (typeof this.translateBotWelcomeBubble !== 'function') return;
             const contentEl = messageEl.querySelector('.message-content');
             if (!contentEl) return;
-            // The rendered body, without the timestamp the bubble tucks inside it.
             const clone = contentEl.cloneNode(true);
             clone.querySelectorAll('.bubble-time-inner').forEach((n) => n.remove());
             const html = clone.innerHTML.trim();
@@ -740,12 +645,8 @@ Object.assign(NYM.prototype, {
         }, 150);
     },
 
-    // The Nymbot premium welcome is a local HTML bubble (not routed through
-    // displayMessage), so translate it into the user's chosen APP language,
-    // preserving formatting and literal <code> commands, with a Show original
-    // toggle.
+    // The premium welcome bypasses displayMessage, so translate it here into the app language.
 
-    // Translate one <br>-joined HTML line, shielding tags and literal commands.
     async _translateHtmlSegment(segment, target) {
         if (!segment || !segment.trim()) return segment;
         const tokens = [];
@@ -754,7 +655,7 @@ Object.assign(NYM.prototype, {
             .replace(/<code>[\s\S]*?<\/code>/gi, stash)  // literal commands (keep as-is)
             .replace(/<\/?[a-z][^>]*>/gi, stash)         // other inline tags
             .replace(/&[a-z#0-9]+;/gi, stash);           // html entities
-        if (!/\p{L}/u.test(shielded.replace(/PLH\d+PLH/g, ''))) return segment; // nothing to translate
+        if (!/\p{L}/u.test(shielded.replace(/PLH\d+PLH/g, ''))) return segment;
         let out;
         try {
             const res = await this._doTranslate(shielded, target);
@@ -770,8 +671,6 @@ Object.assign(NYM.prototype, {
         return translated.join('<br>');
     },
 
-    // Public: translate a Nymbot welcome bubble in place (with a toggle) into
-    // the user's app language. No-op for English.
     translateBotWelcomeBubble(el, originalHtml) {
         try {
             const lang = (typeof this.getUiLanguage === 'function' && this.getUiLanguage()) || '';
@@ -781,9 +680,7 @@ Object.assign(NYM.prototype, {
     },
 
     async _renderBotWelcomeTranslation(el, originalHtml, lang) {
-        // Keyed by source as well as language: two different welcomes go through
-        // here — the premium chat's, and the first-contact PM's — and a
-        // language-only key would serve one of them the other's translation.
+        // Keyed by source too: two different welcomes share this cache.
         const cache = this._botWelcomeI18n || (this._botWelcomeI18n = new Map());
         const key = lang + '\u0000' + originalHtml;
         if (!cache.has(key)) cache.set(key, await this._translateBotHtml(originalHtml, lang));
@@ -794,7 +691,6 @@ Object.assign(NYM.prototype, {
         if (!contentEl) return;
         const timeEl = contentEl.querySelector(':scope > .bubble-time-inner');
 
-        // Hide the original body (keep the timestamp), show the translation.
         const origWrap = document.createElement('span');
         origWrap.className = 'mt-original';
         origWrap.style.display = 'none';
@@ -826,19 +722,15 @@ Object.assign(NYM.prototype, {
         el._autoTr = { lang, origWrap, transWrap, footer };
     },
 
-    // Show/hide the translate input button based on whether the input has text.
     updateTranslateInputBtn() {
         const input = document.getElementById('messageInput');
         const btn = document.getElementById('translateInputBtn');
         if (!btn || !input) return;
         const hasText = input.value.trim().length > 0;
         btn.style.display = hasText ? 'flex' : 'none';
-        // The translate button now shares an inline action row with the
-        // formatting toggle, so the input's right padding tracks however many of
-        // those buttons are currently visible (rich-compose.js).
+        // Shares an inline action row with the formatting toggle (rich-compose.js).
         if (typeof this.syncComposerInlineActions === 'function') this.syncComposerInlineActions();
         else input.style.paddingRight = hasText ? '38px' : '';
-        // Hide dropdown when button hides
         if (!hasText) {
             const dropdown = document.getElementById('translateInputDropdown');
             if (dropdown) dropdown.classList.remove('active');

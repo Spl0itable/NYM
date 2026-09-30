@@ -7,15 +7,9 @@ import '../../services/storage/key_value_store.dart';
 import '../../state/app_state.dart';
 import '../i18n/i18n.dart';
 
-/// Helpers backing the Settings modal's data-completeness features (gap report
-/// 06): the geohash-location label, the landing-channel autocomplete model, the
-/// on-device cache-size readout, and the settings-reset key wipe. Kept in the
-/// settings slice (no cross-file edits) and side-effect-free where possible so
-/// they can be unit-tested.
+/// Side-effect-free helpers for the Settings modal's data features.
 
-/// `"37.77°N, 122.41°W"` for a geohash — the PWA's `getGeohashLocation`
-/// (geohash-globe.js:1256): decode → abs(lat)°N/S, abs(lng)°E/W. Empty on a
-/// decode failure.
+/// `"37.77°N, 122.41°W"` for a geohash; empty on decode failure.
 String geohashLocationLabel(String geohash) {
   if (geohash.isEmpty || !isValidGeohash(geohash)) return '';
   try {
@@ -30,22 +24,19 @@ String geohashLocationLabel(String geohash) {
   }
 }
 
-/// A pinned-landing-channel choice. The PWA persists this as JSON under
-/// `nym_pinned_landing_channel`, e.g. `{"type":"geohash","geohash":"nymchat"}`
-/// (app.js:3899-3914). Only the `geohash` type is offered by the dropdown.
+/// Pinned landing channel, persisted as JSON like `{"type":"geohash","geohash":"nymchat"}`.
 class LandingChannel {
   const LandingChannel({this.type = 'geohash', required this.geohash});
 
   final String type;
   final String geohash;
 
-  /// The PWA default (`{type:'geohash', geohash:'nymchat'}`).
   static const LandingChannel defaultChannel =
       LandingChannel(geohash: 'nymchat');
 
   String toJsonString() => jsonEncode({'type': type, 'geohash': geohash});
 
-  /// `#<geohash>` or `#<geohash> (location)` — the dropdown label form.
+  /// `#<geohash>` or `#<geohash> (location)`.
   String get label {
     final loc = geohashLocationLabel(geohash);
     return loc.isEmpty ? '#$geohash' : '#$geohash ($loc)';
@@ -73,7 +64,6 @@ class LandingChannel {
   int get hashCode => Object.hash(type, geohash);
 }
 
-/// One option in the landing-channel autocomplete, with its group header.
 class LandingChannelOption {
   const LandingChannelOption({
     required this.group,
@@ -86,28 +76,25 @@ class LandingChannelOption {
 
   String get label => value.label;
 
-  /// `"<geohash> <location>"` lowercased — what the type-to-filter matches.
+  /// Lowercased `"<geohash> <location>"` for type-to-filter.
   String get searchText =>
       ('${value.geohash} ${geohashLocationLabel(value.geohash)}')
           .trim()
           .toLowerCase();
 }
 
-/// Reads the persisted landing channel (default `nymchat`).
+/// Persisted landing channel, default `nymchat`.
 LandingChannel readLandingChannel(KeyValueStore kv) {
   return LandingChannel.tryParse(
           kv.getString(StorageKeys.pinnedLandingChannel)) ??
       LandingChannel.defaultChannel;
 }
 
-/// Persists [channel] under `nym_pinned_landing_channel` (PWA saveSettings).
 void writeLandingChannel(KeyValueStore kv, LandingChannel channel) {
   kv.setString(StorageKeys.pinnedLandingChannel, channel.toJsonString());
 }
 
-/// Builds the grouped landing-channel options exactly like app.js:3350-3389:
-/// the 10 common geohashes first, then any joined geohash channels not already
-/// listed.
+/// The 10 common geohashes first, then joined geohash channels not already listed.
 List<LandingChannelOption> buildLandingChannelOptions(
   List<ChannelEntry> channels, {
   List<String> commonGeohashes = const [
@@ -132,8 +119,7 @@ List<LandingChannelOption> buildLandingChannelOptions(
       value: LandingChannel(geohash: g),
     ));
   }
-  // Joined geohash channels not already in the common list. `nymchat` is named
-  // (never a geohash) so it never double-counts here.
+  // `nymchat` is a named channel, so it never double-counts here.
   for (final c in channels) {
     final key = c.key;
     if (!isValidGeohash(key)) continue;
@@ -147,8 +133,7 @@ List<LandingChannelOption> buildLandingChannelOptions(
   return out;
 }
 
-/// The five valid read-receipt/typing-indicator scopes (settings.js:3
-/// `INDICATOR_SCOPES`).
+/// The five valid read-receipt and typing-indicator scopes.
 const List<String> kIndicatorScopes = [
   'disabled',
   'pms',
@@ -157,10 +142,7 @@ const List<String> kIndicatorScopes = [
   'everywhere',
 ];
 
-/// Coerces a stored indicator-scope value to a valid scope, mirroring
-/// `_normalizeIndicatorScope` (settings.js:27-32): the legacy boolean strings
-/// `'true'` → `'everywhere'` and `'false'` → `'disabled'`; any other value not
-/// in [kIndicatorScopes] falls back to [fallback].
+/// Legacy `'true'`/`'false'` map to everywhere/disabled; other invalid values fall back to [fallback].
 String normalizeIndicatorScope(String? value,
     {String fallback = 'pms-groups'}) {
   if (value == 'true') return 'everywhere';
@@ -169,9 +151,7 @@ String normalizeIndicatorScope(String? value,
   return fallback;
 }
 
-/// Validates a settings-transfer recipient public key, mirroring
-/// `executeSettingsTransfer` (shop.js): an npub or a 64-char hex key, and not
-/// the user's own. Returns the matching PWA error string, or null when valid.
+/// An npub or 64-char hex key that isn't the user's own; returns the error string, or null when valid.
 String? validateTransferPubkey(String input, {required String selfPubkey}) {
   final pk = normalizePubkeyInput(input);
   if (pk == null) {
@@ -183,26 +163,13 @@ String? validateTransferPubkey(String input, {required String selfPubkey}) {
   return null;
 }
 
-/// The on-device cache-size readout shown in Data & Backup (app.js:3681
-/// `refreshAppCacheSize`). Native ports compute the item breakdown from the
-/// live in-memory store (channels / PM+group threads / profiles / reaction
-/// records) with a byte estimate of that content. [realBytes], when > 0, is
-/// preferred over the content estimate — the PWA prefers the real
-/// `navigator.storage.estimate()` usage over its per-record estimate
-/// (app.js:3699 `estimateUsage > 0 ? estimateUsage : counts.totalBytes`); the
-/// native analog is the on-disk `CacheStore.totalBytes()` reading.
-///
-/// Returns the same human strings:
-///  * `"{size} cached on device — N channels, N PM/group threads, N profiles,
-///    N reaction records"` (size auto-scaled B/KB/MB/GB)
-///  * `"No cached data on device yet"` when nothing is cached.
+/// On-device cache readout; a positive [realBytes] (on-disk size) is preferred over the content estimate.
 String cacheReadoutFor(AppState s, {int realBytes = 0}) {
   var channels = 0;
   var pms = 0;
   var bytes = 0;
   s.messages.forEach((key, list) {
     if (list.isEmpty) return;
-    // PM (`pm-`) and group (`group-`) threads vs channel (`#`) keys.
     if (key.startsWith('pm-') || key.startsWith('group-')) {
       pms++;
     } else {
@@ -219,8 +186,7 @@ String cacheReadoutFor(AppState s, {int realBytes = 0}) {
 
   final sizeBytes = realBytes > 0 ? realBytes : bytes;
   final totalItems = channels + pms + profiles + reactions;
-  // The PWA's empty state requires BOTH zero items and zero bytes
-  // (app.js:3701); a non-zero estimate still renders the sized breakdown.
+  // Empty state requires both zero items and zero bytes.
   if (totalItems == 0 && sizeBytes <= 0) {
     return tr('No cached data on device yet');
   }
@@ -233,9 +199,7 @@ String cacheReadoutFor(AppState s, {int realBytes = 0}) {
       {'size': formatCacheBytes(sizeBytes), 'breakdown': breakdown});
 }
 
-/// Formats a byte count as a fixed-unit "MB" string. Retained for tests; the
-/// live Data & Backup readout uses the PWA's auto-scaled [formatCacheBytes]
-/// via [cacheReadoutFor] (app.js:3631 `formatCacheBytes`).
+/// Fixed-unit "MB" string, kept for tests; the live readout uses [formatCacheBytes].
 String formatCacheMb(int bytes) {
   if (bytes <= 0) return '0 MB';
   final mb = bytes / (1024 * 1024);
@@ -243,8 +207,7 @@ String formatCacheMb(int bytes) {
   return '${mb.toStringAsFixed(fixed)} MB';
 }
 
-/// Formats a byte count into a short auto-scaled human string (app.js:3631
-/// `formatCacheBytes`): B/KB/MB/GB, one decimal below 10 (except bytes).
+/// Auto-scaled B/KB/MB/GB, one decimal below 10 (except bytes).
 String formatCacheBytes(int bytes) {
   if (bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -258,10 +221,7 @@ String formatCacheBytes(int bytes) {
   return '${n.toStringAsFixed(fixed)} ${units[i]}';
 }
 
-/// Formats an inbound settings-transfer timestamp (unix seconds) as a compact
-/// local date-time for the Pending Settings Transfers row (F17). Mirrors the
-/// PWA's `new Date(transferredAt * 1000).toLocaleString()` (shop.js:2006) with a
-/// dependency-free `YYYY-MM-DD HH:MM` rendering.
+/// Local `YYYY-MM-DD HH:MM` for a settings-transfer timestamp in unix seconds.
 String formatTransferTimestamp(int unixSeconds) {
   if (unixSeconds <= 0) return '';
   final dt = DateTime.fromMillisecondsSinceEpoch(unixSeconds * 1000).toLocal();
@@ -270,16 +230,13 @@ String formatTransferTimestamp(int unixSeconds) {
       '${two(dt.hour)}:${two(dt.minute)}';
 }
 
-/// Abbreviates a hex pubkey as `<first16>…<last8>` for the transfer row's
-/// "Verified sender key" line (shop.js:2011).
+/// `<first16>…<last8>` pubkey abbreviation.
 String abbreviateTransferKey(String pubkey) {
   if (pubkey.length <= 24) return pubkey;
   return '${pubkey.substring(0, 16)}…${pubkey.substring(pubkey.length - 8)}';
 }
 
-/// The exact `nym_*` keys wiped by "Reset Settings to Defaults"
-/// (app.js:4048-4073 `SETTINGS_KEY_EXACT`). Identity/login/PM/group/shop keys
-/// are deliberately absent so they are preserved.
+/// Exact keys wiped by "Reset Settings to Defaults"; identity, login, PM, group and shop keys are deliberately absent.
 const List<String> kSettingsResetKeys = [
   'nym_theme',
   'nym_color_mode',
@@ -329,5 +286,5 @@ const List<String> kSettingsResetKeys = [
   'nym_notification_seen',
 ];
 
-/// The key prefixes also wiped on reset (`SETTINGS_KEY_PREFIXES`).
+/// Key prefixes also wiped on reset.
 const List<String> kSettingsResetKeyPrefixes = ['nym_image_blur_'];

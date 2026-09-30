@@ -24,8 +24,7 @@ const live = new Set(sources);
 
 await mkdir(outDir, { recursive: true });
 
-// Clear packs for languages that no longer exist, so a removed language does
-// not linger in the app bundle forever.
+// Clear packs for languages that no longer exist.
 const known = new Set(languages.map((l) => `${l.code}.json`));
 for (const name of await readdir(outDir).catch(() => [])) {
   if (name.endsWith('.json') && !known.has(name)) {
@@ -44,10 +43,9 @@ for (const lang of languages) {
   try {
     cache = JSON.parse(await readFile(cachePath(lang.code), 'utf8'));
   } catch {
-    continue; // Nothing translated for this language yet.
+    continue;
   }
-  // Only strings still in the app: a stale entry ships a translation for copy
-  // nobody can reach, and grows every install.
+  // Only strings still in the app.
   const pack = {};
   let have = 0;
   for (const [source, translated] of Object.entries(cache)) {
@@ -65,9 +63,7 @@ for (const lang of languages) {
 }
 
 console.log(`${counts.total} source strings -> ${outDir}`);
-// These packs are keyed by the raw English string, which is what the Flutter
-// runtime looks up — unlike the web packs the build writes, which are keyed the
-// way js/modules/i18n.js keys its cache. Do not converge the two.
+// Keyed by the raw English string (what Flutter looks up), unlike web packs; do not converge the two.
 if (counts.dartKind === 'mirror') {
   console.warn(
     `  read from flutter/, this repository's release mirror — it can be a`
@@ -82,9 +78,7 @@ if (written === 0) {
 }
 console.log(`  ${written} languages, ${complete} complete`);
 if (partial.length) {
-  // Not a failure: the app falls back to translating on demand for whatever a
-  // pack is missing. Worth naming so a half-finished run is not mistaken for a
-  // finished one.
+  // Not a failure: the app translates on demand whatever a pack is missing.
   console.log(`  partial: ${partial.slice(0, 8).join(', ')}${partial.length > 8 ? ` (+${partial.length - 8} more)` : ''}`);
 }
 console.log(`  ${(bytes / 1024 / 1024).toFixed(1)} MB total, ${(bytes / written / 1024).toFixed(0)} KB per language`);

@@ -1,27 +1,10 @@
-// mesh_outbox.dart - The sender outbox.
-//
-// With no internet, an outgoing message rides the Bluetooth mesh instead of
-// Nostr (`MeshBridge.shouldSendOverMesh`). That reaches whoever is in radio
-// range and NOBODY else — the message never existed as far as the relays are
-// concerned, and nothing ever went back for it. Someone who was two rooms away,
-// or reading from another device, simply never saw it.
-//
-// This is the queue that closes that gap, mirroring bitchat's
-// `MessageRouter`/`MessageOutboxStore` pair: a send that could not reach Nostr
-// is retained here, and the moment relays come back the controller publishes it
-// (`NostrController.flushMeshOutbox`). The mesh copy still went out immediately
-// — this is the second, slower delivery path, not a replacement for it.
-//
-// Deliberately free of Riverpod and IO: entries are plain data and every rule
-// (TTL, cap, attempt ceiling) is a pure function of `nowMs`, so the whole
-// policy is unit-testable without a relay, a radio, or a disk.
+// Sender outbox: sends that went mesh-only are retained and published to Nostr once relays return; pure and IO-free.
 
 import 'dart:convert';
 
-/// Which conversation surface an outbox entry replays into.
+/// Which conversation surface an entry replays into.
 enum MeshOutboxKind { channel, pm }
 
-/// One retained send.
 class MeshOutboxEntry {
   MeshOutboxEntry({
     required this.kind,
@@ -36,53 +19,33 @@ class MeshOutboxEntry {
     this.attempts = 0,
   });
 
-  /// channel → replayed as a public channel message; pm → as a gift-wrapped DM.
+  /// channel replays as a public channel message; pm as a gift-wrapped DM.
   final MeshOutboxKind kind;
 
-  /// The bare channel key (`nymchat`, a geohash) or the peer's REAL Nostr
-  /// pubkey. A mesh-only peer's synthetic `sha256("mesh:…")` pubkey must never
-  /// reach here — there is no Nostr identity behind it to deliver to.
+  /// Bare channel key or the peer's real Nostr pubkey, never a mesh-only synthetic pubkey.
   final String target;
 
   final String content;
 
-  /// The thread this reply belongs to, so a queued send lands back in its
-  /// thread rather than at the bottom of the flat conversation.
+  /// Thread root, so a queued reply lands back in its thread.
   final String? threadRoot;
 
-  /// The original send time. The replay publishes with THIS, not with the time
-  /// the relays happened to come back: it keeps the message where it belongs in
-  /// history, and it is what lets the sender's own optimistic echo reconcile
-  /// (the channel ingest matches a placeholder within 60s of the event) however
-  /// long the entry sat in the queue.
+  /// Original send time, used for the replay so history order holds and the optimistic echo reconciles.
   final int createdAtSec;
 
-  /// The optimistic echo this entry belongs to, so the publish can swap in the
-  /// real event id — and a drop can mark the bubble failed instead of leaving
-  /// it looking sent forever.
+  /// Optimistic echo id, so publish swaps in the real id and a drop marks the bubble failed.
   final String localId;
 
-  /// The id the mesh copy carried. Republished as a `['nymmesh', id]` tag so a
-  /// peer who already received this over the radio drops the Nostr copy instead
-  /// of showing the message twice.
+  /// Republished as `['nymmesh', id]` so peers who got the radio copy drop the Nostr one.
   final String? meshMessageId;
 
-  /// A PM's shared cross-recipient id. The mesh DM already used it, so reusing
-  /// it here dedups the two copies through the ordinary PM path.
+  /// A PM's shared cross-recipient id, deduping mesh and Nostr copies.
   final String? nymMessageId;
 
-  /// The event signed at send time, as raw JSON, when one could be built.
-  ///
-  /// Gateway mode may already be carrying this exact event to the relays.
-  /// Republishing the SAME bytes means the same event id, so the relays treat
-  /// the second copy as a duplicate; rebuilding it here would differ by the
-  /// proof-of-work nonce alone and put the message on the relays twice. It is
-  /// also what the user actually wrote — a rebuild hours later would re-read
-  /// the current nym and settings.
+  /// Event signed at send time; republishing the same bytes keeps one event id and the original content.
   final Map<String, dynamic>? signedEvent;
 
-  /// Publish attempts spent. Bounded so a message to a dead relay set cannot
-  /// retry forever.
+  /// Publish attempts spent, bounded so a dead relay set can't retry forever.
   int attempts;
 
   Map<String, dynamic> toJson() => {
@@ -98,9 +61,7 @@ class MeshOutboxEntry {
         if (attempts > 0) 'attempts': attempts,
       };
 
-  /// Rebuilds an entry from persisted JSON. Null for a row missing anything the
-  /// replay needs, so a corrupt blob costs one message rather than throwing on
-  /// every boot.
+  /// Null for a row missing required fields, so a corrupt blob costs one message rather than throwing.
   static MeshOutboxEntry? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final kindName = raw['kind'];
@@ -139,27 +100,14 @@ class MeshOutboxEntry {
   }
 }
 
-/// The retained sends, oldest first.
-///
-/// Every bound here exists so an outbox cannot grow without limit or replay
-/// something the user has long since given up on:
-/// * [ttlMs] — 24h, the same window the bell history and the mesh's own
-///   store-and-forward use. Past it a message is stale enough that surfacing it
-///   would confuse rather than help.
-/// * [cap] — the newest [cap] entries survive; the oldest are dropped first.
-/// * [maxAttempts] — a publish that keeps failing (relays up, but rejecting)
-///   stops rather than looping.
-///
-/// [onDropped] fires with the entry's [MeshOutboxEntry.localId] whenever one
-/// leaves without being delivered, so the UI can fail the bubble instead of
-/// leaving it looking sent.
+/// Retained sends, oldest first, bounded by [ttlMs], [cap] and [maxAttempts]; [onDropped] reports undelivered drops.
 class MeshOutbox {
   MeshOutbox({this.onDropped});
 
-  /// 24 hours, matching the mesh's own store-and-forward window.
+  /// 24 hours, matching the mesh's store-and-forward window.
   static const int ttlMs = 24 * 60 * 60 * 1000;
 
-  /// Most retained sends. Bounded because this survives restarts.
+  /// Bounded because this survives restarts.
   static const int cap = 200;
 
   /// Publish attempts before an entry is given up on.
@@ -169,15 +117,12 @@ class MeshOutbox {
 
   final List<MeshOutboxEntry> _entries = <MeshOutboxEntry>[];
 
-  /// The retained sends, oldest first. Read-only.
   List<MeshOutboxEntry> get entries => List.unmodifiable(_entries);
 
   bool get isEmpty => _entries.isEmpty;
   int get length => _entries.length;
 
-  /// Retains [entry], dropping the oldest if that would exceed [cap]. An entry
-  /// whose [MeshOutboxEntry.localId] is already held is ignored, so a repeated
-  /// enqueue for one echo cannot double-publish.
+  /// Retains [entry], dropping the oldest past [cap]; a repeated localId is ignored.
   void add(MeshOutboxEntry entry) {
     if (_entries.any((e) => e.localId == entry.localId)) return;
     _entries.add(entry);
@@ -187,16 +132,14 @@ class MeshOutbox {
     }
   }
 
-  /// Removes the entry for [localId] (delivered, or given up on). Returns
-  /// whether anything was held.
+  /// Removes the entry for [localId]; returns whether one was held.
   bool remove(String localId) {
     final before = _entries.length;
     _entries.removeWhere((e) => e.localId == localId);
     return _entries.length != before;
   }
 
-  /// Drops everything older than [ttlMs] at [nowMs], reporting each. Returns
-  /// whether anything went.
+  /// Drops entries older than [ttlMs], reporting each; returns whether any went.
   bool prune(int nowMs) {
     final cutoffSec = (nowMs - ttlMs) ~/ 1000;
     final expired = _entries
@@ -210,14 +153,7 @@ class MeshOutbox {
     return true;
   }
 
-  /// The entries a flush should publish at [nowMs]: everything still inside the
-  /// TTL, oldest first, so a conversation replays in the order it was written.
-  /// Prunes as a side effect — an expired entry is never handed out.
-  /// Attaches the event signed at send time to an entry already queued.
-  ///
-  /// Separate from [add] because the enqueue must not wait on it: signing mines
-  /// proof of work, and a message must be durably queued the moment the radio
-  /// carried it, not a second later. Returns whether an entry was updated.
+  /// Separate from [add] so the enqueue never waits on proof-of-work signing; returns whether an entry was updated.
   bool attachSignedEvent(String localId, Map<String, dynamic> event) {
     for (var i = 0; i < _entries.length; i++) {
       final e = _entries[i];
@@ -245,8 +181,7 @@ class MeshOutbox {
     return List.unmodifiable(_entries);
   }
 
-  /// Records a spent publish attempt for [localId], dropping the entry once it
-  /// reaches [maxAttempts]. Returns true when the entry was dropped.
+  /// Records a spent attempt, dropping the entry at [maxAttempts]; true when dropped.
   bool noteAttempt(String localId) {
     for (final e in _entries) {
       if (e.localId != localId) continue;
@@ -261,15 +196,12 @@ class MeshOutbox {
     return false;
   }
 
-  /// Empties the queue WITHOUT reporting drops — sign-out / panic, where the
-  /// messages are being discarded along with everything else.
+  /// Empties without reporting drops, for sign-out or panic.
   void clear() => _entries.clear();
 
-  /// Serializes for [StorageKeys.meshOutbox].
   String encode() => jsonEncode([for (final e in _entries) e.toJson()]);
 
-  /// Replaces the contents from a persisted blob. Unparseable rows are skipped;
-  /// a wholly unparseable blob leaves the queue empty rather than throwing.
+  /// Unparseable rows are skipped; a wholly unparseable blob leaves the queue empty.
   void decode(String? raw) {
     _entries.clear();
     if (raw == null || raw.isEmpty) return;

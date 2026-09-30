@@ -4,17 +4,9 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../widgets/nym_icons.dart';
 
-/// Shared form/control widgets that mirror the PWA's `.form-*` and
-/// `.settings-section` styling (docs/specs/02 §5.10, §5.6). All controls take
-/// their colors from `context.nym`.
+/// Shared form controls matching the PWA's settings styling, colored from `context.nym`.
 
-/// A collapsible `.settings-section`. The header bar is full-bleed: a
-/// `rgba(255,255,255,.04)` tinted bar, primary 12px/700 uppercase label with
-/// letter-spacing 1.2, a primary chevron that rotates -90° when collapsed, and a
-/// bottom glass-border divider. The section spans the full modal-body width (the
-/// PWA's `.settings-section{margin:0 -32px}` cancels the modal padding); [bleed]
-/// is the horizontal inset (32) applied to the header/body content so it lines up
-/// with the rest of the modal.
+/// Collapsible full-bleed settings section; [bleed] insets content to line up with the modal padding.
 class SettingsSection extends StatelessWidget {
   const SettingsSection({
     super.key,
@@ -35,7 +27,6 @@ class SettingsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     return DecoratedBox(
-      // `.settings-section { border-bottom: 1px glass-border }`.
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
@@ -45,8 +36,6 @@ class SettingsSection extends StatelessWidget {
           InkWell(
             onTap: onToggle,
             child: Container(
-              // `.settings-section-header { background: rgba(255,255,255,.04);
-              //   padding: 14px 32px }`.
               color: const Color(0x0AFFFFFF),
               padding: EdgeInsets.symmetric(vertical: 14, horizontal: bleed),
               child: Row(
@@ -65,10 +54,8 @@ class SettingsSection extends StatelessWidget {
                   AnimatedRotation(
                     duration: NymMotion.transition,
                     curve: NymMotion.curve,
-                    // chevron points down when open, -90° (right) when collapsed.
+                    // Down when open, -90° when collapsed.
                     turns: open ? 0 : -0.25,
-                    // `.settings-section-chevron` (index.html:1363) — the down
-                    // chevron; the PWA rotates it -90° when collapsed.
                     child: NymSvgIcon(
                       NymIcons.chevronDown,
                       size: 18,
@@ -81,7 +68,6 @@ class SettingsSection extends StatelessWidget {
           ),
           if (open)
             Padding(
-              // `.settings-section-body { padding: 18px 32px 4px }`.
               padding: EdgeInsets.fromLTRB(bleed, 18, bleed, 4),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -94,7 +80,7 @@ class SettingsSection extends StatelessWidget {
   }
 }
 
-/// A `.form-group`: label + control + optional hint/warning.
+/// Label, control, and optional hint or warning.
 class FormGroup extends StatelessWidget {
   const FormGroup({
     super.key,
@@ -110,28 +96,22 @@ class FormGroup extends StatelessWidget {
   final Widget child;
   final String? hint;
 
-  /// A plain amber `.form-hint.nm-h-59` line (`color: var(--warning-color,
-  /// #f0a030); margin-top: 4px`, no-inline.css:77) — un-boxed hint text, used
-  /// by e.g. the hardcore-keypair warning (index.html hardcoreKeypairWarning).
+  /// Plain amber hint line, un-boxed.
   final String? amberHint;
   final String? warning;
 
-  /// Optional trailing widget rendered after the hint(s), inside the group —
-  /// e.g. the "Reset columns to defaults" button that follows the Chat View
-  /// hint in the PWA markup (index.html `.nm-h-58`).
+  /// Optional widget after the hints, inside the group.
   final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
     return Padding(
-      // `.form-group { margin-bottom: 20px }`.
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (label != null) ...[
-            // `.form-label`: 11px uppercase, letter-spacing 1.2, weight 600.
             Text(
               label!.toUpperCase(),
               style: TextStyle(
@@ -145,7 +125,6 @@ class FormGroup extends StatelessWidget {
           ],
           child,
           if (hint != null) ...[
-            // `.form-hint { margin-top: 5px }`.
             const SizedBox(height: 5),
             Text(
               hint!,
@@ -154,9 +133,7 @@ class FormGroup extends StatelessWidget {
           ],
           if (amberHint != null) ...[
             const SizedBox(height: 4),
-            // `.nm-h-59`: plain form-hint text in the amber warning color
-            // (`var(--warning-color, #f0a030)` — the variable is undefined in
-            // the PWA CSS, so the #f0a030 fallback always applies). No box.
+            // The warning-color variable is undefined in the PWA, so the #f0a030 fallback always applies.
             Text(
               amberHint!,
               style: const TextStyle(
@@ -165,7 +142,7 @@ class FormGroup extends StatelessWidget {
           ],
           if (warning != null) ...[
             const SizedBox(height: 6),
-            // `.form-warning`: danger-tinted box (not the amber warning color).
+            // Danger-tinted box, not the amber warning color.
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
@@ -189,9 +166,7 @@ class FormGroup extends StatelessWidget {
   }
 }
 
-/// A `.form-select`: a styled dropdown over [items] (value, label). When
-/// [disabled] is true the control is locked (the PWA's `select.disabled`): dimmed
-/// and non-interactive, with an optional [tooltip] (the PWA's `title=`).
+/// Styled dropdown; [disabled] dims it and makes it inert, with an optional [tooltip].
 class FormSelect<T> extends StatelessWidget {
   const FormSelect({
     super.key,
@@ -212,7 +187,6 @@ class FormSelect<T> extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final field = Opacity(
-      // Disabled native selects render at reduced opacity.
       opacity: disabled ? 0.5 : 1.0,
       child: _field(c),
     );
@@ -224,9 +198,6 @@ class FormSelect<T> extends StatelessWidget {
 
   Widget _field(NymColors c) {
     return Container(
-      // `.form-select { background: rgba(255,255,255,.05); padding: 11px 14px }`;
-      // light mode forces `background: rgba(0,0,0,.04) !important; border-color:
-      // rgba(0,0,0,.1) !important` (styles-themes-responsive.css:560-568).
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
         color: c.isLight
@@ -244,9 +215,7 @@ class FormSelect<T> extends StatelessWidget {
           isDense: true,
           dropdownColor: c.bgTertiary,
           iconEnabledColor: c.textDim,
-          // Inputs/selects force neutral text: `color: #ffffff !important`
-          // dark / `#000000 !important` light, 15px
-          // (styles-themes-responsive.css:570-592, styles-components.css:236).
+          // Inputs force pure white/black text at 15px.
           style: TextStyle(
             color: c.isLight ? Colors.black : Colors.white,
             fontSize: 15,
@@ -260,7 +229,7 @@ class FormSelect<T> extends StatelessWidget {
                 child: Text(it.label, overflow: TextOverflow.ellipsis),
               ),
           ],
-          // `disabled` → null handler (Material renders it greyed + inert).
+          // Null handler renders it greyed and inert.
           onChanged: disabled
               ? null
               : (v) {
@@ -280,14 +249,7 @@ class FormSelect<T> extends StatelessWidget {
   }
 }
 
-/// A `.form-input` text field (or `.form-textarea` when [maxLines] > 1).
-///
-/// Mirrors styles-components.css:229-255 + the theme input overrides
-/// (styles-themes-responsive.css:560-592): bg white@.05 dark (focus → .07) /
-/// black@.04 light (`!important`, so no focus lift), text forced pure
-/// white/black at 15px, glass border (focus → primary@.3 in dark; light keeps
-/// the `!important` rgba(0,0,0,.1) border), and a `0 0 0 3px` primary@.06
-/// focus ring.
+/// Text field ([maxLines] > 1 for a textarea); light mode forces its fill and border with no focus lift.
 class FormInput extends StatefulWidget {
   const FormInput({
     super.key,
@@ -309,15 +271,13 @@ class FormInput extends StatefulWidget {
   final FocusNode? focusNode;
   final VoidCallback? onTap;
 
-  /// Optional leading in-field icon (the PWA's `.settings-search-icon`: a 16px
-  /// glyph inset at the left with the input's text starting at 36px).
+  /// Optional 16px leading icon; text starts at 36px.
   final Widget? prefix;
 
-  /// > 1 renders the `.form-textarea` variant (e.g. the About contact box).
+  /// More than 1 renders the textarea variant.
   final int maxLines;
 
-  /// HTML `maxlength=` equivalent — hard cap with no visible counter (the PWA
-  /// attribute renders none).
+  /// Hard length cap with no visible counter.
   final int? maxLength;
 
   @override
@@ -363,9 +323,7 @@ class _FormInputState extends State<FormInput> {
     final c = context.nym;
     final borderColor = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     return DecoratedBox(
-      // `.form-input:focus { box-shadow: 0 0 0 3px primary@.06 }` — a
-      // hard-edged ring (no blur); light mode's `:focus` override lifts it to
-      // primary@.1 `!important` (styles-themes-responsive.css:1087-1093).
+      // Hard-edged 3px focus ring; light mode lifts it to primary@.1.
       decoration: BoxDecoration(
         borderRadius: NymRadius.rsm,
         boxShadow: _focused
@@ -385,14 +343,11 @@ class _FormInputState extends State<FormInput> {
         onChanged: widget.onChanged,
         maxLines: widget.maxLines,
         maxLength: widget.maxLength,
-        // No counter — the PWA's `maxlength=` attribute renders none.
         buildCounter: widget.maxLength == null
             ? null
             : (_, {required currentLength, required isFocused, maxLength}) =>
                 null,
-        // Inputs force neutral text: `color: #ffffff !important` dark /
-        // `#000000 !important` light, 15px (styles-themes-responsive.css:
-        // 570-592, styles-components.css:236).
+        // Inputs force pure white/black text at 15px.
         style: TextStyle(
           color: c.isLight ? Colors.black : Colors.white,
           fontSize: 15,
@@ -400,8 +355,6 @@ class _FormInputState extends State<FormInput> {
         cursorColor: c.isLight ? Colors.black : Colors.white,
         decoration: InputDecoration(
           isDense: true,
-          // `.settings-search .form-input { padding-left: 36px }` with the 16px
-          // icon inset at the left (styles-components.css:148-157).
           prefixIcon: widget.prefix == null
               ? null
               : Padding(
@@ -412,12 +365,10 @@ class _FormInputState extends State<FormInput> {
               const BoxConstraints(minWidth: 36, minHeight: 16),
           hintText: widget.hint,
           hintStyle: TextStyle(color: c.textDim, fontSize: 15),
-          // `.form-input { padding: 11px 14px }`.
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           filled: true,
-          // Dark: white@.05, focus lifts to .07; light: black@.04 `!important`
-          // (no focus lift).
+          // Light mode's fill is `!important`, so no focus lift.
           fillColor: c.isLight
               ? const Color(0x0A000000)
               : Colors.white.withValues(alpha: _focused ? 0.07 : 0.05),
@@ -429,10 +380,7 @@ class _FormInputState extends State<FormInput> {
             borderRadius: NymRadius.rsm,
             borderSide: BorderSide(color: borderColor),
           ),
-          // `:focus` border is primary@.3 in both modes — light mode's own
-          // `:focus` rule re-asserts it `!important` and, being more specific,
-          // beats the base light `border-color: rgba(0,0,0,.1) !important`
-          // (styles-themes-responsive.css:1087-1093 over :564-569).
+          // Primary@.3 focus border in both modes; light's `:focus` rule beats its base border.
           focusedBorder: OutlineInputBorder(
             borderRadius: NymRadius.rsm,
             borderSide: BorderSide(color: c.primaryA(0.3)),
@@ -443,8 +391,7 @@ class _FormInputState extends State<FormInput> {
   }
 }
 
-/// `.color-mode-group`: a segmented control. Container bg @0.04, radius sm,
-/// padding 3px; buttons flex:1, radius xs; active = primary @15%.
+/// Segmented control; the active segment is primary at 15%.
 class SegmentGroup<T> extends StatelessWidget {
   const SegmentGroup({
     super.key,
@@ -462,9 +409,7 @@ class SegmentGroup<T> extends StatelessWidget {
     final c = context.nym;
     return Container(
       padding: const EdgeInsets.all(3),
-      // `.color-mode-group { background: rgba(255,255,255,.04) }`; light mode
-      // → `rgba(0,0,0,.04)` (styles-themes-responsive.css:1292-1294). Neutral
-      // white/black — NOT the theme text color.
+      // Neutral white/black tint, not the theme text color.
       decoration: BoxDecoration(
         color: c.insetFill,
         borderRadius: NymRadius.rsm,
@@ -478,8 +423,6 @@ class SegmentGroup<T> extends StatelessWidget {
                 child: AnimatedContainer(
                   duration: NymMotion.transition,
                   curve: NymMotion.curve,
-                  // `.color-mode-btn { padding: 8px 4px; border: 1px solid
-                  //   transparent }`; `.active { border-color: primary@.2 }`.
                   padding:
                       const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                   decoration: BoxDecoration(
@@ -512,11 +455,7 @@ class SegmentGroup<T> extends StatelessWidget {
   }
 }
 
-/// `.unblock-btn` / `.remove-keyword-btn` (styles-components.css:532-549): the
-/// small danger pill on moderation-list rows. Fixed red tint in both modes
-/// (`rgba(255,68,68,.1)` fill, `.3` border), 20px pill radius, `3px 10px`
-/// padding, 10px `--danger` label. No uppercase transform — the PWA labels are
-/// 'Remove' / 'Unblock' / 'Unhide' as written.
+/// Small fixed-red danger pill for moderation rows; labels aren't uppercased.
 class DangerPillButton extends StatelessWidget {
   const DangerPillButton({
     super.key,
@@ -534,14 +473,14 @@ class DangerPillButton extends StatelessWidget {
     return InkWell(
       onTap: onPressed,
       borderRadius: radius,
-      // :hover/:active → bg rgba(255,68,68,.2): the .1 fill + this overlay.
+      // Hover and active reach 0.2 via the 0.1 fill plus this overlay.
       highlightColor: const Color(0x1AFF4444),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
         decoration: BoxDecoration(
-          color: const Color(0x1AFF4444), // rgba(255,68,68,.1)
+          color: const Color(0x1AFF4444),
           borderRadius: radius,
-          border: Border.all(color: const Color(0x4DFF4444)), // @.3
+          border: Border.all(color: const Color(0x4DFF4444)),
         ),
         child: Text(
           label,
@@ -552,7 +491,7 @@ class DangerPillButton extends StatelessWidget {
   }
 }
 
-/// A `.icon-btn`-style button used for inline actions (Add, Send, Reset…).
+/// `.icon-btn`-style inline action button.
 class NymOutlineButton extends StatelessWidget {
   const NymOutlineButton({
     super.key,
@@ -567,25 +506,16 @@ class NymOutlineButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool danger;
 
-  /// `.icon-btn` text is uppercase with letter-spacing; `.btn-small` (Reset)
-  /// is not.
+  /// `.icon-btn` text is uppercase; `.btn-small` (Reset) isn't.
   final bool uppercase;
 
-  /// Fixed pill height. `.modal-actions` sets no `align-items`, so flex's
-  /// default stretch sizes an `.icon-btn` to the 42px `.send-btn` beside it
-  /// (label centered — `.icon-btn` is `inline-flex; align-items: center`).
-  /// Null keeps the natural padded height.
+  /// Fixed height to match a 42px send button beside it; null keeps the natural height.
   final double? height;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `.icon-btn` rest palette: white/0.05 fill + glass border + `--text`
-    // label in dark; black/0.03 fill + black/0.1 border + `--primary` label
-    // in light (`body.light-mode .icon-btn`, styles-themes-responsive.css:
-    // 595-599) — same as _IconButtonState in modal_chrome.dart. The danger
-    // variant is a separate class (danger/0.08 fill, danger/0.3 border,
-    // danger label) with no light override.
+    // Light mode uses a primary label; the danger variant has no light override.
     final accent = danger ? c.danger : (c.isLight ? c.primary : c.text);
     final text = Text(
       uppercase ? label.toUpperCase() : label,
@@ -612,8 +542,7 @@ class NymOutlineButton extends StatelessWidget {
                 : (c.isLight ? const Color(0x1A000000) : c.glassBorder),
           ),
         ),
-        // Center + widthFactor keeps the pill shrink-wrapped while centering
-        // the label within the pinned height.
+        // Center with widthFactor keeps the pill shrink-wrapped while centering the label.
         child: height == null ? text : Center(widthFactor: 1, child: text),
       ),
     );

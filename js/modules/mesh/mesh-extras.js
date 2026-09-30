@@ -10,8 +10,7 @@
     // PING / PONG 
     const PING_NONCE_LENGTH = 8;
 
-    /// 9 bytes: an 8-byte nonce, then the TTL the packet was LAUNCHED with, so
-    /// the far end can derive the hop count from the TTL that arrives.
+    // 8-byte nonce plus the launch TTL so the far end can derive the hop count.
     function encodePing(nonce, originTtl) {
         if (!nonce || nonce.length !== PING_NONCE_LENGTH) return null;
         const out = new Uint8Array(PING_NONCE_LENGTH + 1);
@@ -20,8 +19,7 @@
         return out;
     }
 
-    /// Accepts trailing bytes so a future revision can extend the format
-    /// without older clients refusing to answer.
+    // Accepts trailing bytes so future revisions can extend the format.
     function decodePing(data) {
         if (!data || data.length < PING_NONCE_LENGTH + 1) return null;
         return {
@@ -30,10 +28,7 @@
         };
     }
 
-    /// Links crossed: the TTL decrements plus the final delivery link, so a
-    /// directly connected peer is 1 hop away. Null when the pair is impossible
-    /// (received above origin), which means the packet was rewritten rather
-    /// than relayed.
+    // TTL decrements plus the final link (direct peer = 1); null means the packet was rewritten, not relayed.
     function hopCount(originTtl, receivedTtl) {
         if (originTtl < receivedTtl) return null;
         return (originTtl - receivedTtl) + 1;
@@ -49,8 +44,7 @@
     const CARRIER_MAX_EVENT_BYTES = 16 * 1024;
     const CARRIER_MAX_GEOHASH = 12;
 
-    /// TLV with 2-byte big-endian lengths — a signed event's JSON does not fit
-    /// the 1-byte range the smaller packets use.
+    // 2-byte big-endian lengths: a signed event's JSON exceeds the 1-byte range.
     function encodeCarrier(direction, geohash, eventJson) {
         const geoBytes = enc(geohash || '');
         if (!geoBytes.length || geoBytes.length > CARRIER_MAX_GEOHASH) return null;
@@ -63,9 +57,7 @@
         return C().concat(...parts);
     }
 
-    /// Null for anything malformed, INCLUDING trailing bytes: a carrier is
-    /// published on somebody's behalf, so a payload that does not parse exactly
-    /// is refused rather than guessed at.
+    // Null for malformed input, including trailing bytes: a carrier is published on someone's behalf.
     function decodeCarrier(data) {
         let off = 0, direction = null, geohash = null, eventJson = null;
         const known = new Set(Object.values(CARRIER_DIRECTION));
@@ -94,9 +86,7 @@
         return { direction, geohash, eventJson };
     }
 
-    /// The carried event as an object. The caller MUST still verify the
-    /// signature before publishing or displaying it: this parses, it does not
-    /// vouch.
+    // The caller must still verify the signature: this parses, it does not vouch.
     function carrierEvent(carrier) {
         try {
             const parsed = JSON.parse(new TextDecoder().decode(carrier.eventJson));
@@ -109,8 +99,7 @@
     const PREKEY_SIGNATURE_LENGTH = 64;
     const PREKEY_MAX = 8;
     const PREKEY_ENTRY_LENGTH = 4 + PREKEY_KEY_LENGTH;
-    // Domain separation, so a bundle signature can never be mistaken for an
-    // announce or packet signature.
+    // Domain separation so a bundle signature can't be mistaken for an announce or packet signature.
     const PREKEY_SIGNING_CONTEXT = 'bitchat-prekey-bundle-v1';
 
     const beU32 = (v) => {
@@ -131,8 +120,7 @@
         return out;
     };
 
-    /// The canonical bytes the signature covers. Encoders and verifiers must
-    /// derive these identically or every bundle looks forged.
+    // Encoders and verifiers must derive these identically or every bundle looks forged.
     function prekeySignableBytes(bundle) {
         const ctx = enc(PREKEY_SIGNING_CONTEXT);
         const parts = [new Uint8Array([Math.min(ctx.length, 255)]), ctx.subarray(0, 255),
@@ -194,16 +182,12 @@
         }
         if (!owner || !prekeys || generatedAt === null || !signature) return null;
         if (!prekeys.length) return null;
-        // Duplicate ids would let one consumed key shadow another, steering a
-        // sender onto a prekey the owner has already thrown away.
+        // Duplicate ids would let one consumed key shadow another.
         if (new Set(prekeys.map(p => p.id)).size !== prekeys.length) return null;
         return { noiseStaticPublicKey: owner, prekeys, generatedAtMs: generatedAt, signature };
     }
 
-    // How long a consumed key's private half survives. Spray-and-wait means
-    // several couriers carry copies of the SAME envelope and arrive whenever
-    // their carriers happen to meet us; deleting on first open would make every
-    // later copy look like lost mail. 48h, matching bitchat.
+    // Spray-and-wait delivers copies late, so keep consumed private halves 48h (matching bitchat).
     const PREKEY_GRACE_MS = 48 * 60 * 60 * 1000;
 
     class LocalPrekeys {
@@ -216,12 +200,10 @@
             this.nextId = 1;
         }
 
-        // `== null` rather than falsy: a key consumed at epoch 0 (fake clocks
-        // in tests, a device with no time yet) is still a consumed key.
+        // `== null` so a key consumed at epoch 0 (fake clocks, no time yet) still counts as consumed.
         get available() { return this.keys.filter(k => k.consumedAt == null); }
 
-        /// Mints until `batchSize` unused keys exist. Returns whether anything
-        /// was minted, so the caller re-gossips only a bundle that changed.
+        // Returns whether anything was minted, so only a changed bundle is re-gossiped.
         async replenish() {
             let minted = false;
             while (this.available.length < this.batchSize) {
@@ -244,8 +226,7 @@
             return k ? k.publicKey : null;
         }
 
-        /// True only on the FIRST open, so the shrunken bundle is republished
-        /// once rather than on every redelivery of the same message.
+        // True only on the first open, so the bundle is republished once.
         markConsumed(id) {
             const k = this.keys.find(k => k.id === id);
             if (!k || k.consumedAt != null) return false;
@@ -253,8 +234,7 @@
             return true;
         }
 
-        /// Deletes consumed keys past their grace window. This is where forward
-        /// secrecy actually happens — everything before it is bookkeeping.
+        // This is where forward secrecy actually happens.
         prune() {
             const now = this.now();
             const before = this.keys.length;
@@ -262,23 +242,15 @@
             return this.keys.length !== before;
         }
 
-        /// Random rather than first: two senders picking the same key would burn
-        /// it twice, and the second envelope would then depend on the grace
-        /// window to open at all.
+        // Random so two senders don't burn the same key.
         chooseFrom(published) {
             if (!published || !published.length) return null;
             return published[Math.floor(Math.random() * published.length)];
         }
 
-        /// Async because a prekey's private half is a WebCrypto key, not
-        /// bytes — it has to be exported before it can be written down. Both
-        /// halves are stored: WebCrypto cannot re-derive a public key from a
-        /// private one, so a restart that kept only the private half could no
-        /// longer say which prekey it was.
+        // Private halves are WebCrypto keys, exported here; both halves are stored as public can't be re-derived.
         async encode() {
-            // Byte-at-a-time rather than spreading into fromCharCode: a typed
-            // array from another realm is not always spreadable, and a spread
-            // blows the call stack on a large array anyway.
+            // Byte-at-a-time: cross-realm typed arrays aren't always spreadable, and a spread can blow the stack.
             const b64 = (u8) => {
                 let s = '';
                 for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
@@ -291,9 +263,7 @@
                 try {
                     priv = new Uint8Array(await s.exportKey('pkcs8', k.privateKey));
                 } catch (_) {
-                    // A key we cannot export is a key we cannot restore. Drop
-                    // it from the record rather than write a row that decodes
-                    // into mail we can never open.
+                    // A key we cannot export is a key we cannot restore; drop it.
                     continue;
                 }
                 rows.push({
@@ -327,12 +297,10 @@
                     });
                 }
             } catch (_) {
-                // A corrupt blob costs the batch, which is replenished on next
-                // use — never the launch.
+                // A corrupt blob costs the batch, never the launch.
                 this.keys = [];
             }
-            // Never re-issue an id: a repeat would let new mail be sealed under
-            // an id whose private half we already deleted.
+            // Never re-issue an id whose private half may already be deleted.
             for (const k of this.keys) if (k.id >= this.nextId) this.nextId = k.id + 1;
         }
 

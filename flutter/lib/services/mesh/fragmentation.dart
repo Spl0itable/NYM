@@ -5,19 +5,11 @@ import 'protocol/bitchat_packet.dart';
 import 'protocol/fragment_payload.dart';
 import 'protocol/mesh_message_type.dart';
 
-/// Splits oversized packets into MTU-safe fragments and reassembles them —
-/// byte-compatible with bitchat's `FragmentManager`.
-///
-/// The *unpadded* serialized packet is chunked; each chunk rides as the payload
-/// of a [MeshMessageType.fragment] packet that inherits the original's
-/// sender/recipient (so directed packets stay routable). The receiver
-/// concatenates chunks in index order and decodes the original packet.
+/// Splits and reassembles oversized packets, byte-compatible with bitchat's `FragmentManager`.
 class PacketFragmenter {
   const PacketFragmenter._();
 
-  /// Returns [packet] unchanged when it fits, otherwise its fragment packets.
-  /// Returns an empty list if the packet cannot be serialized or would need more
-  /// than [MeshMessageType.fragment]-safe fragments.
+  /// Returns [packet] when it fits, else its fragments, or empty when it cannot be fragmented.
   static List<BitchatPacket> fragment(BitchatPacket packet) {
     if (packet.type == MeshMessageType.fragment) return [packet];
 
@@ -53,7 +45,7 @@ class PacketFragmenter {
           : fullData.length;
       chunks.add(Uint8List.sublistView(fullData, offset, end));
     }
-    // bitchat caps reassembly at 256 fragments per id; never emit more.
+    // bitchat caps reassembly at 256 fragments per id.
     if (chunks.length > 256) return const [];
 
     final out = <BitchatPacket>[];
@@ -80,12 +72,10 @@ class PacketFragmenter {
   }
 }
 
-/// Reassembles incoming fragments into the original packet bytes.
 class FragmentReassembler {
   final Map<String, _Assembly> _assemblies = {};
 
-  /// Accepts a fragment payload. Returns the reassembled original packet bytes
-  /// when the final missing fragment arrives, otherwise null.
+  /// Returns the original packet bytes once the last missing fragment arrives, else null.
   Uint8List? accept(FragmentPayload fragment) {
     _evictExpired();
     if (fragment.total < 1 ||
@@ -104,7 +94,7 @@ class FragmentReassembler {
     final builder = BytesBuilder();
     for (var i = 0; i < assembly.total; i++) {
       final chunk = assembly.chunks[i];
-      if (chunk == null) return null; // gap remains
+      if (chunk == null) return null;
       builder.add(chunk);
     }
     _assemblies.remove(key);

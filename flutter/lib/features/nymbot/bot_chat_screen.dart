@@ -48,25 +48,11 @@ import 'nymbot_models.dart';
 import 'brand_tile.dart';
 import 'nymbot_providers.dart';
 
-/// The private 1:1 Nymbot chat screen.
-///
-/// The conversation itself is the CANONICAL PM thread
-/// (`AppState.messages['pm-<botPubkey>']`, fed by [BotChatController]), rendered
-/// through the same [MessageGroup]/`MessageRow` pipeline as every other PM —
-/// IRC/bubble layout setting, 5-minute grouping, sticky group avatar, author
-/// headers (incl. self), delivery ticks, crypto locks, reactions, context menu,
-/// swipe/double-tap quote-reply, the shared typing-indicator strip and the
-/// scroll-to-bottom button. Exactly how the PWA routes the bot PM through
-/// `displayMessage()` (pms.js:1291-1339).
-///
-/// Premium features kept on top of the canonical chat (intentional additions):
-///   * the Standard / Pro tier switch + `?model` picker sheet,
-///   * `?balance` / `?buy` (shared credits modal).
+/// Private Nymbot chat over the canonical bot PM thread, with tier/model switching and credit buying.
 class BotChatScreen extends ConsumerStatefulWidget {
   const BotChatScreen({super.key, this.onOpenSidebar});
 
-  /// Mobile/tablet: opens the off-canvas sidebar drawer (the chat-header
-  /// hamburger). Null on wide layouts, where the sidebar is always visible.
+  /// Opens the drawer on compact layouts; null on wide ones.
   final VoidCallback? onOpenSidebar;
 
   @override
@@ -77,9 +63,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   final _scroll = ScrollController();
   final _composerKey = GlobalKey<_BotComposerState>();
 
-  /// Whether the floating scroll-to-bottom chevron shows (the PWA's
-  /// `distanceFromBottom > 150` gate, app.js:7120-7124). In the reversed list
-  /// `offset` IS the distance from the bottom.
+  /// Whether the scroll-to-bottom button shows (>150px up); in the reversed list `offset` is that distance.
   bool _showScrollButton = false;
 
   @override
@@ -88,17 +72,14 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     _scroll.addListener(_onScrolled);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // Bind the paid surface to the live identity, make the bot PM the active
-      // view (receipts / read-marking / typing all key off it, like openPM),
-      // then render the empty-thread intro + refresh credits.
+      // Bind the paid surface to the identity, make the bot PM the active view, then show the intro and refresh credits.
       final nostr = ref.read(nostrControllerProvider);
       nostr.bindBotChat();
       ref
           .read(appStateProvider.notifier)
           .switchView(const ChatView.pm(kNymbotPubkey));
       final engine = ref.read(botChatControllerProvider.notifier);
-      // Paid-auth signs through the ACTIVE signer (local or NIP-46 remote) —
-      // the PWA's `_signBotAuth` generic dispatch (pms.js:1649-1679).
+      // Sign paid actions through the active signer (local or NIP-46).
       engine.attachSigner(nostr.signer);
       engine.ensureIntro();
       engine.refreshBalance();
@@ -127,10 +108,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   NymColors _colors(BuildContext context) =>
       Theme.of(context).extension<NymColors>() ?? _fallbackColors;
 
-  /// The open thread when it belongs to THIS bot conversation — the message
-  /// area then swaps to the in-place [ThreadView] (ChatPane does the same for
-  /// canonical conversations, but renders this screen instead for the bot PM,
-  /// so the swap has to happen here). Null when no bot thread is open.
+  /// The open thread when it belongs to this bot conversation, swapped in here since ChatPane renders this screen.
   ActiveThread? get _openThread {
     if (!appThreadsEnabled) return null;
     final at = ref.watch(activeThreadProvider);
@@ -151,58 +129,36 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       });
     });
 
-    // NOTE: `?buy` / out-of-credits (`botBuyRequestProvider`) AND gift requests
-    // (`?gift` / context-menu "Gift Nymbot Credits") are handled by the
-    // always-mounted listeners in home_shell.dart — no second listener here,
-    // or the modal would open twice.
+    // Buy and gift requests are handled by home_shell's listeners; a second one here would open the modal twice.
 
-    // ChatPane renders the SHARED `_ChatHeader` above this widget (back/forward
-    // nav, audio/video call buttons, notification bell + hamburger, presence +
-    // `E2E encrypted · <credits>` meta, verified badge) — the exact header the
-    // PWA uses for the bot PM. This widget renders only the paid surface BELOW
-    // that header: the premium control bar, the thread, the typing strip and
-    // the bot composer. (No Scaffold/AppBar of its own — the shell Scaffold
-    // supplies the opaque base and keyboard insets, and the region stays
-    // transparent so the `#wallpaperLayer` reads through, like the canonical
-    // ChatPane body.)
+    // Below the shared chat header: control bar, thread, typing strip and composer; transparent so the wallpaper shows.
     return Column(
       children: [
         _BotControlBar(
           isPro: state.isPro,
-          // Pinned Pro model → its brand label; otherwise the "Auto-routed"
-          // UI copy (pms.js `_refreshBotControlBar`, model chip).
+          // Pinned Pro model label, else "Auto-routed".
           modelLabel: state.proModel?.label ?? tr('Auto-routed'),
           colors: c,
           onTapStandard: () =>
               ref.read(botChatControllerProvider.notifier).setModelDirect(null),
-          // Both the Pro pill and the model chip open the picker (botSetTier
-          // 'pro' + openBotModelModal, pms.js:2419/2438).
+          // Both the Pro pill and the model chip open the picker.
           onTapModel: () => _showModelPicker(context),
           onTapBuy: () => _showBuy(context),
           anonOn: state.anonEnabled,
           onTapAnon: () => _showAnon(context),
         ),
         Expanded(
-          // Tap on the messages region drops focus (dismisses the keyboard)
-          // when no interactive child consumes it — same wiring as the
-          // canonical ChatPane; the browser gives the PWA this for free.
+          // Tapping the messages region drops focus when nothing else consumes the tap.
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: () => FocusScope.of(context).unfocus(),
-            // An open thread swaps the messages area for the in-place
-            // ThreadView, exactly like ChatPane does for canonical
-            // conversations — the premium control bar and bot composer stay,
-            // and sends while it is open reply into the thread.
+            // An open thread replaces the message list; control bar and composer stay, and sends reply into it.
             child: _openThread != null
                 ? ThreadView(key: ValueKey(_openThread), thread: _openThread!)
                 : _buildMessagesArea(c),
           ),
         ),
-        // The shared `.typing-indicator` strip pinned above the composer —
-        // "Nymbot is thinking" with the 18px avatar + bouncing dots
-        // (pms.js `_setBotTyping` → `_renderTypingInto`). ThreadView renders
-        // its own strip, so the flat-view one is skipped while a thread is
-        // open.
+        // "Nymbot is thinking" strip above the composer; the thread view renders its own.
         if (_openThread == null)
           const TypingIndicatorRow(storageKey: 'pm-$kNymbotPubkey'),
         if (state.priceRetry != null)
@@ -230,26 +186,18 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Message list — the canonical `.messages-container` pipeline
-  // ---------------------------------------------------------------------------
-
   static const int _groupWindowSec = 300; // 5 min (messages.js:1557)
 
   Widget _buildMessagesArea(NymColors c) {
     final app = ref.watch(appStateProvider);
     final settings = ref.watch(settingsProvider);
     final reactions = ref.watch(reactionsProvider);
-    // The canonical thread merged with the LOCAL-ONLY info bubbles (welcome,
-    // `?help` guide, command outputs — never in the shared store, never
-    // persisted; PWA `_displayBotInfoMessage`, pms.js:1773-1776).
+    // The canonical thread merged with local-only, never-persisted info bubbles.
     var msgs = mergeBotThreadWithInfo(
       app.messages[BotChatController.conversationKey] ?? const <Message>[],
       ref.watch(botChatControllerProvider).infoMessages,
     );
-    // Slack-style threads: replies collapse into their root's thread view and
-    // are hidden from the flat conversation when the root is present locally —
-    // the same filter `visibleMessagesFor` applies to canonical conversations.
+    // Thread replies hide from the flat view when their root is present, like canonical conversations.
     if (appThreadsEnabled && msgs.any((m) => m.threadRoot != null)) {
       final rootIds = <String>{
         for (final m in msgs)
@@ -268,25 +216,19 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       ];
     }
 
-    // `.messages-container` bg: black@0.15 dark / white@0.3 light.
     final containerColor = c.isLight
-        ? const Color(0x4DFFFFFF) // white @ 0.3
-        : const Color(0x26000000); // black @ 0.15
+        ? const Color(0x4DFFFFFF)
+        : const Color(0x26000000);
 
     final mentionToken = '@${stripPubkeySuffix(app.selfNym)}';
 
-    // Fold consecutive same-author bubble messages into render groups (the
-    // PWA's `.message-group`, 5-minute window) so the group's single avatar can
-    // glide over the run — identical fold to `messages_list.dart`.
+    // Fold consecutive same-author messages into 5-minute groups, as messages_list.dart does.
     final units = <List<MessageGroupEntry>>[];
     for (final m in msgs) {
       final entry = MessageGroupEntry(
         message: m,
         reactions: reactions[m.id] ?? const [],
-        // Same gated fast probe as messages_list.dart: `.mentioned` never
-        // applies to self or PM rows (messages.js:686-692) and bails while the
-        // self nym is unknown (messages.js:400) — a bare '@' token must not
-        // flag every '@'-containing message.
+        // Mentions never apply to self or PM rows, and need a known self nym.
         mentioned: mentionToken.length > 1 &&
             !m.isOwn &&
             !m.isPM &&
@@ -309,22 +251,13 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
             child: ListView.builder(
               controller: _scroll,
               reverse: true,
-              // Drag on the list dismisses the keyboard, like the canonical
-              // MessagesList's on-drag unfocus.
+              // Dragging the list dismisses the keyboard.
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              // Scroller padding (`styles-shell.css:941`).
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
               itemCount: units.length,
               itemBuilder: (context, revIndex) {
                 final unit = units[units.length - 1 - revIndex];
-                // A reasoning-bearing bot reply renders its collapsed
-                // "💭 Reasoning" section INSIDE the bubble content — the
-                // canonical MessageRow prepends it (messages.js:796-797).
-                //
-                // Keyed by the group's LEAD message id so appending a reply
-                // doesn't shift every reversed index and re-create still-visible
-                // rows (which would restart their `bubble-snap-in` from opacity
-                // 0). See messages_list.dart for the full rationale.
+                // Keyed by the group's lead id so appended replies don't re-create visible rows and restart their snap-in.
                 return MessageGroup(
                   key: ValueKey('botgroup_${unit.first.message.id}'),
                   entries: unit,
@@ -335,7 +268,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
               },
             ),
           ),
-          // `.scroll-to-bottom-btn` — shown >150px from the bottom.
+          // Shown >150px from the bottom.
           if (_showScrollButton)
             Positioned(
               right: 24,
@@ -347,10 +280,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     );
   }
 
-  /// Whether [cur] bubble-groups onto [prev]: same author within the 5-minute
-  /// window, neither a system pill nor a `/me` action (messages.js:1679-1706).
-  /// A thinking reply groups NORMALLY — its `.bot-think` section renders inside
-  /// the bubble (messages.js:1552-1568 has no thinking exclusion).
+  /// Groups onto [prev] for the same author within 5 minutes, excluding system pills and `/me`; thinking replies group normally.
   bool _groupsWith(Message prev, Message cur) =>
       !prev.isSystemRow &&
       !cur.isSystemRow &&
@@ -359,13 +289,8 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       prev.pubkey == cur.pubkey &&
       (cur.createdAt - prev.createdAt).abs() <= _groupWindowSec;
 
-  // ---------------------------------------------------------------------------
-  // Modals (premium surfaces kept on top of the canonical chat)
-  // ---------------------------------------------------------------------------
-
   void _showBuy(BuildContext context) {
-    // Buy mode of the shared credits modal (PWA: same modal as gift, no
-    // recipient). Pro tier preselected when a Pro model is pinned.
+    // Buy mode of the shared credits modal; Pro preselected when a Pro model is pinned.
     final state = ref.read(botChatControllerProvider);
     BotCreditsModal.show(
       context,
@@ -386,13 +311,11 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   void _showModelPicker(BuildContext context) {
     final c = _colors(context);
     final current = ref.read(botChatControllerProvider).proModel;
-    // Refresh in the background: the sheet opens on the cached list and
-    // rebuilds if the catalog has moved on.
+    // Refresh in the background; the sheet opens on the cached list.
     ref.read(proModelCatalogProvider.notifier).refresh();
     showModalBottomSheet<void>(
       context: context,
-      // Without this the sheet is capped at 9/16 of the screen, which the
-      // catalog outgrew.
+      // Otherwise the sheet is capped at 9/16 of the screen.
       isScrollControlled: true,
       backgroundColor: c.bgSecondary,
       builder: (_) => Consumer(
@@ -414,11 +337,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   }
 }
 
-// =============================================================================
-// `.scroll-to-bottom-btn` (styles-chat.css:9-43): 40×40 round glass FAB with a
-// primary down-chevron, hover glow + scale 1.1; light mode flips the rest fill
-// to white@0.85 / border primary@0.2 (styles-themes-responsive.css:607-615).
-// =============================================================================
+// 40x40 round glass scroll-to-bottom button with a primary chevron.
 
 class _ScrollToBottomButton extends StatefulWidget {
   const _ScrollToBottomButton({required this.onTap});
@@ -437,17 +356,17 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
     final light = c.isLight;
     final fill = _hover
         ? c.primaryA(0.15)
-        : (light ? const Color(0xD9FFFFFF) /* white @ 0.85 */ : c.glassBg);
+        : (light ? const Color(0xD9FFFFFF) : c.glassBg);
     final border =
         _hover ? c.primaryA(0.30) : (light ? c.primaryA(0.20) : c.glassBorder);
     final shadow = light
         ? const BoxShadow(
-            color: Color(0x26000000), // black @ 0.15
+            color: Color(0x26000000),
             offset: Offset(0, 2),
             blurRadius: 12,
           )
         : const BoxShadow(
-            color: Color(0x66000000), // black @ 0.4
+            color: Color(0x66000000),
             offset: Offset(0, 4),
             blurRadius: 16,
           );
@@ -479,22 +398,16 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
   }
 }
 
-// =============================================================================
-// Premium Nymbot control bar (`.bot-control-bar`, styles-chat.css:1270-1382 /
-// index.html:680-697). A single glass strip under the header holding the tier
-// switch (Standard / Pro), the auto-routed/model chip and the
-// buy chip — the PWA's unified control row that replaced the old header action
-// icons. Labels + active states track `_refreshBotControlBar` (pms.js:2381).
-// =============================================================================
+// Glass control bar with the tier switch, model chip and buy chip.
 
-/// Feather sparkle glyph for the model chip (index.html:684 `#botModelBtn`).
+/// Feather sparkle glyph for the model chip.
 const String _kSvgSparkle =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
     'stroke-linecap="round" stroke-linejoin="round">'
     '<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21'
     'l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>';
 
-/// Feather lightning-bolt polygon for the buy chip (index.html:692 `#botBuyBtn`).
+/// Feather lightning bolt for the buy chip.
 const String _kSvgAnon =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
     'stroke-linecap="round" stroke-linejoin="round">'
@@ -530,15 +443,12 @@ class _BotControlBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = colors;
-    // `@media (max-width: 600px)`: tighter gaps/padding + a shorter label clamp.
+    // ≤600px: tighter spacing and a shorter label clamp.
     final compact = MediaQuery.sizeOf(context).width <= 600;
     final gap = compact ? 6.0 : 8.0;
     final labelMax = compact ? 96.0 : 150.0;
 
-    // The left cluster (tier switch + model + anon) scrolls horizontally when it
-    // can't fit — the PWA's `overflow-x: auto` — while the Buy chip stays pinned
-    // to the trailing edge (its `margin-left: auto`), the premium CTA always in
-    // reach even on the narrowest phone.
+    // The left cluster scrolls horizontally while Buy stays pinned at the trailing edge.
     final left = SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       physics: const ClampingScrollPhysics(),
@@ -571,7 +481,6 @@ class _BotControlBar extends StatelessWidget {
     );
 
     return Container(
-      // `.bot-control-bar`: glass fill + a bottom hairline, 8px 16px padding.
       padding: EdgeInsets.symmetric(
           horizontal: compact ? 12 : 16, vertical: compact ? 7 : 8),
       decoration: BoxDecoration(
@@ -582,7 +491,6 @@ class _BotControlBar extends StatelessWidget {
         children: [
           Expanded(child: left),
           SizedBox(width: gap),
-          // `.bot-ctrl-buy`: the lightning-accented purchase chip.
           _CtrlButton(
             svg: _kSvgBolt,
             label: tr('Buy'),
@@ -598,9 +506,7 @@ class _BotControlBar extends StatelessWidget {
     );
   }
 
-  /// `.bot-tier-switch`: a 2-segment pill group. The active segment lights up in
-  /// the lightning accent (fill @0.14, text --lightning, inset 1px ring @0.4);
-  /// tapping Standard drops back to auto-routing, Pro opens the model picker.
+  /// Two-segment tier switch; Standard returns to auto-routing, Pro opens the model picker.
   Widget _tierSwitch(NymColors c) {
     return Container(
       padding: const EdgeInsets.all(3),
@@ -630,7 +536,6 @@ class _BotControlBar extends StatelessWidget {
           color:
               active ? c.lightning.withValues(alpha: 0.14) : Colors.transparent,
           borderRadius: BorderRadius.circular(7),
-          // `.bot-tier-btn.active`: `box-shadow: inset 0 0 0 1px lightning@0.4`.
           border: Border.all(
             color: active
                 ? c.lightning.withValues(alpha: 0.4)
@@ -650,8 +555,7 @@ class _BotControlBar extends StatelessWidget {
   }
 }
 
-/// `.bot-ctrl-btn` / `.bot-ctrl-buy`: an icon + label chip with a hover-lit
-/// border (desktop) and an `.active` state that switches to the primary accent.
+/// Icon and label chip with a hover-lit border and a primary active state.
 class _CtrlButton extends StatefulWidget {
   const _CtrlButton({
     required this.svg,
@@ -683,24 +587,19 @@ class _CtrlButtonState extends State<_CtrlButton> {
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
-    // Resolve fill / border / foreground across the three states, buy chip
-    // first (lightning), then active (primary), then the neutral resting chip.
+    // Buy chip (lightning), then active (primary), then the neutral chip.
     final Color fill;
     final Color border;
     final Color fg;
     if (widget.buy) {
-      // `.bot-ctrl-buy`: lightning text + fill @0.1 / border @0.4 (@0.6 hover).
       fill = c.lightning.withValues(alpha: _hover ? 0.16 : 0.1);
       border = c.lightning.withValues(alpha: _hover ? 0.6 : 0.4);
       fg = c.lightning;
     } else if (widget.active) {
-      // `.bot-ctrl-btn.active`: primary text + fill @0.1 / border @0.5.
       fill = c.primary.withValues(alpha: 0.1);
       border = c.primary.withValues(alpha: 0.5);
       fg = c.primary;
     } else {
-      // Resting chip: mode-aware inset fill (white@0.05 in the PWA) + the glass
-      // hairline; hover lifts the text to --text and the border to primary@0.4.
       fill = c.insetFill;
       border = _hover ? c.primary.withValues(alpha: 0.4) : c.glassBorder;
       fg = _hover ? c.text : c.textDim;
@@ -726,8 +625,7 @@ class _CtrlButtonState extends State<_CtrlButton> {
             children: [
               NymSvgIcon(widget.svg, size: 15, color: fg),
               const SizedBox(width: 6),
-              // `.bot-ctrl-label`: clamp + ellipsis so a long model name
-              // can't blow out the bar.
+              // Clamp with ellipsis so a long model name can't blow out the bar.
               ConstrainedBox(
                 constraints: BoxConstraints(maxWidth: widget.labelMaxWidth),
                 child: Text(
@@ -737,8 +635,6 @@ class _CtrlButtonState extends State<_CtrlButton> {
                   style: TextStyle(
                     color: fg,
                     fontSize: 12,
-                    // Buy is the standalone CTA (w500 like the PWA); the neutral
-                    // chips also sit at w500 per `.bot-ctrl-btn`.
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -750,10 +646,6 @@ class _CtrlButtonState extends State<_CtrlButton> {
     );
   }
 }
-
-// =============================================================================
-// Composer — the PWA `.input-container` chrome (styles-chat.css:1384-1965)
-// =============================================================================
 
 class BotPriceRetryBar extends StatelessWidget {
   const BotPriceRetryBar({
@@ -820,7 +712,7 @@ class _BotComposer extends ConsumerStatefulWidget {
 
   final NymColors colors;
 
-  /// Receives the composed outgoing content (quote prefix already applied).
+  /// Receives the outgoing content, quote prefix applied.
   final ValueChanged<String> onSubmit;
 
   @override
@@ -828,61 +720,47 @@ class _BotComposer extends ConsumerStatefulWidget {
 }
 
 class _BotComposerState extends ConsumerState<_BotComposer> {
-  /// The shared rich composer controller: known `:code:` collapse to sentinel
-  /// chars painted as 1.4em inline emoji images while composing, and
-  /// [EmojiSentinelController.expand] restores the literal shortcodes at send —
-  /// the PWA's single rich `#messageInput` (`_maybeRenderTypedEmoji`,
-  /// ui-context.js:1968), which bot PMs share.
+  /// Shared rich controller: known `:code:` renders inline while composing, expanded back at send.
   final _controller = EmojiSentinelController();
   final _focus = FocusNode();
 
-  /// The currently-filtered `?…` suggestions (empty → palette hidden).
+  /// Filtered `?` suggestions; empty hides the palette.
   List<BotPMCommand> _suggestions = const [];
 
-  /// Which trigger (if any) is live, and the derived palette contents for the
-  /// `/` command palette and the `:` emoji autocomplete. The Nymbot PM now
-  /// supports all three (`/`, `?`, `:`) via the shared [detectTrigger].
+  /// Live trigger for `/`, `?` and `:` palettes via the shared [detectTrigger].
   TriggerMatch _trigger = const TriggerMatch.none();
   List<PaletteRow> _cmdRows = const [];
   AutocompleteView? _acView;
 
-  /// True when any palette (command / bot / emoji) is live and not suppressed.
+  /// True when any palette is live and not suppressed.
   bool get _paletteActive =>
       !_suppressPalette &&
       (_suggestions.isNotEmpty ||
           _cmdRows.isNotEmpty ||
           (_acView != null && !_acView!.isEmpty));
 
-  /// The number of selectable rows in the active palette (for ↑/↓ nav).
+  /// Selectable rows in the active palette.
   int get _paletteLength {
     if (_cmdRows.isNotEmpty) return paletteCommands(_cmdRows).length;
     if (_acView != null && !_acView!.isEmpty) return _acView!.itemCount;
     return _suggestions.length;
   }
 
-  /// Highlighted palette row — reset to the first row on every input change,
-  /// like `showBotCommandPalette` (`commandPaletteIndex = 0`, commands.js:464).
+  /// Highlighted row, reset to the first on every input change.
   int _paletteIndex = 0;
 
-  /// Escape hides the palette until the input text changes again
-  /// (`hideCommandPalette`; the next input event re-shows it,
-  /// ui-context.js:1003-1005).
+  /// Escape hides the palette until the text changes.
   bool _suppressPalette = false;
 
-  /// Anchors the floating `#commandPalette` overlay to the input wrapper
-  /// (the PWA's `position:absolute; bottom:100%` — the palette pops out OVER
-  /// the conversation above the input container, never growing it).
+  /// Anchors the palette overlay above the input so it floats over the conversation.
   final _acAnchor = LayerLink();
   final _acPortal = OverlayPortalController();
 
-  /// Groups the input field with its `?` palette so a tap outside both dismisses
-  /// it (like the app's other modals), while a tap on a row still selects it.
+  /// Groups the field and palette so outside taps dismiss it.
   final Object _acGroupId = Object();
   final _inputKey = GlobalKey();
 
-  /// Aligns the portal's visibility with the palette state. Deferred to a
-  /// post-frame callback because it's invoked from build (show()/hide() mark
-  /// the overlay dirty, which is illegal mid-build).
+  /// Deferred post-frame because show()/hide() can't run mid-build.
   void _syncPalettePortal() {
     final want = _paletteActive;
     if (want == _acPortal.isShowing) return;
@@ -894,9 +772,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     });
   }
 
-  /// The palette overlay: same width as the input wrapper, bottom edge flush
-  /// with the input's top (the `_palette` Container's own `margin-bottom: 8`
-  /// provides the PWA's 8px gap).
+  /// Palette overlay matching the input width, flush with its top.
   Widget _paletteOverlay(BuildContext context) {
     final box = _inputKey.currentContext?.findRenderObject() as RenderBox?;
     final width = (box != null && box.hasSize)
@@ -920,18 +796,13 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
   }
 
-  /// Last seen input text, so selection-only controller notifications don't
-  /// count as input events (the PWA palette reacts to `input` only).
+  /// Last input text, so selection-only notifications aren't input events.
   String _lastText = '';
 
-  /// Deferred quote-reply chip (`setQuoteReply`): the author, the nested-quote-
-  /// stripped [text] that is prepended to the outgoing content only at send,
-  /// and the FULL original [fullText] the chip previews (the PWA's `cleanText`
-  /// derives from `text`, not `strippedText` — messages.js:1845-1846).
+  /// Pending quote: author, nested-quote-stripped [text] sent at send time, and [fullText] shown in the chip.
   ({String author, String text, String fullText})? _pendingQuote;
 
-  // Emoji / GIF picker popovers, anchored above their toolbar buttons like the
-  // PWA's inline `bottom:100%` popups.
+  // Emoji and GIF pickers anchored above their toolbar buttons.
   final _emojiPortal = OverlayPortalController();
   final _gifPortal = OverlayPortalController();
   final _emojiAnchor = LayerLink();
@@ -939,42 +810,31 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   SharedPreferences? _prefs;
   List<String> _recents = const [];
 
-  // --- Attachments (`selectImage` / `selectP2PFile`, index.html:759-775) ----
-  // The bot PM shares the canonical `.input-buttons` in the PWA, so the
-  // Image/Video upload and P2P-file buttons are present here too.
+  // The bot PM has the same attachment buttons as other conversations.
 
-  /// `#uploadProgress` state (0..1, null = hidden) — the progress panel shown
-  /// during `uploadImage` (users.js:971+).
+  /// Upload progress 0..1, or null when hidden.
   double? _uploadProgress;
   String? _uploadMime;
   bool _uploadCancelled = false;
 
-  /// 1-based index + total of the current multi-file upload ("Uploading i of
-  /// N…" when N>1, users.js:1006-1008). 0/0 = single-file.
+  /// 1-based index and total for multi-file uploads; 0/0 for single.
   int _uploadIndex = 0;
   int _uploadTotal = 0;
 
-  // --- In-composer translate (`#translateInputBtn` + its 230px dropdown, ----
-  // translate.js:563-600) — the bot PM shares the same `.message-input-row`.
+  // In-composer translate button and its dropdown.
   final _translatePortal = OverlayPortalController();
   final _translateAnchor = LayerLink();
   final _translateSearchController = TextEditingController();
   String _translateQuery = '';
   bool _translating = false;
 
-  /// Translate-dropdown favorites (`nym_translate_favorites`), pinned to the
-  /// top of the language list (translate.js:93-108).
+  /// Translate favorites pinned to the top of the list.
   List<String> _translateFavorites = const [];
 
-  /// Favorites-pinned order snapshotted when the dropdown opens ("the next
-  /// time the dropdown opens", translate.js:563-571) — toggling a star
-  /// mid-open doesn't reshuffle.
+  /// Order snapshotted at open so toggling a star doesn't reshuffle.
   List<MapEntry<String, String>> _translateLangOrder = const [];
 
-  /// The bot conversation's draft key in the shared session store — the PWA's
-  /// one persistent `#messageInput` keeps bot-PM drafts in the same
-  /// `_inputDrafts` map as every other conversation (`_getInputContextKey`
-  /// `'p:'+pm`, channels.js:1075-1105).
+  /// Bot draft key in the shared draft store.
   static final String _draftKey =
       ComposerDrafts.keyFor(const ChatView.pm(kNymbotPubkey));
 
@@ -983,9 +843,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     super.initState();
     _controller.addListener(_onTextChanged);
     _focus.addListener(() => setState(() {}));
-    // Restore any unsent input previously typed for the bot conversation
-    // (`_restoreDraftForContext` on open, pms.js:3023-3024). Post-frame so the
-    // change listener's setState never fires mid-mount.
+    // Restore any unsent draft, post-frame so setState never runs mid-mount.
     final draft = ComposerDrafts.restore(_draftKey);
     if (draft.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -998,9 +856,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
 
   @override
   void dispose() {
-    // Stash the unsent input before this composer unmounts (switching away
-    // from the bot chat) — `_saveCurrentDraft` on every conversation switch
-    // (channels.js:1082-1089); a blank draft deletes the entry.
+    // Save the unsent input before unmounting; a blank draft deletes it.
     ComposerDrafts.save(_draftKey, _controller.expand(_controller.text));
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
@@ -1013,17 +869,13 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       _prefs ??= await SharedPreferences.getInstance();
 
   void _onTextChanged() {
-    // Collapse any just-completed known `:code:` into its inline-image
-    // sentinel (mirrors `_maybeRenderTypedEmoji` firing on input). A rewrite
-    // re-notifies; the second pass is a no-op.
+    // Collapse a just-completed `:code:` into its inline sentinel; the re-notify is a no-op.
     _controller.resolveInput();
     final text = _controller.text;
     final textChanged = text != _lastText;
     _lastText = text;
 
-    // The bot PM now supports all three input palettes: `/` commands, `?` Nymbot
-    // commands (with multi-step subcommands), and `:` emoji — resolved by the
-    // shared trigger detector (botPM: true keeps `?` alive past a space).
+    // Shared trigger detector; `botPM: true` keeps `?` alive past a space.
     final sel = _controller.selection;
     final caret = sel.isValid ? sel.start : text.length;
     _trigger = detectTrigger(text, caret: caret, botPM: true);
@@ -1057,8 +909,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     }
 
     if (textChanged) {
-      // Every input event re-shows the palette (after an Escape) and
-      // re-highlights the first row (showBotCommandPalette).
+      // Every input event re-shows the palette and highlights the first row.
       _suppressPalette = false;
       _paletteIndex = 0;
     }
@@ -1069,16 +920,13 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     });
   }
 
-  /// Cheap equality on the (small) suggestion lists, by command name+order.
-
   void _pick(BotPMCommand cmd) {
     final text = '${cmd.name} ';
     _controller.value = TextEditingValue(
       text: text,
       selection: TextSelection.collapsed(offset: text.length),
     );
-    // Re-filter so a multi-step command (e.g. `?model `) immediately surfaces its
-    // subcommands; a leaf command just hides the palette.
+    // Re-filter so a multi-step command shows its subcommands.
     _onTextChanged();
     _focus.requestFocus();
   }
@@ -1092,7 +940,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _focus.requestFocus();
   }
 
-  /// Completes a `/` slash command (inserts `"<command> "`).
+  /// Completes a `/` command as `"<command> "`.
   void _completeCommand(CommandSpec spec) {
     final name = localizedCommandToken(spec.name);
     _controller.value = TextEditingValue(
@@ -1103,7 +951,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _focus.requestFocus();
   }
 
-  /// Completes a `:` emoji autocomplete, splicing the emoji over the `:token`.
+  /// Splices the emoji over the `:token`.
   void _completeEmoji(EmojiResult result) {
     final start = _trigger.triggerIndex;
     final text = _controller.text;
@@ -1120,7 +968,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _focus.requestFocus();
   }
 
-  /// Applies the selected row of whichever palette is active.
+  /// Applies the selected row of the active palette.
   void _completeSelected() {
     final i = _paletteIndex.clamp(0, (_paletteLength - 1).clamp(0, 1 << 30));
     if (_cmdRows.isNotEmpty) {
@@ -1133,8 +981,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       _pick(_suggestions[i]);
     }
   }
-
-  // --- Quote-reply chip (mention/quote mailbox from swipe / menu / dbl-tap) ---
 
   void _applyComposerAction(ComposerAction action) {
     switch (action) {
@@ -1151,16 +997,14 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
           fullText: content,
         );
       case InsertTextAction() || ShareFilesAction():
-        // Share-sheet actions target real conversations, never the bot chat;
-        // ignore them here so the mailbox isn't mis-applied.
+        // Share-sheet actions target real conversations, never the bot chat.
         return;
     }
     _focus.requestFocus();
     setState(() {});
   }
 
-  /// Strips nested `>` quote lines (keep only the top level), collapses blank
-  /// runs, and trims — the `setQuoteReply` pre-processing (messages.js:1817).
+  /// Keeps only top-level quote lines, collapses blank runs and trims.
   static String _strippedQuoteText(String text) {
     final kept = <String>[];
     for (final line in text.split('\n')) {
@@ -1169,8 +1013,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     return kept.join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
   }
 
-  /// The chip's cleaned preview text: strip HTML/markdown punctuation, cap 120
-  /// (`cleanText` in setQuoteReply, messages.js:1845-1846).
+  /// Chip preview: markup stripped, capped at 120.
   static String _quotePreviewText(String text) {
     final clean = text
         .replaceAll(RegExp(r'<[^>]*>'), '')
@@ -1183,7 +1026,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     setState(() => _pendingQuote = null);
   }
 
-  /// Prepends the pending quote to [typed] ONLY at send (messages.js:2354-2361).
+  /// Prepends the pending quote only at send.
   String _composeOutgoing(String typed) {
     var content = typed;
     final quote = _pendingQuote;
@@ -1200,10 +1043,9 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   }
 
   void _send() {
-    // Expand sentinel chars back to literal `:code:` before anything leaves
-    // the composer (wire safety — the sentinel is render-only).
+    // Expand sentinels to literal `:code:` before anything leaves the composer.
     final typed = _controller.expand(_controller.text).trim();
-    // The PWA allows sending a bare quote: `if (!content && !pendingQuote)`.
+    // A bare quote can be sent.
     if (typed.isEmpty && _pendingQuote == null) return;
     final content = _composeOutgoing(typed);
     widget.onSubmit(content);
@@ -1212,11 +1054,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _focus.requestFocus();
   }
 
-  /// With the `?` palette open: ↑/↓ move the highlight (wrapping), Enter/Tab
-  /// pick the highlighted command, Escape hides the palette until the input
-  /// changes (ui-context.js:992-1005 → navigateCommandPalette/selectCommand).
-  /// Otherwise hardware Enter sends; Shift+Enter inserts a newline
-  /// (ui-context.js:1007-14). Esc cancels a pending quote chip.
+  /// With the palette open: arrows move, Enter/Tab pick, Escape hides; otherwise Enter sends and Shift+Enter adds a newline.
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
@@ -1254,10 +1092,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     return KeyEventResult.ignored;
   }
 
-  /// Insert text at the current selection (mirrors PWA `insertEmoji`/`insertGif`
-  /// which splice at the caret), keeping focus in the input — both call
-  /// `input.focus()` after the splice (reactions.js:1236-1240 /
-  /// ui-context.js:2180-2186).
+  /// Inserts at the caret, keeping focus in the input.
   void _insertAtCaret(String insert) {
     final text = _controller.text;
     final sel = _controller.selection;
@@ -1271,11 +1106,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _focus.requestFocus();
   }
 
-  /// Hides an emoji/GIF picker WITHOUT a selection (✕ / tap-out / button
-  /// toggle) and, on desktop widths, returns focus to the message input —
-  /// `closeEnhancedEmojiModal`/`closeGifPicker` → `_focusMessageInput`
-  /// (reactions.js:908 / ui-context.js:2194), which bails at ≤768px
-  /// (channels.js:1383-1393) so a phone keyboard isn't yanked open.
+  /// Closes a picker without a selection; refocuses the input only above 768px so phone keyboards don't pop.
   void _hidePickerAndRefocus(OverlayPortalController portal) {
     portal.hide();
     if (!mounted) return;
@@ -1299,7 +1130,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   }
 
   void _onGifSelected(String url) {
-    // PWA appends the GIF URL; the formatter renders it as media.
+    // The formatter renders the appended GIF URL as media.
     _insertAtCaret(url);
     _gifPortal.hide();
   }
@@ -1327,10 +1158,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _gifPortal.show();
   }
 
-  // --- Attachments: image upload (Blossom) + P2P file share -----------------
-
-  /// A system line in the bot conversation (the failure/notice surface the
-  /// canonical composer's `_onSystemMessage` uses for upload errors).
+  /// A system line in the bot conversation, for upload errors.
   void _systemLine(String text) => ref
       .read(appStateProvider.notifier)
       .addSystemMessage(text, storageKey: BotChatController.conversationKey);
@@ -1345,10 +1173,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     });
   }
 
-  /// Image/Video button (`selectImage` → fileInput `multiple`, accepts image +
-  /// video): pick one OR MANY media, upload each to a Blossom server, then
-  /// append ALL resulting URLs (space-joined) to the input — the formatter
-  /// renders them as media (users.js:971-1028).
+  /// Uploads picked media to Blossom and appends the URLs to the input.
   Future<void> _pickAndUploadImage() async {
     List<XFile> picked;
     try {
@@ -1412,9 +1237,9 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       _uploadIndex = 0;
       _uploadTotal = 0;
     });
-    // Drop the results entirely if the user pressed ✕ mid-batch.
+    // Drop results if cancelled mid-batch.
     if (wasCancelled || urls.isEmpty) return;
-    // Append all URLs space-joined (then a trailing space), like the PWA.
+    // Append URLs space-joined plus a trailing space.
     final existing = _controller.text;
     final needsSpace = existing.isNotEmpty && !existing.endsWith(' ');
     _controller.text = '$existing${needsSpace ? ' ' : ''}${urls.join(' ')} ';
@@ -1423,8 +1248,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _focus.requestFocus();
   }
 
-  /// File button (`selectP2PFile` → p2pFileInput): pick any file and offer it
-  /// as a P2P transfer (`shareP2PFile`, p2p.js:86).
+  /// Offers a picked file as a P2P transfer.
   Future<void> _pickAndShareFile() async {
     FilePickerResult? result;
     try {
@@ -1458,10 +1282,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     return 'application/octet-stream';
   }
 
-  /// `.upload-progress` — a panel (12px padding, 8px bottom gap, top corners
-  /// radius-sm) floating above the input with a label + cancel ✕ + a thin
-  /// primary→secondary gradient bar (users.js:988-1008). Single: "Uploading
-  /// image/video..."; multi: "Uploading i of N...".
+  /// Upload panel with label, cancel and gradient progress bar.
   Widget _uploadBar(BuildContext context) {
     final c = widget.colors;
     final isVideo = (_uploadMime ?? '').startsWith('video/');
@@ -1473,9 +1294,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final fraction = (_uploadProgress ?? 0.1).clamp(0.0, 1.0);
     final solidUi = ref.watch(settingsProvider.select((s) => s.solidUi));
     return Container(
-      // `.upload-progress`: bg rgba(20,20,35,0.9) dark / white@0.92 light
-      // (solid-ui repaints with --glass-bg), 1px glass border, radius-sm top
-      // corners (styles-components.css:1142-1153).
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1497,8 +1315,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                 child: Text(label,
                     style: TextStyle(color: c.textDim, fontSize: 12)),
               ),
-              // `.upload-progress-close` (22×22 ✕, radius-sm), cancels the
-              // in-flight upload.
+              // Cancels the in-flight upload.
               Material(
                 type: MaterialType.transparency,
                 borderRadius: NymRadius.rsm,
@@ -1518,8 +1335,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
             ],
           ),
           const SizedBox(height: 8),
-          // `.progress-bar`: height 6, white@0.05, radius 10; `.progress-fill`
-          // linear-gradient(90deg, primary, secondary).
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: Container(
@@ -1547,10 +1362,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
   }
 
-  // --- In-composer translate (`#translateInputBtn` + dropdown) --------------
-
-  /// `#translateInputBtn` (+ its dropdown). Exists only while the field has
-  /// text; pulses while translating. Anchors the 230px language dropdown.
+  /// Present only while there is text; anchors the language dropdown.
   Widget _translateButton(BuildContext context) {
     final hasText = _controller.text.trim().isNotEmpty;
     return CompositedTransformTarget(
@@ -1580,7 +1392,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     setState(() {
       _translateFavorites = _loadTranslateFavorites(prefs);
       _translateQuery = '';
-      // Snapshot the favorites-pinned order at open (re-pins only on reopen).
+      // Snapshot the favorites order at open.
       _translateLangOrder =
           sortedTranslateLanguagesWithFavorites(_translateFavorites);
     });
@@ -1588,7 +1400,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _translatePortal.show();
   }
 
-  /// Read the persisted translate favorites (`nym_translate_favorites`).
+  /// Persisted translate favorites.
   static List<String> _loadTranslateFavorites(SharedPreferences prefs) {
     final raw = prefs.getString(kTranslateFavoritesKey);
     if (raw == null || raw.isEmpty) return const [];
@@ -1599,8 +1411,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     return const [];
   }
 
-  /// Toggle [code] in the favorites list and persist (translate.js:102-108):
-  /// append when absent, remove when present.
+  /// Toggle [code] in favorites and persist.
   void _toggleTranslateFavorite(String code) {
     final next = [..._translateFavorites];
     if (!next.remove(code)) next.add(code);
@@ -1608,14 +1419,11 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _prefs?.setString(kTranslateFavoritesKey, jsonEncode(next));
   }
 
-  /// `.translate-input-dropdown`: a 230px search + language list anchored
-  /// above the translate button. Choosing a language translates the draft in
-  /// place (identical chrome to the canonical composer's dropdown).
+  /// Language dropdown that translates the draft in place.
   Widget _translateDropdown(BuildContext context) {
     final c = widget.colors;
     final q = _translateQuery.trim().toLowerCase();
-    // Star FILL reads the live favorites set; row ORDER uses the open-time
-    // snapshot so toggling a star doesn't reshuffle mid-open (PWA parity).
+    // Star fill reads live favorites; row order uses the open-time snapshot.
     final favSet = _translateFavorites.toSet();
     final order = _translateLangOrder.isEmpty
         ? sortedTranslateLanguagesWithFavorites(_translateFavorites)
@@ -1645,9 +1453,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                 width: 230,
                 constraints: const BoxConstraints(maxHeight: 320),
                 decoration: BoxDecoration(
-                  // `.translate-input-dropdown` bg --bg-secondary / glass
-                  // border / shadow black@0.4; light flips to white@0.98 /
-                  // black@0.12 (styles-themes-responsive.css:1278-1282).
                   color: c.isLight
                       ? Colors.white.withValues(alpha: 0.98)
                       : c.bgSecondary,
@@ -1669,18 +1474,13 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // `.translate-dropdown-search`: 8px padding + a bottom
-                    // hairline under the search region.
                     Container(
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         border:
                             Border(bottom: BorderSide(color: c.glassBorder)),
                       ),
-                      // NOT autofocused: the PWA never focuses the dropdown
-                      // search on open (only the Select-Your-Language MODAL
-                      // focuses its search, translate.js:190) — grabbing focus
-                      // here would yank the IME away from the message input.
+                      // Not autofocused, which would pull the IME away from the message input.
                       child: TextField(
                         controller: _translateSearchController,
                         onChanged: (v) => setState(() => _translateQuery = v),
@@ -1712,7 +1512,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                       ),
                     ),
                     Flexible(
-                      // `.translate-dropdown-list`: padding 4px 0.
                       child: langs.isEmpty
                           ? Padding(
                               padding: const EdgeInsets.all(14),
@@ -1747,9 +1546,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
   }
 
-  /// Translates the typed draft into [targetLang] and replaces the input text
-  /// (the PWA's in-input translate flow). Sentinel emoji expand to their
-  /// literal `:code:` before the external round-trip.
+  /// Translates the draft in place, expanding emoji sentinels first.
   Future<void> _translateDraft(String targetLang) async {
     _translatePortal.hide();
     final text = _controller.expand(_controller.text).trim();
@@ -1759,9 +1556,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       final res = await TranslateService().translate(text, targetLang);
       if (!mounted) return;
       final out = res.translatedText;
-      // Don't clobber the input if the upstream returned nothing or echoed
-      // the original (detected language already matches the target) —
-      // `translateInputText` (translate.js:479-483).
+      // Don't clobber the input on an empty or echoed result.
       if (out.trim().isEmpty || out.trim() == text) {
         _systemLine(tr(
             'Nothing to translate (text may already be in the target language).'));
@@ -1771,9 +1566,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       _controller.selection =
           TextSelection.collapsed(offset: _controller.text.length);
     } catch (e) {
-      // `'Translation failed: ' + (err.message || 'Unknown error')`
-      // (translate.js:488) — [TranslateException.message] already carries the
-      // "Translation failed: …" prefix.
+      // The exception message already carries the "Translation failed" prefix.
       if (mounted) {
         _systemLine(e is TranslateException
             ? e.message
@@ -1787,20 +1580,16 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
-    // `#sendBtn` is gated on CONNECTION, not input content (relays.js:1040+);
-    // the empty-input guard lives inside `_send`. It is NOT disabled while a
-    // reply is pending — the PWA lets you keep sending.
+    // Send is gated on connection, not content, and stays enabled while a reply is pending.
     final sendEnabled = ref.watch(
           appStateProvider.select((s) => s.connectedRelays > 0),
         ) ||
         ref.read(nostrControllerProvider).isLive;
 
-    // Feed the live NIP-30 shortcode→url map into the controller so typed and
-    // picked custom emoji render inline while composing (composer parity).
+    // Live custom emoji map so emoji render inline while composing.
     _controller.codeToUrl = ref.watch(liveCustomEmojiProvider).codeToUrl;
 
-    // Apply mention/quote requests published by the context menu / swipe /
-    // double-tap (one-shot mailbox).
+    // Apply one-shot mention/quote requests.
     ref.listen(pendingComposerActionProvider, (_, action) {
       if (action == null) return;
       _applyComposerAction(action);
@@ -1816,7 +1605,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        // `.quote-preview` chip stacked above the input, sliding in.
         AnimatedSize(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
@@ -1827,8 +1615,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _QuotePreviewChip(
                     author: _pendingQuote!.author,
-                    // The chip previews the FULL original content; only the
-                    // SENT quote is nested-quote-stripped (messages.js:1845).
+                    // The chip shows the full original; only the sent quote is stripped.
                     text: _quotePreviewText(_pendingQuote!.fullText),
                     onClose: _clearQuote,
                   ),
@@ -1838,11 +1625,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       ],
     );
 
-    // `#commandPalette` is `position:absolute; bottom:100%` of the input
-    // wrapper (styles-components.css:849-863): it POPS OUT over the messages
-    // above the input container instead of growing it. Hosted in an
-    // OverlayPortal anchored to the input (same pattern as the main
-    // composer's autocomplete portal).
+    // The palette floats over the messages in an OverlayPortal rather than growing the input area.
     final inputWithPalette = CompositedTransformTarget(
       key: _inputKey,
       link: _acAnchor,
@@ -1861,7 +1644,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         color: c.glassBg,
         border: Border(top: BorderSide(color: c.glassBorder)),
       ),
-      // `.input-container { padding: 12px 16px }`; phones collapse to 10px.
       padding: phone
           ? const EdgeInsets.all(10)
           : const EdgeInsets.fromLTRB(16, 12, 16, 12),
@@ -1871,8 +1653,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            // `#uploadProgress` floats above the input while a Blossom upload
-            // runs (users.js:988-1008).
+            // Upload progress floats above the input.
             if (_uploadProgress != null) _uploadBar(context),
             compact
                 ? Column(
@@ -1897,10 +1678,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
   }
 
-  /// `.message-input`: white@0.05 fill (black@0.04 light), glass border, ONLY
-  /// the bottom corners rounded (radius-md), 10px/16px padding, pure
-  /// white/black text at the user size; focus lifts the fill, tints the border
-  /// primary@0.3 and paints the 3px primary@0.06 ring (styles-chat.css:1662+).
+  /// Message input with bottom-only rounding and a focus ring.
   Widget _textField(BuildContext context, bool phone) {
     final c = widget.colors;
     final focused = _focus.hasFocus;
@@ -1932,7 +1710,6 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       cursorColor: c.isLight ? Colors.black : Colors.white,
       decoration: InputDecoration(
         isDense: true,
-        // The shared input placeholder (index.html `data-placeholder`).
         hintText: tr('Message, / for commands, ? for Nymbot...'),
         hintStyle: TextStyle(
             color: (c.isLight ? Colors.black : Colors.white)
@@ -1940,8 +1717,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
             fontSize: phone ? 16 : 15),
         filled: true,
         fillColor: flatFill,
-        // The translate button only exists when there's text, so only then
-        // does the input reserve right padding for it (`paddingRight 38px`).
+        // Reserve right padding only while the translate button exists.
         contentPadding: EdgeInsets.fromLTRB(16, 10, hasText ? 38 : 16, 10),
         border: border,
         enabledBorder: border,
@@ -1954,8 +1730,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     final stack = Stack(
       children: [
         field,
-        // `#translateInputBtn` starts `.nm-hidden` and `display:flex` ONLY
-        // when the field has text (translate.js:588-600).
+        // The translate button only exists while there is text.
         if (hasText)
           Positioned(
             right: 8,
@@ -1964,9 +1739,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
           ),
       ],
     );
-    // `.message-input:focus`: a 3px primary@0.06 ring painted OUTSIDE the
-    // field only (CSS box-shadow semantics — a spread BoxShadow also fills
-    // behind the translucent fill and highlights the whole input).
+    // Focus ring painted outside the field only.
     return CssFocusRing(
       show: focused,
       color: c.primaryA(0.06),
@@ -1975,8 +1748,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
   }
 
-  /// `.input-buttons` (index.html:758-790): EXACTLY five children — Image,
-  /// File (P2P), Emoji, GIF and the SEND pill — shared by the bot PM.
+  /// Exactly five controls: Image, File, Emoji, GIF and Send.
   Widget _toolbar(
       BuildContext context, bool sendEnabled, bool compact, bool phone) {
     final buttons = <Widget>[
@@ -1984,8 +1756,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         svg: NymIcons.composerImage,
         tooltip: tr('Upload Image/Video'),
         expand: compact,
-        // Inert until relays connect (same `sendEnabled` as SEND), then the
-        // in-upload guard takes over.
+        // Inert until relays connect, then the in-upload guard applies.
         enabled: sendEnabled,
         onTap: _uploadProgress != null ? null : _pickAndUploadImage,
       ),
@@ -2080,9 +1851,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
   }
 
-  /// Positions a picker above its anchor button (the PWA's `bottom: 100%`
-  /// popups) with a barrier to dismiss on tap-out; phones center it above the
-  /// input bar instead.
+  /// Picker positioned above its button with a tap-out barrier; centered above the input on phones.
   Widget _popover({
     required LayerLink link,
     required VoidCallback onDismiss,
@@ -2128,12 +1897,9 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     );
   }
 
-  /// The `#commandPalette` dropdown: `.command-item` rows (name w600 + desc);
-  /// `.command-item.selected` highlights [_paletteIndex] (first row on open,
-  /// then ↑/↓-navigable), bgTertiary surface.
+  /// Command palette rows with the selected one highlighted.
   Widget _palette(NymColors c) {
-    // `/` command palette and `:` emoji autocomplete reuse the shared widgets;
-    // the `?` Nymbot palette keeps its bespoke rows below.
+    // `/` and `:` palettes reuse the shared widgets; `?` keeps bespoke rows.
     if (_cmdRows.isNotEmpty) {
       return CommandPalette(
         rows: _cmdRows,
@@ -2156,14 +1922,9 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     }
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      // `.command-palette`: bg rgba(20,20,35,0.9), radius 16/16/0/0, padding 6,
-      // max-height 200, shadow-lg.
       constraints: const BoxConstraints(maxHeight: 200),
       padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        // `body.light-mode .command-palette { background: rgba(255,255,255,0.92);
-        // box-shadow: 0 8px 32px rgba(0,0,0,0.12); border-color: rgba(0,0,0,0.08) }`
-        // (styles-themes-responsive.css:1155-1158) vs dark rgba(20,20,35,0.9).
         color: c.isLight ? const Color(0xEBFFFFFF) : const Color(0xE6141423),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         border: Border.all(
@@ -2183,10 +1944,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         itemCount: _suggestions.length,
         itemBuilder: (_, i) {
           final cmd = _suggestions[i];
-          // Reuse the shared `.command-item` row (same chrome as the `/` and
-          // main `?` palettes): the command name sizes to content, the
-          // description fills the full remaining width, wraps, and is localized
-          // via `tr()` — fixing the previously cramped/untranslated rows here.
+          // Shared command row: sized name, wrapping localized description.
           return commandItemRow(
             c,
             name: cmd.name,
@@ -2200,9 +1958,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   }
 }
 
-/// `.quote-preview`: bgTertiary panel with a 3px primary bar, the author
-/// (primary 12/w600 with a muted `#suffix`) over the truncated quoted text
-/// (dim 12, ellipsis) and a close ✕.
+/// Quote chip: accent bar, author with dim suffix, truncated text and close.
 class _QuotePreviewChip extends StatelessWidget {
   const _QuotePreviewChip({
     required this.author,
@@ -2227,7 +1983,6 @@ class _QuotePreviewChip extends StatelessWidget {
         border: Border.all(color: c.glassBorder),
         borderRadius:
             const BorderRadius.vertical(top: Radius.circular(NymRadius.md)),
-        // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5).
         boxShadow: const [
           BoxShadow(
               color: Color(0x80000000), blurRadius: 32, offset: Offset(0, 8)),
@@ -2236,7 +1991,6 @@ class _QuotePreviewChip extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // `.quote-preview-bar`: 3px wide, ≥28 tall, radius 2.
           Container(
             width: 3,
             constraints: const BoxConstraints(minHeight: 28),
@@ -2264,7 +2018,6 @@ class _QuotePreviewChip extends StatelessWidget {
                       if (suffix.isNotEmpty)
                         TextSpan(
                           text: suffix,
-                          // `.nym-suffix`: opacity 0.7, 0.9em, weight 100.
                           style: TextStyle(
                             color: c.primary.withValues(alpha: 0.7),
                             fontWeight: FontWeight.w100,
@@ -2285,7 +2038,6 @@ class _QuotePreviewChip extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          // `.quote-preview-close`: 16×16 ✕.
           InkWell(
             onTap: onClose,
             borderRadius: BorderRadius.circular(4),
@@ -2300,9 +2052,7 @@ class _QuotePreviewChip extends StatelessWidget {
   }
 }
 
-/// `.icon-btn.input-btn` (styles-chat.css:1946-1965): 42px tall, 0 12px
-/// padding, radius-sm, 18×18 glyph stroked text → primary on hover; disabled
-/// dims to 0.35.
+/// 42px input toolbar button; glyph turns primary on hover, disabled dims.
 class _BotIconBtn extends StatefulWidget {
   const _BotIconBtn({
     this.svg,
@@ -2332,12 +2082,7 @@ class _BotIconBtnState extends State<_BotIconBtn> {
     final c = context.nym;
     final enabled = widget.enabled;
     final hovered = enabled && _hover;
-    // `.icon-btn.input-btn` carries the SAME mode-aware fill/border/hover as the
-    // canonical composer's `_IconBtn` (composer.dart:2463-2476) — NOT a flat
-    // `glassBg`/`hoverOverlay`, which reads too bright in dark and drops the
-    // primary hover treatment in light. SVG glyphs stay `--text` (→ primary on
-    // hover) in both themes; the GIF label follows `color:` (always primary in
-    // light).
+    // Same mode-aware fill/border/hover as the main composer's button.
     final Color fill;
     final Color borderColor;
     final Color labelColor;
@@ -2396,10 +2141,7 @@ class _BotIconBtnState extends State<_BotIconBtn> {
   }
 }
 
-/// `.send-btn` (styles-chat.css:1920-1944): primary@0.1 fill, primary@0.3 1px
-/// border, radius-sm, 10px/22px padding at 42px height, 'SEND' 12px/600 with
-/// 1.5px letter-spacing, uppercase; hover deepens the fill (0.18) + glow;
-/// disabled dims to 0.35. Phones shrink to `padding:10px; font-size:11px`.
+/// Send pill; hover deepens the fill, disabled dims, phones shrink it.
 class _BotSendButton extends StatefulWidget {
   const _BotSendButton({
     required this.enabled,
@@ -2463,10 +2205,7 @@ class _BotSendButtonState extends State<_BotSendButton> {
   }
 }
 
-/// `#translateInputBtn`: the 26×26 translate glyph overlaid bottom-right of
-/// the input (styles-chat.css `.translate-input-btn`); pulses (opacity
-/// 0.4↔0.8) while a translation runs. Identical to the canonical composer's
-/// button — the PWA bot PM shares the same `.message-input-row`.
+/// Translate glyph overlaid on the input, pulsing while translating.
 class _BotTranslateButton extends StatefulWidget {
   const _BotTranslateButton({
     required this.enabled,
@@ -2519,7 +2258,6 @@ class _BotTranslateButtonState extends State<_BotTranslateButton>
     final color = _hover && widget.enabled ? c.primary : c.textDim;
     Widget glyph = NymSvgIcon(NymIcons.translate, size: 16, color: color);
     if (widget.translating) {
-      // `.translating` pulse: opacity 0.4 ↔ 0.8.
       glyph = FadeTransition(
         opacity: Tween(begin: 0.4, end: 0.8).animate(_pulse),
         child: glyph,
@@ -2542,8 +2280,6 @@ class _BotTranslateButtonState extends State<_BotTranslateButton>
               height: 26,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                // `.translate-input-btn:hover` white@0.08 dark / black@0.06
-                // light (styles-themes-responsive.css:1274).
                 color: _hover && widget.enabled
                     ? (c.isLight
                         ? Colors.black.withValues(alpha: 0.06)
@@ -2560,8 +2296,7 @@ class _BotTranslateButtonState extends State<_BotTranslateButton>
   }
 }
 
-/// One `.translate-dropdown-item` row: the language name + a trailing favorite
-/// star (`#f5c518` when favorited) — styles-chat.css:1850-1897.
+/// Language row with a trailing favorite star.
 class _BotTranslateLangRow extends StatefulWidget {
   const _BotTranslateLangRow({
     required this.name,
@@ -2596,14 +2331,11 @@ class _BotTranslateLangRowState extends State<_BotTranslateLangRow> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
-          // `.translate-dropdown-item:hover` white@0.08 dark / black@0.05
-          // light (styles-themes-responsive.css:1284).
           color: _hover
               ? (c.isLight
                   ? Colors.black.withValues(alpha: 0.05)
                   : Colors.white.withValues(alpha: 0.08))
               : null,
-          // `.translate-dropdown-item`: padding 7px 8px 7px 14px; gap 8.
           padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
           child: Row(
             children: [
@@ -2618,7 +2350,6 @@ class _BotTranslateLangRowState extends State<_BotTranslateLangRow> {
                 ),
               ),
               const SizedBox(width: 8),
-              // `.translate-dropdown-star`: 24×24, radius-sm.
               MouseRegion(
                 cursor: SystemMouseCursors.click,
                 onEnter: (_) => setState(() => _starHover = true),
@@ -2657,23 +2388,7 @@ class _BotTranslateLangRowState extends State<_BotTranslateLangRow> {
   }
 }
 
-// =============================================================================
-// Pro model picker sheet — premium surface
-// =============================================================================
-
-/// The `?model` picker body: a pinned header over a scrolling list of the Pro
-/// catalog plus the standard auto-routing row.
-///
-/// Split out of [_showModelPicker] so the layout can be pumped directly at a
-/// small surface size in tests. The rows come from the live catalog now, which
-/// runs to dozens of models and changes without an app release, so "does it
-/// still fit" is not a property to rely on — the list scrolls, the sheet is
-/// capped below the screen height, and a search field narrows it.
-///
-/// [catalog] null or empty falls back to [kProModelCatalogFallback], the list
-/// compiled into the binary, so the sheet is never blank.
-/// Identifies the scrolling model list inside [ProModelPickerSheet], so tests
-/// can target it rather than whichever Scrollable happens to come first.
+/// Key for the scrolling model list, so tests target it rather than the search field's Scrollable.
 const Key proModelListKey = ValueKey('proModelList');
 
 const Key proPriceUnavailableKey = ValueKey('proPriceUnavailable');
@@ -2695,14 +2410,13 @@ class ProModelPickerSheet extends StatefulWidget {
 
   final ValueChanged<String>? onGenerator;
 
-  /// The live catalog. Null (or empty) falls back to the list compiled into
-  /// the binary, so the sheet is never blank.
+  /// Live catalog; null or empty falls back to the built-in list.
   final ProModelCatalog? catalog;
 
-  /// Currently pinned model, or null for standard auto-routing.
+  /// Pinned model, or null for auto-routing.
   final ProModel? current;
 
-  /// Called with the chosen model, or null for standard auto-routing.
+  /// Called with the chosen model, or null for auto-routing.
   final ValueChanged<ProModel?> onSelected;
 
   @override
@@ -2883,16 +2597,13 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
     );
   }
 
-  /// "vision · reasoning · tools · cloudflare" — only the flags the catalog
-  /// actually set. Cloudflare-hosted weights run on the worker's AI binding,
-  /// with no gateway hop and no upstream provider to reject the call, which is
-  /// worth saying on the row.
+  /// Only the catalog's set flags; "cloudflare" means no gateway hop or upstream to reject the call.
   String _tagLine(ProModel m) {
     final tags = <String>[
       if (m.vision) tr('vision'),
       if (m.reasoning) tr('reasoning'),
       if (m.tools) tr('tools'),
-      // A brand name, so it is not run through tr().
+      // A brand name, so not translated.
       if (m.cloudflareHosted) 'cloudflare',
     ];
     return tags.join(' · ');
@@ -3005,8 +2716,7 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
 
     return SafeArea(
       child: ConstrainedBox(
-        // Leaves the sheet clear of the status bar even when the catalog is
-        // long enough to fill the screen.
+        // Keeps the sheet clear of the status bar.
         constraints: BoxConstraints(
           maxHeight: MediaQuery.of(context).size.height * 0.85,
         ),
@@ -3015,9 +2725,7 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              // Both labels are translated and the sheet has to survive narrow
-              // screens and large text scales, so they share the width and
-              // ellipsize instead of a Spacer forcing them off the edge.
+              // Labels share the width and ellipsize to survive narrow screens and large text.
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -3039,8 +2747,7 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
                 ],
               ),
             ),
-            // The catalog is live and can run to dozens of models, so the
-            // sheet needs a filter to stay usable.
+            // The live catalog can run to dozens of models, so it needs a filter.
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
               child: TextField(
@@ -3066,9 +2773,7 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
                 ),
               ),
             ),
-            // Only the models scroll; the header and search stay put. The
-            // key names this list specifically — the search field brings its
-            // own Scrollable, so "the first Scrollable" is no longer the list.
+            // Only the models scroll; header and search stay.
             Flexible(
               child: ListView(
                 key: proModelListKey,
@@ -3309,10 +3014,7 @@ class _AnonModalState extends ConsumerState<_AnonModal> {
   }
 }
 
-// =============================================================================
-// Fallback theme colors (used only when NymColors isn't registered, e.g. in a
-// bare widget test). The real app supplies NymColors via the theme extension.
-// =============================================================================
+// Fallback colors for bare widget tests without the theme extension.
 
 const NymColors _fallbackColors = NymColors(
   primary: Color(0xFF7C5CFF),

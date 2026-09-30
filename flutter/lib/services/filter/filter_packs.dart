@@ -2,32 +2,9 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show rootBundle;
 
-/// Opt-in keyword packs, and the matcher that makes them survive evasion
-/// without inventing false positives.
-///
-/// A direct port of the PWA's `js/modules/filter-packs.js`, reading the same
-/// `data/filter-packs/*.json` — bundled as assets here rather than fetched,
-/// because a phone that is offline should still filter. The two must agree
-/// term for term and rule for rule: the setting syncs across devices, so a
-/// pack that behaves differently on mobile is a message that is hidden on the
-/// laptop and visible on the phone, with nothing to explain the difference.
-/// `test/filter_packs_test.dart` runs the same corpus as the PWA's
-/// `scripts/test-filter-packs.mjs` and asserts the same verdicts.
-///
-/// The hard part is not the word list. "fuck", "f u c k", "f.u.c.k", "fuuuck",
-/// "f\u200buck" and "fυck" are the same word to a reader and six different
-/// strings to `contains()`, while "Scunthorpe", "classic", "assassin" and
-/// "analysis" are NOT the words they contain. So the text is normalized once
-/// and then matched as WHOLE WORDS — the word boundary being the single most
-/// important defense against false positives.
+/// Opt-in keyword packs, a port of the PWA's filter-packs.js that must match its verdicts term for term.
 
-/// Precomposed Latin letters folded to their base. Dart has no
-/// `String.normalize()`, so this table is GENERATED from Node's Unicode data
-/// (NFD, strip U+0300-U+036F, NFC) over U+00C0-U+024F and U+1E00-U+1EFF. It is
-/// therefore the same fold the PWA performs, rather than an approximation of
-/// it. Greek and Cyrillic accented forms are deliberately absent: those
-/// scripts are handled by the homoglyph table, and stripping their marks would
-/// merge letters that are genuinely distinct.
+/// Generated from Node's NFD fold over U+00C0-U+024F and U+1E00-U+1EFF; Greek/Cyrillic are left to homoglyphs.
 const Map<String, String> _latinFold = {
   'À': 'A', 'Á': 'A', 'Â': 'A', 'Ã': 'A', 'Ä': 'A', 'Å': 'A', 'Ç': 'C', 'È': 'E',
   'É': 'E', 'Ê': 'E', 'Ë': 'E', 'Ì': 'I', 'Í': 'I', 'Î': 'I', 'Ï': 'I', 'Ñ': 'N',
@@ -93,8 +70,7 @@ const Map<String, String> _latinFold = {
   'ự': 'u', 'Ỳ': 'Y', 'ỳ': 'y', 'Ỵ': 'Y', 'ỵ': 'y', 'Ỷ': 'Y', 'ỷ': 'y', 'Ỹ': 'Y',
   'ỹ': 'y',};
 
-/// Characters that look like ASCII letters and are not. Cyrillic and Greek
-/// lookalikes are the common evasion. Mirrors HOMOGLYPHS in filter-packs.js.
+/// ASCII lookalikes; mirrors HOMOGLYPHS in filter-packs.js.
 const Map<String, String> _homoglyphs = {
   'а': 'a', 'ӓ': 'a', 'ɑ': 'a', 'α': 'a',
   'ь': 'b', 'β': 'b',
@@ -123,9 +99,7 @@ const Map<String, String> _homoglyphs = {
   'ᴢ': 'z', 'ζ': 'z',
 };
 
-/// Digits that stand in for a letter, as ALTERNATIVES inside a compiled term
-/// rather than a rewrite of the text: turning every '1' into an 'i' would
-/// corrupt ordinary numbers.
+/// Digit alternatives inside compiled terms, not a text rewrite, so numbers survive.
 const Map<String, String> _leet = {
   'a': 'a@4', 'b': 'b8', 'c': 'c', 'd': 'd', 'e': 'e3', 'f': 'f', 'g': 'g69',
   'h': 'h', 'i': 'i1!|', 'j': 'j', 'k': 'k', 'l': 'l1|', 'm': 'm', 'n': 'n',
@@ -135,27 +109,22 @@ const Map<String, String> _leet = {
 
 final RegExp _invisible = RegExp(
     r'[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]');
-/// Deleted between two alphanumerics: the shape of "f.u.c.k", and nothing a
-/// reader writes by accident. Outside a word they stay separators.
+/// Separators deleted only between two alphanumerics, as in "f.u.c.k".
 final RegExp _midwordStrip =
     RegExp(r"(?<=[\p{L}\p{N}])[.\-_*'’`~^+]+(?=[\p{L}\p{N}])", unicode: true);
-/// @ and $ convert beside a LETTER ("$hit", "a$$hole"); a digit neighbor is
-/// left alone so "$20" stays a price.
+/// @ and $ convert only beside a letter, so "$20" stays a price.
 final RegExp _atDollar = RegExp(r'(?<=\p{L})[@$]|[@$](?=\p{L})', unicode: true);
-/// ! and | only BETWEEN two letters ("b!tch"). Converting a trailing one turns
-/// "fuck!" into "fucki", which the term then misses.
+/// ! and | convert only between letters, so "fuck!" still matches.
 final RegExp _bangPipe = RegExp(r'(?<=\p{L})[!|]+(?=\p{L})', unicode: true);
 final RegExp _nonAlnum = RegExp(r'[^\p{L}\p{N}]+', unicode: true);
 final RegExp _spacedRun =
     RegExp(r'(?:^| )((?:[\p{L}\p{N}] ){2,}[\p{L}\p{N}])(?= |$)', unicode: true);
-/// Scripts with no spaces between words, where a whole-word match can never
-/// reach inside the text. Terms in these match as substrings instead.
+/// Unspaced scripts, where terms match as substrings instead of whole words.
 final RegExp _unspaced = RegExp(
     r'[぀-ヿ㐀-䶿一-鿿豈-﫿'
     r'฀-๿຀-໿ក-៿က-႟]');
 final RegExp _reSpecial = RegExp(r'[.*+?^${}()|[\]\\]');
 
-/// Only the first this many characters are scanned.
 const int _scanLimit = 8000;
 
 const List<String> kFilterPackIds = ['profanity', 'scams', 'crypto', 'politics'];
@@ -169,9 +138,7 @@ class _CompiledPack {
   final RegExp? nym;
 }
 
-/// The normalized forms of one message: [norm] with word boundaries as spaces,
-/// and [joined] with runs of three or more single characters rejoined so
-/// "f u c k" is reachable. [joined] is empty when nothing was joined.
+/// [norm] with word boundaries as spaces; [joined] rejoins spaced-out letters, or is empty.
 class NormalizedText {
   const NormalizedText(this.norm, this.joined);
   final String norm;
@@ -189,7 +156,7 @@ class FilterPacks {
   static String _escape(String s) =>
       s.replaceAllMapped(_reSpecial, (m) => '\\${m[0]}');
 
-  /// Folds a message down to `[a-z0-9 ]`. Mirrors `normalizeForFilter`.
+  /// Folds a message down to `[a-z0-9 ]`, mirroring `normalizeForFilter`.
   static NormalizedText normalize(String? text) {
     if (text == null || text.isEmpty) return const NormalizedText('', '');
     var s = text.length > _scanLimit ? text.substring(0, _scanLimit) : text;
@@ -214,13 +181,7 @@ class FilterPacks {
     return NormalizedText(s, joined == s ? '' : joined);
   }
 
-  /// A term is normalized by the SAME pipeline as the text before compiling,
-  /// or the homoglyph fold breaks every non-Latin list: "хуй" becomes "xyй" in
-  /// the message and stays "хуй" in the pack.
-  ///
-  /// [repeat] false compiles each letter exactly once. Allow entries use it
-  /// because with repetition "niger" matches "nigger", and an allow list that
-  /// swallows the slur is worse than no allow list.
+  /// Terms use the text's normalization; [repeat] false stops allow entries like "niger" matching the slur.
   static String? _termBody(String term, {bool repeat = true}) {
     final norm = normalize(term).norm;
     if (norm.isEmpty) return null;
@@ -272,7 +233,7 @@ class FilterPacks {
         patterns.add(RegExp(p['re'] as String,
             caseSensitive: !(p['flags'] as String? ?? 'i').contains('i')));
       } catch (_) {
-        // A pattern the Dart engine will not take is skipped, not fatal.
+        // A pattern the Dart engine rejects is skipped.
       }
     }
     final allowBodies = <String>[];
@@ -296,17 +257,14 @@ class FilterPacks {
     );
   }
 
-  /// Compiles a pack from already-decoded JSON. Public so tests can load the
-  /// same file the app bundles without going through the asset system.
+  /// Compiles a decoded pack; public so tests can load the bundled file directly.
   static void loadFromJson(Map<String, dynamic> pack) {
     final id = pack['id'] as String?;
     if (id == null || !kFilterPackIds.contains(id)) return;
     _compiled[id] = _compile(pack);
   }
 
-  /// Sets the enabled packs and loads any that are new. A pack that will not
-  /// load simply does not filter — a missing asset must never swallow a
-  /// channel.
+  /// Sets and loads the enabled packs; one that fails to load simply does not filter.
   static Future<void> setActive(Iterable<String> ids) async {
     _active = ids.where(kFilterPackIds.contains).toSet();
     for (final id in _active) {
@@ -316,13 +274,12 @@ class FilterPacks {
             await rootBundle.loadString('assets/data/filter-packs/$id.json');
         loadFromJson(jsonDecode(raw) as Map<String, dynamic>);
       } catch (_) {
-        // Leave it uncompiled; match() skips packs it has no rules for.
+        // Leave it uncompiled; match() skips packs with no rules.
       }
     }
   }
 
-  /// The id of the pack that matched, or null. The id rather than a bool so a
-  /// caller can say WHICH pack hid a message.
+  /// The id of the matching pack, or null.
   static String? match(String? text, {String? nym}) {
     if (_active.isEmpty) return null;
     final body = text ?? '';
@@ -336,8 +293,7 @@ class FilterPacks {
     for (final id in _active) {
       final pack = _compiled[id];
       if (pack == null) continue;
-      // The allow list is subtracted from the haystack BEFORE the terms run,
-      // so "Scunthorpe" cannot be reached by the term inside it.
+      // Subtract the allow list first so "Scunthorpe" can't match the term inside it.
       var hay = n.norm;
       var hay2 = n.joined;
       if (pack.allow != null) {
@@ -353,8 +309,7 @@ class FilterPacks {
             : nymNorm;
         if (pack.nym!.hasMatch(nymHay)) return id;
       }
-      // Structural patterns run on the ORIGINAL text: a wallet address or an
-      // invite link does not survive normalization.
+      // Structural patterns run on the original text, which normalization would destroy.
       for (final re in pack.patterns) {
         if (re.hasMatch(body)) return id;
       }
@@ -364,7 +319,6 @@ class FilterPacks {
 
   static bool matches(String? text, {String? nym}) => match(text, nym: nym) != null;
 
-  /// Test seam: forget every compiled pack.
   static void resetForTest() {
     _compiled.clear();
     _active = <String>{};

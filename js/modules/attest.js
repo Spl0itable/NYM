@@ -1,25 +1,15 @@
-// attest.js — the client half of app attestation.
-
 (function () {
     const BADGE_TAG = 'nymattest';
-    /// Strongest first. `attested` is hardware-backed and unmintable by a
-    /// third party; `challenged` is a browser that solved a domain-bound
-    /// challenge for its own enrollment; `origin` is a browser and no more.
+    // Strongest first: `attested` is hardware-backed, `challenged` solved a domain-bound challenge, `origin` is a browser.
     const TIER_RANK = { attested: 3, challenged: 2, origin: 1 };
-    /// The public key of ATTEST_AUTHORITY_SECRET, as
-    /// npub1rfymj0vm6dtjvuujj27556phcj2va0qxuarmhphnx29pgy8ugq8s3l03yh.
-    /// Pinned here rather than learned, because the fallback below trusts the
-    /// first answer the API gives this device — fine as a bootstrap, but a
-    /// device that first reached a hostile endpoint would trust it forever.
+    // Pinned rather than learned, so a device whose first contact was hostile doesn't trust it forever.
     const PINNED_AUTHORITY = '1a49b93d9bd35726739292bd4a6837c494cebc06e747bb86f3328a1410fc400f';
     const AUTHORITY_LS_KEY = 'nym_attest_authority';
     const BADGE_LS_KEY = 'nym_attest_badge';
-    /// Re-enroll with this much of the badge's term left, so a device that is
-    /// offline for a while still renews before anyone stops trusting it.
+    // Re-enroll with this much of the badge's term left so briefly-offline devices still renew in time.
     const RENEW_BEFORE_MS = 7 * 24 * 3600 * 1000;
     const ENROLL_RETRY_MS = 10 * 60 * 1000;
-    /// Verified badges are cached per (pubkey, badge) — a busy channel re-reads
-    /// the same sender's badge on every message they post.
+    // Verified badges are cached per (pubkey, badge).
     const VERIFY_CACHE_MAX = 4000;
 
     const NT = () => window.NostrTools;
@@ -52,8 +42,7 @@
             return '';
         },
 
-        // Digest the authority signs. Mirrors badgeDigest in _attest.js; the two
-        // must stay identical or every badge this client sees reads as forged.
+        // Must stay identical to badgeDigest in _attest.js or every badge reads as forged.
         _attestDigest(pubkey, expDay, tier) {
             const sha = NT() && NT()._sha256;
             if (!sha) return '';
@@ -62,9 +51,7 @@
             )));
         },
 
-        // Returns the badge's tier, or '' when it does not verify for this
-        // pubkey. A badge lifted from someone else's event fails here: the
-        // pubkey it was issued for is inside the signed digest.
+        // Returns the badge's tier, or '' when it does not verify for this pubkey.
         verifyAttestBadge(badge, pubkey) {
             if (typeof badge !== 'string' || !/^[0-9a-f]{64}$/.test(pubkey || '')) return '';
             const authority = this.attestAuthorityPubkey();
@@ -73,9 +60,7 @@
             if (!schnorr) return '';
 
             if (!(this._attestVerifyCache instanceof Map)) this._attestVerifyCache = new Map();
-            // Keyed by the authority too: before enrollment there is no pinned
-            // key and every badge verifies as '', and those entries must not
-            // outlive the moment the key arrives.
+            // Keyed by the authority too, so pre-enrollment '' results don't outlive the key's arrival.
             const cacheKey = authority + '|' + pubkey + '|' + badge;
             const cached = this._attestVerifyCache.get(cacheKey);
             if (cached !== undefined) return cached;
@@ -102,17 +87,13 @@
             return tier;
         },
 
-        // The tier a sender has most recently proved. Remembered per pubkey so
-        // a message that arrives without a badge (an older client, a mesh
-        // replay) still shows as verified once one of their messages carried it.
+        // Remembered per pubkey so later badge-less messages still show as verified.
         attestedTier(pubkey) {
             if (!(this._attestTiers instanceof Map)) return '';
             return this._attestTiers.get(pubkey) || '';
         },
 
-        // Reads the badge off an inbound channel event and records what it
-        // proves. Also feeds nymchatPubkeys, which the PoW-era heuristics
-        // already use, so an attested peer is trusted everywhere that set is.
+        // Also feeds nymchatPubkeys so an attested peer is trusted everywhere that set is.
         ingestAttestBadge(event) {
             if (!event || !Array.isArray(event.tags)) return '';
             const tag = event.tags.find(t => Array.isArray(t) && t[0] === BADGE_TAG);
@@ -120,10 +101,7 @@
             const tier = this.verifyAttestBadge(tag[1], event.pubkey);
             if (!tier) return '';
             if (!(this._attestTiers instanceof Map)) this._attestTiers = new Map();
-            // Keep the strongest tier ever seen for a key rather than the most
-            // recent. The same person on a phone and on the web is still that
-            // person, and with three tiers "anything but attested is
-            // replaceable" would also let a challenged sender decay to origin.
+            // Keep the strongest tier ever seen for a key, not the most recent.
             const prev = this._attestTiers.get(event.pubkey);
             if (!prev || (TIER_RANK[tier] || 0) > (TIER_RANK[prev] || 0)) {
                 this._attestTiers.set(event.pubkey, tier);
@@ -143,8 +121,6 @@
             if (typeof this.isFriend === 'function' && this.isFriend(pubkey)) return true;
             return TIER_RANK[this.attestedTier(pubkey)] !== undefined;
         },
-
-        // ---- enrollment ----------------------------------------------------
 
         _loadAttestBadge() {
             try {
@@ -176,10 +152,7 @@
             return data || {};
         },
 
-        // The platform proof for this build. The PWA has none to give — a page
-        // cannot attest itself, and pretending otherwise would put a tier on
-        // web users that the name would not honestly describe. A native shell
-        // installs window.NymNativeAttest to supply a real one.
+        // The PWA cannot attest itself; a native shell supplies window.NymNativeAttest.
         async _platformAttestation(challenge) {
             const native = window.NymNativeAttest;
             if (native && typeof native.attest === 'function') {
@@ -191,10 +164,7 @@
             return { platform: 'web' };
         },
 
-        /// Hashes the asset paths the server named for this enrollment.
-        /// build-verify.js already does this for the About dialog; enrollment
-        /// borrows the same hashing so the two can never disagree about what
-        /// an asset's hash is.
+        // Reuses build-verify.js hashing so enrollment and the About dialog never disagree.
         async _buildProof(paths) {
             if (typeof window.hashRunningAssets !== 'function') return null;
             try {
@@ -204,18 +174,7 @@
             }
         },
 
-        /// The auth event, optionally mined first.
-        ///
-        /// The work rides on this event rather than a field of its own: it is
-        /// already signed by the enrolling key and already carries the
-        /// server's challenge, so mining it binds the work to both. Mining
-        /// happens before signing because every signing path recomputes the id
-        /// from these same fields, and the nonce tag is one of them.
-        ///
-        /// _minePow runs in the crypto worker where there is one and falls
-        /// back to a main-thread miner that yields every 4ms, so a slow device
-        /// grinding for a few seconds does not drop frames. Nothing is waiting
-        /// on it — the app sends unbadged until enrollment lands.
+        // Mining happens before signing because the nonce tag is part of the id.
         async _signAttestAuth(challenge, powBits) {
             const apiHost = this._getApiHost && this._getApiHost();
             const event = {
@@ -262,13 +221,11 @@
                     const challenge = issued && issued.challenge;
                     if (!challenge) throw new Error('no challenge');
                     const proof = await this._platformAttestation(challenge);
-                    // Only the web tier is probed. A native build already
-                    // carries a proof the server trusts more than this one.
+                    // Only the web tier is probed; native builds carry a stronger proof.
                     const build = (proof.platform === 'web' && Array.isArray(issued.buildProbe))
                         ? await this._buildProof(issued.buildProbe)
                         : null;
-                    // Only the web tier pays. A native build already carries a
-                    // proof the server trusts more than any amount of hashing.
+                    // Only the web tier pays; native builds carry a stronger proof.
                     const auth = await this._signAttestAuth(
                         challenge, proof.platform === 'web' ? issued.powBits : 0);
                     const res = await this._attestApi(Object.assign({
@@ -295,8 +252,7 @@
                     this._attestNextTry = 0;
                     return rec;
                 } catch (_) {
-                    // A failed enrollment is not an error the user needs to see:
-                    // they keep sending, they just go unbadged until it works.
+                    // Enrollment failures stay silent; the user just goes unbadged.
                     this._attestNextTry = Date.now() + ENROLL_RETRY_MS;
                     return this._loadAttestBadge();
                 } finally {

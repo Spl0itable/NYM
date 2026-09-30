@@ -10,8 +10,7 @@ import '../../services/storage/mesh_file_store.dart';
 import '../../services/storage/secure_store.dart';
 import 'biometric_secret_store.dart';
 
-/// Abstractions over the data stores the panic wipe destroys, so tests can
-/// inject fakes and assert they were cleared.
+/// Store abstractions so tests can inject fakes and assert they were cleared.
 abstract class PanicPrefsStore {
   Future<void> wipe();
 }
@@ -28,16 +27,13 @@ abstract class PanicFileStore {
   Future<void> wipe();
 }
 
-/// Default adapters around the real stores used in production.
 class _SharedPrefsAdapter implements PanicPrefsStore {
   @override
   Future<void> wipe() async {
     final prefs = await SharedPreferences.getInstance();
     final keys = prefs.getKeys().toList();
     final rng = Random.secure();
-    // 1) Encrypt every value under a fresh, non-extractable AES-GCM-256 key that
-    //    goes out of scope when this returns — so any bytes that survive deletion
-    //    are ciphertext nobody can recover (mirrors `_panicEncryptStorage`).
+    // Encrypt every value under a discarded AES-GCM-256 key so any surviving bytes are unrecoverable.
     try {
       final algo = AesGcm.with256bits();
       final key = await algo.newSecretKey();
@@ -60,7 +56,7 @@ class _SharedPrefsAdapter implements PanicPrefsStore {
         } catch (_) {}
       }
     } catch (_) {}
-    // 2) Junk-overwrite, then clear (mirrors the PWA junk-overwrite + clear).
+    // Junk-overwrite, then clear.
     for (final k in keys) {
       try {
         await prefs.setString(k, _junk(rng));
@@ -100,10 +96,7 @@ class _CacheStoreAdapter implements PanicCacheStore {
   final CacheStore _store;
   @override
   Future<void> wipe() async {
-    // Junk-overwrite every store, clear it, then close + DELETE the database
-    // file itself — the PWA overwrites + `indexedDB.deleteDatabase`s every DB
-    // (panic.js:95-106), it does not merely empty the stores. The open is
-    // isolated so a corrupt DB that won't open still gets its file deleted.
+    // Overwrite and clear every store, then delete the DB file; the open is isolated so a corrupt DB still gets deleted.
     try {
       if (!_store.isOpen) await _store.open();
     } catch (_) {}
@@ -118,13 +111,7 @@ String _junk(Random rng) {
   return b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 }
 
-/// Performs the emergency wipe (`panicWipe`, docs/specs/04 §10.3): clears
-/// SharedPreferences, flutter_secure_storage (`deleteAll`), and shreds +
-/// DELETES the sqflite cache DB file, then resolves. The UI
-/// restart-to-first-run is handled by the caller after this completes.
-///
-/// All three stores are injectable so the wipe can be unit-tested against
-/// fakes; production callers use [PanicWipe.production].
+/// Emergency wipe of prefs, secure storage and the sqflite cache DB; the caller handles restart-to-first-run.
 class PanicWipe {
   PanicWipe({
     required PanicPrefsStore prefs,
@@ -136,7 +123,6 @@ class PanicWipe {
         _cache = cache,
         _files = files;
 
-  /// The production wipe wired to the real stores.
   factory PanicWipe.production({
     SecureStore? secure,
     CacheStore? cache,
@@ -154,26 +140,14 @@ class PanicWipe {
   final PanicCacheStore _cache;
   final PanicFileStore? _files;
 
-  /// True while a panic wipe is destroying the stores (and until
-  /// `resetAfterPanic` finishes the teardown). The controller's persistence
-  /// paths check this and refuse to write — the native analog of panic.js
-  /// setting `_cacheDisabled = true` and clearing every persist timer FIRST
-  /// (panic.js:63-67) so nothing re-writes data mid-wipe.
+  /// True while a wipe runs; persistence paths check it and refuse to write so nothing re-writes data mid-wipe.
   static bool inProgress = false;
 
-  /// Destroy every local store. Each step is best-effort and isolated so one
-  /// failing store can't abort the others (matching the PWA's try/catch wrap).
-  ///
-  /// [onStatus] receives the PWA's stage strings (panic.js:84/96/109) as each
-  /// destruction stage starts, so the overlay's status line tracks the real
-  /// progress instead of jumping straight to the final state.
+  /// Destroys every local store, each step isolated so one failure can't abort the others.
   Future<void> wipe({void Function(String status)? onStatus}) async {
-    // Stop persistence before destroying anything (panic.js `_cacheDisabled`).
+    // Stop persistence before destroying anything.
     inProgress = true;
-    // Order mirrors the PWA (`panic.js`): encrypt-with-discarded-key + junk +
-    // clear the key/value store (web-storage analog) first, then shred the
-    // local database (IndexedDB analog), then the secure keystore (the
-    // vault's remaining at-rest bytes — the PWA's final purge stage).
+    // Order: key/value store, then the local database, then the secure keystore last.
     try {
       onStatus?.call('Encrypting local store with a random key…');
     } catch (_) {}

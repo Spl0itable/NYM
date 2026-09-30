@@ -1,18 +1,9 @@
-// notification_sounds.dart - Synthesized notification tones, ported 1:1 from
-// `../js/modules/notifications.js` (`NOTIFICATION_SOUNDS` + `playSound`).
-//
-// The PWA builds each sound at runtime with the Web Audio API. Here we mirror
-// the same note tables and render them to a 16-bit mono PCM WAV buffer that the
-// platform can play. The descriptor table + selection logic are pure so they
-// can be unit-tested without an audio device.
+// Synthesized notification tones rendered from the PWA's note tables to 16-bit mono PCM WAV.
 
 import 'dart:math';
 import 'dart:typed_data';
 
-/// One note in a sound sequence — same field names as notifications.js:
-/// f (Hz), d (seconds), optional f2 (glide target), gap (silence after),
-/// chord (simultaneous freqs), g (gain override), a (attack ramp),
-/// h (hold time), noise (bandpass white noise at f), q (noise resonance).
+/// One note: f (Hz), d (s), f2 glide target, gap, chord, g gain, a attack, h hold, noise, q resonance.
 class SoundNote {
   const SoundNote({
     this.f,
@@ -39,10 +30,8 @@ class SoundNote {
   final double? q;
 }
 
-/// Oscillator waveform (notifications.js `sound.wave`).
 enum SoundWave { sine, square, sawtooth, triangle }
 
-/// A full sound descriptor (notifications.js `NOTIFICATION_SOUNDS[type]`).
 class SoundDescriptor {
   const SoundDescriptor({
     required this.wave,
@@ -58,8 +47,7 @@ class SoundDescriptor {
   double get totalDuration => notes.fold(0.0, (acc, n) => acc + n.d + n.gap);
 }
 
-/// The complete sound table, verbatim from notifications.js. Keys match
-/// `settings.sound` values. `'none'` is intentionally absent (Silent).
+/// Keys match `settings.sound` values; `'none'` (Silent) is intentionally absent.
 const Map<String, SoundDescriptor> kNotificationSounds = {
   'beep': SoundDescriptor(
     wave: SoundWave.sine,
@@ -274,48 +262,29 @@ const Map<String, SoundDescriptor> kNotificationSounds = {
   ),
 };
 
-/// Legacy aliases (notifications.js `playSound`: `{ icq:'uhoh', msn:'msnding' }`).
+/// Legacy setting aliases.
 const Map<String, String> kLegacySoundAliases = {
   'icq': 'uhoh',
   'msn': 'msnding',
 };
 
-/// The incoming-call ringtone beep — a single 480 Hz sine note at gain 0.07
-/// rendered for 0.4 s, verbatim from calls.js `_startRingtone.playBeep`
-/// (`o.frequency.value = 480; g.gain.value = 0.07; o.stop(ctx.currentTime + 0.4)`,
-/// calls.js:907-910). CallService loops this every 2 s while a call rings (the
-/// PWA's `setInterval(playBeep, 2000)`, calls.js:913). Kept here next to the
-/// notification sounds so it reuses the same [renderSoundWav] synthesis +
-/// audioplayers playback rather than a second audio engine. Not part of
-/// [kNotificationSounds] — it isn't a user-selectable `settings.sound` value.
+/// Incoming-call beep (480 Hz, gain 0.07, 0.4s) that CallService loops every 2s; not a user-selectable sound.
 const SoundDescriptor kIncomingCallRingtone = SoundDescriptor(
   wave: SoundWave.sine,
   gain: 0.07,
   notes: [SoundNote(f: 480, d: 0.4)],
 );
 
-/// Resolve a `settings.sound` value to its descriptor, honoring legacy aliases.
-/// Returns null for `'none'` (Silent) or any unknown value — matching
-/// notifications.js where an unknown key short-circuits `playSound`.
+/// Descriptor for a `settings.sound` value (honoring aliases), or null for `'none'` or unknown.
 SoundDescriptor? resolveSound(String type) {
   if (type == 'none') return null;
   final key = kLegacySoundAliases[type] ?? type;
   return kNotificationSounds[key];
 }
 
-/// True when the selection produces audible output. `'none'` => silent.
 bool soundIsAudible(String type) => resolveSound(type) != null;
 
-/// Renders a descriptor to a 16-bit mono PCM WAV byte buffer at [sampleRate].
-///
-/// Faithfully reproduces notifications.js `playSound`'s per-note gain envelopes:
-/// - attack (`a`): ramp 0→gain over `a`, then exp-decay to ~0 by `d`.
-/// - hold (`h`): hold gain until `h`, then exp-decay to ~0 by `d`.
-/// - very short (`d < 0.06`): hold then linear release (anti-click).
-/// - default: hold then exp-decay to ~0 by `d`.
-/// Oscillators use the descriptor wave; `f2` glides exponentially f→f2 over `d`;
-/// `chord` sums multiple sines/waves; `noise` is bandpass-ish filtered white
-/// noise (approximated with a simple resonant band emphasis).
+/// Renders a descriptor to 16-bit mono PCM WAV using the PWA's per-note attack/hold/decay envelopes.
 Uint8List renderSoundWav(SoundDescriptor sound, {int sampleRate = 44100}) {
   final total = sound.totalDuration;
   final totalSamples = max(1, (total * sampleRate).ceil());
@@ -335,9 +304,7 @@ Uint8List renderSoundWav(SoundDescriptor sound, {int sampleRate = 44100}) {
 
       double sample;
       if (note.noise) {
-        // Bandpass-filtered white noise approximated by white noise scaled by
-        // a resonance factor — good enough for the rare noise notes (none in
-        // the active 4 sounds; kept for table fidelity).
+        // Noise approximated as scaled white noise; no active sound uses it.
         sample = (rng.nextDouble() * 2 - 1);
       } else {
         final freqs = note.chord ?? [note.f ?? 0];
@@ -360,13 +327,12 @@ Uint8List renderSoundWav(SoundDescriptor sound, {int sampleRate = 44100}) {
   return _encodeWav(samples, sampleRate);
 }
 
-/// Per-note gain envelope value at time [t] (seconds into the note).
+/// Gain envelope at [t] seconds into the note.
 double _envelope(SoundNote note, double t, double gain) {
   final d = note.d;
   if (note.a != null) {
     final a = note.a!;
     if (t < a) return gain * (t / a);
-    // exponential decay from gain to ~0.001 by d
     return _expRamp(gain, 0.001, a, d, t);
   }
   if (note.h != null) {
@@ -377,11 +343,9 @@ double _envelope(SoundNote note, double t, double gain) {
   if (d < 0.06) {
     final rel = d - 0.01;
     if (t <= rel) return gain;
-    // linear release to ~0 by d
     final frac = ((d - t) / (d - rel)).clamp(0.0, 1.0);
     return gain * frac;
   }
-  // default: hold at start then exp-decay to ~0.001 by d
   return _expRamp(gain, 0.001, 0, d, t);
 }
 
@@ -389,7 +353,7 @@ double _expRamp(double from, double to, double t0, double t1, double t) {
   if (t <= t0) return from;
   if (t >= t1) return to;
   final frac = (t - t0) / (t1 - t0);
-  // exponential interpolation (matches setTarget/exponentialRampToValueAtTime)
+  // Exponential interpolation, matching `exponentialRampToValueAtTime`.
   return from * pow(to / from, frac).toDouble();
 }
 
@@ -415,7 +379,7 @@ double _osc(SoundWave wave, double freq, double t, double phaseOffset) {
 }
 
 Uint8List _encodeWav(Float64List samples, int sampleRate) {
-  // Soft-clip then convert to 16-bit PCM.
+  // Soft-clip, then convert to 16-bit PCM.
   final n = samples.length;
   final bytesPerSample = 2;
   final dataSize = n * bytesPerSample;

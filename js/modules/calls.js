@@ -1,5 +1,3 @@
-// calls.js - P2P audio/video calling for 1:1 PMs and group chats over NIP-17 gift-wrapped signaling
-
 Object.assign(NYM.prototype, {
 
     _genCallId() {
@@ -15,10 +13,7 @@ Object.assign(NYM.prototype, {
         return (pubkey || '').slice(0, 8);
     },
 
-    // Decorated display name for call UI (overlay tiles + chat): base nym, the
-    // #suffix, purchased flairs, the developer/bot verified badge and the friend
-    // icon — mirroring how nyms render everywhere else. `self` renders a plain
-    // "You" with no decorations.
+    // `self` renders a plain "You" with no decorations.
     _callNymHtml(pubkey, opts) {
         opts = opts || {};
         if (opts.self || pubkey === this.pubkey) return 'You';
@@ -38,9 +33,7 @@ Object.assign(NYM.prototype, {
         return `<span class="call-nym-base">${this.escapeHtml(base)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterBadge}${friendHtml}`;
     },
 
-    // Open the shared user context menu (block, friend, PM, report…) from a
-    // nickname tapped in the call overlay or call chat. profileOnly trims the
-    // message-only actions that don't apply during a call.
+    // profileOnly trims the message-only actions that don't apply during a call.
     showCallUserMenu(e, pubkey) {
         if (!pubkey || pubkey === this.pubkey) return;
         if (typeof this.showContextMenu !== 'function') return;
@@ -171,7 +164,6 @@ Object.assign(NYM.prototype, {
     handleCallSignalingEvent(event) {
         const sender = event.pubkey;
         if (sender === this.pubkey) return;
-        // A blocked user can't ring, join, or signal into a call at all.
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
         let data;
         try { data = JSON.parse(event.content); } catch (e) { return; }
@@ -195,11 +187,9 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Records persist 24h to match the notification window so a call answered or
-    // missed in the last day isn't re-surfaced on reopen.
+    // Records persist 24h to match the notification window.
     _CALL_SEEN_TTL_SEC: 86400,
-    // Higher rank wins on merge so a resolution (answered) isn't lost to a weaker
-    // status (pending) synced from another device.
+    // Higher rank wins on merge so an answered status isn't lost to a synced pending one.
     _CALL_STATUS_RANK: { seen: 0, pending: 1, missed: 2, declined: 3, answered: 4 },
 
     _getSeenCalls() {
@@ -210,7 +200,7 @@ Object.assign(NYM.prototype, {
         return map;
     },
 
-    // Normalize a stored value (legacy number or {t,s}) to {t,s} or null
+    // Normalize a stored value (legacy number or {t,s}) to {t,s} or null.
     _normCallRecord(v) {
         if (typeof v === 'number') return { t: v, s: 'seen' };
         if (v && typeof v === 'object' && typeof v.t === 'number') return { t: v.t, s: v.s || 'seen' };
@@ -259,8 +249,7 @@ Object.assign(NYM.prototype, {
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave();
     },
 
-    // Merge a synced seen-call map from another device so a call handled or
-    // answered elsewhere isn't re-rung or shown as missed after a reload here.
+    // Merge seen-call maps from other devices so calls handled elsewhere aren't re-rung or shown as missed.
     _mergeSeenCalls(incoming) {
         if (!incoming || typeof incoming !== 'object') return;
         const map = this._getSeenCalls();
@@ -281,7 +270,6 @@ Object.assign(NYM.prototype, {
             if (s === 'answered' && cur.s !== 'answered') nowAnswered.push(id);
         }
         this._persistSeenCalls(map);
-        // A call answered elsewhere retracts any missed-call we already surfaced
         if (nowAnswered.length && typeof this._retractMissedCallNotification === 'function') {
             nowAnswered.forEach(id => this._retractMissedCallNotification(id));
         }
@@ -311,18 +299,14 @@ Object.assign(NYM.prototype, {
     },
 
     _onCallInvite(sender, data, event) {
-        // Skip calls already handled here or answered/seen on another device
         if (this._hasSeenCall(data.callId)) return;
 
-        // Honor accept prefs/blocks for ringing and missed-call records alike
         const pref = (this.settings && this.settings.acceptCalls) || 'enabled';
         if (pref === 'disabled') return;
         if (pref === 'friends' && !this.isFriend(sender)) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
 
-        // A stale invite can't be answered (e.g. it arrived while the app was
-        // closed). Within the seen-call window, log it as a missed call so it
-        // surfaces in notifications on reopen rather than being dropped silently.
+        // Stale invites within the seen-call window are logged as missed calls rather than dropped.
         const createdAt = event && event.created_at ? event.created_at : 0;
         const ageSec = createdAt ? (Math.floor(Date.now() / 1000) - createdAt) : 0;
         if (ageSec > 60) {
@@ -518,7 +502,7 @@ Object.assign(NYM.prototype, {
                 try {
                     if (entry.videoSender) entry.videoSender.replaceTrack(st);
                     else entry.videoSender = pc.addTrack(st, this.activeCall.screenStream);
-                } catch (e) { /* ignore */ }
+                } catch (e) { }
             }
             this._sendCallSignal(peerPubkey, { type: 'share', callId: this.activeCall.callId, on: true });
         }
@@ -599,7 +583,7 @@ Object.assign(NYM.prototype, {
         const entry = this.activeCall && this.activeCall.peers.get(sender);
         if (!entry || !data.candidate) return;
         if (entry.haveRemote) {
-            try { await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (e) { /* ignore */ }
+            try { await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch (e) { }
         } else {
             entry.pendingCandidates.push(data.candidate);
         }
@@ -609,7 +593,7 @@ Object.assign(NYM.prototype, {
         const entry = this.activeCall && this.activeCall.peers.get(peerPubkey);
         if (!entry) return;
         for (const c of entry.pendingCandidates) {
-            try { await entry.pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) { /* ignore */ }
+            try { await entry.pc.addIceCandidate(new RTCIceCandidate(c)); } catch (e) { }
         }
         entry.pendingCandidates = [];
     },
@@ -618,7 +602,7 @@ Object.assign(NYM.prototype, {
         if (!this.activeCall) return;
         const entry = this.activeCall.peers.get(peerPubkey);
         if (entry) {
-            try { entry.pc.close(); } catch (e) { /* ignore */ }
+            try { entry.pc.close(); } catch (e) { }
             this.activeCall.peers.delete(peerPubkey);
         }
         this._clearCallChatTyping(peerPubkey);
@@ -644,13 +628,13 @@ Object.assign(NYM.prototype, {
         if (ac) {
             if (ac.ringTimeout) clearTimeout(ac.ringTimeout);
             if (ac.timerInterval) clearInterval(ac.timerInterval);
-            ac.peers.forEach(entry => { try { entry.pc.close(); } catch (e) { /* ignore */ } });
+            ac.peers.forEach(entry => { try { entry.pc.close(); } catch (e) { } });
             ac.peers.clear();
             if (ac.chatTypers) { ac.chatTypers.forEach(e => { if (e.timeout) clearTimeout(e.timeout); }); ac.chatTypers.clear(); }
             if (this._callTypingStopTimer) { clearTimeout(this._callTypingStopTimer); this._callTypingStopTimer = null; }
             this._callTypingThrottle = 0;
-            if (ac.localStream) ac.localStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { /* ignore */ } });
-            if (ac.screenStream) ac.screenStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { /* ignore */ } });
+            if (ac.localStream) ac.localStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { } });
+            if (ac.screenStream) ac.screenStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { } });
         }
         this.activeCall = null;
         this._stopRingtone();
@@ -703,10 +687,10 @@ Object.assign(NYM.prototype, {
         if (!newTrack) { stream.getTracks().forEach(t => t.stop()); ac.switchingCamera = false; this._updateCallControls(); return; }
         newTrack.enabled = !ac.cameraOff;
         const oldTrack = ac.localStream.getVideoTracks()[0];
-        if (oldTrack) { ac.localStream.removeTrack(oldTrack); try { oldTrack.stop(); } catch (e) { /* ignore */ } }
+        if (oldTrack) { ac.localStream.removeTrack(oldTrack); try { oldTrack.stop(); } catch (e) { } }
         ac.localStream.addTrack(newTrack);
         if (!ac.sharing) {
-            ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(newTrack); } catch (e) { /* ignore */ } } });
+            ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(newTrack); } catch (e) { } } });
         }
         ac.facingMode = next;
         ac.switchingCamera = false;
@@ -723,7 +707,7 @@ Object.assign(NYM.prototype, {
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 show = devices.filter(d => d.kind === 'videoinput').length > 1;
-            } catch (e) { /* keep showing */ }
+            } catch (e) { }
         }
         if (!this.activeCall || this.activeCall !== ac) return;
         btn.classList.toggle('nm-call-hidden', !show);
@@ -750,7 +734,6 @@ Object.assign(NYM.prototype, {
         return `${prefix}<span class="call-title-id">${avatar}<span class="call-title-nym">${this._callNymHtml(peer)}</span></span>`;
     },
 
-    // Re-render the call overlay title in place when a peer's profile arrives.
     _refreshCallTitle() {
         const title = document.getElementById('callTitle');
         if (title && this.activeCall) title.innerHTML = this._callTitleHtml();
@@ -914,12 +897,12 @@ Object.assign(NYM.prototype, {
             };
             playBeep();
             this._ringInterval = setInterval(playBeep, 2000);
-        } catch (e) { /* ignore */ }
+        } catch (e) { }
     },
 
     _stopRingtone() {
         if (this._ringInterval) { clearInterval(this._ringInterval); this._ringInterval = null; }
-        if (this._ringCtx) { try { this._ringCtx.close(); } catch (e) { /* ignore */ } this._ringCtx = null; }
+        if (this._ringCtx) { try { this._ringCtx.close(); } catch (e) { } this._ringCtx = null; }
     },
 
     _startCallTimer() {
@@ -997,12 +980,12 @@ Object.assign(NYM.prototype, {
         ac.sharing = true;
         ac.peers.forEach((entry, pk) => {
             if (entry.videoSender) {
-                try { entry.videoSender.replaceTrack(track); } catch (e) { /* ignore */ }
+                try { entry.videoSender.replaceTrack(track); } catch (e) { }
             } else {
                 try {
                     entry.videoSender = entry.pc.addTrack(track, stream);
                     this._makeOffer(pk);
-                } catch (e) { /* ignore */ }
+                } catch (e) { }
             }
         });
         track.addEventListener('ended', () => this._stopScreenShare());
@@ -1016,8 +999,8 @@ Object.assign(NYM.prototype, {
         const ac = this.activeCall;
         if (!ac || !ac.sharing) return;
         const cam = ac.localStream ? (ac.localStream.getVideoTracks()[0] || null) : null;
-        ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(cam); } catch (e) { /* ignore */ } } });
-        if (ac.screenStream) ac.screenStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { /* ignore */ } });
+        ac.peers.forEach(entry => { if (entry.videoSender) { try { entry.videoSender.replaceTrack(cam); } catch (e) { } } });
+        if (ac.screenStream) ac.screenStream.getTracks().forEach(t => { try { t.stop(); } catch (e) { } });
         ac.screenStream = null;
         ac.sharing = false;
         const others = ac.members.filter(pk => pk !== this.pubkey);
@@ -1104,8 +1087,6 @@ Object.assign(NYM.prototype, {
 
     _callReactionDefaults() { return ['👍', '❤️', '😂', '😮', '👏', '🎉', '🙌', '🔥']; },
 
-    // Last-used first (shared with the message reaction picker), padded with
-    // defaults, dropping any custom shortcode whose pack is no longer known.
     _callReactionBarEmojis() {
         const out = [];
         const seen = new Set();
@@ -1192,7 +1173,6 @@ Object.assign(NYM.prototype, {
         const ac = this.activeCall;
         const input = document.getElementById('callChatInput');
         if (!ac || !input) return;
-        // A mention pick (Enter/Tab) should complete the mention, not send.
         if (this._callMentionActive()) { this._selectCallMention(); return; }
         const text = input.value.trim();
         if (!text) return;
@@ -1207,7 +1187,6 @@ Object.assign(NYM.prototype, {
 
     handleCallChatKeydown(e) {
         if (!e) return;
-        // Mention autocomplete navigation takes precedence while it's open.
         if (this._callMentionActive()) {
             if (e.key === 'ArrowDown') { e.preventDefault(); this._navigateCallMention(1); return; }
             if (e.key === 'ArrowUp') { e.preventDefault(); this._navigateCallMention(-1); return; }
@@ -1314,8 +1293,7 @@ Object.assign(NYM.prototype, {
         this._renderCallChatTyping();
     },
 
-    // Acknowledge a peer's chat message as read. Broadcast to all members so the
-    // original sender records us as a reader; non-senders ignore unknown mids.
+    // Broadcast to all members so the sender records us as a reader; non-senders ignore unknown mids.
     _sendCallChatRead(senderPubkey, mid) {
         const ac = this.activeCall;
         if (!ac || !mid || !senderPubkey || senderPubkey === this.pubkey) return;
@@ -1327,8 +1305,6 @@ Object.assign(NYM.prototype, {
         this._broadcastCallSignal(others, { type: 'chat-read', callId: ac.callId, mid });
     },
 
-    // Send read receipts for every received message still unacknowledged (called
-    // when the chat panel is opened).
     _flushCallChatReads() {
         const ac = this.activeCall;
         if (!ac || !Array.isArray(ac.chatLog)) return;
@@ -1407,8 +1383,6 @@ Object.assign(NYM.prototype, {
         row.className = 'call-chat-msg' + (isSelf ? ' self' : '');
         row.dataset.mid = mid;
         if (pubkey) row.dataset.pk = pubkey;
-        // Carry the sender's purchased message flair (style/supporter/aura) onto
-        // the call-chat row, mirroring how channel/PM messages render cosmetics.
         const shop = pubkey && typeof this.getUserShopItems === 'function' ? this.getUserShopItems(pubkey) : null;
         if (shop) {
             if (shop.style) { row.classList.add(shop.style); }
@@ -1453,10 +1427,7 @@ Object.assign(NYM.prototype, {
         list.scrollTop = list.scrollHeight;
     },
 
-    // Decorate @mentions in call chat text. Matching runs over the RAW text and
-    // each segment (and the mention name) is escaped individually — escaping
-    // first would let the regex split an HTML entity (e.g. the &#39; for an
-    // apostrophe right after a mention), corrupting the output.
+    // Match on the raw text and escape segments individually so the regex can't split an HTML entity.
     _formatCallChatText(text) {
         const raw = String(text == null ? '' : text);
         const re = /(^|\s)@([^\s#@]+)(#[0-9a-f]{4})?/gi;
@@ -1480,16 +1451,12 @@ Object.assign(NYM.prototype, {
         return Array.from(list.children).find(r => r.dataset && r.dataset.mid === mid) || null;
     },
 
-    // Open the quick-reaction popup for a call-chat message (from the ＋ button
-    // or a long-press). The popup also exposes the user context menu.
     callChatReact(e, node) {
         if (!this.activeCall || !node) return;
         const row = node.closest ? node.closest('.call-chat-msg') : null;
         if (row) this._showCallChatQuickReact(row, e);
     },
 
-    // Six quick emojis: most-recent first, padded with defaults, dropping any
-    // custom shortcode whose pack is no longer known.
     _callQuickEmojis() {
         const defaults = ['👍', '❤️', '😂', '🔥', '👎', '😮'];
         const out = [];
@@ -1514,7 +1481,6 @@ Object.assign(NYM.prototype, {
         document.querySelectorAll('.quick-react-popup, .quick-context-menu').forEach(el => el.remove());
 
         const popup = document.createElement('div');
-        // Reuse the message quick-react styling, lifted above the call overlay.
         popup.className = 'quick-react-popup call-quick-react active';
         popup.style.position = 'fixed';
         popup.style.zIndex = '10050';
@@ -1567,7 +1533,6 @@ Object.assign(NYM.prototype, {
                 ev.preventDefault();
                 ev.stopPropagation();
                 if (btn.dataset.qr === 'menu') { close(); this.showCallUserMenu(ev, pubkey); return; }
-                // More reactions: open the full picker anchored where the popup was.
                 const left = popup.style.left, top = popup.style.top;
                 close();
                 const tmp = document.createElement('button');
@@ -1587,7 +1552,6 @@ Object.assign(NYM.prototype, {
         }, 0);
     },
 
-    // Long-press a call-chat message to open the quick-react/context popup.
     // Bound once; the message list is delegated so it covers future rows.
     _setupCallChatInteractions() {
         if (this._callChatInteractionsBound) return;
@@ -1853,7 +1817,6 @@ Object.assign(NYM.prototype, {
         return row;
     },
 
-    // Mentions in the in-call chat are scoped to the call's own participants.
     _callMentionParticipants() {
         const ac = this.activeCall;
         if (!ac) return [];
@@ -1956,10 +1919,7 @@ Object.assign(NYM.prototype, {
         this._hideCallMentionAutocomplete();
     },
 
-    // Invoked from the shared block/unblock paths so blocking from the call's
-    // own context menu (or anywhere) updates the live call: a blocked user's
-    // chat is hidden and their video drops out of a group call, or the 1:1
-    // call ends outright.
+    // Invoked from the shared block/unblock paths so blocking updates the live call.
     _onUserBlockedForCall(pubkey) {
         const ac = this.activeCall;
         if (!ac || !pubkey) return;
@@ -1972,8 +1932,6 @@ Object.assign(NYM.prototype, {
             this.hangupCall();
             return;
         }
-        // Drop them from the group call: close their connection, stop addressing
-        // chat/reactions to them, and remove their tile.
         this._removePeer(pubkey);
         ac.members = ac.members.filter(pk => pk !== pubkey);
         this._renderCallGrid();

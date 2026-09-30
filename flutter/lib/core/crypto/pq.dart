@@ -1,38 +1,4 @@
-// Hybrid post-quantum key agreement for Nymchat <-> Nymchat messages.
-//
-// Dart port of the PWA's `js/nym-crypto.js` PQ surface. The two implementations
-// must agree byte-for-byte or the apps cannot read each other's messages;
-// test/pq_test.dart gates that against test/pq-vectors.json, which the PWA
-// emits from its own implementation.
-//
-// ## Why
-// NIP-44 v2's symmetric layer (ChaCha20 + HMAC-SHA256 + HKDF) has adequate
-// post-quantum margins, but the secp256k1 ECDH producing its 32-byte
-// conversation key is solved outright by Shor's algorithm. So the NIP-44
-// payload format is left completely untouched and only that one derivation is
-// replaced, combining the existing ECDH with an ML-KEM-768 encapsulation.
-//
-// ## The combiner
-// Transcript-binding, in the style of X-Wing / PQXDH: the KEM ciphertext and
-// both public keys are folded into the HKDF input rather than just the two
-// shared secrets, which blocks KEM re-encapsulation attacks. Security is
-// max(classical, PQ) — as strong as today's NIP-44 even if ML-KEM is broken,
-// and quantum-safe if secp256k1 is.
-//
-//     ck = HKDF-Extract-SHA256(
-//            salt = "nymchat-pq-v1",
-//            ikm  = ecdhX || kemSs || kemCt || recipKemPk
-//                || senderSecpPk || recipSecpPk)
-//
-// ## Wire format
-// Used identically at both the seal (kind 13) and gift wrap (kind 1059)
-// layers, so one code path covers both:
-//
-//     pq1.<base64url-nopad(kemCiphertext)>.<standard NIP-44 v2 payload>
-//
-// Carrying the ciphertext in the content rather than a tag keeps the event's
-// tag surface byte-identical to vanilla NIP-17, so relay filters and
-// recipient matching are unaffected.
+// Hybrid PQ key agreement (ECDH + ML-KEM-768, transcript-bound HKDF) matching the PWA; `pq1.<kemCt>.<nip44>`.
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -42,16 +8,12 @@ import 'keys.dart';
 import 'ml_kem.dart';
 import 'nip44.dart' as nip44;
 
-/// Marks a payload as using the hybrid post-quantum transport.
 const String pqPrefix = 'pq1.';
 
-/// Domain separator for the KEM combiner.
 const String pqCombinerSalt = 'nymchat-pq-v1';
 
-/// Domain separator for deriving the ML-KEM seed from an nsec.
 const String pqSeedSalt = 'nym-pq-v1';
 
-/// A recipient's own key material, needed to decrypt.
 class PqIdentity {
   const PqIdentity({
     required this.privkey,
@@ -64,7 +26,6 @@ class PqIdentity {
   final Uint8List kemPublicKey;
 }
 
-/// True if [content] uses the hybrid post-quantum transport.
 bool isPqPayload(String? content) =>
     content != null && content.startsWith(pqPrefix);
 
@@ -82,7 +43,7 @@ Uint8List _concat(List<Uint8List> parts) {
   return out;
 }
 
-/// base64url encode, no padding — matches the PWA's `_b64uEncode`.
+/// base64url without padding, matching the PWA's `_b64uEncode`.
 String b64uEncode(Uint8List bytes) =>
     base64Url.encode(bytes).replaceAll('=', '');
 
@@ -95,8 +56,7 @@ Uint8List b64uDecode(String s) {
   return Uint8List.fromList(base64Url.decode(t));
 }
 
-/// The hybrid conversation key. Feeds straight into the UNMODIFIED
-/// [nip44.encrypt] / [nip44.decrypt], which take a 32-byte conversation key.
+/// The hybrid 32-byte conversation key for unmodified [nip44.encrypt] / [nip44.decrypt].
 Uint8List pqConversationKey({
   required Uint8List ecdhSharedX,
   required Uint8List kemSharedSecret,
@@ -117,13 +77,7 @@ Uint8List pqConversationKey({
       Uint8List.fromList(utf8.encode(pqCombinerSalt)), ikm);
 }
 
-/// Encrypts [plaintext] to a recipient holding
-/// ([recipSecpPubkey], [recipKemPublicKey]).
-///
-/// The KEM leg is freshly encapsulated per call, so every message gets an
-/// independent post-quantum shared secret even though the recipient's ML-KEM
-/// key is long-lived. [encapsulationRandomness] and [nonce] exist only to
-/// reproduce known vectors — leave them null in production.
+/// Encapsulates freshly per call; [encapsulationRandomness] and [nonce] are for test vectors only.
 String pqEncrypt(
   String plaintext,
   Uint8List senderPrivkey,
@@ -149,8 +103,7 @@ String pqEncrypt(
       '${nip44.encrypt(plaintext, ck, nonce: nonce)}';
 }
 
-/// Inverse of [pqEncrypt]. Throws on any malformed or undecryptable input, so
-/// callers can treat a throw as "not for us" exactly as they do for NIP-44.
+/// Throws on malformed or undecryptable input, so callers treat a throw as not for us.
 String pqDecrypt(String content, String senderSecpPubkey, PqIdentity self) {
   if (!isPqPayload(content)) throw ArgumentError('not a pq payload');
   final dot = content.indexOf('.', pqPrefix.length);
@@ -159,10 +112,7 @@ String pqDecrypt(String content, String senderSecpPubkey, PqIdentity self) {
   if (cipherText.length != mlKemCipherTextLength) {
     throw ArgumentError('bad ml-kem ciphertext');
   }
-  // ML-KEM decapsulation is designed never to fail: on a malformed ciphertext
-  // the FO transform returns an implicit-rejection secret, so a wrong key
-  // surfaces as an HMAC failure inside nip44.decrypt rather than as a
-  // distinguishable error here.
+  // Decapsulation never fails; a wrong key surfaces as an HMAC failure in nip44.decrypt.
   final sharedSecret = mlKem768.decapsulate(cipherText, self.kemSecretKey);
   final ck = pqConversationKey(
     ecdhSharedX: nip44.ecdhSharedX(self.privkey, senderSecpPubkey),
@@ -175,12 +125,7 @@ String pqDecrypt(String content, String senderSecpPubkey, PqIdentity self) {
   return nip44.decrypt(content.substring(dot + 1), ck);
 }
 
-/// Deterministic ML-KEM seed from an nsec.
-///
-/// ML-KEM keygen is a pure function of its 64-byte seed, so the keypair is
-/// re-derivable on any device: nothing new to back up, and every device sharing
-/// an nsec derives the SAME key — which is what makes a single replaceable
-/// announcement per identity correct. [epoch] bumps to rotate.
+/// Deterministic ML-KEM seed from an nsec, so every device sharing it derives the same key; [epoch] rotates.
 Uint8List pqDeriveSeed(Uint8List privkey, int epoch) {
   final prk = nip44.hkdfExtract(
       Uint8List.fromList(utf8.encode(pqSeedSalt)), privkey);
@@ -188,27 +133,19 @@ Uint8List pqDeriveSeed(Uint8List privkey, int epoch) {
       prk, Uint8List.fromList(utf8.encode('mlkem768/epoch/$epoch')), 64);
 }
 
-/// The ML-KEM identity keypair for [privkey] at [epoch].
 MlKemKeyPair pqKeypairFromPrivkey(Uint8List privkey, int epoch) =>
     mlKem768.keygen(pqDeriveSeed(privkey, epoch));
 
-// v2: the independently-seeded root secret. See docs/PQ-ROOT-SPEC.md.
-//
-// v1 seeds ML-KEM from the nsec, so breaking secp256k1 also yields the
-// post-quantum key. v2 seeds from 32 CSPRNG bytes instead. The v1 path stays
-// forever: everything sealed under it must remain readable (spec §4).
+// v2 seeds ML-KEM from an independent root secret; the v1 nsec path must stay readable forever.
 
-/// Domain separator for deriving the ML-KEM seed from a root secret. Differs
-/// from [pqSeedSalt] so a root and an nsec can never derive the same keypair.
+/// Differs from [pqSeedSalt] so a root and an nsec never derive the same keypair.
 const String pqRootSeedSalt = 'nym-pq-root-v2';
 
-/// Length of the root secret, in bytes.
 const int pqRootLength = 32;
 
-/// A fresh root secret. Generated once per identity.
+/// A fresh root secret, generated once per identity.
 Uint8List pqGenerateRoot() => randomBytes(pqRootLength);
 
-/// Deterministic ML-KEM seed from a root secret.
 Uint8List pqRootDeriveSeed(Uint8List root, int epoch) {
   if (root.length != pqRootLength) {
     throw ArgumentError('pq root must be $pqRootLength bytes');
@@ -219,23 +156,14 @@ Uint8List pqRootDeriveSeed(Uint8List root, int epoch) {
       prk, Uint8List.fromList(utf8.encode('mlkem768/epoch/$epoch')), 64);
 }
 
-/// The ML-KEM identity keypair for [root] at [epoch].
 MlKemKeyPair pqKeypairFromRoot(Uint8List root, int epoch) =>
     mlKem768.keygen(pqRootDeriveSeed(root, epoch));
 
-/// Domain separator for the root fingerprint.
 const String pqRootFpSalt = 'nym-pq-root-fp-v1';
 
-/// Fingerprint length, in bytes.
 const int pqRootFpLength = 8;
 
-/// A short public fingerprint of [root], as lowercase hex.
-///
-/// Goes in the settings record so a device can tell "this is the root I hold"
-/// from "this is a different one" without either side revealing the secret.
-/// Must stay byte-identical to the PWA's `pqRootFingerprint` — a record
-/// without a matching one reads as no record at all, and a device that
-/// believes there is no record generates a second root.
+/// Public hex fingerprint of [root]; must match the PWA's `pqRootFingerprint` byte for byte.
 String pqRootFingerprint(Uint8List root) {
   if (root.length != pqRootLength) {
     throw ArgumentError('pq root must be $pqRootLength bytes');
@@ -247,11 +175,7 @@ String pqRootFingerprint(Uint8List root) {
   return [for (final b in out) b.toRadixString(16).padLeft(2, '0')].join();
 }
 
-// ---- pq2: layered, so a signer login can take part -------------------------
-//
-// pq1 mixes the ECDH secret and the KEM secret into one key, and a NIP-07 or
-// NIP-46 signer never returns the raw ECDH x. Here NIP-44 is the inner layer
-// (any signer does it) and the KEM keys an outer AEAD. See PQ-ROOT-SPEC A2.
+// pq2: NIP-44 inner layer plus a KEM-keyed outer AEAD, so signer logins can take part.
 
 const String pq2Prefix = 'pq2.';
 const String _pq2Salt = 'nymchat-pq2-v1';
@@ -269,8 +193,7 @@ class Pq2LayerKeys {
   final Uint8List aad;
 }
 
-/// Outer-layer key, nonce and AAD. The shared secret is fresh per message, so
-/// the key is never reused and a derived nonce is safe.
+/// Outer-layer key, nonce and AAD; the per-message secret makes a derived nonce safe.
 Pq2LayerKeys pq2LayerKeys({
   required Uint8List kemSharedSecret,
   required Uint8List kemCipherText,
@@ -296,8 +219,7 @@ Pq2LayerKeys pq2LayerKeys({
   );
 }
 
-/// Wraps an already-encrypted NIP-44 payload in the post-quantum layer. The
-/// caller produced [inner] however it can — local key or signer.
+/// Wraps an already-encrypted NIP-44 payload [inner] in the post-quantum layer.
 Future<String> pq2Seal(
   String inner,
   String senderSecpPubkey,
@@ -328,8 +250,7 @@ Future<String> pq2Seal(
   return '$pq2Prefix${b64uEncode(enc.cipherText)}.${b64uEncode(outer)}';
 }
 
-/// Strips the post-quantum layer, returning the NIP-44 payload inside. No secp
-/// key is needed here, which is what lets a signer login participate.
+/// Strips the post-quantum layer; needs no secp key, so signer logins can open it.
 Future<String> pq2Open(
   String content,
   String senderSecpPubkey,

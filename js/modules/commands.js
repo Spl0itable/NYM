@@ -1,8 +1,5 @@
-// commands.js - Slash-command parsing and handlers (cmdJoin, cmdNick, cmdZap, ...) plus bot commands and palette
-
 Object.assign(NYM.prototype, {
 
-    // Add a command for sharing
     async cmdShare() {
         this.shareChannel();
     },
@@ -10,25 +7,20 @@ Object.assign(NYM.prototype, {
     async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot) {
         if (!this._getApiHost()) return;
         if (typeof geohash === 'string' && geohash && !this.isValidChannelTag(geohash)) return;
-        // Support @Nymbot mentions anywhere in the message as an alias for ?ask
         const mentionRegex = /@nymbot(?:#[a-f0-9]{4})?/i;
         if (mentionRegex.test(content) && !content.startsWith('?')) {
-            // Remove the @nymbot mention and use the rest as the question
             const question = content.replace(mentionRegex, '').trim();
             if (question) {
                 content = '?ask ' + question;
             } else if (quoteContext && quoteContext.text) {
-                // User just typed @Nymbot with no question — use the quoted text as the question
                 const quotedText = quoteContext.text.replace(/^>\s*@[^:]+:\s*/gm, '').replace(/^>\s?/gm, '').trim();
                 if (quotedText) {
                     content = '?ask ' + quotedText;
                 }
             }
         }
-        // If replying to a Nymbot message without an explicit command, treat as ?ask or ?guess
         if (quoteContext && /^nymbot(?:#[a-f0-9]{4})?$/i.test(quoteContext.author)) {
             if (!content.startsWith('?')) {
-                // If the quoted message contains a wordplay game token, route to ?guess
                 const hasGameToken = quoteContext.text && /\[gc:[A-Za-z0-9+/=]+\]/.test(quoteContext.text);
                 content = hasGameToken ? '?guess ' + content : '?ask ' + content;
             }
@@ -41,10 +33,7 @@ Object.assign(NYM.prototype, {
         if (!command) return;
         const canonical = this.resolveCommandToken(prefix + command);
         if (canonical) command = canonical.slice(prefix.length);
-        // Build conversation context for ?ask and ?guess commands: the whole
-        // thread when the message came from one (a thread IS the conversation,
-        // and a game's [gc:] token lives further up it), otherwise the quote
-        // chain the user replied to.
+        // The whole thread when the message came from one, otherwise the quote chain replied to.
         let conversation = [];
         if (['ask', 'guess'].includes(command.toLowerCase())) {
             const storageKey = geohash ? `#${geohash}` : this.currentChannel;
@@ -55,14 +44,11 @@ Object.assign(NYM.prototype, {
                 conversation = this._extractQuoteChain(quoteContext);
             }
         }
-        // Gather channel context for AI-aware commands (ask, summarize)
         let channelMessages = [];
         let activeUsers = [];
         const aiCommands = ['ask', 'summarize'];
         if (aiCommands.includes(command.toLowerCase())) {
             const msgLimit = 100;
-            // Check if the user referenced specific channels with #hashtags in their ?ask
-            // e.g. "?ask #dr5r what's happening there?" pulls context from #dr5r
             const referencedChannels = new Set();
             if (command.toLowerCase() === 'ask' && args) {
                 const channelRefRegex = /(?:^|[^a-z0-9])#([a-z0-9_-]+)/gi;
@@ -74,15 +60,12 @@ Object.assign(NYM.prototype, {
                 if (channelRefNames.length > 0) {
                     const channelsToFetch = [];
                     for (const name of channelRefNames) {
-                        // Case-insensitive lookup across messages Map
                         let found = false;
-                        // Exact match (case-sensitive) first
                         if (this.messages.has(`#${name}`)) {
                             referencedChannels.add(`#${name}`);
                             found = true;
                         }
                         if (!found) {
-                            // Case-insensitive and bidirectional prefix match
                             for (const key of this.messages.keys()) {
                                 if (!key.startsWith('#')) continue;
                                 const stored = key.substring(1).toLowerCase();
@@ -93,7 +76,6 @@ Object.assign(NYM.prototype, {
                                 }
                             }
                         }
-                        // Also check sidebar channels Map (may have channel with no messages yet)
                         if (!found) {
                             for (const chanKey of this.channels.keys()) {
                                 if (chanKey.toLowerCase() === name || chanKey.toLowerCase().startsWith(name) || name.startsWith(chanKey.toLowerCase())) {
@@ -104,30 +86,25 @@ Object.assign(NYM.prototype, {
                                 }
                             }
                         }
-                        // Not found anywhere — queue for relay fetch
                         if (!found) {
                             const chanType = this.isValidGeohash(name) ? 'geohash' : 'standard';
                             channelsToFetch.push({ name, type: chanType });
                             referencedChannels.add(`#${name}`);
                         }
                     }
-                    // Fetch any channels we don't have messages for from relays
                     if (channelsToFetch.length > 0) {
                         for (const ch of channelsToFetch) {
                             this.channelLoadedFromRelays.delete(ch.name);
                             this.subscribeToChannelTargeted(ch.name, ch.type);
                         }
-                        // Brief wait for relay messages to arrive
                         await new Promise(r => setTimeout(r, 2000));
                     }
                 }
             }
-            // Default to current channel if no referenced channels found
             const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
             if (referencedChannels.size === 0) {
                 referencedChannels.add(currentKey);
             }
-            // Collect messages from all referenced channels
             for (const chanKey of referencedChannels) {
                 const msgs = (this.messages.get(chanKey) || []).filter(m => !m._spamGated);
                 const mapped = msgs.slice(-msgLimit).map(m => ({
@@ -140,13 +117,11 @@ Object.assign(NYM.prototype, {
                 }));
                 channelMessages.push(...mapped);
             }
-            // Sort merged messages by timestamp if pulling from multiple channels
             if (referencedChannels.size > 1) {
                 channelMessages.sort((a, b) => a.timestamp - b.timestamp);
                 channelMessages = channelMessages.slice(-msgLimit);
             }
-            // Collect active users from referenced channels
-            // user.channels stores raw geohashes (no # prefix) which may vary in precision
+            // user.channels stores raw geohashes without #, which may vary in precision.
             const channelKeys = referencedChannels;
             this.users.forEach((user, pubkey) => {
                 if (user.channels) {
@@ -154,7 +129,7 @@ Object.assign(NYM.prototype, {
                     for (const chanKey of channelKeys) {
                         const rawName = chanKey.startsWith('#') ? chanKey.substring(1) : chanKey;
                         for (const userChan of user.channels) {
-                            // Match if either is a prefix of the other (handles geohash precision differences)
+                            // Either may be a prefix of the other to handle geohash precision differences.
                             if (userChan === rawName || userChan.startsWith(rawName) || rawName.startsWith(userChan)) {
                                 found = true;
                                 break;
@@ -174,7 +149,6 @@ Object.assign(NYM.prototype, {
                 }
             });
         }
-        // For top/last/seen/who, gather messages from ALL channels in memory
         const inMemoryCommands = ['top', 'last', 'seen', 'who'];
         if (inMemoryCommands.includes(command.toLowerCase())) {
             channelMessages = [];
@@ -190,7 +164,6 @@ Object.assign(NYM.prototype, {
                 channelMessages.push(...mapped);
             }
             channelMessages.sort((a, b) => a.timestamp - b.timestamp);
-            // Gather all known active users
             activeUsers = [];
             this.users.forEach((user, pubkey) => {
                 if (user.nym) {
@@ -217,7 +190,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
             if (data.event) {
-                // Publish the signed bot event to all connected relays
                 const msg = JSON.stringify(['EVENT', data.event]);
                 if (this.useRelayProxy && this.poolSockets.length > 0) {
                     for (const pool of this.poolSockets) {
@@ -257,7 +229,6 @@ Object.assign(NYM.prototype, {
     },
 
     setupCommands() {
-        // Bot commands (? prefix) — shown in command palette when user types ?
         this.botCommands = {
             '?ask': { desc: 'Ask Nymbot a question (or @Nymbot)' },
             '?summarize': { desc: 'Summarize recent channel conversation' },
@@ -284,7 +255,6 @@ Object.assign(NYM.prototype, {
             '?changelog': { desc: 'Latest Nymchat release notes' },
             '?help': { desc: 'Show all Nymbot commands' },
         };
-        // PM-only Nymbot commands — surfaced only inside the Nymbot private chat
         this.botPMCommands = {
             '?help': { desc: 'Guide to premium, Pro models & credits (free)' },
             '?model': { desc: 'Pick a Pro frontier model (?model off for standard)' },
@@ -348,7 +318,6 @@ Object.assign(NYM.prototype, {
             ['formatting', 'Formatting'],
             ['misc',       'Misc']
         ];
-        // Kaomoji picker (type \ in chat) — Japanese emoticons grouped by mood
         this.kaomojiCategories = [
             ['Joy',       ['(◕‿◕)', '(◠‿◠)', '(*^‿^*)', '(≧◡≦)', 'ヽ(•‿•)ノ', '(´∇｀)', '＼(^o^)／']],
             ['Love',      ['(♥‿♥)', '(づ｡◕‿‿◕｡)づ', '♡(◡‿◡)', '(*♡∀♡)', '(❤ω❤)']],
@@ -363,8 +332,7 @@ Object.assign(NYM.prototype, {
         this.cmdI18nEnsure();
     },
 
-    // Filter commands map for display surfaces. Hides aliasOf entries so each
-    // command shows once with its shortcuts collapsed into the description.
+    // Hides aliasOf entries so each command shows once.
     _visibleCommandEntries() {
         return Object.entries(this.commands).filter(([, info]) => !(info && info.aliasOf));
     },
@@ -375,7 +343,6 @@ Object.assign(NYM.prototype, {
         return `${shown}, ${info.aliases.join(', ')}`;
     },
 
-    // Group visible command entries by category, preserving category order.
     _groupCommandsByCategory(entries) {
         const cats = this.commandCategories || [['misc', 'Misc']];
         return cats
@@ -414,9 +381,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Deeper completions shown after "?model " in the bot PM. Returns
-    // { base, remainder, entries } where base is the already-typed prefix
-    // each completed entry is appended to.
+    // Returns { base, remainder, entries } where base is the typed prefix entries append to.
     _botPMSubcommands(cmd, rest) {
         if (cmd === '?model') {
             return {
@@ -432,21 +397,17 @@ Object.assign(NYM.prototype, {
 
     showBotCommandPalette(input) {
         const palette = document.getElementById('commandPalette');
-        // The premium Nymbot private chat only supports the PM commands — the
-        // public-channel bot commands aren't wired there, so don't list them.
+        // The premium Nymbot PM only supports PM commands; channel bot commands aren't wired there.
         const inBotPM = this.inPMMode && this.currentPM && this.isVerifiedBot(this.currentPM);
         const available = inBotPM ? this.botPMCommands : this.botCommands;
         const needle = input.toLowerCase();
         let matchingCommands = Object.entries(available)
             .filter(([cmd]) => cmd.startsWith(needle) || this.localizeCommandToken(cmd).startsWith(needle));
-        // Once a multi-step command plus a space is typed (e.g. "?model "),
-        // surface its subcommands so users don't have to memorize them.
         if (inBotPM && matchingCommands.length === 0) {
             const m = /^(\?\S+)\s+(.*)$/.exec(input.toLowerCase());
             const ctx = m && this._botPMSubcommands(this.resolveCommandToken(m[1]) || m[1], m[2]);
             if (ctx) {
-                // Completions append to what the user actually typed, so a
-                // localized command name survives the selection.
+                // Completions append to what the user typed so a localized command name survives.
                 const base = m[1] + ctx.base.slice(ctx.base.indexOf(' '));
                 matchingCommands = ctx.entries
                     .filter(([sub]) => sub.startsWith(ctx.remainder))
@@ -494,10 +455,7 @@ Object.assign(NYM.prototype, {
             const input = document.getElementById('messageInput');
             input.value = cmd + ' ';
             input.focus();
-            // Programmatic value changes don't fire the input handler, so
-            // re-evaluate the palette: a multi-step ?command immediately shows
-            // its next-level options (typing afterwards re-filters as usual);
-            // anything without deeper options just hides the palette.
+            // Programmatic value changes don't fire the input handler, so re-evaluate the palette.
             if (cmd.startsWith('?')) {
                 this.showBotCommandPalette(input.value);
             } else {
@@ -519,7 +477,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Command implementations
     showHelp() {
         const groups = this._groupCommandsByCategory(this._visibleCommandEntries())
             .map(([label, items]) => {
@@ -553,12 +510,11 @@ Object.assign(NYM.prototype, {
 
         let channel = args.trim().toLowerCase();
 
-        // Strip leading # if present
         if (channel.startsWith('#')) {
             channel = channel.substring(1);
         }
 
-        // Sanitize: only allow letters (including international) and digits
+        // Only letters (including international) and digits.
         channel = this.sanitizeChannelName(channel);
 
         if (!channel) {
@@ -566,7 +522,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Blocked channels cannot be joined — unblock first
         if (this.isChannelBlocked(channel, channel)) {
             this.displaySystemMessage(`Channel #${channel} is blocked. Use /unblock #${channel} to unblock it first.`);
             return;
@@ -582,10 +537,8 @@ Object.assign(NYM.prototype, {
     async cmdLeave() {
         if (this.inPMMode) {
             if (this.currentGroup) {
-                // Leave and delete the current group chat
                 this.leaveGroup(this.currentGroup);
             } else if (this.currentPM) {
-                // Delete the current PM conversation
                 this.deletePMDirect(this.currentPM);
             }
             return;
@@ -613,14 +566,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Check if reserved nickname
         if (this.isReservedNick(newNym)) {
             const result = await showDevNsecModal('nick');
             if (!result) {
                 this.displaySystemMessage('Nickname change canceled.');
                 return null;
             }
-            // Verified - apply developer identity
             this.applyDeveloperIdentity(result.secretKey, result.pubkey);
             this.displaySystemMessage(`Identity verified. You are now logged in as ${this.nym}.`);
             return result;
@@ -630,16 +581,13 @@ Object.assign(NYM.prototype, {
         document.getElementById('currentNym').innerHTML = this.formatNymWithPubkey(this.nym, this.pubkey);
         this.updateSidebarAvatar();
 
-        // Persist nickname to localStorage so it survives page reloads
         localStorage.setItem(`nym_nickname_${this.pubkey}`, newNym);
-        // Mark this as a user-chosen nick so it qualifies for D1 mirroring
+        // Mark as user-chosen so it qualifies for D1 mirroring.
         try { localStorage.setItem('nym_custom_nick', newNym); } catch (_) { }
-        // Also update the auto-ephemeral nick so persistent sessions use the new name
         if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
             localStorage.setItem('nym_auto_ephemeral_nick', newNym);
         }
 
-        // Update the users map so other parts of the app see the new nym
         const existingUser = this.users.get(this.pubkey);
         if (existingUser) {
             existingUser.nym = newNym;
@@ -654,11 +602,9 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Update already-rendered messages and PM sidebar entries with the new nickname
         this.updateStoredNymsForPubkey(this.pubkey, newNym);
         this.updatePMNicknameFromProfile(this.pubkey, newNym);
 
-        // Publish updated kind 0 profile so other users see the new nickname
         await this.saveToNostrProfile();
 
         const changeMessage = `Your nym's new nick is now ${this.nym}`;
@@ -666,7 +612,6 @@ Object.assign(NYM.prototype, {
     },
 
     async cmdWho() {
-        // /who and /w only make sense in public channels — block in PMs and group chats.
         if (this.inPMMode) {
             this.displaySystemMessage('/who only works in public channels.');
             return;
@@ -705,7 +650,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // When viewing a group, /invite adds the user to that group
         if (this.inPMMode && this.currentGroup) {
             const targetInput = args.trim().replace(/^@/, '');
             const targetPubkey = this.resolvePubkeyFromNym(targetInput);
@@ -739,8 +683,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Accept a public key in either form — hex or npub — before falling
-        // back to a nym lookup (`normalizePubkeyInput`, users.js).
         const targetInput = this.normalizePubkeyInput(args) || args.trim().replace(/^@/, '');
         let targetPubkey = null;
         let matchedNym = null;
@@ -755,7 +697,6 @@ Object.assign(NYM.prototype, {
 
             matchedNym = this.getNymFromPubkey(targetPubkey);
         } else {
-            // Check if input has #xxxx suffix
             const hashIndex = targetInput.indexOf('#');
             let searchNym = targetInput;
             let searchSuffix = null;
@@ -765,18 +706,15 @@ Object.assign(NYM.prototype, {
                 searchSuffix = targetInput.substring(hashIndex + 1);
             }
 
-            // Find user by nym, considering suffix if provided
             const matches = [];
             this.users.forEach((user, pubkey) => {
                 const baseNym = this.stripPubkeySuffix(user.nym);
                 if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                     if (searchSuffix) {
-                        // If suffix provided, only match exact pubkey suffix
                         if (pubkey.endsWith(searchSuffix)) {
                             matches.push({ nym: user.nym, pubkey: pubkey });
                         }
                     } else {
-                        // No suffix provided, collect all matches
                         matches.push({ nym: user.nym, pubkey: pubkey });
                     }
                 }
@@ -788,7 +726,6 @@ Object.assign(NYM.prototype, {
             }
 
             if (matches.length > 1 && !searchSuffix) {
-                // Multiple users with same nym, show them
                 const matchList = matches.map(m =>
                     `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
                 ).join(', ');
@@ -797,7 +734,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Single match or exact suffix match
             targetPubkey = matches[0].pubkey;
             matchedNym = matches[0].nym;
 
@@ -807,21 +743,17 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Create channel info for geohash channel
         const channelInfo = `#${this.currentGeohash}`;
         const joinCommand = `/join #${this.currentGeohash}`;
 
-        // Send an invitation as a PM
         const inviteMessage = `📨 Channel Invitation: You've been invited to join ${channelInfo}. Use ${joinCommand} to join!`;
 
-        // Send as PM
         const sent = await this.sendPM(inviteMessage, targetPubkey);
 
         if (sent) {
             const displayNym = this.formatNymWithPubkey(matchedNym, targetPubkey);
             this.displaySystemMessage(`Invitation sent to ${displayNym} for ${this.escapeHtml(channelInfo)}`, 'system', { html: true });
 
-            // Also send a mention in the current channel
             const publicNotice = `@${matchedNym} you've been invited to this channel! Check your PMs for details.`;
             await this.publishMessage(publicNotice, this.currentChannel, this.currentGeohash);
         } else {
@@ -829,7 +761,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // /addmember @nym — add a member to the currently viewed group
     async cmdAddMember(args) {
         if (this.inPMMode && this.currentPM && !this.currentGroup) {
             const extra = args && args.trim() ? this.resolvePubkeyFromNym(args.trim().replace(/^@/, '')) : null;
@@ -937,20 +868,17 @@ Object.assign(NYM.prototype, {
 
     async cmdBlock(args) {
         if (!args) {
-            // If no args, check if in a channel that can be blocked
             if (this.inPMMode) {
                 this.displaySystemMessage('Usage: /block nym, /block nym#xxxx, /block [pubkey], or /block #channel');
                 return;
             }
 
-            // Check current channel
             const currentChannelName = this.currentGeohash || this.currentChannel;
             if (this.currentGeohash === 'nymchat') {
                 this.displaySystemMessage('Cannot block the default #nymchat channel');
                 return;
             }
 
-            // Block current channel
             if (await window.showAppConfirm(`Block channel #${currentChannelName}?`, { danger: true, okLabel: 'Block' })) {
                 this.blockChannel(this.currentGeohash, this.currentGeohash);
                 this.displaySystemMessage(
@@ -959,7 +887,6 @@ Object.assign(NYM.prototype, {
                         : `Blocked channel #${this.currentGeohash}`
                 );
 
-                // Switch to #nymchat
                 this.switchChannel('nymchat', 'nymchat');
 
                 this.updateBlockedChannelsList();
@@ -970,13 +897,10 @@ Object.assign(NYM.prototype, {
 
         const target = args.trim();
 
-        // Check if it's a channel block
         if (target.startsWith('#') && !target.includes('@')) {
             const channelName = target.substring(1);
 
-            // Check if it's current channel
             if (this.currentGeohash === channelName) {
-                // Block current channel and switch to #nymchat
                 if (await window.showAppConfirm(`Block and leave channel #${channelName}?`, { danger: true, okLabel: 'Block' })) {
                     this.blockChannel(channelName, channelName);
                     this.displaySystemMessage(
@@ -985,7 +909,6 @@ Object.assign(NYM.prototype, {
                             : `Blocked channel #${channelName}`
                     );
 
-                    // Switch to #nymchat
                     this.switchChannel('nymchat', 'nymchat');
 
                     this.updateBlockedChannelsList();
@@ -993,13 +916,11 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Don't allow blocking #nymchat
             if (channelName === 'nymchat') {
                 this.displaySystemMessage("Cannot block the default #nymchat channel");
                 return;
             }
 
-            // Block channel (geohash or non-geohash)
             this.blockChannel(channelName, channelName);
             if (this.isValidGeohash(channelName)) {
                 this.displaySystemMessage(`Blocked geohash channel #${channelName}`);
@@ -1013,8 +934,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // A public key in either form (hex or npub) resolves directly;
-        // anything else is a nym to look up.
         let targetPubkey = this.normalizePubkeyInput(target);
         if (!targetPubkey) {
             targetPubkey = await this.findUserPubkey(target);
@@ -1023,9 +942,7 @@ Object.assign(NYM.prototype, {
 
         const nymHtml = this.getNymHtmlFromPubkey(targetPubkey);
 
-        // Check if already blocked to toggle
         if (this.blockedUsers.has(targetPubkey)) {
-            // Unblock
             this.blockedUsers.delete(targetPubkey);
             this.saveBlockedUsers();
             this.showMessagesFromUnblockedUser(targetPubkey);
@@ -1055,7 +972,6 @@ Object.assign(NYM.prototype, {
 
         const target = args.trim();
 
-        // Check if it's a channel unblock
         if (target.startsWith('#')) {
             const channelName = target.substring(1);
 
@@ -1076,7 +992,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // User unblock - use findUserPubkey
         const targetPubkey = await this.findUserPubkey(target);
         if (!targetPubkey) {
             this.displaySystemMessage(`User ${target} not found or is not blocked`);
@@ -1134,12 +1049,10 @@ Object.assign(NYM.prototype, {
         let targetNym = '';
         let targetPubkey = null;
 
-        // A public key in either form (hex or npub); otherwise a nym lookup.
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
             targetPubkey = targetInput.toLowerCase();
             const user = this.users.get(targetPubkey);
             if (user) {
-                // Get the base nym without HTML tags and flair
                 targetNym = this.parseNymFromDisplay(user.nym);
             } else {
                 targetNym = `nym#${targetPubkey.slice(-4)}`;
@@ -1154,10 +1067,8 @@ Object.assign(NYM.prototype, {
                 searchSuffix = targetInput.substring(hashIndex + 1);
             }
 
-            // Find matching users
             const matches = [];
             this.users.forEach((user, pubkey) => {
-                // Strip HTML from user nym for comparison
                 const cleanNym = this.parseNymFromDisplay(user.nym);
                 if (cleanNym === searchNym || cleanNym.toLowerCase() === searchNym.toLowerCase()) {
                     if (searchSuffix) {
@@ -1187,14 +1098,12 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Use a full @nym#suffix mention so the message renderer attaches the
-        // target's avatar, suffix, and flair next to their name.
+        // Full @nym#suffix so the renderer attaches the avatar, suffix, and flair.
         const targetMention = targetPubkey
             ? `@${targetNym}#${this.getPubkeySuffix(targetPubkey)}`
             : `@${targetNym}`;
         const slapContent = `/me slaps ${targetMention} around a bit with a large trout 🐟`;
 
-        // Send the message using the appropriate method based on current context
         try {
             await this._sendToCurrentTarget(slapContent);
         } catch (error) {
@@ -1213,7 +1122,6 @@ Object.assign(NYM.prototype, {
         let targetNym = '';
         let targetPubkey = null;
 
-        // A public key in either form (hex or npub); otherwise a nym lookup.
         if (/^[0-9a-f]{64}$/i.test(targetInput)) {
             targetPubkey = targetInput.toLowerCase();
             const user = this.users.get(targetPubkey);
@@ -1232,7 +1140,6 @@ Object.assign(NYM.prototype, {
                 searchSuffix = targetInput.substring(hashIndex + 1);
             }
 
-            // Find matching users
             const matches = [];
             this.users.forEach((user, pubkey) => {
                 const cleanNym = this.parseNymFromDisplay(user.nym);
@@ -1292,7 +1199,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Send content to whichever conversation surface is currently active
     async _sendToCurrentTarget(content) {
         if (this.inPMMode && this.currentGroup) {
             return this.sendGroupMessage(content, this.currentGroup);
@@ -1348,7 +1254,6 @@ Object.assign(NYM.prototype, {
         const message = args.trim();
         this.awayMessages.set(this.pubkey, message);
 
-        // Update user status
         if (this.users.has(this.pubkey)) {
             this.users.get(this.pubkey).status = 'away';
         }
@@ -1356,10 +1261,8 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(`Away message set: "${message}"`);
         this.displaySystemMessage('You will auto-reply to mentions in ALL channels while away');
 
-        // Broadcast away status to other users
         this.publishPresence('away', message);
 
-        // Clear session storage for BRB responses to allow fresh responses
         const keysToRemove = [];
         for (let i = 0; i < sessionStorage.length; i++) {
             const key = sessionStorage.key(i);
@@ -1376,17 +1279,14 @@ Object.assign(NYM.prototype, {
         if (this.awayMessages.has(this.pubkey)) {
             this.awayMessages.delete(this.pubkey);
 
-            // Update user status
             if (this.users.has(this.pubkey)) {
                 this.users.get(this.pubkey).status = 'online';
             }
 
             this.displaySystemMessage('Away message cleared - you are back!');
 
-            // Broadcast online status to other users
             this.publishPresence('online');
 
-            // Clear all universal BRB response keys
             const keysToRemove = [];
             for (let i = 0; i < sessionStorage.length; i++) {
                 const key = sessionStorage.key(i);
@@ -1405,13 +1305,11 @@ Object.assign(NYM.prototype, {
     async cmdQuit() {
         this.displaySystemMessage('Disconnecting from Nymchat...');
 
-        // Clear saved connection preferences
         localStorage.removeItem('nym_connection_mode');
         localStorage.removeItem('nym_relay_url');
-        localStorage.removeItem('nym_nsec'); // Clear saved nsec
-        nymSecretRemove('nym_dev_nsec'); // Clear developer nsec
+        localStorage.removeItem('nym_nsec');
+        nymSecretRemove('nym_dev_nsec');
 
-        // Clear pubkey-specific lightning address
         if (this.pubkey) {
             localStorage.removeItem(`nym_lightning_address_${this.pubkey}`);
         }

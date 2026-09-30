@@ -1,5 +1,3 @@
-// _pq.js — hybrid post-quantum (ML-KEM-768) support for the Nymbot worker.
-
 import { ml_kem768 } from "./_mlkem.js";
 import {
   getPublicKey,
@@ -35,10 +33,6 @@ var PQ_D_TAG = "nym-pq";
 var PQ_ALG = "mlkem768";
 var PQ_TTL_SEC = 7 * 24 * 3600;
 
-// ---------------------------------------------------------------------------
-// base64url
-// ---------------------------------------------------------------------------
-
 function b64uEncode(bytes) {
   var s = "";
   for (var i = 0; i < bytes.length; i += 0x8000) {
@@ -56,11 +50,7 @@ function b64uDecode(str) {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// bech32 (BIP-173) — decoding the `nympq1…` root code. nip19-style helpers are
-// not available server-side, so this is the same plain decoder the client
-// carries for the custom HRP.
-// ---------------------------------------------------------------------------
+// bech32 (BIP-173) decoder for the custom `nympq1` HRP; nip19 helpers aren't available server-side.
 
 var BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
@@ -122,8 +112,7 @@ function bech32FromWords(words) {
   return new Uint8Array(out);
 }
 
-/// Decodes a `nympq1…` code to its 32 root bytes; throws on anything
-/// malformed — a bad checksum must never surface as key material.
+// Throws on anything malformed; a bad checksum must never surface as key material.
 function pqRootDecode(code) {
   var d = bech32Decode(code);
   if (d.prefix !== PQ_ROOT_HRP) throw new Error("not a " + PQ_ROOT_HRP + " code");
@@ -132,12 +121,7 @@ function pqRootDecode(code) {
   return bytes;
 }
 
-// ---------------------------------------------------------------------------
-// Key derivation (spec §2)
-// ---------------------------------------------------------------------------
-
-// RFC 5869: PRK = HMAC-Hash(salt, IKM). The client's _hkdfExtract has the
-// same (ikm, salt) → hmac(salt, ikm) shape.
+// RFC 5869 extract: PRK = HMAC(salt, IKM), same shape as the client's _hkdfExtract.
 function hkdfExtract(saltBytes, ikm) {
   return hmac(sha256, saltBytes, ikm);
 }
@@ -155,12 +139,7 @@ function pqKeypairFromRoot(rootBytes, epoch) {
   return { publicKey: kp.publicKey, secretKey: kp.secretKey };
 }
 
-// ---------------------------------------------------------------------------
-// pq1 — the combined construction
-// ---------------------------------------------------------------------------
-
-// secp256k1 ECDH exactly as NIP-44 does it: lift the x-only pubkey to the
-// even-y point and take the 32-byte big-endian x of the shared point.
+// secp256k1 ECDH as NIP-44 does it: even-y lift of the x-only pubkey, 32-byte big-endian shared x.
 function ecdhSharedX(skHex, pubHex) {
   var shared = secp256k1.getSharedSecret(hexToBytes(skHex), hexToBytes("02" + pubHex));
   return shared.slice(1, 33);
@@ -190,8 +169,7 @@ function pq1Encrypt(plaintext, senderSkHex, recipPubHex, recipKemPk) {
   return PQ_PREFIX + b64uEncode(enc.cipherText) + "." + nip44Encrypt(plaintext, ck);
 }
 
-/// `self` is { skHex, kemSk, kemPk }. Throws on anything malformed or not for
-/// us, exactly like nip44Decrypt.
+// `self` is { skHex, kemSk, kemPk }; throws like nip44Decrypt.
 function pq1Decrypt(content, senderPubHex, self) {
   if (!isPq1Payload(content)) throw new Error("not a pq payload");
   var dot = content.indexOf(".", PQ_PREFIX.length);
@@ -206,12 +184,7 @@ function pq1Decrypt(content, senderPubHex, self) {
   return nip44Decrypt(content.slice(dot + 1), ck);
 }
 
-// ---------------------------------------------------------------------------
-// ChaCha20-Poly1305 (RFC 8439) — the pq2 outer AEAD. The vendored crypto in
-// _shared.js carries the raw ChaCha20 stream for NIP-44 but not the Poly1305
-// authenticator, so both live here, validated against the RFC vectors by
-// scripts/test-bot-pq.mjs.
-// ---------------------------------------------------------------------------
+// ChaCha20-Poly1305 (RFC 8439) for the pq2 outer AEAD; the vendored _shared.js crypto lacks Poly1305.
 
 function chachaRotl(x, n) { return ((x << n) | (x >>> (32 - n))) >>> 0; }
 function chachaQR(x, a, b, c, d) {
@@ -260,8 +233,7 @@ function chacha20Xor(key, nonce, data, initialCounter) {
   return out;
 }
 
-// Poly1305 over 16-bit limbs (the donna construction, as vendored ecosystems
-// ship it). One-shot: poly1305(keyBlock32, message) -> 16-byte tag.
+// Poly1305 over 16-bit limbs (donna construction); returns a 16-byte tag.
 function poly1305(key, msg) {
   var t = new Uint16Array(8);
   for (var i = 0; i < 8; i++) t[i] = key[i * 2] | (key[i * 2 + 1] << 8);
@@ -506,7 +478,7 @@ function constEq(a, b) {
   return diff === 0;
 }
 
-/// RFC 8439 ChaCha20-Poly1305 seal: returns ciphertext || 16-byte tag.
+// RFC 8439 seal: returns ciphertext || 16-byte tag.
 function chacha20poly1305Encrypt(key, nonce, plaintext, aad) {
   var polyKey = chachaBlock(key, nonce, 0).subarray(0, 32);
   var ct = chacha20Xor(key, nonce, plaintext, 1);
@@ -514,7 +486,7 @@ function chacha20poly1305Encrypt(key, nonce, plaintext, aad) {
   return concatBytes(ct, tag);
 }
 
-/// RFC 8439 open; throws on a bad tag.
+// RFC 8439 open; throws on a bad tag.
 function chacha20poly1305Decrypt(key, nonce, sealed, aad) {
   if (sealed.length < 16) throw new Error("aead: too short");
   var ct = sealed.subarray(0, sealed.length - 16);
@@ -525,9 +497,7 @@ function chacha20poly1305Decrypt(key, nonce, sealed, aad) {
   return chacha20Xor(key, nonce, ct, 1);
 }
 
-// ---------------------------------------------------------------------------
-// pq2 — the layered construction (spec addendum A2)
-// ---------------------------------------------------------------------------
+// pq2 layered construction (spec addendum A2).
 
 function isPq2Payload(content) {
   return typeof content === "string" && content.startsWith(PQ2_PREFIX);
@@ -575,15 +545,14 @@ function pq2Encrypt(plaintext, senderSkHex, recipPubHex, recipKemPk) {
   return pq2Seal(inner, getPublicKey(senderSkHex), recipPubHex, recipKemPk);
 }
 
-/// `self` is { skHex, kemSk, kemPk }.
+// `self` is { skHex, kemSk, kemPk }.
 function pq2Decrypt(content, senderPubHex, self) {
   var recipPkHex = getPublicKey(self.skHex);
   var inner = pq2Open(content, senderPubHex, recipPkHex, self);
   return nip44Decrypt(inner, nip44ConversationKey(self.skHex, senderPubHex));
 }
 
-/// One decrypt for any Nymchat DM payload the bot can meet: pq2, pq1, or
-/// plain NIP-44. `self` is { skHex, kemSk|null, kemPk|null }.
+// Decrypts pq2, pq1 or plain NIP-44; `self` is { skHex, kemSk|null, kemPk|null }.
 function pqAwareDecrypt(content, senderPubHex, self) {
   if (isPq2Payload(content)) {
     if (!self.kemSk) throw new Error("pq2 payload without a KEM key");
@@ -596,14 +565,9 @@ function pqAwareDecrypt(content, senderPubHex, self) {
   return nip44Decrypt(content, nip44ConversationKey(self.skHex, senderPubHex));
 }
 
-// ---------------------------------------------------------------------------
-// Capability announcements (kind 30078, d-tag `nym-pq`)
-// ---------------------------------------------------------------------------
+// Capability announcements (kind 30078, d-tag `nym-pq`).
 
-/// Parses a peer's announcement event into { pk1, pk2, rootSeeded, epoch,
-/// exp } with Uint8Array keys, or null when it is not a live, valid
-/// announcement. Mirrors the client's handlePqAnnouncement rules: a malformed
-/// key or an expired/retracted payload leaves the peer classical.
+// Returns { pk1, pk2, rootSeeded, epoch, exp } or null; mirrors the client's handlePqAnnouncement rules.
 function parsePqAnnouncement(event, nowSec) {
   try {
     if (!event || !event.content) return null;
@@ -633,13 +597,7 @@ function parsePqAnnouncement(event, nowSec) {
   }
 }
 
-/// Builds the bot's signed announcement. The worker holds both the bot's nsec
-/// (BOT_PRIVKEY) and its root (PQ_CODE), so it may advertise `pk` (either
-/// format) alongside `pk2` (spec A3) — older clients seal pq1 to `pk`, current
-/// ones seal pq2 to `pk2`, and both open here.
-// The bot's post-quantum identity from the PQ_CODE binding (its own nympq1
-// root, epoch 0). Memoized per isolate; a missing or malformed binding yields
-// null so every caller stays classical rather than broken.
+// Advertises both `pk` (pq1, older clients) and `pk2` (pq2, spec A3); memoized, null when PQ_CODE is missing.
 var _botPqCache = { code: null, self: null };
 function botPqSelfFromEnv(env) {
   var code = env && env.PQ_CODE ? String(env.PQ_CODE).trim() : "";
@@ -656,8 +614,7 @@ function botPqSelfFromEnv(env) {
   return self;
 }
 
-// Newest signed, id-valid announcement authored by `author` from a pile of
-// fetched events — relays are never trusted for key material.
+// Newest signed, id-valid announcement by `author`; relays are never trusted for key material.
 function verifiedAnnouncementFrom(events, author) {
   var newest = null;
   for (var i = 0; i < (events || []).length; i++) {
@@ -673,8 +630,7 @@ function verifiedAnnouncementFrom(events, author) {
   return newest;
 }
 
-// A user's announced KEM key as { pk, fmt: 'pq2'|'pq1' } (layered preferred),
-// or null, from fetched events.
+// A user's announced KEM key as { pk, fmt: 'pq2'|'pq1' } (layered preferred), or null.
 function userPqRecordFromEvents(events, userPubkey) {
   var newest = verifiedAnnouncementFrom(events, userPubkey);
   var parsed = newest ? parsePqAnnouncement(newest, Math.floor(Date.now() / 1000)) : null;
@@ -684,9 +640,7 @@ function userPqRecordFromEvents(events, userPubkey) {
   return null;
 }
 
-// Self-contained relay fetch of a user's `nym-pq` announcement key, for callers
-// (storage.js) that carry no relay client of their own. `relays` is a list of
-// wss URLs. Returns { pk, fmt } or null; never throws.
+// Self-contained relay fetch for callers without a relay client; returns { pk, fmt } or null, never throws.
 function fetchPqAnnouncementKey(userPubkey, relays, timeoutMs) {
   var filter = { kinds: [30078], authors: [userPubkey], "#d": [PQ_D_TAG], limit: 3 };
   function fromRelay(url) {
@@ -726,14 +680,7 @@ function fetchPqAnnouncementKey(userPubkey, relays, timeoutMs) {
   }).catch(function () { return null; });
 }
 
-// D1-first announcement lookup. Clients publish their `nym-pq` announcement
-// through the relay proxy, which archives it into the channel events table
-// (relay-pool.js keeps kind-30078 `d=nym-pq` rows), and they resolve peers'
-// keys from that archive first — the worker's own relay list may never carry
-// the event at all. `db` is the (replica'd) DB_CHANNELS binding, or null to
-// skip straight to the caller's relay fallback. Rows are only a transport:
-// userPqRecordFromEvents still verifies id + signature before any key is
-// trusted.
+// D1-first lookup via the relay-pool archive; rows are only transport, and id + signature are still verified.
 async function pqAnnouncementEventsFromD1(db, pubkey) {
   if (!db) return null;
   try {
@@ -774,7 +721,7 @@ function buildBotPqAnnouncement(botPrivkeyHex, botPubkey, kemPk, appVersion) {
     tags: [
       ["d", PQ_D_TAG],
       ["t", PQ_D_TAG],
-      // NIP-40 so relays can drop a stale announcement on their own.
+      // NIP-40 expiration so relays can drop stale announcements.
       ["expiration", String(exp)]
     ],
     content: JSON.stringify(payload),
@@ -784,13 +731,7 @@ function buildBotPqAnnouncement(botPrivkeyHex, botPubkey, kemPk, appVersion) {
   return event;
 }
 
-// ---------------------------------------------------------------------------
-// Bot reply gift wraps — the pq-aware siblings of _shared.js's
-// buildGiftWrappedDM/Pair. `recipKem` is { pk: Uint8Array, fmt: 'pq2'|'pq1' }
-// or null for classical; each layer of each leg is sealed independently, so a
-// post-quantum user copy and a post-quantum bot self-copy never share key
-// material.
-// ---------------------------------------------------------------------------
+// Each layer of each leg is sealed independently so user and self copies never share key material.
 
 function sealContentFor(json, senderSkHex, recipientPubkey, recipKem) {
   if (recipKem && recipKem.fmt === "pq2") {
@@ -824,8 +765,7 @@ function wrapDMTo(rumor, botPrivkeyHex, botPubkey, targetPubkey, targetKem) {
   return wrap;
 }
 
-// The first value of a named rumor tag, or null. Rumor tags are inside the
-// encrypted payload, so they only exist on messages this worker has unwrapped.
+// Rumor tags exist only inside the encrypted payload, i.e. on messages this worker unwrapped.
 function rumorTagValue(rumor, name) {
   var tags = rumor && Array.isArray(rumor.tags) ? rumor.tags : [];
   for (var i = 0; i < tags.length; i++) {
@@ -837,12 +777,7 @@ function rumorTagValue(rumor, name) {
   return null;
 }
 
-// Whether an unwrapped rumor belongs to one conversation scope. With a thread
-// root the scope is that nested discussion only: the root message itself (its
-// shared `x` id) plus the replies marked with the same `nymthread`. Without
-// one it is the top-level conversation, which excludes thread replies the
-// same way the clients' flat views hide them — so a thread stays an isolated
-// context in both directions.
+// With a thread root the scope is that thread only; without one, thread replies are excluded, as clients do.
 function rumorInThreadScope(rumor, threadRoot) {
   var marked = rumorTagValue(rumor, "nymthread");
   if (threadRoot) {
@@ -851,19 +786,13 @@ function rumorInThreadScope(rumor, threadRoot) {
   return !marked;
 }
 
-// `opts.threadRoot`: the shared id of the thread this reply belongs to (the
-// user's message carried it in its `nymthread` tag), echoed back so clients
-// file the reply inside the same thread.
+// Echoing the thread root lets clients file the reply in the same thread.
 function botDMRumor(plaintext, botPubkey, recipientPubkey, opts) {
   var threadRoot = opts && opts.threadRoot ? String(opts.threadRoot) : null;
   var rumor = {
     kind: 14,
     created_at: Math.floor(Date.now() / 1000),
-    // The `x` tag is the client-side shared message id (same 32-byte-hex shape
-    // as the clients' _generateSharedEventId): without it a bot reply has no
-    // cross-recipient id, so clients could never anchor a thread on one. Bot
-    // replies only travel the Nymchat NIP-17 leg, so the bitchat tag
-    // restriction never applies here.
+    // The `x` shared message id lets clients anchor threads on bot replies.
     tags: [
       ["p", recipientPubkey],
       ["x", bytesToHex(randomBytes(32))],
@@ -874,26 +803,18 @@ function botDMRumor(plaintext, botPubkey, recipientPubkey, opts) {
     pubkey: botPubkey
   };
   if (threadRoot) rumor.tags.push(["nymthread", threadRoot]);
-  // Which model wrote this reply. Inside the rumor, so it is sealed and
-  // wrapped with the text and never travels in the clear — and read back on a
-  // later turn, so a model can tell its own earlier work from another model's.
+  // Model id travels sealed inside the rumor so later turns can tell which model wrote what.
   if (opts && opts.model) rumor.tags.push(["model", String(opts.model).slice(0, 60)]);
   rumor.id = getEventHash(rumor);
   return rumor;
 }
 
-/// A single DM wrap to `recipientPubkey`, post-quantum when they announced a
-/// usable key.
 function buildPqGiftWrappedDM(plaintext, botPrivkeyHex, botPubkey, recipientPubkey, recipKem, opts) {
   var rumor = botDMRumor(plaintext, botPubkey, recipientPubkey, opts);
   return wrapDMTo(rumor, botPrivkeyHex, botPubkey, recipientPubkey, recipKem);
 }
 
-/// A reply wrap to the user plus the bot's self-addressed copy (the copy the
-/// worker itself re-reads for thread history). `selfKem` is the bot's own
-/// { pk, fmt } so its archive is never the weakest link. Both legs share ONE
-/// rumor, so the user copy and the self copy agree on the `x` id and thread
-/// marker.
+// Both legs share one rumor so the user and self copies agree on the `x` id and thread marker.
 function buildPqGiftWrappedDMPair(plaintext, botPrivkeyHex, botPubkey, recipientPubkey, recipKem, selfKem, opts) {
   var rumor = botDMRumor(plaintext, botPubkey, recipientPubkey, opts);
   return {

@@ -3,11 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
-/// A render-ready country feature: a list of polygons, each polygon a list of
-/// rings, each ring a flat list of [lon, lat] pairs. Mirrors the shape produced
-/// by `js/geo-decode.js` `decodeWorld` (Polygon/MultiPolygon collapsed into a
-/// uniform `polygons` list) plus the per-feature bounds/centroid/area
-/// annotation used for label placement and area sorting.
+/// Render-ready country feature with polygons of [lon, lat] rings plus bounds, centroid and area.
 @immutable
 class GeoFeature {
   const GeoFeature({
@@ -18,10 +14,9 @@ class GeoFeature {
     required this.area,
   });
 
-  /// Country name (`properties.name`), '' if absent.
   final String name;
 
-  /// polygon -> ring -> list of [lon, lat] points.
+  /// polygon -> ring -> [lon, lat] points.
   final List<List<List<List<double>>>> polygons;
 
   /// [minLng, minLat, maxLng, maxLat].
@@ -30,14 +25,11 @@ class GeoFeature {
   /// [lng, lat] centroid of the largest ring.
   final List<double> centroid;
 
-  /// Absolute area of the largest ring (in squared degrees).
+  /// Absolute area of the largest ring, in squared degrees.
   final double area;
 }
 
-/// A render-ready city point (`decodeCities`, geo-decode.js:119): the projected
-/// dot position, its name, importance rank, and max population. The PWA filters
-/// the list by [rank] against a zoom-dependent cutoff and draws labels from
-/// [name].
+/// Render-ready city point; the globe filters by [rank] against a zoom cutoff.
 @immutable
 class CityPoint {
   const CityPoint({
@@ -51,52 +43,31 @@ class CityPoint {
   final double lng;
   final double lat;
 
-  /// Place name (`properties.name`), '' if absent.
   final String name;
 
-  /// `properties.scalerank` (0 = world's largest). Higher zoom reveals higher
-  /// ranks. Defaults to 10 when absent.
+  /// `scalerank` (0 = largest); higher zoom reveals higher ranks; defaults to 10.
   final int rank;
 
-  /// `properties.pop_max` (or pop_min), 0 if absent.
+  /// `pop_max` (or `pop_min`), 0 if absent.
   final int pop;
 }
 
-/// Path to the bundled world map TopoJSON. Lives here, next to the decoder that
-/// consumes it, so the globe and the place-name fallback name the same file.
+/// Bundled world TopoJSON, shared by the globe and the place-name fallback.
 const String kWorldTopoAsset = 'assets/data/countries-110m.json';
 
-/// Decodes the bundled `countries-110m.json` (world-atlas TopoJSON) into a list
-/// of [GeoFeature], sorted largest-area first — a faithful Dart port of
-/// `decodeTopoJson` + `annotateFeature` + `decodeWorld` from `js/geo-decode.js`.
-///
-/// [jsonString] is the raw asset text. Pure (no Flutter bindings), so it can
-/// run inside a `compute`/Isolate off the UI thread.
+/// Decodes the world TopoJSON into features, largest area first; pure, so it can run in an isolate.
 List<GeoFeature> decodeWorldTopoJson(String jsonString) {
   final topo = json.decode(jsonString) as Map<String, dynamic>;
   return _decodeWorld(topo);
 }
 
-/// Decodes `ne_50m_admin_1_states_provinces_lakes.json` (a GeoJSON
-/// FeatureCollection, NOT TopoJSON) into a list of admin-1 (state/province)
-/// [GeoFeature], sorted largest-area first — a faithful Dart port of
-/// `decodeAdmin1` (geo-decode.js:102). Each feature carries its `name`
-/// (`properties.name`, falling back to `properties.name_en`), bounds, centroid
-/// and area for border drawing + label placement.
-///
-/// Pure (no Flutter bindings), so it can run inside a `compute`/Isolate; the
-/// admin-1 dataset is large (~1.7 MB), so decode it off the UI thread.
+/// Decodes the admin-1 GeoJSON (~1.7 MB), largest area first; decode it off the UI thread.
 List<GeoFeature> decodeAdmin1GeoJson(String jsonString) {
   final geo = json.decode(jsonString) as Map<String, dynamic>;
   return _decodeAdmin1(geo);
 }
 
-/// Decodes `ne_50m_populated_places_simple.json` (a GeoJSON FeatureCollection)
-/// into a list of [CityPoint], sorted by ascending [CityPoint.rank] — a faithful
-/// Dart port of `decodeCities` (geo-decode.js:119). Reads `scalerank`
-/// (defaulting to 10), `name`, and `pop_max`/`pop_min`.
-///
-/// Pure (no Flutter bindings), so it can run inside a `compute`/Isolate.
+/// Decodes populated places, sorted by ascending rank; pure, so it can run in an isolate.
 List<CityPoint> decodeCitiesGeoJson(String jsonString) {
   final geo = json.decode(jsonString) as Map<String, dynamic>;
   return _decodeCities(geo);
@@ -162,8 +133,6 @@ List<CityPoint> _decodeCities(Map<String, dynamic> geo) {
   return out;
 }
 
-/// Converts raw GeoJSON Polygon coordinates (`[ring][pt][lng,lat]`) into the
-/// `ring -> [lng,lat]` shape [_annotate]/the painter expect.
 List<List<List<double>>> _coordsToPolygon(List rings) => [
       for (final ring in rings)
         [
@@ -173,7 +142,7 @@ List<List<List<double>>> _coordsToPolygon(List rings) => [
     ];
 
 List<GeoFeature> _decodeWorld(Map<String, dynamic> topo) {
-  // Quantization transform: x_real = x*scale + translate (delta-decoded arcs).
+  // Quantization transform: real = x*scale + translate, arcs delta-encoded.
   final tx = (topo['transform'] as Map?) ?? const {};
   final scale = (tx['scale'] as List?) ?? const [1, 1];
   final translate = (tx['translate'] as List?) ?? const [0, 0];
@@ -182,7 +151,6 @@ List<GeoFeature> _decodeWorld(Map<String, dynamic> topo) {
   final dx = (translate[0] as num).toDouble();
   final dy = (translate[1] as num).toDouble();
 
-  // Delta-decode + dequantize each arc into absolute [lon, lat] points.
   final rawArcs = <List<List<double>>>[];
   for (final arc in (topo['arcs'] as List)) {
     var x = 0.0;
@@ -196,14 +164,13 @@ List<GeoFeature> _decodeWorld(Map<String, dynamic> topo) {
     rawArcs.add(pts);
   }
 
-  // Arc lookup: negative index i means reversed arc ~i.
+  // Negative index i means reversed arc ~i.
   List<List<double>> arcAt(int i) {
     if (i >= 0) return rawArcs[i];
     return rawArcs[~i].reversed.toList();
   }
 
-  // Stitch a ring's arc indices into one continuous point list (dropping the
-  // shared first vertex on each subsequent arc).
+  // Drops the shared first vertex on each subsequent arc.
   List<List<double>> stitchRing(List arcIdxs) {
     final out = <List<double>>[];
     for (var i = 0; i < arcIdxs.length; i++) {
@@ -303,11 +270,7 @@ GeoFeature _annotate(String name, List<List<List<List<double>>>> polys) {
   );
 }
 
-// -----------------------------------------------------------------------------
-// Naming a place from the bundled map data alone (no network)
-// -----------------------------------------------------------------------------
-
-/// Point-in-polygon (ray casting) over one ring of `[lng, lat]` points.
+/// Ray-casting point-in-polygon over one ring.
 bool _pointInRing(List<List<double>> ring, double lng, double lat) {
   var inside = false;
   for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -321,7 +284,7 @@ bool _pointInRing(List<List<double>> ring, double lng, double lat) {
   return inside;
 }
 
-/// Inside the feature's outer ring and outside every hole.
+/// Inside the outer ring and outside every hole.
 bool pointInFeature(GeoFeature feat, double lng, double lat) {
   final b = feat.bounds;
   if (b.length == 4 &&
@@ -342,9 +305,7 @@ bool pointInFeature(GeoFeature feat, double lng, double lat) {
   return false;
 }
 
-/// The country containing this point, or ''. Walked smallest-first (the decoder
-/// sorts largest-area first) so an enclave wins over the country whose bounding
-/// box merely contains it.
+/// Country containing the point, or ''; walked smallest-first so enclaves win.
 String countryAt(List<GeoFeature> features, double lat, double lng) {
   for (var i = features.length - 1; i >= 0; i--) {
     if (pointInFeature(features[i], lng, lat)) return features[i].name;
@@ -362,9 +323,7 @@ double _haversineKm(double lat1, double lng1, double lat2, double lng2) {
   return 2 * r * math.asin(math.min(1.0, math.sqrt(a)));
 }
 
-/// Nearest country to a point at sea. Measured to the nearest polygon VERTEX
-/// rather than the nearest edge — at 110m resolution the error is far below the
-/// thresholds this feeds, and it keeps the scan a flat loop.
+/// Nearest country at sea, measured to the nearest vertex, which is accurate enough at 110m.
 ({String name, double km}) nearestCountry(
     List<GeoFeature> features, double lat, double lng) {
   var best = '';
@@ -372,8 +331,7 @@ double _haversineKm(double lat1, double lng1, double lat2, double lng2) {
   for (final feat in features) {
     final b = feat.bounds;
     if (b.length == 4) {
-      // Cheap reject: if even the bbox edge nearest in latitude is farther than
-      // the best so far, the polygon cannot beat it.
+      // Cheap reject when even the nearest bbox latitude edge is farther than the best so far.
       final dLat = lat < b[1] ? b[1] - lat : (lat > b[3] ? lat - b[3] : 0.0);
       if (dLat * 111 > bestKm) continue;
     }
@@ -392,29 +350,14 @@ double _haversineKm(double lat1, double lng1, double lat2, double lng2) {
   return (name: best, km: bestKm);
 }
 
-/// A human description of somewhere the geocoder could not name, from the map
-/// data the app already ships. Never coordinates.
-///
-/// Deliberately conservative about water. The two polar oceans are named
-/// because their extent is unambiguous; everywhere else at sea is described by
-/// what it is near, rather than by a basin name, because the
-/// Atlantic/Pacific/Indian boundaries are irregular enough (the Gulf of Mexico
-/// is Atlantic despite sitting west of Panama; the South China Sea is Pacific
-/// despite sitting at the Indian Ocean's longitudes) that a hand-drawn table
-/// would state some of them confidently and wrongly.
-///
-/// A 1:1 port of `describeRegion` in `js/geo-decode.js`; the two must agree.
+/// Describes an unnamed place from shipped map data, never coordinates; must agree with the PWA's `describeRegion`.
 String describeRegion(List<GeoFeature> features, double lat, double lng) {
   if (features.isEmpty) return '';
   final land = countryAt(features, lat, lng);
   if (land.isNotEmpty) return land;
-  // Natural Earth's Antarctica ring is CLIPPED at ~-85.6 and never closes
-  // around the pole, so plate-carrée point-in-polygon reports "not land" for
-  // the entire polar cap — every longitude at -85 and below. Below that clip
-  // line there is nothing but continent.
+  // Natural Earth's Antarctica ring is clipped near -85.6, so everything below is continent.
   if (lat <= -85.5) return 'Antarctica';
-  // Proximity BEFORE the polar names, so a point just off the Antarctic or
-  // Greenland coast says which coast rather than naming the whole ocean.
+  // Proximity before polar names, so near-coast points name the coast.
   final near = nearestCountry(features, lat, lng);
   if (near.name.isNotEmpty && near.km <= 300) {
     return 'Off the coast of ${near.name}';

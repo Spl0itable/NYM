@@ -1,5 +1,3 @@
-// call_providers.dart - Riverpod wiring for the calling feature.
-
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,16 +6,9 @@ import '../../state/app_state.dart';
 import 'call_service.dart';
 import 'call_state.dart';
 
-/// The singleton [CallService] for the app. Registers the inbound call-signal
-/// handler on construction (see [CallService]). Boot it once early (e.g. read
-/// it in the root widget) so inbound invites are caught even before the overlay
-/// is mounted.
+/// Singleton [CallService]; read it early so inbound invites are caught before the overlay mounts.
 final callServiceProvider = Provider<CallService>((ref) {
   final service = CallService(ref);
-  // Route every call status message (calls.js `displaySystemMessage`) to the
-  // centered in-chat `.system-message` pill, mirroring the PWA. Missed/declined
-  // calls additionally land in the notification history (handled inside the
-  // service via `notificationHistoryProvider`).
   service.onSystemMessage = (message) {
     try {
       ref.read(appStateProvider.notifier).addSystemMessage(message);
@@ -29,8 +20,7 @@ final callServiceProvider = Provider<CallService>((ref) {
   return service;
 });
 
-/// The live [CallState] snapshot (idle/ringing/incoming/connecting/active +
-/// participant streams). Rebuilds whenever the service publishes a new state.
+/// The live [CallState] snapshot.
 final callStateProvider = StreamProvider<CallState>((ref) {
   final service = ref.watch(callServiceProvider);
   final controller = StreamController<CallState>();
@@ -44,9 +34,7 @@ final callStateProvider = StreamProvider<CallState>((ref) {
   return controller.stream;
 });
 
-/// Convenience: the current call state, defaulting to idle while the stream
-/// is connecting (so widgets never juggle AsyncValue for a value that always
-/// has a sensible default).
+/// Current call state, defaulting to idle while the stream connects.
 final currentCallStateProvider = Provider<CallState>((ref) {
   return ref.watch(callStateProvider).valueOrNull ?? CallState.idle;
 });

@@ -7,10 +7,7 @@
         serviceUuid: 'f47b5e2d-4a9e-4c5a-9b3f-8e1d2c3a4b5c',
         characteristicUuid: 'a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d',
         messageTtl: 7,
-        // Web Bluetooth caps a GATT write at 512 bytes, and padding rounds a
-        // frame UP to the next block, so the fragment threshold is set where
-        // padding still lands on 512 (480 + 16 = 496). Purely a send-side
-        // choice: peers reassemble whatever fragmentation they are handed.
+        // Web Bluetooth caps a GATT write at 512 bytes; 480 + 16 padding = 496 still fits. Send-side only.
         fragmentSizeThreshold: 480,
         maxFragmentSize: 469,
         maxFrameBytes: 512,
@@ -30,22 +27,19 @@
         announce: 0x01,
         message: 0x02,
         leave: 0x03,
-        // Store-and-forward envelope carried by another peer on the sender's
-        // behalf. Opaque to whoever carries it (mesh-courier.js).
+        // Store-and-forward envelope, opaque to the carrier (mesh-courier.js).
         courierEnvelope: 0x04,
         noiseHandshake: 0x10,
         noiseEncrypted: 0x11,
         fragment: 0x20,
         requestSync: 0x21,
         fileTransfer: 0x22,
-        // A signed batch of one-time prekeys, gossiped mesh-wide so courier
-        // mail can be sealed to a key its owner DELETES after use.
+        // Signed one-time prekeys, gossiped mesh-wide so courier mail can be sealed to a key its owner deletes.
         prekeyBundle: 0x24,
         // Directed echo request / reply — mesh diagnostics.
         ping: 0x26,
         pong: 0x27,
-        // Gateway mode: a signed Nostr event ferried between a mesh-only peer
-        // and a peer that has internet.
+        // Gateway mode: a signed Nostr event ferried between a mesh-only peer and one with internet.
         nostrCarrier: 0x28,
         voiceFrame: 0x29,
         nymProfileRequest: 0x50,
@@ -91,8 +85,7 @@
         u8(v) { this._ensure(1); this.buf[this.pos++] = v & 0xFF; }
         u16(v) { this._ensure(2); this.buf[this.pos++] = (v >>> 8) & 0xFF; this.buf[this.pos++] = v & 0xFF; }
         u32(v) { this._ensure(4); this.buf[this.pos++] = (v >>> 24) & 0xFF; this.buf[this.pos++] = (v >>> 16) & 0xFF; this.buf[this.pos++] = (v >>> 8) & 0xFF; this.buf[this.pos++] = v & 0xFF; }
-        // Millisecond timestamps exceed 2^32, so the high word goes through
-        // division rather than a shift (>>> truncates to 32 bits).
+        // Millisecond timestamps exceed 2^32, so the high word uses division (>>> truncates to 32 bits).
         u64(v) {
             this._ensure(8);
             const hi = Math.floor(v / 4294967296);
@@ -224,8 +217,7 @@
         return padding ? MessagePadding.pad(result, MessagePadding.optimalBlockSize(result.length)) : result;
     }
 
-    // The bytes an Ed25519 signature covers: no signature, TTL zeroed (it
-    // mutates on relay), padded — matching bitchat's toBinaryDataForSigning.
+    // No signature, TTL zeroed (it mutates on relay), padded; matches bitchat's toBinaryDataForSigning.
     function packetSigningBytes(packet) {
         return encodePacket(makePacket({
             version: packet.version,
@@ -290,9 +282,7 @@
                 }
             }
 
-            // bitchat may compress a payload. Inflation is async in the
-            // browser, so the compressed bytes are carried out and expanded by
-            // decodePacketAsync before the packet is used.
+            // Inflation is async in the browser, so decodePacketAsync expands the compressed bytes.
             let payload, compressed = null;
             if (isCompressed) {
                 const lenFieldBytes = version >= 2 ? 4 : 2;
@@ -328,8 +318,7 @@
         }
     }
 
-    // Decodes a frame, expanding a compressed payload. Use this on the receive
-    // path; decodePacket alone leaves a compressed packet with an empty payload.
+    // Use on the receive path; decodePacket alone leaves compressed packets with an empty payload.
     async function decodePacketAsync(data) {
         const packet = decodePacket(data);
         if (!packet || !packet._compressed) return packet;
@@ -542,8 +531,7 @@
             this.ttl = ttlMs || MeshConst.seenPacketTtlMs;
             this.seen = new Map();
         }
-        // Keyed on the identity-bearing fields only; TTL mutates on relay, so a
-        // relayed copy must dedup against the original.
+        // Identity-bearing fields only; TTL mutates on relay, so relayed copies dedup against the original.
         static keyFor(type, senderID, timestamp, payload) {
             let h1 = 0x811c9dc5, h2 = 0x01000193;
             const mix = (b) => {

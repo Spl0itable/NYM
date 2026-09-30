@@ -4,8 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const SOURCE = new URL('../js/modules/translate.js', import.meta.url);
 
-/// Every offered language as `{ code, name }`, English excluded — English is
-/// the source, so a pack for it would map every string to itself.
+// English is excluded: it is the source, so its pack would map every string to itself.
 export async function loadLanguages() {
   const src = await readFile(SOURCE, 'utf8');
   const start = src.indexOf('const NYM_TRANSLATE_LANGUAGES = [');

@@ -3,30 +3,27 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 
-/// P2P file-sharing constants — 1:1 with the PWA (`app.js:705-734`,
-/// docs/specs/04 §4 table).
+/// P2P file-sharing constants, matching the PWA.
 class P2PConstants {
   P2PConstants._();
 
-  /// `P2P_CHUNK_SIZE` — 16 KiB data-channel chunk (app.js:733).
+  /// 16 KiB data-channel chunk.
   static const int chunkSize = 16384;
 
-  /// `P2P_MAX_FILE_SIZE` — 2 GiB transfer cap (p2p.js:5).
+  /// 2 GiB transfer cap.
   static const int maxFileSize = 2 * 1024 * 1024 * 1024;
 
-  /// `P2P_SIGNALING_KIND` — plain p-tagged WebRTC signaling (offer/answer/ice).
+  /// Plain p-tagged WebRTC signaling (offer/answer/ice).
   static const int signalingKind = 25051;
 
-  /// `P2P_FILE_STATUS_KIND` — `unseeded` announcements.
+  /// `unseeded` announcements.
   static const int fileStatusKind = 25052;
 
-  /// Backpressure high-water mark — `chunkSize * 16` (p2p.js:431).
   static const int highWater = chunkSize * 16;
 
-  /// Backpressure low-water mark — `chunkSize * 4` (p2p.js:432).
   static const int lowWater = chunkSize * 4;
 
-  /// WebRTC ICE servers shared by calls + P2P (`p2pIceServers`, app.js:711).
+  /// ICE servers shared by calls and P2P.
   static const List<Map<String, dynamic>> iceServers = [
     {'urls': 'stun:rtc.0xchat.com:5349'},
     {
@@ -41,8 +38,7 @@ class P2PConstants {
   ];
 }
 
-/// A file offer advertised on a message's `['offer', JSON]` tag (p2p.js
-/// `shareP2PFile` / `parseFileOfferTag`). Mirrors the PWA `fileOffer` object.
+/// A file offer advertised on a message's `['offer', JSON]` tag.
 class FileOffer {
   const FileOffer({
     required this.offerId,
@@ -56,20 +52,20 @@ class FileOffer {
     this.infoHash,
   });
 
-  /// `hash[:16] + '-' + base36(now)` (p2p.js:99).
+  /// `hash[:16] + '-' + base36(now)`.
   final String offerId;
   final String name;
   final int size;
   final String type;
 
-  /// Full SHA-256 hex of the file content (integrity check on receive).
+  /// Full SHA-256 hex of the file, checked on receive.
   final String hash;
   final String seederPubkey;
 
   /// Unix seconds.
   final int timestamp;
 
-  /// WebTorrent magnet URI (torrent path only; null for direct WebRTC).
+  /// WebTorrent magnet URI; null for direct WebRTC.
   final String? magnetURI;
   final String? infoHash;
 
@@ -99,8 +95,7 @@ class FileOffer {
         infoHash: j['infoHash']?.toString(),
       );
 
-  /// Builds an offer from raw file bytes, computing the hash + offerId the same
-  /// way as `shareP2PFile` (p2p.js:92-113).
+  /// Builds an offer from raw bytes, computing hash and offerId like the PWA.
   static FileOffer fromBytes({
     required Uint8List bytes,
     required String name,
@@ -124,7 +119,6 @@ class FileOffer {
   }
 }
 
-/// Lifecycle status of an active transfer (`updateTransferStatus`).
 enum P2PStatus { connecting, transferring, complete, error }
 
 String p2pStatusWire(P2PStatus s) => switch (s) {
@@ -134,7 +128,6 @@ String p2pStatusWire(P2PStatus s) => switch (s) {
       P2PStatus.error => 'error',
     };
 
-/// An active (incoming or outgoing) transfer (`p2pActiveTransfers` entry).
 class P2PTransfer {
   P2PTransfer({
     required this.transferId,
@@ -157,7 +150,7 @@ class P2PTransfer {
   final int startTime;
   final bool isOutgoing;
 
-  /// Last status detail line shown in the modal (`updateTransferStatus` msg).
+  /// Last status detail line shown in the modal.
   String? message;
 
   double get progress {
@@ -168,12 +161,7 @@ class P2PTransfer {
   }
 }
 
-// =============================================================================
-// Chunking (pure — used by the data-channel sender/receiver + unit tests).
-// =============================================================================
-
-/// Splits [bytes] into ordered 16 KiB chunks plus a final partial, exactly like
-/// the PWA sender's `file.slice(offset, offset+chunkSize)` loop (p2p.js:468).
+/// Ordered 16 KiB chunks plus a final partial, like the PWA sender.
 List<Uint8List> chunkBytes(Uint8List bytes,
     [int chunkSize = P2PConstants.chunkSize]) {
   final out = <Uint8List>[];
@@ -187,7 +175,6 @@ List<Uint8List> chunkBytes(Uint8List bytes,
   return out;
 }
 
-/// Reassembles received chunks into a single buffer (`new Blob(chunks)`).
 Uint8List reassembleChunks(List<Uint8List> chunks) {
   final total = chunks.fold<int>(0, (a, c) => a + c.length);
   final out = Uint8List(total);
@@ -199,17 +186,10 @@ Uint8List reassembleChunks(List<Uint8List> chunks) {
   return out;
 }
 
-/// SHA-256 hex of [bytes] (lower-case), matching the receiver's integrity check
-/// (`crypto.subtle.digest('SHA-256', …)`, p2p.js:572).
+/// Lowercase SHA-256 hex, matching the receiver's integrity check.
 String sha256Hex(Uint8List bytes) => sha256.convert(bytes).toString();
 
-// =============================================================================
-// Wire payload builders (pure — kind 25051 signaling + 25052 file status).
-// =============================================================================
-
-/// Builds the kind-25051 signaling event content+tags (`sendP2PSignal`,
-/// p2p.js:651): plain (NOT gift-wrapped) event p-tagged to [targetPubkey], the
-/// `data` JSON as content. [data] is `{type, …}` (offer/answer/ice-candidate).
+/// Kind-25051 signaling: plain (not gift-wrapped), p-tagged to [targetPubkey], `data` JSON as content.
 class P2PSignalPayload {
   const P2PSignalPayload({required this.tags, required this.content});
   final List<List<String>> tags;
@@ -228,7 +208,6 @@ P2PSignalPayload buildSignalPayload({
   );
 }
 
-/// An SDP offer signal (`{type:'offer', sdp, transferId, offerId}`).
 Map<String, dynamic> offerSignal({
   required Map<String, dynamic> sdp,
   required String transferId,
@@ -236,42 +215,26 @@ Map<String, dynamic> offerSignal({
 }) =>
     {'type': 'offer', 'sdp': sdp, 'transferId': transferId, 'offerId': offerId};
 
-/// An SDP answer signal (`{type:'answer', sdp, transferId}`).
 Map<String, dynamic> answerSignal({
   required Map<String, dynamic> sdp,
   required String transferId,
 }) =>
     {'type': 'answer', 'sdp': sdp, 'transferId': transferId};
 
-/// An ICE candidate signal (`{type:'ice-candidate', candidate, transferId}`).
 Map<String, dynamic> iceSignal({
   required Map<String, dynamic> candidate,
   required String transferId,
 }) =>
     {'type': 'ice-candidate', 'candidate': candidate, 'transferId': transferId};
 
-/// Builds the kind-25052 `unseeded` file-status event (`stopSeeding`,
-/// p2p.js:823): tags `['offer_id', id], ['status','unseeded'], ['x', hash]?,
-/// [wire.tag, channelKey]?`; content `{offerId,name,status:'unseeded'}`.
+/// Kind-25052 `unseeded` file-status event.
 class FileStatusPayload {
   const FileStatusPayload({required this.tags, required this.content});
   final List<List<String>> tags;
   final String content;
 }
 
-/// Builds the unseeded broadcast tags. The PWA appends the active channel's wire
-/// tag whenever a channel is open (p2p.js:828
-/// `[this.channelWire(this.currentGeohash).tag, this.currentGeohash]`):
-/// `channelWire` (channels.js:454) returns `'g'` for a geohash channel else
-/// `'d'` — and for a NAMED channel the PWA's `currentGeohash` holds the channel
-/// name (named channels are entered via `switchChannel(name, name)`,
-/// commands.js:575 / channels.js:488), so the named branch fires.
-///
-/// Mirror that here: pass [geohash] for a geohash channel (→ `['g', geohash]`)
-/// OR [channelName] for a named channel (→ `['d', channelName]`). At most one is
-/// emitted ([geohash] wins). Both null (PM/group, or no channel open) → no wire
-/// tag, exactly like the PWA when `currentGeohash` is falsy. The `'g' : 'd'`
-/// selection matches `buildChannelEditTags` (nostr_controller.dart:6239).
+/// Adds `['g', geohash]` or `['d', channelName]` for the open channel ([geohash] wins); neither for PM/group.
 FileStatusPayload buildUnseededPayload({
   required FileOffer offer,
   String? geohash,
@@ -296,13 +259,11 @@ FileStatusPayload buildUnseededPayload({
   );
 }
 
-/// The `['offer', JSON]` tag carried on a file-offer message (`publishFileOffer`
-/// p2p.js:149). Used by both the channel message tag and the local echo.
+/// The `['offer', JSON]` tag on a file-offer message and its local echo.
 List<String> fileOfferTag(FileOffer offer) =>
     ['offer', jsonEncode(offer.toJson())];
 
-/// Parses a file offer off a message's tags, binding seederPubkey to the actual
-/// sender (`parseFileOfferTag`, p2p.js:179). Returns null when absent/mismatched.
+/// Parses a file offer, binding seederPubkey to the actual sender; null when absent or mismatched.
 FileOffer? parseFileOfferTag(List<List<String>> tags, String senderPubkey) {
   for (final t in tags) {
     if (t.isNotEmpty && t[0] == 'offer' && t.length > 1) {
@@ -323,7 +284,6 @@ FileOffer? parseFileOfferTag(List<List<String>> tags, String senderPubkey) {
   return null;
 }
 
-/// Human file size (`formatFileSize`, p2p.js:197).
 String formatFileSize(int bytes) {
   if (bytes < 1024) return '$bytes B';
   if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
@@ -333,7 +293,6 @@ String formatFileSize(int bytes) {
   return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
 }
 
-/// Sanitizes a download filename (`sanitizeDownloadFilename`, p2p.js:7).
 String sanitizeDownloadFilename(String name) {
   var safe = name
       .replaceAll(RegExp(r'[/\\]'), '_')

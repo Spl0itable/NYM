@@ -29,30 +29,20 @@ import 'key_backup/passkey_backup_service.dart';
 import 'modal_chrome.dart';
 import 'nip46_service.dart';
 
-/// Which auth tab the setup modal shows (`.setup-tab`, index.html:1204-1206).
 enum _SetupTab { signup, login }
 
-/// Opens an absolute [url] in the external browser (ToS/PP footer links).
+/// Opens an absolute [url] in the external browser.
 TapGestureRecognizer _linkTap(String url) {
   return TapGestureRecognizer()
     ..onTap =
         () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
 }
 
-/// First-run setup screen mirroring `#setupModal` (index.html 1257–1346).
-///
-/// The user picks an optional nickname / avatar / banner / bio and taps
-/// **Enter** to create an ephemeral identity, or opens the Nostr login. On
-/// success [onComplete] fires so the [BootGate] proceeds to the shell.
-///
-/// Avatar/banner are file pickers (`setupAvatarPreview` / `setupBannerPreview`,
-/// index.html:1285-1323): a preview, "Choose photo"/"Remove" buttons. The picked
-/// file is uploaded (Blossom) at pick-time and the returned HOSTED URL is what
-/// `saveProfile` publishes into the kind-0 — a `file://` path is never sent.
+/// First-run setup: optional profile then Enter for an ephemeral identity, or Nostr login; images upload at pick time.
 class SetupModal extends ConsumerStatefulWidget {
   const SetupModal({super.key, required this.onComplete});
 
-  /// Called after the identity is created / login starts so the gate advances.
+  /// Called after identity creation or login starts so the gate advances.
   final VoidCallback onComplete;
 
   @override
@@ -63,13 +53,11 @@ class _SetupModalState extends ConsumerState<SetupModal> {
   final _nymCtl = TextEditingController();
   final _bioCtl = TextEditingController();
 
-  /// Active auth tab — Sign up (default) or Login (`switchSetupTab`).
   _SetupTab _tab = _SetupTab.signup;
 
-  // ---- Login tab state (inlined from the former Nostr-login popup) ----
   final _nsecCtl = TextEditingController();
 
-  /// A pasted `bunker://` (or `nostrconnect://`) signer connection URI.
+  /// A pasted `bunker://` or `nostrconnect://` signer URI.
   final _bunkerCtl = TextEditingController();
   bool _connectingUri = false;
 
@@ -79,41 +67,32 @@ class _SetupModalState extends ConsumerState<SetupModal> {
   Nip46Service? _nip46;
   String _remoteStatus = tr('Waiting for remote signer...');
 
-  /// Guards the async nsec adopt so a double-tap can't re-enter login.
+  /// Guards the async nsec adopt against a double-tap.
   bool _loggingIn = false;
 
-  /// Set once a remote-signer session is established + adopted, so [dispose]
-  /// won't cancel the (now live) session when the modal tears down.
+  /// Set once a signer session is adopted so [dispose] won't cancel the live session.
   bool _loginSucceeded = false;
 
-  /// Local preview paths for the on-screen thumbnails only — the published
-  /// value is always the HOSTED URL below (set after a pick-time upload).
+  /// Local preview paths for thumbnails only; the hosted URLs below are published.
   String? _avatarPath;
   String? _bannerPath;
 
-  /// The hosted (Blossom) URLs returned by `uploadImage` after a pick. These —
-  /// not the local `file://` paths — are what `saveProfile` publishes into the
-  /// kind-0 `picture`/`banner`.
+  /// Hosted URLs from the pick-time upload, published into kind 0 instead of local paths.
   String? _avatarUrl;
   String? _bannerUrl;
 
-  /// `.upload-progress` affordance state (mirrors new_pm_modal): `_uploading`
-  /// toggles the bar, `_uploadLabel` is the "Uploading avatar…"/"Uploading
-  /// banner…" line, `_uploadProgress` drives the fill (users.js
-  /// `_uploadFileWithProgress`).
+  /// Upload progress state: bar visibility, label, and fill fraction.
   bool _uploading = false;
   String _uploadLabel = 'Uploading…';
   double _uploadProgress = 0;
 
   bool _busy = false;
 
-  /// Per-surface upload caps, mirroring the PWA avatar/banner guards. Avatar
-  /// 5MB, banner 10MB.
+  /// Upload caps: avatar 5MB, banner 10MB.
   static const int _avatarMaxBytes = 5 * 1024 * 1024;
   static const int _bannerMaxBytes = 10 * 1024 * 1024;
 
-  /// Best-effort MIME from the picked file's extension (BUD-02 `Content-Type`),
-  /// mirroring `_contentTypeFor` in new_pm_modal.dart.
+  /// Best-effort MIME type from the file extension (BUD-02 `Content-Type`).
   static String _contentTypeFor(String path) {
     final lower = path.toLowerCase();
     if (lower.endsWith('.png')) return 'image/png';
@@ -128,17 +107,12 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     _bioCtl.dispose();
     _nsecCtl.dispose();
     _bunkerCtl.dispose();
-    // Only abort an INCOMPLETE handshake — a successful session is the shared
-    // [nip46ServiceProvider] instance the controller now signs with.
+    // Only abort an incomplete handshake; a live session is the instance the controller signs with.
     if (!_loginSucceeded) _nip46?.cancelConnect();
     super.dispose();
   }
 
-  /// Pick an avatar/banner, then UPLOAD it (Blossom) so `saveProfile` publishes
-  /// a hosted URL, never a `file://` path. Mirrors the PWA setup avatar/banner
-  /// select → `uploadImage` flow: enforce the cap (avatar 5MB / banner 10MB),
-  /// show the progress affordance, store the returned URL. On failure the old
-  /// image is kept (nothing stored) and the PWA failure alert is shown.
+  /// Uploads the picked image so `saveProfile` publishes a hosted URL; on failure the old image is kept.
   Future<void> _pickImage(bool avatar) async {
     if (_uploading) return; // one upload at a time
     final Uint8List bytes;
@@ -152,12 +126,12 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       contentType = _contentTypeFor(file.path);
       path = file.path;
     } catch (_) {
-      // Picker unavailable (e.g. tests / desktop) — silently ignore.
+      // Picker unavailable (tests, desktop): ignore.
       return;
     }
-    if (!mounted) return; // readAsBytes awaited above
+    if (!mounted) return;
 
-    // Enforce the per-surface size cap before uploading.
+    // Enforce the size cap before uploading.
     final cap = avatar ? _avatarMaxBytes : _bannerMaxBytes;
     if (bytes.length > cap) {
       final capMb = avatar ? 5 : 10;
@@ -175,7 +149,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
 
     setState(() {
       _uploading = true;
-      _uploadProgress = 0.15; // PWA seeds the fill at 15%.
+      _uploadProgress = 0.15;
       _uploadLabel = avatar ? 'Uploading avatar…' : 'Uploading banner…';
     });
 
@@ -194,8 +168,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (!mounted) return;
 
     if (url == null || url.isEmpty) {
-      // Keep the old image — never store a broken/local value (PWA shows
-      // "Upload failed — try again").
+      // Keep the old image; never store a broken or local value.
       setState(() {
         _uploading = false;
         _uploadProgress = 0;
@@ -209,7 +182,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       _uploadProgress = 1;
       if (avatar) {
         _avatarUrl = url;
-        _avatarPath = path; // local preview thumbnail
+        _avatarPath = path;
       } else {
         _bannerUrl = url;
         _bannerPath = path;
@@ -224,8 +197,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (_busy) return;
     final nym = _nymCtl.text.trim();
 
-    // Reserved nicknames ("Luxas") require the developer nsec before the name
-    // is allowed (index.html setup submit → isReservedNick, app.js:4766).
+    // Reserved nicknames require the developer nsec first.
     if (nym.isNotEmpty && isReservedNick(nym)) {
       final verified = await DevNsecModal.open(context);
       if (!mounted) return;
@@ -237,35 +209,24 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     final kv = ref.read(keyValueStoreProvider);
     final controller = ref.read(nostrControllerProvider);
 
-    // Persist auto-ephemeral so future boots skip the modal (initializeNym).
+    // Persist auto-ephemeral so future boots skip the modal.
     await kv.setBool(StorageKeys.autoEphemeral, true);
     if (nym.isNotEmpty) {
       await kv.setString(StorageKeys.autoEphemeralNick, nym);
       await kv.setString(StorageKeys.customNick, nym);
     }
     final bio = _bioCtl.text.trim();
-    // Persist/publish the HOSTED URLs (uploaded at pick-time), never the local
-    // `file://` paths — a `file://` is not a valid kind-0 `picture`/`banner`.
+    // Publish hosted URLs only; `file://` isn't a valid kind-0 picture or banner.
     final avatar = _avatarUrl;
     final banner = _bannerUrl;
     if (bio.isNotEmpty) await kv.setString(StorageKeys.bio, bio);
     if (avatar != null) await kv.setString(StorageKeys.avatarUrl, avatar);
     if (banner != null) await kv.setString(StorageKeys.bannerUrl, banner);
 
-    // Ensure the controller is booted. At COLD boot main() already booted the
-    // ephemeral identity behind this modal (init() is then a no-op via its
-    // _started guard), but after a panic-wipe remount NOTHING has re-booted
-    // it — the PWA reloads the page, which re-runs its whole boot chain.
-    // Without this the shell mounts with no identity (empty pubkey → '????'
-    // suffix) and no relay service, so nothing ever loads. Runs AFTER the
-    // autoEphemeral/nick persists (the boot adopts the chosen nick) and
-    // BEFORE saveProfile (the publish needs a live identity + signer).
+    // After a panic-wipe remount nothing has booted the controller; runs after the nick persists and before saveProfile.
     await controller.init();
 
-    // Publish the chosen profile so the nym + avatar/banner/bio land on
-    // relays (saveToNostrProfile). avatar/banner are the hosted URLs returned
-    // by `uploadImage`; if no image was picked they're null, so nothing new
-    // is published for them.
+    // Publish the profile; unpicked images are null and not published.
     await controller.saveProfile(
       name: nym.isEmpty ? null : nym,
       about: bio.isEmpty ? null : bio,
@@ -277,11 +238,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     widget.onComplete();
   }
 
-  /// Starts the inline `nostrconnect://` remote-signer flow (Login tab). Drives
-  /// the SHARED [nip46ServiceProvider] so the live socket this handshake opens
-  /// is the exact instance the controller signs with after
-  /// [NostrController.loginWithNip46] adopts it — remote signing works
-  /// immediately, not only after an app restart.
+  /// Inline `nostrconnect://` flow on the shared [nip46ServiceProvider] so its socket is the one the controller signs with.
   void _startRemoteSigner() {
     final service = ref.read(nip46ServiceProvider);
     final uri = service.startNostrConnect();
@@ -323,10 +280,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     });
   }
 
-  /// Connects to a signer from a pasted `bunker://` (or `nostrconnect://`) URI
-  /// via [Nip46Service.connectViaUri] — for a `bunker://` we send the explicit
-  /// `connect` RPC and adopt on the signer's ack; for a pasted `nostrconnect://`
-  /// we wait for the signer to initiate. Then adopts at runtime like the QR flow.
+  /// `bunker://` sends the `connect` RPC and adopts on ack; `nostrconnect://` waits for the signer.
   Future<void> _connectViaUri() async {
     if (_connectingUri || _loggingIn) return;
     final uri = _bunkerCtl.text.trim();
@@ -359,10 +313,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     }
   }
 
-  /// Validates the pasted nsec, then ADOPTS it as the running identity via
-  /// [NostrController.loginWithNsec] (persist + re-boot under the new pubkey +
-  /// bump the boot epoch, which remounts the gate onto the shell). Then advances
-  /// the gate via [onComplete] (idempotent with the boot-epoch remount).
+  /// Validates the nsec and adopts it as the running identity, then advances the gate.
   Future<void> _loginWithNsec() async {
     if (_loggingIn) return;
     final input = _nsecCtl.text.trim();
@@ -370,7 +321,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       setState(() => _loginError = tr('Please enter your nsec.'));
       return;
     }
-    // Accepts either form of private key — `nsec1…` or bare 64-char hex.
+    // Accepts `nsec1…` or bare 64-char hex.
     if (normalizePrivkeyInput(input) == null) {
       setState(() => _loginError =
           tr('Invalid private key. Paste an nsec1… or a 64-character hex key.'));
@@ -427,8 +378,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     final c = context.nym;
     final invite = _inviteBannerText();
 
-    // `.setup-modal-content`: borderless, radius 0, fills the screen, with the
-    // inner column capped at 500 / 90% width (index.html:1258, CSS :30-46/75-89).
+    // Borderless, full-screen, with the inner column capped at 500 or 90% width.
     return Material(
       color: c.bg,
       child: SafeArea(
@@ -445,9 +395,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
                     _InviteBanner(text: invite, c: c),
                     const SizedBox(height: 16),
                   ],
-                  // `.setup-tabs` (index.html:1204-1206): Sign up / Login —
-                  // replaces the old "Login with nsec…" link; the Login tab
-                  // swaps in the login fields inline (no popup).
+                  // Login fields swap in inline under the Login tab.
                   _setupTabs(c),
                   if (_tab == _SetupTab.signup)
                     ..._signupPanel(c)
@@ -462,9 +410,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
   }
 
-  /// `.setup-tabs` (styles-components.css:87-127): a flex row of two equal
-  /// `.setup-tab` buttons over a 1px glass-border baseline; the active tab is
-  /// primary-tinted with a 2px primary underline.
+  /// Two equal tabs over a 1px baseline; the active tab gets a 2px primary underline.
   Widget _setupTabs(NymColors c) {
     return Container(
       margin: const EdgeInsets.only(bottom: 20),
@@ -474,7 +420,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       child: Row(
         children: [
           Expanded(child: _setupTabBtn(c, _SetupTab.signup, tr('Sign up'))),
-          const SizedBox(width: 4), // `.setup-tabs { gap: 4px }`
+          const SizedBox(width: 4),
           Expanded(child: _setupTabBtn(c, _SetupTab.login, tr('Login'))),
         ],
       ),
@@ -487,7 +433,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       behavior: HitTestBehavior.opaque,
       onTap: () => setState(() => _tab = tab),
       child: Container(
-        // `.setup-tab { padding: 12px 10px }`.
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
         decoration: BoxDecoration(
           color: active ? c.primaryA(0.06) : Colors.transparent,
@@ -495,7 +440,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
             topLeft: Radius.circular(NymRadius.xs),
             topRight: Radius.circular(NymRadius.xs),
           ),
-          // `.setup-tab.active::after`: a 2px primary underline.
           border: Border(
             bottom: BorderSide(
               color: active ? c.primary : Colors.transparent,
@@ -516,8 +460,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
   }
 
-  /// `#setupSignupPanel` (index.html:1208-1267) + the shared Enter action / ToS
-  /// footer that live under the signup tab.
   List<Widget> _signupPanel(NymColors c) {
     return [
       _label(c, tr('Choose Your Nickname'), optional: true),
@@ -554,15 +496,12 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         showCounter: true,
       ),
       const SizedBox(height: 5),
-      // `.form-hint` under the bio char count (index.html:1332).
       Text(
         tr('Short bio shown on your profile (max 150 characters)'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       const SizedBox(height: 20),
-      // `.send-btn` (translucent primary pill), h42. `.modal-actions` is a
-      // centered flex and the button is `flex: 0 1 auto`, so it's content-width
-      // and centered — NOT full-bleed (index.html:1338, styles-chat.css:1920).
+      // Content-width and centered, not full-bleed.
       Align(
         key: const Key('setupEnterBtn'),
         alignment: Alignment.center,
@@ -589,16 +528,13 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         ),
       ],
       const SizedBox(height: 20),
-      // `#setupSignupTos` (index.html:1341): centered ToS/Privacy footer.
       _tosText(c, tr('By entering, you agree to our ')),
     ];
   }
 
-  /// `#setupLoginPanel` (index.html:1268-1345): remote-signer + paste-nsec login
-  /// inline (the browser-extension option is native-hidden, as in the PWA).
+  /// Remote-signer and paste-nsec login inline; the browser-extension option is hidden on native.
   List<Widget> _loginPanel(NymColors c) {
     return [
-      // `.nm-h-21`: 13px text-dim.
       Text(
         tr('Login with your Nostr identity to sync settings across devices.'),
         style: TextStyle(color: c.textDim, fontSize: 13),
@@ -609,7 +545,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         ModalChrome.orDivider(c),
         const SizedBox(height: brandGroupGap - 16),
       ],
-      // `.send-btn` "Login with Remote Signer" + hint.
       ModalChrome.sendButton(
         c,
         tr('Login with Remote Signer'),
@@ -623,9 +558,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       ),
       if (_remoteSignerOpen) ..._remoteSignerConnect(c),
       const SizedBox(height: 14),
-      // Paste a signer connection URI (bunker:// or a nostrconnect:// string) —
-      // an alternative to scanning the QR, and the way to use a signer whose
-      // relay isn't the default (the URI carries its own relay).
+      // A signer URI is an alternative to the QR and works with signers on non-default relays.
       _label(c, tr('Or paste a signer URI')),
       const SizedBox(height: 6),
       Row(
@@ -651,7 +584,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
       ModalChrome.orDivider(c),
-      // Paste-nsec option.
       _label(c, tr('Paste your nsec')),
       const SizedBox(height: 6),
       _field(
@@ -669,10 +601,8 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         tr('Your private key stays local and is never sent to any server'),
         style: TextStyle(color: c.textDim, fontSize: 11),
       ),
-      // `.modal-actions.nm-h-81 { margin: 40px auto 20px }`.
       const SizedBox(height: 40),
-      // `.send-btn.nm-h-82 { flex: 0 1 auto }` in a centered `.modal-actions`:
-      // content-width, centered — not full-bleed.
+      // Content-width and centered, not full-bleed.
       Align(
         alignment: Alignment.center,
         child: ModalChrome.sendButton(
@@ -694,9 +624,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     ];
   }
 
-  /// The remote-signer connection affordance (`#nostrLoginRemoteSignerConnect`,
-  /// index.html:1292-1311): status line, QR, readonly connection string + Copy,
-  /// hint, and a Cancel action.
+  /// Remote-signer connect: status, QR, copyable connection string, hint and Cancel.
   List<Widget> _remoteSignerConnect(NymColors c) {
     return [
       const SizedBox(height: 12),
@@ -770,8 +698,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     ];
   }
 
-  /// The centered `.nm-secondary` ToS / Privacy footer shared by both panels
-  /// (`#setupSignupTos` / `#setupLoginPanel .nm-h-35`), with the given lead-in.
+  /// Centered ToS / Privacy footer shared by both panels.
   Widget _tosText(NymColors c, String lead) {
     return Text.rich(
       TextSpan(
@@ -804,11 +731,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
   }
 
-  /// Mirrors updateSetupInviteBanner: shows an invite line when a pending
-  /// group-invite token is present (`nym_pending_group_invite`), decoding the
-  /// group name so the banner reads `You've been invited to join "<name>".`
-  /// (app.js:7161) — falling back to the generic copy when the token carries
-  /// no name.
+  /// Invite line for a pending group-invite token, naming the group when the token carries one.
   String? _inviteBannerText() {
     final kv = ref.read(keyValueStoreProvider);
     final token = kv.getString(StorageKeys.pendingGroupInvite);
@@ -824,8 +747,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         {'name': name});
   }
 
-  /// `.form-label`: 11px textDim UPPERCASE ls1.2 w600; the trailing
-  /// "(optional)" span is `.nm-h-2` (w400, none-case, ls0).
+  /// Form label; the trailing "(optional)" is lowercase w400.
   Widget _label(NymColors c, String text, {bool optional = false}) {
     return RichText(
       text: TextSpan(
@@ -861,10 +783,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     bool showCounter = false,
     bool obscureText = false,
   }) {
-    // Light mode forces `input/.form-input { background: rgba(0,0,0,0.04);
-    // border-color: rgba(0,0,0,0.1); color: #000 } !important`
-    // (styles-themes-responsive.css:561-592); dark keeps the `.form-input`
-    // white/0.05 fill + glass border.
+    // Light mode forces a black@0.04 fill and black@0.1 border.
     final baseBorder = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     final field = TextField(
       controller: controller,
@@ -884,7 +803,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         hintStyle: TextStyle(color: c.textDim, fontSize: 15),
         counterText: '',
         filled: true,
-        // `.form-input` fill white/0.05 (light: black/0.04).
         fillColor: c.isLight
             ? const Color(0x0A000000)
             : Colors.white.withValues(alpha: 0.05),
@@ -905,7 +823,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       ),
     );
     if (!showCounter || maxLength == null) return field;
-    // `.input-char-count` — warn at 80%, limit at 100% (updateFieldCharCount).
+    // Warn at 80%, limit at 100%.
     final len = controller.text.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -927,10 +845,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
   }
 
-  /// `setupAvatarPreview` (index.html:1220-1233) — 80×80 preview + Choose/Remove.
-  /// `.avatar-preview` (styles-features.css:2891) is a CIRCLE (border-radius 50%)
-  /// with a 2px glass border over a `white@0.04` fill; before a pick the PWA
-  /// shows a BLANK circle (a plain `#222` SVG), not a person glyph.
+  /// 80x80 circular avatar preview with Choose/Remove; blank circle before a pick.
   Widget _avatarPicker(NymColors c) {
     return Row(
       children: [
@@ -977,8 +892,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
   }
 
-  /// `setupBannerPreview` (index.html:1304-1323) — preview wrap + Choose/Remove
-  /// with a "No banner set" placeholder.
+  /// Banner preview with Choose/Remove and a "No banner set" placeholder.
   Widget _bannerPicker(NymColors c) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1022,10 +936,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
   }
 
-  /// `.upload-progress` body: an "Uploading …" label over the `.progress-bar`
-  /// (height 6, bg white/0.05, radius 10) with the `.progress-fill` (90°
-  /// primary→secondary gradient) at the live progress width (mirrors
-  /// new_pm_modal's `_uploadProgressBar`).
+  /// Upload label over a 6px progress bar with a gradient fill.
   Widget _uploadProgressBar(NymColors c) {
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -1092,8 +1003,6 @@ class _InviteBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // `.setup-invite-banner`: 1px secondary border, bg white/0.04, radius 8,
-    // padding 10/12, 13px, centered, NO icon (styles-components.css:59-68).
     return Container(
       key: const Key('setupInviteBanner'),
       width: double.infinity,

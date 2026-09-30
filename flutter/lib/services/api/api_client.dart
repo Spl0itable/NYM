@@ -16,27 +16,20 @@ import '../relay/relay_stats.dart';
 import 'api_config.dart';
 import 'proxy_reachability.dart';
 
-/// Factory that opens a [WebSocketChannel] to the `/api` socket. Overridable in
-/// tests so no real socket is opened (mirrors `WebSocketChannelFactory` in
-/// relay_connection.dart). The native factory attaches the `User-Agent` header
-/// the backend `isNymchatClient` gate recognizes — the headers-less
-/// `WebSocketChannel.connect` would send a default Dart UA.
+/// Opens the `/api` socket; overridable in tests.
 typedef ApiSocketFactory = WebSocketChannel Function(Uri url);
 
-/// The real native `/api` socket factory: an [IOWebSocketChannel] carrying the
-/// `NymchatApp/<ver>` UA (same gate the relay sockets pass).
+/// Native `/api` socket factory carrying the `NymchatApp/<ver>` UA the backend gate requires.
 WebSocketChannel defaultApiSocketFactory(Uri url) => IOWebSocketChannel.connect(
       url,
       headers: ApiConfig.socketHeadersFor(url),
       customClient: ApiConfig.socketClient(),
     );
 
-/// Default Giphy API key (PWA `this.giphyApiKey`, app.js:679). Mirrors the
-/// existing `kGiphyApiKey` in features/emoji/gif_picker.dart.
+/// Default Giphy API key, as the PWA's `giphyApiKey`.
 const String kApiGiphyApiKey = 'G6neFEExTMBM0h3hM2QjQg4vG8jMMLa9';
 
-/// An OpenGraph link-preview result (`/api/proxy?action=unfurl`).
-/// Shape mirrors proxy.js: `{url,title,description,image,siteName,type,favicon}`.
+/// OpenGraph preview from `/api/proxy?action=unfurl`.
 class UnfurlResult {
   const UnfurlResult({
     required this.url,
@@ -67,8 +60,7 @@ class UnfurlResult {
       );
 }
 
-/// A translation result (`/api/proxy?action=translate`).
-/// proxy.js returns `{translatedText, detectedLanguage}`.
+/// Translation result from `/api/proxy?action=translate`.
 class TranslateResult {
   const TranslateResult({
     required this.translatedText,
@@ -84,8 +76,7 @@ class TranslateResult {
       );
 }
 
-/// A geo relay entry (`/api/proxy?action=geo-relays`).
-/// proxy.js returns `{relays:[{url,lat,lng}]}`.
+/// Geo relay entry from `/api/proxy?action=geo-relays`.
 class GeoRelay {
   const GeoRelay({required this.url, required this.lat, required this.lng});
 
@@ -100,37 +91,14 @@ class GeoRelay {
       );
 }
 
-/// Builds the NIP-98-style kind-27235 auth event the nym backend expects for
-/// mutating `/api/storage` and `/api/bot` actions (`_signBotAuth`, pms.js:1649;
-/// server `verifyClientAuth`, _shared.js:2656).
-///
-/// The PWA sends the *full signed event object* as `body.auth` (NOT a base64
-/// `Authorization: Nostr <…>` header — that header form is only the Blossom
-/// kind-24242 upload path). Tags mirror the PWA exactly:
-///   `['domain','nymbot-pm'], ['method','POST'], ['u', url], ['action', action]`
-/// content is the literal string `'nymbot-pm-auth'`, created_at is unix seconds.
-///
-/// The server checks: `kind === 27235`, `|now - created_at| <= 120`,
-/// `getEventHash(auth) === auth.id`, schnorr sig, and the `action` / `method` /
-/// `u` (origin+pathname) tag binding. The optional `['payload', …]` tag is NOT
-/// emitted by the PWA (the server only enforces it when present), so we omit it
-/// too for byte-for-byte parity.
-///
-/// This is pure (no network): give it the identity privkey + pubkey and it
-/// returns the signed event. Callers that hold the [Identity] (the zap/shop
-/// modals, nymbot UI) build it and pass it down as the `auth` map.
+/// Kind-27235 auth event sent whole as `body.auth` for mutating storage/bot actions; tags match the PWA exactly.
 class Nip98Auth {
   Nip98Auth._();
 
-  /// The literal `content` field the PWA signs (pms.js:1672).
+  /// The literal `content` the PWA signs.
   static const String content = 'nymbot-pm-auth';
 
-  /// Builds + signs the kind-27235 auth event for [action] against [url],
-  /// returning the full signed event as a JSON map (the `body.auth` value).
-  ///
-  /// [privkey] is the 32-byte identity secret key; [pubkey] its 64-hex public
-  /// key. [createdAt] defaults to now (unix seconds) and is injectable for
-  /// deterministic tests.
+  /// Builds and signs the auth event for [action] against [url]; [createdAt] is injectable for tests.
   static Map<String, dynamic> build({
     required String action,
     required String url,
@@ -159,14 +127,7 @@ class Nip98Auth {
     return signed.toJson();
   }
 
-  /// Signer-based async variant: builds the kind-27235 event and signs it via
-  /// the active [EventSigner], so a NIP-46 remote signer authenticates exactly
-  /// like a local key. Mirrors the PWA's `_signBotAuth`, which signs through the
-  /// generic `signEvent` dispatch (local OR remote) and caches non-[sensitive]
-  /// auth for 90s keyed by `pubkey|action|url` (`_botAuthCache`, pms.js:1659) so
-  /// a remote signer isn't round-tripped per request. Returns null when signing
-  /// fails (remote unreachable/declined) — the caller then proceeds best-effort
-  /// (unauthenticated), exactly as before for accounts that can't sign.
+  /// Signs via [EventSigner] (local or NIP-46), caching non-[sensitive] auth 90s; null when signing fails.
   static Future<Map<String, dynamic>?> buildSigned({
     required String action,
     required String url,
@@ -181,9 +142,7 @@ class Nip98Auth {
     final cacheKey = '$pubkey|$action|$url';
     if (!sensitive) {
       final cached = _authCache[cacheKey];
-      // Match the PWA: validate the *signed* event's created_at (a remote signer
-      // may stamp its own clock) against a 90s window, well inside the worker's
-      // 120s tolerance.
+      // Validate the signed event's created_at against 90s, inside the worker's 120s tolerance.
       if (cached != null &&
           cached.pubkey == pubkey &&
           (now - cached.createdAt) < 90) {
@@ -205,9 +164,7 @@ class Nip98Auth {
       tags: tags,
       content: content,
     );
-    // Mined before signing: every signer recomputes the id from these fields,
-    // and the nonce tag is one of them. mineNonce grinds in an isolate and
-    // works for remote signers too.
+    // Mine before signing, since the nonce tag is part of the id.
     if (powBits > 0) unsigned = await mineNonce(unsigned, powBits);
     try {
       final signed = await signer.sign(unsigned);
@@ -238,19 +195,13 @@ class Nip98Auth {
         ],
       );
 
-  /// 90s non-sensitive auth cache (the PWA's `_botAuthCache`). Static so it is
-  /// shared across the storage + api-ws builders for one process identity.
+  /// 90s non-sensitive auth cache, shared process-wide.
   static final Map<String, _CachedAuth> _authCache = {};
 
-  /// Drops all cached auth. Call on sign-out / identity switch so a new identity
-  /// never reuses the previous one's signed auth.
+  /// Call on sign-out or identity switch so a new identity never reuses stale auth.
   static void clearAuthCache() => _authCache.clear();
 
-  /// Optional `['payload', sha256hex(canonicalBody)]` tag value. The nym backend
-  /// canonicalizes by dropping the `auth` key and sorting the remaining keys,
-  /// then `JSON.stringify`, sha256, lowercase hex (`canonicalAuthBody` +
-  /// `authPayloadHashHex`, _shared.js:2644). Exposed for completeness/tests; the
-  /// PWA does not attach it.
+  /// Optional `['payload', sha256(canonical body)]` value, matching the backend's `canonicalAuthBody`; unused by the PWA.
   static String payloadHashHex(Map<String, dynamic> body) {
     final canonical = <String, dynamic>{};
     final keys = body.keys.where((k) => k != 'auth').toList()..sort();
@@ -262,8 +213,6 @@ class Nip98Auth {
   }
 }
 
-/// A cached signed auth event with the timestamp its 90s validity is judged by
-/// (see [Nip98Auth.buildSigned]).
 class _CachedAuth {
   _CachedAuth(this.pubkey, this.createdAt, this.auth);
   final String pubkey;
@@ -271,10 +220,7 @@ class _CachedAuth {
   final Map<String, dynamic> auth;
 }
 
-/// The parsed result of a single `/api` socket request: the HTTP-equivalent
-/// [status] code, the decoded JSON [data] (single-response actions), and the
-/// per-line [items] for a streaming (NDJSON) action with the `X-Has-More` flag
-/// recovered from the `END` frame headers.
+/// One `/api` socket result: [status], [data] for single responses, or streamed [items] plus has-more.
 class ApiSocketResult {
   ApiSocketResult({
     required this.status,
@@ -288,23 +234,7 @@ class ApiSocketResult {
   final bool hasMore;
 }
 
-/// One persistent, multiplexed `/api` WebSocket that carries every D1 storage op
-/// so the client doesn't open an HTTP request (and sign an auth event) per
-/// fetch/put — the native port of the PWA's `_ensureApiSocket` / `_apiSocketSend`
-/// (shop.js:12-151).
-///
-/// Framing matches the worker byte-for-byte:
-///   * client → `['AUTH', authEvent]` on open (only when authenticated), then
-///     `['REQ', id, action, extra]` per request;
-///   * server → `['AUTH_OK']` / `['AUTH_ERR', msg]`, `['RES', id, status, data]`
-///     (single), or `['ITEM', id, item]…['END', id, headers]` (streaming).
-///
-/// Logged-in callers authenticate the socket once (so per-request signatures are
-/// skipped — the worker pins `context._wsAuthedPubkey`); logged-out callers open
-/// an unauthenticated socket usable for public reads (channel/profile/shop-status).
-/// A connect/auth failure trips a short cooldown so a broken endpoint doesn't add
-/// a connect-timeout to every call (shop.js `_apiSockFailedUntil`); the caller
-/// then falls back to HTTP.
+/// Persistent multiplexed `/api` socket for D1 storage ops; failures trip a cooldown and fall back to HTTP.
 class ApiSocket {
   ApiSocket({
     required Uri url,
@@ -325,10 +255,7 @@ class ApiSocket {
   final Duration _requestTimeout;
   final Duration _failureCooldown;
 
-  /// Per-frame byte tally (sent/received JSON frame length, attributed to the
-  /// request action), wired to the network-stats sink. Mirrors the PWA's
-  /// `_trackApiData` calls in `_ensureApiSocket`/`_apiSocketSend` (shop.js:60-70,
-  /// 147). Null in HTTP-only clients and the test default.
+  /// Per-frame byte tally by action for network stats; null when HTTP-only.
   final void Function(String action, {int sent, int recv})? onTraffic;
 
   WebSocketChannel? _channel;
@@ -344,11 +271,7 @@ class ApiSocket {
   bool get isOpen => _open;
   bool get isAuthenticated => _authed;
 
-  /// Ensures the socket is connected (and authenticated when [authEvent] is
-  /// non-null). Resolves when ready; throws on connect/auth failure (and trips
-  /// the cooldown). [authEvent] is the signed `api-ws` kind-27235 event the
-  /// worker's `AUTH` handler verifies (built by the caller exactly like the
-  /// other storage auth, but bound to the `…/api` WS URL).
+  /// Connects, authenticating when [authEvent] is set; throws and trips the cooldown on failure.
   Future<void> ensureConnected({Map<String, dynamic>? authEvent}) async {
     final needAuth = authEvent != null;
     if (_open && (_authed || !needAuth)) return;
@@ -391,11 +314,7 @@ class ApiSocket {
         final sent = _send(['AUTH', authEvent]);
         onTraffic?.call('auth', sent: sent);
       } else {
-        // Mirror `ws.onopen` (shop.js:58): an unauthenticated socket is ready
-        // only once the underlying connection is actually up — not merely once
-        // the listener is attached — so requests are never framed into (and
-        // left pending on) a socket that never opened. The `_channel == ch`
-        // guard skips a stale ready/error racing a timeout-driven teardown.
+        // Ready only once the connection is really up; the `_channel == ch` guard skips stale callbacks.
         unawaited(ch.ready.then((_) {
           if (_channel == ch) markReady();
         }, onError: (Object e) {
@@ -414,8 +333,7 @@ class ApiSocket {
     void Function(Object) fail,
     bool needAuth,
   ) {
-    // Frame byte count for the network stats (PWA: string `event.data.length`,
-    // else `byteLength`). Attributed to the action below, like `_trackApiData`.
+    // Frame byte count for the network stats.
     final recvLen = raw is String ? raw.length : (raw is List ? raw.length : 0);
     dynamic msg;
     try {
@@ -446,8 +364,7 @@ class ApiSocket {
     }
     final id = msg[1];
     final p = _pending[id];
-    // Attribute received bytes to the request's action (else 'other') before any
-    // dispatch removes the pending entry — mirrors the PWA's recv tally.
+    // Tally received bytes before dispatch removes the pending entry.
     onTraffic?.call(p?.action ?? 'other', recv: recvLen);
     if (p == null) return;
     if (t == 'RES') {
@@ -457,11 +374,7 @@ class ApiSocket {
       final data = (msg.length > 3 && msg[3] is Map)
           ? (msg[3] as Map).cast<String, dynamic>()
           : <String, dynamic>{};
-      // A stream request answered by an error RES (the worker rejects before
-      // any ITEM/END) must REJECT — the PWA's non-raw `_apiSocketSend` rejects
-      // on `status >= 400 || data.error` (shop.js:88-95), which the caller's
-      // catch turns into an HTTP retry — never resolve as an empty item list.
-      // Non-stream error RES keeps resolving; [_trySocket] gates its status.
+      // A stream request answered by an error RES must reject so the caller retries over HTTP.
       if (p.stream && (status >= 400 || data['error'] != null)) {
         p.completeError(ApiException(p.action, status,
             data['error']?.toString() ?? 'Request failed ($status)'));
@@ -481,12 +394,7 @@ class ApiSocket {
     }
   }
 
-  /// Sends a `REQ` for [action] with [extra] and resolves the result. [stream]
-  /// collects `ITEM` frames until `END`; otherwise a single `RES`. Rejects on a
-  /// closed socket or a per-request timeout (so the caller falls back to HTTP).
-  /// [timeout] overrides the socket-wide request timeout for THIS request —
-  /// the PWA's `opts.timeout || 45000` (shop.js:142), which the bot `pm`
-  /// action stretches to 180s (pms.js:2470).
+  /// Sends a REQ and resolves its result; rejects on close or timeout so the caller falls back to HTTP.
   Future<ApiSocketResult> request(
     String action,
     Map<String, dynamic> extra, {
@@ -514,9 +422,7 @@ class ApiSocket {
     return p.future;
   }
 
-  /// Encodes [frame], sends it, and returns the JSON byte length sent (so the
-  /// caller can tally it via [onTraffic], matching the PWA's per-frame
-  /// `_trackApiData(action, frame.length, 0)`).
+  /// Sends [frame] and returns its JSON byte length for [onTraffic].
   int _send(List<dynamic> frame) {
     final ch = _channel;
     if (ch == null) throw StateError('api socket not ready');
@@ -532,12 +438,7 @@ class ApiSocket {
     _pending.clear();
   }
 
-  /// Tears down the current channel, failing every in-flight request FIRST —
-  /// the PWA's `onclose` → `fail` rejects all `sock.pending` (shop.js:38-46,
-  /// 105) — so a request orphaned by a reconnect (e.g. the unauth→auth upgrade)
-  /// falls back to HTTP immediately instead of waiting out the 45s request
-  /// timeout. Must run before [_teardown] cancels the stream listener, which
-  /// suppresses the onDone that would otherwise report the close.
+  /// Fails in-flight requests before teardown, which suppresses the onDone that would report the close.
   void _resetChannel() {
     _failAllPending(StateError('api socket reconnecting'));
     _teardown();
@@ -560,20 +461,17 @@ class ApiSocket {
     }
   }
 
-  /// Closes the socket and fails any in-flight requests.
   void dispose() {
     _failAllPending(StateError('api socket disposed'));
     _teardown();
   }
 }
 
-/// An in-flight `/api` socket request awaiting its `RES`/`END` frame.
 class _Pending {
   _Pending({required this.stream, required this.action});
   final bool stream;
 
-  /// The request action, so a received RES/ITEM/END frame's bytes are tallied
-  /// under it (the PWA looks this up from `sock.pending`).
+  /// The request action, for tallying frame bytes.
   final String action;
   final List<dynamic> items = [];
   final Completer<ApiSocketResult> _completer = Completer<ApiSocketResult>();
@@ -592,11 +490,6 @@ class _Pending {
   }
 }
 
-/// Typed client for the backend proxy endpoints (spec §6).
-///
-/// Every request carries the `isNymchatClient` UA header
-/// ([ApiConfig.userAgent]). Construction performs NO network — calls are lazy.
-/// The `http.Client` is injectable for tests.
 const String kOwnMediaApex = 'nymchat.app';
 
 bool isOwnMediaUrl(String url) {
@@ -617,29 +510,20 @@ class ApiClient {
         _giphyApiKey = giphyApiKey,
         _injectedSocket = apiSocket,
         _socketFactory = apiSocketFactory,
-        // The socket is OFF until [activateApiSocket] (or an injected socket /
-        // factory) turns it on, so a plain ApiClient — the unit-test default and
-        // the shop controller's own client — stays HTTP-only and a [MockClient]
-        // still sees every request. Production wires it on at boot.
+        // Off until [activateApiSocket] or an injected socket, so plain clients stay HTTP-only for tests.
         _socketEnabled = apiSocket != null || apiSocketFactory != null;
 
   final http.Client _client;
   final String _baseUrl;
   final String _giphyApiKey;
 
-  /// Whether the WS-first transport for `/api/storage` is active. The PWA always
-  /// rides a persistent socket and falls back to HTTP (shop.js:181-202/215-238);
-  /// natively this is enabled once the controller calls [activateApiSocket] (or
-  /// an `apiSocket`/`apiSocketFactory` is injected), and otherwise HTTP-only.
+  /// Whether the WS-first `/api/storage` transport is active.
   bool _socketEnabled;
   final ApiSocket? _injectedSocket;
   final ApiSocketFactory? _socketFactory;
   ApiSocket? _socket;
 
-  /// Turns on the WS-first storage transport (call once at boot). [factory]
-  /// overrides the native socket factory (tests pass a fake). After this, every
-  /// [storageAction]/[storageStream] tries the socket first per the PWA gating
-  /// and falls back to HTTP on any socket failure.
+  /// Turns on WS-first storage with HTTP fallback (call once at boot); [factory] is for tests.
   void activateApiSocket({ApiSocketFactory? factory}) {
     _socketEnabled = true;
     if (factory != null && _socket == null && _injectedSocket == null) {
@@ -651,28 +535,21 @@ class ApiClient {
     }
   }
 
-  /// Builds the signed `api-ws` auth event for the socket's AUTH handshake, or
-  /// null when there's no signable identity (an unauthenticated socket is then
-  /// opened for public reads). Wired by the controller, mirroring the PWA's
-  /// `_signBotAuth('api-ws', 'WS')` (shop.js:30). When unset the socket is never
-  /// authenticated, so only public reads ride it.
+  /// Builds the signed `api-ws` socket auth, or null for an unauthenticated public-read socket.
   Future<Map<String, dynamic>?> Function()? _apiSocketAuthBuilder;
 
-  /// Registers the `api-ws` socket auth builder (see [_apiSocketAuthBuilder]).
   void setApiSocketAuthBuilder(
     Future<Map<String, dynamic>?> Function()? builder,
   ) {
     _apiSocketAuthBuilder = builder;
   }
 
-  /// `wss://<host>/api` — the multiplexed storage socket (`_apiWsUrl`, shop.js:5).
-  /// Derived from the proxy base by swapping scheme→wss and the trailing path
-  /// segment to the bare `/api`.
+  /// `wss://<host>/api`, derived from the proxy base.
   Uri _apiSocketUri() {
     final u = Uri.parse(_baseUrl);
     final segs = List<String>.from(u.pathSegments);
     if (segs.isNotEmpty) {
-      segs.removeLast(); // drop `proxy` → leaves `…/api`
+      segs.removeLast(); // Drop `proxy`, leaving `…/api`.
     }
     return Uri(
       scheme: u.scheme == 'http' ? 'ws' : 'wss',
@@ -691,14 +568,7 @@ class ApiClient {
         );
   }
 
-  /// Attempts to run a storage [action] over the `/api` socket, returning the
-  /// `(status, data, items, hasMore)` result, or null when the socket is
-  /// skipped/unavailable so the caller falls back to HTTP. Gating mirrors the
-  /// PWA exactly (`if (this.pubkey || !withAuth)`, shop.js:181/215): the socket
-  /// is tried when the request is authenticated ([authed]) OR is a public read
-  /// (`withAuth === false`). Any connect/auth/request failure — including a
-  /// server *error frame* (a non-2xx single RES or a `data.error`) — resolves to
-  /// null so the caller transparently falls back to HTTP (the PWA reject→retry).
+  /// Tries [action] over the socket when authed or a public read; null on any failure, including error frames.
   Future<ApiSocketResult?> _trySocket(
     String action,
     Map<String, dynamic> body, {
@@ -706,58 +576,31 @@ class ApiClient {
   }) async {
     if (!_socketEnabled) return null;
     final authed = body.containsKey('auth');
-    // Public reads ride the socket even logged out; authed requests need a
-    // signable identity (the auth builder). Otherwise skip straight to HTTP.
+    // Authed requests need a signable identity; otherwise go straight to HTTP.
     final authBuilder = _apiSocketAuthBuilder;
     if (authed && authBuilder == null) return null;
     try {
       final socket = _ensureSocketObject();
-      // Authenticate the socket whenever a signable identity exists — the PWA's
-      // `needAuth = !!this.pubkey` (shop.js:14) — even when THIS request is a
-      // public read. Otherwise a boot-time public read (profile-get/channel-get)
-      // opens an unauthenticated socket that the first signed request then tears
-      // down and re-opens with AUTH, orphaning every read pending on it. Sign
-      // only when the socket isn't already authenticated (the PWA signs once
-      // per connection, shop.js:30).
+      // Authenticate whenever an identity exists, even for public reads, so an upgrade doesn't orphan pending reads.
       Map<String, dynamic>? authEvent;
       if (authBuilder != null && !socket.isAuthenticated) {
         authEvent = await authBuilder();
-        // Signing failed (remote signer unreachable/declined): the PWA's
-        // `_signBotAuth` rejection lands in the callers' catch → HTTP retry,
-        // so skip the socket for this request too.
+        // Signing failed: skip the socket for this request too.
         if (authEvent == null) return null;
       }
-      // Don't stall a request for seconds on the socket handshake — at boot the
-      // first channel backfill (e.g. #nymchat) waited ~5s for the socket to open
-      // instead of loading over HTTP. Give the socket only a brief window to come
-      // up; if it doesn't, fall back to HTTP NOW while the connection keeps going
-      // in the background, so the next request rides the (by then) connected
-      // socket (which is why clicking away + back already loaded instantly). An
-      // already-open socket resolves instantly, so steady-state still rides it.
+      // Give the handshake only a brief window, then use HTTP while it keeps connecting.
       final connecting = socket.ensureConnected(authEvent: authEvent);
-      // Swallow a post-timeout connect failure so it isn't an unhandled async
-      // error (the await below stops listening once the timeout fires).
+      // Swallow a post-timeout connect failure.
       unawaited(connecting.catchError((_) {}));
       await connecting.timeout(const Duration(milliseconds: 800));
-      // The socket is authenticated once; per-request bodies drop pubkey/auth
-      // (the worker pins the socket's pubkey — shop.js comment at :273). Public
-      // reads never carried them. Strip them from the `extra` we frame.
+      // The socket is authenticated once, so strip pubkey/auth from per-request bodies.
       final extra = <String, dynamic>{
         for (final e in body.entries)
           if (e.key != 'action' && e.key != 'auth' && e.key != 'pubkey')
             e.key: e.value,
       };
       final result = await socket.request(action, extra, stream: stream);
-      // SAFETY/parity: a server *error frame* (non-2xx RES, or a `data.error`)
-      // is a fallback trigger too. The PWA's non-`raw` `_apiSocketSend` REJECTS
-      // on `status >= 400 || data.error` (shop.js:89), which its callers'
-      // try/catch turns into an HTTP retry (`_storageApiRequest`/`_storageApiStream`
-      // shop.js:182-185/216-219). So we return null here to make the caller fall
-      // back to HTTP rather than surfacing the socket's error — HTTP always gets
-      // a turn, and its (re-signed) response is the authoritative one the caller
-      // sees. A streaming read's error arrives as an error RES that [_onFrame]
-      // rejects (the throw lands in the catch below → null → HTTP fallback), so
-      // this status gate only sees single-response actions.
+      // An error frame also falls back to HTTP, whose response is authoritative.
       if (!stream &&
           (result.status < 200 ||
               result.status >= 300 ||
@@ -766,24 +609,11 @@ class ApiClient {
       }
       return result;
     } catch (_) {
-      return null; // fall back to HTTP
+      return null; // Fall back to HTTP.
     }
   }
 
-  /// Runs one bot/ledger [action] over the shared identity-authed `/api`
-  /// socket with RAW semantics — resolves `(status, data)` regardless of the
-  /// status so callers can branch on `noCredits`/`error` themselves — the WS
-  /// leg of the PWA's `_botMoneyRequest` (`_apiSocketSend(action, extra,
-  /// {raw:true, timeout})`, shop.js:158-161). This is THE seam that lets
-  /// [NymbotService] ride the SAME multiplexed socket as the storage sync (the
-  /// PWA's single `_apiSock`) instead of opening + AUTH-signing a second one.
-  ///
-  /// Gated on a signable identity like the PWA's `if (this.pubkey)`
-  /// (shop.js:158): with no auth builder wired, the ledger never rides the
-  /// socket. Returns null on any socket unavailability/failure so the caller
-  /// falls back to the per-action-signed HTTP POST. Unlike the storage paths
-  /// there is no fast-fallback connect cap — `_botMoneyRequest` awaits
-  /// `_ensureApiSocket()` in full (user-initiated, no boot backfill to stall).
+  /// Runs a bot/ledger [action] over the shared authed socket with raw status semantics; null means use HTTP.
   Future<({int status, Map<String, dynamic> data})?> botSocketRequest(
     String action,
     Map<String, dynamic> extra, {
@@ -797,97 +627,81 @@ class ApiClient {
       Map<String, dynamic>? authEvent;
       if (!socket.isAuthenticated) {
         authEvent = await authBuilder();
-        // No signable identity → the bot ledger can't ride the socket.
+        // No signable identity: the bot ledger can't ride the socket.
         if (authEvent == null) return null;
       }
       await socket.ensureConnected(authEvent: authEvent);
       final res = await socket.request(action, extra, timeout: timeout);
       return (status: res.status, data: res.data);
     } catch (_) {
-      return null; // fall back to HTTP (shop.js:162)
+      return null; // Fall back to HTTP.
     }
   }
 
-  /// Process-wide /api traffic sink for the Network Stats "App data" section.
-  /// Mirrors the PWA's single shared `nym.relayStats` that `_trackApiData`
-  /// writes to (shop.js:113): every [ApiClient] (shop, zaps, profiles, geo,
-  /// media, …) tallies its request/response bytes per action here. Set once at
-  /// boot ([NostrService] wires it to its persistent stats); null = not tracked
-  /// (the default in tests, so unit tests stay isolated).
+  /// Process-wide /api traffic sink for Network Stats; null in tests.
   static RelayStats? apiStatsSink;
 
-  /// Record an /api request of [action] that sent [sent] request bytes and
-  /// received [recv] response bytes into [apiStatsSink] (no-op when unset).
-  /// Mirrors `_trackApiData` (shop.js:113).
   static void _trackApiData(String action, {int sent = 0, int recv = 0}) {
     apiStatsSink?.recordApiData(action, sent: sent, recv: recv);
   }
 
-  /// Best-effort byte size of a request body for the App-data tally: a String
-  /// body counts its UTF-8 length; a byte body its length; null/other → 0.
+  /// Request body size in bytes for the tally; 0 for null or other types.
   static int _bodyLen(Object? body) {
     if (body is String) return utf8.encode(body).length;
     if (body is List<int>) return body.length;
     return 0;
   }
 
-  // ---------------------------------------------------------------------------
-  // URL builders (pure — used directly by media widgets and unit tests).
-  // ---------------------------------------------------------------------------
+  // URL builders
 
   /// `GET /api/proxy?url=<encoded>` (optional `&emoji=1`).
-  /// Mirrors `getProxiedMediaUrl` / `getProxiedEmojiUrl` (users.js:485/493).
   String mediaProxyUrl(String url, {bool emoji = false}) {
     final enc = Uri.encodeComponent(url);
     return emoji ? '$_baseUrl?emoji=1&url=$enc' : '$_baseUrl?url=$enc';
   }
 
-  /// `GET /api/proxy?action=unfurl&url=<encoded>` (ui-context.js:693).
+  /// `GET /api/proxy?action=unfurl&url=<encoded>`
   String unfurlUrl(String url) =>
       '$_baseUrl?action=unfurl&url=${Uri.encodeComponent(url)}';
 
-  /// `GET /api/proxy?action=geo-relays` (relays.js:16).
+  /// `GET /api/proxy?action=geo-relays`
   String geoRelaysUrl() => '$_baseUrl?action=geo-relays';
 
-  /// `GET /api/proxy?action=geocode&lat&lng&zoom&lang` (relays.js:3210).
+  /// `GET /api/proxy?action=geocode&lat&lng&zoom&lang`
   String geocodeUrl(double lat, double lng,
           {int zoom = 10, String lang = 'en'}) =>
       '$_baseUrl?action=geocode&lat=$lat&lng=$lng&zoom=$zoom&lang=$lang';
 
-  /// `GET /api/proxy?action=giphy&q=<q>&api_key=<key>` (relays.js:3221).
+  /// `GET /api/proxy?action=giphy&q=<q>&api_key=<key>`
   String giphySearchUrl(String query) =>
       '$_baseUrl?action=giphy&q=${Uri.encodeComponent(query)}&api_key=${Uri.encodeComponent(_giphyApiKey)}';
 
-  /// `GET /api/proxy?action=giphy&trending=1&api_key=<key>` (relays.js:3221).
+  /// `GET /api/proxy?action=giphy&trending=1&api_key=<key>`
   String giphyTrendingUrl() =>
       '$_baseUrl?action=giphy&trending=1&api_key=${Uri.encodeComponent(_giphyApiKey)}';
 
-  /// `PUT /api/proxy?action=upload&server=<encoded>` (users.js:499).
+  /// `PUT /api/proxy?action=upload&server=<encoded>`
   String blossomUploadUrl(String server) =>
       '$_baseUrl?action=upload&server=${Uri.encodeComponent(server)}';
 
-  /// `PUT /api/proxy?action=mirror&server=<encoded>` (users.js:511) — asks a
-  /// Blossom server to pull an already-uploaded blob from its primary URL.
+  /// `PUT /api/proxy?action=mirror&server=<encoded>`: asks a Blossom server to pull an uploaded blob.
   String blossomMirrorUrl(String server) =>
       '$_baseUrl?action=mirror&server=${Uri.encodeComponent(server)}';
 
-  /// `GET|POST /api/proxy?action=json&url=<encoded>` — the JSON privacy proxy
-  /// (`proxiedJsonFetch`, relays.js:3192; worker `handleJsonProxy`, proxy.js:180).
+  /// `GET|POST /api/proxy?action=json&url=<encoded>`, the JSON privacy proxy.
   String jsonProxyUrl(String url) =>
       '$_baseUrl?action=json&url=${Uri.encodeComponent(url)}';
 
-  /// `POST /api/proxy?action=zap-verify` (zaps.js:979 `_serverVerifyZapPaid`).
+  /// `POST /api/proxy?action=zap-verify`
   String zapVerifyUrl() => '$_baseUrl?action=zap-verify';
 
-  /// `https://<host>/api/storage` — shop-* mutating actions (shop.js:187).
-  /// Derived from the proxy base by swapping the trailing path segment so the
-  /// `u`-tag binding in NIP-98 auth matches the actual request URL.
+  /// `https://<host>/api/storage`, derived so the NIP-98 `u` tag matches the request URL.
   String get storageUrl => _siblingApi('storage');
 
-  /// `https://<host>/api/bot` — Nymbot credit actions (bot.js).
+  /// `https://<host>/api/bot`
   String get botUrl => _siblingApi('bot');
 
-  /// Rewrites the proxy base (`…/api/proxy[?…]`) to a sibling `…/api/<name>`.
+  /// Rewrites the proxy base to a sibling `…/api/<name>`.
   String _siblingApi(String name) {
     final u = Uri.parse(_baseUrl);
     final segs = List<String>.from(u.pathSegments);
@@ -896,7 +710,7 @@ class ApiClient {
     } else {
       segs.add(name);
     }
-    // Build a query-less URI (replace(query: '') leaves a trailing '?').
+    // Build a query-less URI; replace(query: '') leaves a trailing '?'.
     return Uri(
       scheme: u.scheme,
       host: u.host,
@@ -905,34 +719,18 @@ class ApiClient {
     ).toString();
   }
 
-  // ---------------------------------------------------------------------------
-  // Network calls (lazy).
-  // ---------------------------------------------------------------------------
+  // Network calls
 
   Map<String, String> _headers([Map<String, String>? extra]) => {
         ...ApiConfig.defaultHeaders,
         if (extra != null) ...extra,
       };
 
-  /// UTF-8 text of an HTTP response body. NEVER use `res.body` for wire text:
-  /// package:http picks the charset from the Content-Type header and silently
-  /// falls back to LATIN-1 when the header carries no `charset=` — and the nym
-  /// worker sends charset-less `application/json` / `application/x-ndjson`
-  /// (storage.js:199/638). Every UTF-8 byte then decodes as one Latin-1 char,
-  /// so multibyte nyms/emoji arrive as mojibake ('ð£…' instead of '🅃…').
-  /// The PWA's `response.json()` / TextDecoder always decodes UTF-8 (with
-  /// U+FFFD replacement, never throwing), so mirror that here.
+  /// Response body decoded as UTF-8, since package:http defaults charset-less responses to Latin-1.
   static String _utf8Body(http.Response res) =>
       utf8.decode(res.bodyBytes, allowMalformed: true);
 
-  /// Re-wrap a JSON response whose Content-Type lacks a `charset=` so that
-  /// downstream `res.body` readers (the LNURL flows consume the raw response
-  /// from [proxiedJsonFetch]) decode UTF-8 instead of package:http's Latin-1
-  /// default. JSON is UTF-8 by spec (RFC 8259 §8.1), and the PWA's
-  /// `response.json()` always decodes UTF-8.
-  /// Case-insensitive response-header lookup. Real HTTP clients normalize
-  /// header names to lowercase, but MockClient (tests) preserves the given
-  /// casing — browser `Headers` (the PWA) is case-insensitive by spec.
+  /// Case-insensitive header lookup; MockClient preserves header casing.
   static String? _header(http.Response res, String name) {
     final direct = res.headers[name];
     if (direct != null) return direct;
@@ -960,8 +758,7 @@ class ApiClient {
     );
   }
 
-  /// POST translate `{text, source, target}` -> `{translatedText, detectedLanguage}`.
-  /// `source` defaults to `'auto'` (proxy.js:504).
+  /// Translates [text]; `source` defaults to 'auto'.
   Future<TranslateResult> translate(
     String text,
     String target, {
@@ -983,11 +780,7 @@ class ApiClient {
         jsonDecode(_utf8Body(res)) as Map<String, dynamic>);
   }
 
-  /// GET unfurl (OpenGraph preview).
-  /// Process-wide unfurl cache. A preview card refetches on every mount, so
-  /// re-entering a channel or scrolling a list would otherwise rebuild every
-  /// card from the network. Failures are cached briefly too, and concurrent
-  /// callers for one URL share a single request.
+  /// Process-wide unfurl cache; failures are cached briefly and concurrent callers share one request.
   static final Map<String, ({DateTime at, UnfurlResult? data})> _unfurlCache =
       {};
   static final Map<String, Future<UnfurlResult>> _unfurlInflight = {};
@@ -995,8 +788,7 @@ class ApiClient {
   static const Duration _unfurlMissTtl = Duration(hours: 1);
   static const int _unfurlCacheMax = 200;
 
-  /// Synchronous cache peek, so a card that has already been unfurled paints
-  /// on its first frame instead of flashing empty.
+  /// Synchronous cache peek so an unfurled card paints on its first frame.
   UnfurlResult? unfurlCached(String url) {
     final hit = _unfurlCache[url];
     if (hit == null || hit.data == null) return null;
@@ -1025,8 +817,7 @@ class ApiClient {
     }, onError: (Object e) {
       _putUnfurl(url, null);
       throw e;
-      // Block body on purpose: Map.remove returns this very future, and an
-      // arrow body would make whenComplete await it — a self-deadlock.
+      // Block body on purpose: an arrow would make whenComplete await its own future and deadlock.
     }).whenComplete(() {
       _unfurlInflight.remove(url);
     });
@@ -1052,9 +843,7 @@ class ApiClient {
         jsonDecode(_utf8Body(res)) as Map<String, dynamic>);
   }
 
-  /// PUT a Blossom blob through the proxy. [authHeader] is the full
-  /// `Authorization` value (e.g. `Nostr <base64-event>`, kind-24242 BUD auth).
-  /// Returns the parsed Blossom JSON (caller reads `data['url']`).
+  /// PUTs a Blossom blob via the proxy with a kind-24242 [authHeader]; returns the Blossom JSON.
   Future<Map<String, dynamic>> uploadBlob(
     Uint8List bytes,
     String server,
@@ -1076,13 +865,7 @@ class ApiClient {
     return jsonDecode(_utf8Body(res)) as Map<String, dynamic>;
   }
 
-  /// PUT a Blossom mirror request through the proxy (`action=mirror`,
-  /// proxy.js:334): asks [server] to pull the already-uploaded blob at
-  /// [sourceUrl] instead of re-uploading the bytes (`_mirrorBlobBackground`,
-  /// users.js:640-655). [authHeader] is the same `Nostr <base64>` kind-24242
-  /// value as the primary upload — the PWA signs the mirror auth with
-  /// `t: 'upload'` too (users.js:642). Body is `{"url": <sourceUrl>}`.
-  /// Returns the parsed Blossom JSON (caller reads `data['url']`).
+  /// Asks [server] to mirror the blob at [sourceUrl] via the proxy; returns the Blossom JSON.
   Future<Map<String, dynamic>> mirrorBlob(
     String sourceUrl,
     String server,
@@ -1105,13 +888,7 @@ class ApiClient {
     return jsonDecode(_utf8Body(res)) as Map<String, dynamic>;
   }
 
-  /// Fetches a JSON resource through the `/api/proxy?action=json` privacy
-  /// proxy so the upstream host (e.g. an LNURL Lightning provider) only ever
-  /// sees Cloudflare IPs, mirroring `proxiedJsonFetch` (relays.js:3192-3200).
-  ///
-  /// The worker passes through GET and POST (any other method is coerced to
-  /// GET, proxy.js:195), forwards the request `Content-Type` + body on POST,
-  /// and returns the upstream body + status.
+  /// Fetches JSON through the privacy proxy so upstream hosts only see Cloudflare IPs; GET or POST.
   Future<http.Response> proxiedJsonFetch(
     String targetUrl, {
     String method = 'GET',
@@ -1142,18 +919,11 @@ class ApiClient {
     return _utf8Response(res);
   }
 
-  /// GET the geo relay list -> `[{url,lat,lng}]`. Filters out non-finite coords
-  /// (relays.js:20). Returns an empty list on a non-200 so the caller can fall
-  /// back to the bitchat CSV.
+  /// Geo relays with finite coords; empty on a non-200 so the caller can fall back to the CSV.
   Future<List<GeoRelay>> geoRelays() async =>
       (await geoRelayDirectories()).upstream;
 
-  /// GET both geo-relay directories the proxy serves.
-  ///
-  /// `upstream` is the georelays CSV bitchat-android reads; `vetted` is the
-  /// validator-gated copy inside the bitchat repo that bitchat iOS reads. They
-  /// have diverged, and each client picks from its own, so both are needed to
-  /// reach either population. `vetted` is empty against an older proxy build.
+  /// Both geo-relay directories: `upstream` (bitchat-android) and `vetted` (bitchat iOS).
   Future<({List<GeoRelay> upstream, List<GeoRelay> vetted})>
       geoRelayDirectories() async {
     final u = geoRelaysUrl();
@@ -1170,7 +940,7 @@ class ApiClient {
     );
   }
 
-  /// Filters out non-finite coords (relays.js:20).
+  /// Filters out non-finite coords.
   static List<GeoRelay> _parseGeoRelayList(Object? raw) {
     if (raw is! List) return const [];
     final out = <GeoRelay>[];
@@ -1187,7 +957,7 @@ class ApiClient {
     return out;
   }
 
-  /// GET reverse geocode -> raw Nominatim JSON (passed through by proxy.js).
+  /// Reverse geocode, returning raw Nominatim JSON.
   Future<Map<String, dynamic>> geocode(
     double lat,
     double lng, {
@@ -1203,7 +973,6 @@ class ApiClient {
     return jsonDecode(_utf8Body(res)) as Map<String, dynamic>;
   }
 
-  /// GET Giphy search -> raw Giphy JSON.
   Future<Map<String, dynamic>> giphySearch(String query) async {
     final u = giphySearchUrl(query);
     final res = await _client.get(Uri.parse(u), headers: _headers());
@@ -1214,7 +983,6 @@ class ApiClient {
     return jsonDecode(_utf8Body(res)) as Map<String, dynamic>;
   }
 
-  /// GET Giphy trending -> raw Giphy JSON.
   Future<Map<String, dynamic>> giphyTrending() async {
     final u = giphyTrendingUrl();
     final res = await _client.get(Uri.parse(u), headers: _headers());
@@ -1225,16 +993,9 @@ class ApiClient {
     return jsonDecode(_utf8Body(res)) as Map<String, dynamic>;
   }
 
-  // ---------------------------------------------------------------------------
-  // Payment settlement (zaps / shop / bot).
-  // ---------------------------------------------------------------------------
+  // Payment settlement
 
-  /// `POST /api/proxy?action=zap-verify` — server-side confirmation that a zap
-  /// invoice was paid (zaps.js `_serverVerifyZapPaid`, proxy.js `handleZapVerify`).
-  ///
-  /// Body mirrors the PWA exactly: `{pr, verifyUrl, providerPubkey, receipt}`
-  /// (any may be null). Unauthenticated. Returns `data.paid === true`; any
-  /// transport error resolves to `false` so polling can simply retry.
+  /// Server-side zap payment check; any transport error resolves false so polling can retry.
   Future<bool> zapVerify({
     required String pr,
     String? verifyUrl,
@@ -1263,18 +1024,10 @@ class ApiClient {
     }
   }
 
-  /// `POST /api/storage` — the shop-* mutating actions (shop.js `_storageApiRequest`).
-  ///
-  /// [body] must already carry `action` and, for authenticated actions,
-  /// `pubkey` + `auth` (build the latter with [Nip98Auth.build], `url:`
-  /// [storageUrl]). Returns the decoded JSON map. Throws [ApiException] on a
-  /// non-2xx so the caller can surface the server `error` (e.g. "Payment not
-  /// confirmed yet." → retry).
+  /// `POST /api/storage` for shop-* actions; [body] carries `action` and any auth. Throws [ApiException] on non-2xx.
   Future<Map<String, dynamic>> storageAction(Map<String, dynamic> body) async {
     final action = (body['action'] ?? 'other').toString();
-    // WS-first (PWA `_storageApiRequest`): ride the socket when authed OR public.
-    // A non-null result here is already a 2xx with no `error` — [_trySocket]
-    // converts an error frame into a null so we fall through to HTTP below.
+    // WS-first; a non-null socket result is already a 2xx with no `error`.
     final ws = await _trySocket(action, body, stream: false);
     if (ws != null) return ws.data;
     final payload = jsonEncode(body);
@@ -1296,20 +1049,10 @@ class ApiClient {
     return decoded;
   }
 
-  /// `POST /api/storage` for the NDJSON-streaming reads (`profile-get`,
-  /// `pm-get`). The worker streams `application/x-ndjson` (one JSON value per
-  /// line) for these actions instead of a JSON object (storage.js:636/932), so
-  /// the JSON-object [storageAction] path can't be used. Mirrors the PWA's
-  /// `_storageApiStream` + `_readNdjsonStream` (shop.js:211/241).
-  ///
-  /// [body] must already carry `action` and (for the authenticated `pm-get`)
-  /// `pubkey` + `auth`. `profile-get` is an unauthenticated public read. Returns
-  /// the parsed per-line JSON values plus the `X-Has-More` header flag the PM
-  /// pager reads. Throws [ApiException] on a non-2xx.
+  /// `POST /api/storage` for NDJSON-streamed reads (`profile-get`, `pm-get`); throws [ApiException] on non-2xx.
   Future<StorageStream> storageStream(Map<String, dynamic> body) async {
     final action = (body['action'] ?? 'other').toString();
-    // WS-first (PWA `_storageApiStream`): streaming actions collect ITEM frames
-    // over the socket (`{stream:true}` → `_wsItems`) before the HTTP fallback.
+    // WS-first: streaming actions collect ITEM frames before the HTTP fallback.
     final ws = await _trySocket(action, body, stream: true);
     if (ws != null) {
       return StorageStream(items: ws.items, hasMore: ws.hasMore);
@@ -1322,11 +1065,7 @@ class ApiClient {
     );
     _trackApiData(action,
         sent: _bodyLen(payload), recv: _bodyLen(res.bodyBytes));
-    // The worker streams `application/x-ndjson` for these actions; the PWA
-    // rejects even a 2xx whose Content-Type isn't NDJSON, surfacing the JSON
-    // `{error}` body (shop.js:232-237: `!resp.ok || ct.indexOf(
-    // 'application/x-ndjson') < 0`). Without this gate a 200 JSON/HTML error
-    // body would be line-split into bogus "items" instead of throwing.
+    // Reject even a 2xx that isn't NDJSON, or a JSON error body would be split into bogus items.
     final contentType = _header(res, 'content-type') ?? '';
     if (res.statusCode < 200 ||
         res.statusCode >= 300 ||
@@ -1345,17 +1084,14 @@ class ApiClient {
       try {
         items.add(jsonDecode(trimmed));
       } catch (_) {
-        // Skip malformed lines (mirrors `_readNdjsonStream`'s try/catch).
+        // Skip malformed lines.
       }
     }
     final hasMore = (_header(res, 'x-has-more') ?? '') == '1';
     return StorageStream(items: items, hasMore: hasMore);
   }
 
-  /// `POST /api/bot` — the Nymbot credit actions (`create-invoice`,
-  /// `check-invoice`, `claim-credits`, `transfer-credits`, …). Same auth contract
-  /// as [storageAction] but bound to [botUrl]. Returns the decoded JSON map;
-  /// throws [ApiException] on a non-2xx.
+  /// `POST /api/bot` for Nymbot credit actions; same auth contract as [storageAction], bound to [botUrl].
   Future<Map<String, dynamic>> botAction(Map<String, dynamic> body) async {
     final action = (body['action'] ?? 'other').toString();
     final payload = jsonEncode(body);
@@ -1392,9 +1128,7 @@ class ApiClient {
   }
 }
 
-/// The parsed result of a streaming `/api/storage` read ([ApiClient.storageStream]).
-/// [items] are the per-line JSON values; [hasMore] is the `X-Has-More` flag the
-/// PM pager uses to decide whether an older page exists (storage.js:936).
+/// Streamed `/api/storage` read: per-line [items] and the `X-Has-More` flag.
 class StorageStream {
   const StorageStream({required this.items, required this.hasMore});
   final List<dynamic> items;

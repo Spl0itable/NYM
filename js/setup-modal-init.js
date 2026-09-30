@@ -1,5 +1,4 @@
-// Decide before first paint whether to show the setup modal, so the
-// logged-out app doesn't briefly flash before the modal appears.
+// Decide before first paint so the logged-out app doesn't flash before the setup modal.
 (function () {
     var needsSetup;
     try {

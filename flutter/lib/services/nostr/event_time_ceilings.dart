@@ -1,23 +1,12 @@
 import '../../core/constants/history_window.dart';
 
-/// Remembers, per event id, the instant this device FIRST had to clamp a
-/// future-dated event back to "now".
-///
-/// A sender whose clock runs fast publishes an event whose `created_at` is
-/// ahead of ours. Clamping it to the current time is right once, but the clamp
-/// was recomputed on every ingest and the replay after each launch re-ingests
-/// the same event — so it was re-stamped to each new "now" and the message read
-/// `now` forever. Pinning the first clamp makes the correction settle.
-///
-/// Entries outside [kChannelHistoryMaxAge] are dropped.
+/// Pins the first clamp of a future-dated event to now, so replays do not re-stamp it to each new now.
 class EventTimeCeilings {
   final Map<String, int> _byId = <String, int>{};
 
-  /// Invoked when a new ceiling is recorded, so the owner can schedule a write.
   void Function()? onChanged;
 
-  /// The stable ceiling for [id]. Returns [candidateMs] untouched when it is
-  /// not in the future; otherwise the first "now" this event was clamped to.
+  /// Returns [candidateMs] when not in the future, else the first now this event was clamped to.
   int stableCeiling(String id, int candidateMs, int nowMs) {
     if (candidateMs <= nowMs) return candidateMs;
     if (id.isEmpty) return nowMs;
@@ -28,8 +17,7 @@ class EventTimeCeilings {
     return nowMs;
   }
 
-  /// Drops entries older than the channel history window and returns what is
-  /// left, in the `{id: ms}` shape the meta store persists.
+  /// Drops entries outside the channel history window and returns `{id: ms}`.
   Map<String, dynamic> toJson({int? nowMs}) {
     final cutoff = (nowMs ?? DateTime.now().millisecondsSinceEpoch) -
         kChannelHistoryMaxAge.inMilliseconds;
@@ -37,7 +25,6 @@ class EventTimeCeilings {
     return Map<String, dynamic>.from(_byId);
   }
 
-  /// Restores ceilings written by a previous session, skipping aged-out ones.
   void hydrate(Map<String, dynamic> map, {int? nowMs}) {
     final cutoff = (nowMs ?? DateTime.now().millisecondsSinceEpoch) -
         kChannelHistoryMaxAge.inMilliseconds;

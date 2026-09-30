@@ -4,20 +4,13 @@ import 'package:flutter/material.dart';
 
 import '../messages/format/message_content.dart';
 
-/// A one-shot reaction "burst" overlay played when the user adds a reaction
-/// (reactions.js `_playReactionBurst`, styles-features.css `.reaction-burst` /
-/// `.reaction-spark`, keyframes `reactionBurst` (0.85s) / `reactionSpark`
-/// (0.7s)). The emoji pops up and floats while 10 radial sparks fan out.
-///
-/// Call [ReactionBurst.play] with a global anchor point (the badge center) to
-/// spawn it into the root [Overlay]; it removes itself after ~900ms.
+/// One-shot reaction burst overlay: the emoji pops while 10 sparks fan out; removes itself after ~900ms.
 class ReactionBurst {
   ReactionBurst._();
 
   static const _durationMs = 900;
   static const _sparkCount = 10;
 
-  /// Spawns a burst centerd at [globalCenter] showing [emoji].
   static void play(BuildContext context, Offset globalCenter, String emoji) {
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
@@ -31,31 +24,23 @@ class ReactionBurst {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Badge anchoring — the PWA bursts ON the reaction badge for that emoji
-  // (`_burstOnBadge` queries `[data-emoji]` under the message and falls back to
-  // the message element, reactions.js:50-52). Mounted badges register here so
-  // the burst can anchor at the badge's live position.
-  // ---------------------------------------------------------------------------
+  // Mounted reaction badges register here so bursts anchor at the badge's live position.
 
   static final Map<String, GlobalKey> _badges = <String, GlobalKey>{};
 
   static String _badgeKeyOf(String messageId, String emoji) =>
       '$messageId|$emoji';
 
-  /// Called by a mounted reaction badge to expose its position.
   static void registerBadge(String messageId, String emoji, GlobalKey key) {
     _badges[_badgeKeyOf(messageId, emoji)] = key;
   }
 
-  /// Removes a badge registration iff it still points at [key] (a replacement
-  /// badge may have re-registered the same message/emoji first).
+  /// Removes a registration only if it still points at [key]; a replacement badge may have re-registered first.
   static void unregisterBadge(String messageId, String emoji, GlobalKey key) {
     final k = _badgeKeyOf(messageId, emoji);
     if (identical(_badges[k], key)) _badges.remove(k);
   }
 
-  /// Global center of the registered badge for [messageId]+[emoji], or null.
   static Offset? badgeCenter(String messageId, String emoji) {
     final key = _badges[_badgeKeyOf(messageId, emoji)];
     final box = key?.currentContext?.findRenderObject() as RenderBox?;
@@ -63,11 +48,7 @@ class ReactionBurst {
     return box.localToGlobal(box.size.center(Offset.zero));
   }
 
-  /// Bursts on the badge for [messageId]+[emoji] once the current frame has
-  /// laid it out (an optimistic add mounts the badge this frame), falling back
-  /// to [fallbackCenter] when no badge exists — `_burstOnBadge(messageId,
-  /// emoji, fallbackEl)`: badge first, message element fallback, silent when
-  /// neither resolves (reactions.js:50-52).
+  /// Bursts on the badge after this frame's layout, else at [fallbackCenter], else silently skips.
   static void playAtBadge(
     BuildContext context,
     String messageId,
@@ -115,7 +96,7 @@ class _BurstWidgetState extends State<_BurstWidget>
       return _Spark(
         math.cos(angle) * dist,
         math.sin(angle) * dist,
-        // animationDelay up to 40ms over a 900ms window.
+        // Delay up to 40ms over the 900ms window.
         (rng.nextDouble() * 40) / ReactionBurst._durationMs,
       );
     });
@@ -133,10 +114,7 @@ class _BurstWidgetState extends State<_BurstWidget>
 
   @override
   Widget build(BuildContext context) {
-    // The burst is inserted into the root Overlay, which is NOT under a
-    // Material (app.dart). Without a Material/DefaultTextStyle ancestor the
-    // glyph would draw Flutter's debug double yellow underline. A transparent
-    // Material supplies the ancestor without painting (cf. zap_modal.dart:327).
+    // The root Overlay has no Material ancestor; without one the glyph gets the debug yellow underline.
     return Material(
       type: MaterialType.transparency,
       child: IgnorePointer(
@@ -157,16 +135,11 @@ class _BurstWidgetState extends State<_BurstWidget>
     );
   }
 
-  /// The `.reaction-burst` timing function, `cubic-bezier(0.34, 1.56, 0.64, 1)`
-  /// (styles-features.css:365) — springy overshoot. CSS applies it WITHIN each
-  /// keyframe segment, so each segment below eases its own local fraction.
+  /// Springy overshoot curve, applied within each keyframe segment like CSS.
   static const Cubic _burstEase = Cubic(0.34, 1.56, 0.64, 1);
 
   Widget _buildEmoji(double t) {
-    // reactionBurst keyframes (styles-features.css:376-381):
-    // scale 0 → 1.5 → 1.15 → 0.5, rotate -25° → 8° → -4° → 0,
-    // translate y -50% → -50% → -70% → -130% (i.e. 0 → 0 → -20% → -80% of the
-    // glyph past the centerd base), opacity 0 → 1 → 1 → 0.
+    // Keyframes: scale 0→1.5→1.15→0.5, rotate -25°→8°→-4°→0, y 0→0→-20%→-80% of glyph, opacity 0→1→1→0.
     double scale;
     double yShift; // in multiples of the glyph height (~45px)
     double opacity;
@@ -200,19 +173,12 @@ class _BurstWidgetState extends State<_BurstWidget>
           angle: rotationDeg * math.pi / 180,
           child: Transform.scale(
             scale: scale,
-            // `renderReactionEmoji` (emoji.js:342-351) renders an exact custom
-            // `:code:` reaction as its `<img>` (45×45, `.reaction-burst img`,
-            // styles-features.css:369-374), not literal text; mirror that with
-            // InlineEmojiText (unicode falls through to a styled Text fast-path).
-            // `decoration: none` also belt-and-suspenders kills the yellow
-            // underline on the text fast-path.
+            // Exact `:code:` reactions render as a 45x45 image; unicode falls through to text.
             child: InlineEmojiText(
               text: widget.emoji,
               wholeStringOnly: true,
               emojiSize: glyph,
               emojiMargin: EdgeInsets.zero,
-              // `.reaction-burst img { vertical-align: top }`
-              // (styles-features.css:369-374).
               emojiAlignment: PlaceholderAlignment.top,
               style: const TextStyle(
                 fontSize: glyph,
@@ -230,8 +196,7 @@ class _BurstWidgetState extends State<_BurstWidget>
   }
 
   List<Widget> _buildSparks() {
-    // reactionSpark spans 0.7s of the 0.9s window, `ease-out` timing
-    // (styles-features.css:400 `animation: reactionSpark 0.7s ease-out`).
+    // Sparks span 0.7s of the 0.9s window with ease-out.
     return _sparks.map((s) {
       final raw = ((_c.value - s.delay) * 900 / 700).clamp(0.0, 1.0);
       final eased = Curves.easeOut.transform(raw);
@@ -267,7 +232,6 @@ class _BurstWidgetState extends State<_BurstWidget>
     }).toList();
   }
 
-  // Unclamped so the overshoot easing (f > 1) can spring past the keyframe
-  // targets like the CSS cubic-bezier does; opacity is clamped at use sites.
+  // Unclamped so the overshoot easing can spring past keyframe targets.
   double _lerp(double a, double b, double t) => a + (b - a) * t;
 }

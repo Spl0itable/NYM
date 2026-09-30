@@ -3,20 +3,15 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 
-/// The equirectangular camera (`view{cx,cy,zoom}` in geohash-globe.js), plus the
-/// `project`/`unproject` math ported verbatim. lng/lat ↔ pixel is a plain linear
-/// mapping; the camera centers on (cx, cy) in degrees at a given zoom (1–16).
+/// Equirectangular camera centered on (cx, cy) in degrees at a zoom of 1–16.
 @immutable
 class GeoView {
   const GeoView({this.cx = 0, this.cy = 0, this.zoom = 1});
 
-  /// Center longitude (degrees).
   final double cx;
 
-  /// Center latitude (degrees).
   final double cy;
 
-  /// Zoom factor (minZoom..maxZoom).
   final double zoom;
 
   static const double minZoom = 1;
@@ -25,15 +20,12 @@ class GeoView {
   GeoView copyWith({double? cx, double? cy, double? zoom}) =>
       GeoView(cx: cx ?? this.cx, cy: cy ?? this.cy, zoom: zoom ?? this.zoom);
 
-  /// Pixels-per-degree at zoom 1, fitting the world to [size] (same as
-  /// `baseScale()`: `max(w/360, h/180)` — fills the viewport, may crop).
+  /// Pixels per degree at zoom 1: `max(w/360, h/180)`, filling the viewport and possibly cropping.
   static double baseScale(Size size) =>
       math.max(size.width / 360.0, size.height / 180.0);
 
-  /// Effective pixels-per-degree at the current zoom.
   double scale(Size size) => baseScale(size) * zoom;
 
-  /// lng/lat → canvas pixel (`project`).
   Offset project(double lng, double lat, Size size) {
     final s = scale(size);
     return Offset(
@@ -42,7 +34,6 @@ class GeoView {
     );
   }
 
-  /// canvas pixel → lng/lat (`unproject`).
   ({double lng, double lat}) unproject(double x, double y, Size size) {
     final s = scale(size);
     return (
@@ -51,8 +42,7 @@ class GeoView {
     );
   }
 
-  /// Clamps zoom to [minZoom, maxZoom] and keeps the viewport over the world
-  /// (recenters axes that are fully visible), matching `clampView()`.
+  /// Clamps zoom and keeps the viewport over the world.
   GeoView clamped(Size size) {
     var z = zoom.clamp(minZoom, maxZoom);
     final s = baseScale(size) * z;
@@ -72,8 +62,7 @@ class GeoView {
     return GeoView(cx: ncx, cy: ncy, zoom: z);
   }
 
-  /// Zoom by [factor] keeping the geo point under pixel [focus] fixed
-  /// (zoom-to-cursor), then clamp. Ports the `onWheel`/`zoomBy` math.
+  /// Zooms by [factor] keeping the geo point under [focus] fixed, then clamps.
   GeoView zoomedAt(double factor, Offset focus, Size size) {
     final before = unproject(focus.dx, focus.dy, size);
     final z = (zoom * factor).clamp(minZoom, maxZoom);
@@ -86,7 +75,6 @@ class GeoView {
     ).clamped(size);
   }
 
-  /// Fits [bounds] (lat:[lo,hi], lng:[lo,hi]) with [padding], as `zoomToBounds`.
   GeoView fitBounds(
     ({double latLo, double latHi, double lngLo, double lngHi}) bounds,
     Size size, {
@@ -106,8 +94,7 @@ class GeoView {
   }
 }
 
-/// Geohash cell longitude/latitude step at a given precision, matching
-/// `geohashCellSize` (lng gets `ceil(5p/2)` bits, lat `floor(5p/2)`).
+/// Cell step at [precision]: lng gets `ceil(5p/2)` bits, lat `floor(5p/2)`.
 ({double lngStep, double latStep}) geohashCellSize(int precision) {
   final totalBits = 5 * precision;
   final lngBits = (totalBits / 2).ceil();
@@ -118,8 +105,7 @@ class GeoView {
   );
 }
 
-/// Auto grid precision from the current pixel scale (`computeGridPrecision`):
-/// the finest precision whose next-level cell would still be ≥ 50px wide.
+/// Finest precision whose next-level cell would still be at least 50px wide.
 int computeGridPrecision(GeoView view, Size size) {
   final s = view.scale(size);
   var p = 1;
@@ -131,8 +117,7 @@ int computeGridPrecision(GeoView view, Size size) {
   return p;
 }
 
-/// Decodes a geohash to its bounding box (`decodeGeohashBoundsRaw`); null if a
-/// character is invalid.
+/// Decodes a geohash to its bounding box; null if a character is invalid.
 ({double latLo, double latHi, double lngLo, double lngHi})? geohashBounds(
     String geohash) {
   const base32 = '0123456789bcdefghjkmnpqrstuvwxyz';

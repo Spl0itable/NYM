@@ -7,32 +7,24 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 
-/// Validation for the poll-create form (commands.js `submitPoll`): a non-empty
-/// question and at least 2 non-empty options. Returns true when the form may be
-/// submitted.
+/// Poll form is valid with a non-empty question and at least 2 non-empty options.
 bool pollFormValid(String question, List<String> options) {
   if (question.trim().isEmpty) return false;
   final filled = options.where((o) => o.trim().isNotEmpty).length;
   return filled >= 2;
 }
 
-/// `#pollModal` — "Create Poll": a question field + dynamic option rows (start
-/// with 2, add up to 6, the first two have no remove button) → `publishPoll`.
-/// Channel-only; the entry affordance is disabled in PM/group views
-/// (commands.js `cmdPoll`).
+/// Create Poll modal: question plus 2–6 option rows (first two fixed); channel-only.
 class PollCreateModal extends ConsumerStatefulWidget {
   const PollCreateModal({super.key});
 
   static Future<void> open(BuildContext context) {
-    // `.modal` barrier: solid-ui (default) dark `rgba(0,0,0,0.75)` →
-    // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-    // (styles-themes-responsive.css:1630-1635).
     final isLight = context.nym.isLight;
     return showDialog<void>(
       context: context,
       barrierColor: isLight
-          ? const Color(0x73000000) // black @ 0.45
-          : const Color(0xBF000000), // black @ 0.75
+          ? const Color(0x73000000)
+          : const Color(0xBF000000),
       builder: (_) => const PollCreateModal(),
     );
   }
@@ -45,7 +37,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
   static const int _maxOptions = 6;
 
   final _questionController = TextEditingController();
-  // Start with two option rows (commands.js `cmdPoll`).
   final List<TextEditingController> _optionControllers = [
     TextEditingController(),
     TextEditingController(),
@@ -72,7 +63,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
   }
 
   void _removeOption(int index) {
-    // The first two rows are fixed (no remove button), matching the PWA.
+    // The first two rows are fixed.
     if (index < 2 || index >= _optionControllers.length) return;
     setState(() {
       _optionControllers.removeAt(index).dispose();
@@ -104,15 +95,11 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
           decoration: BoxDecoration(
             color: c.bgSecondary,
             border: Border.all(color: c.glassBorder),
-            // `.modal-content` — radius 24 + shadow-lg/glow/ring stack.
-            // `body.light-mode .modal-content { box-shadow: 0 8px 40px
-            // rgba(0,0,0,0.12) }` — a single soft shadow, no glow/white ring
-            // (styles-themes-responsive.css:1050-1052).
             borderRadius: NymRadius.rxl,
             boxShadow: c.isLight
                 ? const [
                     BoxShadow(
-                      color: Color(0x1F000000), // black @ 0.12
+                      color: Color(0x1F000000),
                       blurRadius: 40,
                       offset: Offset(0, 8),
                     ),
@@ -135,8 +122,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // `.modal-header` — 22px primary UPPERCASE ls1.5 w700, bottom
-                  // rule, padding-bottom 14, margin-bottom 24. (32px padding.)
                   Container(
                     margin: const EdgeInsets.fromLTRB(32, 32, 32, 24),
                     padding: const EdgeInsets.only(bottom: 14),
@@ -168,7 +153,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                             maxLength: 280,
                             onChanged: (_) => setState(() {}),
                           ),
-                          const SizedBox(height: 20), // `.form-group` margin
+                          const SizedBox(height: 20),
                           _label(c, tr('Options')),
                           const SizedBox(height: 8),
                           for (var i = 0; i < _optionControllers.length; i++)
@@ -198,7 +183,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                       ),
                     ),
                   ),
-                  // `.modal-actions` — center, gap 10.
                   Padding(
                     padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
                     child: Row(
@@ -212,7 +196,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
                   ),
                 ],
               ),
-              // `.modal-close` — 32px circular glass chip at top:14/right:14.
               Positioned(top: 14, right: 14, child: _closeButton(c)),
             ],
           ),
@@ -221,7 +204,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
     );
   }
 
-  /// `.form-label` — 11px UPPERCASE ls1.2 w600 text-dim.
   Widget _label(NymColors c, String text) => Text(
         text.toUpperCase(),
         style: TextStyle(
@@ -232,7 +214,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
         ),
       );
 
-  /// `.modal-close` — 32×32 circular glass chip with a 16px ✕ (text-dim).
   Widget _closeButton(NymColors c) {
     return InkWell(
       onTap: () => Navigator.of(context).maybePop(),
@@ -246,15 +227,12 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
           color: Colors.white.withValues(alpha: 0.05),
           border: Border.all(color: c.glassBorder),
         ),
-        // `.modal-close` is a literal "✕" char in the PWA — styled text.
         child: Text('✕',
             style: TextStyle(color: c.textDim, fontSize: 16, height: 1)),
       ),
     );
   }
 
-  /// `.poll-remove-option-btn` — 28×28 transparent circle, glass border, 12px
-  /// ✕, text-dim (only for option rows ≥ 3).
   Widget _removeOptionBtn(NymColors c, int index) {
     return InkWell(
       onTap: () => _removeOption(index),
@@ -267,15 +245,12 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
           shape: BoxShape.circle,
           border: Border.all(color: c.glassBorder),
         ),
-        // Matches the PWA's "✕" dismissal convention (styled text, not an icon).
         child: Text('✕',
             style: TextStyle(color: c.textDim, fontSize: 12, height: 1)),
       ),
     );
   }
 
-  /// `.poll-add-option-btn` — full-width transparent block with a dashed glass
-  /// border, radius 12, text-dim, 13px, padding 8/16, margin-top 4.
   Widget _addOptionBtn(NymColors c) {
     return Padding(
       padding: const EdgeInsets.only(top: 4),
@@ -299,8 +274,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
     );
   }
 
-  /// `.icon-btn` Cancel — bg white/0.05, glass border, radius 8, color --text,
-  /// UPPERCASE 12px w500 ls0.8, padding 7/14.
   Widget _cancelBtn(NymColors c) {
     return InkWell(
       onTap: () => Navigator.of(context).maybePop(),
@@ -308,10 +281,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          // `body.light-mode .icon-btn { background: rgba(0,0,0,0.03);
-          // color: var(--primary) }` (styles-themes-responsive.css:595-599);
-          // dark base white@0.05 + `--text`. `subtleFill` = black@.03 light /
-          // white@.05 dark (nym_colors.dart:112).
           color: c.subtleFill,
           border: Border.all(color: c.glassBorder),
           borderRadius: NymRadius.rxs,
@@ -329,9 +298,6 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
     );
   }
 
-  /// `.send-btn` Create Poll — translucent primary outline pill (bg
-  /// primary/0.1, border primary/0.3, text primary, radius 12, h42, padding
-  /// 22/10, UPPERCASE 12px w600 ls1.5; disabled opacity 0.35).
   Widget _createBtn(NymColors c) {
     final enabled = _valid && !_submitting;
     return Opacity(
@@ -363,13 +329,10 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
   }
 }
 
-/// Whether the poll-create affordance should be enabled — channel-only.
+/// Poll creation is channel-only.
 bool pollCreationAllowed(WidgetRef ref) =>
     ref.read(currentViewProvider).kind == ViewKind.channel;
 
-/// `.form-input` — a bordered text field matching the PWA's modal inputs
-/// (radius 12, bg white/0.05, padding 11/14, font 15, color text-bright, with
-/// the `0 0 0 3px primary/0.06` focus glow + white/0.07 fill on focus).
 class _FormInput extends StatefulWidget {
   const _FormInput({
     required this.controller,
@@ -445,8 +408,7 @@ class _FormInputState extends State<_FormInput> {
   }
 }
 
-/// A rounded-rect box with a dashed border (the `.poll-add-option-btn`'s
-/// `1px dashed --glass-border`). Flutter has no dashed `Border`, so paint it.
+/// Rounded box with a dashed border, painted since Flutter has no dashed [Border].
 class DottedBorderBox extends StatelessWidget {
   const DottedBorderBox({
     super.key,

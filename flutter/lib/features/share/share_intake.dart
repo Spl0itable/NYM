@@ -7,12 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'share_destination_sheet.dart';
 
-/// Bridges the OS share sheet into the app: when another app shares text, a
-/// URL, or media into Nymchat, this collects the payload and opens the
-/// destination picker so the user chooses a channel / PM / group.
-///
-/// Wired from the root widget alongside deep links and push. Self-guards so a
-/// missing platform channel (tests, web, de-Googled builds) no-ops.
+/// Bridges the OS share sheet into the destination picker; no-ops when the platform channel is missing.
 class ShareIntake {
   ShareIntake({required this.ref, required this.navKey});
 

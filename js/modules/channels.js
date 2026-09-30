@@ -1,5 +1,3 @@
-// channels.js - Channel switch/add/remove, joined/pinned/hidden channels, navigation history, unread counts
-
 Object.assign(NYM.prototype, {
 
     async handleChannelLink(channelInput, event) {
@@ -8,13 +6,12 @@ Object.assign(NYM.prototype, {
             event.stopPropagation();
         }
 
-        // Strip legacy g: prefix from old shared URLs
+        // Strip legacy g: prefix from old shared URLs.
         let channelName = channelInput;
         if (channelInput.startsWith('g:')) {
             channelName = channelInput.substring(2);
         }
 
-        // Sanitize channel name
         channelName = this.sanitizeChannelName(channelName);
         if (!channelName) return;
 
@@ -26,7 +23,6 @@ Object.assign(NYM.prototype, {
             this.userJoinedChannels.add(channelName);
             this.saveUserChannels();
         } else if (channelName) {
-            // Non-geohash channel
             if (!this.channels.has(channelName)) {
                 this.addChannel(channelName, channelName);
             }
@@ -46,28 +42,23 @@ Object.assign(NYM.prototype, {
     updateGeohashChannels() {
         this.geohashChannels = [];
 
-        // Get all geohash channels from discovered channels and user channels
         const allGeohashes = new Set();
 
-        // From common geohashes
         this.commonGeohashes.forEach(g => allGeohashes.add(g.toLowerCase()));
 
-        // From user's channels (only valid geohashes)
         this.channels.forEach((value, key) => {
             if (value.geohash && this.isValidGeohash(value.geohash)) {
                 allGeohashes.add(value.geohash.toLowerCase());
             }
         });
 
-        // From stored messages
         this.messages.forEach((msgs, channel) => {
             if (channel.startsWith('#') && this.isValidGeohash(channel.substring(1))) {
                 allGeohashes.add(channel.substring(1).toLowerCase());
             }
         });
 
-        // From D1 activity counts (channels we know of but may never have opened,
-        // so the explorer reflects real activity without loading their messages).
+        // From D1 activity counts, so the explorer reflects channels never opened here.
         if (this._geohashD1Activity) {
             this._geohashD1Activity.forEach((_buckets, name) => {
                 if (this.isValidGeohash(name)) allGeohashes.add(name.toLowerCase());
@@ -78,11 +69,9 @@ Object.assign(NYM.prototype, {
             ? Math.min(24, this._geohashActiveWindowHours) : 24;
         const nowSec = Math.floor(Date.now() / 1000);
 
-        // Convert to array with coordinates - only channels with activity inside the active window
         allGeohashes.forEach(geohash => {
             try {
-                // Bucket locally stored messages into 24 hourly slots aligned with
-                // the D1 activity buckets (index 0 = the most recent hour).
+                // 24 hourly slots aligned with the D1 activity buckets (index 0 = the most recent hour).
                 const localBuckets = new Array(24).fill(0);
                 const allMsgs = this.messages.get(`#${geohash}`) || [];
                 for (const m of allMsgs) {
@@ -93,7 +82,6 @@ Object.assign(NYM.prototype, {
                     if (ageH < 0) ageH = 0;
                     if (ageH < 24) localBuckets[ageH]++;
                 }
-                // Mix local + D1 counts
                 const recentCount = this._combineGeohashActivity(geohash, localBuckets, windowHours);
                 if (recentCount < 1) return;
                 const coords = this.decodeGeohash(geohash);
@@ -109,7 +97,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Combine locally stored and D1-archived activity for a geohash
     _combineGeohashActivity(geohash, localBuckets, windowHours) {
         const d1 = this._geohashD1Activity
             ? this._geohashD1Activity.get(String(geohash).toLowerCase())
@@ -124,7 +111,6 @@ Object.assign(NYM.prototype, {
         return total;
     },
 
-    // Quietly fetch recent-activity counts for all known geohash channels
     async fetchGeohashActivityFromD1() {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiRequest !== 'function') return;
@@ -132,8 +118,6 @@ Object.assign(NYM.prototype, {
         if (this._geohashActivityFetchedAt && now - this._geohashActivityFetchedAt < 30000) return;
         this._geohashActivityFetchedAt = now;
 
-        // Gather every geohash we know about: common geohashes, sidebar
-        // channels, and any geohash with stored messages.
         const names = new Set();
         const add = (g) => { if (g && this.isValidGeohash(g)) names.add(String(g).toLowerCase()); };
         this.commonGeohashes.forEach(add);
@@ -169,7 +153,6 @@ Object.assign(NYM.prototype, {
                 this.geohashMap.updatePoints();
             }
         } catch (_) {
-            // Best-effort; the explorer still works from locally stored messages.
             this._geohashActivityFetchedAt = 0;
         }
     },
@@ -183,7 +166,6 @@ Object.assign(NYM.prototype, {
         this._mergeD1Last(data.last);
     },
 
-    // Merge a { channel: lastCreatedAtSec } map from D1 into _d1ChannelLast.
     _mergeD1Last(last) {
         if (!last || typeof last !== 'object') return;
         if (!this._d1ChannelLast) this._d1ChannelLast = new Map();
@@ -195,9 +177,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Precise last-activity (ms) for a channel from D1, falling back to an
-    // hourly-bucket approximation (index 0 = current hour) when no exact
-    // timestamp is available.
+    // Precise last-activity (ms) from D1, falling back to hourly buckets (index 0 = current hour).
     _d1ChannelLastActivityMs(name, buckets) {
         const exact = this._d1ChannelLast && this._d1ChannelLast.get(String(name).toLowerCase());
         if (exact) return exact * 1000;
@@ -215,16 +195,10 @@ Object.assign(NYM.prototype, {
         return 0;
     },
 
-    // Populate the sidebar with channels discovered via D1 activity (geohash
-    // kind 20000 and named kind 23333). The relay proxy pool relies on D1
-    // instead of a relay backfill, so without this the sidebar never learns
-    // about active channels it hasn't joined.
+    // The relay proxy pool relies on D1 instead of relay backfill, so this is how the sidebar learns of active channels.
     _populateSidebarFromD1Activity() {
         if (!this._getApiHost()) return [];
-        // The explorer can plot thousands of channels, but the sidebar should
-        // only surface the most recently active discovered ones. Never fewer
-        // than the collapsed row budget, so every row on screen can carry a
-        // badge; expanding the list raises it.
+        // Never fewer than the collapsed row budget, so every visible row can carry a badge.
         const expanded = this.listExpansionStates && this.listExpansionStates.get('channelList');
         const SIDEBAR_DISCOVER_LIMIT = Math.max(
             this.COLLAPSED_LIST_VISIBLE, expanded ? 120 : 30);
@@ -260,9 +234,7 @@ Object.assign(NYM.prototype, {
         return added;
     },
 
-    // Discovery hands us raw activity, which includes spam the client hides, so
-    // it can't seed a badge. Pull the spam-aware buckets for rows we just added
-    // and seed them now instead of leaving them blank until the next sweep.
+    // Discovery activity includes spam, so seed badges from the spam-aware buckets instead.
     async _fetchUnreadBucketsFor(names) {
         if (!Array.isArray(names) || names.length === 0) return;
         if (typeof this._storageApiRequest !== 'function') return;
@@ -277,8 +249,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Seed sidebar unread badges from the spam-aware per-channel activity so the
-    // floor matches what the client actually renders (no spam/poll inflation).
     _seedUnreadFromD1Activity() {
         const act = this._d1UnreadBuckets;
         if (!act || act.size === 0 || !this.channels) return;
@@ -289,8 +259,7 @@ Object.assign(NYM.prototype, {
         const seedKey = (unreadKey, name, buckets) => {
             if (!Array.isArray(buckets)) return;
             const lastRead = this.channelLastRead.get(unreadKey) || 0;
-            // Buckets are hourly, index 0 = the hour ending now. Sum the whole
-            // hours after lastRead, prorating the boundary bucket.
+            // Buckets are hourly, index 0 = the hour ending now; the boundary bucket is prorated.
             const newest = (this._d1ChannelLast && this._d1ChannelLast.get(name)) || 0;
             let count = 0;
             if (!(lastRead > 0 && newest > 0 && newest <= lastRead)) {
@@ -302,8 +271,7 @@ Object.assign(NYM.prototype, {
                     if (fraction > 0) count += Math.floor((buckets[whole] || 0) * fraction);
                 }
             }
-            // D1 is the archive of record: keep it as a floor so a stale or
-            // already-read local cache can't drop the badge below real activity.
+            // D1 is the archive of record: keep it as a floor so a stale local cache can't drop the badge.
             this._d1Unread.set(unreadKey, count);
             const standing = this.unreadCounts.get(unreadKey) || 0;
             if (count > standing) {
@@ -321,20 +289,14 @@ Object.assign(NYM.prototype, {
             const name = String(value.geohash || value.channel || '').toLowerCase();
             if (!name) return;
             if (this.blockedChannels && this.blockedChannels.has(name)) return;
-            // The conversation on screen is being read as it arrives, so the
-            // archive must not paint a badge on it: a reply collapsed inside a
-            // thread never advances the read watermark, and D1's buckets count
-            // it, which put a badge on the channel the user was looking at.
+            // Never badge the conversation on screen; collapsed thread replies don't advance the read watermark.
             if (this._channelIsOnScreen('#' + name)) return;
             seedKey('#' + name, name, act.get(name));
         });
         if (changed) this._persistUnreadCounts();
     },
 
-    // True when this conversation is the one being read right now. Under column
-    // view that is the focused, visible, bottom-pinned column (the same test
-    // _cvMarkColumnRead makes before clearing a badge); otherwise the channel
-    // the single view has open.
+    // Under column view this is the focused, visible, bottom-pinned column (as in _cvMarkColumnRead).
     _channelIsOnScreen(unreadKey) {
         if (typeof document !== 'undefined' && document.hidden) return false;
         if (this._cvActive) {
@@ -346,9 +308,6 @@ Object.assign(NYM.prototype, {
         return unreadKey === (this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel);
     },
 
-    // Discover recently-active NAMED channels (kind 23333) and fetch activity
-    // buckets for known ones into a map separate from the geohash explorer's,
-    // then surface them in the sidebar and seed their unread badges.
     async fetchNamedChannelActivityFromD1() {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiRequest !== 'function') return;
@@ -420,7 +379,6 @@ Object.assign(NYM.prototype, {
             this.calculateDistance(this.userLocation.lat, this.userLocation.lng, channel.lat, channel.lng).toFixed(1) + ' km away' :
             '';
 
-        // Get city and country from reverse geocoding
         let locationInfo = 'Loading location...';
         infoContent.innerHTML = `
 <div class="geohash-info-item">
@@ -435,21 +393,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 </div>
 `;
 
-        // Update join button
         if (channel.isJoined) {
             joinBtn.textContent = 'Go to Channel';
         } else {
             joinBtn.textContent = 'Join Channel';
         }
 
-        // Set up join button with proper handler
         joinBtn.onclick = () => {
             this.joinSelectedGeohash();
         };
 
         infoPanel.style.display = 'block';
 
-        // Fetch city and country asynchronously
         try {
             const data = await this.fetchGeocode(channel.lat, channel.lng, 10);
 
@@ -459,7 +414,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             locationInfo = [city, country].filter(x => x).join(', ')
                 || this.getGeohashLocation(channel.geohash) || 'Unknown location';
 
-            // Update the location info element
             const locationInfoItem = document.getElementById('locationInfoItem');
             if (locationInfoItem) {
                 locationInfoItem.innerHTML = `<strong>Location:</strong> ${this.escapeHtml(locationInfo)}`;
@@ -474,18 +428,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     shareChannel() {
-        // Generate the share URL with geohash channel
         const baseUrl = window.location.origin + window.location.pathname;
         const channel = this.currentChannel || 'nymchat';
         const shareUrl = `${baseUrl}#${channel}`;
 
-        // Set the URL in the input
         document.getElementById('shareUrlInput').value = shareUrl;
 
-        // Show the modal
         document.getElementById('shareModal').classList.add('active');
 
-        // Auto-select the text
         setTimeout(() => {
             document.getElementById('shareUrlInput').select();
         }, 100);
@@ -514,15 +464,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return this.geohashRegex.test(str.toLowerCase());
     },
 
-    // The geohash a channel IS, or '' when it is a named one.
-    //
-    // Registration happens from a dozen places and several only ever have the
-    // NAME — a column seed, a synced joined-key list, a mesh-backed row — while
-    // others pass the name as the geohash whether or not it is one. Whichever
-    // landed first decided the row, so a real geohash channel could read "Not a
-    // geohash" (or a named one try to show a location) purely on arrival order.
-    // `channelWire` picks the transport by this same test, so the label can
-    // never disagree with what the channel is on the wire.
+    // Derived from the name rather than trusting callers, many of which pass a named channel as the geohash.
     channelGeohashKey(channel, geohash) {
         const g = this.sanitizeChannelName(geohash || '');
         if (g && this.isValidGeohash(g)) return g;
@@ -530,8 +472,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return (c && this.isValidGeohash(c)) ? c : '';
     },
 
-    // Wire encoding for a channel. Geohash channels use kind 20000 + `g` tag;
-    // named (non-geohash) channels use kind 23333 + `d` tag.
+    // Geohash channels use kind 20000 + `g` tag; named channels use kind 23333 + `d` tag.
     channelWire(channelKey) {
         const isGeohash = !!channelKey && this.isValidGeohash(channelKey);
         return {
@@ -545,19 +486,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const term = this.sanitizeChannelName(searchTerm.trim());
         const resultsDiv = document.getElementById('channelSearchResults');
 
-        // Filter existing channels
         this.filterChannels(term);
 
-        // Show create/join prompt if search term exists
         if (term.length > 0) {
             const isGeohash = this.isValidGeohash(term);
             const exists = Array.from(this.channels.keys()).some(k => k.toLowerCase() === term);
 
-            // Clear previous results
             resultsDiv.innerHTML = '';
 
             if (isGeohash && !exists) {
-                // Valid geohash — offer to join as geohash channel
                 const location = this.getGeohashLocation(term) || 'Unknown location';
                 const prompt = document.createElement('div');
                 prompt.className = 'search-create-prompt';
@@ -575,7 +512,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 };
                 resultsDiv.appendChild(prompt);
             } else if (!isGeohash && !exists) {
-                // Not a valid geohash — offer to join as non-geohash channel
                 const prompt = document.createElement('div');
                 prompt.className = 'search-create-prompt';
                 prompt.innerHTML = `
@@ -597,12 +533,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    // Sanitize channel names: allow letters (including international) and digits only.
-    // Strips everything else (spaces, URLs, special chars) and lowercases.
     sanitizeChannelName(name) {
         if (!name) return '';
         const lower = name.toLowerCase();
-        // Reject names containing any invalid characters instead of stripping them
         if (!/^[\p{L}\p{N}]+$/u.test(lower)) return '';
         return lower;
     },
@@ -628,10 +561,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return !!tag && this.isValidChannelTag(tag[1]);
     },
 
-    // Push a navigation entry onto the history stack.
     _pushNavigation(entry) {
         if (this._navigating) return;
-        // Avoid duplicate adjacent entries
         const current = this.navigationHistory[this.navigationIndex];
         if (current && current.type === entry.type) {
             if (entry.type === 'channel' && current.channel === entry.channel && current.geohash === entry.geohash) return;
@@ -639,24 +570,21 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (entry.type === 'group' && current.groupId === entry.groupId) return;
             if (entry.type === 'thread' && current.rootId === entry.rootId) return;
         }
-        // Truncate any forward history
         this.navigationHistory = this.navigationHistory.slice(0, this.navigationIndex + 1);
         this.navigationHistory.push(entry);
-        // Cap at 50 entries
         if (this.navigationHistory.length > 50) {
             this.navigationHistory.shift();
         }
         this.navigationIndex = this.navigationHistory.length - 1;
-        // Sync with browser history so mouse back/forward buttons trigger popstate
+        // Sync with browser history so mouse back/forward buttons trigger popstate.
         try {
             history.pushState({ _nym_nav: this.navigationIndex }, '');
         } catch {
-            // Ignore if pushState fails (e.g. sandboxed iframe)
+            // pushState can fail, e.g. in a sandboxed iframe.
         }
         this._updateNavButtons();
     },
 
-    // Navigate back in history.
     navigateBack() {
         if (this.navigationIndex <= 0) return;
         this.navigationIndex--;
@@ -665,7 +593,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._updateNavButtons();
     },
 
-    // Navigate forward in history.
     navigateForward() {
         if (this.navigationIndex >= this.navigationHistory.length - 1) return;
         this.navigationIndex++;
@@ -674,7 +601,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._updateNavButtons();
     },
 
-    // Navigate to a specific history entry without recording it.
     _navigateTo(entry) {
         this._navigating = true;
         try {
@@ -682,8 +608,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (typeof this._navOpenThread === 'function') this._navOpenThread(entry);
                 return;
             }
-            // Leaving a thread entry (or jumping conversations) exits the
-            // thread view, restoring its conversation in place.
             if (typeof this.closeThreadView === 'function') this.closeThreadView({ nav: false });
             if (entry.type === 'channel') {
                 this.switchChannel(entry.channel, entry.geohash);
@@ -697,7 +621,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    // Update the enabled/disabled state of the back/forward buttons.
     _updateNavButtons() {
         const backBtn = document.getElementById('channelBackBtn');
         const fwdBtn = document.getElementById('channelForwardBtn');
@@ -706,15 +629,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     discoverChannels() {
-        // Skip channel discovery in group chat & PM only mode
         if (this.settings.groupChatPMOnlyMode) return;
 
-        // Create a mixed array of geohash channels
         const allChannels = [];
 
-        // Add all geohash channels
         this.commonGeohashes.forEach(geohash => {
-            // Don't re-add if already exists or if user-joined
             if (!this.channels.has(geohash) && !this.userJoinedChannels.has(geohash)) {
                 allChannels.push({
                     name: geohash,
@@ -725,10 +644,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         });
 
-        // Sort randomly to mix standard and geo channels
         allChannels.sort((a, b) => a.sortKey - b.sortKey);
 
-        // Add channels to UI in mixed order
         this._withBulkChannelAdd(() => {
             allChannels.forEach(channel => {
                 this.addChannel(channel.name, channel.geohash);
@@ -760,7 +677,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const term = searchTerm.toLowerCase();
         const list = document.getElementById('channelList');
 
-        // Update wrapper has-value class for clear button visibility
         const wrapper = document.getElementById('channelSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', term.length > 0);
@@ -768,15 +684,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const validChannelPattern = /^#[\p{L}\p{N}]+$/u;
         items.forEach(item => {
-            // The row's own identity, NOT its rendered text. `.channel-name`
-            // wraps the `.channel-sub` location line, so its textContent reads
-            // "#u4pruylondon, united kingdom" — which fails the name pattern
-            // below on the comma and space, and hid every located channel the
-            // moment anything was typed. "Not a geohash" did the same to named
-            // rows, so a search matched nothing that was already listed.
+            // Match on the row's identity, not its text, which includes the location subline.
             const key = (item.dataset.geohash || item.dataset.channel || '').toLowerCase();
             const channelName = key ? `#${key}` : '';
-            // Hide channels with invalid names (spaces, special chars, URLs)
             if (!validChannelPattern.test(channelName)) {
                 item.style.display = 'none';
                 item.classList.add('search-hidden');
@@ -789,7 +699,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         });
 
-        // Hide view more button during search
         const viewMoreBtn = list.querySelector('.view-more-btn');
         if (viewMoreBtn) {
             viewMoreBtn.style.display = term ? 'none' : 'block';
@@ -800,7 +709,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.userSearchTerm = searchTerm;
         this.updateUserList();
 
-        // Update wrapper has-value class for clear button visibility
         const wrapper = document.getElementById('userSearchWrapper');
         if (wrapper) {
             wrapper.classList.toggle('has-value', searchTerm.length > 0);
@@ -808,7 +716,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const list = document.getElementById('userListContent');
 
-        // Hide view more button during search
         const viewMoreBtn = list.querySelector('.view-more-btn');
         if (viewMoreBtn) {
             viewMoreBtn.style.display = searchTerm ? 'none' : 'block';
@@ -816,7 +723,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     togglePin(channel, geohash) {
-        // Don't allow pinning/unpinning #nymchat since it's always at top
         if ((geohash || channel) === 'nymchat') {
             this.displaySystemMessage('#nymchat is always at the top');
             return;
@@ -824,7 +730,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const key = geohash || channel;
 
-        // Toggle pin status
         if (this.pinnedChannels.has(key)) {
             this.pinnedChannels.delete(key);
         } else {
@@ -930,26 +835,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         try {
             return fn();
         } finally {
-            // Never leave the flag set on a throw — later addChannel calls would
-            // silently stop refreshing pins and hidden state.
+            // Never leave the flag set on a throw, or later addChannel calls stop refreshing pins and hidden state.
             if (outer) this._flushBulkChannelAdd();
         }
     },
 
-    /// Runs the per-add sidebar refreshes that _bulkChannelAdd suppressed.
+    // Runs the per-add sidebar refreshes that _bulkChannelAdd suppressed.
     _flushBulkChannelAdd() {
         this._bulkChannelAdd = false;
         this.updateChannelPins();
         this.applyHiddenChannels();
-        // After applyHiddenChannels, so the overflow marking sees settled
-        // display state rather than recomputing against stale rows.
+        // After applyHiddenChannels, so overflow marking sees settled display state.
         this.updateViewMoreButton('channelList');
         if (typeof this.refreshChannelAutocompleteIfOpen === 'function') {
             this.refreshChannelAutocompleteIfOpen();
         }
     },
 
-    /// Rows a collapsed list shows before "View N more...".
+    // Rows a collapsed list shows before "View N more...".
     COLLAPSED_LIST_VISIBLE: 20,
 
     _markListOverflow(listId) {
@@ -972,24 +875,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const geohash = item.dataset.geohash;
             const key = geohash || channel;
 
-            // Don't override search filter visibility
             if (item.classList.contains('search-hidden')) {
                 return;
             }
 
-            // Never hide #nymchat or the active channel
             if (key === 'nymchat' || item.classList.contains('active')) {
                 item.style.display = '';
                 return;
             }
 
-            // Hide if explicitly hidden
             if (this.hiddenChannels.has(key)) {
                 item.style.display = 'none';
                 return;
             }
 
-            // Hide if "hide non-pinned" is on and channel is not pinned
             if (this.hideNonPinned && !this.pinnedChannels.has(key)) {
                 item.style.display = 'none';
                 return;
@@ -1025,7 +924,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveBlockedChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
-        // Remove from DOM immediately
         const selector = geohash ?
             `[data-geohash="${geohash}"]` :
             `[data-channel="${channel}"][data-geohash=""]`;
@@ -1034,16 +932,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             element.remove();
         }
 
-        // Remove from channels map
         this.channels.delete(key);
 
-        // If currently in this channel, switch to #nymchat
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
             this.switchChannel('nymchat', 'nymchat');
         }
 
-        // Update view more button after removing
         this.updateViewMoreButton('channelList');
     },
 
@@ -1053,14 +948,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveBlockedChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
-        // Re-add the channel to the sidebar
         if (geohash) {
             this.addChannel(geohash, geohash);
         } else {
             this.addChannel(channel, channel);
         }
 
-        // Update view more button after adding
         this.updateViewMoreButton('channelList');
     },
 
@@ -1121,7 +1014,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.updateHiddenChannelsList();
     },
 
-    // Render the current channel title
     _renderChannelTitle(channel, geohash) {
         const titleEl = document.getElementById('currentChannel');
         if (!titleEl) return;
@@ -1158,24 +1050,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const locWrap = document.createElement('div');
             locWrap.className = 'channel-location';
 
-            // Opens OUR geohash explorer, zoomed to this cell, instead of
-            // handing the user off to geohash.es — which is a third party we
-            // don't control, currently erroring on its own map provider's API
-            // key, and unnecessary: the cell's bounds are decoded locally
-            // (`decodeGeohashBoundsRaw`) and the explorer already draws the
-            // map from data we ship. Kept as an <a> with a real href so it
-            // still reads and behaves as a link (middle-click, focus ring,
-            // the existing `.channel-location-link` styling); the href is the
-            // in-app channel URL rather than an external destination.
+            // Opens our own explorer zoomed to this cell rather than an external geohash site.
             const link = document.createElement('a');
-            // The class the retry sweep looks the header up by
-            // (`_paintPlaceEverywhere`). It was never set — the CSS styles this
-            // element as `.channel-location a`, so nothing pointed out that the
-            // selector matched nothing — which meant a header that first
-            // painted raw coordinates was never repainted when the place name
-            // finally resolved. Independent of the backoff bug, and the reason
-            // the header stayed on coordinates even when the sidebar row did
-            // update.
+            // The class _paintPlaceEverywhere looks the header up by.
             link.className = 'channel-location-link';
             const ghLower = safeGeohash.toLowerCase();
             link.setAttribute('href', `#${encodeURIComponent(ghLower)}`);
@@ -1223,10 +1100,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._fillLocationParts(link, place);
     },
 
-    // Split "City, Region, Country" into a shrinkable city part and a country
-    // part that never truncates, so a narrow container eats the city and still
-    // shows which country the channel is in. Shared by the channel header and
-    // the sidebar subtext.
+    // The country part never truncates, so a narrow container ellipsizes the city instead.
     _fillLocationParts(el, place) {
         el.replaceChildren();
         const idx = place.lastIndexOf(', ');
@@ -1240,7 +1114,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             el.appendChild(city);
             el.appendChild(country);
         } else {
-            // No country to protect — one run, free to ellipsize.
             const only = document.createElement('span');
             only.className = 'loc-city';
             only.textContent = place;
@@ -1248,20 +1121,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    // Resolve a geohash to a human-readable place name, cached per geohash.
-
-    /// localStorage key for the persisted geohash → "City, Country" map.
+    // localStorage key for the persisted geohash → "City, Country" map.
     _GEO_PLACE_KEY: 'nym_geohash_places',
-    /// Bound on the persisted map. Entries are ~30 bytes, so this is tiny.
     _GEO_PLACE_MAX: 500,
-    /// Nominatim's documented rate limit, plus a little headroom. Applies to
-    /// the direct-to-Nominatim fallback, where this browser is the API client.
+    // Nominatim's documented rate limit plus headroom, for the direct fallback path.
     _GEO_PLACE_MIN_INTERVAL_MS: 1100,
     _GEO_PLACE_RETRY_BASE_MS: 45 * 1000,
     _GEO_PLACE_RETRY_MAX_MS: 30 * 60 * 1000,
     _GEO_PLACE_MAX_ATTEMPTS: 4,
 
-    // When a miss may be retried again.
     _geoPlaceRetryAt(key) {
         const miss = this._geoPlaceMisses && this._geoPlaceMisses.get(key);
         if (!miss) return 0;
@@ -1282,13 +1150,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     // Re-resolves rows still showing a fallback and repaints them in place.
-    // Without this nothing ever re-triggers a lookup, so a row that lost the
-    // race once kept its coordinates until the sidebar happened to rebuild.
     _scheduleGeoPlaceSweep() {
         if (this._geoPlaceSweepTimer || !this._geoPlacePending || this._geoPlacePending.size === 0) return;
-        // Only keys that can still fire automatically are worth a timer; the
-        // exhausted ones stay in `pending` waiting for a forced retry (an app
-        // resume), so scheduling on their behalf would spin forever.
+        // Exhausted keys stay pending for a forced retry, so scheduling for them would spin forever.
         const anyRetryable = [...this._geoPlacePending]
             .some(k => this._geoPlaceRetryAt(k) !== Infinity);
         if (!anyRetryable) return;
@@ -1308,11 +1172,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (cache.has(key)) { pending.delete(key); continue; }
             const retryAt = this._geoPlaceRetryAt(key);
             if (retryAt === Infinity) {
-                // Out of automatic attempts: SKIP it, don't drop it. Dropping
-                // is what broke the "an explicit retry still gets one more
-                // chance" contract — the sweep evicted the key, so the
-                // visibilitychange retry below found an empty set and the row
-                // kept its raw coordinates for the rest of the session.
+                // Out of automatic attempts: skip it, don't drop it, so an explicit retry still gets one more chance.
                 if (!force) continue;
                 this._geoPlaceMisses.delete(key);
             } else if (now < retryAt && !force) {
@@ -1324,8 +1184,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    // Updates every surface showing this geohash: its sidebar row and, when it
-    // is the open channel, the header.
     _paintPlaceEverywhere(key, place) {
         document.querySelectorAll(`.channel-item[data-geohash="${CSS.escape(key)}"] .channel-sub`)
             .forEach(el => this._fillLocationParts(el, place));
@@ -1334,10 +1192,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (link) this._fillLocationParts(link, place);
         }
     },
-    /// Lookups allowed in flight at once when going through our proxy, which
-    /// edge-caches for a day and is itself Nominatim's client. Keeps a sidebar
-    /// full of geohashes resolving in a couple of round trips instead of one
-    /// per second, which is what made the coordinates linger.
+    // Concurrent lookups via our proxy, which edge-caches and is itself Nominatim's client.
     _GEO_PLACE_CONCURRENCY: 4,
 
     _loadGeohashPlaceCache() {
@@ -1350,13 +1205,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 for (const k in obj) {
                     if (!Object.prototype.hasOwnProperty.call(obj, k)) continue;
                     if (typeof obj[k] !== 'string') continue;
-                    // Drop negatives written by earlier builds so a row stuck on
-                    // "Unknown location" can resolve for real on this run.
+                    // Drop negatives written by earlier builds so "Unknown location" rows can resolve.
                     if (obj[k] === 'Unknown location') continue;
                     this._geohashPlaceCache.set(k, obj[k]);
                 }
             }
-        } catch (_) { /* corrupt or unavailable — start empty */ }
+        } catch (_) { }
         return this._geohashPlaceCache;
     },
 
@@ -1374,17 +1228,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     this._geohashPlaceCache = new Map(entries);
                 }
                 localStorage.setItem(this._GEO_PLACE_KEY, JSON.stringify(Object.fromEntries(entries)));
-            } catch (_) { /* quota or private mode — cache stays in memory */ }
+            } catch (_) { }
         }, 1000);
     },
 
-    /// How precise a question to ask about a cell.
-    ///
-    /// Nominatim's `zoom` selects the granularity of the answer (3 country,
-    /// 5 state, 8 county, 10 city). Asking a CITY-level question about a cell
-    /// 1250 km across is a category error: a 2-character geohash covers whole
-    /// countries, so the useful answer is the country, not whichever hamlet
-    /// happens to sit under the center pixel.
+    // Nominatim `zoom` granularity (3 country, 5 state, 8 county, 10 city), matched to the cell size.
     _geoPlaceZoomFor(geohash) {
         const n = (geohash || '').length;
         if (n <= 2) return 5;   // ~1250km — state/country
@@ -1392,19 +1240,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return 10;              // ~5km and finer — city
     },
 
-    /// Points to ask about, in order, for one geohash.
-    ///
-    /// The center first, then the four quarter-points of the cell. This is what
-    /// makes short geohashes resolvable at all: a cell's center very often
-    /// falls in WATER even when the cell is mostly land — `gc` spans Ireland
-    /// and part of Britain but centers on the Irish Sea, `dh` centers in the
-    /// Gulf of Mexico, `9e` in the Pacific. Reverse geocoding open water
-    /// returns no city and no country, which the caller reads as a miss, so
-    /// those channels sat on raw coordinates no matter how many times the
-    /// backoff retried — every retry asked the same unanswerable point.
-    ///
-    /// Only walked until something answers, so a normal land-centerd geohash
-    /// still costs exactly one request.
+    // The center first, then the four quarter-points, since a short cell's center often falls in water.
     _geoPlaceProbePoints(geohash) {
         const zoom = this._geoPlaceZoomFor(geohash);
         let b;
@@ -1423,10 +1259,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         ];
     },
 
-    /// "City, Country" out of a reverse-geocode response, or '' when the point
-    /// has no name. Falls back to the state/region when there is no
-    /// city-level feature — which is the normal shape of a coarse-zoom answer
-    /// for a large cell, and beats reporting nothing.
+    // "City, Country" from a reverse-geocode response, falling back to state/region, or ''.
     _geoPlaceFromAddress(data) {
         const addr = (data && data.address) || {};
         const city = addr.city || addr.town || addr.village || addr.county
@@ -1435,12 +1268,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return [city, country].filter(x => x).join(', ');
     },
 
-    /// The bundled Natural Earth country polygons, decoded once and kept.
-    ///
-    /// Fetched lazily — only when a lookup has actually failed — so a session
-    /// that never hits an unnamed cell never pays for it. The globe keeps its
-    /// own copy behind a worker; this is deliberately independent so the place
-    /// fallback works whether or not the explorer was ever opened.
+    // Fetched lazily, only after a lookup fails; independent of the globe's worker copy.
     _loadWorldPlaceFeatures() {
         if (!this._worldPlaceFeatures) {
             this._worldPlaceFeatures = fetch('/data/countries-110m.json', { cache: 'force-cache' })
@@ -1451,17 +1279,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return this._worldPlaceFeatures;
     },
 
-    /// What to show when the geocoder can name nothing in a cell.
-    ///
-    /// Some cells genuinely have no address: `12` is the Antarctic plateau,
-    /// `zxnjj` is open Arctic Ocean. Falling back to raw coordinates told the
-    /// user nothing they could read. This answers from the map data the app
-    /// already ships — the same countries file the globe draws — so it needs
-    /// no network and cannot fail on somebody else's outage.
-    ///
-    /// Deliberately NOT written into the place cache: it is a display fallback,
-    /// not a resolved place, and caching it would end the search for a real
-    /// name exactly the way caching "Unknown location" once did.
+    // Label for cells the geocoder can't name, from the bundled map data instead of raw coordinates.
     async _geoPlaceDescribeRegion(geohash) {
         try {
             const feats = await this._loadWorldPlaceFeatures();
@@ -1471,8 +1289,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } catch (_) { return ''; }
     },
 
-    /// The best label available for a cell with no geocoded name: a described
-    /// region if we can work one out locally, else the raw coordinates.
     async _geoPlaceFallbackLabel(geohash) {
         const described = await this._geoPlaceDescribeRegion(geohash);
         return described || this.getGeohashLocation(geohash) || '';
@@ -1488,19 +1304,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return this._geoPlaceFallbackLabel(geohash);
         }
 
-        // Collapse concurrent callers for the same geohash (the header and its
-        // sidebar row resolve the same place on channel switch).
+        // Collapse concurrent callers for the same geohash.
         if (!this._geoPlaceInflight) this._geoPlaceInflight = new Map();
         const existing = this._geoPlaceInflight.get(key);
         if (existing) return existing;
 
         const p = this._geoPlaceRun(async () => {
-            // Probes are SEQUENTIAL and, on the direct-to-Nominatim path,
-            // spaced: `_geoPlaceRun` only paces one lookup against the next, so
-            // without this a five-probe walk would fire five requests back to
-            // back and break the 1/s limit this browser is bound by. Through
-            // the proxy there is no gap to keep — it is Nominatim's client, not
-            // us, and it edge-caches each point for a day.
+            // Probes are sequential and, on the direct Nominatim path, spaced to respect its 1/s limit.
             const viaProxy = typeof this._getProxyBaseUrl === 'function' && !!this._getProxyBaseUrl();
             let first = true;
             for (const pt of this._geoPlaceProbePoints(geohash)) {
@@ -1518,11 +1328,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         })
             .then(place => {
                 this._geoPlaceInflight.delete(key);
-                // A geocode with no city/country is a NON-answer, not a place.
-                // Caching it permanently is what left a row reading "Unknown
-                // location" while the header, resolved on a luckier attempt,
-                // showed the real one. Fall back to the decoded coordinates and
-                // let a later attempt still find a name.
+                // A geocode with no city/country is a non-answer; don't cache it permanently.
                 if (!place) {
                     this._geoPlaceNoteMiss(key);
                     return this._geoPlaceFallbackLabel(geohash);
@@ -1535,8 +1341,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             })
             .catch(err => {
                 this._geoPlaceInflight.delete(key);
-                // A hard failure is a miss too, so it earns a retry instead of
-                // leaving the row with nothing to trigger another attempt.
+                // A hard failure is a miss too, so it earns a retry.
                 this._geoPlaceNoteMiss(key);
                 throw err;
             });
@@ -1544,14 +1349,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return p;
     },
 
-    // Run one geocode lookup under whichever rate policy actually binds.
-    //
-    // Through the proxy the worker is Nominatim's client and its answers are
-    // edge-cached for a day, so a handful of lookups can be in flight at once
-    // — that is what lets a sidebar of geohashes resolve in a round trip or
-    // two instead of one per second. On the direct fallback this browser *is*
-    // the API client, so requests stay strictly serialized with the documented
-    // ≥1s gap between them.
+    // Via the proxy several lookups may run at once; direct to Nominatim they are paced one per second.
     async _geoPlaceRun(fn) {
         const viaProxy = typeof this._getProxyBaseUrl === 'function' && !!this._getProxyBaseUrl();
 
@@ -1562,8 +1360,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this._geoPlaceLastAt = Date.now();
                 return fn();
             });
-            // Keep the chain alive after a rejection so one failure doesn't
-            // wedge every queued lookup behind it.
+            // Keep the chain alive after a rejection so one failure doesn't wedge every queued lookup.
             this._geoPlaceQueue = mine.catch(() => { });
             return mine;
         }
@@ -1583,14 +1380,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    // Identifies the active conversation so unsent input can be kept per place.
     _getInputContextKey() {
         if (this.inPMMode && this.currentGroup) return 'g:' + this.currentGroup;
         if (this.inPMMode && this.currentPM) return 'p:' + this.currentPM;
         return 'c:' + (this.currentGeohash || this.currentChannel || '');
     },
 
-    // Stash whatever is in the message input under the current conversation key.
     _saveCurrentDraft() {
         const input = document.getElementById('messageInput');
         if (!input || !input._richInit || !this._activeDraftKey) return;
@@ -1600,7 +1395,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         else this._inputDrafts.delete(this._activeDraftKey);
     },
 
-    // Load the saved draft for the conversation now in view (empty if none).
     _restoreDraftForContext() {
         const input = document.getElementById('messageInput');
         if (!input || !input._richInit) return;
@@ -1615,15 +1409,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (typeof this.handleInputChange === 'function') this.handleInputChange(draft);
     },
 
-    // Replay a channel's archived events (messages, reactions, edits) through
-    // handleEvent, which dedupes. Oldest-first so edits and reaction add/remove
-    // net correctly. Throttled per channel.
+    // Oldest-first through handleEvent so edits and reaction add/remove net correctly; throttled per channel.
     async channelRestoreFromD1(channelName, opts = {}) {
         if (!channelName) return;
         return this.channelRestoreManyFromD1([channelName], opts);
     },
 
-    // Batch several channels' archived events into one channel-get
     async channelRestoreManyFromD1(channelNames, opts = {}) {
         if (!Array.isArray(channelNames) || channelNames.length === 0) return;
         if (!this._getApiHost || !this._getApiHost()) return;
@@ -1653,7 +1444,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         let applied = false;
         const applyBatch = async (batch) => {
             if (!batch.length) return;
-            // Warm the formatter cache for this batch before rendering.
             if (typeof this._preformatBatch === 'function') {
                 for (const ev of batch) {
                     if (typeof this.ingestEmojiTags === 'function') this.ingestEmojiTags(ev.tags);
@@ -1669,7 +1459,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     try { await this.handleEvent(ev); applied = true; } catch (_) { }
                 }
             }
-            // Let the browser paint this batch before the next one.
             if (typeof this._yieldToIdle === 'function') await this._yieldToIdle();
         };
 
@@ -1703,21 +1492,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             await applyBatch(batch);
         } catch (_) { }
 
-        // If the active channel was waiting on this restore (its view settled to
-        // an empty note before the archive arrived), paint it now.
+        // Paint the active channel if its view settled empty before the archive arrived.
         if (applied) this._repaintActiveChannelIfEmpty(names);
     },
 
-    // Force a re-render of the active channel when its container is empty but the
-    // message store has been populated (e.g. by a D1 restore landing late).
     _repaintActiveChannelIfEmpty(names) {
-        // Column view has no single active container: every open channel column
-        // can be sitting on its "No recent messages" note while the archive it
-        // was waiting for lands. Repaint each one the restore actually filled.
+        // Column view: repaint each channel column whose DOM has fallen behind its store.
         if (this._cvActive) {
-            // Not just the columns this restore names: the same replay feeds
-            // every open channel, and a column only needs repainting if its DOM
-            // has actually fallen behind its store (_cvColumnBehind).
             this._cvReconcileColumns();
             return;
         }
@@ -1737,40 +1518,30 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     switchChannel(channel, geohash = '') {
         if (this._cvActive) { this._cvOpenConversation({ type: 'channel', channel, geohash: geohash || '' }); return; }
-        // In single view a thread belongs to the conversation on screen.
         if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
-        // Keep the current conversation's unsent input before switching away
         this._saveCurrentDraft();
-        // Store previous state
         const previousChannel = this.currentChannel;
         const previousGeohash = this.currentGeohash;
 
-        // Check if we're actually switching to a different channel
         const isSameChannel = !this.inPMMode &&
             channel === previousChannel &&
             geohash === previousGeohash;
 
         if (isSameChannel) {
-            // Check if the DOM is out of sync with the message store
-            // (e.g. too many messages arrived and virtual scroll state is stale)
             const container = document.getElementById('messagesContainer');
             const storageKey = geohash ? `#${geohash}` : channel;
             const storedCount = (this.messages.get(storageKey) || []).length;
             const domCount = container ? container.querySelectorAll('.message[data-message-id]').length : 0;
 
-            // If there are stored messages but none in the DOM, force a re-render
             if (storedCount > 0 && domCount === 0) {
-                // Clear lastChannel so loadChannelMessages won't skip
                 if (container) container.dataset.lastChannel = '';
-                // Fall through to full channel load below
             } else {
-                // Still ensure the sidebar active state is correct (for initialization)
                 document.querySelectorAll('.channel-item').forEach(item => {
                     const isActive = item.dataset.channel === channel &&
                         item.dataset.geohash === geohash;
                     item.classList.toggle('active', isActive);
                 });
-                return; // Don't reload the same channel
+                return;
             }
         }
 
@@ -1785,46 +1556,34 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.currentGeohash = geohash;
         this.userScrolledUp = false;
 
-        // Hydrate recent history from the D1 channel archive (best-effort). This
-        // feeds the same event handler as the relays, so the two merge and sort
-        // by created_at + the millisecond 'ms' tag.
+        // Feeds the same handler as the relays, which merge by created_at plus the millisecond 'ms' tag.
         if (typeof this.channelRestoreFromD1 === 'function') {
             this.channelRestoreFromD1(geohash || channel, { force: true });
         }
         this.clearQuoteReply();
         if (this.pendingEdit) this.cancelEditMessage();
 
-        // Close the mobile sidebar as soon as the switch is committed so the
-        // UI feels responsive even while the channel loads. Anything that
-        // throws later won't leave the sidebar stuck open.
+        // Close the mobile sidebar first so later throws can't leave it stuck open.
         if (window.innerWidth <= 1024) {
             this.closeSidebar();
         }
 
-        // Track navigation history
         this._pushNavigation({ type: 'channel', channel, geohash });
 
-        // Hide typing indicator when leaving PM mode
         this.renderTypingIndicator();
 
-        // Handle geo-relay connections for Bitchat compatibility
-        // Clean up previous geo relays if switching away from a geohash channel
         if (previousGeohash && previousGeohash !== geohash) {
             this.cleanupGeoRelays(previousGeohash);
         }
 
-        // Close the prior channel's REQ on relays unless it's joined/common
-        // (keep those alive so background unread counts keep updating)
+        // Keep joined/common channels' REQs alive so background unread counts keep updating.
         const previousKey = previousGeohash || previousChannel;
         const newKey = geohash || channel;
         if (previousKey && previousKey !== newKey && typeof this.closeChannelSubscription === 'function') {
             this.closeChannelSubscription(previousKey);
         }
 
-        // Connect to nearby relays for geohash channels (async, non-blocking)
-        // connectToGeoRelays handles its own subscription internally after
-        // geo relays are configured. The proxy buffers GEO_EVENTs for relays
-        // still connecting, so no need to block the channel switch.
+        // Non-blocking: the proxy buffers GEO_EVENTs for relays still connecting.
         if (geohash) {
             this.connectToGeoRelays(geohash);
             this.startGeoRelayKeepAlive(geohash);
@@ -1832,15 +1591,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.stopGeoRelayKeepAlive();
         }
 
-        // Always ensure default relays (first 5 broadcast) stay connected
         this.ensureDefaultRelaysConnected();
 
-        // Load channel messages from relays (immediate, uses whatever relays are connected)
         const channelType = (geohash && this.isValidGeohash(geohash)) ? 'geohash' : 'non-geohash';
         const channelKey = geohash || channel;
         this.loadChannelFromRelays(channelKey, channelType);
 
-        // Show share button in channel mode
         const shareBtn = document.getElementById('shareChannelBtn');
         if (shareBtn) {
             shareBtn.style.display = 'block';
@@ -1851,12 +1607,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         this._renderChannelTitle(channel, geohash);
 
-        // Ensure channel exists in sidebar before updating active state
         if (!document.querySelector(`[data-channel="${channel}"][data-geohash="${geohash}"]`)) {
             this.addChannel(channel, geohash);
         }
 
-        // Update active state
         document.querySelectorAll('.channel-item').forEach(item => {
             const isActive = item.dataset.channel === channel &&
                 item.dataset.geohash === geohash;
@@ -1867,28 +1621,20 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             item.classList.remove('active');
         });
 
-        // Clear unread count
         const unreadKey = geohash ? `#${geohash}` : channel;
         this.clearUnreadCount(unreadKey);
 
-        // Re-sort sidebar so the active channel moves to the top while we're
-        // viewing it (and the previous channel falls back to its activity slot)
         this.sortChannelsByActivity();
 
-        // Load channel messages - loadChannelMessages has its own dedup check
-        // via container.dataset.lastChannel, so always call it to handle
-        // switching back from PM mode to the same channel correctly
+        // loadChannelMessages dedups via container.dataset.lastChannel, so always call it.
         this.loadChannelMessages(displayName);
 
-        // Report receipts for messages that piled up here while we were away
         if (typeof this.markVisibleChannelMessagesRead === 'function') {
             this.markVisibleChannelMessagesRead();
         }
 
-        // Update user list for this channel
         this.updateUserList();
 
-        // Track current channel for auto-ephemeral session resume
         if (localStorage.getItem('nym_auto_ephemeral') === 'true') {
             localStorage.setItem('nym_auto_ephemeral_channel', JSON.stringify({
                 channel: channel,
@@ -1896,11 +1642,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }));
         }
 
-        // Restore any unsent input previously typed for this channel
         this._restoreDraftForContext();
 
-        // Close stale autocomplete dropdowns from the previous channel and
-        // restore focus to the input so typing continues without re-clicking.
         this.hideAutocomplete();
         this.hideChannelAutocomplete();
         this.hideEmojiAutocomplete();
@@ -1909,9 +1652,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _focusMessageInput() {
         if (window.innerWidth <= 768) return;
-        // Don't steal focus from another input/editable the user just clicked
-        // into (search boxes, modal fields, etc.). Only refocus the message
-        // input when focus isn't already on a different focusable control.
+        // Only refocus the message input when focus isn't already on another control.
         const active = document.activeElement;
         if (active && active.id !== 'messageInput') {
             const tag = active.tagName;
@@ -1927,17 +1668,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const list = document.getElementById('channelList');
         const key = geohash || channel;
 
-        // Reject invalid channel names (must be letters and digits only)
         if (key && !/^[\p{L}\p{N}]+$/u.test(key)) {
             return;
         }
 
-        // Don't add blocked channels
         if (this.isChannelBlocked(channel, geohash)) {
             return;
         }
 
-        // Duplicate guard keyed on the logical channel identity (geohash || channel)
+        // Duplicate guard keyed on the logical channel identity (geohash || channel).
         const alreadyPresent = list &&
             Array.from(list.querySelectorAll('.channel-item'))
                 .some(el => (el.dataset.geohash || el.dataset.channel) === key);
@@ -1947,17 +1686,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const item = document.createElement('div');
             item.className = 'channel-item list-item';
             item.dataset.channel = channel;
-            // The ROUTING key, exactly as registered: `switchChannel` reads it
-            // back off the row, and `geohash || channel` is what keys the
-            // message store, the activity map and the unread counts. It is NOT
-            // an "is this a geohash" flag — `geoKey` below answers that, for
-            // display only. Emptying this for a named channel pointed its
-            // storage key at the bare name while its messages live under
-            // `#name`, and sent its posts to the `geohash || 'nymchat'` fallback
-            // in `publishMessage`.
+            // The routing key as registered (`geohash || channel` keys the store); not an "is geohash" flag.
             item.dataset.geohash = geohash;
 
-            // Check if this is the current active channel
             const isCurrentChannel = !this.inPMMode &&
                 this.currentChannel === channel &&
                 (this.currentGeohash || '') === geohash;
@@ -1965,15 +1696,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 item.classList.add('active');
             }
 
-            // DISPLAY ONLY — whether this channel has a location to show, and
-            // which geohash to resolve it from. Derived rather than taken on
-            // trust from the caller (see `channelGeohashKey`); the routing key
-            // above is untouched.
+            // Display only: whether this channel has a location to show, derived via channelGeohashKey.
             const geoKey = this.channelGeohashKey(channel, geohash);
             const isGeo = !!geoKey;
             const displayName = geoKey ? `#${this.escapeHtml(geoKey)}` : `#${this.escapeHtml(channel)}`;
 
-            // Get location information for geohash channels
             let locationHint = '';
             if (isGeo) {
                 const location = this.getGeohashLocation(geoKey);
@@ -1987,10 +1714,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 item.classList.add('pinned');
             }
 
-            // Location subtext. A geohash paints its coordinates immediately
-            // (decoded locally, no network) and upgrades in place to the
-            // human-readable place once the queued lookup lands; a named
-            // channel just says it isn't one. Mirrors the channel header.
             const subText = isGeo
                 ? (this._loadGeohashPlaceCache().get(geoKey) || this.getGeohashLocation(geoKey) || '')
                 : 'Not a geohash';
@@ -2003,19 +1726,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     </div>
 `;
 
-            // Upgrade the coordinates to a place name once the queued lookup
-            // returns. Only fires for a geohash we have never resolved — a
-            // cached one already rendered its place above and costs no request.
-            // Only a resolved place name has the "City, Country" shape worth
-            // splitting; raw coordinates and 'Not a geohash' stay one run.
             const cachedPlace = isGeo ? this._loadGeohashPlaceCache().get(geoKey) : null;
             const subEl = item.querySelector('.channel-sub');
             if (subEl) {
                 if (cachedPlace) {
                     this._fillLocationParts(subEl, cachedPlace);
                 } else {
-                    // Wrapped rather than set as bare text: .channel-sub is a
-                    // flex container, and an anonymous flex item can't ellipsize.
+                    // Wrapped rather than bare text: an anonymous flex item can't ellipsize.
                     const only = document.createElement('span');
                     only.className = 'loc-city';
                     only.textContent = subText;
@@ -2025,10 +1742,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (isGeo && !this._loadGeohashPlaceCache().has(geoKey)) {
                 this._resolveGeohashPlaceName(geoKey).then(place => {
                     if (place && subEl && subEl.isConnected) this._fillLocationParts(subEl, place);
-                }).catch(() => { /* keep the coordinates */ });
+                }).catch(() => { });
             }
 
-            // Insert before the view more button if it exists
             const viewMoreBtn = list.querySelector('.view-more-btn');
             if (viewMoreBtn) {
                 list.insertBefore(item, viewMoreBtn);
@@ -2037,17 +1753,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
 
             this.channels.set(key, { channel, geohash });
-            // The row template above hardcodes a hidden zero badge. Sidebar rows
-            // are built as channels are discovered, which is often AFTER the
-            // counts were restored and painted, so seed from the live count or
-            // the badge stays blank until the next message in that channel.
+            // Seed the badge from the live count, since rows are often built after counts are painted.
             const unreadKey = geohash ? `#${geohash}` : channel;
             const standingUnread = (this.unreadCounts && this.unreadCounts.get(unreadKey)) || 0;
             if (standingUnread > 0) this._renderUnreadBadge(unreadKey, standingUnread);
-            // updateChannelPins and applyHiddenChannels each sweep the whole
-            // list with querySelectorAll, so doing them per add makes bulk
-            // population O(n^2) in DOM queries. During a bulk add the caller
-            // runs them ONCE at the end (_flushBulkChannelAdd).
+            // During a bulk add these per-list sweeps run once at the end (_flushBulkChannelAdd) to avoid O(n^2).
             if (!this._bulkChannelAdd) {
                 this.updateChannelPins();
                 this.applyHiddenChannels();
@@ -2056,7 +1766,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
-            // Hide new channel if it doesn't match active search filter
             const searchInput = document.getElementById('channelSearch');
             if (searchInput && searchInput.value.trim().length > 0) {
                 const term = searchInput.value.toLowerCase();
@@ -2068,12 +1777,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
 
-            // Check if we need to add/update view more button. Suppressed during
-            // a bulk add for the same reason as the sweeps above, and it is the
-            // expensive one: _markListOverflow reads style.display on every row
-            // (forcing a style recalc) and rewrites the .list-overflow class
-            // across the list, so running it per add was the real O(n^2) —
-            // _flushBulkChannelAdd runs it once at the end instead.
+            // Also suppressed during bulk add; _markListOverflow forces a style recalc per row.
             if (!this._bulkChannelAdd) this.updateViewMoreButton('channelList');
         }
     },
@@ -2082,11 +1786,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const list = document.getElementById(listId);
         if (!list) return;
 
-        // Don't manage view more button if search is active
         const searchWrapper = list.parentElement?.querySelector('.search-input-wrapper');
         const searchInput = searchWrapper?.querySelector('.search-input');
         if (searchInput && searchInput.value.trim().length > 0) {
-            // Hide the view-more button during active search
             const existingBtn = list.querySelector('.view-more-btn');
             if (existingBtn) {
                 existingBtn.style.display = 'none';
@@ -2094,21 +1796,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
-        // Only rows that can actually be SEEN count toward the collapsed budget.
-        // The CSS used to do this with `.list-collapsed .list-item:nth-child(n+21)`,
-        // but nth-child counts every sibling — including rows already hidden by
-        // the hidden/blocked-channel filter — so those silently ate slots and the
-        // collapsed list showed fewer than 20. Channels with unread badges that
-        // should have been on screen were pushed out of view by rows that were
-        // not even rendered. Mark the overflow explicitly instead.
+        // Only visible rows count toward the collapsed budget.
         const items = this._markListOverflow(listId);
         let existingBtn = list.querySelector('.view-more-btn');
 
-        // Get current expansion state
         const isExpanded = this.listExpansionStates.get(listId) || false;
 
         if (items.length > this.COLLAPSED_LIST_VISIBLE) {
-            // We need a button
             if (!existingBtn) {
                 const btn = document.createElement('div');
                 btn.className = 'view-more-btn';
@@ -2117,7 +1811,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 existingBtn = btn;
             }
 
-            // Update button text based on state
             if (isExpanded) {
                 existingBtn.textContent = 'Show less';
                 list.classList.remove('list-collapsed');
@@ -2128,15 +1821,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 list.classList.remove('list-expanded');
             }
 
-            // Make sure button is visible
             existingBtn.style.display = 'block';
         } else {
-            // Don't need a button - remove if exists
             if (existingBtn) {
                 existingBtn.remove();
             }
             list.classList.remove('list-collapsed', 'list-expanded');
-            // Clear expansion state since button is gone
             this.listExpansionStates.delete(listId);
         }
     },
@@ -2148,12 +1838,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         let btn = list.querySelector('.view-more-btn');
         const items = list.querySelectorAll('.list-item');
 
-        // Toggle the state
         const currentState = this.listExpansionStates.get(listId) || false;
         const newState = !currentState;
         this.listExpansionStates.set(listId, newState);
-        // Rows revealed by expanding have no badge yet: re-run the D1 seed so
-        // they pick one up, and refresh the archive floors behind it.
+        // Rows revealed by expanding have no badge yet, so re-run the D1 seed.
         if (newState && listId === 'channelList') {
             if (typeof this._seedUnreadFromD1Activity === 'function') {
                 this._seedUnreadFromD1Activity();
@@ -2167,16 +1855,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.fetchNamedChannelActivityFromD1().catch(() => { });
             }
         }
-        // Re-mark for the new state: expanding clears every overflow mark,
-        // collapsing re-applies them to whatever is currently visible.
         this._markListOverflow(listId);
 
         if (newState) {
-            // Expanding
             list.classList.remove('list-collapsed');
             list.classList.add('list-expanded');
 
-            // Move button to the end of the list
             if (btn) {
                 btn.remove();
                 btn = document.createElement('div');
@@ -2186,11 +1870,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 list.appendChild(btn);
             }
         } else {
-            // Collapsing
             list.classList.add('list-collapsed');
             list.classList.remove('list-expanded');
 
-            // Move button back to after the 20th item
             if (btn) {
                 btn.remove();
                 btn = document.createElement('div');
@@ -2201,8 +1883,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 btn.textContent = `View ${this.abbreviateNumber(visible.length - cap)} more...`;
                 btn.onclick = () => this.toggleListExpansion(listId);
 
-                // Insert after the last VISIBLE row of the collapsed window —
-                // counting raw items would place it behind hidden rows.
+                // Insert after the last visible row of the collapsed window, not the raw item count.
                 if (visible.length > cap && visible[cap - 1]) {
                     visible[cap - 1].insertAdjacentElement('afterend', btn);
                 } else {
@@ -2215,19 +1896,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     removeChannel(channel, geohash = '') {
         const key = geohash || channel;
 
-        // Don't allow removing default channel #nymchat
         if (key === 'nymchat') {
             this.displaySystemMessage('Cannot remove the default #nymchat channel');
             return;
         }
 
-        // Remove from channels map
         this.channels.delete(key);
 
-        // Remove from user-joined set
         this.userJoinedChannels.delete(key);
 
-        // Remove from DOM
         const selector = geohash ?
             `[data-geohash="${geohash}"]` :
             `[data-channel="${channel}"][data-geohash=""]`;
@@ -2236,35 +1913,29 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             element.remove();
         }
 
-        // If we're currently in this channel, switch to #nymchat
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
             this.switchChannel('nymchat', 'nymchat');
         }
 
-        // Save the updated channel list
         this.saveUserChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
         this.displaySystemMessage(`Left channel ${geohash ? '#' + geohash : '#' + channel}`);
     },
 
-    /// Cap on the joined-channel set.
+    // Cap on the joined-channel set.
     MAX_JOINED_CHANNELS: 300,
 
     saveUserJoinedChannels() {
-        // No union with the stored copy: app.js seeds this.userJoinedChannels
-        // from localStorage at construction, so the in-memory set is already
-        // authoritative — merging the old list back in only undid removals,
-        // which is why leaving a channel never actually shrank this.
+        // No union with the stored copy: the in-memory set is authoritative, and merging would undo removals.
         this._capUserJoinedChannels();
         localStorage.setItem('nym_user_joined_channels',
             JSON.stringify(Array.from(this.userJoinedChannels)));
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
-    /// Trims the joined set to MAX_JOINED_CHANNELS, dropping least-recently-
-    /// active first. Pinned channels and the current one are never dropped.
+    // Drops least-recently-active first; pinned channels and the current one are never dropped.
     _capUserJoinedChannels() {
         const set = this.userJoinedChannels;
         if (!set || set.size <= this.MAX_JOINED_CHANNELS) return;
@@ -2289,8 +1960,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (saved) {
             try {
                 const channels = JSON.parse(saved);
-                // Filter out invalid channel names (legacy data with spaces/special chars/underscores/hyphens)
-                // and migrate the legacy default channel key to the renamed default.
+                // Drop invalid legacy names and migrate the legacy default channel key.
                 return [...new Set(channels
                     .filter(ch => ch && /^[\p{L}\p{N}]+$/u.test(ch))
                     .map(ch => ch === 'nym' ? 'nymchat' : ch))];
@@ -2313,23 +1983,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             }
         });
 
-        // Save the channels
         localStorage.setItem('nym_user_channels', JSON.stringify(userChannels));
 
-        // Also save the joined channels set
         this.saveUserJoinedChannels();
     },
 
     addChannelToList(channel, geohash) {
-        // For geohash channels, ALWAYS use the geohash as the key
+        // For geohash channels, always use the geohash as the key.
         const key = geohash ? geohash : channel;
 
-        // Check if this channel was previously user-joined
         const wasUserJoined = this.userJoinedChannels.has(key);
 
-        // Only add if not already in channels map
         if (geohash) {
-            // This is a geohash channel
             if (!this.channels.has(geohash)) {
                 this.addChannel(geohash, geohash);
                 if (wasUserJoined) {
@@ -2338,7 +2003,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 this.addGeohashChannelToGlobe(geohash);
             }
         } else {
-            // This is a standard channel
             if (!this.channels.has(channel)) {
                 this.addChannel(channel, '');
                 if (wasUserJoined) {
@@ -2348,20 +2012,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    // Every caller gates this on `!message.isHistorical`, so it always means
-    // "one more LIVE unread message arrived".
+    // Every caller gates this on `!message.isHistorical`, so it means one more live unread arrived.
     updateUnreadCount(channel, createdAt) {
         let count = this._recomputeUnreadCount(channel);
         // Don't let a partial local cache drop the badge below the D1 archive.
         if (this._d1Unread) count = Math.max(count, this._d1Unread.get(channel) || 0);
-        // The cache may hold only a slice of what is unread, so the recompute
-        // alone would stomp a larger standing count back down. A live arrival
-        // means the true total is one MORE than whatever already stood — but
-        // only when the message is newer than the channel's read watermark.
-        // Relays replay older events live and a backfill can land on this path,
-        // and every one of those bumped the badge by one for a message the
-        // channel had already been read past. Callers with no message in hand
-        // (a deletion sweep) pass nothing and keep the unconditional bump.
+        // Bump the standing count only for messages newer than the read watermark, since relays replay old events.
         if (this._unreadCountStillValid(channel)) {
             const standing = this.unreadCounts.get(channel) || 0;
             const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
@@ -2374,8 +2030,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._scheduleChannelSort();
     },
 
-    // Re-derive a badge without updateUnreadCount's live-arrival bump, for
-    // callers that only changed which STORED messages are visible.
+    // Re-derive without the live-arrival bump, for callers that only changed which stored messages are visible.
     refreshUnreadCount(channel) {
         let count = this._recomputeUnreadCount(channel);
         if (this._d1Unread) count = Math.max(count, this._d1Unread.get(channel) || 0);
@@ -2388,8 +2043,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this._scheduleChannelSort();
     },
 
-    // Counter is derived from cached messages newer than lastRead so it
-    // can't drift from the actual cache contents.
+    // Derived from cached messages newer than lastRead so it can't drift from the cache.
     _recomputeUnreadCount(channel) {
         if (!this.channelLastRead) this.channelLastRead = new Map();
         const lastRead = this.channelLastRead.get(channel) || 0;
@@ -2450,7 +2104,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         item.classList.toggle('has-unread', count > 0);
     },
 
-    // Throttle the sidebar sort so it fires immediately on the first call
     _scheduleChannelSort() {
         const SORT_THROTTLE_MS = 300;
         const now = Date.now();
@@ -2479,41 +2132,33 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const channelList = document.getElementById('channelList');
         const channels = Array.from(channelList.querySelectorAll('.channel-item'));
 
-        // Save view more button if it exists
         const viewMoreBtn = channelList.querySelector('.view-more-btn');
 
-        // Store current scroll position
         const scrollTop = channelList.scrollTop;
 
         channels.sort((a, b) => {
-            // #nymchat is always first
             const aIsDefault = (a.dataset.geohash || a.dataset.channel) === 'nymchat';
             const bIsDefault = (b.dataset.geohash || b.dataset.channel) === 'nymchat';
 
             if (aIsDefault) return -1;
             if (bIsDefault) return 1;
 
-            // Active channel is third
             const aIsActive = a.classList.contains('active');
             const bIsActive = b.classList.contains('active');
 
             if (aIsActive && !bIsActive) return -1;
             if (!aIsActive && bIsActive) return 1;
 
-            // Then sort by pinned status
             const aPinned = a.classList.contains('pinned');
             const bPinned = b.classList.contains('pinned');
 
             if (aPinned && !bPinned) return -1;
             if (!aPinned && bPinned) return 1;
 
-            // Check if these are valid geohash channels (not just any channel with a geohash field)
             const aIsGeo = !!a.dataset.geohash && a.dataset.geohash !== '' && this.isValidGeohash(a.dataset.geohash);
             const bIsGeo = !!b.dataset.geohash && b.dataset.geohash !== '' && this.isValidGeohash(b.dataset.geohash);
 
-            // If proximity sorting is enabled, sort valid geohash channels by distance
             if (this.settings.sortByProximity && this.userLocation) {
-                // If both are valid geohash, sort by distance
                 if (aIsGeo && bIsGeo) {
                     try {
                         const coordsA = this.decodeGeohash(a.dataset.geohash);
@@ -2528,17 +2173,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                             coordsB.lat, coordsB.lng
                         );
 
-                        // Return distance comparison (don't fall through to unread count)
                         return distA - distB;
                     } catch (e) {
-                        // Fall through to unread count if error
                     }
                 }
-                // Non-geohash channels mix in with geohash by unread count — no forced grouping
             }
 
-            // Default: sort by most recent activity so live channels float
-            // to the top regardless of stale unread counts left over from cache
+            // Sort by most recent activity so live channels rise regardless of stale cached unread counts.
             const aChannel = a.dataset.geohash ? `#${a.dataset.geohash}` : a.dataset.channel;
             const bChannel = b.dataset.geohash ? `#${b.dataset.geohash}` : b.dataset.channel;
 
@@ -2547,31 +2188,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
             if (aActivity !== bActivity) return bActivity - aActivity;
 
-            // Tiebreaker: unread count
             const aUnread = this.unreadCounts.get(aChannel) || 0;
             const bUnread = this.unreadCounts.get(bChannel) || 0;
             return bUnread - aUnread;
         });
 
-        // Clear and re-append
         channelList.innerHTML = '';
         channels.forEach(channel => channelList.appendChild(channel));
 
-        // Hidden/blocked channels first: updateViewMoreButton counts only rows
-        // that are actually visible, so their display state has to be settled
-        // before the collapsed budget is worked out.
+        // Hidden/blocked state must be settled before updateViewMoreButton counts visible rows.
         this.applyHiddenChannels();
 
-        // Re-add view more button
         this.updateViewMoreButton('channelList');
 
-        // Re-apply channel search filter if search is active
         const searchInput = document.getElementById('channelSearch');
         if (searchInput && searchInput.value.trim().length > 0) {
             this.filterChannels(searchInput.value);
         }
 
-        // Restore scroll position
         channelList.scrollTop = scrollTop;
     },
 
@@ -2591,8 +2225,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
         this.channelLastRead.set(channel, lastTs);
         this._setUnreadCount(channel, 0);
-        // Drop the D1 archive floor — it was relative to the old lastRead and
-        // would otherwise resurrect the badge on the next recompute.
+        // Drop the D1 floor; it was relative to the old lastRead.
         if (this._d1Unread) this._d1Unread.delete(channel);
         this._persistUnreadCounts(true);
         if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
@@ -2619,8 +2252,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.autoResizeTextarea(input);
     },
 
-    // Persist unread counts and last-activity timestamps so the sidebar
-    // sort order and badges survive a page reload.
     _persistUnreadCounts(immediate = false) {
         if (immediate) {
             if (this._persistUnreadTimer) {
@@ -2636,7 +2267,6 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this._writeUnreadCountsToLocalStorage();
         }, 1000);
 
-        // Flush pending writes on unload so debounced state isn't lost.
         if (!this._unreadUnloadHooked && typeof window !== 'undefined') {
             this._unreadUnloadHooked = true;
             const flush = () => {
@@ -2668,10 +2298,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     if (v > 0) lastRead[k] = v;
                 }
             }
-            // The lastRead each stored count was computed against. Without it a
-            // reload cannot tell "this count is still valid, the local cache is
-            // just thin" from "this count is stale, the channel has been read",
-            // and a partial cache silently wipes the badge.
+            // The lastRead each stored count was computed against, to tell a thin cache from a stale count.
             const basis = {};
             if (this._unreadBasisRead) {
                 for (const [k, v] of this._unreadBasisRead) {
@@ -2722,7 +2349,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         } catch (_) { }
     },
 
-    /// Store an unread count and stamp the lastRead it was derived from.
+    // Store an unread count and stamp the lastRead it was derived from.
     _setUnreadCount(channel, count) {
         if (!this._unreadBasisRead) this._unreadBasisRead = new Map();
         if (count > 0) {
@@ -2734,9 +2361,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
     },
 
-    /// Newest activity we know of for [channel], in seconds. channelLastActivity
-    /// is stored in ms; the cache is consulted too because activity may not have
-    /// loaded yet. Returns 0 when nothing is known.
+    // In seconds; channelLastActivity is in ms. Returns 0 when nothing is known.
     _channelActivityTime(channel) {
         let ts = 0;
         const ms = (this.channelLastActivity && this.channelLastActivity.get(channel)) || 0;
@@ -2752,18 +2377,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         return ts;
     },
 
-    /// True when the stored count for [channel] still stands. Counts with no
-    /// stamp (written before this existed, or by an older build) are treated as
-    /// still valid so an upgrade does not wipe every badge once.
+    // Unstamped counts from older builds are treated as valid so an upgrade doesn't wipe badges.
     _unreadCountStillValid(channel) {
         const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
         const basis = this._unreadBasisRead && this._unreadBasisRead.get(channel);
         if (basis === undefined) return true;
         if (lastRead <= basis) return true;
-        // The read mark moved past the stamp. That only means the channel was
-        // actually read when it reaches the newest activity we know of. A stamp
-        // taken before the read state finished loading would otherwise look
-        // stale for every channel at once and wipe the whole sidebar.
+        // Only stale once the read mark reaches the newest known activity, not merely past the stamp.
         const activity = this._channelActivityTime(channel);
         if (activity <= 0) return true;
         return activity > lastRead;
@@ -2785,21 +2405,15 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (Array.isArray(cached) && cached.length > 0) {
                 count = this._recomputeUnreadCount(k);
             } else {
-                // No cached messages to derive from — keep the persisted count
+                // No cached messages to derive from; keep the persisted count.
                 count = persisted;
             }
             const floor = d1Floor.get(k);
             if (isConv) {
-                // PM/group history is restored in full before recompute, so the
-                // cache count is authoritative (lets cross-device reads clear).
+                // PM/group history is restored in full, so the cache count is authoritative.
                 count = Math.max(count, floor || 0);
             } else {
-                // A public channel's local cache is a PARTIAL view: D1 restore
-                // brings back recent history, most of which is usually already
-                // read, so recomputing from it undercounts badly. Keep the
-                // stored count as a floor while it is still valid — only a read
-                // (here or on another device, which advances lastRead past the
-                // stamp) may lower the badge.
+                // A public channel's cache is partial, so keep the stored count as a floor until a read lowers it.
                 count = Math.max(count, floor || 0);
                 if (this._unreadCountStillValid(k)) count = Math.max(count, persisted);
             }

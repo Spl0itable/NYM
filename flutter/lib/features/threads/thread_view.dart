@@ -12,11 +12,7 @@ import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import '../reactions/reaction_picker.dart';
 
-/// Opens the thread view for [m]'s thread (its own thread, or its root's when
-/// [m] is already a reply). The conversation is focused first so the shared
-/// composer — which attaches the thread root to every send while a thread is
-/// open — always targets the right conversation; the message area then swaps
-/// to the thread in place (PWA `openThreadView`).
+/// Focuses the conversation first so the shared composer targets it, then swaps the message area to [m]'s thread.
 void openMessageThread(WidgetRef ref, Message m,
     {String? storageKey, bool silent = false}) {
   if (!appThreadsEnabled) return;
@@ -39,12 +35,7 @@ void openMessageThread(WidgetRef ref, Message m,
   if (view != app.view) {
     ref.read(appStateProvider.notifier).switchView(view);
   }
-  // Post-frame: the view switch above may fire listeners that clear the
-  // active thread; setting it afterwards wins either order. Capture the
-  // NOTIFIER now — the view switch can dispose the widget whose `ref` this
-  // is before the frame ends (its message row unmounts with the old view),
-  // and reading through a disposed ref threw "Cannot use ref after the
-  // widget was disposed" every time a thread was opened cross-view.
+  // Post-frame so it wins over listeners that clear the thread; use the captured notifier since this ref may be disposed.
   final target = ActiveThread(view: view, rootId: threadKeyForMessage(root));
   final activeThread = ref.read(activeThreadProvider.notifier);
   WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -60,18 +51,12 @@ ChatView? _viewForStorageKey(String key) {
   return null;
 }
 
-/// The in-place thread view: replaces the conversation's messages list while a
-/// thread is open — back bar, the root message, a reply divider, then the
-/// replies — with the same composer below it (the controller attaches the
-/// thread root to sends while [activeThreadProvider] is set). The chat
-/// header's back/forward buttons step in and out of it.
+/// In-place thread view that replaces the message list while a thread is open, above the shared composer.
 class ThreadView extends ConsumerStatefulWidget {
   const ThreadView({super.key, required this.thread, this.showTyping = true});
   final ActiveThread thread;
 
-  /// False inside a columns deck, where the column already hosts a typing row
-  /// under the thread — and hosts it keyed to ITS conversation, not whichever
-  /// one happens to be active.
+  /// False inside a columns deck, where the column hosts its own typing row.
   final bool showTyping;
 
   @override
@@ -114,7 +99,6 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final settings = ref.watch(settingsProvider);
-    // Re-render on every display revision (new replies, edits, reactions).
     ref.watch(appStateProvider.select((s) => s.displayRev));
     final app = ref.read(appStateProvider);
     final storageKey = widget.thread.view.storageKey;
@@ -122,7 +106,6 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
     final replies = threadRepliesFor(app, storageKey, widget.thread.rootId);
     final reactions = ref.watch(reactionsProvider);
 
-    // Pin to the newest reply when one arrives while the thread is open.
     if (replies.length != _lastReplyCount) {
       _lastReplyCount = replies.length;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -141,18 +124,14 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
           showThreadAffordances: false,
         );
 
-    // Same translucent wash as `.messages-container` so the thread view reads
-    // as the same surface the conversation list uses.
     final containerColor = c.isLight
-        ? const Color(0x4DFFFFFF) // white @ 0.3
-        : const Color(0x26000000); // black @ 0.15
+        ? const Color(0x4DFFFFFF)
+        : const Color(0x26000000);
 
     return ColoredBox(
       color: containerColor,
       child: Column(
         children: [
-          // In-view thread bar (`.thread-view-bar`): back chevron, thread
-          // icon + title, the conversation label.
           Container(
             margin: const EdgeInsets.fromLTRB(6, 6, 6, 0),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -208,7 +187,6 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
                       style: TextStyle(color: c.textDim, fontSize: 12),
                     ),
                   ),
-                // `.thread-replies-divider`
                 Padding(
                   padding: const EdgeInsets.fromLTRB(8, 12, 8, 8),
                   child: Row(
@@ -220,7 +198,6 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
                             ? tr('No replies yet')
                             : replies.length == 1
                                 ? tr('1 reply')
-                                // Abbreviated like reaction badges.
                                 : tr('{n} replies',
                                     {'n': abbreviateNumber(replies.length)}),
                         style: TextStyle(

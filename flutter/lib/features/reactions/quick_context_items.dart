@@ -15,24 +15,7 @@ import '../../features/zaps/zap_modal.dart';
 import '../i18n/i18n.dart';
 import 'quick_react_popup.dart';
 
-/// Builds the gated [QuickContextItem] list for the long-press quick-context-menu
-/// (F3), mirroring `ui-context.js:1358-1450`:
-///
-///  - Slap / Hug — other users (`!isSelf && targetPubkey`).
-///  - Zap (lightning) — other-user + has message.
-///  - Quote / Copy / Translate — any message with content.
-///  - Edit — own + content.
-///  - Delete (danger) — own.
-///
-/// Dispatch reuses the same engine paths as the full context menu (slap/hug via
-/// the rate-limited `/me` command, quote via the composer mailbox, copy via the
-/// clipboard + a system-message confirm, zap via the zap modal, delete via a
-/// confirm + `deleteMessage`). [onTranslate] and [onEdit] integrate with the
-/// host (message_row owns the inline translation render + the edit/compose
-/// flow); the corresponding rows are only added when their callback is supplied.
-///
-/// All logic lives here so the only change the host must make is to call this
-/// and pass the result to `showQuickReactPopup(contextItems: …)`.
+/// Builds the gated long-press quick-context items; the translate and edit rows appear only when their callback is supplied.
 List<QuickContextItem> buildQuickContextItems(
   BuildContext context,
   WidgetRef ref,
@@ -77,8 +60,6 @@ List<QuickContextItem> buildQuickContextItems(
     ));
   }
 
-  // "Reply in Thread" — any message that can anchor (or already belongs to)
-  // a thread; the host gates on the threads setting and supplies the opener.
   if (onThread != null && hasMessageId) {
     items.add(QuickContextItem(
       label: tr('Reply in Thread'),
@@ -177,11 +158,7 @@ Future<void> _zap(
   Message message,
   String baseNym,
 ) async {
-  // Cache-first, then a kind-0 fetch (D1, then relays) — the same resolve the
-  // quick-zap button and the context menu already use
-  // (`resolveLightningAddressForZap`). Reading only the local `users` map, as
-  // this did, reported "cannot receive zaps" for anyone whose profile had not
-  // been ingested yet — which is most senders in a channel you just opened.
+  // Cache first, then a kind-0 fetch, so unseen senders aren't reported as unable to receive zaps.
   final notifier = ref.read(appStateProvider.notifier);
   notifier.addSystemMessage(
       tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));

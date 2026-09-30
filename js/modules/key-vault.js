@@ -1,5 +1,3 @@
-// key-vault.js — Optional encryption-at-rest for the identity secret keys
-
 window.nymSecretGet = function (name) {
   try { return (window.nym && window.nym.secretGet) ? window.nym.secretGet(name) : localStorage.getItem(name); }
   catch (e) { return null; }
@@ -15,13 +13,11 @@ window.nymSecretRemove = function (name) {
 
 Object.assign(NYM.prototype, {
 
-  // `nym_pq_root` seeds the ML-KEM identity key, so it is protected — and
-  // destroyed on reset — exactly like the nsec (spec §5.3).
+  // `nym_pq_root` seeds the ML-KEM identity key, so it is protected and reset exactly like the nsec (spec §5.3).
   _VAULT_KEYS: ['nym_session_nsec', 'nym_dev_nsec', 'nym_nostr_login_nsec', 'nym_nip46_client_secret',
     'nym_pq_root', 'nym_botpm_git'],
 
-  // localStorage key prefixes for additional secret material that is encrypted
-  // alongside the identity keys (per-pubkey group ephemeral secret keys).
+  // Prefixes of extra secrets encrypted alongside the identity keys (per-pubkey group ephemeral keys).
   _VAULT_EXTRA_PREFIXES: ['nym_ephemeral_keys_'],
 
   _vaultExtraKeyNames() {
@@ -35,7 +31,7 @@ Object.assign(NYM.prototype, {
     return names;
   },
 
-  // Encrypt any plaintext extra-secret entries in place (vault must be unlocked).
+  // Vault must be unlocked.
   async _vaultProtectExtras() {
     if (!this._vaultKey) return;
     for (const name of this._vaultExtraKeyNames()) {
@@ -47,7 +43,7 @@ Object.assign(NYM.prototype, {
     }
   },
 
-  // Decrypt extra-secret entries back to plaintext (vault must be unlocked).
+  // Vault must be unlocked.
   async _vaultUnprotectExtras() {
     if (!this._vaultKey) return;
     for (const name of this._vaultExtraKeyNames()) {
@@ -59,7 +55,6 @@ Object.assign(NYM.prototype, {
     }
   },
 
-  // Drop encrypted extra-secret entries whose key is being discarded (reset path).
   _vaultDiscardExtras() {
     for (const name of this._vaultExtraKeyNames()) {
       try {
@@ -69,9 +64,7 @@ Object.assign(NYM.prototype, {
     }
   },
 
-  // Encrypt every plaintext PM/group cache record in IndexedDB under the vault
-  // key (enable path). The cache mirrors end-to-end encrypted conversations;
-  // with Identity Encryption on, that mirror must not stay readable on disk.
+  // The PM/group cache mirrors E2E conversations, so it must not stay readable on disk with the vault on.
   async _vaultProtectPmCache() {
     if (!this._vaultKey || typeof this._cacheGetAll !== 'function') return;
     try {
@@ -86,8 +79,7 @@ Object.assign(NYM.prototype, {
     } catch (e) {}
   },
 
-  // Decrypt PM/group cache records back to plaintext (disable path, while the
-  // vault key is still in memory) so they don't become unreadable.
+  // Runs while the vault key is still in memory so records don't become unreadable.
   async _vaultUnprotectPmCache() {
     if (!this._vaultKey || typeof this._cacheGetAll !== 'function') return;
     try {
@@ -114,7 +106,7 @@ Object.assign(NYM.prototype, {
     try {
       if (this.vaultEnabled()) {
         if (this._vaultMem && this._vaultMem.has(name)) return this._vaultMem.get(name);
-        return null; // locked or not present
+        return null;
       }
       return localStorage.getItem(name);
     } catch (e) { return null; }
@@ -129,7 +121,7 @@ Object.assign(NYM.prototype, {
       } else {
         localStorage.setItem(name, val);
       }
-    } catch (e) { /* storage may be full/blocked */ }
+    } catch (e) { }
   },
 
   secretRemove(name) {
@@ -159,16 +151,11 @@ Object.assign(NYM.prototype, {
       base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   },
 
-  // True when a WebAuthn authenticator of any kind is usable (platform
-  // biometric, roaming security key, or a synced passkey). Used to offer the
-  // "Passkey" method.
   webauthnAvailable() {
     return !!(window.PublicKeyCredential && navigator.credentials &&
       navigator.credentials.create && navigator.credentials.get);
   },
 
-  // True when a built-in platform authenticator (Face/Touch ID, Windows Hello,
-  // Android biometric) is present. Used to offer the "Biometric" quick method.
   async biometricAvailable() {
     try {
       if (!this.webauthnAvailable()) return false;
@@ -179,10 +166,7 @@ Object.assign(NYM.prototype, {
 
   _vaultIsWebAuthn(method) { return method === 'biometric' || method === 'passkey'; },
 
-  // On Apple platforms (iOS/iPadOS/macOS Safari) the built-in platform
-  // authenticator IS the passkey provider, so "Biometric" and "Passkey" trigger
-  // the same Face/Touch ID flow and create the same synced passkey. Offering
-  // both there is redundant, so the separate Biometric option is hidden.
+  // On Apple platforms Biometric and Passkey are the same Face/Touch ID flow, so Biometric is hidden.
   _biometricRedundantWithPasskey() {
     try {
       const ua = navigator.userAgent || '';
@@ -192,10 +176,7 @@ Object.assign(NYM.prototype, {
     } catch (e) { return false; }
   },
 
-  // Enroll a WebAuthn credential and derive the vault key from its PRF output.
-  // platformOnly=true pins it to the built-in biometric authenticator;
-  // platformOnly=false ("passkey") lets the OS picker offer synced passkeys and
-  // external security keys too.
+  // platformOnly pins the built-in authenticator; otherwise the OS picker may offer synced passkeys and security keys.
   _webauthnRpId() { return location.hostname; },
 
   async _webauthnEnroll(salt, platformOnly) {
@@ -212,9 +193,7 @@ Object.assign(NYM.prototype, {
       extensions: { prf: {} }
     }});
     if (!cred) throw new Error('Passkey enrollment was canceled.');
-    // Derive the actual key via a follow-up get() (PRF results are reliably
-    // returned on get, not always on create). This also fails fast here if the
-    // chosen authenticator doesn't support PRF, before we commit any state.
+    // Derive via a follow-up get(), since PRF results are only reliable on get; also fails fast without PRF.
     const credId = this._vb64(new Uint8Array(cred.rawId));
     const key = await this._webauthnDeriveKey(credId, salt);
     return { credId, key };
@@ -239,8 +218,6 @@ Object.assign(NYM.prototype, {
       base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
   },
 
-  // Enable the vault: derive a key from the chosen factor, encrypt the existing
-  // plaintext secrets, and persist the encrypted blobs + metadata.
   async enableVault(method, password) {
     if (this.vaultEnabled()) throw new Error('Encryption is already enabled.');
     const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -253,7 +230,6 @@ Object.assign(NYM.prototype, {
       if (!password || String(password).length < 4) throw new Error('Choose a password or PIN of at least 4 characters.');
       this._vaultKey = await this._deriveKeyFromPassword(String(password), salt);
     }
-    // Snapshot current plaintext secrets and re-store them encrypted.
     this._vaultMem = new Map();
     for (const name of this._VAULT_KEYS) {
       let cur = null;
@@ -262,21 +238,16 @@ Object.assign(NYM.prototype, {
       this._vaultMem.set(name, cur);
       try { localStorage.setItem(name, await this._vaultEncrypt(cur)); } catch (e) {}
     }
-    // Group ephemeral secret keys get the same at-rest protection.
     await this._vaultProtectExtras();
-    // ...and the cached decrypted PM/group history in IndexedDB.
     await this._vaultProtectPmCache();
     try {
       localStorage.setItem('nym_vault_salt', this._vb64(salt));
       localStorage.setItem('nym_vault_method', this._vaultIsWebAuthn(method) ? method : 'password');
       if (credId) localStorage.setItem('nym_vault_cred', credId);
-      // A known token encrypted under the vault key — lets unlock verify the
-      // derived key even when no identity secret is stored yet.
+      // A known token under the vault key lets unlock verify the key even with no identity secret stored.
       localStorage.setItem('nym_vault_check', await this._vaultEncrypt('nymchat-vault-ok'));
       localStorage.setItem('nym_vault_enabled', '1');
-      // Remember the (non-sensitive) preference and sync it so other devices
-      // can offer to set up encryption too. Clear any prior "don't ask" so the
-      // user's renewed intent re-enables prompting on new devices.
+      // Only the non-sensitive preference syncs; clearing "don't ask" re-enables prompting on new devices.
       localStorage.setItem('nym_encrypt_at_rest_pref', '1');
       localStorage.removeItem('nym_encrypt_at_rest_prompt_dismissed');
     } catch (e) {
@@ -285,8 +256,7 @@ Object.assign(NYM.prototype, {
     try { if (typeof nostrSettingsSave === 'function') nostrSettingsSave(); } catch (e) {}
   },
 
-  // Disable the vault: decrypt the secrets back to plaintext (requires the
-  // vault to be unlocked) and clear the metadata.
+  // Requires the vault to be unlocked.
   async disableVault() {
     if (!this.vaultEnabled()) return;
     if (!this._vaultKey) throw new Error('Unlock first to disable encryption.');
@@ -315,11 +285,7 @@ Object.assign(NYM.prototype, {
     this._vaultMem = null;
   },
 
-  // Prove the chosen factor can actually unlock BEFORE the user relies on it at
-  // next launch. For passkey/biometric this triggers a fresh authenticator
-  // interaction and re-derives the key independently, then decrypts the check
-  // token. Returns true on success. (Password/PIN derive deterministically from
-  // the just-confirmed input, so they need no round-trip.)
+  // Proves passkey/biometric unlock with a fresh authenticator round-trip; password/PIN needs none.
   async testVaultUnlock() {
     if (!this.vaultEnabled() || !this._vaultIsWebAuthn(this.vaultMethod())) return true;
     try {
@@ -336,8 +302,6 @@ Object.assign(NYM.prototype, {
     } catch (e) { return false; }
   },
 
-  // Derive the session key from the supplied factor and decrypt all secrets
-  // into memory. Returns true on success.
   async unlockVault(password) {
     if (!this.vaultEnabled()) return true;
     let salt;
@@ -350,9 +314,7 @@ Object.assign(NYM.prototype, {
       if (!password) throw new Error('Enter your password or PIN.');
       this._vaultKey = await this._deriveKeyFromPassword(String(password), salt);
     }
-    // Verify the derived key against the check token first — this rejects a
-    // wrong password/PIN (or a mismatched passkey) even when no identity secret
-    // is stored yet. _vaultDecrypt throws on the AES-GCM tag if the key is wrong.
+    // Verify against the check token first; _vaultDecrypt throws on the AES-GCM tag if the key is wrong.
     const mem = new Map();
     let verifiedOne = false;
     try {
@@ -370,29 +332,24 @@ Object.assign(NYM.prototype, {
       try { blob = localStorage.getItem(name); } catch (e) {}
       if (!blob) continue;
       if (String(blob).startsWith('enc:v1:')) {
-        mem.set(name, await this._vaultDecrypt(blob)); // throws if key wrong
+        mem.set(name, await this._vaultDecrypt(blob));
         verifiedOne = true;
       } else {
-        mem.set(name, blob); // legacy plaintext alongside (shouldn't normally happen)
+        mem.set(name, blob);
       }
     }
     if (!verifiedOne) {
-      // Nothing encrypted to verify against — accept the key (will be used on
-      // the next secretSet). This is the freshly-enabled empty-identity case.
+      // Nothing encrypted to verify against: the freshly-enabled empty-identity case.
     }
     this._vaultMem = mem;
     return true;
   },
 
-  // Clear the vault and its secrets entirely (escape hatch for a forgotten
-  // password — the encrypted identity is unrecoverable and is discarded).
+  // Escape hatch for a forgotten password; the encrypted identity is unrecoverable and discarded.
   resetVault() {
     for (const name of this._VAULT_KEYS) { try { localStorage.removeItem(name); } catch (e) {} }
-    // The loop above takes the stored root; this drops the decoded copy the
-    // instance is still holding.
     try { if (typeof this.pqRootWipe === 'function') this.pqRootWipe(); } catch (e) {}
-    // Encrypted-under-the-discarded-key extras are unrecoverable — drop them,
-    // and clear the PM cache whose encrypted records can never be read again.
+    // Extras and PM cache records under the discarded key are unrecoverable, so drop them.
     this._vaultDiscardExtras();
     try { if (typeof this.clearPMCache === 'function') this.clearPMCache(); } catch (e) {}
     try {
@@ -406,10 +363,7 @@ Object.assign(NYM.prototype, {
     this._vaultMem = null;
   },
 
-  // Full "Forget identity": discard the vault/secrets, then drop the login
-  // pointers, profile, and session prefs so the next boot starts at a clean
-  // first-run instead of restoring a key-less, half-logged-in state. Reloads to
-  // a bare URL (drops any channel/hash route) so no stale state survives.
+  // Reloads to a bare URL so no half-logged-in or stale route state survives.
   _forgetIdentityAndReload() {
     // Bounded, and before resetVault takes the key that signs it.
     try {
@@ -434,16 +388,13 @@ Object.assign(NYM.prototype, {
     catch (e) { try { location.reload(); } catch (e2) {} }
   },
 
-  // Called early in startup. If the vault is enabled, blocks until the user
-  // unlocks (or resets) so the encrypted identity can be read by the loader.
+  // Called early in startup; blocks until the user unlocks or resets.
   async unlockVaultAtBoot() {
     if (!this.vaultEnabled() || this._vaultKey) return;
-    // Apply the saved theme/color mode first so the unlock modal matches the
-    // app's appearance instead of boot defaults (this runs before initialize()).
+    // Apply the saved theme first; this runs before initialize().
     try { this.applyColorMode(); } catch (e) {}
     while (true) {
-      // The prompt adapts to the method (password/PIN field, or a passkey/
-      // biometric "Unlock" button). null means the user chose to reset.
+      // null means the user chose to reset.
       const password = await this._vaultPromptModal();
       if (password === null) {
         this._forgetIdentityAndReload();
@@ -455,7 +406,6 @@ Object.assign(NYM.prototype, {
       } catch (e) {
         const retry = await this._vaultErrorModal(e && e.message ? e.message : 'Unlock failed.');
         if (retry === 'reset') { this._forgetIdentityAndReload(); return; }
-        // otherwise loop and prompt again
       }
     }
   },
@@ -490,8 +440,7 @@ Object.assign(NYM.prototype, {
       };
       const inp = o.box.querySelector('#nymVaultPw');
       if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === 'Enter') go(); }; }
-      // For passkey/biometric there is no field — the user taps "Unlock" to
-      // bring up the authenticator (we don't auto-fire the system sheet).
+      // We don't auto-fire the system authenticator sheet.
     });
   },
 
@@ -511,8 +460,6 @@ Object.assign(NYM.prototype, {
     });
   },
 
-  // True only when there is an identity secret actually persisted on this device
-  // that would benefit from at-rest encryption (skip for pure per-session keys).
   _hasPersistedSecret() {
     for (const name of this._VAULT_KEYS) {
       try { if (localStorage.getItem(name)) return true; } catch (e) {}
@@ -520,10 +467,7 @@ Object.assign(NYM.prototype, {
     return false;
   },
 
-  // Called once after settings sync. If the user prefers identity encryption
-  // (set on another device) but this device hasn't enabled it, offer to set it
-  // up. Only the boolean preference crossed devices — no key material — so each
-  // device still creates its own factor here.
+  // Only the boolean preference crosses devices, so each device creates its own factor here.
   maybePromptEncryptAtRest() {
     if (this._atRestPromptShown) return;
     try {
@@ -565,7 +509,6 @@ Object.assign(NYM.prototype, {
     return { box, close: () => { try { document.body.removeChild(ov); } catch (e) {} } };
   },
 
-  // Verify a password/PIN against the stored check token without unlocking.
   async _verifyPassword(password) {
     try {
       if (!password) return false;
@@ -580,10 +523,7 @@ Object.assign(NYM.prototype, {
     } catch (e) { return false; }
   },
 
-  // Challenge the user for their current factor before a sensitive change (e.g.
-  // turning encryption off). Resolves true on success, false on failure, and
-  // null when the user cancels. WebAuthn triggers a fresh authenticator check;
-  // password/PIN shows a themed re-entry prompt.
+  // Resolves true on success, false on failure, and null when the user cancels.
   async _vaultReauth() {
     if (this._vaultIsWebAuthn(this.vaultMethod())) {
       return await this.testVaultUnlock();
@@ -609,10 +549,6 @@ Object.assign(NYM.prototype, {
     });
   },
 
-  // Opened from Settings. Lets the user enable/disable encryption and pick a
-  // factor. Biometric is offered when a platform authenticator exists; Passkey
-  // is offered whenever WebAuthn is available (covers synced passkeys and
-  // external security keys as well as platform authenticators).
   async openVaultSettings() {
     const enabled = this.vaultEnabled();
     const bio = (await this.biometricAvailable()) && !this._biometricRedundantWithPasskey();
@@ -632,7 +568,7 @@ Object.assign(NYM.prototype, {
         try {
           if (!this._vaultKey) { o.close(); this._vaultAlert('Unlock the app first, then turn off encryption.'); return; }
           const auth = await this._vaultReauth();
-          if (auth === null) return; // canceled
+          if (auth === null) return;
           if (auth !== true) { this._vaultAlert('Re-authentication failed. Encryption was not turned off.'); return; }
           await this.disableVault();
           o.close();
@@ -692,9 +628,7 @@ Object.assign(NYM.prototype, {
         }
         const btn = o.box.querySelector('#nymVEnable');
         await this.enableVault(method, pw.value);
-        // For passkey/biometric, immediately prove a real unlock works (a fresh
-        // authenticator interaction + PRF) before the user relies on it next
-        // launch. If it can't, roll back so they're never locked out.
+        // Prove a real unlock works before relying on it; roll back if it can't so the user is never locked out.
         if (this._vaultIsWebAuthn(method)) {
           if (btn) { btn.textContent = 'Confirm unlock…'; btn.disabled = true; }
           const ok = await this.testVaultUnlock();

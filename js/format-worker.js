@@ -1,4 +1,3 @@
-// format-worker.js - Off-main-thread message content formatting.
 importScripts('/js/modules/syntax-highlight.js');
 importScripts('/js/modules/message-format.js');
 

@@ -15,41 +15,7 @@ import '../../models/message.dart';
 import '../../models/user.dart';
 import 'secure_store.dart';
 
-/// sqflite-backed mirror of the PWA's IndexedDB `nym-cache` (v2) store
-/// (`js/modules/persistence.js`, docs/specs/01 §5.1).
-///
-/// This is a thin, well-documented data layer: it persists and reloads cached
-/// channel/PM messages, profiles, reactions and dedup/meta sets, enforcing the
-/// same LRU limits as the PWA. It holds **no app state** — integration into the
-/// controller is done elsewhere.
-///
-/// Fidelity notes (mirrored from persistence.js):
-/// - Same logical stores: meta / profiles / channels / pms / reactions /
-///   avatars / banners. (Here as SQLite tables of the same names.)
-/// - `STORE_LIMITS` — profiles 2000, channels 50, pms 100, reactions 5000,
-///   avatars 500, banners 200. Eviction trims to ~90% (`floor(limit*0.9)`) once
-///   a store exceeds its limit, oldest `lastTouched` first. That LRU has no time
-///   component; the 24-hour window below is separate and applies to public
-///   channel history only.
-/// - Per-record message caps: channels keep the last [channelMessageLimit],
-///   pms the last [pmStorageLimit]. These mirror what app.js actually SETS
-///   (`this.channelMessageLimit = 1000`, `this.pmStorageLimit = 1000`) — they
-///   used to mirror the `|| 100` / `|| 500` fallbacks in the persistence.js
-///   expressions, which the PWA never reaches, so a phone kept a tenth of the
-///   history the web client did.
-/// - Public channel history is additionally bounded to a rolling
-///   [channelHistoryMaxAge] (the PWA's `channelHistoryMaxAgeMs`): the D1 archive
-///   floors `channel-get` at the same 24 hours and the relay filters ask for
-///   `since: now - 86400`, so anything older cannot be re-fetched by this device
-///   or any other.
-/// - PMs are **only** persisted when caching is enabled
-///   (`settings.cachePMs`); when disabled, `savePmMessages` is a no-op (and the
-///   `pms` table can be cleared via [clearPms]).
-/// - The database is encrypted at rest with SQLCipher under a random key held
-///   in the platform keystore (Keychain / Android Keystore) — the local mirror
-///   of end-to-end-encrypted conversations must not be plaintext on disk. A
-///   pre-encryption plaintext database is migrated in place losslessly via
-///   `sqlcipher_export` on first open.
+/// SQLCipher-encrypted mirror of the PWA's IndexedDB `nym-cache`, with the same LRU limits and no app state.
 class CacheStore {
   CacheStore({Database? db}) : _db = db;
 
@@ -63,16 +29,14 @@ class CacheStore {
     'banners': 200,
   };
 
-  /// Per-record message caps used when persisting, matching the values app.js
-  /// assigns (`this.channelMessageLimit` / `this.pmStorageLimit`).
+  /// Per-record message caps matching what app.js actually assigns.
   static const int channelMessageLimit = 1000;
   static const int pmStorageLimit = 1000;
 
-  /// Rolling window for PUBLIC channel history — see
-  /// `core/constants/history_window.dart`.
+  /// Rolling window for public channel history.
   static const Duration channelHistoryMaxAge = kChannelHistoryMaxAge;
 
-  /// `meta` store key constants (persistence.js).
+  /// `meta` store keys (persistence.js).
   static const String metaProcessedPmEventIds = 'processedPMEventIds';
   static const String metaDeletedEventIds = 'deletedEventIds';
   static const String metaNymchatPubkeys = 'nymchatPubkeys';
@@ -82,20 +46,13 @@ class CacheStore {
   static const String metaEventTimeCeilings = 'eventTimeCeilings';
   static const String metaPqKeys = 'pqKeys';
 
-  /// Event ids whose BIP340 signatures verified in past sessions (bounded,
-  /// newest-biased — see `IsolateVerifier.snapshotVerifiedIds`). Restored at
-  /// boot so the relay/D1 replay of already-seen reactions, profiles, presence
-  /// and out-of-cache history skips the ~12 ms/event signature math that made
-  /// heavy accounts crawl on open/resume. Ids are public, content-bound
-  /// hashes; caching them weakens nothing (tampered content re-hashes to a
-  /// different id and misses the cache).
+  /// Past-verified event ids, restored at boot to skip signature checks; ids are content-bound, so this is safe.
   static const String metaVerifiedEventIds = 'verifiedEventIds';
 
   static const String _dbName = 'nym_cache.db';
   static const int _dbVersion = 2;
 
-  /// Every logical store, mirroring persistence.js `STORES` + the unbounded
-  /// `meta` store.
+  /// Every logical store, plus the unbounded `meta` store.
   static const List<String> _allTables = [
     'meta',
     'profiles',
@@ -108,8 +65,7 @@ class CacheStore {
 
   Database? _db;
 
-  /// On-disk path recorded by [open] so [panicWipe] can delete the database
-  /// FILE itself. Null for injected (test/in-memory) databases.
+  /// Database file path for [panicWipe]; null for injected databases.
   String? _path;
 
   Database get _database {
@@ -127,10 +83,7 @@ class CacheStore {
   /// SecureStore key holding the SQLCipher passphrase for [_dbName].
   static const String _dbKeyName = 'nym_cache_db_key';
 
-  /// Returns the SQLCipher passphrase from the platform keystore, minting a
-  /// random 64-hex one on first use. The passphrase never leaves the device:
-  /// it is not synced and is destroyed with the keystore on panic wipe, which
-  /// renders any surviving database file undecryptable ciphertext.
+  /// SQLCipher passphrase from the keystore, minted as random 64-hex on first use; never leaves the device.
   Future<String> _databasePassword(SecureStore secure, String path) async {
     final existing = await secure.get(_dbKeyName);
     if (existing != null && existing.isNotEmpty) return existing;
@@ -150,8 +103,7 @@ class CacheStore {
     }
   }
 
-  /// True when the file at [path] is a plaintext SQLite database (SQLCipher
-  /// databases have a random header instead of the magic string).
+  /// True when [path] is plaintext SQLite (SQLCipher files have a random header).
   Future<bool> _isPlaintextDb(String path) async {
     try {
       final f = File(path);
@@ -168,11 +120,7 @@ class CacheStore {
     }
   }
 
-  /// Losslessly migrates a pre-encryption plaintext database to SQLCipher:
-  /// open plain, `sqlcipher_export` into an encrypted sibling, then swap the
-  /// files. On any failure the plaintext original is left untouched so the
-  /// open below falls back to it (encryption retries next launch) instead of
-  /// destroying the user's local history.
+  /// Migrates a plaintext database to SQLCipher via `sqlcipher_export`; on failure the original is left intact.
   Future<void> _migratePlaintextIfNeeded(String path, String password) async {
     if (!await _isPlaintextDb(path)) return;
     final tmp = '$path.enc';
@@ -181,14 +129,10 @@ class CacheStore {
       if (await tmpFile.exists()) await tmpFile.delete();
       final plain = await openDatabase(path);
       try {
-        // The passphrase is 64 lowercase hex chars (see [_databasePassword]),
-        // so inlining it in the SQL literal cannot break out of the quotes.
+        // The passphrase is 64 lowercase hex chars, so inlining it in the SQL literal is safe.
         await plain.rawQuery("ATTACH DATABASE '$tmp' AS enc KEY '$password'");
         await plain.rawQuery("SELECT sqlcipher_export('enc')");
-        // sqlcipher_export copies schema + data but NOT user_version. Carry it
-        // over so the encrypted copy doesn't read as a brand-new (version-0)
-        // database — today onCreate is all IF-NOT-EXISTS so that would be
-        // harmless, but a future onUpgrade must see the real version.
+        // sqlcipher_export skips user_version; carry it over so future upgrades see the real version.
         final ver = await plain.rawQuery('PRAGMA main.user_version');
         final v = (ver.isNotEmpty ? ver.first.values.first : 0) as int? ?? 0;
         await plain.rawQuery('PRAGMA enc.user_version = $v');
@@ -196,8 +140,7 @@ class CacheStore {
       } finally {
         await plain.close();
       }
-      // Swap: remove the plaintext original (and its WAL/SHM sidecars, which
-      // also hold plaintext pages) and move the encrypted copy into place.
+      // Remove the plaintext original and its sidecars, which also hold plaintext pages.
       for (final suffix in ['', '-wal', '-shm', '-journal']) {
         final side = File('$path$suffix');
         if (await side.exists()) await side.delete();
@@ -211,10 +154,7 @@ class CacheStore {
     }
   }
 
-  /// Open (and create/migrate) the cache database. If a [Database] was injected
-  /// via the constructor (e.g. an in-memory DB in tests) it is used directly,
-  /// otherwise the on-device app-documents path is used, encrypted with
-  /// SQLCipher under a keystore-held key.
+  /// Opens the database: an injected one directly, else the app-documents file encrypted with SQLCipher.
   Future<void> open() async {
     if (_db != null) return;
     final dir = await getApplicationDocumentsDirectory();
@@ -223,8 +163,7 @@ class CacheStore {
     final password = await _databasePassword(SecureStore(), path);
     await _migratePlaintextIfNeeded(path, password);
     if (await _isPlaintextDb(path)) {
-      // Migration failed and left the plaintext original — open it as-is so
-      // the app keeps working; encryption is retried on the next launch.
+      // Migration failed: open the plaintext original; encryption retries next launch.
       _db = await openDatabase(
         path,
         version: _dbVersion,
@@ -240,21 +179,19 @@ class CacheStore {
     );
   }
 
-  /// Initialize the schema on an already-open [Database]. Useful for tests that
-  /// open an in-memory database through sqflite_common_ffi and pass it in.
+  /// Creates the schema on an open [Database], e.g. an in-memory test DB.
   Future<void> initSchema() async {
     await _createSchema(_database);
   }
 
   Future<void> _createSchema(Database db) async {
-    // meta(key PK, json) — sets like processedPMEventIds/deletedEventIds and the
-    // poolShardLastSeen map.
+    // meta(key PK, json)
     await db.execute(
       'CREATE TABLE IF NOT EXISTS meta ('
       'key TEXT PRIMARY KEY, '
       'json TEXT NOT NULL)',
     );
-    // profiles(pubkey PK, json, kind0Ts, lastTouched).
+    // profiles(pubkey PK, json, kind0Ts, lastTouched)
     await db.execute(
       'CREATE TABLE IF NOT EXISTS profiles ('
       'pubkey TEXT PRIMARY KEY, '
@@ -262,28 +199,28 @@ class CacheStore {
       'kind0Ts INTEGER, '
       'lastTouched INTEGER NOT NULL)',
     );
-    // channels(key PK, json /*messages array*/, lastTouched).
+    // channels(key PK, json messages array, lastTouched)
     await db.execute(
       'CREATE TABLE IF NOT EXISTS channels ('
       'key TEXT PRIMARY KEY, '
       'json TEXT NOT NULL, '
       'lastTouched INTEGER NOT NULL)',
     );
-    // pms(key PK, json, lastTouched) — only written when caching enabled.
+    // pms(key PK, json, lastTouched), only written when caching is enabled
     await db.execute(
       'CREATE TABLE IF NOT EXISTS pms ('
       'key TEXT PRIMARY KEY, '
       'json TEXT NOT NULL, '
       'lastTouched INTEGER NOT NULL)',
     );
-    // reactions(messageId PK, json, lastTouched).
+    // reactions(messageId PK, json, lastTouched)
     await db.execute(
       'CREATE TABLE IF NOT EXISTS reactions ('
       'messageId TEXT PRIMARY KEY, '
       'json TEXT NOT NULL, '
       'lastTouched INTEGER NOT NULL)',
     );
-    // avatars(pubkey PK, bytes, sourceUrl, kind0Ts, lastTouched).
+    // avatars(pubkey PK, bytes, sourceUrl, kind0Ts, lastTouched)
     await db.execute(
       'CREATE TABLE IF NOT EXISTS avatars ('
       'pubkey TEXT PRIMARY KEY, '
@@ -292,7 +229,7 @@ class CacheStore {
       'kind0Ts INTEGER, '
       'lastTouched INTEGER NOT NULL)',
     );
-    // banners(pubkey PK, bytes, sourceUrl, kind0Ts, lastTouched).
+    // banners(pubkey PK, bytes, sourceUrl, kind0Ts, lastTouched)
     await db.execute(
       'CREATE TABLE IF NOT EXISTS banners ('
       'pubkey TEXT PRIMARY KEY, '
@@ -311,14 +248,9 @@ class CacheStore {
     }
   }
 
-  // ---------------------------------------------------------------------------
   // Channel messages
-  // ---------------------------------------------------------------------------
 
-  /// Drop channel messages that have aged out of [channelHistoryMaxAge], then
-  /// pin back any thread ROOT the survivors still reply to — an in-window reply
-  /// whose root aged out would otherwise reflow inline as a top-level message
-  /// with a dead-end thread affordance. Mirrors `_pruneChannelWindow`.
+  /// Drops aged-out channel messages, then pins back thread roots the survivors reply to.
   static List<Message> _withinChannelWindow(List<Message> messages) {
     if (messages.isEmpty) return messages;
     final floor = channelWindowFloorSec();
@@ -327,13 +259,7 @@ class CacheStore {
     return _withPinnedThreadRoots(messages, kept, (m) => m.id);
   }
 
-  /// Keep thread ROOTS in the persisted window (PWA
-  /// `persistence.js#_withPinnedThreadRoots`). The window is a plain last-N
-  /// slice, so a root older than the window drops off while its replies stay —
-  /// and after a reload those replies can never re-thread: they render inline,
-  /// as though they were top-level messages, and their thread affordance
-  /// dead-ends. Any message the kept window references as a thread root is
-  /// pinned in front of the slice.
+  /// Pins referenced thread roots in front of the last-N slice so replies can still re-thread after reload.
   static List<Message> _withPinnedThreadRoots(
     List<Message> messages,
     List<Message> trimmed,
@@ -356,9 +282,7 @@ class CacheStore {
     return pinned.isEmpty ? trimmed : [...pinned, ...trimmed];
   }
 
-  /// Persist a channel's messages, keeping only the last [channelMessageLimit]
-  /// (mirrors `persistChannelMessages`: `messages.slice(-limit)`). Stamps
-  /// `lastTouched`. An empty list deletes the record, as in the PWA.
+  /// Persists the last [channelMessageLimit] messages; an empty list deletes the record.
   Future<void> saveChannelMessages(String key, List<Message> msgs,
       [DatabaseExecutor? executor]) async {
     if (key.isEmpty) return;
@@ -367,8 +291,7 @@ class CacheStore {
       await db.delete('channels', where: 'key = ?', whereArgs: [key]);
       return;
     }
-    // Age first, then the count cap — a channel quiet for a day must not write
-    // back a full window of messages that have all aged out.
+    // Age first, then the count cap.
     final inWindow = _withinChannelWindow(msgs);
     if (inWindow.isEmpty) {
       await db.delete('channels', where: 'key = ?', whereArgs: [key]);
@@ -377,7 +300,7 @@ class CacheStore {
     var trimmed = inWindow.length > channelMessageLimit
         ? inWindow.sublist(inWindow.length - channelMessageLimit)
         : inWindow;
-    // Channel thread keys are event ids (`threadKeyForMessage`).
+    // Channel thread keys are event ids.
     trimmed = _withPinnedThreadRoots(inWindow, trimmed, (m) => m.id);
     final json = jsonEncode(trimmed.map((m) => m.toJson()).toList());
     await db.insert(
@@ -399,11 +322,7 @@ class CacheStore {
     return _withinChannelWindow(_decodeMessages(rows.first['json'] as String?));
   }
 
-  /// Delete the cached reactions targeting [messageIds] — reactions are keyed by
-  /// the id of the message they react to, so pruning the rows for a set of
-  /// dropped channel messages is exactly "kind 7 events whose `k` tag is
-  /// 20000/23333". A reaction on a PM or group message is keyed by an id that
-  /// never appears in a channel history.
+  /// Deletes cached reactions targeting [messageIds], which only channel messages use.
   Future<void> deleteReactionsFor(Iterable<String> messageIds) async {
     final ids = messageIds.where((id) => id.isNotEmpty).toSet().toList();
     if (ids.isEmpty) return;
@@ -416,14 +335,10 @@ class CacheStore {
     }
   }
 
-  /// Load EVERY cached channel history, keyed by storage key — the boot
-  /// hydration read (persistence.js `hydrateFromCache` getAll over the
-  /// `channels` store, :427-433). Empty/corrupt records are skipped.
+  /// Loads every cached channel history by storage key; empty or corrupt records are skipped.
   Future<Map<String, List<Message>>> loadAllChannelMessages() async {
     final all = await _loadAllMessages('channels');
-    // A cache written before the window rule, or simply left unopened for a
-    // day, must not put aged-out history back into memory. Rows that empty out
-    // are deleted rather than reloaded every launch.
+    // Drop aged-out history on load; rows that empty out are deleted.
     final drop = <String>[];
     all.updateAll((key, msgs) {
       final kept = _withinChannelWindow(msgs);
@@ -437,14 +352,9 @@ class CacheStore {
     return all;
   }
 
-  // ---------------------------------------------------------------------------
-  // PM / group messages (only persisted when caching enabled)
-  // ---------------------------------------------------------------------------
+  // PM / group messages
 
-  /// Persist a PM/group conversation's messages — **only when [enabled]**
-  /// (`settings.cachePMs`). When disabled this is a no-op, mirroring
-  /// `persistPMMessages`'s `if (settings.cachePMs === false) return;`.
-  /// Keeps the last [pmStorageLimit] messages; empty list deletes the record.
+  /// Persists the last [pmStorageLimit] messages only when [enabled]; an empty list deletes the record.
   Future<void> savePmMessages(
     String key,
     List<Message> msgs, {
@@ -483,22 +393,13 @@ class CacheStore {
     return _decodeMessages(rows.first['json'] as String?);
   }
 
-  /// Load EVERY cached PM/group conversation, keyed by storage key — the boot
-  /// hydration read (persistence.js `hydrateFromCache` getAll over the `pms`
-  /// store, :455-461). The caller gates this on `settings.cachePMs` the way
-  /// the PWA does (`cachePMsAllowed`); disabled → it calls [clearPms] instead.
+  /// Loads every cached PM/group conversation; callers gate this on `settings.cachePMs`.
   Future<Map<String, List<Message>>> loadAllPmMessages() =>
       _loadAllMessages('pms');
 
   Future<Map<String, List<Message>>> _loadAllMessages(String table) async {
     final rows = await _database.query(table, columns: ['key', 'json']);
-    // Decode OFF the main isolate: a heavy account's boot hydration decodes
-    // tens of thousands of message maps, and doing that jsonDecode +
-    // Message.fromJson loop on the UI thread both janked the first seconds of
-    // the app AND made hydration lose the boot race against the relay
-    // connect gate — the empty stores then re-downloaded and re-rendered the
-    // whole history from the network. One compute hop per table keeps the
-    // main isolate free while the worker chews through the JSON.
+    // Decode off the main isolate so heavy hydration neither janks the UI nor loses the boot race.
     final raw = <String, String>{};
     for (final r in rows) {
       final key = r['key'] as String?;
@@ -510,8 +411,7 @@ class CacheStore {
     return compute(decodeMessageStores, raw);
   }
 
-  /// Wipe the `pms` table (`clearPMCache`). Used when the user disables PM
-  /// caching.
+  /// Wipes the `pms` table when PM caching is disabled.
   Future<void> clearPms() async {
     await _database.delete('pms');
   }
@@ -523,10 +423,7 @@ class CacheStore {
     final out = <Message>[];
     for (final e in decoded) {
       if (e is Map) {
-        // Anything restored from the on-disk cache is BACKLOG by provenance, no
-        // matter what timestamp it carries — mark it historical so it is never
-        // flood-dimmed or snap-in animated on rehydrate (matches the PWA restore
-        // path; a live message that was cached and reloaded is no longer "live").
+        // Anything restored from cache is backlog, so mark it historical.
         out.add(
             Message.fromJson(e.cast<String, dynamic>())..isHistorical = true);
       }
@@ -534,10 +431,7 @@ class CacheStore {
     return out;
   }
 
-  /// `compute` entry point for [_loadAllMessages]: decodes every conversation's
-  /// JSON blob into [Message] lists in a worker isolate. Top-level (as
-  /// `compute` requires); per-record try/catch so one corrupt row can't abort
-  /// the whole hydration. Same historical-marking as [_decodeMessages].
+  /// `compute` entry that decodes every conversation's JSON; a corrupt row is skipped, not fatal.
   static Map<String, List<Message>> decodeMessageStores(
       Map<String, String> raw) {
     final out = <String, List<Message>>{};
@@ -558,19 +452,14 @@ class CacheStore {
     return out;
   }
 
-  // ---------------------------------------------------------------------------
   // Profiles
-  // ---------------------------------------------------------------------------
 
-  /// Persist a kind-0 [UserProfile] keyed by pubkey, recording its `kind0Ts`
-  /// alongside (mirrors `persistProfile`'s enriched snapshot). Stamps
-  /// `lastTouched`.
+  /// Persists a kind-0 profile with its `kind0Ts`; stamps `lastTouched`.
   Future<void> saveProfile(String pubkey, UserProfile profile,
       [DatabaseExecutor? executor]) async {
     if (pubkey.isEmpty) return;
     final map = profile.toJson();
-    // Persist kind0Ts inside the JSON too so it survives the round-trip even if
-    // toJson() (which omits it today) ever changes.
+    // Keep kind0Ts inside the JSON too, independent of toJson().
     map['kind0Ts'] = profile.kind0Ts;
     await (executor ?? _database).insert(
       'profiles',
@@ -596,7 +485,6 @@ class CacheStore {
     return _decodeProfile(rows.first);
   }
 
-  /// Load every cached profile, keyed by pubkey.
   Future<Map<String, UserProfile>> loadAllProfiles() async {
     final rows = await _database.query(
       'profiles',
@@ -623,9 +511,7 @@ class CacheStore {
     return UserProfile.fromJson(map, kind0Ts: kind0Ts);
   }
 
-  // ---------------------------------------------------------------------------
-  // Avatars / banners (raw bytes keyed by pubkey)
-  // ---------------------------------------------------------------------------
+  // Avatars / banners
 
   Future<void> saveAvatar(
     String pubkey,
@@ -664,7 +550,6 @@ class CacheStore {
     );
   }
 
-  /// A cached avatar/banner blob record.
   Future<CachedBlob?> loadAvatar(String pubkey) => _loadBlob('avatars', pubkey);
 
   Future<CachedBlob?> loadBanner(String pubkey) => _loadBlob('banners', pubkey);
@@ -696,13 +581,9 @@ class CacheStore {
     await _database.delete('banners', where: 'pubkey = ?', whereArgs: [pubkey]);
   }
 
-  // ---------------------------------------------------------------------------
   // Reactions
-  // ---------------------------------------------------------------------------
 
-  /// Persist a reaction record keyed by [messageId]. [entries] mirrors the
-  /// PWA's `entries` shape: `[[emoji, [[reactor, value], ...]], ...]`. An empty
-  /// list deletes the record (`persistReactions`).
+  /// Persists `[[emoji, [[reactor, value], ...]], ...]` for [messageId]; an empty list deletes it.
   Future<void> saveReactions(String messageId, List<dynamic> entries,
       [DatabaseExecutor? executor]) async {
     if (messageId.isEmpty) return;
@@ -723,21 +604,9 @@ class CacheStore {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Pre-encoded flush path
-  // ---------------------------------------------------------------------------
-  //
-  // The periodic cache flush used to call the save* methods above directly,
-  // which jsonEncode whole conversations (up to 1000 messages each), every
-  // in-memory profile and every reaction tally ON THE MAIN ISOLATE — during a
-  // busy backfill that was hundreds of ms of solid UI-thread block every few
-  // seconds (the recurring scroll/sidebar freezes that "settle down" once the
-  // backfill stops dirtying keys). The flush now builds all of that JSON in a
-  // worker isolate via [encodeCacheFlush] and writes the finished strings
-  // through these thin row-insert variants.
+  // Pre-encoded flush path: JSON is built off-isolate by [encodeCacheFlush], then written here.
 
-  /// Writes a channel row whose JSON was pre-encoded off-isolate. An empty
-  /// array deletes the row (same contract as [saveChannelMessages]).
+  /// Writes a pre-encoded channel row; an empty array deletes it.
   Future<void> saveChannelMessagesJson(String key, String json,
       [DatabaseExecutor? executor]) async {
     if (key.isEmpty) return;
@@ -753,8 +622,7 @@ class CacheStore {
     );
   }
 
-  /// [saveChannelMessagesJson]'s `pms` counterpart. The caller gates on
-  /// `settings.cachePMs` exactly like [savePmMessages].
+  /// The `pms` counterpart; callers gate on `settings.cachePMs`.
   Future<void> savePmMessagesJson(String key, String json,
       [DatabaseExecutor? executor]) async {
     if (key.isEmpty) return;
@@ -770,7 +638,7 @@ class CacheStore {
     );
   }
 
-  /// [saveProfile] with the JSON (which already embeds kind0Ts) pre-encoded.
+  /// [saveProfile] with pre-encoded JSON that already embeds kind0Ts.
   Future<void> saveProfileJson(String pubkey, String json, int kind0Ts,
       [DatabaseExecutor? executor]) async {
     if (pubkey.isEmpty) return;
@@ -786,7 +654,7 @@ class CacheStore {
     );
   }
 
-  /// [saveReactions] with the entries pre-encoded. `[]` deletes the row.
+  /// [saveReactions] with pre-encoded entries; `[]` deletes the row.
   Future<void> saveReactionsJson(String messageId, String json,
       [DatabaseExecutor? executor]) async {
     if (messageId.isEmpty) return;
@@ -803,19 +671,14 @@ class CacheStore {
     );
   }
 
-  /// Runs [body] inside a single SQLite transaction, passing the transaction
-  /// executor to thread into the `save*` methods. The whole flush thus commits
-  /// as ONE transaction instead of hundreds of individually-locked inserts —
-  /// which is what was tripping sqflite's "database locked for 10s" warning when
-  /// a busy channel re-persisted every profile/reaction on each 6s flush.
+  /// Runs [body] in one SQLite transaction so a flush doesn't hold the lock for many inserts.
   Future<void> runInTransaction(
     Future<void> Function(DatabaseExecutor txn) body,
   ) async {
     await _database.transaction((txn) async => body(txn));
   }
 
-  /// Load all reaction records, keyed by messageId. Each value is the decoded
-  /// `entries` list (`[[emoji, [[reactor, value], ...]], ...]`).
+  /// All reaction records by messageId, as decoded `entries` lists.
   Future<Map<String, List<dynamic>>> loadAllReactions() async {
     final rows = await _database.query(
       'reactions',
@@ -832,12 +695,9 @@ class CacheStore {
     return out;
   }
 
-  // ---------------------------------------------------------------------------
   // Meta sets / maps
-  // ---------------------------------------------------------------------------
 
-  /// Persist a dedup set under [key] as `{ids: [...]}` (mirrors the meta store's
-  /// `{key, ids}` record). An empty set deletes the record.
+  /// Persists a dedup set as `{ids: [...]}`; an empty set deletes it.
   Future<void> saveMetaSet(String key, Set<String> ids) async {
     if (key.isEmpty) return;
     if (ids.isEmpty) {
@@ -872,8 +732,7 @@ class CacheStore {
     return ids.whereType<String>().toSet();
   }
 
-  /// Persist a meta map under [key] as `{map: {...}}` (the `poolShardLastSeen`
-  /// shape). An empty map deletes the record.
+  /// Persists a meta map as `{map: {...}}`; an empty map deletes it.
   Future<void> saveMetaMap(String key, Map<String, dynamic> map) async {
     if (key.isEmpty) return;
     if (map.isEmpty) {
@@ -908,14 +767,9 @@ class CacheStore {
     return map.cast<String, dynamic>();
   }
 
-  // ---------------------------------------------------------------------------
   // LRU enforcement
-  // ---------------------------------------------------------------------------
 
-  /// Evict oldest-by-`lastTouched` records from each store that exceeds its
-  /// [storeLimits] cap, trimming down to `floor(limit * 0.9)` (mirrors
-  /// `_trimStore`/`_trimAllStores`). The `meta` store is unbounded, as in the
-  /// PWA. **No time expiry.**
+  /// Evicts oldest-`lastTouched` rows down to `floor(limit * 0.9)` per store; `meta` is unbounded, no time expiry.
   Future<void> enforceLruLimits() async {
     for (final entry in storeLimits.entries) {
       await _trimStore(entry.key, entry.value);
@@ -932,9 +786,7 @@ class CacheStore {
     final target = (limit * 0.9).floor();
     final evictCount = count - target;
 
-    // Oldest first (matches the PWA's ascending lastTouched sort + slice).
-    // rowid breaks ties so eviction stays deterministic when several records
-    // share a lastTouched millisecond.
+    // Oldest first; rowid breaks ties deterministically.
     final victims = await _database.query(
       table,
       columns: [keyColumn],
@@ -964,20 +816,14 @@ class CacheStore {
     }
   }
 
-  /// Wipe every cache table (`resetCache` — logout / nuke).
+  /// Wipes every cache table (logout).
   Future<void> resetCache() async {
     for (final table in _allTables) {
       await _database.delete(table);
     }
   }
 
-  /// EMERGENCY destruction for the panic wipe (panic.js `_panicWipeDb`,
-  /// :237-277): overwrite a few junk records into every store, clear the
-  /// stores, then close the connection and delete the database FILE itself —
-  /// the sqflite analog of the PWA's junk `put`s + `indexedDB.deleteDatabase`.
-  /// Every step is best-effort and isolated so a locked table can't block the
-  /// wipe. Injected (test/in-memory) databases have no file; for those the
-  /// junk-overwrite + clear + close is the whole wipe.
+  /// Panic wipe: junk-overwrite and clear every store, then delete the file; each step best-effort.
   Future<void> panicWipe() async {
     final db = _db;
     if (db != null) {
@@ -985,7 +831,7 @@ class CacheStore {
       for (final table in _allTables) {
         try {
           final keyColumn = _keyColumnFor(table);
-          // 3 junk records per store, like the PWA's `__panic_<i>` puts.
+          // 3 junk records per store, as the PWA does.
           for (var i = 0; i < 3; i++) {
             final record = <String, Object?>{keyColumn: '__panic_$i'};
             if (table == 'avatars' || table == 'banners') {
@@ -1019,14 +865,7 @@ class CacheStore {
     }
   }
 
-  /// Clears all cached **content** — channels / PMs / profiles / reactions
-  /// (plus their avatar/banner blobs) — leaving only the `meta` dedup/trust sets
-  /// intact, then reclaims the freed pages. This is the "Clear cache" data
-  /// control (settings.js `clearMessageCache`): a user wiping cached
-  /// conversations + profiles, NOT a full identity logout (which uses
-  /// [resetCache]). `meta` is preserved so processed-event dedup and the trust
-  /// roster survive the wipe (mirrors the PWA, which keeps the meta store when
-  /// clearing the message cache).
+  /// "Clear cache": deletes cached content but keeps `meta` dedup/trust sets, then vacuums.
   Future<void> wipe() async {
     for (final table in const [
       'channels',
@@ -1038,24 +877,15 @@ class CacheStore {
     ]) {
       await _database.delete(table);
     }
-    // Reclaim the pages the deleted rows held so the reported on-disk size drops
-    // (SQLite keeps freed pages by default). VACUUM can't run inside a txn; the
-    // deletes above are auto-committed, so this is safe.
+    // Reclaim freed pages; VACUUM can't run in a transaction, and the deletes auto-committed.
     try {
       await _database.execute('VACUUM');
     } catch (_) {
-      // VACUUM is best-effort (e.g. an in-memory DB or an open cursor); the rows
-      // are already gone regardless.
+      // VACUUM is best-effort; the rows are already gone.
     }
   }
 
-  /// The real on-disk size of the cache database in bytes (settings.js
-  /// `estimateCacheSize` / the "Cache: N MB" data-control readout).
-  ///
-  /// Uses SQLite's own page accounting (`page_count * page_size`) rather than a
-  /// row-by-row estimate so it reflects the actual file footprint — including
-  /// index + free pages — and works for the injected in-memory test DB (where
-  /// there is no file to `stat`). Returns 0 if the pragmas are unavailable.
+  /// On-disk size via `page_count * page_size`; works for in-memory DBs; 0 if unavailable.
   Future<int> totalBytes() async {
     try {
       final pageCountRows = await _database.rawQuery('PRAGMA page_count');
@@ -1077,7 +907,6 @@ class CacheStore {
   }
 }
 
-/// A cached avatar/banner blob record (bytes + source URL + kind0Ts).
 class CachedBlob {
   const CachedBlob({required this.bytes, this.sourceUrl, this.kind0Ts});
 
@@ -1086,9 +915,7 @@ class CachedBlob {
   final int? kind0Ts;
 }
 
-/// The full input of one periodic cache flush, shipped to a worker isolate so
-/// every byte of jsonEncode happens off the main thread. Plain model objects
-/// only (Message / UserProfile / reaction entry lists) — all isolate-sendable.
+/// One cache flush's input, sent to a worker isolate for encoding.
 class CacheFlushPayload {
   const CacheFlushPayload({
     this.channels = const {},
@@ -1097,19 +924,18 @@ class CacheFlushPayload {
     this.reactions = const {},
   });
 
-  /// storageKey → already-filtered, already-capped messages to persist.
+  /// Storage key to filtered, capped messages.
   final Map<String, List<Message>> channels;
   final Map<String, List<Message>> pms;
 
-  /// pubkey → profile (only the ones that CHANGED since the last flush).
+  /// Pubkey to profile, only those changed since the last flush.
   final Map<String, UserProfile> profiles;
 
-  /// messageId → reaction entries snapshot.
+  /// Message id to reaction entries snapshot.
   final Map<String, List<dynamic>> reactions;
 }
 
-/// [encodeCacheFlush]'s result: finished JSON strings per row, ready for the
-/// thin `save*Json` writers inside one transaction.
+/// Finished JSON strings per row for the `save*Json` writers.
 class EncodedCacheFlush {
   const EncodedCacheFlush({
     required this.channels,
@@ -1126,9 +952,7 @@ class EncodedCacheFlush {
   final Map<String, String> reactions;
 }
 
-/// `compute` entry point: serializes a whole flush in a worker isolate.
-/// Mirrors exactly what the save* methods encode inline — including embedding
-/// `kind0Ts` inside the profile JSON (see [CacheStore.saveProfile]).
+/// `compute` entry that encodes a flush exactly as the inline save* methods would.
 EncodedCacheFlush encodeCacheFlush(CacheFlushPayload p) {
   final channels = <String, String>{};
   p.channels.forEach((key, msgs) {

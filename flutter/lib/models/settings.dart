@@ -7,12 +7,10 @@ import '../services/storage/key_value_store.dart';
 /// Color-mode preference (`nym_color_mode`).
 enum ColorMode { auto, light, dark }
 
-/// Scope choices used by read-receipts / typing / status / image-blur.
-/// (`everywhere` | `friends` | `disabled`)
+/// Scope for read receipts, typing, status and image blur.
 enum ScopeSetting { everywhere, friends, disabled }
 
-/// Application settings, mirroring the PWA `this.settings` object
-/// (docs/specs/01 §1.9). Immutable; persisted one field per localStorage key.
+/// App settings mirroring the PWA's `this.settings`; persisted one field per key.
 @immutable
 class Settings {
   const Settings({
@@ -74,28 +72,21 @@ class Settings {
   final String chatViewMode; // 'single' | 'columns'
   final bool columnsWallpaper;
 
-  /// Slack-style message threads (default ON). When disabled the app shows the
-  /// classic flat view: replies render inline and no thread affordances appear.
+  /// Message threads (default on); off shows the classic flat view.
   final bool threadsEnabled;
   final bool lowDataMode;
 
-  /// When true, the app asks the OS to keep the Nostr relay sockets and the
-  /// Bluetooth mesh radio alive while it is backgrounded, instead of letting
-  /// every connection drop the moment the user leaves the app. Persisted as
-  /// [StorageKeys.backgroundConnectivity]; costs battery, so it is opt-in.
+  /// Keep relays and the mesh alive in the background; opt-in because it costs battery.
   final bool backgroundConnectivity;
 
-  /// When true, the Bluetooth mesh transport (bitchat-compatible offline mesh)
-  /// is active alongside the Nostr relays. Persisted as [StorageKeys.meshEnabled].
+  /// Bluetooth mesh transport alongside the Nostr relays.
   final bool meshEnabled;
   final int textSize;
   final bool transparencyEnabled;
   final bool groupChatPMOnlyMode;
   final String translateLanguage;
 
-  /// The app's static-text UI language code (empty ⇒ English source shown as
-  /// authored). See [StorageKeys.uiLanguage]; localized at runtime by
-  /// `LocalizationService`.
+  /// Static UI language code (empty means English).
   final String uiLanguage;
 
   final bool gesturesEnabled;
@@ -111,26 +102,19 @@ class Settings {
   final String wallpaperType;
   final bool notificationsEnabled;
 
-  /// Hide all non-favorited channels from the sidebar (`nym_hide_non_pinned`).
-  /// Device-local-only (never cross-device synced). Held in state so the sidebar
-  /// can `ref.watch(settingsProvider.select((s) => s.hideNonPinned))` and react
-  /// live to the Channels → "Hide All Non-Favorited Channels" toggle.
+  /// Hide non-favorited channels from the sidebar; device-local, never synced.
   final bool hideNonPinned;
 
-  /// Runtime-only counter bumped by `SettingsController.resetColumns()` so a
-  /// mounted columns deck can observe the "Reset columns to defaults" action
-  /// and re-seed live (PWA `cvResetColumns`, columns.js:363-381, tears down and
-  /// re-seeds the deck immediately). Never persisted.
+  /// Runtime-only counter bumped by `resetColumns()` so a mounted deck re-seeds; never persisted.
   final int columnsResetTick;
 
-  /// solid-ui is ON unless transparency is explicitly enabled.
+  /// Solid UI is on unless transparency is explicitly enabled.
   bool get solidUi => !transparencyEnabled;
 
   bool get useBubbles => chatLayout != 'irc';
 
   bool get useColumns => chatViewMode == 'columns';
 
-  /// Resolves the effective brightness given the platform brightness.
   Brightness effectiveBrightness(Brightness platform) {
     switch (colorMode) {
       case ColorMode.light:
@@ -229,8 +213,7 @@ class Settings {
     );
   }
 
-  /// The five valid indicator-scope values (PWA `INDICATOR_SCOPES`,
-  /// settings.js:3).
+  /// The five valid indicator scopes (PWA `INDICATOR_SCOPES`).
   static const List<String> indicatorScopes = [
     'disabled',
     'pms',
@@ -239,10 +222,7 @@ class Settings {
     'everywhere',
   ];
 
-  /// Coerces a stored indicator-scope value to one of the five valid scopes
-  /// (PWA `_normalizeIndicatorScope`, settings.js:27-32): legacy booleans map
-  /// `'true'` → `'everywhere'` and `'false'` → `'disabled'`; anything else
-  /// out-of-enum falls back to [fallback].
+  /// Coerces a stored scope: legacy 'true'/'false' map to everywhere/disabled, else [fallback].
   static String normalizeIndicatorScope(String? value,
       {String fallback = 'pms-groups'}) {
     if (value == 'true') return 'everywhere';
@@ -251,7 +231,7 @@ class Settings {
     return fallback;
   }
 
-  /// Loads settings from the key/value store, applying PWA defaults/coercions.
+  /// Loads settings from the store with PWA defaults and coercions.
   factory Settings.fromStore(KeyValueStore kv) {
     ColorMode parseColorMode(String? v) {
       switch (v) {
@@ -264,7 +244,6 @@ class Settings {
       }
     }
 
-    // Legacy sound aliases.
     var sound = kv.getString(StorageKeys.sound) ?? 'beep';
     if (sound == 'icq') sound = 'uhoh';
     if (sound == 'msn') sound = 'msnding';
@@ -282,9 +261,7 @@ class Settings {
       dmForwardSecrecyEnabled:
           kv.getBool(StorageKeys.dmFwdSecEnabled, defaultValue: false),
       dmTtlSeconds: kv.getInt(StorageKeys.dmTtlSeconds, defaultValue: 86400),
-      // PWA loadSettings (settings.js:1105-1112): normalize the stored scope,
-      // deriving the fallback from the legacy enabled boolean ('false' →
-      // 'disabled', otherwise 'everywhere').
+      // As the PWA: the fallback derives from the legacy enabled boolean.
       readReceiptsScope: normalizeIndicatorScope(
         kv.getString(StorageKeys.readReceiptsScope),
         fallback: kv.getString(StorageKeys.readReceiptsEnabled) == 'false'
@@ -306,8 +283,7 @@ class Settings {
       lowDataMode: kv.getBool(StorageKeys.lowDataMode, defaultValue: false),
       backgroundConnectivity: kv.getBool(StorageKeys.backgroundConnectivity,
           defaultValue: false),
-      // Mesh runs by default; the radio only actually starts once Bluetooth
-      // permission is granted. Users who explicitly turn it off keep it off.
+      // On by default; the radio only starts once Bluetooth permission is granted.
       meshEnabled: kv.getBool(StorageKeys.meshEnabled, defaultValue: true),
       textSize: kv.getInt(StorageKeys.textSize, defaultValue: 15),
       transparencyEnabled:
@@ -337,21 +313,10 @@ class Settings {
   }
 }
 
-/// A swipe-react emoji is either a literal emoji or a `:shortcode:` naming a
-/// custom emoji — the picker returns both (`EmojiPicker.onSelect`). Used to
-/// validate the value arriving from a settings sync.
-///
-/// The previous rule was a flat 8-character cap, which rejected every
-/// `:shortcode:` and the longer ZWJ sequences. A pick that failed here was
-/// dropped silently, and the next publish from a device that had never chosen
-/// one put the ❤️ default back over it — the "quick react keeps reverting"
-/// bug.
+/// A `:shortcode:` swipe-react value; the picker returns these as well as literal emoji.
 final RegExp _swipeReactShortcodeRe = RegExp(r'^:[A-Za-z0-9_]{1,48}:$');
 
-/// A literal emoji carries no ASCII letters, digits or whitespace, which is
-/// what separates it from a short piece of text that happens to fit the length
-/// bound. ZWJ (U+200D) and the variation selectors are not whitespace, so
-/// sequences like 🏳️‍🌈 and 👨‍👩‍👧‍👦 still pass.
+/// A literal emoji has no ASCII letters, digits or whitespace; ZWJ sequences still pass.
 final RegExp _swipeReactTextishRe = RegExp(r'[A-Za-z0-9\s]');
 
 bool isValidSwipeReactEmoji(String value) {
@@ -360,18 +325,7 @@ bool isValidSwipeReactEmoji(String value) {
   return value.length <= 16 && !_swipeReactTextishRe.hasMatch(value);
 }
 
-/// Whether a swipe-react emoji arriving from the settings sync may replace the
-/// one this device holds.
-///
-/// The settings apply is otherwise unconditional and runs on every boot, so
-/// without this a blob written BEFORE the user's pick — an older build's ❤️
-/// default, or another device that never chose one — overwrote the choice at
-/// every launch: the "quick react keeps reverting" bug.
-///
-/// [remoteTs] is the published `swipeReactEmojiTs` (0 when the payload predates
-/// the stamp) and [localTs] is [StorageKeys.swipeReactEmojiTs] — 0 on a device
-/// whose user never picked one, which is why anything still applies there.
-/// Equal stamps apply so a device's own echo is a harmless no-op re-set.
+/// Synced swipe-react emoji applies only when [remoteTs] >= [localTs], so stale blobs can't revert a pick.
 bool shouldApplySyncedSwipeReactEmoji({
   required String value,
   required int remoteTs,

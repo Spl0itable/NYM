@@ -19,9 +19,7 @@ console.log(
   + `${counts.html} from index.html), `
   + `${targets.length} languages`);
 
-// The sync is where translations are PAID for, so an incomplete corpus here
-// costs more than it does in the build: a string missing now is one nobody
-// pre-translates until the next run.
+// The sync pays for translations, so an incomplete corpus here leaves strings untranslated until the next run.
 if (counts.dartKind === 'mirror') {
   console.warn(
     `\nReading the app strings from flutter/, this repository's release`
@@ -35,8 +33,7 @@ if (counts.dartKind === 'mirror') {
 }
 
 if (unknownEntities.length > 0) {
-  // Left encoded, these produce source strings the runtime will never match,
-  // so the containing string is silently never found in the pack.
+  // Left encoded, these never match runtime source strings.
   console.warn(
     `\nindex.html uses HTML entities this extractor does not decode: ${unknownEntities.join(' ')}`
     + `\nAdd them to ENTITIES in i18n/strings.mjs, or those strings will not be pre-translated.\n`);
@@ -54,11 +51,7 @@ if (listOnly) {
   process.exit(0);
 }
 
-// This run takes hours and spends most of it waiting on a rate-limited upstream,
-// so the difference between "working" and "wedged" has to be visible without
-// attaching a debugger. Every language prints the moment it starts, progress
-// refreshes on a timer rather than at string counts, and the slow parts — route
-// selection, throttle backoffs — announce themselves.
+// Hours-long and rate-limited, so progress and slow phases must be visible.
 console.log(`\ntranslating (${targets.length} languages, ~${sources.length} strings each)\n`);
 
 let line = '';
@@ -66,26 +59,16 @@ const draw = (text) => {
   line = text;
   process.stdout.write(`\r${text.padEnd(72)}`);
 };
-// A notice outlives the progress line it interrupts, so it gets its own row and
-// the progress line is redrawn under it.
+// A notice gets its own row and the progress line is redrawn under it.
 onNotice((text) => {
   process.stdout.write(`\r${''.padEnd(72)}\r  ${text}\n`);
   if (line) process.stdout.write(`\r${line.padEnd(72)}`);
 });
 
-// Progress used to print on `done % 25`, which the batched route steps straight
-// over: it advances 20 strings at a time, so most languages printed nothing at
-// all until they finished. Time is the honest axis here anyway — what the
-// reader wants to know is that something moved recently, not that a round
-// number was crossed.
+// Time-based ticks: the batched route advances 20 strings at a time.
 const TICK_MS = 400;
 
-// Languages ran strictly one after another, which is what made a sync of a
-// handful of new strings take the better part of an hour: a copy tweak is only
-// a batch or two per language, so almost all of the wall time was 132 waits in
-// a row rather than any real work. They share nothing, so they overlap freely.
-// The per-language batch concurrency inside translateMissing is unchanged and
-// nests under this.
+// Languages share nothing, so they overlap; per-language batch concurrency nests under this.
 const LANG_CONCURRENCY = Number(process.env.NYM_I18N_LANG_CONCURRENCY || 8);
 
 let failed = 0;
@@ -114,8 +97,7 @@ async function runLang(lang, i) {
   }
 }
 
-// A heartbeat, because with several languages in flight a per-language
-// progress line would just fight itself for the same row.
+// A shared heartbeat, since per-language progress lines would fight for the same row.
 const ticker = setInterval(() => {
   const secs = Math.round((Date.now() - runStarted) / 1000);
   draw(`  ${done_}/${targets.length} languages  ${secs}s elapsed`);

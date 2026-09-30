@@ -15,8 +15,6 @@ import '../../widgets/sidebar/pm_context_menu.dart';
 import '../i18n/i18n.dart';
 import '../settings/settings_screen.dart';
 
-/// One entry in the channel `.quick-context-menu` (sidebar-sections.js
-/// `_buildSidebarMenuItems`).
 class ChannelMenuAction {
   const ChannelMenuAction({
     required this.label,
@@ -26,17 +24,12 @@ class ChannelMenuAction {
   });
   final String label;
 
-  /// The leading glyph as a [NymIcons] SVG string.
   final String svg;
   final VoidCallback onSelected;
   final bool danger;
 }
 
-/// Builds the 500ms-hold action list for a channel row, mirroring the PWA's
-/// `_buildSidebarMenuItems` channel branch (sidebar-sections.js:167-200):
-/// Favorite/Unfavorite → Hide/Unhide → Block (danger). `#nymchat` is the
-/// built-in home row — it can't be favorited, hidden or blocked, so its menu
-/// carries the one setting that governs it.
+/// Hold-menu actions for a channel row; `#nymchat` can't be favorited, hidden or blocked.
 List<ChannelMenuAction> buildChannelMenuActions(
   BuildContext context,
   WidgetRef ref,
@@ -66,20 +59,14 @@ List<ChannelMenuAction> buildChannelMenuActions(
   return <ChannelMenuAction>[
     ChannelMenuAction(
       label: isPinned ? tr('Unfavorite channel') : tr('Favorite channel'),
-      // PWA uses the same filled-star `favSvg` for both states.
       svg: NymIcons.sidebarFavorite,
       onSelected: () => controller.togglePin(key),
     ),
     ChannelMenuAction(
       label: isHidden ? tr('Unhide channel') : tr('Hide channel'),
-      // PWA uses the same eye-off `hideSvg` for both states.
       svg: NymIcons.sidebarHide,
       onSelected: () {
-        // `toggleHideChannel` (channels.js:790-806): toggle + ALWAYS persist
-        // `nym_hidden_channels`. The hide path persists inside
-        // `controller.hideChannel`; the unhide path must write the store
-        // itself — the notifier alone leaves the key hidden on disk, so the
-        // channel would come back hidden on the next launch.
+        // Unhide must persist the store itself, or the channel comes back hidden on the next launch.
         if (isHidden) {
           ref.read(appStateProvider.notifier).unhideChannel(key);
           ref.read(keyValueStoreProvider).setString(
@@ -95,10 +82,6 @@ List<ChannelMenuAction> buildChannelMenuActions(
       label: tr('Block channel'),
       svg: NymIcons.sidebarBlock,
       danger: true,
-      // PWA (sidebar-sections.js:187-198): confirm with a danger dialog
-      // first, then `blockChannel` + a `Blocked channel #name` system message
-      // (the settings blocked-channels list is reactive here, so no explicit
-      // `updateBlockedChannelsList` equivalent is needed).
       onSelected: () async {
         if (!context.mounted) return;
         final ok = await showAppConfirm(
@@ -118,11 +101,7 @@ List<ChannelMenuAction> buildChannelMenuActions(
   ];
 }
 
-/// Fires the row's 500ms-hold `.quick-context-menu`, reporting whether it
-/// actually opened. An empty item list reports false and the PWA only sets its
-/// click-suppressing `fired` flag when `items.length > 0`
-/// (sidebar-sections.js:246-252) — so the caller lets the release-tap through
-/// when this returns false.
+/// Opens the hold menu and reports whether it did, so the caller lets the release tap through otherwise.
 bool maybeShowChannelContextMenu(
   BuildContext context,
   WidgetRef ref,
@@ -143,10 +122,6 @@ bool maybeShowChannelContextMenu(
   return true;
 }
 
-/// Shows the channel `.quick-context-menu` for [entry] at [globalPosition],
-/// reusing the shared sidebar overlay ([showSidebarQuickMenu]) so the channel
-/// rows match the PM / group rows' look + entrance animation exactly. Mirrors
-/// the PWA's floating action menu (`_showSidebarActionMenu`).
 Future<void> showChannelContextMenu(
   BuildContext context,
   WidgetRef ref,

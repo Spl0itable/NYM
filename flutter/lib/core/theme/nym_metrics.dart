@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-/// Radii, motion and type metrics ported from `:root` (docs/specs/02 §2.2).
+/// Radii, motion and type metrics ported from the PWA `:root`.
 class NymRadius {
   NymRadius._();
   static const double xs = 8;
@@ -23,7 +23,6 @@ class NymMotion {
   static const Duration transition = Duration(milliseconds: 250);
   static const Curve curve = Cubic(0.4, 0, 0.2, 1);
 
-  /// Sidebar / context-menu slide.
   static const Duration slide = Duration(milliseconds: 150);
 }
 
@@ -35,7 +34,6 @@ class NymTextSize {
   static const double max = 28;
 }
 
-/// Fixed layout dimensions from the spec.
 class NymDimens {
   NymDimens._();
   static const double sidebarWidth = 290;

@@ -1,5 +1,3 @@
-// command-i18n.js - Localized aliases for the / and ? command vocabularies.
-
 const NYM_CMD_SOURCE = {
     '/pm': 'private message',
     '/nick': 'nickname',
@@ -23,14 +21,13 @@ Object.assign(NYM.prototype, {
         return [this.commands || {}, this.botCommands || {}, this.botPMCommands || {}];
     },
 
-    // Canonical tokens worth translating: multi-character, non-alias entries.
     _cmdI18nCanonical() {
         const out = [];
         const seen = new Set();
         for (const table of this._cmdI18nTables()) {
             for (const [cmd, info] of Object.entries(table)) {
                 if (info && info.aliasOf) continue;
-                if (cmd.length <= 2) continue; // "/b", "/i" — single-letter aliases stay English
+                if (cmd.length <= 2) continue; // single-letter aliases stay English
                 if (seen.has(cmd)) continue;
                 seen.add(cmd);
                 out.push(cmd);
@@ -44,7 +41,6 @@ Object.assign(NYM.prototype, {
         return cmd.slice(1);
     },
 
-    // Fold a translated phrase into something typeable as a single token.
     _cmdI18nSlug(text) {
         if (!text) return '';
         let s = String(text).trim().toLocaleLowerCase();
@@ -56,7 +52,6 @@ Object.assign(NYM.prototype, {
         try { return token.normalize('NFD').replace(/\p{M}+/gu, ''); } catch (_) { return token; }
     },
 
-    // cache 
     _cmdI18nCacheKey(lang) { return 'nym_cmd_i18n_' + lang; },
 
     _cmdI18nCache(lang) {
@@ -81,7 +76,6 @@ Object.assign(NYM.prototype, {
         }, 800);
     },
 
-    // alias map 
     // { local: Map(canonical -> localized token), lookup: Map(typed token -> canonical) }
     _cmdI18nMaps() {
         const lang = this.getUiLanguage ? this.getUiLanguage() : '';
@@ -92,7 +86,6 @@ Object.assign(NYM.prototype, {
         const cache = this._cmdI18nCache(lang);
         const local = new Map();
         const lookup = new Map();
-        // Never let an alias shadow a real English token.
         const reserved = new Set();
         for (const table of this._cmdI18nTables()) {
             for (const cmd of Object.keys(table)) reserved.add(cmd);
@@ -112,7 +105,6 @@ Object.assign(NYM.prototype, {
             if (!slug || slug === cmd.slice(1)) continue;
             local.set(cmd, cmd[0] + slug);
             claim(slug, cmd);
-            // A multi-word translation also answers to its first word.
             const first = this._cmdI18nSlug(String(translated).trim().split(/\s+/)[0]);
             if (first && first !== slug) claim(first, cmd);
         }
@@ -122,9 +114,7 @@ Object.assign(NYM.prototype, {
         return this._cmdI18nMapCache;
     },
 
-    // translation 
-    // Fetch any missing command translations for the active language. Safe to
-    // call repeatedly; work happens once per language.
+    // Fetch missing command translations for the active language; runs once per language.
     cmdI18nEnsure() {
         const lang = this.getUiLanguage ? this.getUiLanguage() : '';
         if (!lang || lang === 'en') return;
@@ -136,10 +126,7 @@ Object.assign(NYM.prototype, {
         });
         if (!pending.length) return;
 
-        // The command phrases are part of the pre-translated corpus, so the pack
-        // the UI cache was primed from usually already has them. Taking those
-        // first is what turns "sixty requests the moment a language is picked"
-        // into none at all.
+        // Take phrases from the pre-translated pack first to avoid a burst of requests on language change.
         const landedFromPack = this._cmdI18nTakeFromPack(pending, cache, lang);
         if (landedFromPack.length) {
             this._cmdI18nSaveCache(lang);
@@ -153,10 +140,7 @@ Object.assign(NYM.prototype, {
         const stillHere = () => (this.getUiLanguage ? this.getUiLanguage() : '') === lang;
         const run = async () => {
             let landed = 0;
-            // Whatever the pack is missing goes out in batches rather than one
-            // request per command, which used to trickle through sixty of them.
-            // _translateBatches partitions in order, so slicing the command list
-            // by each batch's length keeps phrase and command aligned.
+            // _translateBatches partitions in order, so slicing by batch length keeps phrase and command aligned.
             const phrases = pending.map((cmd) => this._cmdI18nSource(cmd));
             let at = 0;
             for (const batch of this._translateBatches(phrases)) {
@@ -176,15 +160,14 @@ Object.assign(NYM.prototype, {
                     });
                     continue;
                 }
-                // A batch the proxy would not take falls back to the
-                // single-string path, which is also the one it edge-caches.
+                // A rejected batch falls back to the single-string path, which the proxy edge-caches.
                 for (let i = 0; i < commands.length; i++) {
                     if (!stillHere()) break;
                     try {
                         const res = await this._doTranslate(batch[i], lang);
                         const out = res && res.translatedText;
                         if (out && out.trim()) { cache[commands[i]] = out.trim(); landed++; }
-                    } catch (_) { /* retried on the next call */ }
+                    } catch (_) { }
                 }
             }
             if (landed) {
@@ -196,8 +179,7 @@ Object.assign(NYM.prototype, {
         run();
     },
 
-    // Fill what the pre-translated UI pack already carries. Returns the commands
-    // it answered for.
+    // Returns the commands answered from the pre-translated UI pack.
     _cmdI18nTakeFromPack(pending, cache, lang) {
         if (typeof this._i18nLoadCache !== 'function') return [];
         const ui = this._i18nLoadCache(lang);
@@ -217,15 +199,12 @@ Object.assign(NYM.prototype, {
         return took;
     },
 
-    // public helpers 
-    // Localized display token for a canonical command, or the canonical one.
     localizeCommandToken(cmd) {
         const maps = this._cmdI18nMaps();
         if (!maps) return cmd;
         return maps.local.get(cmd) || cmd;
     },
 
-    // Canonical token for something the user typed, or null when unknown.
     resolveCommandToken(token) {
         if (!token) return null;
         const t = token.toLocaleLowerCase();
@@ -237,8 +216,6 @@ Object.assign(NYM.prototype, {
         return maps.lookup.get(t) || maps.lookup.get(this._cmdI18nDeaccent(t)) || null;
     },
 
-    // Rewrite a leading localized command token in raw input to its canonical
-    // form, leaving the arguments untouched.
     canonicalizeCommandInput(text) {
         if (!text) return text;
         const m = /^([/?])(\S+)/.exec(text);
@@ -248,8 +225,7 @@ Object.assign(NYM.prototype, {
         return canonical + text.slice(m[0].length);
     },
 
-    // { typed, canonical } when raw input opens with a localized command, so a
-    // server-side parser can normalize the same text. Null otherwise.
+    // Returns { typed, canonical } when raw input opens with a localized command, else null.
     commandAliasHint(text) {
         if (!text) return null;
         const m = /^\s*([/?]\S+)/.exec(text);
@@ -260,8 +236,7 @@ Object.assign(NYM.prototype, {
         return { typed, canonical };
     },
 
-    // Rewrite canonical tokens inside rendered text (Nymbot help, system
-    // messages) so the names shown match what the app accepts.
+    // Rewrite canonical tokens in rendered text so shown names match what the app accepts.
     localizeCommandTokensIn(text) {
         const maps = this._cmdI18nMaps();
         if (!maps || !text) return text;

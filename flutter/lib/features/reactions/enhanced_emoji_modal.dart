@@ -1,26 +1,4 @@
-// The enhanced reaction picker surface — a 1:1 port of the PWA's
-// `.enhanced-emoji-modal` / `.reaction-picker` card (reactions.js
-// `_ensureEnhancedEmojiModal`, lines 691-717; styles-components.css:1203-1341).
-//
-// Chrome (styles-components.css:1203-1219):
-//   - card: `--bg-secondary`, 1px `--glass-border`, `--radius-md`, padding 12,
-//     `--shadow-lg` (0 8px 32px black@0.5 dark; light-mode override
-//     0 8px 32px black@0.12 + border rgba(0,0,0,0.08),
-//     styles-themes-responsive.css:1161-1165), width 350, max-height 400,
-//     overflow-y auto (the header scrolls WITH the content — it is not sticky).
-//   - `.emoji-modal-header` (:1225-1232): flex row gap 10, padding-bottom 10,
-//     1px glass bottom rule, margin-bottom 10. Contains the
-//     `.emoji-search-input` (flex 1, :1245-1255) and the 28×28 `.modal-close
-//     .emoji-modal-close` ✕ chip (:1234-1243).
-//   - `.emoji-grid` (:1308-1312): 6 columns, gap 5 (5 columns ≤480px,
-//     styles-themes-responsive.css:428-439).
-//   - `.emoji-option` (:1325-1342): padding 8, 23px glyph, radius-xs,
-//     transparent; hover white@0.08 + scale 1.15.
-//
-// Content: the same shared section markup as every picker surface
-// (`_emojiSectionsHtml`, emoji.js:534-557) — Recently Used, custom NIP-30
-// packs (fav → own → subscribed → rest, created_at desc, ≤50 packs of ≤120
-// emojis), then default categories with favorite stars.
+// Enhanced reaction picker card: search header, recents, custom packs, then default categories with favorite stars.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -36,14 +14,10 @@ import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
 
-/// Width breakpoint below which the `.emoji-grid` drops to 5 columns
-/// (styles-themes-responsive.css:428 `max-width: 480px`).
+/// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
 
-/// The `.enhanced-emoji-modal` card. [recents] is the current
-/// most-recent-first list; selecting an emoji calls [onSelect] with the
-/// literal char (unicode) or `:code:` (custom). [onClose] closes the modal
-/// (the ✕ chip, `data-action="closeEnhancedEmojiModal"`).
+/// [onSelect] gets the unicode char or `:code:` for custom emoji.
 class EnhancedEmojiModal extends ConsumerStatefulWidget {
   const EnhancedEmojiModal({
     super.key,
@@ -54,19 +28,17 @@ class EnhancedEmojiModal extends ConsumerStatefulWidget {
     required this.height,
   });
 
-  /// Most-recent-first recents (unicode chars and/or `:code:` tokens).
+  /// Most-recent-first unicode chars and/or `:code:` tokens.
   final List<String> recents;
 
-  /// Called with the chosen emoji (unicode char or `:shortcode:`).
   final ValueChanged<String> onSelect;
 
-  /// Closes the modal (the header ✕ chip).
   final VoidCallback onClose;
 
-  /// Card width: 350, capped at 90% of the screen on mobile.
+  /// 350, capped at 90% of the screen on mobile.
   final double width;
 
-  /// Card height: 400 desktop / 80vh mobile (content always exceeds it).
+  /// 400 on desktop, 80% of the screen on mobile.
   final double height;
 
   @override
@@ -79,10 +51,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
 
   late final Map<String, List<String>> _emojiToNames = buildEmojiToNames();
 
-  // Favorite-star state (emoji.js `nym_emoji_category_favorites` /
-  // `nym_emoji_pack_favorites`). Loaded lazily once prefs resolve; toggling a
-  // star reorders that block to the top live and persists (the PWA marks the
-  // cached modal dirty and rebuilds — setState is our equivalent).
+  // Favorite stars load lazily; toggling reorders the block live and persists.
   EmojiFavoritesStore? _catFavStore;
   EmojiFavoritesStore? _packFavStore;
   List<String> _categoryFavorites = const [];
@@ -131,9 +100,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     super.dispose();
   }
 
-  /// Recents filtered to drop custom `:code:` tokens whose pack is no longer
-  /// known (emoji.js `_recentEmojisForPicker`, lines 150-159). The PWA caps the
-  /// picker recents at 20 on mobile (`innerWidth<=768`) / 24 on desktop.
+  /// Drops custom tokens whose pack is unknown; capped at 20 on mobile, 24 on desktop.
   List<String> _visibleRecents(CustomEmojiState custom, double width) {
     final cap = width <= 768 ? 20 : kRecentEmojisCap;
     return widget.recents
@@ -146,8 +113,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
         .toList();
   }
 
-  /// True when an emoji passes the current search (reactions.js
-  /// `_applyEmojiSearch`: matches the char itself or any of its names).
+  /// Matches the char itself or any of its names.
   bool _matches(String emoji) {
     if (_query.isEmpty) return true;
     final q = _query.toLowerCase();
@@ -161,8 +127,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     return false;
   }
 
-  /// Custom emoji match: search against the shortcode (emoji.js sets
-  /// `data-names` to the shortcode for custom options).
+  /// Custom emoji match on the shortcode.
   bool _matchesCustom(String shortcode) {
     if (_query.isEmpty) return true;
     return shortcode.toLowerCase().contains(_query.toLowerCase());
@@ -177,7 +142,6 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
 
     final sections = <_Section>[];
 
-    // Recently Used.
     final recents = _visibleRecents(custom, screenWidth).where((e) {
       final m = RegExp(r'^:([a-zA-Z0-9_]+):$').firstMatch(e);
       return m == null ? _matches(e) : _matchesCustom(m.group(1)!);
@@ -196,9 +160,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       ));
     }
 
-    // Custom NIP-30 packs ranked fav(0)→own(1)→subscribed(2)→rest(3), then
-    // created_at desc (emoji.js `buildCustomEmojiSectionsHtml`:487-495).
-    // Own/subscribed packs get a ` ★` title suffix.
+    // Packs ranked fav, own, subscribed, rest, then newest; own/subscribed get a ` ★` suffix.
     final packFavSet = _packFavorites.toSet();
     final selfPubkey = ref.read(nostrControllerProvider).identity?.pubkey;
     final liveNotifier = ref.read(liveCustomEmojiProvider.notifier);
@@ -215,10 +177,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
         if (r != 0) return r;
         return b.createdAt.compareTo(a.createdAt);
       });
-    // At most 50 pack sections, each sliced to its first 120 known emojis
-    // (`buildCustomEmojiSectionsHtml`, emoji.js:499-504). The 50-pack budget
-    // counts packs with ≥1 KNOWN emoji; the search filter only hides buttons
-    // afterwards, so it doesn't free slots.
+    // At most 50 packs with a known emoji, 120 emojis each; search only hides cells, freeing no slots.
     var shownPacks = 0;
     for (final pack in orderedPacks) {
       if (shownPacks >= 50) break;
@@ -237,8 +196,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       ];
       if (cells.isEmpty) continue;
       final star = (isOwn(pack) || isSubscribed(pack)) ? ' ★' : '';
-      // `pack.title || 'Emoji pack'` (emoji.js:507) — an empty/missing cached
-      // title still gets a section header.
+      // An empty cached title still gets a section header.
       final packTitle = pack.title.isEmpty ? tr('Emoji pack') : pack.title;
       sections.add(_Section(
         title: '$packTitle$star',
@@ -249,7 +207,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       ));
     }
 
-    // Default categories, favorited categories hoisted to the top of the block.
+    // Favorited categories hoisted to the top of the block.
     for (final category in orderedEmojiCategories(_categoryFavorites)) {
       final list = kEmojisByCategory[category]!;
       final cells = <Widget>[
@@ -267,11 +225,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       ));
     }
 
-    // `.enhanced-emoji-modal`: bg-secondary card, 1px glass border, radius-md,
-    // padding 12, shadow-lg, overflow-y auto. Light mode overrides the shadow
-    // to 0 8px 32px rgba(0,0,0,0.12) and the border to rgba(0,0,0,0.08) — the
-    // light `glassBorder` token IS rgba(0,0,0,0.08), so only the shadow needs
-    // an explicit swap (styles-themes-responsive.css:1161-1165).
+    // Light mode swaps only the shadow; the light glass border token already matches.
     return Material(
       type: MaterialType.transparency,
       child: Container(
@@ -293,9 +247,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
         clipBehavior: Clip.antiAlias,
         padding: const EdgeInsets.all(12),
         child: CustomScrollView(
-          // The whole modal scrolls (`overflow-y: auto`) — the header is part
-          // of the content, NOT sticky. Lazy slivers keep only visible
-          // custom-emoji images decoded (the PWA's `loading="lazy"`).
+          // The header scrolls with the content; lazy slivers keep only visible images decoded.
           slivers: [
             SliverToBoxAdapter(child: _header(c)),
             for (final s in sections) ..._sectionSlivers(c, s, columns),
@@ -305,8 +257,6 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     );
   }
 
-  /// `.emoji-modal-header`: search + 28×28 ✕ chip in a row (gap 10), 1px glass
-  /// bottom rule (padding-bottom 10, margin-bottom 10).
   Widget _header(NymColors c) {
     return Container(
       padding: const EdgeInsets.only(bottom: 10),
@@ -324,12 +274,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     );
   }
 
-  /// `.emoji-search-input` (styles-components.css:1245-1255): white@0.05 fill,
-  /// 1px glass border, radius-xs, 12px `--text-bright` (light mode overrides
-  /// the color to `--text`, styles-themes-responsive.css:1063-1068), padding
-  /// 7px 10px, placeholder "Search emoji...". The global
-  /// `body.light-mode input` rule forces a black@0.04 fill and black@0.1
-  /// border (styles-themes-responsive.css:561-568).
+  /// Search input; light mode forces the global input fill and border.
   Widget _search(NymColors c) {
     final Color fill = c.isLight
         ? Colors.black.withValues(alpha: 0.04)
@@ -356,8 +301,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
           borderRadius: NymRadius.rxs,
           borderSide: BorderSide(color: borderColor),
         ),
-        // `.emoji-search-input` has no :focus override (unlike the composer's
-        // `.emoji-picker-search-input:focus`), so the border stays glass.
+        // No focus override, so the border stays glass.
         focusedBorder: OutlineInputBorder(
           borderRadius: NymRadius.rxs,
           borderSide: BorderSide(color: borderColor),
@@ -366,14 +310,12 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     );
   }
 
-  /// Defensively sanitize user input to avoid crashes when the platform IME
-  /// sends an unpaired surrogate (rare, but can happen on Android).
+  /// Replaces unpaired surrogates the Android IME can send, avoiding crashes.
   static String _sanitizeUserText(String input) {
     final units = input.codeUnits;
     final out = StringBuffer();
     for (var i = 0; i < units.length; i++) {
       final u = units[i];
-      // High surrogate.
       if (u >= 0xD800 && u <= 0xDBFF) {
         if (i + 1 < units.length) {
           final next = units[i + 1];
@@ -384,11 +326,9 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
             continue;
           }
         }
-        // Unpaired high surrogate -> replacement.
         out.write('�');
         continue;
       }
-      // Unpaired low surrogate -> replacement.
       if (u >= 0xDC00 && u <= 0xDFFF) {
         out.write('�');
         continue;
@@ -398,7 +338,6 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     return out.toString();
   }
 
-  /// `.emoji-option` with a unicode glyph: 23px text.
   Widget _unicodeCell(String emoji) {
     return _EmojiOptionCell(
       onTap: () => widget.onSelect(emoji),
@@ -410,13 +349,11 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     );
   }
 
-  /// `.emoji-option.custom-emoji-option`: a 30×30 image
-  /// (emoji.js `renderCustomEmojiImg`). Selecting inserts `:shortcode:`.
+  /// 30x30 custom emoji image; selecting inserts `:shortcode:`.
   Widget _customCell(String shortcode, String url) {
     return _EmojiOptionCell(
       onTap: () => widget.onSelect(':$shortcode:'),
       child: InlineNetworkImage(
-        // Route through the media proxy (PWA getProxiedEmojiUrl).
         url: proxiedMedia(url, emoji: true),
         width: 30,
         height: 30,
@@ -430,16 +367,12 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
     );
   }
 
-  /// The lazy slivers for one [section]: `.emoji-section-title` (10px dim
-  /// UPPERCASE ls1, margin-bottom 5) + the `.emoji-grid` (gap 5), the section
-  /// closing with `.emoji-section`'s 15px bottom margin.
+  /// Lazy slivers for one section: title, grid, then a 15px bottom margin.
   List<Widget> _sectionSlivers(NymColors c, _Section section, int columns) {
     return [
       SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.only(bottom: 5),
-          // `.emoji-default-cat-title` / `.emoji-pack-title`: flex
-          // space-between, the star button trailing.
           child: Row(
             children: [
               Expanded(
@@ -477,7 +410,6 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
   }
 }
 
-/// A single emoji section (title + flat list of cells).
 class _Section {
   const _Section({
     required this.title,
@@ -489,14 +421,11 @@ class _Section {
   final List<Widget> cells;
   final bool isFavorite;
 
-  /// When non-null, a favorite star is shown at the end of the title row.
+  /// When non-null, a favorite star ends the title row.
   final VoidCallback? onToggleFavorite;
 }
 
-/// The header's `.modal-close.emoji-modal-close` chip: 28×28 (the `.modal-close`
-/// base 32×32 is overridden, styles-components.css:1234-1243), circular,
-/// white@0.05 fill, 1px glass border, 14px ✕ in `--text-dim`; hover swaps to
-/// the danger palette (`.modal-close:hover`, styles-components.css:111-115).
+/// 28x28 circular close chip that turns danger-red on hover.
 class _ModalCloseChip extends StatefulWidget {
   const _ModalCloseChip({required this.onTap});
   final VoidCallback onTap;
@@ -524,11 +453,11 @@ class _ModalCloseChipState extends State<_ModalCloseChip> {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: _hover
-                ? const Color(0x1FFF4444) // rgba(255,68,68,0.12)
+                ? const Color(0x1FFF4444)
                 : Colors.white.withValues(alpha: 0.05),
             border: Border.all(
               color: _hover
-                  ? const Color(0x4DFF4444) // rgba(255,68,68,0.3)
+                  ? const Color(0x4DFF4444)
                   : c.glassBorder,
             ),
           ),
@@ -547,9 +476,7 @@ class _ModalCloseChipState extends State<_ModalCloseChip> {
   }
 }
 
-/// `.emoji-category-fav-btn` / `.emoji-pack-fav-btn`: a 14px star, dim by
-/// default (hover → primary), filled `#F5C518` when active
-/// (styles-components.css:1276-1306, 1350-1380).
+/// 14px favorite star, dim by default and filled `#F5C518` when active.
 class _FavStar extends StatelessWidget {
   const _FavStar({required this.active, required this.onTap});
   final bool active;
@@ -578,9 +505,7 @@ class _FavStar extends StatelessWidget {
   }
 }
 
-/// `.emoji-option` tap target: transparent, radius-xs, padding 8. On hover the
-/// cell fills `rgba(255,255,255,0.08)` and the glyph scales to 1.15
-/// (styles-components.css:1325-1342).
+/// Emoji cell that fills and scales to 1.15 on hover.
 class _EmojiOptionCell extends StatefulWidget {
   const _EmojiOptionCell({required this.onTap, required this.child});
   final VoidCallback onTap;
@@ -608,8 +533,7 @@ class _EmojiOptionCellState extends State<_EmojiOptionCell> {
           child: Padding(
             padding: const EdgeInsets.all(8),
             child: Center(
-              // `transition: all var(--transition)` = 0.25s
-              // cubic-bezier(0.4,0,0.2,1) (styles-components.css:1333).
+              // 0.25s cubic-bezier(0.4, 0, 0.2, 1).
               child: AnimatedScale(
                 scale: _hover ? 1.15 : 1.0,
                 duration: NymMotion.transition,

@@ -2,9 +2,7 @@ import 'dart:math';
 
 import '../../core/utils/nym_utils.dart';
 
-/// Random nym generation, ported verbatim from the PWA `generateRandomNym`
-/// (js/modules/users.js:208). Style 'fancy' = `adjective_noun#suffix`,
-/// 'simple' = `nymNNNN#suffix`.
+/// Random nym generation, a verbatim port of the PWA `generateRandomNym`.
 class NymGenerator {
   NymGenerator([Random? random]) : _rand = random ?? Random.secure();
   final Random _rand;

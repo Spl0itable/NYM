@@ -4,10 +4,9 @@ Object.assign(NYM.prototype, {
 
     setupMobileGestures() {
         if (window.innerWidth <= 768) {
-            // Touch events for swipe to open menu
             document.addEventListener('touchstart', (e) => {
                 const touch = e.touches[0];
-                // Only track swipes starting from left edge
+                // Only track swipes starting from the left edge.
                 if (touch.clientX < 50) {
                     this.swipeStartX = touch.clientX;
                 }
@@ -38,17 +37,14 @@ Object.assign(NYM.prototype, {
     },
 
     setupContextMenu() {
-        // Close context menu sidebar via overlay click
         document.getElementById('contextMenuOverlay').addEventListener('click', () => {
             this.closeContextMenu();
         });
 
-        // Close context menu sidebar via close button
         document.getElementById('ctxCloseBtn').addEventListener('click', () => {
             this.closeContextMenu();
         });
 
-        // Context menu actions
         document.getElementById('ctxMention').addEventListener('click', () => {
             if (this.contextMenuData) {
                 const baseNym = this.contextMenuData.nym;
@@ -70,26 +66,20 @@ Object.assign(NYM.prototype, {
             this.closeContextMenu();
         });
 
-        // Add zap handler
         document.getElementById('ctxZap').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.messageId) {
                 const { messageId, pubkey, nym } = this.contextMenuData;
 
-                // Close context menu immediately
                 this.closeContextMenu();
 
-                // Show loading message
                 this.displaySystemMessage(`Checking if @${nym} can receive zaps...`);
 
                 try {
-                    // Always fetch fresh to ensure we have the latest
                     const lnAddress = await this.fetchLightningAddressForUser(pubkey);
 
                     if (lnAddress) {
-                        // User has lightning address, show zap modal
                         this.showZapModal(messageId, pubkey, nym);
                     } else {
-                        // No lightning address found
                         this.displaySystemMessage(`@${nym} cannot receive zaps (no lightning address set)`);
                     }
                 } catch (error) {
@@ -98,7 +88,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Gift Nymbot credits to this user
         document.getElementById('ctxGiftCredits').addEventListener('click', () => {
             if (this.contextMenuData) {
                 const { pubkey, nym } = this.contextMenuData;
@@ -107,16 +96,13 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Add slap handler
         let slapOption = document.getElementById('ctxSlap');
         if (!slapOption) {
-            // Create slap option if it doesn't exist
             slapOption = document.createElement('div');
             slapOption.className = 'context-menu-item';
             slapOption.id = 'ctxSlap';
             slapOption.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" class="nm-ico8"><path d="M 1 8 Q 3 4 8 4 Q 11 4 13 6 L 15 4.5 L 15 11.5 L 13 10 Q 11 12 8 12 Q 3 12 1 8 Z" fill="none" /><circle cx="5" cy="7.5" r="0.7" fill="currentColor" stroke="none" /><path d="M 9 6.5 Q 10 8 9 9.5" stroke-linecap="round" /></svg>Slap with Trout';
 
-            // Insert after PM option
             const pmOption = document.getElementById('ctxPM');
             if (pmOption && pmOption.nextSibling) {
                 pmOption.parentNode.insertBefore(slapOption, pmOption.nextSibling);
@@ -125,7 +111,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Add hug handler
         let hugOption = document.getElementById('ctxHug');
         if (!hugOption) {
             hugOption = document.createElement('div');
@@ -133,7 +118,6 @@ Object.assign(NYM.prototype, {
             hugOption.id = 'ctxHug';
             hugOption.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico8"><circle cx="6" cy="5" r="2" /><circle cx="10" cy="5" r="2" /><path d="M 2 14 C 2 10 4 9 6 9 C 7 9 7.5 9.5 8 10 C 8.5 9.5 9 9 10 9 C 12 9 14 10 14 14" stroke-linecap="round" stroke-linejoin="round" /><path d="M 4 11.5 Q 8 9 12 11.5" stroke-linecap="round" /></svg>Give warm Hug';
 
-            // Insert after slap option
             if (slapOption && slapOption.nextSibling) {
                 slapOption.parentNode.insertBefore(hugOption, slapOption.nextSibling);
             } else if (slapOption) {
@@ -141,7 +125,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Add report handler
         document.getElementById('ctxReport').addEventListener('click', () => {
             if (this.contextMenuData) {
                 this.openReportModal();
@@ -149,16 +132,13 @@ Object.assign(NYM.prototype, {
             this.closeContextMenu();
         });
 
-        // Add the click handler for slap
         slapOption.addEventListener('click', () => {
             if (this.contextMenuData) {
-                // Pass the pubkey directly as the argument
                 this.cmdSlap(this.contextMenuData.pubkey);
             }
             this.closeContextMenu();
         });
 
-        // Add the click handler for hug
         hugOption.addEventListener('click', () => {
             if (this.contextMenuData) {
                 this.cmdHug(this.contextMenuData.pubkey);
@@ -170,9 +150,7 @@ Object.assign(NYM.prototype, {
             if (this.contextMenuData && this.contextMenuData.reactionId) {
                 this.closeContextMenu();
 
-                // Use a delay to ensure context menu closes first
                 setTimeout(() => {
-                    // Create a temporary button element for positioning (centered for mobile)
                     const tempButton = document.createElement('button');
                     tempButton.style.position = 'fixed';
                     tempButton.style.left = '50%';
@@ -183,7 +161,6 @@ Object.assign(NYM.prototype, {
 
                     this.showEnhancedReactionPicker(this.contextMenuData.reactionId, tempButton);
 
-                    // Remove temp button after modal is created
                     setTimeout(() => tempButton.remove(), 100);
                 }, 100);
             }
@@ -208,14 +185,12 @@ Object.assign(NYM.prototype, {
 
         document.getElementById('ctxBlock').addEventListener('click', () => {
             if (this.contextMenuData) {
-                // Pass the pubkey directly as the argument
                 this.cmdBlock(this.contextMenuData.pubkey);
             }
             this.closeContextMenu();
         });
 
-        // Copies whichever form is currently on screen, so what the user sees
-        // is what lands on their clipboard.
+        // Copies whichever form is on screen.
         document.getElementById('ctxCopyPubkey').addEventListener('click', async () => {
             if (this.contextMenuData && this.contextMenuData.pubkey) {
                 const format = this.getPubkeyDisplayFormat();
@@ -232,9 +207,7 @@ Object.assign(NYM.prototype, {
             this.closeContextMenu();
         });
 
-        // npub ⇄ hex. Both are the same identity; bitchat speaks hex over the
-        // mesh, so the raw form has to stay one click away. The menu stays open
-        // so the switch can be seen taking effect.
+        // npub ⇄ hex: bitchat speaks hex over the mesh, so the raw form stays one click away.
         const togglePubkeyFormat = () => {
             this.togglePubkeyDisplayFormat();
             this._renderContextMenuPubkey(this.contextMenuData && this.contextMenuData.pubkey);
@@ -258,12 +231,10 @@ Object.assign(NYM.prototype, {
             this.closeContextMenu();
         });
 
-        // Translate message handler
         document.getElementById('ctxTranslate').addEventListener('click', async () => {
             const data = this.contextMenuData;
             this.closeContextMenu();
             if (data && data.content) {
-                // Strip quoted lines (> prefixed) to translate only the user's reply
                 const nonQuotedContent = data.content.split('\n')
                     .filter(line => !line.startsWith('>'))
                     .join('\n').trim();
@@ -273,7 +244,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Add edit message handler
         document.getElementById('ctxEditMessage').addEventListener('click', () => {
             if (this.contextMenuData && this.contextMenuData.messageId && this.contextMenuData.pubkey === this.pubkey) {
                 this.startEditMessage(this.contextMenuData);
@@ -281,13 +251,11 @@ Object.assign(NYM.prototype, {
             this.closeContextMenu();
         });
 
-        // Edit preview close button
         document.getElementById('editPreviewClose').addEventListener('click', () => {
             this.cancelEditMessage();
         });
 
-        // Note: ctxDeleteMessage is wired via data-action="deleteMessageFromContext"
-        // in index.html and dispatched through inline-bindings.js.
+        // ctxDeleteMessage is wired via data-action in index.html and dispatched through inline-bindings.js.
     },
 
     openReportModal() {
@@ -303,7 +271,6 @@ Object.assign(NYM.prototype, {
 
         targetNym.textContent = fullNym;
 
-        // Enable message reporting only if there's a messageId
         if (this.contextMenuData.messageId) {
             reportMessageCheckbox.disabled = false;
             reportMessageCheckbox.checked = true;
@@ -319,7 +286,6 @@ Object.assign(NYM.prototype, {
         const modal = document.getElementById('reportModal');
         modal.style.display = 'none';
 
-        // Reset form
         document.getElementById('reportType').value = 'nudity';
         document.getElementById('reportDetails').value = '';
         document.getElementById('reportMessage').checked = true;
@@ -336,7 +302,7 @@ Object.assign(NYM.prototype, {
         const messageId = this.contextMenuData.messageId;
 
         try {
-            // Create NIP-56 kind 1984 report event
+            // NIP-56 kind 1984 report event.
             const event = {
                 kind: 1984,
                 created_at: Math.floor(Date.now() / 1000),
@@ -345,15 +311,13 @@ Object.assign(NYM.prototype, {
                 pubkey: this.pubkey
             };
 
-            // Add p tag (always required for user reports)
+            // p tag is always required for user reports.
             event.tags.push(['p', pubkey, reportType]);
 
-            // Add e tag if reporting a specific message
             if (reportMessage && messageId) {
                 event.tags.push(['e', messageId, reportType]);
             }
 
-            // Sign and publish the event
             const signedEvent = await this.signEvent(event);
 
             if (signedEvent) {
@@ -367,11 +331,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // The profile card's nym block: name, suffix, flair, supporter/verified/friend
-    // badges and any developer / bot / owner / moderator label. Extracted so that
-    // opening the card and REFRESHING it after a kind 0 lands build the same
-    // markup — the card used to bake in whatever nym the clicked row happened to
-    // carry, and never changed it again.
+    // Shared by card open and refresh so both build the same nym markup.
     _ctxNymHtml(pubkey, baseNym, suffix) {
         const flairHtml = this.getFlairForUser(pubkey);
         const userShopItems = this.getUserShopItems(pubkey);
@@ -391,7 +351,6 @@ Object.assign(NYM.prototype, {
         } else if (this.isVerifiedBot(pubkey)) {
             nymHtml += `<div class="context-menu-dev-label">Nymchat Bot</div>`;
         }
-        // Show "Group Owner" or "Moderator" badge for the user in the current group
         if (this.inPMMode && this.currentGroup) {
             const grp = this.groupConversations.get(this.currentGroup);
             if (grp && grp.createdBy === pubkey) {
@@ -403,13 +362,7 @@ Object.assign(NYM.prototype, {
         return nymHtml;
     },
 
-    // Show/hide the profile card's banner. Opening the card and a banner
-    // ARRIVING while it is open have to do exactly the same thing, and they used
-    // not to: the open path set src + display + the has-banner class, while the
-    // late path (cacheBannerImage's blob finishing) set src alone — onto an
-    // <img> the open path had already hidden because the profile carried no
-    // banner yet. The banner then never appeared, however long the card stayed
-    // up; only closing and reopening it worked.
+    // Shared by card open and late banner arrival so both behave identically.
     _applyCtxBanner(bannerUrl) {
         const img = document.getElementById('ctxBannerImg');
         const menu = document.getElementById('contextMenu');
@@ -430,17 +383,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Profile data that arrives AFTER the card is on screen. The card populates
-    // every field once, at open, from whatever was known then; a kind 0 landing
-    // a moment later changed nothing on it. Avatars were the exception — they
-    // ride the global img[data-avatar-pubkey] sweep (_flushAvatarUpdates), which
-    // is exactly why they never showed this bug — so this covers the rest:
-    // banner, bio, and the nym block (name, flair, badges), each of which
-    // renders in this one place and had no equivalent.
-    //
-    // The lightning address needs nothing here: it is not displayed on the card,
-    // and the zap option's visibility does not depend on knowing it — the click
-    // path awaits waitForLightningAddress, which the same kind 0 resolves.
+    // Refreshes banner, bio and nym block for kind 0 data arriving after open; avatars use _flushAvatarUpdates.
     updateRenderedProfileCard(pubkey) {
         if (!pubkey) return;
         if (!this.contextMenuData || this.contextMenuData.pubkey !== pubkey) return;
@@ -455,8 +398,7 @@ Object.assign(NYM.prototype, {
 
         const ctxAvatarNym = document.getElementById('ctxAvatarNym');
         if (ctxAvatarNym) {
-            // The live nym, not the one the clicked row carried when the card
-            // was opened.
+            // The live nym, not the one the clicked row carried when the card was opened.
             const baseNym = this.resolveDisplayNym(pubkey, '');
             const html = this._ctxNymHtml(pubkey, baseNym, this.getPubkeySuffix(pubkey));
             if (ctxAvatarNym.innerHTML !== html) ctxAvatarNym.innerHTML = html;
@@ -464,8 +406,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Kept as the banner-specific entry point (users.js calls it when a banner
-    // blob finishes downloading, which says nothing about the other fields).
+    // Called by users.js when a banner blob finishes downloading.
     updateRenderedBanner(pubkey) {
         if (!pubkey) return;
         if (!this.contextMenuData || this.contextMenuData.pubkey !== pubkey) return;
@@ -477,27 +418,21 @@ Object.assign(NYM.prototype, {
         e.stopPropagation();
 
         const menu = document.getElementById('contextMenu');
-        // Parse base nym from display format - this removes HTML tags
         const parsedNym = this.resolveDisplayNym(pubkey, nym);
-        // Get just the base nym without any suffix
         const baseNym = this.stripPubkeySuffix(parsedNym);
         const suffix = this.getPubkeySuffix(pubkey);
         const fullNym = `${baseNym}#${suffix}`;
 
-        // reactionId is the DOM-facing ID (nymMessageId for PMs), messageId is the real event ID
+        // reactionId is the DOM-facing ID (nymMessageId for PMs); messageId is the real event ID.
         this.contextMenuData = { nym: baseNym, pubkey, content, messageId, reactionId: reactionId || messageId };
 
-        // Back button: shown only when this menu was opened from a group context
-        // menu, to return to it. Cleared for all other entry points.
+        // Shown only when opened from a group context menu, to return to it.
         this._ctxBackToGroup = backToGroupId || null;
         const ctxBackBtn = document.getElementById('ctxBackBtn');
         if (ctxBackBtn) ctxBackBtn.classList.toggle('nm-hidden', !backToGroupId);
 
-        // Populate banner if available. Shared with the late-arrival path so a
-        // banner landing after the card is open lands identically.
         this._applyCtxBanner(this.getBannerUrl(pubkey));
 
-        // Populate avatar header
         const ctxAvatarImg = document.getElementById('ctxAvatarImg');
         const ctxAvatarNym = document.getElementById('ctxAvatarNym');
         if (ctxAvatarImg) {
@@ -509,11 +444,9 @@ Object.assign(NYM.prototype, {
             ctxAvatarNym.innerHTML = this._ctxNymHtml(pubkey, baseNym, suffix);
         }
 
-        // Populate the full public key block in the user's chosen format
-        // (npub by default — see the npub/hex notes in users.js).
+        // npub by default (see users.js).
         this._renderContextMenuPubkey(pubkey);
 
-        // Populate status row (online / away / offline)
         const ctxStatusRow = document.getElementById('ctxStatusRow');
         if (ctxStatusRow) {
             ctxStatusRow.textContent = '';
@@ -534,9 +467,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Group moderation entries: visibility only — actions are bound via
-        // data-action in index.html and dispatched through inline-bindings.js,
-        // which reads the target pubkey from this.contextMenuData.
+        // Visibility only: actions are bound via data-action and dispatched through inline-bindings.js.
         const gid = (this.inPMMode && this.currentGroup) ? this.currentGroup : null;
         const grpForCtx = gid ? this.groupConversations.get(gid) : null;
         const targetIsMember = !!(grpForCtx && grpForCtx.members.includes(pubkey));
@@ -568,16 +499,13 @@ Object.assign(NYM.prototype, {
         setDisplay('ctxRemoveAdmin', showRemoveAdmin);
         setDisplay('ctxTransferOwner', showTransfer);
 
-        // Add slap option if it doesn't exist
         let slapOption = document.getElementById('ctxSlap');
         if (!slapOption) {
-            // Create slap option
             slapOption = document.createElement('div');
             slapOption.className = 'context-menu-item';
             slapOption.id = 'ctxSlap';
             slapOption.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" class="nm-ico8"><path d="M 1 8 Q 3 4 8 4 Q 11 4 13 6 L 15 4.5 L 15 11.5 L 13 10 Q 11 12 8 12 Q 3 12 1 8 Z" fill="none" /><circle cx="5" cy="7.5" r="0.7" fill="currentColor" stroke="none" /><path d="M 9 6.5 Q 10 8 9 9.5" stroke-linecap="round" /></svg>Slap with Trout';
 
-            // Insert after PM option
             const pmOption = document.getElementById('ctxPM');
             if (pmOption && pmOption.nextSibling) {
                 pmOption.parentNode.insertBefore(slapOption, pmOption.nextSibling);
@@ -586,10 +514,8 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Show slap option only if not yourself
         slapOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
 
-        // Add hug option if it doesn't exist
         let hugOption = document.getElementById('ctxHug');
         if (!hugOption) {
             hugOption = document.createElement('div');
@@ -604,15 +530,10 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Show hug option only if not yourself
         hugOption.style.display = pubkey === this.pubkey ? 'none' : 'block';
 
-        // Add zap option handling
         const zapOption = document.getElementById('ctxZap');
         if (zapOption) {
-            // Show zap option if:
-            // 1. Not your own message
-            // 2. Has a valid message ID
             if (pubkey !== this.pubkey && messageId) {
                 zapOption.style.display = 'block';
             } else {
@@ -620,7 +541,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Hide friend option if it's your own message, toggle label
         const friendOption = document.getElementById('ctxFriend');
         if (pubkey === this.pubkey) {
             friendOption.style.display = 'none';
@@ -633,7 +553,6 @@ Object.assign(NYM.prototype, {
             friendOption.innerHTML = friendSvg + (isFriend ? 'Remove Friend' : 'Add Friend');
         }
 
-        // Hide block option if it's your own message
         const blockOption = document.getElementById('ctxBlock');
         if (pubkey === this.pubkey) {
             blockOption.style.display = 'none';
@@ -643,7 +562,7 @@ Object.assign(NYM.prototype, {
             blockOption.innerHTML = blockSvg + (this.blockedUsers.has(pubkey) ? 'Unblock User' : 'Block User');
         }
 
-        // Hide PM option only for your own messages (Nymbot accepts private chats)
+        // Hide PM only for your own messages (Nymbot accepts private chats).
         document.getElementById('ctxPM').style.display = (pubkey === this.pubkey) ? 'none' : 'block';
 
         const addToGroupOption = document.getElementById('ctxAddToGroup');
@@ -653,11 +572,9 @@ Object.assign(NYM.prototype, {
             addToGroupOption.classList.toggle('nm-hidden', !canStartGroup);
         }
 
-        // Gift Nymbot credits — for other users, not yourself or Nymbot itself
         document.getElementById('ctxGiftCredits').style.display =
             (pubkey === this.pubkey || this.isVerifiedBot(pubkey)) ? 'none' : 'block';
 
-        // Show "Edit Profile" only for own messages
         const editProfileOption = document.getElementById('ctxEditProfile');
         if (editProfileOption) {
             editProfileOption.style.display = pubkey === this.pubkey ? 'block' : 'none';
@@ -667,22 +584,17 @@ Object.assign(NYM.prototype, {
             };
         }
 
-        // Show/hide quote option
         document.getElementById('ctxQuote').style.display = content ? 'block' : 'none';
 
-        // Show/hide Copy Message option
         document.getElementById('ctxCopyMessage').style.display = content ? 'block' : 'none';
 
-        // Translate needs message text, so only show it when we have content
-        // (hidden for mention/sidebar clicks that carry no message body).
+        // Hidden for mention/sidebar clicks that carry no message body.
         const ctxTranslateOption = document.getElementById('ctxTranslate');
         if (ctxTranslateOption) ctxTranslateOption.style.display = content ? 'block' : 'none';
 
-        // Show/hide React option
         const reactOption = document.getElementById('ctxReact');
         reactOption.style.display = messageId ? 'block' : 'none';
 
-        // Show/hide Edit Message option - only for own messages with content
         const editOption = document.getElementById('ctxEditMessage');
         if (pubkey === this.pubkey && messageId && content) {
             editOption.style.display = 'block';
@@ -690,8 +602,7 @@ Object.assign(NYM.prototype, {
             editOption.style.display = 'none';
         }
 
-        // Show/hide Delete Message option - own messages, or mod/owner deleting
-        // another member's message in the current group.
+        // Own messages, or a mod/owner deleting another member's message in the current group.
         const deleteOption = document.getElementById('ctxDeleteMessage');
         let canDeleteOwn = pubkey === this.pubkey && messageId;
         let canModDelete = false;
@@ -707,10 +618,9 @@ Object.assign(NYM.prototype, {
         }
         deleteOption.style.display = (canDeleteOwn || canModDelete) ? 'block' : 'none';
 
-        // Hide report option for own messages
         document.getElementById('ctxReport').style.display = pubkey === this.pubkey ? 'none' : 'block';
 
-        // In profile-only mode (e.g. nyms sidebar) show only PM, Report, Block
+        // In profile-only mode (e.g. nyms sidebar) show only PM, Report, Block.
         if (profileOnly) {
             const ctxMention = document.getElementById('ctxMention');
             if (ctxMention) ctxMention.style.display = 'none';
@@ -727,21 +637,18 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Populate bio
         const ctxBio = document.getElementById('ctxBio');
         if (ctxBio) {
             const bio = this.getBio(pubkey);
             ctxBio.textContent = bio;
         }
 
-        // Scroll sidebar to top
         menu.scrollTop = 0;
 
-        // Show overlay and sidebar
         document.getElementById('contextMenuOverlay').classList.add('active');
         menu.classList.add('active');
 
-        // Prevent the click from immediately closing the menu
+        // Prevent the click from immediately closing the menu.
         e.stopImmediatePropagation();
     },
 
@@ -757,8 +664,6 @@ Object.assign(NYM.prototype, {
     UNFURL_MISS_TTL_MS: 60 * 60 * 1000,
     UNFURL_CACHE_MAX: 200,
 
-    // Restore the unfurl cache from disk so previews seen in an earlier session
-    // don't refetch on the next load.
     _loadUnfurlCache() {
         if (this._unfurlCacheLoaded) return;
         this._unfurlCacheLoaded = true;
@@ -799,10 +704,7 @@ Object.assign(NYM.prototype, {
         return data || null;
     },
 
-    // Unfurl a URL and return Open Graph metadata.
-    // Uses CF proxy when available; falls back to direct fetch (may be blocked by CORS).
-    // Results (including misses) are cached and persisted; concurrent callers for
-    // the same URL share one request.
+    // CF proxy when available, else direct fetch (may hit CORS); results incl. misses are cached and shared.
     unfurlUrl(url) {
         this._loadUnfurlCache();
         const hit = this._unfurlCache.get(url);
@@ -838,7 +740,7 @@ Object.assign(NYM.prototype, {
                 if (!proxied.ok) return null;
                 data = await proxied.json();
             } else {
-                // Direct fetch fallback — works when the target sets CORS headers
+                // Direct fetch fallback: works when the target sets CORS headers.
                 const resp = await fetch(url, {
                     headers: { 'Accept': 'text/html' },
                     redirect: 'follow',
@@ -856,7 +758,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Client-side Open Graph extraction (used when CF proxy is unavailable)
     _extractOpenGraph(html, pageUrl) {
         const get = (property) => {
             const ogMatch = html.match(new RegExp(`<meta[^>]+property=["']og:${property}["'][^>]+content=["']([^"']+)["']`, 'i'))
@@ -894,12 +795,10 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Render a rich link preview card for an unfurled URL
     _renderLinkPreview(meta) {
         if (!meta || (!meta.title && !meta.description)) return '';
 
-        // The unfurled page controls these, and a cached entry may predate the
-        // extractor's scheme check, so re-guard here.
+        // Cached entries may predate the extractor's scheme check, so re-guard here.
         const imageSrc = this.safeUrl(meta.image);
         const imageHtml = imageSrc
             ? `<img src="${this.escapeHtml(this.getProxiedMediaUrl(imageSrc))}" class="link-preview-image" decoding="async" loading="lazy" data-error-action="errorHideElement">`
@@ -930,14 +829,7 @@ Object.assign(NYM.prototype, {
         </a>`;
     },
 
-    // After a message is rendered, find URLs in it and attach link previews.
-    // Re-entering a channel rebuilds the row, so this runs again on the same
-    // message: it is idempotent, deduplicates repeated hrefs, and paints
-    // straight from the cache when warm so a seen preview doesn't flash.
-    // [opts] lets another surface reuse this: `scope` is what to search for
-    // links, `container` what to append the cards to, and `flag` the dataset
-    // key that makes it idempotent (a Nostr reference card unfurls the links in
-    // ITS body, into ITS body, without touching the host message's own).
+    // Idempotent; opts.scope/container/flag let Nostr reference cards unfurl their own body's links.
     _attachLinkPreviews(messageEl, opts = {}) {
         const flag = opts.flag || 'previewsAttached';
         if (messageEl.dataset[flag] === '1') return;
@@ -955,7 +847,7 @@ Object.assign(NYM.prototype, {
         for (const link of links) {
             const href = link.getAttribute('href');
             if (!href || seen.has(href)) continue;
-            // Skip media URLs (already embedded as inline images/videos)
+            // Skip media URLs (already embedded inline).
             if (/\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$/i.test(href)) continue;
             seen.add(href);
             hrefs.push(href);
@@ -984,11 +876,7 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Defer the unfurls until the message actually nears the viewport:
-        // opening a conversation renders a 50-message window, and unfurling
-        // every link in it immediately fired a burst of proxy requests for
-        // messages the user may never scroll to. Cached hits paint the moment
-        // the message first shows; anything else fetches then.
+        // Defer until near the viewport so a 50-message window doesn't burst proxy requests.
         if (typeof IntersectionObserver !== 'function') { run(); return; }
         if (!this._unfurlObserver) {
             this._unfurlObserver = new IntersectionObserver((entries) => {
@@ -1005,7 +893,6 @@ Object.assign(NYM.prototype, {
     },
 
     setupEventListeners() {
-        // Click handler for status indicator to manually trigger reconnection
         const statusIndicator = document.querySelector('.status-indicator');
         if (statusIndicator) {
             statusIndicator.style.cursor = 'pointer';
@@ -1018,7 +905,6 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Delegated click handler for DM retry buttons (failed delivery indicator)
         const messagesContainer = document.getElementById('messagesContainer');
         if (messagesContainer) {
             messagesContainer.addEventListener('click', (e) => {
@@ -1032,11 +918,7 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        // Clicking a @mention opens that user's context menu. Delegated on the
-        // document, not on #messagesContainer: under column view each column
-        // renders into its own list, which that container never sees. Scoped to
-        // a message body so the call-chat overlay's mentions stay inert, as
-        // they were when this listener lived on the conversation container.
+        // Delegated on document because column view renders outside #messagesContainer; mentions only in message bodies.
         document.addEventListener('click', (e) => {
             if (!e.target.closest) return;
             const mentionEl = e.target.closest('.nm-mention');
@@ -1051,9 +933,7 @@ Object.assign(NYM.prototype, {
             this.showContextMenu(e, `${nym}#${suffix}`, pubkey, null, null, false);
         });
 
-        // Clicking a quoted block jumps to the message it quotes. Delegated on
-        // the document, not on #messagesContainer: under column view each
-        // column renders into its own list, which that container never sees.
+        // Delegated on document because column view renders outside #messagesContainer.
         document.addEventListener('click', (e) => {
             const bq = e.target.closest && e.target.closest('.message-content > blockquote');
             if (!bq || !bq.closest('.message[data-message-id]')) return;
@@ -1063,17 +943,13 @@ Object.assign(NYM.prototype, {
             this._scrollToQuotedMessage(bq);
         });
 
-        // Quote preview close button
         document.getElementById('quotePreviewClose').addEventListener('click', () => {
             this.clearQuoteReply();
         });
 
-        // Swipe-to-reply on mobile
         this.setupSwipeToReply();
-        // Double-click to reply on desktop
         this.setupDoubleClickToReply();
 
-        // Alt+Left / Alt+Right for channel back/forward navigation
         document.addEventListener('keydown', (e) => {
             if (e.altKey && e.key === 'ArrowLeft') {
                 e.preventDefault();
@@ -1084,9 +960,7 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Mouse back/forward buttons: browser intercepts these before JS can
-        // preventDefault, so we integrate with the History API instead.
-        // pushState is called in _pushNavigation; popstate handles back/forward.
+        // Browsers intercept mouse back/forward before JS, so use the History API (pushState in _pushNavigation).
         window.addEventListener('popstate', (e) => {
             if (e.state && e.state._nym_nav != null) {
                 const targetIndex = e.state._nym_nav;
@@ -1192,8 +1066,7 @@ Object.assign(NYM.prototype, {
                     e.preventDefault();
                     this.sendMessage();
                 } else if (e.key === 'Enter' && e.shiftKey) {
-                    // contenteditable would insert a block element — insert a
-                    // plain newline so the value stays clean text.
+                    // contenteditable would insert a block element; insert a plain newline instead.
                     e.preventDefault();
                     this._insertTextAtCursor(input, '\n');
                 } else if (e.key === 'Escape' && this.pendingEdit) {
@@ -1203,10 +1076,7 @@ Object.assign(NYM.prototype, {
                     e.preventDefault();
                     this.clearQuoteReply();
                 } else if (e.key === 'Backspace' || e.key === 'Delete') {
-                    // A hidden marker has no caret position of its own, so the
-                    // browser's own delete would eat it one invisible character
-                    // at a time. Take the whole marker (or the whole fence)
-                    // instead — see nymRichMarkerDelete.
+                    // Hidden markers have no caret position, so delete the whole marker (nymRichMarkerDelete).
                     if (this._deleteRichMarker(input, e.key === 'Delete')) e.preventDefault();
                 } else if (e.key === 'ArrowUp' && input.value === '') {
                     e.preventDefault();
@@ -1221,14 +1091,11 @@ Object.assign(NYM.prototype, {
         input.addEventListener('input', (e) => {
             // Drop browser filler nodes so :empty placeholder styling works.
             if (!e.target.value && e.target.innerHTML !== '') e.target.innerHTML = '';
-            // Render a just-completed :shortcode: as its custom emoji image.
             this._maybeRenderTypedEmoji(e.target);
-            // ...and a just-completed **bold** / # heading / ``` fence.
             this._maybeRenderRichFormat(e.target);
             this.handleInputChange(e.target.value);
             this.autoResizeTextarea(e.target);
             this.updateTranslateInputBtn();
-            // Signal typing for PMs, groups, and public channels
             if (e.target.value.trim().length > 0) {
                 if (this.inPMMode) {
                     this.handleTypingSignal();
@@ -1238,9 +1105,7 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Use event delegation for channel clicks
         document.getElementById('channelList').addEventListener('click', (e) => {
-            // Handle channel item clicks
             if (e.target.closest('.row-menu-btn')) return;
             const channelItem = e.target.closest('.channel-item');
             if (channelItem && !e.target.closest('.pin-btn') && !e.target.closest('.hide-btn')) {
@@ -1250,54 +1115,45 @@ Object.assign(NYM.prototype, {
                 const channel = channelItem.dataset.channel;
                 const geohash = channelItem.dataset.geohash || '';
 
-                // Don't reload if already in channel
                 if (!nym.inPMMode &&
                     channel === nym.currentChannel &&
                     geohash === nym.currentGeohash) {
                     return;
                 }
 
-                // Add debounce to prevent double-clicks
+                // Debounce double-clicks.
                 if (channelItem.dataset.clicking === 'true') return;
                 channelItem.dataset.clicking = 'true';
 
                 nym.switchChannel(channel, geohash);
 
-                // Reset click flag after a short delay
                 setTimeout(() => {
                     delete channelItem.dataset.clicking;
                 }, 1000);
             }
         });
 
-        // Global click handler for closing dropdowns and modals
         document.addEventListener('click', (e) => {
-            // Close command palette if clicking outside
             if (!e.target.closest('#commandPalette') && !e.target.closest('#messageInput')) {
                 this.hideCommandPalette();
             }
 
-            // Close emoji autocomplete if clicking outside
             if (!e.target.closest('#emojiAutocomplete') && !e.target.closest('#messageInput')) {
                 this.hideEmojiAutocomplete();
             }
 
-            // Close \ kaomoji autocomplete if clicking outside
             if (!e.target.closest('#kaomojiAutocomplete') && !e.target.closest('#messageInput')) {
                 this.hideKaomojiAutocomplete();
             }
 
-            // Close # channel autocomplete if clicking outside
             if (!e.target.closest('#channelAutocomplete') && !e.target.closest('#messageInput')) {
                 this.hideChannelAutocomplete();
             }
 
-            // Close @ mention autocomplete if clicking outside
             if (!e.target.closest('#autocompleteDropdown') && !e.target.closest('#messageInput')) {
                 this.hideAutocomplete();
             }
 
-            // Close enhanced emoji modal if clicking outside
             if (!e.target.closest('.enhanced-emoji-modal') &&
                 !e.target.closest('.reaction-btn') &&
                 !e.target.closest('.add-reaction-btn') &&
@@ -1308,13 +1164,11 @@ Object.assign(NYM.prototype, {
                 this.closeEnhancedEmojiModal();
             }
 
-            // Close GIF picker if clicking outside
             if (!e.target.closest('.gif-picker') &&
                 !e.target.closest('.icon-btn[title="GIF"]')) {
                 this.closeGifPicker();
             }
 
-            // Close reactors/readers modal if clicking outside
             if (!e.target.closest('.reactors-modal') &&
                 !e.target.closest('.reaction-badge')) {
                 this.closeReactorsModal();
@@ -1329,23 +1183,19 @@ Object.assign(NYM.prototype, {
                 if (typeof this.closeTimestampPopup === 'function') this.closeTimestampPopup();
             }
 
-            // Handle command palette item click
             const commandItem = e.target.closest('.command-item');
             if (commandItem && !commandItem.classList.contains('kaomoji-item')) {
                 this.selectCommand(commandItem);
             }
         });
 
-        // Anchored popups are positioned against a specific message; once that
-        // message scrolls they'd float out of place, so dismiss them on scroll.
-        // Capture phase so scroll events from inner containers are caught too.
+        // Anchored popups dismiss on scroll; capture phase catches inner containers too.
         document.addEventListener('scroll', () => {
             if (this.reactorsModal && typeof this.closeReactorsModal === 'function') this.closeReactorsModal();
             if (this.readersModal && typeof this.closeReadersModal === 'function') this.closeReadersModal();
             if (this._pollVotersModal && typeof this.closePollVotersModal === 'function') this.closePollVotersModal();
         }, { passive: true, capture: true });
 
-        // File input
         document.getElementById('fileInput').addEventListener('change', (e) => {
             if (e.target.files && e.target.files.length) {
                 this.uploadImage(Array.from(e.target.files));
@@ -1353,7 +1203,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Clipboard paste — auto-upload images/videos pasted into the message input
         document.getElementById('messageInput').addEventListener('paste', (e) => {
             const items = e.clipboardData && e.clipboardData.items;
             if (items) {
@@ -1370,8 +1219,7 @@ Object.assign(NYM.prototype, {
                     return;
                 }
             }
-            // Plain-text paste — strip formatting so the contenteditable input
-            // never accumulates foreign HTML.
+            // Plain-text paste so the contenteditable never accumulates foreign HTML.
             const text = e.clipboardData && e.clipboardData.getData('text/plain');
             if (text) {
                 e.preventDefault();
@@ -1379,7 +1227,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // P2P File input - auto-detect torrent files vs regular files
         document.getElementById('p2pFileInput').addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
                 const file = e.target.files[0];
@@ -1388,11 +1235,11 @@ Object.assign(NYM.prototype, {
                 } else {
                     this.shareP2PFile(file);
                 }
-                e.target.value = ''; // Reset for next selection
+                e.target.value = '';
             }
         });
 
-        // Long-press Send button (2s) for pseudonymous send (Nostr login users only)
+        // Long-press Send (2s) for pseudonymous send (Nostr login users only).
         const sendBtn = document.getElementById('sendBtn');
         let sendLongPressTimer = null;
         let sendLongPressFired = false;
@@ -1456,9 +1303,7 @@ Object.assign(NYM.prototype, {
         sendBtn.addEventListener('touchcancel', cancelSendLongPress);
         sendBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
 
-        // Long-press on messages to show quick emoji reaction popup. Bound to
-        // .main-content so it covers both the single chat view and every
-        // column (modals live outside .main-content, so they're safe).
+        // Bound to .main-content to cover single view and every column; modals live outside it.
         const messagesEl = document.querySelector('.main-content') || document.getElementById('messagesContainer');
         const _dimScroller = (el) => el && el.closest('.messages-container');
         let msgLongPressTimer = null;
@@ -1471,7 +1316,6 @@ Object.assign(NYM.prototype, {
             if (!messageId) return;
             window.nymHapticTap && window.nymHapticTap();
 
-            // Build the 6 emojis to show: recently used + defaults
             const defaultEmojis = ['👍', '❤️', '😂', '🔥', '👎', '😮'];
             let quickEmojis = [];
 
@@ -1489,10 +1333,8 @@ Object.assign(NYM.prototype, {
                 quickEmojis = defaultEmojis.slice(0, 6);
             }
 
-            // Remove any existing quick react popup
             document.querySelectorAll('.quick-react-popup, .quick-context-menu').forEach(el => el.remove());
 
-            // Highlight the long-pressed message and dim the others
             document.querySelectorAll('.messages-container.has-long-press-highlight').forEach(el => el.classList.remove('has-long-press-highlight'));
             document.querySelectorAll('.message.long-press-highlight').forEach(el => el.classList.remove('long-press-highlight'));
             const _dimEl = _dimScroller(msgEl);
@@ -1515,15 +1357,13 @@ Object.assign(NYM.prototype, {
                     </svg>
                 </button>`;
 
-            // Position near the long-press point
             const msgRect = msgEl.getBoundingClientRect();
             popup.style.position = 'fixed';
 
-            // Position above the message, centered on press point
             const clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : msgRect.left + msgRect.width / 2);
             const clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : msgRect.top);
 
-            // Append popup offscreen first to measure its actual rendered size
+            // Append offscreen first to measure its rendered size.
             popup.style.position = 'fixed';
             popup.style.visibility = 'hidden';
             document.body.appendChild(popup);
@@ -1539,7 +1379,6 @@ Object.assign(NYM.prototype, {
             popup.style.left = left + 'px';
             popup.style.top = top + 'px';
 
-            // Build the quick context menu (Slap, Hug, Zap, Quote, Copy)
             const targetPubkey = msgEl.dataset.pubkey || '';
             const baseAuthor = this.resolveDisplayNym(targetPubkey, msgEl.dataset.author || '');
             const targetBaseNym = this.stripPubkeySuffix(baseAuthor);
@@ -1701,7 +1540,6 @@ Object.assign(NYM.prototype, {
                 quickCtxMenu.style.top = ctxTop + 'px';
             }
 
-            // Trigger animation
             requestAnimationFrame(() => {
                 popup.classList.add('active');
                 if (quickCtxMenu) quickCtxMenu.classList.add('active');
@@ -1742,7 +1580,6 @@ Object.assign(NYM.prototype, {
                 });
             }
 
-            // Handle expand button to open full reaction picker
             const expandBtn = popup.querySelector('.quick-react-expand');
             const openFullPicker = (ev) => {
                 ev.preventDefault();
@@ -1752,7 +1589,6 @@ Object.assign(NYM.prototype, {
                 closeAll();
                 removeCloseListeners();
 
-                // Create a temporary button for positioning the full picker
                 const tempButton = document.createElement('button');
                 tempButton.style.position = 'fixed';
                 tempButton.style.left = popupLeft;
@@ -1767,7 +1603,6 @@ Object.assign(NYM.prototype, {
             expandBtn.addEventListener('click', openFullPicker);
             expandBtn.addEventListener('touchend', openFullPicker);
 
-            // Handle emoji clicks via both click and touchend for reliability
             popup.addEventListener('click', async (ev) => {
                 ev.stopPropagation();
                 const btn = ev.target.closest('.quick-react-emoji');
@@ -1779,7 +1614,6 @@ Object.assign(NYM.prototype, {
                 this.addToRecentEmojis(emoji);
             });
 
-            // Also handle touch on emoji buttons directly for mobile
             popup.querySelectorAll('.quick-react-emoji').forEach(btn => {
                 btn.addEventListener('touchend', async (ev) => {
                     ev.preventDefault();
@@ -1792,9 +1626,7 @@ Object.assign(NYM.prototype, {
                 });
             });
 
-            // Close on click/tap outside. Ignore any close events that fire
-            // within 400ms of opening — these come from the same long-press
-            // gesture (mouseup + click, or touchend) that triggered the popup.
+            // Ignore closes within 400ms of opening; they come from the opening long-press gesture.
             const openedAt = Date.now();
             const closePopup = (ev) => {
                 if (popup.contains(ev.target)) return;
@@ -1813,12 +1645,9 @@ Object.assign(NYM.prototype, {
                 document.removeEventListener('touchstart', closePopup);
                 document.removeEventListener('scroll', closeOnScroll, { capture: true });
             };
-            // Use mousedown/touchstart (not mouseup/click) so the popup
-            // closes on the start of a new gesture, not the end of the
-            // opening gesture.
+            // Close on the start of a new gesture, not the end of the opening one.
             document.addEventListener('mousedown', closePopup);
             document.addEventListener('touchstart', closePopup);
-            // Anchored to a message — dismiss if the list scrolls underneath it.
             document.addEventListener('scroll', closeOnScroll, { passive: true, capture: true });
         };
 
@@ -1827,7 +1656,7 @@ Object.assign(NYM.prototype, {
         const MSG_LONG_PRESS_MOVE_THRESHOLD = 5;
 
         messagesEl.addEventListener('mousedown', (e) => {
-            // Only trigger on primary (left) mouse button; ignore right/middle clicks
+            // Primary button only.
             if (e.button !== 0) return;
             if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
@@ -1862,7 +1691,6 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Cancel long-press react if the pointer moves (e.g. text selection drag)
         messagesEl.addEventListener('mousemove', (e) => {
             if (!msgLongPressTimer) return;
             const dx = e.clientX - msgLongPressStartX;
@@ -1871,7 +1699,6 @@ Object.assign(NYM.prototype, {
                 cancelMsgLongPress();
             }
         });
-        // Cancel long-press react if a swipe gesture is detected
         messagesEl.addEventListener('touchmove', cancelMsgLongPress, { passive: true });
         messagesEl.addEventListener('mouseup', cancelMsgLongPress);
         messagesEl.addEventListener('mouseleave', cancelMsgLongPress);
@@ -1887,28 +1714,23 @@ Object.assign(NYM.prototype, {
     },
 
     handleInputChange(value) {
-        // Use cursor position so autocomplete works mid-sentence
         const inputEl = document.getElementById('messageInput');
         const cursor = (inputEl && typeof inputEl.selectionStart === 'number')
             ? inputEl.selectionStart
             : value.length;
         const before = value.substring(0, cursor);
 
-        // Check for @ mentions first (token immediately to the left of cursor)
         const mentionMatch = before.match(/(?:^|\s)@([^\s]*)$/);
         const isMentionActive = mentionMatch !== null;
 
-        // Check for # channel references (# at start or after whitespace, followed by non-space chars)
         const hashMatch = before.match(/(?:^|\s)#([^\s]*)$/);
         const isChannelActive = hashMatch !== null;
 
-        // Check for \ kaomoji picker (\ at start or after whitespace)
         const kaomojiMatch = before.match(/(?:^|\s)\\([a-z]*)$/i);
 
         if (isMentionActive) {
             const search = mentionMatch[1];
             this.showAutocomplete(search);
-            // Hide emoji autocomplete and channel autocomplete
             this.hideEmojiAutocomplete();
             this.hideChannelAutocomplete();
             this.hideKaomojiAutocomplete();
@@ -1928,9 +1750,7 @@ Object.assign(NYM.prototype, {
             this.hideChannelAutocomplete();
             this.hideKaomojiAutocomplete();
 
-            // Only check for emoji autocomplete when not in a mention context.
-            // Match a :shortcode token immediately to the left of the cursor
-            // so it works mid-sentence (e.g., "hello :thum| world").
+            // Match a :shortcode token left of the cursor so it works mid-sentence.
             const emojiMatch = before.match(/(?:^|\s):([a-z0-9_+-]*)$/i);
             if (emojiMatch) {
                 this.showEmojiAutocomplete(emojiMatch[1]);
@@ -1939,7 +1759,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Check for commands (/ for local commands, ? for bot commands)
         if (value.startsWith('/')) {
             this.showCommandPalette(value);
         } else if (value.startsWith('?')) {
@@ -1967,9 +1786,7 @@ Object.assign(NYM.prototype, {
         if (container) container.classList.toggle('composer-popout', expand);
         textarea.style.height = '';
         this._refreshComposerOffsets();
-        // Every path that mutates the draft (typing, send, edit, upload, quote)
-        // ends up here, so it's the one hook the attachment strip needs
-        // (rich-compose.js).
+        // Every draft mutation ends up here, so it's the hook the attachment strip needs (rich-compose.js).
         if (textarea.id === 'messageInput') {
             if (typeof this.updateComposerMediaPreviews === 'function') this.updateComposerMediaPreviews();
         }
@@ -1985,15 +1802,11 @@ Object.assign(NYM.prototype, {
         const expanded = !!(container && container.classList.contains('composer-popout'));
         const overhang = expanded ? Math.max(0, input.offsetHeight - base) : 0;
         wrapper.style.setProperty('--popout-overhang', overhang + 'px');
-        // The formatting toolbar / attachment strip stack (rich-compose.js)
-        // sits between the field and the quote/edit chips, so everything anchored
-        // at `bottom:100%` above it has to clear its height.
+        // The toolbar/attachment stack sits between the field and the chips, so `bottom:100%` anchors must clear it.
         const panels = document.getElementById('composerPanels');
         const panelsH = (panels && panels.offsetHeight > 0) ? panels.offsetHeight + 8 : 0;
         wrapper.style.setProperty('--composer-panels-h', panelsH + 'px');
-        // The upload panel sits in the same stack, between those and the
-        // quote/edit chip, so it both clears the panels and has to be cleared
-        // by whatever is above it.
+        // The upload panel sits in the same stack, so it clears the panels and is cleared by what's above.
         const up = document.getElementById('uploadProgress');
         const uploadH = (up && up.offsetHeight > 0) ? up.offsetHeight + 8 : 0;
         wrapper.style.setProperty('--composer-upload-h', uploadH + 'px');
@@ -2005,8 +1818,6 @@ Object.assign(NYM.prototype, {
             (overhang + panelsH + uploadH + (previewH ? previewH + 8 : 0)) + 'px');
     },
 
-    // Paint the context menu's full-key row plus the labels on its two buttons
-    // for the currently selected format.
     _renderContextMenuPubkey(pubkey) {
         const el = document.getElementById('ctxFullPubkey');
         const copyLabel = document.getElementById('ctxCopyPubkeyLabel');
@@ -2026,8 +1837,7 @@ Object.assign(NYM.prototype, {
         el.style.display = '';
     },
 
-    // Keep the nick-edit modal's slide-out in step when the format is switched
-    // from the context menu (and vice versa) — one preference, one truth.
+    // Keep the nick-edit slide-out in step with the context menu's format choice.
     _refreshPubkeySlideoutFormat() {
         const value = document.getElementById('pubkeySlideoutValue');
         const label = document.getElementById('pubkeySlideoutLabel');
@@ -2037,7 +1847,6 @@ Object.assign(NYM.prototype, {
         const isNpub = this.getPubkeyDisplayFormat() === 'npub';
         if (label) label.textContent = isNpub ? 'Full Public Key (npub)' : 'Full Public Key (hex)';
         if (formatLabel) formatLabel.textContent = isNpub ? 'Show hex' : 'Show npub';
-        // Same wording as the context menu, so the two read as one control.
         if (copyBtn) copyBtn.textContent = isNpub ? 'Copy npub' : 'Copy hex pubkey';
         if (value && this.pubkey) value.textContent = this.formatPubkeyForDisplay(this.pubkey);
     },
@@ -2047,26 +1856,17 @@ Object.assign(NYM.prototype, {
         return code ? ':' + code + ':' : (img.getAttribute('alt') || '');
     },
 
-    // The plain-text a single atomic inline input node serializes to, or null if
-    // the node isn't atomic. Atomic = a custom-emoji <img> (-> its shortcode) or
-    // a mention chip (-> the "@base#suffix" text it stands in for). Atomic nodes
-    // are treated as one indivisible unit by the caret/length math below, exactly
-    // like the emoji images already were.
+    // Atomic nodes (emoji <img>, mention chip) count as one unit in the caret/length math; null otherwise.
     _richAtomicToken(node) {
         if (!node || node.nodeType !== Node.ELEMENT_NODE) return null;
         if (node.tagName === 'IMG') return this._emojiTokenForImg(node);
         if (node.dataset && typeof node.dataset.mention === 'string') return node.dataset.mention;
-        // A hidden markdown marker: it renders nothing, but still stands for the
-        // delimiter it replaced, so the draft round-trips and the caret offsets
-        // stay in the same coordinate system as the text the user sends.
+        // Hidden markers still stand for their delimiter so the draft round-trips and offsets stay aligned.
         if (node.dataset && typeof node.dataset.mark === 'string') return node.dataset.mark;
         return null;
     },
 
-    // Build the contenteditable=false mention chip shown in the composer for an
-    // injected @base#suffix mention: avatar + @name + suffix + flair. It
-    // serializes back to its data-mention text ("@base#suffix") when the message
-    // is read for sending.
+    // Serializes back to its data-mention text ("@base#suffix") when the message is read for sending.
     _buildInputMentionChip(base, sfx, pubkey, rawText) {
         const span = document.createElement('span');
         span.className = 'input-mention';
@@ -2105,7 +1905,7 @@ Object.assign(NYM.prototype, {
                 if (atomTok != null) {
                     out += atomTok;
                 } else if (node.tagName === 'BR') {
-                    // A lone trailing <br> is browser filler — ignore it.
+                    // A lone trailing <br> is browser filler; ignore it.
                     if (i !== nodes.length - 1) out += '\n';
                 } else {
                     out += this._serializeRichInput(node);
@@ -2122,15 +1922,13 @@ Object.assign(NYM.prototype, {
             if (atomTok != null) return atomTok.length;
             if (node.tagName === 'BR') return 1;
         }
-        // Element wrappers and document fragments (from cloneContents) — sum children.
         let n = 0;
         const kids = node.childNodes;
         if (kids) for (let i = 0; i < kids.length; i++) n += this._richNodeLength(kids[i]);
         return n;
     },
 
-    // Leaf text: custom-emoji shortcodes and mentions become chips, everything
-    // else stays plain text so the caret model matches the serialized value.
+    // Emoji shortcodes and mentions become chips; everything else stays plain so the caret model matches.
     _renderRichPlain(text, frag) {
         const pushText = (s) => { if (s) frag.appendChild(document.createTextNode(s)); };
         const re = /:([a-zA-Z0-9_]+):|@([^\s@#]+)#([0-9a-f]{4})/gi;
@@ -2163,9 +1961,7 @@ Object.assign(NYM.prototype, {
         pushText(text.slice(last));
     },
 
-    // True when the caret/selection touches one of a node's reveal ranges — for
-    // an inline construct its whole span, for a heading or quote just its line
-    // prefix, for a fenced block just the two fences.
+    // Inline construct: its whole span; heading/quote: the line prefix; fenced block: the two fences.
     _richIsRevealed(node, sel) {
         if (!sel || !node.reveal) return false;
         const s = Math.min(sel.start, sel.end), e = Math.max(sel.start, sel.end);
@@ -2176,10 +1972,7 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    // A markdown delimiter. Hidden it carries its source text in data-mark and
-    // is atomic; revealed it holds the same text as real, dimmed content the
-    // caret can move through and delete. Both spellings have the same model
-    // length, so toggling one never moves the caret.
+    // Hidden and revealed spellings have the same model length, so toggling never moves the caret.
     _richMarkNode(src, shown) {
         const span = document.createElement('span');
         span.className = shown ? 'rich-mark rich-mark-shown' : 'rich-mark';
@@ -2207,10 +2000,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // A fingerprint of the rendered structure: the shape of the tree plus which
-    // markers are revealed, deliberately without offsets. Typing inside a run
-    // shifts every offset after it but changes nothing the DOM needs, so leaving
-    // them out is what keeps ordinary keystrokes from re-rendering the field.
+    // Omits offsets on purpose so ordinary keystrokes don't re-render the field.
     _richTreeSig(nodes, sel) {
         let out = '';
         for (let i = 0; i < nodes.length; i++) {
@@ -2241,18 +2031,7 @@ Object.assign(NYM.prototype, {
         el.appendChild(frag);
     },
 
-    // A caret at the end of a formatted run has two spellings — the last
-    // position inside the wrapper, and the first position after it — and the
-    // browser resolves the ambiguity by choosing INSIDE. That is the wrong one
-    // here: the wrapper ends with a hidden closing marker, so typing there put
-    // the new text between the body and the marker. Finishing "**bold**" and
-    // carrying on typing produced "**bold x**" — the run swallowed everything
-    // written after it, and the closing marker never moved.
-    //
-    // An empty text node after each wrapper gives that outside position a real
-    // home to land in. It renders as nothing, serializes as nothing and
-    // measures zero, so it changes what the caret does and not what the draft
-    // says.
+    // Empty text nodes after wrappers give the caret an outside position, so typing after a run isn't swallowed.
     _richPadBoundaries(frag) {
         const kids = [...frag.childNodes];
         for (const child of kids) {
@@ -2264,10 +2043,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Re-render only when the formatting the field should show actually
-    // changed: a run was completed or broken, or the caret crossed into or out
-    // of one and its markers need to appear or disappear. The caret is restored
-    // by model offset, which the hidden markers preserve exactly.
+    // Re-render only when displayed formatting changes; the caret is restored by model offset.
     _maybeRenderRichFormat(el) {
         if (!el || el._richComposing) return;
         if (typeof this._richParseFormat !== 'function') return;
@@ -2296,22 +2072,11 @@ Object.assign(NYM.prototype, {
             + this._richOutwardSkip(el, container, offsetInContainer);
     },
 
-    // How many model characters sit between this DOM position and the outside
-    // of the run it ends.
-    //
-    // A hidden closing marker occupies no screen space, so "just before it" and
-    // "just after it" are the same pixel and the user cannot mean one rather
-    // than the other. They are different model offsets, though, and the browser
-    // always reports the inner one. Reading it literally puts the caret inside
-    // a run the user has already closed, so the next character typed lands
-    // between the text and its own closing marker.
-    //
-    // Resolving outward is the only choice that matches what was typed: writing
-    // "**bold**" ends the bold, so what follows is not bold.
+    // The browser reports the inner offset at a hidden closing marker; resolve outward to match what was typed.
     _richOutwardSkip(el, container, offsetInContainer) {
         let cur;
         if (container.nodeType === Node.TEXT_NODE) {
-            // Only at the very end of the text — anywhere else is unambiguous.
+            // Only at the very end of the text; anywhere else is unambiguous.
             if (offsetInContainer !== container.nodeValue.length) return 0;
             cur = container;
         } else if (container.nodeType === Node.ELEMENT_NODE) {
@@ -2386,9 +2151,7 @@ Object.assign(NYM.prototype, {
         el._savedSelStart = 0;
         el._savedSelEnd = 0;
 
-        // The caret only lives in window.getSelection() while the input is
-        // focused; opening the emoji picker moves focus away. Remember the last
-        // in-input caret so insertions land where the user left off.
+        // Remember the last in-input caret; the emoji picker moves focus away.
         const saveSel = () => {
             const sel = window.getSelection();
             if (!sel || !sel.rangeCount) return;
@@ -2398,8 +2161,7 @@ Object.assign(NYM.prototype, {
             const e = self._richSelectionOffset(el, r.endContainer, r.endOffset);
             if (s != null) el._savedSelStart = s;
             if (e != null) el._savedSelEnd = e;
-            // Moving the caret is also what reveals and re-hides the markdown
-            // markers around it, so the same hooks drive the live formatting.
+            // Caret moves also reveal/hide markdown markers.
             self._maybeRenderRichFormat(el);
         };
         el.addEventListener('keyup', saveSel);
@@ -2407,16 +2169,7 @@ Object.assign(NYM.prototype, {
         el.addEventListener('input', saveSel);
         el.addEventListener('focus', saveSel);
 
-        // Typed text goes through the model, not through the browser's own
-        // insertion. Left to itself the browser puts a character typed at the
-        // end of a run INSIDE the run's wrapper — before the hidden closing
-        // marker — so "**bold**" followed by " x" became "**bold x**": the run
-        // silently swallowed everything written after it. Applying the edit to
-        // the draft and re-rendering means the model decides where a character
-        // lands, and the DOM only ever reflects it.
-        //
-        // IME composition is left alone: it needs to write into the live DOM,
-        // and compositionend re-renders once the word is committed.
+        // Apply typed text through the model so it can't land inside a run's wrapper; IME composition is left alone.
         el.addEventListener('beforeinput', (e) => {
             if (el._richComposing) return;
             const kind = e.inputType;
@@ -2424,28 +2177,13 @@ Object.assign(NYM.prototype, {
                 && kind !== 'insertParagraph') return;
             const insert = kind === 'insertText' ? (e.data == null ? '' : e.data) : '\n';
             if (!insert) return;
-            // Rebuilding the field costs time proportional to the whole draft
-            // — 26ms a keystroke on a 5000-character one — so a draft with no
-            // formatting in it at all takes the browser's own insertion
-            // instead. That is safe for exactly the reason it is fast: with no
-            // hidden marker anywhere in the field there is no ambiguous
-            // position for the caret to be in, so there is nothing for the
-            // browser to resolve the wrong way. Typing the marker that starts
-            // a run puts one there, and from that keystroke on this path is
-            // taken again.
-            //
-            // Narrower than testing the caret's own position, and deliberately
-            // so: "is the caret next to a hidden marker" turned out to have
-            // more spellings than it first appears — the browser reports the
-            // inner one, we place the outer one, and a line break sits next to
-            // a <br> that is neither. This condition has one.
+            // Fast path: with no hidden marker in the field the browser's own insertion is safe.
             if (kind === 'insertText' && !el.querySelector('.rich-mark')) return;
             e.preventDefault();
             self._insertTextAtCursor(el, insert);
         });
 
-        // Never re-render mid-composition: replacing the nodes an IME is
-        // composing into cancels the composition on every platform.
+        // Never re-render mid-composition: it cancels the IME composition.
         el.addEventListener('compositionstart', () => { el._richComposing = true; });
         el.addEventListener('compositionend', () => {
             el._richComposing = false;
@@ -2508,8 +2246,7 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Applies the marker-aware delete when the caret is against a hidden block
-    // marker. Returns true when it handled the key.
+    // Returns true when it handled the key.
     _deleteRichMarker(el, forward) {
         if (!el || el.disabled || typeof this._richMarkerDelete !== 'function') return false;
         const start = el.selectionStart, end = el.selectionEnd;
@@ -2528,10 +2265,7 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // When the caret sits just after a complete :shortcode: for a known custom
-    // emoji, re-render so it becomes an inline image. The :shortcode: token and
-    // its emoji image share the same model length, so the caret offset is
-    // unchanged by the re-render.
+    // Shortcode and image share the same model length, so the caret offset is unchanged.
     _maybeRenderTypedEmoji(el) {
         if (!this.customEmojis || this.customEmojis.size === 0) return;
         const caret = el.selectionStart;
@@ -2542,7 +2276,6 @@ Object.assign(NYM.prototype, {
         el.selectionStart = el.selectionEnd = caret;
     },
 
-    // Insert plain text at the caret (used for Shift+Enter newlines and pastes)
     _insertTextAtCursor(el, text) {
         const start = el.selectionStart;
         const end = el.selectionEnd;
@@ -2559,10 +2292,8 @@ Object.assign(NYM.prototype, {
         if (gifPicker.classList.contains('active')) {
             this.closeGifPicker();
         } else {
-            // Close emoji picker if open
             this.closeEnhancedEmojiModal();
 
-            // Show GIF picker
             this.showGifPicker();
         }
     },
@@ -2579,7 +2310,7 @@ Object.assign(NYM.prototype, {
 <div class="gif-attribution">Powered by <a href="https://giphy.com" target="_blank">GIPHY</a></div>
 `;
 
-        // Reparent to <body> so position:fixed anchors to the viewport
+        // Reparent to <body> so position:fixed anchors to the viewport.
         const button = document.querySelector('.icon-btn.input-btn[title="GIF"]');
         document.body.appendChild(gifPicker);
         gifPicker.style.position = 'fixed';
@@ -2599,10 +2330,8 @@ Object.assign(NYM.prototype, {
 
         gifPicker.classList.add('active');
 
-        // Load trending GIFs by default
         this.loadTrendingGifs();
 
-        // Add search functionality
         const searchInput = gifPicker.querySelector('#gifSearchInput');
         searchInput.addEventListener('input', (e) => {
             clearTimeout(this.gifSearchTimeout);
@@ -2681,7 +2410,6 @@ Object.assign(NYM.prototype, {
         else favs.unshift({ url, title: title || '' });
         this.saveFavoriteGifs();
 
-        // Re-render the current view from cached results so favorites/stars update
         if (this._lastGifRender) {
             this.displayGifs(this._lastGifRender.gifs, { showFavorites: this._lastGifRender.showFavorites });
         }
@@ -2739,16 +2467,13 @@ Object.assign(NYM.prototype, {
         const end = input.selectionEnd;
         const text = input.value;
 
-        // Insert GIF URL at cursor position
         const newText = text.substring(0, start) + gifUrl + text.substring(end);
         input.value = newText;
 
-        // Position cursor after the inserted URL
         const newPosition = start + gifUrl.length;
         input.selectionStart = input.selectionEnd = newPosition;
         input.focus();
 
-        // Close the GIF picker
         this.closeGifPicker();
     },
 

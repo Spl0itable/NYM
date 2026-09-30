@@ -1,5 +1,3 @@
-// messages.js - Message rendering, formatting, sending, edits, quotes, swipe-to-reply, virtual scroll
-
 const _RX_REGEX_ESCAPE = /[.*+?^${}()|[\]\\]/g;
 const _RX_HTML_TAG = /<[^>]*>/g;
 const _RX_DUP_SUFFIX = /@([^@#\s]+)#([0-9a-f]{4})#\2\b/gi;
@@ -38,15 +36,13 @@ const WOT_SPAM_GATE = false;
 
 Object.assign(NYM.prototype, {
 
-    // Millisecond sort key for a message. NYM clients stamp outgoing events with
-    // an 'ms' tag (Date.now()) since Nostr created_at only has second resolution.
-    // Falls back to the second boundary so events without the tag still order sanely.
+    // Nostr created_at has second resolution, so NYM clients add an 'ms' tag; falls back to the second boundary.
     _messageMs(m) {
         if (m && Number.isFinite(m._ms) && m._ms > 0) return m._ms;
         return (m && m.created_at || 0) * 1000;
     },
 
-    // Reads the 'ms' tag off an event/rumor, capped at now to absorb clock skew.
+    // Capped at now to absorb clock skew.
     _extractEventMs(eventOrRumor, createdAtSec) {
         const tags = eventOrRumor && eventOrRumor.tags;
         if (Array.isArray(tags)) {
@@ -72,17 +68,14 @@ Object.assign(NYM.prototype, {
         return now;
     },
 
-    // True only when the message has an authentic sub-second 'ms' tag
-    // (not the floor-to-second fallback _extractEventMs synthesises).
+    // True only for an authentic 'ms' tag, not the floor-to-second fallback.
     _hasRealMsTag(m) {
         if (!m || !Number.isFinite(m._ms) || m._ms <= 0) return false;
         const base = (m.created_at || 0) * 1000;
         return m._ms > base;
     },
 
-    // Compare by created_at seconds first so cross-client ordering can't be
-    // flipped by one peer's missing 'ms' tag. Only use sub-second 'ms' when
-    // both messages carry a real tag; otherwise tie-break by arrival seq.
+    // Seconds first so one peer's missing 'ms' tag can't flip order; ms only when both carry it, else arrival seq.
     _compareMessages(a, b) {
         const sa = a.created_at || 0;
         const sb = b.created_at || 0;
@@ -112,9 +105,7 @@ Object.assign(NYM.prototype, {
             lowerText.includes(keyword) || (lowerNick && lowerNick.includes(keyword))
         );
         if (ownKeyword) return true;
-        // Filter packs join the user's own keywords here so every place that
-        // already asks "is this filtered?" picks them up — the alternative is
-        // ten call sites that each have to remember a second question.
+        // Filter packs join the user's keywords here so every filter call site picks them up.
         if (typeof this.hasFilterPackMatch !== 'function') return false;
         if (pubkey) {
             if (pubkey === this.pubkey) return false;
@@ -124,46 +115,34 @@ Object.assign(NYM.prototype, {
         return this.hasFilterPackMatch(text, nickname);
     },
 
-    // Extract conversation context from a quote chain for bot replies
-    // Parses nested quotes (> @Author: text) into an ordered conversation array
     _extractQuoteChain(quoteContext) {
         const conversation = [];
         if (!quoteContext || !quoteContext.text) return conversation;
-        // Use fullText (preserves nested quotes) for bot conversation context
         const rawText = quoteContext.fullText || quoteContext.text;
-        // Parse the quoted text to extract nested quote layers
         const lines = rawText.split('\n');
         let currentAuthor = null;
         let currentText = [];
         for (const line of lines) {
-            // Match quote lines: "> @Author#xxxx: text" or "> continuation"
+            // Quote lines: "> @Author#xxxx: text" or "> continuation"
             const authorMatch = line.match(/^>\s*@([^:]+):\s*(.*)/);
             if (authorMatch) {
-                // Save previous entry if exists
                 if (currentAuthor !== null) {
                     conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
                 }
                 currentAuthor = authorMatch[1].trim();
                 currentText = [authorMatch[2]];
             } else if (line.startsWith('>') && currentAuthor !== null) {
-                // Continuation of current quote
                 currentText.push(line.replace(/^>\s?/, ''));
             } else if (currentAuthor !== null) {
-                // Non-quoted line after quotes — this is the replier's own text
                 conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
                 currentAuthor = null;
                 currentText = [];
             }
         }
-        // Push final entry
         if (currentAuthor !== null) {
             conversation.push({ author: currentAuthor, text: currentText.join('\n').trim() });
         }
-        // If quoteContext has non-quoted text remainder, add it as the replier's text
-        // (this is the previous reply before the current user's input)
-        // The text below the quote is the REPLIER's, not the quoted author's;
-        // tagged as Nymbot's it reached the worker as an assistant turn and
-        // came straight back as an echo.
+        // Text below the quote is the replier's, not Nymbot's, or the worker echoes it back as an assistant turn.
         const nonQuotedText = lines.filter(l => !l.startsWith('>')).join('\n').trim();
         if (nonQuotedText && (conversation.length === 0 || conversation[conversation.length - 1].text !== nonQuotedText)) {
             const senderNym = (this.nym && this.pubkey && typeof this.getPubkeySuffix === 'function')
@@ -171,8 +150,7 @@ Object.assign(NYM.prototype, {
                 : (this.nym || 'nym');
             conversation.push({ author: senderNym, text: nonQuotedText });
         }
-        // Take the wire envelope off Nymbot's own turns; shown it as history
-        // the model writes it itself.
+        // Strip the wire envelope from Nymbot's own turns, or the model imitates it.
         if (typeof this._stripBotEnvelope === 'function') {
             for (const entry of conversation) {
                 if (/^nymbot(?:#[a-f0-9]{4})?$/i.test((entry.author || '').trim())) {
@@ -183,9 +161,7 @@ Object.assign(NYM.prototype, {
         return conversation.filter(e => e.text);
     },
 
-    // Swap an optimistic message's temp id for the real signed event id, and
-    // re-sort if PoW mining shifted created_at out of chronological order
-    // relative to messages that arrived during mining.
+    // Re-sort if PoW mining shifted created_at relative to messages that arrived meanwhile.
     _replaceOptimisticMessage(tempId, signedEvent, storageKey, isPM) {
         const arr = isPM ? this.pmMessages.get(storageKey) : this.messages.get(storageKey);
         if (!arr) return;
@@ -197,8 +173,7 @@ Object.assign(NYM.prototype, {
         msg.created_at = signedEvent.created_at;
         msg.timestamp = new Date(signedEvent.created_at * 1000);
         delete msg._optimistic;
-        // The optimistic row predates mining; the signed event is where the
-        // PoW target first exists.
+        // The signed event is where the PoW target first exists.
         if (typeof this._powTargetFromEvent === 'function') {
             const ownPowTarget = this._powTargetFromEvent(signedEvent);
             if (typeof ownPowTarget === 'number') msg.powTarget = ownPowTarget;
@@ -550,7 +525,7 @@ Object.assign(NYM.prototype, {
             if (this.trustedPubkeys.size > 50000) {
                 this.trustedPubkeys.delete(this.trustedPubkeys.values().next().value);
             }
-            // Trust survives reloads via the meta store
+            // Trust survives reloads via the meta store.
             if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
             if (!silent) this._revealGatedPubkey(pubkey);
         }
@@ -572,7 +547,6 @@ Object.assign(NYM.prototype, {
         this._revealGatedPubkey(pubkey);
     },
 
-    // Insert messages in place
     _revealGatedPubkey(pubkey) {
         const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
         this.messages.forEach((msgs, key) => {
@@ -587,7 +561,6 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (!hadGated) return;
-            // Newly revealed messages now count toward channel sort ordering
             if (maxTime > (this.channelLastActivity.get(key) || 0)) {
                 this.channelLastActivity.set(key, maxTime);
             }
@@ -610,23 +583,20 @@ Object.assign(NYM.prototype, {
     isMentioned(content) {
         if (!content || !this.nym) return false;
 
-        // Strip HTML from nym for comparison
         const cleanNym = this.parseNymFromDisplay(this.nym);
         const mySuffix = this.getPubkeySuffix(this.pubkey);
 
-        // Cached, per-identity pattern (recompiled only when nym/suffix changes)
+        // Cached per identity; recompiled only when nym/suffix changes.
         const nymPattern = _getMentionPattern(cleanNym, mySuffix);
         nymPattern.lastIndex = 0;
 
-        // Strip HTML from content and deduplicate suffixes for mention detection
         let cleanContent = content.replace(_RX_HTML_TAG, '');
         cleanContent = cleanContent.replace(_RX_DUP_SUFFIX, '@$1#$2');
 
-        // A quote-reply addressed to us counts as a mention even though the
-        // "> @ourNym: ..." line is itself a blockquote.
+        // A quote-reply to us counts as a mention even though its line is a blockquote.
         if (_getQuoteToMePattern(cleanNym, mySuffix).test(cleanContent)) return true;
 
-        // Strip blockquoted lines so mentions inside quoted text don't trigger notifications
+        // Strip blockquoted lines so mentions inside quoted text don't notify.
         cleanContent = cleanContent.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n');
 
         return nymPattern.test(cleanContent);
@@ -644,7 +614,6 @@ Object.assign(NYM.prototype, {
     },
 
     displayMessage(message) {
-        // Check if message has been deleted (kind 5)
         if (this.deletedEventIds.has(message.id) ||
             (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId)) ||
             (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(message))) {
@@ -654,7 +623,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Apply pending edits that arrived before the original message
+        // Apply pending edits that arrived before the original message.
         const editLookupId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         const pendingEdit = (message.pubkey && this.editedMessages.get(`${message.pubkey}:${editLookupId}`))
             || this.editedMessages.get(editLookupId);
@@ -663,22 +632,18 @@ Object.assign(NYM.prototype, {
             message.isEdited = true;
         }
 
-        // Check if message is from a blocked user (from stored state OR by pubkey)
         if (message.blocked || this.blockedUsers.has(message.pubkey)) {
-            return; // Don't display blocked messages
+            return;
         }
 
-        // Column view mode routes each message to its own column rather
-        // than the single active conversation; null means no open column for it.
+        // Column view routes each message to its own column; null means no open column for it.
         let _cvContainer = null;
 
-        // Thread panel rendering: the message is already stored and routed —
-        // just build its element into the panel container (threads.js).
+        // Thread panel rendering: the message is already stored and routed (threads.js).
         const _threadRender = message._threadRender === true;
         const _threadTarget = _threadRender ? this._threadRenderTarget : null;
         if (_threadRender && !_threadTarget) return;
 
-        // Handle PM messages differently
         if (_threadRender) {
             // Storage and view routing are skipped in thread render mode.
         } else if (message.isPM) {
@@ -686,32 +651,26 @@ Object.assign(NYM.prototype, {
                 _cvContainer = this._cvListForKey(message.conversationKey);
                 if (!_cvContainer) return;
             } else if (message.isGroup) {
-                // Group message: only display when viewing the correct group
                 if (!this.inPMMode || this.currentGroup !== message.groupId) return;
                 if (message.conversationKey !== this.getGroupConversationKey(this.currentGroup)) return;
             } else {
-                // 1:1 PM: only display when viewing the correct conversation
                 if (!this.inPMMode || this.currentPM !== message.conversationPubkey) return;
                 const currentConversationKey = this.getPMConversationKey(this.currentPM);
                 if (message.conversationKey !== currentConversationKey) return;
             }
         } else {
-            // Regular geohash channel message
             const storageKey = message.geohash ? `#${message.geohash}` : message.channel;
 
             const isGated = WOT_SPAM_GATE && this._clientGatesActive() && !message.isOwn && !this.isFriend(message.pubkey) &&
                 !this.nymchatPubkeys.has(message.pubkey) &&
                 this._isPubkeyGated(message.pubkey);
 
-            // Always store channel messages in memory regardless of current view
             if (!this.messages.has(storageKey)) {
                 this.messages.set(storageKey, []);
             }
 
-            // Check if message already exists
             const exists = this.messages.get(storageKey).some(m => m.id === message.id);
             if (!exists) {
-                // Track most recent message time for channel sort ordering
                 const msgTime = (message.created_at || 0) * 1000;
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
                 if (!isGated && msgTime > prevActivity) {
@@ -719,38 +678,28 @@ Object.assign(NYM.prototype, {
                     if (typeof this._persistUnreadCounts === 'function') {
                         this._persistUnreadCounts();
                     }
-                    // Throttled sort so discovered/historical channels order by activity
                     if (typeof this._scheduleChannelSort === 'function') {
                         this._scheduleChannelSort();
                     }
                 }
 
-                // Add message in chronological order (created_at seconds, then the
-                // millisecond 'ms' stamp, then arrival sequence) via binary insert
-                // into the already-sorted array — no full re-sort per event.
+                // Binary insert by created_at, 'ms' stamp, then arrival sequence; no full re-sort per event.
                 this._insertMessageSorted(this.messages.get(storageKey), message);
 
                 const messages = this.messages.get(storageKey);
                 if (messages && messages.length > this.channelMessageLimit) {
                     let trimmed = messages.slice(-this.channelMessageLimit);
-                    // Keep thread roots the kept window still references, so
-                    // a busy channel scrolling past the cap doesn't break its
-                    // threads live (same pinning the persisted window gets in
-                    // persistChannelMessages).
+                    // Keep thread roots the kept window still references so busy channels don't break live threads.
                     if (typeof this._withPinnedThreadRoots === 'function') {
                         trimmed = this._withPinnedThreadRoots(messages, trimmed, m => m.id);
                     }
                     this.messages.set(storageKey, trimmed);
                 }
 
-                // If a zap notification is waiting for this message's text,
-                // refresh the modal so the body shows the actual content.
                 if (typeof this._maybeRefreshZapNotif === 'function') {
                     this._maybeRefreshZapNotif(message.id);
                 }
 
-                // Persist to IndexedDB (debounced) so this channel's
-                // history is available instantly on next launch.
                 this.persistChannelMessages(storageKey);
 
                 if (this.geohashMap && message.geohash && this.isValidGeohash && this.isValidGeohash(message.geohash)) {
@@ -763,7 +712,6 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            // Now check if we should actually render this message
             if (this._cvActive) {
                 _cvContainer = this._cvListForKey(storageKey);
                 if (!_cvContainer) {
@@ -783,38 +731,27 @@ Object.assign(NYM.prototype, {
                     this.sendChannelReadReceipt(message.id, message.pubkey, message.geohash);
                 }
             } else if (this.inPMMode) {
-                // In PM mode — message is stored but don't render channel
-                // messages. Leave the cached DOM alone; loadChannelMessages
-                // does a partial-cache restore that appends trailing new
-                // messages on switch back, avoiding a full re-render.
+                // Leave the cached DOM alone; loadChannelMessages appends trailing new messages on switch back.
                 if (!message.isOwn && !exists && !message.isHistorical) {
                     this.updateUnreadCount(storageKey, message.created_at);
                 }
                 return;
             } else {
-                // Check if this is for current channel
                 const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                 if (storageKey !== currentKey) {
-                    // Message is for different channel — same partial-cache
-                    // strategy as the PM branch above; no cache invalidation
-                    // needed.
+                    // Same partial-cache strategy as the PM branch; no invalidation needed.
                     if (!message.isOwn && !exists && !message.isHistorical) {
                         this.updateUnreadCount(storageKey, message.created_at);
                     }
                     return;
                 }
-                // A reply collapsed inside a thread is not on screen, so it must
-                // not advance the channel's read watermark: doing so landed its
-                // notification pre-viewed (`_notificationAlreadySeen`) and the
-                // bell badge never moved for a thread @mention.
+                // A collapsed thread reply is off screen, so it must not advance the read watermark.
                 if (typeof this._markChannelRead === 'function' && message.created_at &&
                     !(typeof this._threadReplyHidden === 'function' && this._threadReplyHidden(message))) {
                     this._markChannelRead(storageKey, message.created_at);
                 }
 
-                // Send a public read receipt (kind 24421) only for messages the
-                // user can actually see: fresh, in the current channel, tab
-                // visible, and not scrolled away from the bottom.
+                // Public read receipts (kind 24421) only for messages the user can actually see.
                 const canBeSeen = !document.hidden && !this.userScrolledUp;
                 if (canBeSeen && !message.isOwn && !message.isHistorical && message.geohash &&
                     message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
@@ -824,10 +761,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Thread replies never render inline while threads are enabled: update
-        // the root's reply-count row (and the open thread panel) instead. A
-        // reply whose root isn't stored locally falls through and renders like
-        // a normal message so it is never lost (threads.js).
+        // Thread replies update the root's reply row instead; replies with no local root render normally (threads.js).
         if (!_threadRender && message.threadRoot &&
             typeof this.threadsEnabled === 'function' && this.threadsEnabled() &&
             this._threadRootExistsFor(message)) {
@@ -835,8 +769,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Don't re-add if already displayed in DOM
-        // For group messages use the shared nymMessageId so duplicates from multiple relays are caught
+        // Group messages use the shared nymMessageId so multi-relay duplicates are caught.
         const _dedupeId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (_threadRender) {
             if (_threadTarget.querySelector(`[data-message-id="${_dedupeId}"]`)) return;
@@ -844,24 +777,18 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Now actually display the message in the DOM (a column list in
-        // column view mode, otherwise the single shared container)
         const container = _threadTarget || _cvContainer || document.getElementById('messagesContainer');
 
-        // An open thread view owns its container: ordinary conversation
-        // messages stay stored-only and reappear when the thread closes
-        // (closing re-renders the conversation from the store).
+        // An open thread view owns its container; conversation messages stay stored-only until it closes.
         if (!_threadRender && typeof this._threadViewOccupies === 'function' &&
             this._threadViewOccupies(container)) {
             return;
         }
 
-        // A real message is landing — drop any loading shimmer or settled
-        // "no messages" note. Bulk renders already cleared the container, so
-        // only the incremental path needs this.
+        // Only the incremental path needs to clear the shimmer or "no messages" note.
         if (!this._bulkAppending && (container._skelTimer || container._emptyNote)) this._clearMessageSkeleton(container);
 
-        // Clamp timestamp to now so messages never appear in the future
+        // Clamp timestamp to now so messages never appear in the future.
         const _clampedMs = this._stableClampMs(message.id, message.timestamp.getTime());
         const displayTimestamp = _clampedMs === message.timestamp.getTime()
             ? message.timestamp : new Date(_clampedMs);
@@ -873,7 +800,6 @@ Object.assign(NYM.prototype, {
                 hour12: this.settings.timeFormat === '12hr'
             }) : '';
 
-        // Get user's shop items for styling
         const userShopItems = this.getUserShopItems(message.pubkey);
         const flairHtml = this.getFlairForUser(message.pubkey);
         const supporterBadge = userShopItems?.supporter ?
@@ -885,9 +811,7 @@ Object.assign(NYM.prototype, {
         const messageEl = document.createElement('div');
         let deferFormat = false;
 
-        // Check if nym is blocked or message contains blocked keywords or is spam.
-        // For our own outgoing messages, surface a system message so the sender
-        // knows why their message disappeared (it was still sent to relays).
+        // Own filtered messages get a system notice, since they were still sent to relays.
         const keywordHit = this.hasBlockedKeyword(message.content, message.author, message.pubkey);
         const clientGates = this._clientGatesActive();
         const spamHit = clientGates && this.isSpamMessage(message.content);
@@ -906,16 +830,14 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Check if nym is flooding in THIS CHANNEL (but not for PMs and not for historical messages)
+        // Flood check is per channel, skipping PMs and historical messages.
         const channelToCheck = message.geohash || message.channel;
         if (clientGates && !message.isPM && !message.isHistorical && this.isFlooding(message.pubkey, channelToCheck)) {
             messageEl.className = 'message flooded';
         }
 
-        // Check if message mentions the user
         const isMentioned = !message.isOwn && this.isMentioned(message.content);
 
-        // Check for action messages
         if (message.content.startsWith('/me ')) {
             messageEl.className = 'system-message me-message';
             messageEl.dataset.messageId = message.id;
@@ -924,21 +846,16 @@ Object.assign(NYM.prototype, {
             messageEl.dataset.ms = this._messageMs(message);
             messageEl.dataset.seq = message._seq || 0;
 
-            // Get clean author name and flair
             const cleanAuthor = this.resolveDisplayNym(message.pubkey, message.author);
             const authorFlairHtml = this.getFlairForUser(message.pubkey);
             const actionAvatarSrc = this.getAvatarUrl(message.pubkey);
             const safePk = this._safePubkey(message.pubkey);
-            // The suffix is dimmed here exactly as it is everywhere else a nym
-            // is shown — it was the one place emitting it as bare text, so the
-            // actor of a `/me` read louder than the people mentioned inside it.
+            // Dim the suffix as everywhere else a nym is shown.
             const authorWithFlair = `<img src="${this.escapeHtml(actionAvatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">${this.escapeHtml(cleanAuthor)}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>${authorFlairHtml}`;
 
-            // Get the action content (everything after /me)
             const actionContent = message.content.substring(4);
 
-            // Format the action content — mentions get avatar + flair from the
-            // formatter's ctx.mentionInfo pass, same as regular messages.
+            // Mentions get avatar + flair from the formatter's ctx.mentionInfo pass.
             const formattedAction = this.formatMessage(actionContent);
 
             messageEl.innerHTML = `* ${authorWithFlair} ${formattedAction} *`;
@@ -953,14 +870,12 @@ Object.assign(NYM.prototype, {
                 classes.push('mentioned');
             }
 
-            // Apply shop styles (message-level)
             if (userShopItems?.style) {
                 classes.push(userShopItems.style);
             }
             if (userShopItems?.supporter) {
                 classes.push('supporter-style');
             }
-            // Apply cosmetics (message-level glow)
             if (Array.isArray(userShopItems?.cosmetics)) {
                 userShopItems.cosmetics.forEach(c => {
                     if (c && c !== 'cosmetic-redacted') classes.push(c);
@@ -968,7 +883,7 @@ Object.assign(NYM.prototype, {
             }
 
             messageEl.className = classes.join(' ');
-            // For PM messages use nymMessageId as the stable shared key (gift wrap IDs differ per recipient)
+            // PMs use nymMessageId as the stable shared key; gift wrap ids differ per recipient.
             messageEl.dataset.messageId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             messageEl.dataset.author = this.resolveDisplayNym(message.pubkey, message.author);
             messageEl.dataset.pubkey = message.pubkey;
@@ -978,9 +893,7 @@ Object.assign(NYM.prototype, {
             messageEl.dataset.ms = this._messageMs(message);
             messageEl.dataset.seq = message._seq || 0;
             if (message.isPM) messageEl.dataset.isPM = '1';
-            // NIP-13: the target the sender committed to. Absent attribute means
-            // the event carried no nonce tag, which is how the timestamp popup
-            // tells "no proof-of-work" from "mined to N bits".
+            // NIP-13 committed target; a missing attribute means no nonce tag, distinct from a mined target.
             if (typeof message.powTarget === 'number') {
                 messageEl.dataset.powTarget = String(message.powTarget);
             }
@@ -989,7 +902,6 @@ Object.assign(NYM.prototype, {
             const authorClass = message.isOwn ? 'self' : '';
             const userColorClass = this.getUserColorClass(message.pubkey);
 
-            // Add verified badge if this is the developer or the nymbot
             const verifiedBadge = message.senderVerified === false ? ''
                 : this.isVerifiedDeveloper(message.pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedDeveloper.title}">✓</span>`
@@ -1027,25 +939,17 @@ Object.assign(NYM.prototype, {
                 `<span class="crypto-verified-badge ${layoutClass}${_lockExtraClass}" data-action="showVerificationInfo" data-verified="${_lockVerified}" title="${_lockTitle}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${_lockSvgInner}</svg></span>`;
             if (_lockVerified !== '') messageEl.dataset.senderVerified = _lockVerified;
 
-            // Post-quantum shield, rendered as a SEPARATE badge beside the lock
-            // rather than folded into it. The lock is about authentication (who
-            // signed this); the shield is about confidentiality (how hard the
-            // key exchange is to break). They are orthogonal — a message can be
-            // post-quantum encrypted yet unverified, or verified yet classical —
-            // so collapsing them into one tri-state glyph would say something
-            // false about one axis or the other.
+            // Separate badge: the lock is authentication, the shield confidentiality, and they are orthogonal.
             const _pqState = this._pqBadgeState(message);
             if (_pqState) messageEl.dataset.pqEncrypted = _pqState;
             const mkPqBadge = (layoutClass) => this._pqBadgeSpan(_pqState, layoutClass);
 
-            // Check if this is a valid event ID (not temporary PM ID)
-            // PM messages use nymMessageId (UUID) as the shared reaction key, so accept those too
+            // PMs use nymMessageId (UUID) as the shared reaction key, so accept those too.
             const isValidEventId = (message.isPM && message.nymMessageId)
                 || (message.id && /^[0-9a-f]{64}$/i.test(message.id));
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             const isMobile = window.innerWidth <= 768;
 
-            // Show reaction, thread & translate buttons for all messages with valid IDs (including PMs)
             const threadHoverBtn = (typeof this.threadsEnabled === 'function' && this.threadsEnabled()) ? `
         <button class="thread-msg-btn" data-action="openMessageThread" title="Reply in thread">
             <svg viewBox="0 0 20 20">
@@ -1067,7 +971,6 @@ Object.assign(NYM.prototype, {
     </div>
 ` : '';
 
-            // Build the initial content HTML
             const preformatted = this._fmtCache && this._fmtCache.get(message.content);
             let formattedContent;
             if (preformatted != null) {
@@ -1079,8 +982,7 @@ Object.assign(NYM.prototype, {
                 formattedContent = this.formatMessageWithQuotes(message.content);
             }
             if (message.isBot || this.isVerifiedBot(message.pubkey)) {
-                // Nymbot answers with canonical command names; show them in the
-                // vocabulary this client actually accepts.
+                // Show Nymbot's canonical command names in this client's localized vocabulary.
                 formattedContent = this.localizeCommandTokensIn(formattedContent);
                 if (message.thinking) {
                     formattedContent = this._renderBotThinkingHtml(message.thinking) + formattedContent;
@@ -1100,7 +1002,6 @@ Object.assign(NYM.prototype, {
             const escapedAuthorBase = this.escapeHtml(baseNym);
             const authorWithHtml = `${escapedAuthorBase}<span class="nym-suffix">#${this.getPubkeySuffix(message.pubkey)}</span>`;
 
-            // Prepare full timestamp for tooltip
             const fullTimestamp = displayTimestamp.toLocaleString('en-US', {
                 year: 'numeric',
                 month: 'short',
@@ -1111,7 +1012,6 @@ Object.assign(NYM.prototype, {
                 hour12: this.settings.timeFormat === '12hr'
             });
 
-            // Delivery status for own PM messages
             let deliveryCheckmark = '';
             if (message.isOwn && !message.isPM && message.geohash &&
                 message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
@@ -1120,7 +1020,6 @@ Object.assign(NYM.prototype, {
                 deliveryCheckmark = `<span class="channel-readers" data-msg-id="${message.id}">${avatarHtml}</span>`;
             } else if (message.isOwn && message.isPM) {
                 if (message.isGroup && message.nymMessageId) {
-                    // Group messages: show stacked reader avatars instead of checkmarks
                     const avatarHtml = this._buildGroupReadersHtml(message);
                     deliveryCheckmark = `<span class="group-readers" data-nym-msg-id="${message.nymMessageId}">${avatarHtml}</span>`;
                 } else if (message.deliveryStatus) {
@@ -1136,7 +1035,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Check if this is a file offer and render special UI
             let messageContentHtml;
             if (message.isFileOffer && message.fileOffer) {
                 const offer = message.fileOffer;
@@ -1210,7 +1108,7 @@ Object.assign(NYM.prototype, {
                 messageContentHtml = formattedContent;
             }
 
-            // Detect emoji-only messages (1-6 emoji with optional whitespace, no other text)
+            // Emoji-only: 1-6 emoji with optional whitespace, no other text.
             const emojiOnlyClass = !message.isFileOffer &&
                 (this.isEmojiOnly(message.content) || this.isCustomEmojiOnly(message.content)) ? ' emoji-only' : '';
 
@@ -1218,7 +1116,6 @@ Object.assign(NYM.prototype, {
             const isBubbleLayout = document.body.classList.contains('chat-bubbles');
             const bubbleTimeText = isBubbleLayout ? this._formatRelativeTime(displayTimestamp.getTime()) : bubbleTime;
 
-            // Check if this message has been edited
             const isEdited = message.isEdited;
             const editedBubble = isEdited ? '<span class="edited-indicator" title="This message has been edited">(edited)</span> ' : '';
             const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited">(edited)</span>' : '';
@@ -1243,17 +1140,14 @@ Object.assign(NYM.prototype, {
                 });
             }
 
-            // Reply-count row for thread roots ("N replies"), under the
-            // reactions/zaps row (threads.js).
+            // Reply-count row for thread roots, under the reactions/zaps row (threads.js).
             if (!_threadRender && !message.threadRoot &&
                 typeof this.threadsEnabled === 'function' && this.threadsEnabled() &&
                 typeof this._threadReplyCountFor === 'function') {
                 const _threadCount = this._threadReplyCountFor(message);
                 if (_threadCount > 0) {
                     this._appendThreadIndicator(messageEl, message, _threadCount);
-                    // Replies that rendered inline while this root was still
-                    // missing (hydration/replay order) belong in the thread
-                    // now that the root row is here — remove the strays.
+                    // Replies that rendered inline before their root arrived belong in the thread now, so remove them.
                     if (typeof this._sweepInlineThreadReplies === 'function') {
                         this._sweepInlineThreadReplies(message);
                     }
@@ -1262,9 +1156,8 @@ Object.assign(NYM.prototype, {
         }
 
 
-        // Apply shop styles for own messages (load from cache if needed)
         if (message.pubkey === this.pubkey) {
-            // Use cached values if shop items haven't loaded yet
+            // Use cached values if shop items haven't loaded yet.
             const activeStyle = this.activeMessageStyle || this.localActiveStyle;
             const activeFlair = this.activeFlair || this.localActiveFlair;
 
@@ -1280,7 +1173,6 @@ Object.assign(NYM.prototype, {
                         const auth = messageEl.querySelector('.message-author');
                         if (auth) auth.classList.add('cosmetic-redacted');
 
-                        // Apply redacted effect to message content after 10 seconds
                         const contentEl = messageEl.querySelector('.message-content');
                         if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
                             setTimeout(() => {
@@ -1295,14 +1187,12 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Apply cosmetics from OTHER users to their messages
         if (message.pubkey !== this.pubkey && userShopItems?.cosmetics) {
             userShopItems.cosmetics.forEach(c => {
                 if (c === 'cosmetic-redacted') {
                     const auth = messageEl.querySelector('.message-author');
                     if (auth) auth.classList.add('cosmetic-redacted');
 
-                    // Apply redacted effect to message content after 10 seconds
                     const contentEl = messageEl.querySelector('.message-content');
                     if (contentEl && !contentEl.classList.contains('cosmetic-redacted-message')) {
                         setTimeout(() => {
@@ -1315,9 +1205,7 @@ Object.assign(NYM.prototype, {
         }
 
 
-        // Insert in chronological order. During bulk render the caller has
-        // already sorted the list and renders in order, so just append —
-        // a per-message querySelectorAll would make bulk render O(N²).
+        // Bulk render is pre-sorted, so just append; a per-message querySelectorAll would be O(N²).
         if (this._bulkAppending) {
             (this._bulkContainer || container).appendChild(messageEl);
         } else {
@@ -1348,10 +1236,7 @@ Object.assign(NYM.prototype, {
 
         this._updateBubbleGrouping(messageEl);
 
-        // Put back a translation the user asked for by hand. A fresh render
-        // rebuilds the row without its `.message-translation`, and nothing
-        // re-issues a manual translation, so without this the user's
-        // translation just disappeared.
+        // Restore a manual translation, since a re-render drops it and nothing re-issues it.
         if (typeof this._reapplyManualTranslation === 'function') this._reapplyManualTranslation(messageEl);
 
         if (typeof this._maybeTranslateBotWelcomePM === 'function') this._maybeTranslateBotWelcomePM(messageEl, message);
@@ -1367,15 +1252,12 @@ Object.assign(NYM.prototype, {
             this._ensureBubbleRelativeTimer();
         }
 
-        // Sending your own channel message should always jump to the latest,
-        // even if you'd scrolled up — reverse-column auto-pinning only holds
-        // when already at the bottom, so force the scroll here.
+        // Force-scroll on own sends; reverse-column pinning only holds when already at the bottom.
         if (message.isOwn && !message.isPM && !message.isHistorical && !_threadRender) {
             this._scheduleScrollToBottom(true);
         }
 
 
-        // Bind long-press on reader-avatar spans so users can open the "seen by" modal
         if (message.isOwn && message.isGroup && message.nymMessageId) {
             const readersEl = messageEl.querySelector('.group-readers');
             if (readersEl && !readersEl._readerLongPressBound) {
@@ -1392,7 +1274,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Apply any reactions we already know about
         if (this.reactions && typeof this.updateMessageReactions === 'function') {
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
             if (reactionMsgId && this.reactions.has(reactionMsgId)) {
@@ -1400,9 +1281,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Skip per-insert DOM prune during bulk render — the caller already
-        // limits to channelPageSize, and scanning the whole DOM after every
-        // insert makes channel switching quadratic.
+        // Skip per-insert pruning during bulk render, which would make channel switching quadratic.
         if (!this._bulkAppending && !_threadRender) {
             const domMessages = container.querySelectorAll('[data-message-id]');
             const domLimit = this.userScrolledUp
@@ -1431,33 +1310,25 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Add existing reactions if any (for both channel messages and PMs)
-        // For PMs, reactions are keyed by nymMessageId (shared across recipients)
+        // PM reactions are keyed by nymMessageId, shared across recipients.
         const reactionKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (reactionKey && this.reactions.has(reactionKey)) {
             this.updateMessageReactions(reactionKey);
         }
-        // Reactions may still be keyed by the event ID if they arrived before
-        // nymMessageId was known — migrate so the key matches the rendered DOM ID.
+        // Migrate reactions keyed by event id before nymMessageId was known.
         if (message.isPM && message.nymMessageId && message.nymMessageId !== message.id) {
             if (this._migrateReactionKey(message.id, message.nymMessageId)) {
                 this.updateMessageReactions(message.nymMessageId);
             }
         }
 
-        // Add zaps display
         const zapKey = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
         if (zapKey && this.zaps.has(zapKey)) {
             this.updateMessageZaps(zapKey);
         }
 
 
-        // Play notification sound for mentions and PMs (but not for historical messages, own messages, or bot messages)
-        // Skip sound when bulk-rendering stored messages (e.g. opening an unread conversation).
-        // Thread render mode is always a re-render from the store — opening a
-        // thread must never replay its root's or replies' mention/PM sound —
-        // so it is silent here; a LIVE reply landing in an open thread gets
-        // its one sound from _onThreadReplyArrived instead.
+        // Silent for historical, own, bot, bulk and thread re-renders; live thread replies sound via _onThreadReplyArrived.
         if (!_threadRender && !this._suppressSound && !message.isHistorical && !message.isOwn && !message.isBot && this.settings.sound) {
             if (isMentioned || message.isPM) {
                 this.playSound(this.settings.sound);
@@ -1506,7 +1377,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // The `.read-more-btn` toggle for one `.truncated-inner`.
     _makeReadMoreBtn(inner) {
         const btn = document.createElement('button');
         btn.className = 'read-more-btn';
@@ -1520,8 +1390,7 @@ Object.assign(NYM.prototype, {
         return btn;
     },
 
-    // The char-count threshold only flags candidates; the collapse itself is
-    // height-based, so drop the toggle for content that already fits.
+    // The char-count threshold only flags candidates; collapse is height-based.
     _settleReadMore(targets) {
         for (const t of targets) {
             if (t.inner.clientHeight > 0 && t.inner.scrollHeight <= t.inner.clientHeight + 2) {
@@ -1532,9 +1401,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Collapse `host`'s current children behind a Read more toggle. Returns the
-    // truncation target for [_settleReadMore], or null when there is nothing to
-    // collapse.
+    // Returns the truncation target for [_settleReadMore], or null when there is nothing to collapse.
     _collapseWithReadMore(host) {
         const nodes = Array.from(host.childNodes);
         if (!nodes.length) return null;
@@ -1552,9 +1419,7 @@ Object.assign(NYM.prototype, {
         return window.innerWidth <= 768 ? 400 : 600;
     },
 
-    // Content-dependent passes that must run after the formatted HTML is in the
-    // DOM: truncation, image blur, iOS video load, link previews, media
-    // fallbacks. Runs inline (sync render) or after the worker content swap.
+    // Passes that need the formatted HTML in the DOM; runs inline or after the worker swap.
     _finalizeMessageContent(messageEl, message) {
         const truncateThreshold = this._readMoreThreshold();
         const truncationTargets = [];
@@ -1610,19 +1475,16 @@ Object.assign(NYM.prototype, {
 
         this._settleReadMore(truncationTargets);
 
-        // Blur images (including quoted images) for non-own senders when set.
         if (!message.isOwn) {
             const shouldBlur = this.blurOthersImages === true ||
                 (this.blurOthersImages === 'friends' && !this.isFriend(message.pubkey));
             if (shouldBlur) {
-                // Blur posted media only — never the inline avatar chips used by
-                // @mentions and quoted authors (custom emoji are handled in CSS).
+                // Blur posted media only, never the inline avatar chips (custom emoji are handled in CSS).
                 messageEl.querySelectorAll('img:not(.avatar-message)').forEach(img => img.classList.add('blurred'));
             }
         }
 
-        // iOS Safari: explicitly load videos inserted via innerHTML, with a blob
-        // fallback when the host lacks Range (206) support.
+        // iOS Safari: explicitly load videos inserted via innerHTML, with a blob fallback when Range (206) is unsupported.
         const videos = messageEl.querySelectorAll('video.message-video');
         if (videos.length > 0) {
             videos.forEach(vid => {
@@ -1656,8 +1518,7 @@ Object.assign(NYM.prototype, {
         this._attachMediaFallbacks(messageEl);
     },
 
-    // Defer formatting to the worker only for live, heavy, sizeable content —
-    // tiny/cheap content formats inline (a round-trip isn't worth it).
+    // Defer to the worker only for live, heavy, sizeable content.
     _shouldDeferLiveFormat(message) {
         if (this._bulkAppending) return false;
         const content = message.content;
@@ -1668,7 +1529,7 @@ Object.assign(NYM.prototype, {
         return !!this._getFormatWorker();
     },
 
-    // Safe, instantly-renderable stand-in shown until the worker result swaps in.
+    // Safe stand-in shown until the worker result swaps in.
     _placeholderContentHtml(content) {
         return this.escapeHtml(content).replace(/\n/g, '<br>');
     },
@@ -1691,10 +1552,7 @@ Object.assign(NYM.prototype, {
         }).catch(() => { try { finishInline(); } catch (_) { } });
     },
 
-    // Replace the placeholder with formatted HTML in-place (the node's DOM
-    // position never changes, so message order is unaffected), then run the
-    // content-dependent passes. No-ops if the node was removed or the message
-    // was edited while the worker was running.
+    // No-ops if the node was removed or the message edited while the worker ran.
     _swapMessageContent(messageEl, message, formattedHtml, originalContent) {
         if (!messageEl || messageEl.dataset.fmtPending !== '1') return;
         delete messageEl.dataset.fmtPending;
@@ -1715,14 +1573,10 @@ Object.assign(NYM.prototype, {
         return window.NymFormat.formatWithQuotes(content, this._mainFormatCtx(content), depth);
     },
 
-    // Resolve a 4-hex nym suffix to a pubkey via a lazily-rebuilt index.
-    // Used by _resolveMentionInfo.
     _pubkeyForSuffix(sfx) {
         if (!sfx) return null;
         if (!this._suffixIndex) this._suffixIndex = new Map();
-        // Rebuild the suffix index lazily — we want it fresh enough but not
-        // every call. The Map size approximates user count; rebuild when it
-        // disagrees materially with the live users map.
+        // Rebuild when the index size disagrees materially with the live users map.
         const usersSize = this.users ? this.users.size : 0;
         if (this._suffixIndex.size === 0 || Math.abs(this._suffixIndex.size - usersSize) > 8) {
             this._suffixIndex.clear();
@@ -1736,10 +1590,7 @@ Object.assign(NYM.prototype, {
         return this._suffixIndex.get(sfx.toLowerCase()) || null;
     },
 
-    // Resolve the mentioned user's avatar + flair HTML for @name#suffix mentions
-    // (needs this.users/getAvatarUrl, so it stays on the main thread); the result
-    // rides along in ctx.mentionInfo for the pure formatter, mirroring
-    // _resolveQuoteInfo for quoted authors. Keyed by suffix -> { avatar, flair }.
+    // Main-thread only (needs this.users); keyed by suffix -> { avatar, flair } in ctx.mentionInfo.
     _resolveMentionInfo(content) {
         if (!content || content.indexOf('@') === -1 || !window.NymFormat
             || typeof window.NymFormat.extractMentions !== 'function') return null;
@@ -1767,8 +1618,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Collapsible "Reasoning" section shown above bot replies whose model
-    // exposed its chain of thought. Collapsed by default; tap to expand.
     _renderBotThinkingHtml(thinking) {
         const body = this.escapeHtml(String(thinking)).replace(/\n/g, '<br>');
         return `<details class="bot-think"><summary>💭 Reasoning</summary><div class="bot-think-body">${body}</div></details>`;
@@ -1778,10 +1627,8 @@ Object.assign(NYM.prototype, {
         return window.NymFormat.format(content, this._mainFormatCtx(content));
     },
 
-    // Check if a raw message is emoji-only (1-6 emoji, optional whitespace, no other text)
     isEmojiOnly(content) {
         if (!content) return false;
-        // Strip whitespace and check if remaining chars are all emoji (up to 6)
         const stripped = content.replace(_RX_WHITESPACE, '');
         return _RX_EMOJI_ONLY.test(stripped);
     },
@@ -1816,7 +1663,6 @@ Object.assign(NYM.prototype, {
         const modalVid = document.getElementById('modalVideo');
         modalImg.style.display = 'none';
         modalImg.src = '';
-        // Clear existing sources
         if (modalVid.dataset.ownBlob) {
             URL.revokeObjectURL(modalVid.dataset.ownBlob);
             delete modalVid.dataset.ownBlob;
@@ -1829,11 +1675,11 @@ Object.assign(NYM.prototype, {
         const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
         const mimeType = mimeTypes[ext] || 'video/mp4';
 
-        // If src is already a blob URL (from inline player fallback), use directly
+        // A blob URL from the inline player fallback is used directly.
         if (src.startsWith('blob:')) {
             modalVid.src = src;
         } else {
-            // Try direct source first, fall back to blob URL for Safari compatibility
+            // Try the direct source first, falling back to a blob URL for Safari.
             const source = document.createElement('source');
             source.src = src;
             source.type = mimeType;
@@ -1886,22 +1732,20 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // The scroll viewport that wraps the message list.
     _getMessagesScroller() {
         return document.getElementById('messagesScroller');
     },
 
-    // Coalesced scroll-to-bottom: batches multiple scroll requests into one rAF frame.
+    // Batches multiple scroll requests into one rAF frame.
     _scheduleScrollToBottom(force = false) {
         if (!force && (!this.settings.autoscroll || this.userScrolledUp)) return;
         if (!force && this.virtualScroll.suppressAutoScroll) return;
-        if (this._scrollRAF) return; // already scheduled
+        if (this._scrollRAF) return;
 
         this._scrollRAF = requestAnimationFrame(() => {
             this._scrollRAF = null;
             const scroller = this._getMessagesScroller();
-            // The list lives in a reverse-column flex container, so scrollTop
-            // is 0 at the bottom (newest) and negative scrolling up.
+            // Reverse-column flex: scrollTop is 0 at the bottom and negative scrolling up.
             if (scroller) scroller.scrollTop = 0;
         });
     },
@@ -1933,8 +1777,7 @@ Object.assign(NYM.prototype, {
             this._applyBubbleGroupingTo(messageEl.nextElementSibling);
             return;
         }
-        // Regroup the list the message actually lives in — the single-view
-        // container or, in column view, the focused column's list.
+        // In column view, regroup the focused column's list rather than the single-view container.
         const container = messageEl.closest('.messages-list') ||
             (messageEl.parentNode === null ? document.getElementById('messagesContainer') : null);
         if (container) {
@@ -2011,8 +1854,7 @@ Object.assign(NYM.prototype, {
         const wrappers = Array.from(container.children).filter(c => c.classList && c.classList.contains('message-group'));
         const salvagedAvatars = new Map();
         for (const wrapper of wrappers) {
-            // Stop observing this wrapper's stack with the shared ResizeObserver
-            // before it is torn down and its messages are re-parented.
+            // Unobserve before teardown, since its messages are re-parented.
             if (this._groupResizeObserver) {
                 const oldStack = wrapper.querySelector(':scope > .message-group-stack');
                 if (oldStack) this._groupResizeObserver.unobserve(oldStack);
@@ -2057,8 +1899,7 @@ Object.assign(NYM.prototype, {
             }
             const ts = parseInt(child.dataset.timestamp) || 0;
             const pk = child.dataset.pubkey;
-            // Polls render as standalone bubbles — never merge with adjacent
-            // messages on either side, even when same-author within window.
+            // Polls render as standalone bubbles and never merge with adjacent messages.
             const isPoll = child.classList.contains('poll-message');
             const sameAuthor = !isPoll && pk === lastPubkey;
             const inWindow = sameAuthor && lastTs && ts && Math.abs(ts - lastTs) <= groupWindowMs;
@@ -2172,7 +2013,7 @@ Object.assign(NYM.prototype, {
     },
 
     setQuoteReply(author, text) {
-        // Strip all nested quotes — only keep the last message being quoted
+        // Strip all nested quotes; keep only the last message being quoted.
         const MAX_NESTED = 1;
         const strippedLines = [];
         for (const line of text.split('\n')) {
@@ -2195,8 +2036,6 @@ Object.assign(NYM.prototype, {
         if (hashIdx >= 0) {
             const base = author.substring(0, hashIdx);
             const suffix = author.substring(hashIdx);
-            // Prefix the quoted author's avatar and append their flair, matching
-            // how the quote renders in the message list.
             const sfx = suffix.replace(/^#/, '').toLowerCase();
             const pubkey = /^[0-9a-f]{4}$/.test(sfx) ? this._pubkeyForSuffix(sfx) : null;
             let avatarHtml = '', flairHtml = '';
@@ -2209,7 +2048,7 @@ Object.assign(NYM.prototype, {
         } else {
             authorEl.textContent = author;
         }
-        // Strip markdown/HTML, keep shortcodes so they can render as images
+        // Strip markdown/HTML, keep shortcodes so they can render as images.
         const cleanText = text.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
         const truncated = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
         textEl.innerHTML = this.renderCustomEmojiInEscapedText(this.escapeHtml(truncated));
@@ -2230,7 +2069,6 @@ Object.assign(NYM.prototype, {
         const { messageId, content, pubkey } = contextData;
         if (!messageId || !content || pubkey !== this.pubkey) return;
 
-        // Determine message context for later sending
         let isPM = false;
         let isGroup = false;
         let groupId = null;
@@ -2242,7 +2080,6 @@ Object.assign(NYM.prototype, {
             isGroup = true;
             groupId = this.currentGroup;
             conversationKey = this.getGroupConversationKey(this.currentGroup);
-            // Find the nymMessageId from stored messages
             const msgs = this.pmMessages.get(conversationKey);
             if (msgs) {
                 const msg = msgs.find(m => m.nymMessageId === messageId || m.id === messageId);
@@ -2260,17 +2097,14 @@ Object.assign(NYM.prototype, {
 
         this.pendingEdit = { messageId, content, pubkey, isPM, isGroup, groupId, conversationKey, nymMessageId };
 
-        // Clear any pending quote
         this.clearQuoteReply();
 
-        // Show edit preview bar
         const preview = document.getElementById('editPreview');
         const textEl = document.getElementById('editPreviewText');
         const cleanText = content.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
         textEl.textContent = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
         preview.style.display = 'flex';
 
-        // Populate input with original content
         const input = document.getElementById('messageInput');
         input.value = content;
         input.focus();
@@ -2315,14 +2149,12 @@ Object.assign(NYM.prototype, {
 
             const signedEvent = await this.signEvent(event);
 
-            // Track this edit locally so it replaces the original visually
             this.editedMessages.set(originalEventId, {
                 newContent,
                 editEventId: signedEvent.id,
                 timestamp: new Date(now * 1000)
             });
 
-            // Update the original message in stored messages
             this.messages.forEach((msgs) => {
                 const msg = msgs.find(m => m.id === originalEventId);
                 if (msg) {
@@ -2331,16 +2163,12 @@ Object.assign(NYM.prototype, {
                 }
             });
 
-            // Update DOM in-place
             this.updateMessageInDOM(originalEventId, newContent);
 
-            // Send to relay
             this.sendToRelay(['EVENT', signedEvent]);
 
-            // Ensure geo relays for this channel also receive the edit
             if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
 
-            // Schedule deletion if redacted cosmetic is active
             if (this.activeCosmetics && this.activeCosmetics.has('cosmetic-redacted')) {
                 setTimeout(() => { this.publishDeletionEvent(signedEvent.id); }, 600000);
             }
@@ -2355,12 +2183,10 @@ Object.assign(NYM.prototype, {
     updateMessageInDOM(messageId, newContent) {
         const msgEl = this.findMessageElementAnywhere(messageId);
         if (!msgEl) return;
-        delete msgEl.dataset.fmtPending; // cancel any in-flight deferred-format swap
+        delete msgEl.dataset.fmtPending;
 
-        // Update raw content data attribute
         msgEl.dataset.rawContent = newContent;
 
-        // Find the message-content element and update its content
         const contentEl = msgEl.querySelector('.message-content');
         if (contentEl) {
             const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
@@ -2381,13 +2207,11 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Add IRC-style edited indicator after message-content (for IRC layout)
         if (!msgEl.querySelector('.edited-indicator-irc')) {
             const ircIndicator = document.createElement('span');
             ircIndicator.className = 'edited-indicator edited-indicator-irc';
             ircIndicator.title = 'This message has been edited';
             ircIndicator.textContent = '(edited)';
-            // Insert after message-content
             if (contentEl && contentEl.nextSibling) {
                 msgEl.insertBefore(ircIndicator, contentEl.nextSibling);
             } else {
@@ -2516,8 +2340,7 @@ Object.assign(NYM.prototype, {
             };
         };
 
-        // For bubble layout: find the sibling avatar when the swiped message
-        // sits next to it (the last bubble in its group's stack).
+        // Bubble layout: find the sibling avatar when the swiped message is last in its stack.
         const findGroupAvatar = (msgEl) => {
             const stack = msgEl.parentElement;
             if (!stack || !stack.classList.contains('message-group-stack')) return null;
@@ -2543,12 +2366,9 @@ Object.assign(NYM.prototype, {
             thresholdHapticFired = false;
         }, { passive: true });
 
-        // Edge zone reserved for the sidebar-open gesture; right swipes that
-        // start inside it defer to the sidebar so the message gesture doesn't
-        // partially trigger.
+        // Right swipes starting in this edge zone defer to the sidebar-open gesture.
         const EDGE_ZONE = 50;
-        // Require a slightly larger initial horizontal travel before we
-        // claim the gesture, which makes accidental drags less likely.
+        // A larger initial horizontal travel makes accidental drags less likely.
         const SWIPE_START_THRESHOLD = 16;
 
         container.addEventListener('touchmove', (e) => {
@@ -2561,8 +2381,6 @@ Object.assign(NYM.prototype, {
 
             if (!isSwiping && absDx > SWIPE_START_THRESHOLD && absDx > dy * 1.5) {
                 direction = dx < 0 ? -1 : 1;
-                // Defer to sidebar-open gesture: it runs on right swipes that
-                // begin within EDGE_ZONE of the left edge.
                 if (direction > 0 && startX < EDGE_ZONE) {
                     currentEl = null;
                     return;
@@ -2649,25 +2467,22 @@ Object.assign(NYM.prototype, {
         if (!container) return;
 
         container.addEventListener('dblclick', (e) => {
-            // Skip if on mobile (swipe handles it)
             if ('ontouchstart' in window) return;
 
             const msgEl = e.target.closest('.message');
             if (!msgEl || !msgEl.dataset.messageId) return;
 
-            // Don't trigger on author name clicks (context menu) or links
             if (e.target.closest('a') || e.target.closest('.message-author')) return;
 
             if (!msgEl.dataset.pubkey) return;
 
-            // Build clean author from data attributes to avoid flair emoji leaking into quote text
+            // Build the author from data attributes so flair emoji don't leak into quote text.
             const baseNym = this.stripPubkeySuffix(msgEl.dataset.author || 'nym');
             const suffix = this.getPubkeySuffix(msgEl.dataset.pubkey);
             const authorText = `${baseNym}#${suffix}`;
             const cleanContent = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
 
             if (cleanContent) {
-                // Clear any text selection caused by the double-click
                 window.getSelection()?.removeAllRanges();
                 this.setQuoteReply(authorText, cleanContent);
             }
@@ -2678,12 +2493,7 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         let content = input.value.trim();
 
-        // Attachments live on their tiles, not in the draft, so their URLs are
-        // appended here rather than being typed into the input as each upload
-        // landed. A tile still uploading or failed contributes nothing, so a
-        // half-finished batch cannot put a broken link in the message.
-        // Sending mid-upload would drop that attachment without saying so: its
-        // tile is still spinning, so it has no URL to contribute yet.
+        // Attachment URLs are appended from their tiles; unfinished or failed uploads contribute nothing.
         if (typeof this.composerHasPendingUploads === 'function'
             && this.composerHasPendingUploads()) {
             this.displaySystemMessage('Still uploading — send again once the attachments finish.');
@@ -2709,13 +2519,11 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Handle edit mode: send edited message instead of new one
         if (this.pendingEdit) {
             const edit = this.pendingEdit;
             this.cancelEditMessage();
 
             if (content === edit.content) {
-                // No changes made
                 return;
             }
 
@@ -2738,23 +2546,18 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Capture quote context before clearing (for bot reply support)
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
-        const quoteData = savedQuote; // Pass to publishMessage for nymquote tag
-        const rawInput = content; // User's typed text before quote prepend
+        const quoteData = savedQuote;
+        const rawInput = content;
 
-        // In a thread view the same composer replies into the thread.
         const threadRoot = (typeof this._threadRootForSend === 'function')
             ? this._threadRootForSend() : null;
-        // A plain reply in a channel thread Nymbot started or last spoke in
-        // continues that conversation the same way a quote-reply does. Captured
-        // before publishing, while the bot is still the thread's last speaker.
+        // A plain reply in a Nymbot thread continues that conversation; captured while the bot is still last speaker.
         const threadBotQuote = (!savedQuote && threadRoot && !this.inPMMode &&
             typeof this._threadBotQuoteContext === 'function')
             ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
             : null;
 
-        // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
             const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
@@ -2763,7 +2566,6 @@ Object.assign(NYM.prototype, {
             this.clearQuoteReply();
         }
 
-        // Add to history
         this.commandHistory.push(content);
         this.historyIndex = this.commandHistory.length;
 
@@ -2771,21 +2573,17 @@ Object.assign(NYM.prototype, {
             this.handleCommand(content);
         } else {
             if (this.inPMMode && this.currentGroup) {
-                // Send to private group
                 await this.sendGroupMessage(content, this.currentGroup, { threadRoot });
             } else if (this.inPMMode && this.currentPM) {
-                // Send 1:1 PM
                 await this.sendPM(content, this.currentPM, { threadRoot });
             } else if (this.currentGeohash) {
-                // The Bluetooth mesh carries #mesh always, and any channel when
-                // the internet route is down.
+                // The Bluetooth mesh carries #mesh always, and any channel when the internet route is down.
                 if (meshOnly) {
                     await this._sendChannelOverMesh(content, this.currentGeohash);
                 } else {
                     await this.publishMessage(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot);
                 }
-                // Check for bot commands (? prefix or @Nymbot mention)
-                // Use rawInput for trigger detection since quote prepend may hide the prefix
+                // Use rawInput for trigger detection, since the quote prepend may hide the prefix.
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const botQuote = savedQuote || threadBotQuote;
                 const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
@@ -2796,7 +2594,6 @@ Object.assign(NYM.prototype, {
         }
 
         input.value = '';
-        // The message carrying them has gone out, so the tiles go with it.
         if (typeof this.clearComposerAttachments === 'function') this.clearComposerAttachments();
         this.autoResizeTextarea(input);
         this.hideCommandPalette();
@@ -2806,7 +2603,7 @@ Object.assign(NYM.prototype, {
         this.sendChannelTypingStop();
         input.focus();
 
-        // Hardcore mode: rotate keypair after every sent message
+        // Hardcore mode: rotate keypair after every sent message.
         if (this.connectionMode === 'ephemeral' && localStorage.getItem('nym_keypair_mode') === 'hardcore') {
             await this.generateKeypair();
             this.nym = this.generateRandomNym();
@@ -2826,23 +2623,18 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Capture quote context before clearing (for bot reply support)
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
-        const quoteData = savedQuote; // Pass to publishMessagePseudonymous for nymquote tag
+        const quoteData = savedQuote;
         const rawInput = content;
 
-        // In a thread view the same composer replies into the thread.
         const threadRoot = (typeof this._threadRootForSend === 'function')
             ? this._threadRootForSend() : null;
-        // A plain reply in a channel thread Nymbot started or last spoke in
-        // continues that conversation the same way a quote-reply does. Captured
-        // before publishing, while the bot is still the thread's last speaker.
+        // A plain reply in a Nymbot thread continues that conversation; captured while the bot is still last speaker.
         const threadBotQuote = (!savedQuote && threadRoot && !this.inPMMode &&
             typeof this._threadBotQuoteContext === 'function')
             ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
             : null;
 
-        // Prepend quote if there's a pending quote reply
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
             const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
@@ -2851,7 +2643,6 @@ Object.assign(NYM.prototype, {
             this.clearQuoteReply();
         }
 
-        // Add to history
         this.commandHistory.push(content);
         this.historyIndex = this.commandHistory.length;
 
@@ -2859,14 +2650,12 @@ Object.assign(NYM.prototype, {
             this.handleCommand(content);
         } else {
             if (this.inPMMode && this.currentGroup) {
-                // Group messages always use the logged-in key
+                // Group messages always use the logged-in key.
                 await this.sendGroupMessage(content, this.currentGroup, { threadRoot });
             } else if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM, { threadRoot });
             } else if (this.currentGeohash) {
-                // Send via ephemeral keypair (pseudonymous)
                 await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot);
-                // Check for bot commands (? prefix or @Nymbot mention)
                 const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
                 const botQuote = savedQuote || threadBotQuote;
                 const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
@@ -2877,7 +2666,6 @@ Object.assign(NYM.prototype, {
         }
 
         input.value = '';
-        // The message carrying them has gone out, so the tiles go with it.
         if (typeof this.clearComposerAttachments === 'function') this.clearComposerAttachments();
         this.autoResizeTextarea(input);
         this.hideCommandPalette();
@@ -2889,7 +2677,6 @@ Object.assign(NYM.prototype, {
     },
 
     hideMessagesFromBlockedUser(pubkey) {
-        // Hide messages in current DOM
         document.querySelectorAll('.message').forEach(msg => {
             if (msg.dataset.pubkey === pubkey) {
                 msg.style.display = 'none';
@@ -2897,7 +2684,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Hide bubble-mode group wrappers (so the avatar disappears too)
         document.querySelectorAll('.message-group').forEach(group => {
             if (group.dataset.pubkey === pubkey) {
                 group.style.display = 'none';
@@ -2905,7 +2691,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Mark messages as blocked in stored messages
         this.messages.forEach((channelMessages, channel) => {
             channelMessages.forEach(msg => {
                 if (msg.pubkey === pubkey) {
@@ -2914,7 +2699,6 @@ Object.assign(NYM.prototype, {
             });
         });
 
-        // Mark PM messages as blocked
         this.pmMessages.forEach((conversationMessages, conversationKey) => {
             conversationMessages.forEach(msg => {
                 if (msg.pubkey === pubkey) {
@@ -2923,13 +2707,10 @@ Object.assign(NYM.prototype, {
             });
         });
 
-        // Drop a blocked user out of any live call (hide their video/chat or
-        // leave a 1:1 call entirely).
         if (typeof this._onUserBlockedForCall === 'function') this._onUserBlockedForCall(pubkey);
     },
 
     hideMessagesWithBlockedKeywords() {
-        // Hide messages in current DOM that contain blocked keywords (check both content and nickname)
         document.querySelectorAll('.message').forEach(msg => {
             const content = msg.querySelector('.message-content');
             const author = msg.dataset.author || '';
@@ -2945,7 +2726,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Mark messages as blocked in stored messages
         this.messages.forEach((channelMessages, channel) => {
             channelMessages.forEach(msg => {
                 if (this.hasBlockedKeyword(msg.content, msg.author)) {
@@ -2954,7 +2734,6 @@ Object.assign(NYM.prototype, {
             });
         });
 
-        // Mark PM messages as blocked
         this.pmMessages.forEach((conversationMessages, conversationKey) => {
             conversationMessages.forEach(msg => {
                 if (this.hasBlockedKeyword(msg.content, msg.author)) {
@@ -2965,7 +2744,7 @@ Object.assign(NYM.prototype, {
     },
 
     showMessagesFromUnblockedUser(pubkey) {
-        // Unmark messages in stored messages FIRST
+        // Unmark stored messages first.
         this.messages.forEach((channelMessages, channel) => {
             channelMessages.forEach(msg => {
                 if (msg.pubkey === pubkey) {
@@ -2974,7 +2753,6 @@ Object.assign(NYM.prototype, {
             });
         });
 
-        // Unmark PM messages
         this.pmMessages.forEach((conversationMessages, conversationKey) => {
             conversationMessages.forEach(msg => {
                 if (msg.pubkey === pubkey) {
@@ -2983,7 +2761,6 @@ Object.assign(NYM.prototype, {
             });
         });
 
-        // Show messages in current DOM (unless blocked by keywords)
         document.querySelectorAll('.message.blocked-user-message').forEach(msg => {
             if (msg.dataset.pubkey === pubkey) {
                 const content = msg.querySelector('.message-content');
@@ -2994,7 +2771,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Restore bubble-mode group wrappers
         document.querySelectorAll('.message-group.blocked-user-group').forEach(group => {
             if (group.dataset.pubkey === pubkey) {
                 group.style.display = '';
@@ -3002,7 +2778,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Reveal any of their hidden in-call chat messages.
         if (typeof this._onUserUnblockedForCall === 'function') this._onUserUnblockedForCall(pubkey);
     },
 
@@ -3012,9 +2787,7 @@ Object.assign(NYM.prototype, {
         const previousKey = container.dataset.lastChannel;
         if (!previousKey || container.children.length === 0) return;
 
-        // Track the IDs in DOM order so we can locate the cached slice in the
-        // current message array on restore — robust against storage truncation,
-        // filter changes, and dedup events.
+        // Track ids in DOM order to locate the cached slice on restore, robust to truncation and dedup.
         const renderedIds = [];
         const domMsgs = container.querySelectorAll('[data-message-id]');
         for (let i = 0; i < domMsgs.length; i++) {
@@ -3046,14 +2819,12 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Limit cache to 5 channels to prevent memory bloat
         if (this.channelDOMCache.size > 5) {
             const oldestKey = this.channelDOMCache.keys().next().value;
             this.channelDOMCache.delete(oldestKey);
         }
     },
 
-    // Compute a fingerprint of messages for cache invalidation
     _resolveMentionPubkey(mentionEl) {
         if (!mentionEl) return null;
         const direct = mentionEl.getAttribute('data-mention-pubkey');
@@ -3098,10 +2869,7 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // The list a quote-jump searches and the scroller that owns it: the clicked
-    // message's own column under column view, otherwise the single shared
-    // container. Both survive a thread view closing (only their children are
-    // re-rendered), so a target resolved before the close stays usable.
+    // The clicked message's own column under column view, otherwise the single container.
     _quoteJumpTargetFor(el) {
         const colList = (el && el.closest) ? el.closest('.cv-column-list') : null;
         if (colList) return { container: colList, scroller: colList.closest('.cv-column-scroller') };
@@ -3111,12 +2879,7 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Split a quote header's text into the nym and its 4-hex pubkey suffix.
-    // The suffix is matched ANYWHERE, not anchored to the end: badges and flair
-    // sit after it inside the header, and the genesis flair carries its edition
-    // NUMBER as SVG text, which an end-anchored match would trip over. No word
-    // boundary after it either — an edition's digits are themselves hex, so
-    // `#1a2b69` has to still read as suffix 1a2b.
+    // The suffix is matched anywhere, since badges and flair (with SVG edition numbers) follow it.
     _parseQuotedAuthor(authorText) {
         const text = String(authorText || '').replace(/^@/, '').replace(/:\s*$/, '').trim();
         const sfxMatch = text.match(/#([0-9a-f]{4})/i);
@@ -3126,14 +2889,11 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // What the search needs from the clicked blockquote, read up front so the
-    // jump can outlive the element — closing a thread view re-renders it away.
+    // Read up front so the jump can outlive the element, which closing a thread view re-renders away.
     _quoteJumpDescriptor(blockquoteEl) {
         const authorEl = blockquoteEl.querySelector('.quote-author');
         let authorText = '';
         if (authorEl) {
-            // Avatar, flair and badges live inside the header but aren't part
-            // of the name.
             const authorClone = authorEl.cloneNode(true);
             authorClone.querySelectorAll('img, svg, .flair-badge, .verified-badge, .supporter-badge, .friend-badge')
                 .forEach(n => n.remove());
@@ -3141,8 +2901,7 @@ Object.assign(NYM.prototype, {
         }
         const parsedAuthor = this._parseQuotedAuthor(authorText);
         const clone = blockquoteEl.cloneNode(true);
-        // The author header and the truncation toggle are chrome, not quoted
-        // text — "Read more" riding along would never match anything.
+        // The author header and truncation toggle are chrome, not quoted text.
         clone.querySelectorAll('.quote-author, .read-more-btn').forEach(n => n.remove());
         const quotedText = (clone.textContent || '').trim().replace(/\s+/g, ' ');
         if (!quotedText) return null;
@@ -3155,18 +2914,14 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Clicking a quoted block jumps to the message it quotes. Kept working
-    // alongside click-to-open-thread: threads.js excludes quotes from the body
-    // click, so this is still the only thing a quote click does.
+    // threads.js excludes quotes from the body click, so this is the only thing a quote click does.
     _scrollToQuotedMessage(blockquoteEl) {
         if (!blockquoteEl) return;
         const desc = this._quoteJumpDescriptor(blockquoteEl);
         if (!desc) return;
         const target = this._quoteJumpTargetFor(blockquoteEl);
         if (!target.container) return;
-        // A quote inside a thread usually points into that same thread, and
-        // the flat view collapses thread replies away — so search the thread
-        // first rather than closing it to look somewhere it cannot be.
+        // Search the thread first, since the flat view collapses thread replies away.
         const inThread = blockquoteEl.closest('.thread-view-active') && this.activeThread;
         if (inThread) {
             if (this._jumpToQuotedMessage(desc, target, { domOnly: true })) return;
@@ -3179,21 +2934,12 @@ Object.assign(NYM.prototype, {
         this._jumpToQuotedMessage(desc, target);
     },
 
-    // Returns whether it found the message. `domOnly` limits it to what is
-    // rendered, and stays silent when it misses.
+    // Returns whether it found the message; `domOnly` limits it to rendered rows and stays silent on a miss.
     _jumpToQuotedMessage(desc, target, opts = {}) {
         const container = target && target.container;
         if (!container || !desc) return;
         const { quotedName, quotedSuffix, needle, hostKey } = desc;
-        // The needle is the quote as RENDERED — markdown markers consumed
-        // (`**bold**` → `bold`), and textContent runs `<br>`-separated lines
-        // together — while the haystack is the stored SOURCE text. Comparing
-        // those two directly only ever matched plain single-line prose, which
-        // is why a quote of anything else reported the original as missing.
-        // So also compare a normalized form: letters and digits only, which
-        // both sides reduce to identically. Kept below the literal tiers so an
-        // exact match still wins, and above them in worth so a normalized hit
-        // beats a merely-contained one.
+        // The needle is rendered text while the haystack is stored source, so both are normalized before comparing.
         const loose = (str) => (str || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
         const looseNeedle = loose(needle);
         const scoreHaystack = (haystack) => {
@@ -3211,9 +2957,7 @@ Object.assign(NYM.prototype, {
         };
         const matchesAuthor = (author, pubkey) => {
             const suffix = (pubkey || '').slice(-4).toLowerCase();
-            // When the quote recorded a #suffix, that IS the identity — the
-            // displayed nym is only how it was spelled at quote time, so don't
-            // also demand the name agree.
+            // A recorded #suffix is the identity, so the displayed nym need not agree.
             if (quotedSuffix) return suffix === quotedSuffix;
             const trimmed = (author || '').trim();
             const baseAuthor = this.stripPubkeySuffix(trimmed);
@@ -3249,12 +2993,7 @@ Object.assign(NYM.prototype, {
                 const renderedStart = startMap.get(storageKey) || 0;
                 let targetIdx = -1;
                 let bestScore = -1;
-                // The WHOLE store, not just the not-yet-rendered head. The DOM
-                // scan above only sees what is currently painted, and a message
-                // scrolled far enough up has been trimmed back out of the DOM
-                // by collapseChannelToLatest — searching only [0, renderedStart)
-                // missed exactly that case, and did nothing at all in a
-                // conversation short enough to be rendered whole.
+                // Search the whole store, since rows scrolled far up are trimmed from the DOM.
                 for (let i = 0; i < store.length; i++) {
                     const m = store[i];
                     if (!m) continue;
@@ -3276,9 +3015,7 @@ Object.assign(NYM.prototype, {
                         const advanced = isPM ? this.loadOlderPMMessages(storageKey) : this.loadOlderChannelMessages(storageKey);
                         if (!advanced) break;
                     }
-                    // Resolve by id: which message this is has already been
-                    // decided, so don't put it back through the fuzzy scan and
-                    // risk losing it to a mismatch there.
+                    // Resolve by id rather than the fuzzy scan, which could lose it to a mismatch.
                     const domId = (targetMsg.isPM && targetMsg.nymMessageId) ? targetMsg.nymMessageId : targetMsg.id;
                     if (domId) {
                         for (const el of container.querySelectorAll('.message[data-message-id]')) {
@@ -3325,32 +3062,25 @@ Object.assign(NYM.prototype, {
         const container = document.getElementById('messagesContainer');
         const storageKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
 
-        // Skip reload if already viewing this channel, but force a re-render if
-        // the DOM is empty while we have stored messages (e.g. the channel was
-        // opened before the IndexedDB cache finished hydrating).
+        // Force a re-render if the DOM is empty while stored messages exist.
         if (container.dataset.lastChannel === storageKey) {
             const storedCount = this.getFilteredMessages(storageKey).length;
             const domCount = container.querySelectorAll('.message[data-message-id]').length;
             if (storedCount === 0 || domCount > 0) {
                 return;
             }
-            // Messages exist but DOM is empty — fall through to re-render
         }
 
-        // Cancel any in-progress batched render for the previous channel
         if (this._renderAbortKey) {
             this._renderAbortKey = null;
         }
 
-        // Cancel any loading shimmer from the conversation we're leaving.
         this._clearMessageSkeleton(container);
 
-        // Cache current container DOM before switching
         this.cacheCurrentContainerDOM();
         container.dataset.lastChannel = storageKey;
 
-        // Try to restore from cache (compare against filtered set so cached
-        // fragment and current visible set stay aligned)
+        // Compare against the filtered set so the cached fragment and visible set stay aligned.
         const filteredMessages = this.getFilteredMessages(storageKey);
         const cached = this.channelDOMCache.get(storageKey);
 
@@ -3359,32 +3089,26 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Cache miss or stale - render fresh
         this.channelDOMCache.delete(storageKey);
         container.innerHTML = '';
 
         if (filteredMessages.length === 0) {
-            // Shimmer first; if nothing loads, settle into a note that clears
-            // itself the moment a message does arrive.
+            // Shimmer first; if nothing loads, settle into a note that clears when a message arrives.
             this._showMessageSkeleton(container, () => this._appendEmptyNote(container, `No recent messages in ${displayName}`));
             this.renderChannelPolls();
             return;
         }
 
-        // Use virtual scrolling for efficient rendering (batched to prevent freeze)
         this.renderMessagesWithVirtualScroll(container, storageKey, true);
 
-        // Re-render any polls for this channel
         this.renderChannelPolls();
     },
 
-    // Restore a cached DOM fragment into the container
     _tryRestoreCachedDOM(container, cached, storageKey, currentMessages, isPM) {
         const renderedIds = cached.renderedIds;
         if (!Array.isArray(renderedIds) || renderedIds.length === 0) return false;
 
-        // Find where the cached fragment's last message lives in the current
-        // (filtered) array. If it's missing, the cache is stale.
+        // If the cached fragment's last message is missing from the filtered array, the cache is stale.
         const lastId = renderedIds[renderedIds.length - 1];
         let lastIdx = -1;
         for (let i = currentMessages.length - 1; i >= 0; i--) {
@@ -3394,9 +3118,7 @@ Object.assign(NYM.prototype, {
         }
         if (lastIdx === -1) return false;
 
-        // The cached fragment must still represent a contiguous tail of the
-        // current array — check that the first cached id is also still
-        // present at the expected offset.
+        // The cached fragment must still be a contiguous tail of the current array.
         const firstId = renderedIds[0];
         const firstExpectedIdx = lastIdx - renderedIds.length + 1;
         if (firstExpectedIdx < 0) return false;
@@ -3415,8 +3137,7 @@ Object.assign(NYM.prototype, {
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
-        // Keep the renderedStart map in sync so loadOlderXxxMessages doesn't
-        // run off a stale offset.
+        // Keep renderedStart in sync so loadOlderXxxMessages doesn't use a stale offset.
         if (isPM) {
             this.pmRenderedStart.set(storageKey, firstExpectedIdx);
         } else {
@@ -3439,9 +3160,7 @@ Object.assign(NYM.prototype, {
             this.virtualScroll.suppressAutoScroll = false;
         }
 
-        // The cached fragment was built when bubbles may have been off, or
-        // when grouping ran against a different sibling chain. Recompute now
-        // that the fragment is back in the live container.
+        // Recompute grouping now that the cached fragment is back in the live container.
         this._recomputeAllBubbleGrouping(container);
 
         if (this.settings.autoscroll) {
@@ -3458,15 +3177,10 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Initialize virtual scroll for a container
-
-    // Get filtered messages for a storage key (applies block filters)
     getFilteredMessages(storageKey) {
         const messages = this.messages.get(storageKey) || [];
 
-        // With threads enabled, replies live in their root's thread panel and
-        // are hidden from the flat view — but only when the root is actually
-        // present locally, so a reply never disappears with nowhere to open it.
+        // Hide thread replies from the flat view only when the root is present locally.
         const _threadsOn = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
         let _threadRoots = null;
         if (_threadsOn) {
@@ -3505,8 +3219,7 @@ Object.assign(NYM.prototype, {
         return sk;
     },
 
-    // IRC rows: [time] author + one or more content lines, reusing the real
-    // message/time/author/content classes so layout matches exactly.
+    // IRC rows reuse the real message classes so layout matches exactly.
     _ircSkeletonHtml(count) {
         const pattern = [
             [2, ['skl-3']], [1, ['skl-4', 'skl-2']], [3, ['skl-2']],
@@ -3525,8 +3238,7 @@ Object.assign(NYM.prototype, {
         return html;
     },
 
-    // Grouped bubbles with avatars, alternating incoming/self, varied sizes —
-    // first line of each bubble drives its width, later lines step down.
+    // Grouped bubbles with avatars; the first line of each bubble drives its width.
     _bubbleSkeletonHtml(count) {
         const pattern = [
             { self: false, bubbles: [[3, 3], [1, 1]] },
@@ -3556,9 +3268,7 @@ Object.assign(NYM.prototype, {
         return html;
     },
 
-    // Show a shimmer placeholder while a conversation loads. settleFn runs once
-    // after a grace period if no real message arrived (e.g. to render an empty
-    // "no messages" note); an incoming message clears everything sooner.
+    // settleFn runs once after a grace period if no real message arrived; a message clears everything sooner.
     _showMessageSkeleton(container, settleFn) {
         if (!container) return;
         if (container.querySelector('.message[data-message-id]')) return;
@@ -3583,8 +3293,7 @@ Object.assign(NYM.prototype, {
         if (container._emptyNote) { container._emptyNote.remove(); container._emptyNote = null; }
     },
 
-    // Centered empty-state note rendered after the shimmer settles with nothing
-    // to show; tracked so displayMessage can drop it when a message arrives.
+    // Tracked so displayMessage can drop it when a message arrives.
     _appendEmptyNote(container, text) {
         if (!container) return;
         if (container.querySelector('.message[data-message-id]')) return;
@@ -3596,21 +3305,17 @@ Object.assign(NYM.prototype, {
         container._emptyNote = note;
     },
 
-    // Render all messages for a channel or PM conversation
-    // isPM: if true, uses pmMessages with conversationKey instead of messages with storageKey
+    // isPM: uses pmMessages with conversationKey instead of messages with storageKey.
     renderMessagesWithVirtualScroll(container, storageKey, scrollToBottom = true, isPM = false) {
         const messages = isPM ? this.getFilteredPMMessages(storageKey) : this.getFilteredMessages(storageKey);
 
-        // Store context for scroll handlers
         container.dataset.virtualScrollKey = storageKey;
         container.dataset.virtualScrollIsPM = isPM ? 'true' : 'false';
 
-        // Clear container
         container.innerHTML = '';
 
         if (messages.length === 0) {
-            // Columns render through here while still empty; shimmer, then settle
-            // into a note that a real message removes.
+            // Columns render through here while still empty; shimmer, then settle into a note.
             this._showMessageSkeleton(container, () => this._appendEmptyNote(container, 'No recent messages'));
             return;
         }
@@ -3630,13 +3335,11 @@ Object.assign(NYM.prototype, {
             this.channelRenderedStart.set(storageKey, 0);
         }
 
-        // Render all messages sorted by timestamp
         this.virtualScroll.suppressAutoScroll = true;
 
 
 
-        // Suppress notification sounds during bulk rendering of stored messages
-        // (e.g. when opening a conversation) to avoid replaying sounds
+        // Suppress notification sounds during bulk rendering of stored messages.
         this._suppressSound = true;
         this._suppressBubbleRewrap = true;
         this._bulkAppending = true;
@@ -3650,11 +3353,7 @@ Object.assign(NYM.prototype, {
         this._suppressBubbleRewrap = false;
         this.virtualScroll.suppressAutoScroll = false;
 
-        // Per-message grouping during a bulk render is evaluated against the
-        // siblings that exist at the moment of insertion, which is fragile if
-        // any message slips in out of order or if `body.chat-bubbles` is set
-        // after this render finishes (settings sync arriving later). Final pass
-        // guarantees grouping is consistent for the whole batch.
+        // Regroup after bulk render, since per-insert grouping is fragile to order and late bubble settings.
         this._recomputeAllBubbleGrouping(container);
 
         const zapBackfillIds = [];
@@ -3664,8 +3363,7 @@ Object.assign(NYM.prototype, {
         }
         this._backfillZapReceipts(zapBackfillIds);
 
-        // Scroll to bottom if requested. The reverse-column container keeps
-        // the bottom pinned as media loads afterwards, so no follow-up is needed.
+        // The reverse-column container keeps the bottom pinned as media loads, so no follow-up is needed.
         if (scrollToBottom && this.settings.autoscroll) {
             this.userScrolledUp = false;
             const scroller = this._getMessagesScroller();
@@ -3764,10 +3462,7 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Re-render whatever conversation is on screen once the IndexedDB cache has
-    // hydrated. The active view may have opened (empty, or with only the first
-    // few D1/relay messages) before hydration populated this.messages, so paint
-    // the full cached history now instead of leaving it stranded in memory.
+    // The view may have opened before hydration populated this.messages, so repaint the full history.
     _refreshActiveViewsAfterHydration() {
         try {
             const container = document.getElementById('messagesContainer');
@@ -3805,13 +3500,11 @@ Object.assign(NYM.prototype, {
     },
 
     refreshMessages() {
-        // Clear user colors cache when theme changes
         this.userColors.clear();
 
-        // Remove stale dynamic bitchat style elements so they regenerate for current mode
+        // Remove stale bitchat style elements so they regenerate for the current mode.
         this.cleanupBitchatStyles();
 
-        // Re-display all messages to apply new colors
         const container = document.getElementById('messagesContainer');
         const messages = container.querySelectorAll('.message');
 
@@ -3820,7 +3513,6 @@ Object.assign(NYM.prototype, {
             const authorElement = msg.querySelector('.message-author');
             const contentElement = msg.querySelector('.message-content');
 
-            // Helper to swap bitchat classes on an element
             const updateBitchatClass = (el) => {
                 if (!el) return;
                 const classesToRemove = [];
@@ -3841,7 +3533,6 @@ Object.assign(NYM.prototype, {
             updateBitchatClass(contentElement);
         });
 
-        // Also refresh user list
         this.updateUserList();
     },
 
@@ -3864,7 +3555,6 @@ Object.assign(NYM.prototype, {
                      : { month: 'short', day: 'numeric', year: 'numeric' });
     },
 
-    // Build a full date/time string honoring the timeFormat + dateFormat settings.
     _formatFullTimestamp(ts) {
         const date = new Date(ts);
         const hour12 = this.settings.timeFormat === '12hr';
@@ -3932,8 +3622,7 @@ Object.assign(NYM.prototype, {
         window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     },
 
-    /// The copy-reference section of the timestamp popup, or '' when the row
-    /// carries no real event id (an optimistic echo, a system line, a poll).
+    // Returns '' when the row carries no real event id.
     _timestampPopupCopyHtml(anchorEl) {
         const row = anchorEl && anchorEl.closest ? anchorEl.closest('.message') : null;
         if (!row || !row.dataset) return '';
@@ -3948,16 +3637,13 @@ Object.assign(NYM.prototype, {
             `<button type="button" class="timestamp-copy-btn" data-action="copyNostrEventRef" data-nostr-copy="${this.escapeHtml(nevent)}">Copy nevent</button>` +
             `<button type="button" class="timestamp-copy-btn" data-action="copyNostrEventRef" data-nostr-copy="${this.escapeHtml(id)}">Copy event ID</button>` +
             '</div>' +
-            // Its own row beneath the two copy buttons, not a third column in
-            // their flex line: it is a different kind of action, and squeezed
-            // into that row all three labels shrink to fit the popup's width.
+            // Its own row beneath the copy buttons, so the three labels don't shrink to fit.
             '<div class="timestamp-popup-details">' +
             `<button type="button" class="timestamp-copy-btn timestamp-details-btn" data-action="openEventDetails" data-event-id="${this.escapeHtml(id)}">Show all event details</button>` +
             '</div>';
     },
 
-    /// The proof-of-work section of the timestamp popup, or '' when PoW does not
-    /// apply to this row.
+    // Returns '' when PoW does not apply to this row.
     _timestampPopupPowHtml(anchorEl) {
         const row = anchorEl && anchorEl.closest ? anchorEl.closest('.message') : null;
         if (!row || !row.dataset) return '';
@@ -4036,9 +3722,7 @@ Object.assign(NYM.prototype, {
         window.addEventListener('scroll', onScroll, { passive: true, capture: true });
     },
 
-    /// The post-quantum info popup, reached by tapping the shield. The copy
-    /// names the primitives and states the limit: this is confidentiality,
-    /// not authentication — signatures are still secp256k1.
+    // States the limit: confidentiality, not authentication; signatures are still secp256k1.
     showPqPopup(anchorEl, state) {
         this.closeTimestampPopup();
         if (!anchorEl) return;
@@ -4095,7 +3779,6 @@ Object.assign(NYM.prototype, {
     },
 
     refreshMessageTimestamps() {
-        // Update all visible timestamps to use new format
         document.querySelectorAll('.message-time').forEach(timeEl => {
             const timestamp = parseInt(timeEl.closest('.message').dataset.timestamp);
             if (timestamp) {
@@ -4109,7 +3792,6 @@ Object.assign(NYM.prototype, {
                 timeEl.textContent = newTime;
                 if (lock) timeEl.appendChild(lock);
 
-                // Update class for spacing
                 if (this.settings.timeFormat === '12hr') {
                     timeEl.classList.add('time-12hr');
                 } else {
@@ -4120,25 +3802,12 @@ Object.assign(NYM.prototype, {
     },
 
     cleanupBitchatStyles() {
-        // Remove all dynamically created bitchat styles
         document.querySelectorAll('style[id^="bitchat-user-"]').forEach(style => {
             style.remove();
         });
     },
 
-    // Shield state: 'full', 'legacy' (post-quantum under an nsec-derived key),
-    // 'partial' (group, only some members covered), 'classical' (encrypted, no
-    // post-quantum), or '' for no badge.
-    //
-    // 'legacy' and 'partial' both mean the same thing to an attacker who breaks
-    // secp256k1 — a copy of this plaintext is recoverable — so neither may read
-    // as protected. They are separate states only because the reason differs.
-    //
-    // 'classical' is rendered rather than omitted because a missing shield is
-    // ambiguous: unprotected, broken badge, or old build all look alike.
-    //
-    // Encrypted messages only. A shield on a public channel message would imply
-    // an encryption it does not have.
+    // 'full', 'legacy' (nsec-derived PQ key), 'partial' (some group members), 'classical', or '' for none.
     _pqBadgeState(message) {
         if (!message) return '';
         const encrypted = !!(message.isPM || message.isGroup);
@@ -4157,10 +3826,7 @@ Object.assign(NYM.prototype, {
         return encrypted ? 'classical' : '';
     },
 
-    // Markup for the post-quantum shield. A shield silhouette reads at 12px
-    // where interior detail would not; the single tilted orbit inside
-    // distinguishes it from the plain ✓ verified-badge without using a
-    // letterform (which would not survive translation).
+    // A silhouette reads at 12px; the orbit distinguishes it from the verified badge without a letterform.
     _pqBadgeSpan(state, layoutClass) {
         if (!state) return '';
         const partial = state === 'partial';
@@ -4174,9 +3840,7 @@ Object.assign(NYM.prototype, {
                     ? 'Not quantum-resistant — tap for details'
                     : 'Quantum-resistant encryption — tap for details';
         const cls = partial ? ' partial' : (legacy ? ' legacy' : (classical ? ' classical' : ''));
-        // The classical shield keeps the same silhouette so the three states
-        // read as one scale rather than three unrelated icons, and drops the
-        // orbit for a slash: the orbit IS the post-quantum part.
+        // The classical shield keeps the silhouette and swaps the orbit for a slash.
         const inner = classical
             ? '<path d="M12 2.5 20 5.5v6c0 4.5-3.4 7.6-8 9.5-4.6-1.9-8-5-8-9.5v-6z"></path>'
               + '<line x1="5.5" y1="5" x2="18.5" y2="18"></line>'
@@ -4188,8 +3852,7 @@ Object.assign(NYM.prototype, {
             + '</svg></span>';
     },
 
-    // Refresh a group message's shield once the fan-out reports coverage (the
-    // wraps are built after the local echo is already on screen).
+    // Wraps are built after the local echo is on screen, so refresh once coverage arrives.
     refreshMessagePqBadge(nymMessageId) {
         if (!nymMessageId) return;
         const row = document.querySelector(`.message[data-message-id="${CSS.escape(nymMessageId)}"]`);
@@ -4205,7 +3868,6 @@ Object.assign(NYM.prototype, {
         if (bubbleInner) bubbleInner.insertAdjacentHTML('beforeend', this._pqBadgeSpan(state, 'crypto-lock-bubble'));
     },
 
-    // Markup for the verification lock (green check / red X), scoped to a layout.
     _verificationLockSpan(verified, layoutClass) {
         const extra = verified ? '' : ' unverified';
         const title = verified ? 'Cryptographically verified sender — tap for details' : 'Unverified sender — tap for details';
@@ -4215,9 +3877,7 @@ Object.assign(NYM.prototype, {
         return `<span class="crypto-verified-badge ${layoutClass}${extra}" data-action="showVerificationInfo" data-verified="${verified}" title="${title}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg></span>`;
     },
 
-    // Update a message's verification lock in the live DOM without a full
-    // re-render — used when a dual-wrapped message's verified copy arrives
-    // after the unverified one already rendered.
+    // Used when a dual-wrapped message's verified copy arrives after the unverified one rendered.
     _setMessageVerifiedDOM(messageId, verified) {
         if (!messageId) return;
         const el = document.querySelector(`[data-message-id="${CSS.escape(String(messageId))}"]`);
@@ -4284,7 +3944,6 @@ Object.assign(NYM.prototype, {
         return this._msgVerifyStatus.get(key);
     },
 
-    // Off-main-thread syntax highlighting
     _getHighlightWorker() {
         if (this._hlWorkerFailed) return null;
         if (this._hlWorker) return this._hlWorker;
@@ -4305,9 +3964,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { this._hlWorkerFailed = true; return null; }
     },
 
-    // Queues a code block for worker highlighting. Returns a DOM id to stamp on
-    // the <code> element, or null when no worker is available (caller highlights
-    // inline). Identical blocks already in flight piggyback on the one request.
+    // Returns a DOM id for the <code> element, or null to highlight inline; identical blocks piggyback.
     _queueHighlight(rawCode, normLang, key) {
         const w = this._getHighlightWorker();
         if (!w) return null;
@@ -4371,10 +4028,9 @@ Object.assign(NYM.prototype, {
         if (this._hlPosts) this._hlPosts.clear();
     },
 
-    // Snapshot of the app state the pure formatter needs, shared across a batch.
     _formatCtxRev: 0,
 
-    /// Call after mutating customEmojis or mediaFallbacks.
+    // Call after mutating customEmojis or mediaFallbacks.
     _invalidateFormatCtx() {
         this._formatCtxRev = (this._formatCtxRev || 0) + 1;
         this._formatCtxCache = null;
@@ -4405,8 +4061,6 @@ Object.assign(NYM.prototype, {
         return ctx;
     },
 
-    // ctx for synchronous main-thread formatting: adds the static emoji map, the
-    // highlight strategy that defers to the highlight worker, and quote flair.
     _mainFormatCtx(content) {
         const ctx = Object.assign({}, this._buildFormatCtx());
         ctx.emojiMap = this.emojiMap;
@@ -4429,9 +4083,7 @@ Object.assign(NYM.prototype, {
         return { codeHtml: trimmed, hlAttr: ` data-hl-id="${id}"` };
     },
 
-    // Resolve avatar + flair HTML for any quoted authors (needs this.users /
-    // getAvatarUrl, so it stays on the main thread); the result rides along in
-    // ctx.quoteInfo for the pure formatter. Keyed by author -> { avatar, flair }.
+    // Main-thread only (needs this.users); keyed by author -> { avatar, flair } in ctx.quoteInfo.
     _resolveQuoteInfo(content) {
         if (!content || content.indexOf('>') === -1 || !window.NymFormat) return null;
         const authors = window.NymFormat.extractQuoteAuthors(content);
@@ -4455,8 +4107,7 @@ Object.assign(NYM.prototype, {
         return out;
     },
 
-    // Pool of format workers (mirrors the verify-worker pool). Returns the live
-    // worker records or null when workers are unavailable (caller formats inline).
+    // Returns live worker records, or null when workers are unavailable (caller formats inline).
     _getFormatWorker() {
         if (this._fmtWorkersFailed) return null;
         if (this._fmtWorkers && this._fmtWorkers.length) return this._fmtWorkers;
@@ -4512,7 +4163,7 @@ Object.assign(NYM.prototype, {
                 this._fmtPending.delete(seq);
                 resolve(val);
             };
-            // A silently-hung worker must never leave a permanent placeholder.
+            // A silently hung worker must never leave a permanent placeholder.
             entry.timer = setTimeout(() => entry.finish(null), 5000);
             this._fmtPending.set(seq, entry);
             try {
@@ -4524,8 +4175,7 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Format a batch of contents in the worker pool into the content-keyed cache
-    // displayMessage consumes. Best-effort; on failure rendering falls back inline.
+    // Best-effort; on failure rendering falls back inline.
     async _preformatBatch(contents) {
         const pool = this._getFormatWorker();
         if (!pool) return;

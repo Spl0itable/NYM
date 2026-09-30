@@ -1,6 +1,4 @@
-// NIP-19 reference cards: a pasted nevent/note/naddr/npub/nprofile (or a bare
-// 64-hex event id) unfurls into a display card under the message, the way a
-// pasted URL unfurls into a link preview.
+// NIP-19 reference cards: a pasted nevent/note/naddr/npub/nprofile or bare event id unfurls into a card.
 
 import 'dart:async';
 
@@ -21,7 +19,6 @@ import 'format/message_content.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../i18n/i18n.dart';
 
-/// What a resolved reference renders as.
 class NostrRefCardData {
   const NostrRefCardData({
     required this.kind,
@@ -43,19 +40,16 @@ class NostrRefCardData {
   /// The event's text, or a profile's about.
   final String body;
 
-  /// `#geohash` / `#name` for a channel message; empty otherwise.
+  /// `#geohash` or `#name` for a channel message; empty otherwise.
   final String channel;
   final int createdAt;
   final int eventKind;
 
-  /// True when this client already held the referenced message, so the card
-  /// can offer to jump to it.
+  /// True when this client holds the referenced message, so the card can jump to it.
   final bool local;
 }
 
-/// Resolves NIP-19 references to card content: the local message store first,
-/// then one bounded relay query. Results and misses are both remembered for the
-/// session, and concurrent callers for the same reference share one lookup.
+/// Resolves references from the local store, then one bounded relay query; results and misses are cached per session.
 class NostrRefResolver {
   NostrRefResolver(this._ref);
 
@@ -63,14 +57,12 @@ class NostrRefResolver {
 
   static const Duration _queryTimeout = Duration(seconds: 4);
 
-  /// Bounded like the translation cache: a busy channel would otherwise hold
-  /// one entry per reference for the life of the process.
+  /// Bounded so a busy channel doesn't grow this forever.
   static const int _max = 200;
 
   final Map<String, Future<NostrRefCardData?>> _entries = {};
 
-  /// The settled result, so a rebuilt row paints immediately instead of
-  /// showing a frame of nothing for a lookup that is long done.
+  /// Settled results, so a rebuilt row paints immediately.
   final Map<String, NostrRefCardData?> _settled = {};
 
   bool hasSettled(String key) => _settled.containsKey(key);
@@ -99,7 +91,7 @@ class NostrRefResolver {
     return future;
   }
 
-  /// A card built from what this client already holds — no network.
+  /// A card from what this client already holds, without network.
   NostrRefCardData? _local(NostrRef ref) {
     final state = _ref.read(appStateProvider);
     if (ref.kind == NostrRefKind.profile) {
@@ -164,8 +156,7 @@ class NostrRefResolver {
     if (event == null) return null;
 
     if (ref.kind == NostrRefKind.profile) {
-      // A kind 0 lands in the store through the usual ingest path; read the
-      // profile back from there rather than re-parsing its JSON here.
+      // Read the profile from the store rather than re-parsing kind-0 JSON.
       final user = _ref.read(appStateProvider).users[ref.pubkey];
       final nym = user?.nym ?? '';
       final about = user?.profile?.about ?? '';
@@ -196,16 +187,7 @@ class NostrRefResolver {
     );
   }
 
-  /// One-shot kind 0 for the author of a referenced event.
-  ///
-  /// The whole point of a shared nevent is that it came from somewhere else, so
-  /// its author is very often somebody this client has never seen and D1 has
-  /// never heard of — D1 only ever holds a profile its own owner mirrored
-  /// there. Nothing on the event path asked for their kind 0 (only the profile
-  /// branch did), so the card named them by the bare `nym#xxxx` fallback
-  /// forever. The event lands in the store through the usual ingest path, so
-  /// this returns nothing: the card watches `usersProvider` and repaints
-  /// itself. Attempted once per pubkey per session.
+  /// Fetches the referenced author's kind 0 once per session; the card repaints via `usersProvider`.
   Future<void> ensureAuthor(String pubkey) async {
     if (pubkey.isEmpty || !_authorAttempted.add(pubkey)) return;
     if (_ref.read(appStateProvider).users[pubkey] != null) return;
@@ -214,8 +196,7 @@ class NostrRefResolver {
 
   final Set<String> _authorAttempted = {};
 
-  /// One bounded query across the pool for a single event. Returns the newest
-  /// match, or null when nothing answers in time.
+  /// Newest match for one bounded pool query, or null on timeout.
   Future<NostrEvent?> _queryOne(NostrFilter filter) async {
     final service = _ref.read(nostrControllerProvider).relayService;
     if (service == null) return null;
@@ -226,8 +207,7 @@ class NostrRefResolver {
     });
     try {
       await sub.eose.timeout(_queryTimeout, onTimeout: () => null);
-      // The relay sends EOSE after the stored event, but delivery of the event
-      // itself is a separate microtask; give it one turn to arrive.
+      // The event arrives in a separate microtask from EOSE; give it one turn.
       await Future<void>.delayed(Duration.zero);
     } catch (_) {
       // A relay that never answers is a normal outcome here.
@@ -242,7 +222,6 @@ class NostrRefResolver {
 final nostrRefResolverProvider =
     Provider<NostrRefResolver>((ref) => NostrRefResolver(ref));
 
-/// Human label for the referenced event's kind.
 String nostrRefKindLabel(int kind) => switch (kind) {
       0 => tr('Profile'),
       1 => tr('Note'),
@@ -253,9 +232,7 @@ String nostrRefKindLabel(int kind) => switch (kind) {
       _ => tr('Event'),
     };
 
-/// The card under a message for one NIP-19 reference in it. Renders nothing
-/// while the lookup is out and nothing at all if it comes back empty, so an
-/// unresolvable reference costs the row no height.
+/// Card for one NIP-19 reference; renders nothing while loading or if empty, costing no height.
 class NostrRefCard extends ConsumerStatefulWidget {
   const NostrRefCard({
     super.key,
@@ -265,20 +242,16 @@ class NostrRefCard extends ConsumerStatefulWidget {
     this.blurImages = false,
   });
 
-  /// The reference as pasted, scheme already stripped by the formatter.
+  /// The pasted reference, scheme already stripped.
   final String token;
 
-  /// Invoked with the event id when the user taps a card for a message this
-  /// client holds.
+  /// Called with the event id when tapping a card for a held message.
   final void Function(String eventId)? onJump;
 
-  /// Invoked with the pubkey when the user taps a PROFILE card. A shared npub
-  /// is a person, so the card offers what tapping that person anywhere else in
-  /// the app offers: their context menu.
+  /// Called when tapping a profile card, to open that person's context menu.
   final void Function(String pubkey, String nym)? onOpenProfile;
 
-  /// Blur media in the referenced body behind a tap-to-reveal, under the same
-  /// others'-images setting the surrounding message obeys.
+  /// Blur media in the referenced body under the same setting as the surrounding message.
   final bool blurImages;
 
   @override
@@ -304,9 +277,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
       _resolved = true;
       return;
     }
-    // DWELL before querying, like [LinkPreviewCard]: rows mount while flinging
-    // through history, and a query each would burst subscriptions for messages
-    // the user scrolls straight past.
+    // Dwell before querying so rows flung past don't burst subscriptions.
     _dwell = Timer(const Duration(milliseconds: 300), () {
       _dwell = null;
       if (mounted) _load(ref0);
@@ -327,8 +298,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
       _data = data;
       _resolved = true;
     });
-    // The head reads the author's nym and avatar out of `usersProvider`, so a
-    // kind 0 that lands later repaints the card with no further work here.
+    // The head reads nym and avatar from `usersProvider`, so a late kind 0 repaints it.
     if (data != null && data.pubkey.isNotEmpty) {
       unawaited(resolver.ensureAuthor(data.pubkey));
     }
@@ -341,11 +311,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
     final c = context.nym;
 
     final users = ref.watch(usersProvider);
-    // Prefer whatever the store knows now: `data.author` was resolved when the
-    // card first painted, and `ensureAuthor` may have brought their kind 0 in
-    // since. Both sides can already carry `#xxxx` — a stored nym, a
-    // `getNymFromPubkey` fallback and a stored message's author all do — so
-    // strip before re-adding or the suffix printed twice.
+    // Prefer the store's current nym; strip any `#xxxx` before re-adding so the suffix isn't doubled.
     final baseNym = pickDisplayNym(users[data.pubkey]?.nym, data.author);
     final openProfileCb = widget.onOpenProfile;
     final nymText = Text(
@@ -371,9 +337,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              // The person named in the card opens their menu, like a tapped
-              // nym anywhere else. Nested inside the head's own tap target, so
-              // it wins the gesture arena and the rest of the head still jumps.
+              // Nested in the head's tap target, so it wins the gesture arena.
               if (baseNym.isNotEmpty)
                 if (openProfileCb != null && data.pubkey.isNotEmpty)
                   GestureDetector(
@@ -409,10 +373,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
       ],
     );
 
-    // The HEAD is the jump/profile affordance, not the whole card: the body
-    // below is real message content now — links, media, the Read more toggle —
-    // and a tap target wrapped around all of it would compete with every one
-    // of them.
+    // Only the head is the tap target, so it doesn't compete with links and media in the body.
     final jump = widget.onJump;
     final VoidCallback? onTap;
     if (data.kind == NostrRefKind.profile) {
@@ -452,13 +413,7 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
                     fontSize: 12,
                     fontStyle: FontStyle.italic))
           else
-            // The referenced event's body renders as a message body: media,
-            // code, mentions, emoji, link previews, and the same height-based
-            // "Read more" clamp. A hard-truncated excerpt could not show any of
-            // it, and a referenced event is often exactly the media it carries.
-            // Keyed on the event's own id so an expansion sticks, and with
-            // reference cards off — a card inside a card, and again inside
-            // that one, is not a thread of context.
+            // Rendered as a full message body keyed on the event id, with reference cards off to avoid nesting.
             MessageContent(
               content: body,
               hostMessageId: data.id.isNotEmpty ? 'nostrcard-${data.id}' : null,

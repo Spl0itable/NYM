@@ -3,39 +3,12 @@ import 'dart:convert';
 
 import '../../services/api/api_client.dart';
 
-/// On-demand message translation routed through the backend `/api/proxy`
-/// worker (`?action=translate`), exactly like the PWA (`translate.js`
-/// `_doTranslate`). The models run on our own infrastructure, so the text of a
-/// private message never reaches a third party.
-///
-/// There is no fallback any more, and its removal is the point rather than a
-/// regression. It existed because the proxy's own upstream WAS Google, which
-/// rate-limits by caller IP: a Worker egresses from an address shared with
-/// every other Worker in its colo, so a busy colo returned 502 for everyone
-/// behind it while the same request from a phone succeeded. Reaching around
-/// the proxy fixed that by handing Google the plaintext of a message the user
-/// chose to keep private. Now the proxy is the only thing that can translate,
-/// so a failure is reported instead of routed around.
-///
-/// [translate] mirrors the PWA's `_translatePreservingMentions`
-/// (`translate.js:292-328`) — the function BOTH the inline message-translate
-/// (`translateMessage`) and the in-composer translate (`translateInputText`)
-/// route through. It (1) shields emoji behind `EMJ<n>EMJ` placeholders so the
-/// upstream can't drop/reorder them (`_shieldEmojis`, `translate.js:275-290`),
-/// then (2) splits on `@mention` tokens and translates only the non-mention
-/// chunks so handles survive verbatim, restoring per-chunk edge whitespace that
-/// Google strips.
-///
-/// Lazy network: nothing runs until [translate] is awaited. The [ApiClient] is
-/// injectable for tests (it accepts a mock `http.Client`).
+/// Message translation via our own proxy only; emoji, mentions and URLs pass through untouched.
 class TranslateService {
   TranslateService({ApiClient? api}) : _api = api;
   final ApiClient? _api;
 
-  /// One emoji "unit" (the PWA's `_shieldEmojis` regex, `translate.js:278`;
-  /// identical to `_EMOJI_UNIT` ported at `message_content.dart:308-314`): a
-  /// flag pair, a keycap, or a presentation/pictographic glyph with optional
-  /// VS / skin-tone / ZWJ sequences and tags.
+  /// One emoji unit: flag pair, keycap, or pictographic glyph with optional VS, skin tone, ZWJ and tags.
   static const String _emojiUnit =
       r'(?:[\u{1F1E0}-\u{1F1FF}]{2})|(?:[#*0-9]\u{FE0F}?\u{20E3})|'
       r'(?:(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})'
@@ -46,51 +19,26 @@ class TranslateService {
 
   static final RegExp _rxEmoji = RegExp(_emojiUnit, unicode: true);
 
-  /// `EMJ<n>EMJ` placeholder restore (`translate.js:288-290`).
   static final RegExp _rxEmojiPlaceholder = RegExp(r'EMJ(\d+)EMJ');
 
-  /// Tokens that must pass through translation UNTRANSLATED. Split out (like the
-  /// PWA's `@mention` handling, `translate.js:298`) so the upstream never sees
-  /// them and can't translate/reflow/break them:
-  ///  * `` `inline code` `` — keeps command tokens (e.g. `` `?help` ``, `` `?model` ``
-  ///    in the Nymbot welcome) and code verbatim (matched FIRST so anything
-  ///    inside a code span is preserved whole);
-  ///  * bare `http(s)://…` URLs — so media, rich link previews, and clickable
-  ///    links survive in the re-rendered translation, and any `@` inside a URL
-  ///    isn't mistaken for a mention (URL is matched before mentions);
-  ///  * `@nym` mentions — handles stay clickable and nicknames aren't translated;
-  ///  * `:shortcode:` custom emoji — render as inline images, not translated text.
+  /// Tokens passed through untranslated, code first, then URLs, @mentions and `:shortcode:` emoji.
   static final RegExp _rxPreserve =
       RegExp(r'`[^`\n]*`|https?://[^\s]+|@[^\s@]+|:[a-zA-Z0-9_+\-]+:');
 
-  /// Per-chunk leading/trailing whitespace capture (`translate.js:305`).
+  /// Per-chunk leading/trailing whitespace capture.
   static final RegExp _rxEdgeWhitespace = RegExp(r'^(\s*)([\s\S]*?)(\s*)$');
 
-  /// Translates [text] into [targetLang] (auto-detected source). Returns the
-  /// translated text and the detected source language. Throws on failure.
-  ///
-  /// Mirrors `_translatePreservingMentions` (`translate.js:292-328`): emoji are
-  /// shielded, `@mentions` are kept verbatim, only the in-between text chunks
-  /// are sent upstream, edge whitespace is preserved, and the first non-`auto`
-  /// detected language wins. When there is nothing translatable (the whole
-  /// string is mentions/whitespace) the original [text] is returned with an
-  /// `'auto'` detection, exactly like the PWA (`translate.js:309-311`).
+  /// Translates [text] with auto-detected source; returns [text] with `'auto'` when nothing is translatable; throws on failure.
   Future<TranslationResult> translate(String text, String targetLang) async {
-    // 1. Shield emoji so the upstream can't strip/reorder them.
+    // Shield emoji so the upstream can't strip or reorder them.
     final shield = _shieldEmojis(text);
 
-    // 2. Split into interleaved translatable-text / preserved-token parts
-    //    (URLs, @mentions, :shortcodes:). JS `split` with a capturing group
-    //    interleaves the delimiters; Dart's `String.split` drops them, so build
-    //    the same even=text / odd=preserved list by hand from the matches.
+    // Dart's `split` drops delimiters, so build the even=text, odd=preserved list by hand.
     final parts = _splitOnPreserved(shield.text);
 
-    // 3. Collect the translatable (even-index, non-blank) chunks, capturing the
-    //    leading/trailing whitespace Google would otherwise strip
-    //    (`translate.js:302-307`).
+    // Capture edge whitespace the upstream would otherwise strip.
     final translatable = <_Chunk>[];
     for (var i = 0; i < parts.length; i++) {
-      // Odd indices are preserved tokens — leave them verbatim.
       if (i.isOdd) continue;
       final part = parts[i];
       if (part.trim().isEmpty) continue;
@@ -103,21 +51,18 @@ class TranslateService {
       ));
     }
 
-    // Nothing to translate (e.g. text was only mentions/whitespace): return the
-    // ORIGINAL text untouched, like the PWA (`translate.js:309-311`).
+    // Nothing to translate: return the original text untouched.
     if (translatable.isEmpty) {
       return TranslationResult(translatedText: text, detectedLanguage: 'auto');
     }
 
-    // 4. One ApiClient, reused across every chunk call, disposed once.
     final api = _api ?? ApiClient();
     try {
       final results = await Future.wait(
         translatable.map((c) => _translateChunk(api, c.content, targetLang)),
       );
 
-      // 5. Reassemble, preserving each chunk's edge whitespace; merge the first
-      //    non-auto detected language (`translate.js:317-324`).
+      // Reassemble with edge whitespace; the first non-auto detected language wins.
       var detected = 'auto';
       for (var i = 0; i < translatable.length; i++) {
         final c = translatable[i];
@@ -130,7 +75,6 @@ class TranslateService {
         }
       }
 
-      // 6. Re-join and restore the shielded emoji (`translate.js:326`).
       final joined = _restoreEmojis(parts.join(''), shield.emojis);
       return TranslationResult(
         translatedText: joined,
@@ -141,10 +85,7 @@ class TranslateService {
     }
   }
 
-  /// One upstream translation call for a single text [chunk]
-  /// (the PWA's `_doTranslate`, `translate.js:332-359`). The proxy worker
-  /// slices to 5000 chars server-side, but mirror the PWA's pre-slice so the
-  /// request stays bounded (`translate.js:446`).
+  /// One proxy call per chunk, pre-sliced to keep the request bounded.
   Future<TranslationResult> _translateChunk(
     ApiClient api,
     String chunk,
@@ -155,14 +96,10 @@ class TranslateService {
     try {
       res = await api.translate(body, targetLang, source: 'auto');
     } on ApiException catch (e) {
-      // Surface the backend's own sentence rather than "ApiException(translate:
-      // HTTP 502)". It already writes one for a person to read, and the detail
-      // that is not for them — which model refused and why — never leaves the
-      // worker's log.
+      // Surface the backend's human-readable sentence rather than the raw exception.
       throw TranslateException(_backendMessage(e));
     }
-    // An empty body with a success status is a failure wearing a success's
-    // clothes: it would replace the message with nothing.
+    // An empty body with a success status would replace the message with nothing.
     if (res.translatedText.trim().isEmpty) {
       throw const TranslateException('Translation failed: empty result');
     }
@@ -173,8 +110,7 @@ class TranslateService {
     );
   }
 
-  /// The human-readable reason out of a failed proxy call, or a plain fallback
-  /// when the body is not the JSON we expect.
+  /// Human-readable reason from a failed proxy call, or a plain fallback.
   static String _backendMessage(ApiException e) {
     try {
       final decoded = jsonDecode(e.body);
@@ -183,15 +119,12 @@ class TranslateService {
         if (msg.isNotEmpty) return msg;
       }
     } catch (_) {
-      // Not JSON — fall through.
+      // Not JSON: fall through.
     }
     return 'Translation is unavailable right now';
   }
 
-  /// Replaces every emoji unit with an `EMJ<n>EMJ` placeholder so the upstream
-  /// translator can't drop or reorder it (the PWA's `_shieldEmojis`,
-  /// `translate.js:275-286`). Returns the placeholdered text plus the ordered
-  /// list of removed emoji for [_restoreEmojis].
+  /// Replaces each emoji with `EMJ<n>EMJ`, returning the text and the removed emoji in order.
   static _ShieldResult _shieldEmojis(String text) {
     final emojis = <String>[];
     final shielded = text.replaceAllMapped(_rxEmoji, (m) {
@@ -202,9 +135,7 @@ class TranslateService {
     return _ShieldResult(shielded, emojis);
   }
 
-  /// Restores `EMJ<n>EMJ` placeholders to their original emoji
-  /// (the PWA's `_restoreEmojis`, `translate.js:288-290`). An out-of-range
-  /// index restores to empty, matching the PWA's `|| ''`.
+  /// Out-of-range indices restore to empty.
   static String _restoreEmojis(String text, List<String> emojis) {
     return text.replaceAllMapped(_rxEmojiPlaceholder, (m) {
       final idx = int.parse(m.group(1)!);
@@ -212,31 +143,27 @@ class TranslateService {
     });
   }
 
-  /// Builds an interleaved `parts` list splitting [text] on the preserved tokens
-  /// ([_rxPreserve]: URLs, `@mentions`, `:shortcodes:`): even indices are
-  /// translatable text (possibly empty), odd indices are the preserved tokens,
-  /// in source order — the same shape JS's `text.split(/(token)/)` produces.
+  /// Even indices are translatable text (maybe empty), odd are preserved tokens, in source order.
   static List<String> _splitOnPreserved(String text) {
     final parts = <String>[];
     var last = 0;
     for (final m in _rxPreserve.allMatches(text)) {
-      parts.add(text.substring(last, m.start)); // leading text (may be empty)
-      parts.add(m.group(0)!); // the preserved token (URL / @mention / :emoji:)
+      parts.add(text.substring(last, m.start));
+      parts.add(m.group(0)!);
       last = m.end;
     }
-    parts.add(text.substring(last)); // trailing text (may be empty)
+    parts.add(text.substring(last));
     return parts;
   }
 
-  /// Strips quoted lines (`> …` prefixed) so only the user's own reply text is
-  /// translated (translate.js `translateMessage`, lines 207-219).
+  /// Strips `> ` quoted lines so only the user's own reply is translated.
   static String stripQuotes(String content) {
     final lines = content
         .split('\n')
         .where((l) => !l.trimLeft().startsWith('>'))
         .join('\n')
         .trim();
-    // Strip a trailing timestamp like "12:34 PM" / "23:59".
+    // Strip a trailing timestamp like "12:34 PM" or "23:59".
     return lines
         .replaceAll(
             RegExp(r'\s*\d{1,2}:\d{2}\s*(AM|PM)?\s*$', caseSensitive: false),
@@ -245,8 +172,7 @@ class TranslateService {
   }
 }
 
-/// A single translatable text chunk plus the edge whitespace to restore after
-/// translation (the PWA's `{ index, lead, content, trail }`, `translate.js:306`).
+/// A translatable chunk plus the edge whitespace to restore.
 class _Chunk {
   const _Chunk({
     required this.index,
@@ -260,8 +186,6 @@ class _Chunk {
   final String trail;
 }
 
-/// Result of [TranslateService._shieldEmojis]: the placeholdered text plus the
-/// ordered emoji to restore.
 class _ShieldResult {
   const _ShieldResult(this.text, this.emojis);
   final String text;

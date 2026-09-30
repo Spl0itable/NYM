@@ -1,13 +1,4 @@
-// NIP-30 custom emoji cache + packs, loaded from the same SharedPreferences /
-// localStorage keys the PWA persists (emoji.js `_loadCustomEmojiCache`,
-// lines 8-24): `nym_custom_emojis` (loose [shortcode,url] pairs, ≤5000) and
-// `nym_custom_emoji_packs` (pack objects, ≤200).
-//
-// [loadCustomEmojiState] is the startup hydration only — the live side
-// (kind-30030 packs, the kind-10030 user list, and inbound message/reaction
-// `emoji` tags) is `LiveCustomEmojiNotifier` (app_state.dart), which seeds
-// itself from this loader and persists back to the same keys. Render surfaces
-// read [liveCustomEmojiProvider] (also app_state.dart), not this provider.
+// Startup hydration of NIP-30 custom emoji and packs; live updates are `LiveCustomEmojiNotifier` in app_state.dart.
 
 import 'dart:convert';
 
@@ -16,18 +7,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'emoji_data.dart';
 
-/// localStorage keys (emoji.js lines 13, 21).
+/// Persisted keys: loose [shortcode,url] pairs (max 5000) and packs (max 200).
 const String kCustomEmojiMapKey = 'nym_custom_emojis';
 const String kCustomEmojiPacksKey = 'nym_custom_emoji_packs';
 
-/// Shortcode regex (emoji.js `_RX_EMOJI_SHORTCODE`).
 final RegExp _rxShortcode = RegExp(r'^[a-zA-Z0-9_]+$');
 
-/// URL must be http(s) (emoji.js `_RX_EMOJI_URL`).
 final RegExp _rxUrl = RegExp(r'^https?://', caseSensitive: false);
 
-/// One NIP-30 emoji pack (kind 30030). Mirrors the PWA's pack shape used in
-/// `buildCustomEmojiSectionsHtml`.
+/// One NIP-30 emoji pack (kind 30030).
 class CustomEmojiPack {
   const CustomEmojiPack({
     required this.pubkey,
@@ -42,24 +30,22 @@ class CustomEmojiPack {
   final String title;
   final int createdAt;
 
-  /// (shortcode, url) entries, ≤120 (emoji.js `handleEmojiPackEvent`).
+  /// (shortcode, url) entries, at most 120.
   final List<({String shortcode, String url})> emojis;
 
-  /// `${pubkey}:${identifier}` (emoji.js `_emojiPackKey`).
   String get key => '$pubkey:$identifier';
 }
 
-/// Immutable snapshot of all known custom emoji.
 class CustomEmojiState {
   const CustomEmojiState({
     this.codeToUrl = const {},
     this.packs = const [],
   });
 
-  /// shortcode -> original (un-proxied) image url. Mirrors `customEmojis`.
+  /// shortcode -> original (un-proxied) image url.
   final Map<String, String> codeToUrl;
 
-  /// Loaded packs, dedup'd by [CustomEmojiPack.key].
+  /// Loaded packs, deduped by [CustomEmojiPack.key].
   final List<CustomEmojiPack> packs;
 
   bool get isEmpty => codeToUrl.isEmpty;
@@ -67,22 +53,18 @@ class CustomEmojiState {
   static const empty = CustomEmojiState();
 }
 
-/// Loads the custom-emoji caches from SharedPreferences and applies the same
-/// validation rules as `registerCustomEmoji` (emoji.js lines 117-130):
-/// valid shortcode + http(s) url, and never shadowing a built-in unicode
-/// shortcode (`kEmojiShortcodeMap`).
+/// Loads cached emoji, requiring a valid shortcode and http(s) url and never shadowing built-in shortcodes.
 CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
   final codeToUrl = <String, String>{};
 
   void register(String? shortcode, String? url) {
     if (shortcode == null || url == null) return;
     if (!_rxShortcode.hasMatch(shortcode) || !_rxUrl.hasMatch(url)) return;
-    // Don't let custom emoji shadow built-in unicode shortcodes (emoji.js:121).
     if (kEmojiShortcodeMap.containsKey(shortcode.toLowerCase())) return;
     codeToUrl[shortcode] = url;
   }
 
-  // Loose map: array of [shortcode, url] pairs (emoji.js lines 12-19).
+  // Array of [shortcode, url] pairs.
   final rawMap = prefs.getString(kCustomEmojiMapKey);
   if (rawMap != null && rawMap.isNotEmpty) {
     try {
@@ -97,7 +79,6 @@ CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
     } catch (_) {}
   }
 
-  // Packs (emoji.js lines 20-23, `_storeEmojiPack`).
   final packs = <CustomEmojiPack>[];
   final seenPackKeys = <String>{};
   final rawPacks = prefs.getString(kCustomEmojiPacksKey);
@@ -130,10 +111,7 @@ CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
           packs.add(CustomEmojiPack(
             pubkey: pubkey,
             identifier: identifier,
-            // The PWA loader keeps the cached title verbatim (`_storeEmojiPack`
-            // applies no fallback); a missing/empty title falls back to
-            // 'Emoji pack' at RENDER time (`pack.title || 'Emoji pack'`,
-            // emoji.js:507) — the pickers mirror that.
+            // Title kept verbatim; the 'Emoji pack' fallback is applied at render time.
             title: (p['title'] as String?) ?? '',
             createdAt: (p['created_at'] as num?)?.toInt() ?? 0,
             emojis: emojis,
@@ -143,30 +121,24 @@ CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
     } catch (_) {}
   }
 
-  // Newest packs first (emoji.js sorts favorites/own/subscribed first, then by
-  // created_at desc; without live ownership info we approximate with recency).
+  // Newest first; approximates the PWA order without live ownership info.
   packs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
   return CustomEmojiState(codeToUrl: codeToUrl, packs: packs);
 }
 
-/// Proxied URL for a custom emoji image (emoji.js `getProxiedEmojiUrl`,
-/// users.js:493). When no proxy base is configured, returns the url verbatim.
+/// Proxied emoji image URL, or [url] verbatim when no proxy base is configured.
 String proxiedEmojiUrl(String url, String? proxyBase) {
   if (proxyBase == null || proxyBase.isEmpty) return url;
   return '$proxyBase?emoji=1&url=${Uri.encodeQueryComponent(url)}';
 }
 
-/// Provider that exposes the cached custom-emoji state. Overridden where the
-/// picker mounts (and in tests). Default is empty so nothing reads prefs at
-/// import time.
+/// Overridden where the picker mounts and in tests; empty by default so nothing reads prefs at import.
 final customEmojiStateProvider = Provider<CustomEmojiState>(
   (ref) => CustomEmojiState.empty,
 );
 
-/// Lazily-resolved SharedPreferences for the emoji/GIF stores. Async so the
-/// composer can build the recents/favorites stores and custom-emoji snapshot
-/// only when a picker is actually opened. Overridable in tests.
+/// Resolved lazily so the stores build only when a picker opens.
 final emojiPrefsProvider = FutureProvider<SharedPreferences>(
   (ref) => SharedPreferences.getInstance(),
 );

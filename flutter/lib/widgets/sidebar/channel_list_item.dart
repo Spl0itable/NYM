@@ -13,24 +13,10 @@ import '../nym_icons.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
 
-/// The gray "pinned/favorited" tint the PWA paints on a `.channel-item.pinned`
-/// row when it is not the active channel (`rgba(150,150,160,…)`,
-/// styles-shell.css:348-366).
-const Color _pinnedGrey = Color(0xFF9696A0); // rgb(150,150,160)
+/// Gray tint for a favorited channel row that is not active.
+const Color _pinnedGrey = Color(0xFF9696A0);
 
-/// A single channel row in the sidebar PUBLIC CHANNELS list.
-///
-/// Mirrors `.channel-item` (docs/specs/02 §5.3): padding 9/12, margin 2/4,
-/// radius rxs, min-height 36, 1px transparent border; active state gets a
-/// primary@10 fill, primary@20 border, glow, and a 3px left accent bar. A
-/// favorited (pinned) row that is not active gets a gray fill/border/glow + a
-/// gray accent bar instead. Unread count renders as a pill badge — the PWA's
-/// ONLY channel badge.
-///
-/// A 500ms press-and-hold (mouse primary button or touch — the PWA binds no
-/// `contextmenu` handler on the sidebar) opens the `.quick-context-menu`
-/// (Favorite/Hide/Block) at the press point — see [SidebarRowGestures] /
-/// [maybeShowChannelContextMenu].
+/// A sidebar channel row; a 500ms hold opens the quick menu (see [SidebarRowGestures]).
 class ChannelListItem extends ConsumerWidget {
   const ChannelListItem({
     super.key,
@@ -50,29 +36,18 @@ class ChannelListItem extends ConsumerWidget {
   final double textSize;
   final VoidCallback onTap;
 
-  /// True when this channel is Bluetooth-mesh-backed — shows a small glyph.
   final bool mesh;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final name = '#${entry.isGeohash ? entry.geohashKey : entry.channel}';
-    // `.channel-item.pinned:not(.active)` paints the gray treatment; the active
-    // state always wins.
     final showPinned = pinned && !active;
-    // Geohash rows get a `title="{getGeohashLocation(geohash)}"` hover tooltip.
     final location = entry.isGeohash ? geohashLocationLabel(entry.geohashKey) : '';
 
-    // `.channel-item.active` fill is primary@0.10 + a primary@0.05 glow (dark);
-    // `body.light-mode` neutralises it to black@0.06 with `box-shadow:none`
-    // (styles-themes-responsive.css:1139), keeping the primary@0.20 border +
-    // primary accent bar. The pinned (gray) treatment has no light override.
     final Color activeFill =
         c.isLight ? Colors.black.withValues(alpha: 0.06) : c.primaryA(0.10);
-    // `@media (hover:hover)` row hover (styles-shell.css:368-374): explicit
-    // white@0.06 fill (light: black@0.04, styles-themes-responsive.css:1132)
-    // that loses to `.active` but WINS over `.pinned` (the hover rule follows
-    // `.pinned` in the stylesheet), plus a padding-left 12→14 content shift.
+    // Hover loses to active but beats pinned, following the CSS cascade order.
     final Color hoverFill = c.isLight
         ? Colors.black.withValues(alpha: 0.04)
         : Colors.white.withValues(alpha: 0.06);
@@ -94,7 +69,6 @@ class ChannelListItem extends ConsumerWidget {
 
     final nameText = Text(
       name,
-      // `.channel-name`: white-space:normal; overflow-wrap:break-word → wraps.
       softWrap: true,
       style: TextStyle(
         color: c.text,
@@ -104,7 +78,6 @@ class ChannelListItem extends ConsumerWidget {
       ),
     );
 
-    // Name plus the location line beneath it (`.channel-sub`).
     final nameBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
@@ -119,18 +92,11 @@ class ChannelListItem extends ConsumerWidget {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      // The PWA's 500ms press-and-hold (mouse button 0 / touch, 10px move
-      // cancel) opens the quick menu at the press point and swallows the
-      // following tap; right-click deliberately does nothing
-      // (sidebar-sections.js:239-303). Hover paints the explicit overlay +
-      // 2px indent below.
       child: SidebarRowGestures(
         onTap: onTap,
         onShowMenu: (pos) =>
             maybeShowChannelContextMenu(context, ref, entry, pos),
         builder: (context, hovered) {
-          // Fill priority mirrors the cascade: `.active` > `:hover` >
-          // `.pinned` > transparent.
           final Color fill = active
               ? activeFill
               : hovered
@@ -142,14 +108,11 @@ class ChannelListItem extends ConsumerWidget {
             children: [
               Container(
                 constraints: const BoxConstraints(minHeight: 36),
-                // `:hover { padding-left: 14px }` (rest 12px).
                 padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 9, 12, 9),
                 decoration: BoxDecoration(
                   color: fill,
                   borderRadius: NymRadius.rxs,
                   border: Border.all(color: borderColor, width: 1),
-                  // `.channel-item.active`: box-shadow 0 0 12px primary@5%
-                  // (gray@5% when pinned-not-active).
                   boxShadow: glow,
                 ),
                 child: Row(
@@ -160,24 +123,16 @@ class ChannelListItem extends ConsumerWidget {
                       const SizedBox(width: 6),
                     ],
                     Expanded(
-                      // `.channel-name` inherits `--text` weight normal even
-                      // when active (active changes bg/border/bar only).
                       child: location.isEmpty
                           ? nameBlock
                           : Tooltip(message: location, child: nameBlock),
                     ),
-                    // PWA `.channel-badges` only ever contains the unread
-                    // pill. `.std-badge` / `.geohash-badge` are DEAD CSS —
-                    // never emitted by channels.js/pms.js/groups.js. Geohash
-                    // vs standard channels are distinguished by the name only.
-                    // `.channel-badges { margin-left: 5px }` sets the gap.
+                    // The unread pill is the only channel badge in the PWA; geohash vs named is shown by the name.
                     if (unread > 0) ...[
                       const SizedBox(width: 5),
                       _UnreadPill(count: unread),
                     ],
-                    // Same menu the hold opens. Suppressed where there would
-                    // be no menu to open, so the control never appears as a
-                    // dead tap target.
+                    // Hidden when there is no menu, so it never appears as a dead tap target.
                     if (buildChannelMenuActions(context, ref, entry)
                         .isNotEmpty) ...[
                       const SizedBox(width: 2),
@@ -201,16 +156,11 @@ class ChannelListItem extends ConsumerWidget {
                       child: Container(
                         width: 3,
                         decoration: BoxDecoration(
-                          // Active bar is `--primary`; the pinned-not-active bar
-                          // is `var(--text-dim)` (styles-shell.css:355-366).
                           color: active ? c.primary : c.textDim,
                           borderRadius: const BorderRadius.only(
                             topRight: Radius.circular(3),
                             bottomRight: Radius.circular(3),
                           ),
-                          // `::before` accent bar glow: 0 0 8px primary@40%
-                          // when active; 0 0 8px rgba(150,150,160,0.3) on the
-                          // gray pinned bar.
                           boxShadow: [
                             BoxShadow(
                               color: active
@@ -232,7 +182,6 @@ class ChannelListItem extends ConsumerWidget {
   }
 }
 
-/// `.unread-badge`: bg primary, text bg-color, pill, 10px weight 600, caps 99+.
 class _UnreadPill extends StatelessWidget {
   const _UnreadPill({required this.count});
   final int count;
@@ -240,7 +189,6 @@ class _UnreadPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `.unread-badge`: min-width 3ch (content-box) + 7px h-padding ≈ 30px.
     return Container(
       constraints: const BoxConstraints(minWidth: 30),
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -262,14 +210,7 @@ class _UnreadPill extends StatelessWidget {
   }
 }
 
-/// The dim location line under a sidebar channel name: the reverse-geocoded
-/// place for a geohash channel, "Not a geohash" for a named one — the same
-/// information the channel header carries.
-///
-/// A geohash paints its decoded coordinates immediately (local, no network) and
-/// upgrades in place when the queued lookup lands, so the row is never empty and
-/// never sits on a spinner. Resolution goes through [GeohashPlaceCache], which
-/// persists and rate-limits; a place already cached costs no request at all.
+/// Location line under a channel name: decoded coordinates at once, upgraded in place when the lookup lands.
 class _ChannelLocationLine extends ConsumerStatefulWidget {
   const _ChannelLocationLine({required this.geohash, required this.textSize});
 
@@ -286,9 +227,7 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
     with WidgetsBindingObserver {
   String? _place;
 
-  /// A locally-derived description ("Arctic Ocean", "Antarctica", "Off the
-  /// coast of Ireland") for a cell the geocoder cannot name. Never promoted to
-  /// [_place]: a real name still wins if one arrives.
+  /// Local fallback description for a cell the geocoder cannot name; a real name still wins.
   String? _region;
   Timer? _retry;
 
@@ -308,8 +247,7 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Coming back to the app is the natural moment to retry a name that
-    // failed earlier, including one the backoff has given up on.
+    // Resuming the app is the natural moment to retry a name that failed earlier.
     if (state == AppLifecycleState.resumed && _place == null) {
       _prime(force: true);
     }
@@ -332,11 +270,7 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
     final cache = ref.read(geohashPlaceCacheProvider);
     final hit = cache.cached(gh);
     if (hit != null) {
-      // `_prime` also runs from `didUpdateWidget` and the app-resume handler,
-      // where a bare assignment paints nothing — the row would keep showing
-      // the coordinates until something else happened to rebuild it. The
-      // initState call is exempt: its build has not run yet, and setState
-      // during it is not allowed.
+      // Must setState outside initState, or the row keeps showing coordinates until an unrelated rebuild.
       if (initial) {
         _place = hit;
       } else {
@@ -350,17 +284,13 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
         setState(() => _place = place);
         return;
       }
-      // Missed. Some cells genuinely have no address (open ocean, the
-      // Antarctic plateau), so say what the place IS from the bundled map data
-      // rather than showing raw coordinates. Held separately from `_place` so
-      // a real geocoded name still replaces it if one ever lands.
+      // Some cells have no address (open ocean), so describe the region from bundled map data.
       cache.describeRegionFor(gh).then((desc) {
         if (!mounted || widget.geohash != gh || desc.isEmpty) return;
         if (_place != null) return;
         setState(() => _region = desc);
       });
-      // Nothing else re-triggers a lookup, so the row schedules its own retry —
-      // otherwise it keeps the fallback until the sidebar happens to rebuild.
+      // Nothing else re-triggers a lookup, so the row schedules its own retry.
       _scheduleRetry(cache, gh);
     });
   }
@@ -368,7 +298,7 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
   void _scheduleRetry(GeohashPlaceCache cache, String gh) {
     _retry?.cancel();
     final at = cache.retryAt(gh);
-    if (at == null) return; // accepted as having no name
+    if (at == null) return; // Accepted as having no name.
     final wait = at.difference(DateTime.now());
     _retry = Timer(wait.isNegative ? const Duration(seconds: 1) : wait, () {
       if (mounted && widget.geohash == gh && _place == null) _prime();
@@ -388,11 +318,7 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
       fontSize: widget.textSize - 3,
       height: 1.25,
     );
-    // Same split as the channel header (chat_pane.dart `_locationLine`): the
-    // city half is the only part allowed to ellipsize, so a narrow sidebar
-    // renders "Long City Na…, Country" instead of dropping the country. Only
-    // a resolved place name has the "City, Country" shape — raw coordinates
-    // and 'Not a geohash' stay a single run.
+    // Only the city half ellipsizes, so a narrow row keeps the country.
     final splitIdx = _place != null ? text.lastIndexOf(', ') : -1;
     final Widget line;
     if (splitIdx > 0 && splitIdx < text.length - 2) {

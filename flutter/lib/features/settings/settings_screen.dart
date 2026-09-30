@@ -48,25 +48,13 @@ import '../../services/filter/filter_packs.dart';
 import 'settings_helpers.dart';
 import 'settings_widgets.dart';
 
-/// The Settings modal (`#settingsModal`, docs/specs/02 §5.10, §04-features §9).
-///
-/// Presented as a centered `.modal-content` dialog (bg `--bg-secondary`,
-/// radius xl, 1px glass border, max-width 500, padding 32). Sections mirror the
-/// PWA collapsible `.settings-section`s in order: Appearance, Privacy &
-/// Security, Messaging & Display, Channels, Mobile Gestures, Data & Backup.
-///
-/// Each control's label text, option order and option labels are copied
-/// verbatim from `index.html`'s `#settingsModal` markup.
-/// The post-quantum status line, named so a test can hold the translation
-/// catalog to it — a caveat only English speakers can read is not a caveat.
+/// Post-quantum status line, named so a test can hold the translation catalog to it.
 const String kPqStatusFull = 'Active for messages with other Nymchat users.';
 const String kPqStatusSendOnly =
     'Active for messages you send to other Nymchat users. Messages you receive, '
     'and your own synced settings and history, stay on standard encryption '
     'until this device has your nympq1\u2026 recovery code.';
-/// Capable, but on the nsec-derived key because this device has no recovery
-/// code yet. Saying plain "Active" here contradicts the panel that says there
-/// is no code, and overstates what is actually protecting the messages.
+/// Capable but on the nsec-derived key because this device has no recovery code; plain "Active" would overstate it.
 const String kPqStatusNoRoot =
     'Active, but on the older key: this device has no nympq1… recovery code '
     'yet. It is set up automatically the first time this account reaches the '
@@ -75,11 +63,7 @@ const String kPqStatusUnavailable =
     'Not available. Post-quantum encryption needs the ML-KEM implementation, '
     'which did not load.';
 
-/// What this device can do and what is actually happening are different
-/// questions, and the line above only ever answered the first. It read
-/// "Active" while every message was still going out classically, because no
-/// peer's key had ever been fetched — so the one indicator that should have
-/// caught that said everything was fine.
+/// Capability and actual use differ: shown when no peer key has been fetched, so messages still go out classical.
 const String kPqReachNone =
     'No contact has published a post-quantum key yet, so messages are still '
     'going out on standard encryption. This turns on by itself as soon as one '
@@ -105,11 +89,10 @@ class SettingsScreen extends ConsumerStatefulWidget {
     this.focusLanding = false,
   });
 
-  /// Pre-fills the settings search so the dialog opens already narrowed to one
-  /// setting, for callers that link straight to it from elsewhere in the UI.
+  /// Pre-fills the search so the dialog opens narrowed to one setting.
   final String? initialSearch;
 
-  /// Focuses the Default Landing Channel field once the dialog is on screen.
+  /// Focuses the Default Landing Channel field once shown.
   final bool focusLanding;
 
   /// Opens the settings dialog as a modal route.
@@ -118,10 +101,6 @@ class SettingsScreen extends ConsumerStatefulWidget {
     String? initialSearch,
     bool focusLanding = false,
   }) {
-    // `.modal` overlay: glass default `rgba(0,0,0,0.7)` (styles-chat.css:1974);
-    // `body.solid-ui .modal { rgba(0,0,0,0.75) }` and
-    // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-    // (styles-themes-responsive.css:1630-1635).
     final solidUi =
         ProviderScope.containerOf(context).read(settingsProvider).solidUi;
     final isLight = context.nym.isLight;
@@ -130,8 +109,8 @@ class SettingsScreen extends ConsumerStatefulWidget {
       barrierColor: !solidUi
           ? Colors.black.withValues(alpha: 0.7)
           : isLight
-              ? const Color(0x73000000) // black @ 0.45
-              : const Color(0xBF000000), // black @ 0.75
+              ? const Color(0x73000000)
+              : const Color(0xBF000000),
       builder: (_) => SettingsScreen(
         initialSearch: initialSearch,
         focusLanding: focusLanding,
@@ -151,28 +130,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _landingFocus = FocusNode();
   String _search = '';
 
-  /// Inline error under the transfer field (F9 / shop.js settingsTransferError).
+  /// Inline error under the transfer field.
   String? _transferError;
 
-  /// Whether an outbound settings transfer is in flight (F9). Disables the Send
-  /// button + relabels it "Sending…" while the gift wrap publishes.
+  /// Outbound transfer in flight; disables Send and shows "Sending…".
   bool _transferSending = false;
 
-  /// The current landing-channel selection (F8). Seeded from the store.
+  /// Current landing-channel selection, seeded from the store.
   LandingChannel _landing = LandingChannel.defaultChannel;
 
   /// Whether the landing-channel suggestions overlay is open.
   bool _landingOpen = false;
 
-  /// The on-device cache readout shown in Data & Backup (F7). Null while the
-  /// first `cacheSizeBytes()` read is in flight (renders the PWA's
-  /// "Calculating…" placeholder); otherwise a formatted human string.
+  /// Cache readout; null while the first read is in flight ("Calculating…").
   String? _cacheReadout;
 
-  // Section open/collapsed state (all expanded by default, matching the PWA's
-  // aria-expanded="true"). Restored from `nym_settings_sections_collapsed` on
-  // open and persisted on every toggle (inline-bindings.js:28-46
-  // persist/restoreSettingsSectionState).
+  // Section expanded state, all open by default; restored and persisted per toggle.
   final Map<String, bool> _open = {
     'appearance': true,
     'privacy': true,
@@ -182,37 +155,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     'data': true,
   };
 
-  /// Whether the blocked-users profile fetch is in flight (users.js:1767
-  /// `updateBlockedList` renders "Loading..." while `loadBlockedUsersAsync`
-  /// resolves unknown blocked users' metadata).
+  /// Blocked users' profile fetch in flight; the list shows "Loading..." meanwhile.
   bool _blockedProfilesLoading = false;
 
-  /// Whether a custom-wallpaper pick is being processed (the PWA's
-  /// "Uploading..." state in the Upload tile, app.js:4184).
+  /// A custom wallpaper upload is in progress.
   bool _wallpaperUploading = false;
 
-  // Live text-size preview value (commits to the controller on change end).
+  // Live text-size preview; commits on change end.
   double? _textSizePreview;
 
-  /// Draft copy of every Save-gated setting (09-M1). The PWA settings modal is
-  /// Save-gated: changing a dropdown mutates the in-DOM value only and is
-  /// committed to `nym.settings` + persisted + synced ONLY when Save is pressed
-  /// (`saveSettings`, app.js:3719-3998); pressing Cancel/closing discards it.
-  /// We mirror that by editing `_draft` on change and fanning it out to the
-  /// real setters in `_onSave`. The handful of controls the PWA applies live —
-  /// theme, color mode, transparency, columns-wallpaper, text size, keypair
-  /// mode — call their real setter immediately AND mirror into `_draft` so the
-  /// Save fan-out doesn't revert them (see `_appearance`).
+  /// Save-gated draft of settings; live-applied controls also mirror into it so Save doesn't revert them.
   late Settings _draft;
 
-  /// `cachePMs` at the moment the modal opened. The PWA only wipes the existing
-  /// PM/group cache on Save when the value flipped on→off (app.js:3853-3858),
-  /// not on every change, so we compare against this baseline in `_onSave`.
+  /// `cachePMs` at open; the cache is wiped on Save only when it flipped on to off.
   late bool _cachePMsAtOpen;
 
-  // Save-gated drafts for the three controls backed by KV-only controller
-  // getters (not `Settings` fields). The PWA reads each on Save too
-  // (keypair app.js:3873-3877, PoW app.js:3616/save, blur app.js:3729-3754).
+  // Save-gated drafts for the KV-only keypair, PoW and blur controls.
   late String _draftKeypair; // 'persistent' | 'random' | 'hardcore'
   late int _draftPow;
   late String _draftVerified;
@@ -223,13 +181,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   void initState() {
     super.initState();
     final kv = ref.read(keyValueStoreProvider);
-    // Snapshot the live settings as the editable draft (09-M1).
     _draft = ref.read(settingsProvider);
-    // Coerce legacy/corrupt indicator-scope values before they reach the two
-    // scope `FormSelect`s (settings.js:27-32 `_normalizeIndicatorScope` +
-    // 1105-1112: 'true' → 'everywhere', 'false' → 'disabled', anything
-    // unknown → the fallback derived from the legacy
-    // `nym_read_receipts_enabled` / `nym_typing_indicators_enabled` booleans).
+    // Coerce legacy indicator-scope values: 'true' -> everywhere, 'false' -> disabled, unknown -> legacy-derived fallback.
     _draft = _draft.copyWith(
       readReceiptsScope: normalizeIndicatorScope(
         _draft.readReceiptsScope,
@@ -247,17 +200,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _cachePMsAtOpen = _draft.cachePMs;
     final ctrl0 = ref.read(settingsProvider.notifier);
     _draftKeypair = ctrl0.keypairMode;
-    // Lift a value stored from the retired 8/12 options onto the offered set,
-    // so the dropdown does not open with nothing selected.
+    // Map retired 8/12 values onto the offered set so the dropdown isn't empty.
     _draftPow = normalizePowDifficulty(ctrl0.powDifficulty);
     _draftVerified = ctrl0.appVerifiedFilter;
     _draftFilterPacks = ctrl0.filterPacks.toSet();
-    // Blur seeds from the per-pubkey key first, then the global key, default
-    // blur — `loadImageBlurSettings` precedence (settings.js:1139-1156; the
-    // PWA's modal shows the resolved value, and the Save-time `setBlurImages`
-    // writes both keys, converging them). Anything that isn't
-    // 'friends'/'true' coerces to 'false' exactly like the PWA's
-    // `saved === 'true'` boolean read.
+    // Blur seeds from the per-pubkey key, then the global key; anything but 'friends'/'true' reads as 'false'.
     final selfPk = ref.read(appStateProvider).selfPubkey;
     final rawBlur = (selfPk.isNotEmpty
             ? kv.getString(StorageKeys.imageBlurFor(selfPk))
@@ -268,13 +215,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         : rawBlur == 'friends'
             ? 'friends'
             : (rawBlur == 'true' ? 'true' : 'false');
-    // Seed the landing-channel field from the persisted value (F8).
     _landing = readLandingChannel(kv);
     _landingController.text = _landing.label;
-    // Restore the persisted section collapse layout (the PWA calls
-    // `restoreSettingsSectionState` on every settings open, app.js:3197;
-    // collapsed sections are stored as `{key: 1}` in
-    // `nym_settings_sections_collapsed`, inline-bindings.js:36-46).
+    // Restore the persisted section collapse layout (`{key: 1}` per collapsed section).
     try {
       final raw = kv.getString(_kSettingsSectionsCollapsedKey);
       if (raw != null && raw.isNotEmpty) {
@@ -302,19 +245,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         setState(() => _landingOpen = false);
       }
     });
-    // Kick off the real on-device cache-size read (F7; refreshAppCacheSize is
-    // run on settings open in the PWA, app.js:3625).
     _loadCacheSize();
-    // Pull any inbound pending settings transfers (F17).
     ref.read(nostrControllerProvider).refreshPendingSettingsTransfers();
-    // Resolve unknown blocked users' profiles so the Blocked Users list can
-    // show real nyms (users.js `loadBlockedUsersAsync` → metadata fetch).
+    // Resolve unknown blocked users' profiles so the list shows real nyms.
     _fetchBlockedProfiles();
   }
 
-  /// Fetches kind-0 profiles for blocked users we don't know yet, showing the
-  /// PWA's "Loading..." placeholder in the Blocked Users list meanwhile
-  /// (users.js:1774-1815 `updateBlockedList`/`loadBlockedUsersAsync`).
+  /// Fetches unknown blocked users' profiles, showing "Loading..." meanwhile.
   Future<void> _fetchBlockedProfiles() async {
     final app = ref.read(appStateProvider);
     final unknown = app.blockedUsers.where((pk) {
@@ -332,13 +269,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() => _blockedProfilesLoading = false);
   }
 
-  /// Reads the real on-device cache size from the controller and formats the
-  /// PWA readout into [_cacheReadout] (F7). Mirrors `refreshAppCacheSize`
-  /// (app.js:3681-3716): show "Calculating…" until the async read resolves,
-  /// then `"[size] cached on device — N channels, N PM/group threads,
-  /// N profiles, N reaction records"` (size auto-scaled B/KB/MB/GB), the
-  /// honest empty-state string when nothing is cached, or the
-  /// cache-unavailable string when the store errors.
+  /// Formats the on-device cache size, an empty state, or an unavailable state.
   Future<void> _loadCacheSize() async {
     final controller = ref.read(nostrControllerProvider);
     try {
@@ -350,9 +281,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      // The PWA's failed-probe branch: `IndexedDB unavailable (<reason>) —
-      // cache disabled in this app` (app.js:3702-3705); the native store's
-      // equivalent honest failure state.
+      // Honest failure state when the store errors.
       setState(() => _cacheReadout = tr(
           'Cache unavailable ({error}) — cache disabled in this app',
           {'error': e}));
@@ -369,10 +298,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     super.dispose();
   }
 
-  /// Toggles a section's collapsed state and persists the layout to
-  /// `nym_settings_sections_collapsed` (inline-bindings.js:28
-  /// `persistSettingsSectionState`: collapsed keys map to `1`, expanded keys
-  /// are removed).
+  /// Toggles a section and persists the layout (collapsed keys map to 1).
   void _toggleSection(String key) {
     setState(() => _open[key] = !(_open[key] ?? true));
     final collapsed = <String, int>{
@@ -384,16 +310,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         .setString(_kSettingsSectionsCollapsedKey, jsonEncode(collapsed));
   }
 
-  /// The option-label text of a select's items, for the per-group search text
-  /// (the PWA's `filterSettings` matches each `.form-group`'s full rendered
-  /// `textContent`, which includes every `<option>` label,
-  /// inline-bindings.js:66-74).
+  /// Option labels, included in each group's search text.
   static String _optText<T>(List<({T value, String label})> items) =>
       items.map((it) => it.label).join(' ');
 
-  /// Mutates the Save-gated [_draft] in place (09-M1). Save-gated dropdowns call
-  /// this from their `onChanged` instead of the live `ctrl.setX` setter, so the
-  /// change is held locally until Save.
+  /// Mutates the Save-gated [_draft] instead of committing.
   void _mutate(Settings Function(Settings draft) fn) {
     setState(() => _draft = fn(_draft));
   }
@@ -401,25 +322,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Watch the live settings so live-applied controls (theme / color mode /
-    // transparency) rebuild `context.nym` immediately. The section builders,
-    // however, render from the Save-gated `_draft` (09-M1) so a pending dropdown
-    // edit shows but is not yet committed.
+    // Watch live settings so live-applied controls restyle at once; sections render from [_draft].
     ref.watch(settingsProvider);
     final settings = _draft;
     final ctrl = ref.read(settingsProvider.notifier);
-    // Watch the moderation Sets so the Friends/Blocked/Keywords/Hidden/Blocked
-    // lists (F1) re-render on add/remove.
+    // Re-render moderation lists on add/remove.
     ref.watch(appStateProvider);
-    // Watch inbound USER-TO-USER settings transfers so the Pending Settings
-    // Transfers list (F17) re-renders as offers arrive or are
-    // accepted/rejected.
+    // Re-render the pending user-to-user transfers list.
     ref.watch(pendingUserSettingsTransfersProvider);
 
-    // `.settings-section.mobile-only` is `display:none` by default and revealed
-    // only `@media (max-width:768px)` (styles-components.css:215 +
-    // styles-themes-responsive.css:70). Gate the Mobile Gestures section the
-    // same way so wide windows/tablets don't over-render it.
+    // Mobile Gestures only at ≤768px width.
     final isMobileWidth = MediaQuery.of(context).size.width <= 768;
 
     final sections = <_SectionSpec>[
@@ -443,7 +355,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         title: tr('Channels'),
         groups: _channels(settings, ctrl),
       ),
-      // Mobile Gestures — only on a mobile-width viewport (PWA mobile-only).
       if (isMobileWidth)
         _SectionSpec(
           key: 'mobile',
@@ -457,12 +368,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
     ];
 
-    // `filterSettings` (inline-bindings.js:53-91): a section-title match shows
-    // the whole section; otherwise each `.form-group` is matched individually
-    // against its full text (label + hint + option labels + placeholders +
-    // rendered content) and hidden on a miss. Matching sections are
-    // force-expanded while a query is active; an empty query restores the
-    // saved collapse layout.
+    // Section-title matches show the whole section; otherwise groups match individually, and matching sections force-expand.
     final q = _search.trim().toLowerCase();
     final visibleSections = <({_SectionSpec spec, List<_GroupSpec> groups})>[];
     for (final s in sections) {
@@ -484,22 +390,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           constraints: const BoxConstraints(maxWidth: 500),
           child: Material(
             color: Colors.transparent,
-            // `.modal-content` card chrome, shared with every other standard
-            // modal: shadow-lg + shadow-glow (primary@.1/20px) + white@.05
-            // ring in dark; a single `0 8px 40px black@0.12` in light
-            // (styles-themes-responsive.css:1050-1052).
             child: ModalChrome.box(
               c,
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxHeight: MediaQuery.of(context).size.height * 0.9,
                 ),
-                // `.modal-content { max-height: 90vh; overflow-y: auto }`
-                // (styles-components.css:17-27): the WHOLE card scrolls — the
-                // SETTINGS header (and its absolute ✕ chip) scrolls off-screen
-                // and the Cancel/Save `.modal-actions` row sits at the END of
-                // the content — only `.settings-search` sticks
-                // (`position: sticky; top: 0`, styles-components.css:136-140).
+                // The whole card scrolls; only the search row is sticky, and Save sits at the end.
                 child: CustomScrollView(
                   shrinkWrap: true,
                   slivers: [
@@ -511,16 +408,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               _header(c),
-                              // `.modal-header { margin-bottom: 24px }` — the
-                              // gap between the header rule and the search row
-                              // shows the modal background.
                               const SizedBox(height: 24),
                             ],
                           ),
-                          // `.modal-close`: 32×32 glass ✕ chip, absolute
-                          // top-right (14,14) INSIDE the scroll content — like
-                          // the PWA's `position: absolute` chip it scrolls away
-                          // with the header.
+                          // The close chip scrolls away with the header.
                           ModalChrome.closeChip(
                               c, () => Navigator.of(context).maybePop()),
                         ],
@@ -528,16 +419,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     PinnedHeaderSliver(child: _searchBar(c)),
                     SliverToBoxAdapter(
-                      // Sections are full-bleed; the no-results text carries
-                      // the `.modal-content { padding: 32px }` horizontal
-                      // inset itself.
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (visibleSections.isEmpty)
-                            // `.settings-no-results { padding: 18px 0 6px;
-                            //   color: text-dim; font-size: 13px;
-                            //   text-align: center }`.
                             Padding(
                               padding: const EdgeInsets.fromLTRB(32, 18, 32, 6),
                               child: Text(
@@ -550,10 +435,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           for (final s in visibleSections)
                             SettingsSection(
                               title: s.spec.title,
-                              // A live query force-expands matching sections
-                              // (filterSettings removes `collapsed` without
-                              // persisting); empty query renders the saved
-                              // layout.
+                              // A live query force-expands matching sections without persisting.
                               open: q.isNotEmpty
                                   ? true
                                   : (_open[s.spec.key] ?? true),
@@ -562,10 +444,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                 for (final g in s.groups) g.child,
                               ],
                             ),
-                          // `.modal-actions` is the last block of the scrolled
-                          // content (you scroll to the bottom to reach Save);
-                          // the 20px body→actions gap (`.modal-body
-                          // { margin-bottom }`) lives on its padding.
+                          // Actions are the last block of the scrolled content.
                           _actions(c),
                         ],
                       ),
@@ -579,8 +458,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
     );
   }
-
-  // --- Chrome ---------------------------------------------------------------
 
   String _attestReadout() {
     final attest = ref.read(nostrControllerProvider).attest;
@@ -607,10 +484,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Widget _header(NymColors c) {
-    // `.modal-header`: a full-width title with a 1px glass bottom rule
-    // (`padding-bottom: 14px`), inset by `.modal-content { padding: 32px }`.
-    // The close ✕ is the separate absolute chip (build), not a Row child.
-    // Right padding (56) keeps the title clear of the floating chip.
+    // Right padding keeps the title clear of the floating close chip.
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(32, 32, 56, 14),
@@ -630,9 +504,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Widget _searchBar(NymColors c) {
-    // `.settings-search { padding: 4px 32px 14px; background: var(--glass-bg) }`
-    // with the 16px magnifier SVG inset at the input's left
-    // (styles-components.css:136-157 + index.html:1351-1353).
     return Container(
       color: c.glassBg,
       padding: const EdgeInsets.fromLTRB(32, 4, 32, 14),
@@ -646,24 +517,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Widget _actions(NymColors c) {
-    // `.modal-actions`: a centered 10px-gap button row with NO border or
-    // background of its own — separated from the body by `.modal-body
-    // { margin-bottom: 20px }` and inset by `.modal-content { padding: 32px }`.
     return Container(
       padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // `.icon-btn` Cancel: `.modal-actions` sets no `align-items`, so
-          // flex's default stretch sizes it to the 42px `.send-btn` Save.
+          // Stretched to match the 42px Save button.
           NymOutlineButton(
             label: tr('Cancel'),
             onPressed: () => Navigator.of(context).maybePop(),
             height: 42,
           ),
           const SizedBox(width: 10),
-          // `.send-btn`: primary-tinted (bg primary@0.1, border primary@0.3),
-          // primary uppercase text with wide letter-spacing, height 42.
           InkWell(
             onTap: _onSave,
             borderRadius: NymRadius.rsm,
@@ -692,11 +557,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  // --- Actions / wiring -----------------------------------------------------
-
-  /// Emits a transient in-conversation system pill (the PWA's
-  /// `displaySystemMessage`), then optionally closes the modal. Scheduled
-  /// post-frame so it runs after the dialog pops.
+  /// Posts a transient system pill post-frame, after the dialog pops.
   void _systemMessage(String text) {
     final notifier = ref.read(appStateProvider.notifier);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -704,32 +565,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
   }
 
-  /// SAVE (F3 / 09-M1): fan the Save-gated [_draft] out to the real setters
-  /// (mirroring the PWA's `saveSettings`, app.js:3719-3998, which reads every
-  /// control's current value and only THEN persists + syncs), run the
-  /// proximity-grant geolocation flow, wipe the PM/group cache iff Cache-PMs
-  /// flipped on→off, commit the landing channel, confirm, and close.
-  ///
-  /// The live-applied controls (theme / color mode / transparency / chat view /
-  /// wallpaper / message layout / text size / keypair mode) already persisted
-  /// on-change; re-sending their (unchanged) draft value here is idempotent and
-  /// keeps the persisted state == draft.
+  /// Fans the Save-gated draft out to the real setters, resolves proximity, conditionally wipes the PM cache, and closes.
   Future<void> _onSave() async {
     final ctrl = ref.read(settingsProvider.notifier);
     final d = _draft;
 
-    // Resolve the proximity geolocation grant BEFORE persisting so a denial
-    // flips the staged value back to Disabled (PWA app.js:3917-3950).
+    // Resolve the proximity grant first so a denial flips it back to Disabled.
     final proximity = await _resolveProximityOnSave(d.sortByProximity);
     if (!mounted) return;
 
-    // Snapshot the pre-save status visibility so a changed value can trigger
-    // the PWA's immediate re-broadcast (app.js:3837-3847).
+    // Snapshot status visibility to re-broadcast immediately if it changes.
     final prevShowStatus = ref.read(settingsProvider).showStatus;
 
-    // Fan out every Save-gated dropdown value through its setter (each writes
-    // KV + state + queues the cross-device sync). Appearance live-applied
-    // controls are included for idempotence.
+    // Fan out every draft value through its synced setter; live-applied ones are idempotent.
     ctrl.setTheme(d.theme);
     ctrl.setColorMode(d.colorMode);
     ctrl.setChatViewMode(d.chatViewMode);
@@ -745,14 +593,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ctrl.setReadReceiptsScope(d.readReceiptsScope);
     ctrl.setTypingIndicatorsScope(d.typingIndicatorsScope);
     ctrl.setShowStatus(d.showStatus);
-    // Show-Status changed: immediately re-assert presence under the NEW
-    // visibility mode so peers hide/show our status dot right away instead of
-    // waiting for the next organic (≤1/60s throttled) broadcast — the PWA's
-    // `publishStatusVisibility()` on Save (app.js:3842-3847 →
-    // nostr-core.js:2841-2846: `publishPresence(away ? 'away' : 'online',
-    // awayMsg)`). The PM-header/user-list refreshes the PWA pairs with it are
-    // reactive on native. Runs after `setShowStatus` so `publishPresence`
-    // reads the new `_statusMode`.
+    // Re-assert presence under the new visibility now rather than at the next throttled broadcast.
     if (prevShowStatus != d.showStatus) {
       final appState = ref.read(appStateProvider);
       final awayMsg = appState.users[appState.selfPubkey]?.awayMessage ?? '';
@@ -780,18 +621,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ctrl.setLowDataMode(d.lowDataMode);
     ctrl.setBackgroundConnectivity(d.backgroundConnectivity);
 
-    // KV-only Save-gated controls (not Settings fields). Skip keypair when
-    // locked to 'persistent' by a logged-in Nostr identity (the select is
-    // disabled, app.js:3237-3241, so its value never changes).
+    // Keypair is locked to 'persistent' while logged in with a Nostr identity.
     final nostrLoggedIn =
         ref.read(nostrControllerProvider).identity?.loginMethod != null;
     if (!nostrLoggedIn) {
       ctrl.setKeypairMode(_draftKeypair);
-      // `saveSettings`' keypair side effects (app.js:3878-3890): switching to
-      // random/hardcore removes the saved session nsec so the next launch
-      // generates a fresh identity; switching to persistent saves the CURRENT
-      // keypair's nsec (only when none is stored) so the identity in use
-      // survives the next launch instead of being regenerated.
+      // Random/hardcore removes the saved nsec; persistent saves the current one if none is stored.
       final secure = SecureStore();
       if (_draftKeypair == 'random' || _draftKeypair == 'hardcore') {
         unawaited(secure.remove(SecretKeys.sessionNsec));
@@ -806,7 +641,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     SecretKeys.sessionNsec, bech32.encodeNsecBytes(privkey));
               }
             } catch (_) {
-              // Best-effort, like the PWA's swallowed nsecEncode try/catch.
+              // Best-effort.
             }
           }());
         }
@@ -819,24 +654,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ctrl.setBlurImages(_draftBlur,
         pubkey: ref.read(appStateProvider).selfPubkey);
 
-    // Cache-PMs side-effect: wipe existing decrypted PM/group cache only when
-    // the value flipped on→off (PWA app.js:3853-3858), not on every save.
+    // Wipe the PM/group cache only when caching flipped on to off.
     if (_cachePMsAtOpen && !d.cachePMs) {
       ref.read(nostrControllerProvider).clearPmGroupCache();
     }
 
-    // Commit the landing channel (F8 — not write-on-change). Routed through the
-    // synced setter (settings_provider.dart:274) rather than a bare KV write so
-    // a Save fires the cross-device `settings-set` publish like every other
-    // Save-gated control — the PWA syncs `pinnedLandingChannel` on Save
-    // (settings.js:21,116; `nostrSettingsSave()`, app.js:3995). The serialized
-    // value is byte-identical to the old `writeLandingChannel` write.
+    // Commit via the synced setter so Save publishes it like other settings.
     ctrl.setPinnedLandingChannel(_landing.toJsonString());
 
-    // Hidden #autoEphemeralSelect compatibility handling (app.js:3862-3870):
-    // the PWA seeds the (permanently hidden) select from `nym_auto_ephemeral`
-    // on open and reads it back on Save — anything but 'true' removes the
-    // auto-ephemeral keys.
+    // The hidden auto-ephemeral select: anything but 'true' removes the auto-ephemeral keys.
     final kvStore = ref.read(keyValueStoreProvider);
     if (kvStore.getString(StorageKeys.autoEphemeral) == 'true') {
       kvStore.setString(StorageKeys.autoEphemeral, 'true');
@@ -851,23 +677,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     Navigator.of(context).maybePop();
   }
 
-  /// Chat-Wallpaper "Upload" tile: pick an image from the gallery, validate
-  /// the PWA's 1920x1080 minimum (users.js:830-850 `uploadWallpaper`), upload
-  /// it to the Blossom hosts and store the returned public URL in
-  /// `nym_wallpaper_custom_url` (so it can roam cross-device as
-  /// `wallpaperCustomUrl`, settings.js:12), then select custom mode. Mirrors
-  /// the PWA `triggerWallpaperUpload`/`handleWallpaperUpload`
-  /// (app.js:4177-4209) — including the Upload tile's "Uploading..." state and
-  /// thumbnail, and leaving the selection unchanged on a failed upload.
-  /// No-op on cancel.
+  /// Picks an image, uploads it to Blossom and selects it; failures leave the selection unchanged.
   Future<void> _uploadCustomWallpaper(SettingsController ctrl) async {
     final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
-    if (picked == null) return; // user canceled the picker
+    if (picked == null) return;
     if (mounted) setState(() => _wallpaperUploading = true);
     try {
-      // Validate the minimum image size (users.js:831-850: reject anything
-      // under 1920x1080 with the exact PWA system message; a decode failure
-      // counts as invalid, like the PWA's `img.onerror`).
+      // Reject anything under 1920x1080; a decode failure counts as invalid.
       const minWidth = 1920, minHeight = 1080;
       final bytes = await File(picked.path).readAsBytes();
       var validSize = false;
@@ -887,48 +703,33 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             {'width': minWidth, 'height': minHeight}));
         return;
       }
-      // Upload through the proxy to the Blossom hosts (users.js:852-857
-      // `_uploadWithFallback` — the SHA-256 `x`-tag auth + 3-server fallback
-      // live in `NostrController.uploadImage`, the same path chat images use).
+      // Same Blossom upload path as chat images.
       String? url;
       try {
         url = await ref
             .read(nostrControllerProvider)
             .uploadImage(bytes, contentType: _imageContentType(picked.path));
       } catch (e) {
-        // `uploadWallpaper`'s catch branch (users.js:864-866) surfaces
-        // `error.message` — strip Dart's `Exception: ` toString prefix so the
-        // system message reads like the PWA's.
+        // Strip Dart's `Exception: ` prefix.
         final msg = '$e'.replaceFirst(RegExp(r'^Exception:\s*'), '');
         _systemMessage(
             tr('Failed to upload wallpaper: {error}', {'error': msg}));
         return;
       }
       if (url == null || url.isEmpty) {
-        // Every server failed (`uploadImage` swallows per-server errors and
-        // returns null; `_uploadWithFallback`'s no-lastErr throw is
-        // `'All Blossom servers failed'`, users.js:562 → uploadWallpaper's
-        // catch, users.js:864-866): the tile reverts and the selection stays
-        // unchanged, like `handleWallpaperUpload`'s null branch
-        // (app.js:4203-4205).
+        // Every server failed: the tile reverts and the selection stays.
         _systemMessage(
             tr('Failed to upload wallpaper: All Blossom servers failed'));
         return;
       }
-      // Cache the bytes we already have under the new url, so this device never
-      // fetches its own wallpaper back from the host, and drop any previous
-      // wallpaper's cached copy. The url still goes to settings — it is what
-      // travels to the user's other devices, which fetch once and then cache
-      // the same way.
+      // Cache our own bytes under the new URL so this device never re-fetches them.
       await WallpaperCache.store(url, bytes);
       unawaited(WallpaperCache.pruneExcept(url));
       await ref.read(keyValueStoreProvider).setString(
             StorageKeys.wallpaperCustomUrl,
             url,
           );
-      // Live-applied like the PWA's custom upload; mirror into the draft so the
-      // Save fan-out (which sends `_draft.wallpaperType`) keeps 'custom'
-      // selected.
+      // Live-applied; mirror into the draft so Save keeps 'custom'.
       ctrl.setWallpaperType('custom');
       if (!mounted) return;
       _mutate((d) => d.copyWith(wallpaperType: 'custom'));
@@ -938,8 +739,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  /// The picked file's MIME type from its extension (the PWA sends the File's
-  /// own `type` to the Blossom PUT).
+  /// MIME type from the file extension.
   static String _imageContentType(String path) {
     switch (p.extension(path).toLowerCase()) {
       case '.png':
@@ -955,11 +755,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  /// Add Keyword (F4): persist + render the new row + confirm + queue the
-  /// cross-device sync (users.js:121-148 `addBlockedKeyword` ends with
-  /// `nostrSettingsSave()`). A duplicate is a no-op on the Set, but the PWA
-  /// still clears the input, shows the confirmation, and syncs — only an
-  /// empty input skips everything.
+  /// Adds a keyword, confirms and syncs; duplicates still confirm, only empty input is skipped.
   void _addKeyword(SettingsController ctrl) {
     final kw = _keywordController.text.trim().toLowerCase();
     if (kw.isEmpty) return;
@@ -971,35 +767,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     setState(() {});
   }
 
-  /// Persists a live moderation Set to KV as the JSON string array the PWA
-  /// uses (`saveFriends`/`saveBlockedUsers`/`saveHiddenChannels`/
-  /// `saveBlockedChannels`/`saveBlockedKeywords`). The store has no typed
-  /// set-setter, so we serialize through `setString`.
+  /// Persists a moderation set as a JSON string array.
   void _persistStringSet(String key, Set<String> values) {
     ref.read(keyValueStoreProvider).setString(key, jsonEncode(values.toList()));
   }
 
-  /// Persists the live blocked-keyword Set to `nym_blocked_keywords`.
   void _persistBlockedKeywords() {
     _persistStringSet(StorageKeys.blockedKeywords,
         ref.read(appStateProvider).blockedKeywords);
   }
 
-  /// Quick React emoji "Change" (F5): open the emoji picker; a pick commits
-  /// IMMEDIATELY (app.js:3294-3303 — the picker callback sets
-  /// `nym.settings.swipeReactEmoji` + localStorage `nym_swipe_react_emoji` at
-  /// once, so the choice survives Cancel).
-  ///
-  /// The pick goes through the SYNCED setter ([SettingsController
-  /// .setSwipeReactEmoji]) so it persists AND publishes right away. An earlier
-  /// version wrote only KV + live state (no publish) on the theory that Save
-  /// would republish it — but the pick already commits outside the Save-gated
-  /// draft (it "survives Cancel"), so a user who never pressed Save had their
-  /// choice silently reverted on the next launch: boot re-applies the last
-  /// *published* settings wrap (`_applySyncedSettings`), which still held the
-  /// default ❤️, clobbering the un-published local pick. Publishing on pick
-  /// advances the server wrap immediately, so it can never be reverted. The
-  /// draft is kept in step so a later Save is a no-op re-send.
+  /// The pick commits immediately via the synced setter, outside the Save-gated draft, so a later boot can't revert it.
   void _openSwipeReactPicker(SettingsController ctrl) {
     final c = context.nym;
     final recents = ref.read(recentEmojisProvider);
@@ -1021,14 +799,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             recents: recents,
             onSelect: (emoji) {
               Navigator.of(dialogCtx).maybePop();
-              // Immediate commit (app.js:3298-3300): persisted KV key + live
-              // state AND a synced publish, so the pick can't be reverted by a
-              // later boot/cross-device settings apply. Keep the draft in step.
+              // Immediate synced commit; keep the draft in step.
               ctrl.setSwipeReactEmoji(emoji);
-              // Publish NOW rather than on the 5s debounce. A user who picks an
-              // emoji and immediately leaves the app never gets that timer, so
-              // the choice would sit only on this device — and the next launch
-              // would apply the older published blob straight over it.
+              // Publish now rather than on the 5s debounce, or leaving the app loses the pick.
               ref.read(nostrControllerProvider).flushSettingsSyncNow();
               _mutate((d) => d.copyWith(swipeReactEmoji: emoji));
               ref.read(recentEmojisProvider.notifier).record(emoji);
@@ -1039,14 +812,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// Swipe-action `<select>` change (09-F-LOW-5): stage the new action into the
-  /// draft, then — mirroring the PWA's `handleSwipeActionChange`
-  /// (app.js:3316-3324) — auto-open the emoji picker the moment a swipe action
-  /// is switched TO "react" when (a) the previous action wasn't already "react"
-  /// and (b) no swipe-react emoji has ever been persisted. The PWA gates on the
-  /// raw `localStorage.getItem('nym_swipe_react_emoji')` being absent, so we
-  /// check the raw KV key (NOT the draft's `'❤️'` default, which is always
-  /// present) — a user who deliberately picked an emoji is never re-prompted.
+  /// Switching to "react" opens the emoji picker if no swipe emoji was ever persisted (raw KV key, not the draft default).
   void _onSwipeActionChanged(
     SettingsController ctrl, {
     required String prev,
@@ -1064,13 +830,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  /// Notification-sound change: stage the choice into the draft (Save-gated,
-  /// 09-M1 — the PWA only commits the sound on Save), then play it as an audible
-  /// preview (the PWA's `soundSelect.onchange` → `nym.playSound(value)`,
-  /// app.js:3480-3484, which previews but does NOT persist). `'none'`/unknown is
-  /// silent. The PWA zeroes its 2s replay-dedupe before the preview
-  /// (app.js:3481-3483) so back-to-back previews always sound — without it a
-  /// second change within 2s is swallowed by the guard.
+  /// Stages the sound and plays a preview, resetting the 2s replay guard so back-to-back previews sound.
   void _onSoundChanged(SettingsController ctrl, String value) {
     _mutate((d) => d.copyWith(sound: value));
     final svc = ref.read(notificationsServiceProvider);
@@ -1078,12 +838,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     svc.playSound(value);
   }
 
-  /// Clear Local Storage Cache (F10): danger confirm with the PWA copy, wipe
-  /// the real on-device cache via the controller (which also mirrors the wipe
-  /// in the in-memory session, app.js:4013-4030), then toast and close the
-  /// settings modal (app.js:4033 `closeModal('settingsModal')`). The wipe is
-  /// best-effort — the PWA swallows `resetCache` errors (app.js:4007-4011) and
-  /// still confirms + closes.
+  /// Confirms, wipes the on-device cache (best-effort), then toasts and closes.
   Future<void> _clearCache() async {
     final ok = await showAppConfirm(
       context,
@@ -1094,12 +849,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
     if (!ok || !mounted) return;
     final controller = ref.read(nostrControllerProvider);
-    // Reflect the in-flight wipe in the readout immediately.
+    // Reflect the in-flight wipe in the readout.
     setState(() => _cacheReadout = null);
     try {
       await controller.clearCache();
     } catch (_) {
-      // Best-effort, like the PWA's swallowed resetCache try/catch.
+      // Best-effort.
     }
     if (!mounted) return;
     setState(() => _cacheReadout = tr('No cached data on device yet'));
@@ -1109,10 +864,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     Navigator.of(context).maybePop();
   }
 
-  /// Reset Settings to Defaults (F11): danger confirm, wipe the exact settings
-  /// keys (+ image-blur prefixes), reset moderation Sets, reload Settings from
-  /// the now-cleared store so theme/layout/wallpaper revert live, then toast +
-  /// close.
+  /// Confirms, wipes settings keys, resets moderation sets and reloads Settings so everything reverts live.
   Future<void> _resetSettings() async {
     final ok = await showAppConfirm(
       context,
@@ -1128,19 +880,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     for (final key in kSettingsResetKeys) {
       kv.remove(key);
     }
-    // Per-pubkey image-blur keys (`nym_image_blur_<pubkey>`): the store can't
-    // enumerate keys, so clear the self entry explicitly (the only one this
-    // device writes via setBlurImages).
+    // The store can't enumerate keys, so clear this pubkey's blur key explicitly.
     final self = ref.read(appStateProvider).selfPubkey;
     if (self.isNotEmpty) kv.remove(StorageKeys.imageBlurFor(self));
 
-    // Reset the in-memory moderation Sets (pinned/hidden/blocked/keywords).
+    // Reset the in-memory moderation sets.
     final notifier = ref.read(appStateProvider.notifier);
-    // `nym.pinnedChannels = new Set()` + `updateChannelPins()` (app.js:4090,
-    // 4101): un-pin every favorited channel so the stars (and the
-    // hide-non-pinned filter) clear immediately, not on the next relaunch.
-    // `togglePin` notifies per removal; #nymchat is never in the set (it can
-    // neither be pinned nor unpinned).
+    // Unpin every channel now; #nymchat is never in the set.
     for (final key in ref.read(appStateProvider).pinnedChannels.toList()) {
       notifier.togglePin(key);
     }
@@ -1157,12 +903,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       notifier.removeBlockedChannel(key);
     }
 
-    // F11 follow-up: rebuild Settings from the now-cleared store so every
-    // synced/visual default (theme, color-mode, message layout, wallpaper,
-    // text size, transparency, …) reverts immediately without a relaunch.
-    // This mirrors the PWA's post-reset re-apply of color-mode/wallpaper('none')
-    // /layout('bubbles') (app.js:4095-4100): rebuilding `Settings.fromStore`
-    // drives all of those reactively here.
+    // Rebuild Settings from the cleared store so visual defaults revert without a relaunch.
     ref.read(settingsProvider.notifier).reloadFromStore();
 
     if (!mounted) return;
@@ -1172,12 +913,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     Navigator.of(context).maybePop();
   }
 
-  /// Transfer → Send (F9): client-side validate the recipient pubkey and show
-  /// the matching inline error (shop.js:1767 `executeSettingsTransfer`). On a
-  /// valid recipient, publish the gift-wrapped kind-30078 settings transfer via
-  /// the controller, then mirror the PWA's success/error states: clear the input
-  /// + "Settings transfer sent to <8>...!" system message on success, or the
-  /// "Failed to send settings transfer." inline error otherwise.
+  /// Validates the recipient, publishes the gift-wrapped settings transfer, and shows success or error.
   Future<void> _sendTransfer() async {
     if (_transferSending) return;
     final raw = _transferPubkeyController.text.trim().toLowerCase();
@@ -1189,8 +925,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       setState(() => _transferError = err);
       return;
     }
-    // `_canSendGiftWraps()` precondition (shop.js:1788-1791): gift wraps need a
-    // signer-capable identity; without one show the PWA's exact error.
+    // Gift wraps need a signer-capable identity.
     if (ref.read(nostrControllerProvider).identity == null) {
       setState(() => _transferError =
           tr('Settings transfer requires a logged-in account.'));
@@ -1209,7 +944,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (!mounted) return;
     setState(() => _transferSending = false);
     if (ok) {
-      // PWA success path: clear the input + confirm with the truncated pubkey.
       _transferPubkeyController.clear();
       _systemMessage(tr('Settings transfer sent to {pubkey}...!',
           {'pubkey': raw.substring(0, 8)}));
@@ -1219,20 +953,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  /// Resolves the proximity-sorting grant at Save time (F13 / 09-M1). Mirrors
-  /// the PWA's `saveSettings` geolocation branch (app.js:3917-3950): when the
-  /// staged value is enabled AND no location is cached yet, request location
-  /// permission — on grant keep it on, on deny flip back to Disabled and clear
-  /// the cached location. Returns the resolved enabled state for `_onSave` to
-  /// persist.
+  /// Enabling proximity without a cached location asks permission; a denial flips it off and clears the location.
   Future<bool> _resolveProximityOnSave(bool desired) async {
     if (!desired) {
       ref.read(userLocationProvider.notifier).state = null;
       return false;
     }
-    // Already have a location: the PWA's `else` branch (app.js:3941-3946)
-    // keeps proximity on SILENTLY — no permission re-request, no fresh GPS
-    // fix, and no repeated "Location access granted…" system message.
+    // Already located: keep proximity on silently.
     if (ref.read(userLocationProvider) != null) return true;
     try {
       var status = await Permission.locationWhenInUse.status;
@@ -1240,10 +967,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         status = await Permission.locationWhenInUse.request();
       }
       if (status.isGranted) {
-        // Permission granted — now fetch the actual GPS fix (the PWA's
-        // getCurrentPosition success callback, app.js:3920-3930) and store it so
-        // the Haversine proximity sort can engage. A failed/timed-out fix
-        // disables proximity, mirroring the PWA's error branch.
+        // Granted: fetch a fix; failure disables proximity.
         final loc = await fetchCurrentUserLocation();
         if (loc != null) {
           ref.read(userLocationProvider.notifier).state = loc;
@@ -1265,8 +989,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
-  // --- Appearance -----------------------------------------------------------
-
   List<_GroupSpec> _appearance(Settings s, SettingsController ctrl) {
     final columnsWallpaperItems = <({bool value, String label})>[
       (value: false, label: tr('Solid background')),
@@ -1280,18 +1002,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: true, label: tr('Enabled')),
       (value: false, label: tr('Disabled (classic flat view)')),
     ];
-    // The custom-wallpaper thumbnail shown on the Upload tile when custom mode
-    // is active (`initWallpaperUI`, app.js:4211-4227).
     final customWallpaperPath = s.wallpaperType == 'custom'
         ? ref
             .read(keyValueStoreProvider)
             .getString(StorageKeys.wallpaperCustomUrl)
         : null;
     return [
-      // App language (static-text localization). Opens the full language
-      // chooser; on selection the app re-renders in the chosen language and the
-      // choice persists/syncs. Distinct from the message-translation target in
-      // Messaging & Display.
+      // App UI language; the choice persists and syncs, separate from the translation target.
       _GroupSpec(
         text: tr('Language app language localization {lang}',
             {'lang': uiLanguageName(s.uiLanguage)}),
@@ -1303,9 +1020,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onTap: () async {
               await showLanguagePickerDialog(context, ref);
               if (!mounted) return;
-              // Choosing the app language also sets the translation language
-              // (setUiLanguage). Mirror both back into the Save-gated draft so
-              // the row reflects the change and Save doesn't revert it.
+              // Choosing the app language also sets the translation language; mirror both into the draft.
               final live = ref.read(settingsProvider);
               _mutate((d) => d.copyWith(
                     uiLanguage: live.uiLanguage,
@@ -1315,8 +1030,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Color mode segment. Live-applied (PWA auto-saves + applies on click,
-      // app.js:3205-3211): commit immediately AND mirror into the draft.
+      // Live-applied: commit now and mirror into the draft.
       _GroupSpec(
         text: tr('Light Auto Dark Auto matches your system preference'),
         child: FormGroup(
@@ -1335,8 +1049,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Theme `<select>` (index.html:1370-1380 `#themeSelect .form-select`).
-      // Live-applied (PWA `themeSelect.onchange`, app.js:3471-3476).
       _GroupSpec(
         text: tr('Theme {options}', {'options': _optText(_themeOptions())}),
         child: FormGroup(
@@ -1351,10 +1063,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Chat View (single / columns) — two preview cards (.view-option) with
-      // the unconditional "Reset columns to defaults" button after the hint
-      // (index.html:1401; the button has no cv-only-setting class, so it shows
-      // in single-chat mode too).
+      // The reset-columns button shows in single view too.
       _GroupSpec(
         text: tr('Chat View Single Chat (Default) Column View Single shows one '
             'conversation at a time. Column view shows channels, PMs, and '
@@ -1365,7 +1074,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hint: tr('Single shows one conversation at a time. Column view shows '
               'channels, PMs, and group chats side by side in scrollable '
               'columns you can add, remove, and drag to reorder.'),
-          // `.nm-h-58` (btn-small): NOT uppercase (`resetColumnView`).
+          // Not uppercase.
           footer: Align(
             alignment: Alignment.centerLeft,
             child: NymOutlineButton(
@@ -1374,7 +1083,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onPressed: ctrl.resetColumns,
             ),
           ),
-          // Live-applied (PWA `selectChatView`, app.js:4115).
           child: _ViewPicker(
             value: s.useColumns ? 'columns' : 'single',
             onChanged: (v) {
@@ -1384,9 +1092,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Message Threads (Slack-style reply threads) — default on; disabling
-      // restores the classic flat view. Live-applied (PWA
-      // `onThreadsEnabledChange`).
+      // Default on; off restores the flat view.
       _GroupSpec(
         text: tr('Message Threads {options} Group replies under their '
             'original message. Replies open in a thread view and the '
@@ -1407,8 +1113,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Column Message Wallpaper (cv-only: shown under body.columns-mode,
-      // styles-columns.css:64-70).
+      // Columns mode only.
       if (s.useColumns)
         _GroupSpec(
           text: tr(
@@ -1420,7 +1125,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             label: tr('Column Message Wallpaper'),
             hint: tr('In column view, let your chat wallpaper show through the '
                 'message area of each column instead of a solid background.'),
-            // Live-applied (PWA `onColumnsWallpaperChange`, app.js:2218).
             child: FormSelect<bool>(
               value: s.columnsWallpaper,
               items: columnsWallpaperItems,
@@ -1431,7 +1135,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
-      // Chat Wallpaper grid.
       _GroupSpec(
         text: tr('Chat Wallpaper None Geometric Circuit Dots Waves Topography '
             'Hexagons Diamonds Upload Choose a background pattern or upload '
@@ -1440,7 +1143,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           label: tr('Chat Wallpaper'),
           hint: tr('Choose a background pattern or upload your own image '
               '(min 1920x1080)'),
-          // Live-applied (PWA `selectWallpaper`, app.js:4159-4161).
           child: _WallpaperPicker(
             value: s.wallpaperType,
             customThumbPath: customWallpaperPath,
@@ -1453,9 +1155,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Message Layout (bubbles / irc). Live-applied (PWA
-      // `selectMessageLayout`, app.js:4127). The search text includes the mock
-      // preview lines (they're part of the group's rendered textContent).
+      // Search text includes the mock preview lines.
       _GroupSpec(
         text: tr('Message Layout Bubbles (Default) IRC Style Choose between '
             "classic IRC-style or modern chat bubbles alice#e45f hey there! "
@@ -1472,7 +1172,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Visual Transparency.
       _GroupSpec(
         text: tr(
             'Visual Transparency {options} Choose between Solid or Glass, '
@@ -1485,7 +1184,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hint: tr('Choose between Solid or Glass, where messages, modals, '
               'sidebars, and other surfaces are rendered with either solid '
               'backgrounds or a translucent "Glass" look.'),
-          // Live-applied (PWA `onTransparencyChange`, app.js:2223).
           child: FormSelect<bool>(
             value: s.transparencyEnabled,
             items: transparencyItems,
@@ -1496,8 +1194,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Text Size slider with live preview + reset. Live-applied/committed
-      // (PWA `commitTextSize`, app.js:2182).
       _GroupSpec(
         text: tr(
             'Text Size Adjust the size of all text across the app '
@@ -1526,18 +1222,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
   }
 
-  // --- Privacy & Security ---------------------------------------------------
-
   List<_GroupSpec> _privacy(Settings s, SettingsController ctrl) {
-    // The moderation sets (friends / blocked users / blocked keywords) live on
-    // AppState, not Settings.
+    // Moderation sets live on AppState.
     final app = ref.watch(appStateProvider);
-    // `isNostrLoggedIn()` (app.js:4960): a durable Nostr identity is logged in
-    // (loginMethod != null; null = ephemeral). Locks the keypair-rotation
-    // control to 'persistent'.
+    // A durable Nostr login locks keypair rotation to 'persistent'.
     final nostrLoggedIn =
         ref.read(nostrControllerProvider).identity?.loginMethod != null;
-    // Save-gated draft value (09-M1); locked to 'persistent' while logged in.
     final keypairValue = nostrLoggedIn ? 'persistent' : _draftKeypair;
     final keypairItems = <({String value, String label})>[
       (value: 'persistent', label: tr('Disabled (reuse same keypair)')),
@@ -1549,13 +1239,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         'and group chats will not work reliably since recipients cannot reply '
         'to a constantly changing pubkey. Settings will not sync across '
         'devices.');
-    // This setting FILTERS INBOUND messages; it does not change what we send —
-    // the send path floors every outgoing message at kNymchatPowFloor (16 bits)
-    // regardless. The old 8- and 12-bit options were therefore dead: every
-    // Nymchat message already clears them, and a client doing no work at all is
-    // not caught by a threshold that low either. Above 16 hides messages from
-    // other Nymchat users, who mine at 16 — the labels say so rather than
-    // presenting it as a neutral "High".
+    // This filters inbound messages only; sends are floored at 16 bits, so above 16 hides other Nymchat users.
     final powItems = <({int value, String label})>[
       (value: 0, label: tr('Disabled')),
       (value: 16, label: tr('16 bits (Nymchat minimum)')),
@@ -1575,11 +1259,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         '⚠ Audio/video calls and P2P file sharing connect peers directly over '
         'WebRTC, which can reveal your true IP address to the other party. '
         'Use a VPN or Tor to help conceal it.');
-    // Post-quantum: sending and receiving are different questions. Sending
-    // needs only the peer's announced key, so any login can do it; receiving
-    // needs this device's own root, which is what the nympq1 code carries. A
-    // device without one therefore sends post-quantum and receives classical,
-    // whatever the login type. See PqPolicy.
+    // Sending post-quantum needs only the peer's key; receiving needs this device's root.
     final nostrCtrl = ref.read(nostrControllerProvider);
     final pqCapable = nostrCtrl.pqCapable;
     final pqSendOnly = !pqCapable && nostrCtrl.pqEnabled;
@@ -1589,7 +1269,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         : pqPeers == 1
             ? tr(kPqReachOne)
             : tr(kPqReachSome, {'count': '$pqPeers'});
-    // Root-seeded is the only state that gets the unqualified "Active".
+    // Only root-seeded gets the unqualified "Active".
     final pqRootHeld = nostrCtrl.pqRootHeld;
     final pqStatus = pqCapable && pqRootHeld
         ? '${tr(kPqStatusFull)} $pqReach'
@@ -1644,7 +1324,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'fallback.'),
           child: NymOutlineButton(
             label: tr('Encrypt identity (nsec) key on this device…'),
-            // F18: open the existing vault-settings modal (identity slice).
             onPressed: () => VaultSettingsModal.open(context),
           ),
         ),
@@ -1665,8 +1344,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
-      // The hidden hardcore warning is part of the group's textContent even
-      // when collapsed away in the PWA, so it's always searchable.
+      // The hardcore warning is always searchable.
       _GroupSpec(
         text: tr(
             'Generate Random Keypair Per Session {options} Generate a new '
@@ -1679,18 +1357,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           hint: tr('Generate a new random keypair on every session restart '
               'for improved pseudonymity. When disabled, your generated '
               'keypair persists across reloads.'),
-          // `#hardcoreKeypairWarning` (index.html:1541): a plain amber
-          // `.form-hint.nm-h-59` line, NOT the danger `.form-warning` box.
+          // A plain amber hint, not the danger box.
           amberHint: keypairValue == 'hardcore' ? hardcoreWarning : null,
           child: FormSelect<String>(
             value: keypairValue,
-            // Locked at 'persistent' while logged in with a Nostr identity —
-            // rotation would conflict with it (app.js:3237-3241).
+            // Locked while logged in with a Nostr identity.
             disabled: nostrLoggedIn,
             tooltip: tr('Not available while logged in with a Nostr identity'),
             items: keypairItems,
-            // Save-gated (PWA commits keypair mode in saveSettings,
-            // app.js:3873-3877).
             onChanged: (v) => setState(() => _draftKeypair = v),
           ),
         ),
@@ -1713,7 +1387,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: FormSelect<int>(
             value: _draftPow,
             items: powItems,
-            // Save-gated (PWA reads #powDifficultySelect in saveSettings).
             onChanged: (v) => setState(() => _draftPow = v),
           ),
         ),
@@ -1791,10 +1464,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Read-only status, not a setting: post-quantum is simply how Nymchat
-      // talks to Nymchat. Shown anyway so the security posture is visible, and
-      // so an extension / NIP-46 login is told WHY it is classical rather than
-      // left to wonder — that is a property of the login, not a preference.
+      // Read-only status so the security posture and any classical reason are visible.
       _GroupSpec(
         text: tr(
             'Quantum-resistant encryption {status} Private messages and group '
@@ -1810,9 +1480,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'by a future quantum computer. This is automatic and has no '
               'setting. Bitchat users and other Nostr clients keep receiving '
               'standard NIP‑17 exactly as before.'),
-          // Green only when it is genuinely on end to end. The send-only and
-          // unavailable states keep the ordinary color, so the green means
-          // one thing — the same rule the PWA's status line follows.
+          // Green only when genuinely on end to end.
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1825,10 +1493,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   fontSize: 13,
                 ),
               ),
-              // Four terms decide whether a conversation is post-quantum, and
-              // from outside all four look the same: a shield reading "Not
-              // quantum-resistant". Read on demand, because every value in here
-              // can change on the next announcement.
+              // On-demand diagnostics of the terms behind each conversation's shield.
               const _PqDiagnostics(),
             ],
           ),
@@ -1855,7 +1520,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Disappear After (TTL) — shown when forward secrecy is enabled.
       if (s.dmForwardSecrecyEnabled)
         _GroupSpec(
           text: tr(
@@ -1955,9 +1619,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               (value: true, label: tr('Enabled')),
               (value: false, label: tr('Disabled')),
             ],
-            // Save-gated. The existing PM/group cache is wiped on Save (only when
-            // the value flipped on→off, PWA app.js:3853-3858) — handled in
-            // `_onSave`, not on-change.
+            // The cache wipe happens in `_onSave`, only on an on-to-off flip.
             onChanged: (v) => _mutate((d) => d.copyWith(cachePMs: v)),
           ),
         ),
@@ -1976,7 +1638,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: FormSelect<String>(
             value: _draftBlur,
             items: blurItems,
-            // Save-gated (PWA commits blur in saveSettings, app.js:3729-3754).
             onChanged: (v) => setState(() => _draftBlur = v),
           ),
         ),
@@ -2016,8 +1677,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onRemove: (kw) {
                   ref.read(appStateProvider.notifier).removeBlockedKeyword(kw);
                   _persistBlockedKeywords();
-                  // users.js:150-178 `removeBlockedKeyword`: confirm with the
-                  // system pill, then `nostrSettingsSave()`.
                   _systemMessage(
                       tr('Unblocked keyword: "{keyword}"', {'keyword': kw}));
                   ref.read(nostrControllerProvider).syncSettings();
@@ -2048,9 +1707,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             buttonLabel: tr('Remove'),
             labelFor: _nymLabelFor,
             labelSpanFor: _nymSpanFor,
-            // `removeFriendByPubkey` (users.js:1953-1961): delete + saveFriends
-            // + system message + nostrSettingsSave. The controller wrapper
-            // persists `nym_friends` and emits "Removed … from friends".
             onRemove: (pk) {
               final controller = ref.read(nostrControllerProvider);
               controller.toggleFriend(pk);
@@ -2068,8 +1724,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         child: FormGroup(
           label: tr('Blocked Users'),
           child: _blockedProfilesLoading
-              // `updateBlockedList` renders "Loading..." while unknown blocked
-              // users' profiles are fetched (users.js:1774-1781).
               ? _emptyListBox(tr('Loading...'))
               : _removableList(
                   entries: app.blockedUsers,
@@ -2077,10 +1731,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   buttonLabel: tr('Unblock'),
                   labelFor: _nymLabelFor,
                   labelSpanFor: _nymSpanFor,
-                  // `unblockByPubkey` (users.js): delete + saveBlockedUsers +
-                  // "Unblocked …" system message + nostrSettingsSave. The
-                  // controller wrapper persists `nym_blocked` + emits the
-                  // message.
                   onRemove: (pk) {
                     final controller = ref.read(nostrControllerProvider);
                     controller.unblockUser(pk);
@@ -2108,9 +1758,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
   }
 
-  /// The four packs, each a checkbox above its own description. The
-  /// description is not a tooltip because what a pack does — and what it
-  /// deliberately does NOT catch — is the whole basis for choosing it.
+  /// Each pack's description is shown, since what it does and doesn't catch is the basis for choosing it.
   static const List<({String id, String label, String desc})> _filterPackSpecs = [
     (
       id: 'profanity',
@@ -2216,9 +1864,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// The rich `name` + dim `#suffix` span for a moderation-list row
-  /// (users.js `getNymHtmlFromPubkey` → `dimNymSuffix`: the trailing 4-hex
-  /// suffix renders in `.nym-suffix` — opacity .7, 0.9em, weight 100).
+  /// Moderation row nym with a dim `#suffix`.
   TextSpan _nymSpanFor(String pubkey) {
     final c = context.nym;
     final nym = _nymLabelFor(pubkey);
@@ -2242,8 +1888,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ],
     );
   }
-
-  // --- Messaging & Display --------------------------------------------------
 
   List<_GroupSpec> _messaging(Settings s, SettingsController ctrl) {
     final timeFormatItems = <({String value, String label})>[
@@ -2270,7 +1914,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           label: tr('Translation Language'),
           hint: tr('Choose your preferred language for translating messages '
               'via the context menu.'),
-          // Same searchable ~130-language chooser as the app language above.
+          // Same language chooser as the app language.
           child: _LanguageSelectRow(
             currentName: uiLanguageName(s.translateLanguage),
             onTap: () => showLanguageListDialog(
@@ -2291,7 +1935,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: FormSelect<String>(
             value: s.sound,
             items: _soundOptions(),
-            // Persist + play an audible preview of the chosen tone.
+            // Stage and preview the chosen tone.
             onChanged: (v) => _onSoundChanged(ctrl, v),
           ),
         ),
@@ -2324,10 +1968,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Time/Date Format are hidden when Show Timestamps = Hide (09-M2),
-      // mirroring the PWA's `#timeFormatGroup`/`#dateFormatGroup` display
-      // toggle (app.js:3492-3499 + the #timestampSelect change listener
-      // app.js:6843-6852). `s` is the draft, so toggling re-renders this.
+      // Time/date format hide when timestamps are hidden.
       if (s.showTimestamps) ...[
         _GroupSpec(
           text: tr(
@@ -2373,13 +2014,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // NOTE: #autoEphemeralSettingGroup is permanently hidden in the PWA
-      // (nm-hidden), so no control renders here — but its save-time key
-      // cleanup is mirrored in `_onSave` (app.js:3862-3870).
+      // Auto-ephemeral has no visible control; its Save cleanup is in `_onSave`.
     ];
   }
-
-  // --- Channels -------------------------------------------------------------
 
   List<_GroupSpec> _channels(Settings s, SettingsController ctrl) {
     final state = ref.watch(appStateProvider);
@@ -2415,8 +2052,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Geohash-specific settings (data-geohash-setting) are hidden in
-      // group-chat/PM-only mode (F6; app.js:3598-3607).
+      // Geohash settings are hidden in group-chat/PM-only mode.
       if (!s.groupChatPMOnlyMode) ...[
         _GroupSpec(
           text: tr(
@@ -2426,10 +2062,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: FormGroup(
             label: tr('Sort Geohash Channels by Proximity'),
             hint: tr('Sort geohash channels by distance from your location'),
-            // Save-gated: the PWA reads `#proximitySelect` and runs the
-            // geolocation permission flow inside `saveSettings`
-            // (app.js:3728/3917-3950), not on-change. The grant/deny resolution
-            // is handled in `_onSave`.
+            // Save-gated; the permission flow runs in `_onSave`.
             child: FormSelect<bool>(
               value: s.sortByProximity,
               items: proximityItems,
@@ -2475,11 +2108,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               entries: state.hiddenChannels,
               emptyText: tr('No hidden channels'),
               buttonLabel: tr('Unhide'),
-              // `updateHiddenChannelsList` (channels.js:942-945): `#key` plus
-              // the decoded geohash location, e.g. `#9q (37.77°N, 122.41°W)`.
+              // `#key` plus the decoded geohash location.
               labelFor: _hiddenChannelLabel,
-              // `unhideChannelFromSettings` (channels.js:955-961): delete +
-              // saveHiddenChannels + nostrSettingsSave + applyHiddenChannels.
               onRemove: (key) {
                 ref.read(appStateProvider.notifier).removeHiddenChannel(key);
                 _persistStringSet(StorageKeys.hiddenChannels,
@@ -2501,12 +2131,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               entries: state.blockedChannels,
               emptyText: tr('No blocked channels'),
               buttonLabel: tr('Unblock'),
-              // `updateBlockedChannelsList` (channels.js:915): geohash keys
-              // render `#key [GEO]`, ephemeral keys `#key [EPH]`.
+              // Geohash keys show `[GEO]`, ephemeral keys `[EPH]`.
               labelFor: _blockedChannelLabel,
-              // `unblockChannelFromSettings` (channels.js:926-932) →
-              // `unblockChannel(key, geohash)`: delete + saveBlockedChannels +
-              // nostrSettingsSave + re-add the channel to the sidebar.
               onRemove: (key) {
                 final controller = ref.read(nostrControllerProvider);
                 final isGeo = isValidGeohash(key);
@@ -2515,8 +2141,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     .unblockChannel(key, geohash: isGeo ? key : '');
                 _persistStringSet(StorageKeys.blockedChannels,
                     ref.read(appStateProvider).blockedChannels);
-                // Re-adding through the controller is idempotent and persists
-                // the rejoined channel list (the PWA's `addChannel` path).
+                // Re-adding is idempotent and persists the channel list.
                 controller.addChannel(key, geohash: isGeo ? key : '');
                 controller.syncSettings();
               },
@@ -2527,22 +2152,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
   }
 
-  /// `#key (37.77°N, 122.41°W)` for a hidden geohash channel, bare `#key`
-  /// otherwise (channels.js:942-945).
+  /// `#key (37.77°N, 122.41°W)` for a hidden geohash channel, else `#key`.
   String _hiddenChannelLabel(String key) {
     final loc = geohashLocationLabel(key);
     return loc.isEmpty ? '#$key' : '#$key ($loc)';
   }
 
-  /// `#key [GEO]` for a geohash channel, `#key [EPH]` for an ephemeral one
-  /// (channels.js:915).
+  /// `#key [GEO]` for a geohash channel, `#key [EPH]` otherwise.
   String _blockedChannelLabel(String key) =>
       isValidGeohash(key) ? '#$key [GEO]' : '#$key [EPH]';
 
-  /// Default-landing-channel searchable field (F8): a text input that, when
-  /// focused/typed, shows a grouped suggestions overlay (Common / Joined
-  /// geohash channels). Picking an option seeds the field + `_landing`; SAVE
-  /// persists it.
+  /// Searchable landing-channel field with grouped suggestions; Save persists it.
   Widget _landingChannelField(List<ChannelEntry> channels) {
     final c = context.nym;
     final options = buildLandingChannelOptions(channels);
@@ -2608,11 +2228,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ));
       }
-      // `.channel-dropdown-option.nm-app-3 { padding: 8px 12px; color:
-      // var(--text) }` (no-inline.css:103) — plain rows with no selected
-      // highlight (the PWA's hover handler sets `var(--background)`, an
-      // undefined variable, so even hover renders no visible tint;
-      // app.js:3428-3441).
+      // Plain rows without a selected or hover tint.
       rows.add(InkWell(
         onTap: () {
           setState(() {
@@ -2635,8 +2251,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return rows;
   }
 
-  // --- Mobile Gestures ------------------------------------------------------
-
   List<_GroupSpec> _mobile(Settings s, SettingsController ctrl) {
     final swipeActions = <({String value, String label})>[
       (value: 'quote', label: tr('Quote Reply')),
@@ -2648,7 +2262,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: 'hug', label: tr('Give Warm Hug')),
       (value: 'none', label: tr('None')),
     ];
-    // Swipe-right's options list leads with Translate in the PWA markup.
+    // Swipe-right options lead with Translate.
     final swipeRightActions = <({String value, String label})>[
       (value: 'translate', label: tr('Translate')),
       (value: 'quote', label: tr('Quote Reply')),
@@ -2684,8 +2298,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Swipe sub-settings hide when gestures are disabled (F16;
-      // app.js:3305 updateSwipeSubsettings).
+      // Swipe sub-settings hide when gestures are disabled.
       if (s.gesturesEnabled) ...[
         _GroupSpec(
           text: tr(
@@ -2727,8 +2340,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
-        // The Quick-React-emoji group only shows when a swipe action is set
-        // to "Quick React" (the PWA's `needsEmoji`).
+        // Only when a swipe action is Quick React.
         if (s.swipeLeftAction == 'react' || s.swipeRightAction == 'react')
           _GroupSpec(
             text: tr(
@@ -2740,13 +2352,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               label: tr('Quick React Emoji'),
               hint: tr('Emoji always used when a swipe gesture is set to '
                   '"Quick React". Tap to choose from the full emoji picker.'),
-              // The preview renders a custom `:code:` emoji as its image
-              // (02-G; PWA `renderEmojiPreview`, app.js:3284-3292 — an
-              // anchored `^:code:$` match, so [wholeStringOnly]). A unicode
-              // emoji inherits the button's 22px font (`.nm-h-60`,
-              // no-inline.css:78); a custom-emoji image is 33x33 with
-              // `vertical-align: middle` (`#swipeReactEmojiPreview
-              // img.custom-emoji`, styles-chat.css:1650-1656).
+              // A custom `:code:` preview renders as a 33x33 image; unicode uses the button's 22px font.
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Row(
@@ -2790,14 +2396,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
   }
 
-  // --- Data & Backup --------------------------------------------------------
-
   List<_GroupSpec> _data(Settings s, SettingsController ctrl) {
     final transfers = ref.watch(pendingUserSettingsTransfersProvider);
     return [
-      // Keep-alive first: it is the one setting here that changes what the app
-      // does while the user is NOT looking at it, and the platforms that can
-      // honor it are the only ones it is offered on.
+      // Keep-alive first, offered only where the platform can honor it.
       if (BackgroundConnectivityService.isSupported)
         _GroupSpec(
           text: tr('Stay Connected in Background Disabled Enabled Keeps relay '
@@ -2819,9 +2421,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'with identity encryption on, '
                 'catches up only while the device has been unlocked at least '
                 'once since it was powered on.'),
-            // Save-gated like its Data & Backup siblings (09-M1): the platform
-            // keep-alive is started from the app shell when the setting's
-            // committed value flips, not from this dropdown.
+            // Save-gated; the shell starts the keep-alive when the committed value flips.
             child: FormSelect<bool>(
               value: s.backgroundConnectivity,
               items: [
@@ -2841,10 +2441,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           label: tr('Low Data Mode'),
           hint: tr('Reduces bandwidth by connecting to only 5 default relays '
               'and loading geo relays on-demand when entering channels'),
-          // Inside the settings modal the PWA renders Low Data Mode as a
-          // Disabled/Enabled `<select>` (index.html:1963-1970, `#lowDataModeSelect`),
-          // consistent with its sibling `.form-select`s — NOT a switch (09-M3).
-          // Save-gated like the other dropdowns (09-M1).
+          // A select, not a switch, and Save-gated.
           child: FormSelect<bool>(
             value: s.lowDataMode,
             items: [
@@ -2887,7 +2484,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                 ],
               ),
-              // Inline validation error (F9; #settingsTransferError).
               if (_transferError != null) ...[
                 const SizedBox(height: 6),
                 Text(
@@ -2925,10 +2521,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Real on-device cache readout (F7; refreshAppCacheSize,
-              // app.js:3681-3716). Shows the PWA's "Calculating…" placeholder
-              // until the async read resolves, then the auto-scaled size +
-              // item breakdown.
+              // "Calculating…" until the async read resolves.
               Text(
                 _cacheReadout ?? tr('Calculating…'),
                 style: TextStyle(color: context.nym.textDim, fontSize: 12),
@@ -2987,8 +2580,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
   }
 
-  /// The settings-modal twin of the press-and-hold panic gesture: the same
-  /// wipe, reached deliberately rather than by accident.
+  /// Same wipe as the press-and-hold panic gesture, reached deliberately.
   Future<void> _wipeThisDevice() async {
     final ok = await showAppConfirm(
       context,
@@ -3002,10 +2594,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     startPanicWipe(context, ref);
   }
 
-  /// The list container chrome shared by the moderation lists and the
-  /// pending-transfers list (`.blocked-list,.keyword-list`): `padding:10px;
-  /// border:1px glass-border; border-radius:var(--radius-sm); background:
-  /// rgba(255,255,255,.03); max-height:200px; overflow-y:auto`.
+  /// Shared list container: padded, bordered, max 200px tall, scrolling.
   Widget _listBox({required Widget child}) {
     final c = context.nym;
     return Container(
@@ -3026,7 +2615,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Widget _emptyListBox(String text) {
     final c = context.nym;
-    // Empty state: the dim `.nm-dim12` text inside the same padded list box.
     return _listBox(
       child: Text(
         text,
@@ -3035,13 +2623,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// A populated moderation list (`.keyword-list` / `.blocked-list`): one row
-  /// per entry with a trailing Remove/Unblock button, falling back to the dim
-  /// empty placeholder when [entries] is empty (F1). Each row resolves a
-  /// display label via [labelFor] — or, when [labelSpanFor] is provided, a
-  /// rich span (the PWA's `getNymHtmlFromPubkey` rows: base nym + dim
-  /// `.nym-suffix`). Rows are borderless (PWA `.blocked-item`/`.keyword-item`
-  /// have no dividers), `padding:5px; margin:2px 0`.
+  /// Moderation list with a trailing remove button per row, or the empty placeholder.
   Widget _removableList({
     required Iterable<String> entries,
     required String emptyText,
@@ -3060,7 +2642,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         children: [
           for (var i = 0; i < items.length; i++)
             Padding(
-              // `.blocked-item/.keyword-item { padding: 5px; margin: 2px 0 }`.
               padding: EdgeInsets.only(
                 top: i == 0 ? 0 : 4,
                 bottom: 4,
@@ -3080,8 +2661,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                           ),
                   ),
                   const SizedBox(width: 8),
-                  // `.unblock-btn`/`.remove-keyword-btn`: small red pill,
-                  // label as written ('Remove'/'Unblock'/'Unhide').
                   DangerPillButton(
                     label: buttonLabel,
                     onPressed: () => onRemove(items[i]),
@@ -3094,15 +2673,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// Pending Settings Transfers list (F17; shop.js:1996
-  /// `renderPendingSettingsTransfers`): one card per inbound USER-TO-USER
-  /// transfer (from another account's `executeSettingsTransfer`) showing the
-  /// sender nym, `Verified sender key: <first16>…<last8>`, the transfer date,
-  /// and an "Includes:" summary, with Accept/Reject buttons wired to
-  /// [NostrController.acceptUserSettingsTransfer] /
-  /// [NostrController.rejectUserSettingsTransfer]. Falls back to the dim
-  /// placeholder when there are no offers. (The controller's own-device D1
-  /// sections auto-apply and never appear here, matching the PWA.)
+  /// Inbound user-to-user transfers with sender, verified key, date and contents, plus Accept/Reject.
   Widget _pendingTransfers() {
     final transfers = ref.watch(pendingUserSettingsTransfersProvider);
     if (transfers.isEmpty) return _emptyListBox(tr('No pending transfers'));
@@ -3114,19 +2685,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// One `.nm-shop-27` transfer card (shop.js:2005-2018): info column (flex 1)
-  /// + Accept/Reject `.icon-btn`s in a trailing `.nm-shop-32` row (gap 6px,
-  /// margin-left 8px). Card chrome: `padding:8px; margin-bottom:6px;
-  /// background:rgba(255,255,255,.03); border:1px glass-border;
-  /// border-radius:8px`, contents vertically centered.
   Widget _transferRow(UserSettingsTransfer t) {
     final c = context.nym;
     final controller = ref.read(nostrControllerProvider);
-    // `Includes: ${t.nickname ? 'nickname' : ''}${t.avatarUrl ? ', avatar' :
-    // ''}${t.settings ? ', preferences' : ''}` (shop.js:2013) — including the
-    // PWA's leading-comma quirk when the nickname is absent. `settings` is
-    // always present (the ingest guard requires it), so ', preferences'
-    // always renders.
+    // Keeps the PWA's leading-comma quirk when nickname is absent; preferences always render.
     final includes = StringBuffer(tr('Includes: '));
     if ((t.nickname ?? '').isNotEmpty) includes.write(tr('nickname'));
     if ((t.avatarUrl ?? '').isNotEmpty) includes.write(', ${tr('avatar')}');
@@ -3146,7 +2708,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // `.nm-shop-29`: sender nym, 13px/500.
                 Text(
                   t.fromNym,
                   style: TextStyle(
@@ -3154,7 +2715,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
-                // `.nm-shop-30` with `title="<full pubkey>"` → Tooltip.
                 Tooltip(
                   message: t.fromPubkey,
                   child: Text(
@@ -3165,9 +2725,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 2),
-                // `new Date(t.transferredAt * 1000).toLocaleString()`.
                 Text(formatTransferTimestamp(t.transferredAt), style: dimStyle),
-                // `.nm-shop-31`.
                 Text(includes.toString(), style: dimStyle),
               ],
             ),
@@ -3189,9 +2747,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// Resolves a `base#suffix` display nym for a pubkey, preferring a known user
-  /// entry and falling back to the abbreviated pubkey (users.js
-  /// `getNymFromPubkey`).
+  /// `base#suffix` for a pubkey, falling back to the abbreviated pubkey.
   String _nymLabelFor(String pubkey) {
     final user = ref.read(appStateProvider).users[pubkey];
     if (user != null && user.nym.isNotEmpty) return user.nym;
@@ -3199,7 +2755,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 }
 
-/// Section descriptor: a titled collection of searchable form groups.
+/// Section descriptor: a titled set of searchable form groups.
 class _SectionSpec {
   _SectionSpec({
     required this.key,
@@ -3211,23 +2767,17 @@ class _SectionSpec {
   final List<_GroupSpec> groups;
 }
 
-/// One searchable `.form-group` (inline-bindings.js `filterSettings` hides
-/// non-matching groups individually): [text] is the group's full rendered
-/// text — label + hints + option labels + placeholders + list contents.
+/// One searchable form group; [text] is its full rendered text.
 class _GroupSpec {
   const _GroupSpec({required this.text, required this.child});
   final String text;
   final Widget child;
 }
 
-/// The KV key for the persisted section collapse layout
-/// (inline-bindings.js:28-46 `persist`/`restoreSettingsSectionState`).
+/// Persisted section collapse layout key.
 const String _kSettingsSectionsCollapsedKey = 'nym_settings_sections_collapsed';
 
-// === Pickers ================================================================
-
-/// Theme options, verbatim and in order from `#themeSelect`
-/// (index.html:1370-1380) — a standard `.form-select` dropdown.
+/// Theme options in order.
 List<({NymThemeKey value, String label})> _themeOptions() => [
       (value: NymThemeKey.bitchat, label: tr('Bitchat (Multicolor)')),
       (value: NymThemeKey.matrix, label: tr('Matrix Green')),
@@ -3237,8 +2787,7 @@ List<({NymThemeKey value, String label})> _themeOptions() => [
       (value: NymThemeKey.ghost, label: tr('Ghost (B&W)')),
     ];
 
-/// Wallpaper picker: 3-column grid of the 8 built-in patterns + Upload, with
-/// the selected option ringed in the accent color.
+/// 3-column grid of the built-in patterns plus Upload, selection ringed.
 class _WallpaperPicker extends StatelessWidget {
   const _WallpaperPicker({
     required this.value,
@@ -3250,19 +2799,13 @@ class _WallpaperPicker extends StatelessWidget {
   final String value;
   final ValueChanged<String> onChanged;
 
-  /// Tapping the "Upload" tile runs this instead of `onChanged('custom')`: it
-  /// picks an image, persists it and selects custom mode (the picker stays
-  /// stateless — the async work lives in the parent state). PWA ref:
-  /// `triggerWallpaperUpload`/`handleWallpaperUpload` (app.js:4173-4209).
+  /// The Upload tile runs this instead of `onChanged('custom')`.
   final Future<void> Function() onUploadCustom;
 
-  /// The active custom wallpaper's on-device path, painted as the Upload
-  /// tile's background thumbnail when custom mode is selected
-  /// (`initWallpaperUI`, app.js:4211-4227 + `handleWallpaperUpload`'s
-  /// post-upload thumbnail, app.js:4190-4192). Null → generic upload glyph.
+  /// Custom wallpaper thumbnail on the Upload tile, or null for the glyph.
   final String? customThumbPath;
 
-  /// The in-flight "Uploading..." state on the Upload tile (app.js:4184).
+  /// Upload in progress.
   final bool uploading;
 
   List<({String id, String label})> get _options => [
@@ -3280,9 +2823,7 @@ class _WallpaperPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `.wallpaper-grid { grid-template-columns: repeat(3, 1fr); gap: 10px }`
-    // (styles-features.css:3133-3138). Row heights follow each tile's own
-    // 16:10 preview + label, so plain Rows beat GridView's fixed-aspect cells.
+    // Plain rows rather than GridView, since tile heights vary.
     return Column(
       children: [
         for (var row = 0; row < _options.length; row += 3) ...[
@@ -3301,10 +2842,7 @@ class _WallpaperPicker extends StatelessWidget {
     );
   }
 
-  /// One `.wallpaper-option` tile (styles-features.css:3140-3182): padding 6,
-  /// an ALWAYS-2px border (transparent at rest, so selecting never shifts
-  /// content), radius 12; `.selected` rings the WHOLE option — preview + label
-  /// — in `--primary` and tints its background primary@0.1.
+  /// Wallpaper tile with an always-2px border so selecting never shifts content.
   Widget _option(NymColors c, ({String id, String label}) o) {
     final selected = o.id == value;
     return GestureDetector(
@@ -3322,16 +2860,11 @@ class _WallpaperPicker extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // `.wallpaper-preview`: 16:10, radius 8, and a CONSTANT 1px border
-            // (glass dark / black@0.12 light) regardless of selection.
             AspectRatio(
               aspectRatio: 16 / 10,
               child: Container(
                 decoration: BoxDecoration(
-                  // `.wallpaper-preview` background: rgba(0,0,0,0.3) dark /
-                  // #ffffff light (styles-features.css:3170 +
-                  // styles-themes-responsive.css:1354-1357), so the light
-                  // thumbnails read light-primary-on-white like the PWA.
+                  // Light previews use a white background.
                   color: c.isLight
                       ? Colors.white
                       : Colors.black.withValues(alpha: 0.3),
@@ -3341,13 +2874,7 @@ class _WallpaperPicker extends StatelessWidget {
                   ),
                 ),
                 alignment: Alignment.center,
-                // `.wallpaper-option` icons (index.html:1420-1471): "None" is
-                // the two-line ✕ SVG, "Upload" is the feather upload glyph —
-                // both 20px. Each pattern tile renders the SAME tiled CSS
-                // pattern as the live wallpaper at thumbnail scale
-                // (`.wallpaper-preview.wallpaper-<name>`,
-                // styles-features.css:3184-3243) via the shared painter's
-                // preview variant.
+                // Pattern tiles use the live wallpaper painter at thumbnail scale.
                 child: o.id == 'none'
                     ? NymSvgIcon(NymIcons.close, size: 20, color: c.textDim)
                     : o.id == 'custom'
@@ -3366,8 +2893,6 @@ class _WallpaperPicker extends StatelessWidget {
                           ),
               ),
             ),
-            // `.wallpaper-option { gap: 6px }` + `.wallpaper-label`: 11px
-            // text-dim, primary when selected.
             const SizedBox(height: 6),
             Text(
               o.label,
@@ -3383,9 +2908,7 @@ class _WallpaperPicker extends StatelessWidget {
     );
   }
 
-  /// The Upload tile's content: "Uploading..." while an upload is in flight
-  /// (app.js:4184), the active custom wallpaper as a cover-fit thumbnail when
-  /// one is set (app.js:4190-4192, 4220-4226), else the upload glyph.
+  /// Upload tile: "Uploading...", the current custom thumbnail, or the glyph.
   Widget _customTile(NymColors c) {
     if (uploading) {
       return Text(
@@ -3395,8 +2918,7 @@ class _WallpaperPicker extends StatelessWidget {
     }
     final path = customThumbPath;
     if (path != null && path.isNotEmpty) {
-      // The PWA stores the uploaded blob's public URL; older native installs
-      // may still hold an on-device file path — render either.
+      // Older installs may hold a local file path instead of a URL.
       final isRemote =
           path.startsWith('http://') || path.startsWith('https://');
       if (isRemote || File(path).existsSync()) {
@@ -3404,8 +2926,7 @@ class _WallpaperPicker extends StatelessWidget {
           borderRadius: NymRadius.rxs,
           child: SizedBox.expand(
             child: isRemote
-                // Proxied like every other remote image (hide IP / bypass
-                // hotlink 403s), matching wallpaper_layer.dart's render path.
+                // Proxied like every other remote image.
                 ? Image.network(
                     proxiedAvatarUrl(path) ?? path,
                     fit: BoxFit.cover,
@@ -3421,11 +2942,7 @@ class _WallpaperPicker extends StatelessWidget {
   }
 }
 
-/// A selectable preview card shared by the Chat-View (`.view-option`) and
-/// Message-Layout (`.layout-option`) pickers: a 2px-bordered card (radius sm)
-/// whose preview area sits above a label; selecting it switches the border to
-/// solid `--primary`, adds a `0 0 12px primary@.25` glow, and tints the label
-/// primary.
+/// Selectable preview card for the view and layout pickers.
 class _PreviewCard extends StatelessWidget {
   const _PreviewCard({
     required this.selected,
@@ -3448,8 +2965,6 @@ class _PreviewCard extends StatelessWidget {
         child: AnimatedContainer(
           duration: NymMotion.transition,
           curve: NymMotion.curve,
-          // `.view-option/.layout-option { border: 2px solid glass-border;
-          //   border-radius: var(--radius-sm); padding: 8px }`.
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             borderRadius: NymRadius.rsm,
@@ -3457,7 +2972,6 @@ class _PreviewCard extends StatelessWidget {
               color: selected ? c.primary : c.glassBorder,
               width: 2,
             ),
-            // `.selected { box-shadow: 0 0 12px primary@.25 }`.
             boxShadow: selected
                 ? [BoxShadow(color: c.primaryA(0.25), blurRadius: 12)]
                 : null,
@@ -3466,8 +2980,6 @@ class _PreviewCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               preview,
-              // `.view-label/.layout-label { padding-top: 6px; font-size: 11px;
-              //   color: text-dim }`; selected → primary.
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
@@ -3487,10 +2999,7 @@ class _PreviewCard extends StatelessWidget {
   }
 }
 
-/// One faux column in the Chat-View preview (`.vp-col`): a `bg-tertiary` box of
-/// dim bars; `bars` is the list of bar widths where `true` = full, `false` =
-/// 60% (`.vp-bar.short`). The caller controls width (Expanded for columns,
-/// FractionallySizedBox for the centered single column).
+/// Faux column in the view preview; `bars` are full (true) or 60% width.
 class _VpCol extends StatelessWidget {
   const _VpCol({required this.bars});
   final List<bool> bars;
@@ -3499,8 +3008,6 @@ class _VpCol extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     return Container(
-      // `.vp-col { padding: 5px; gap: 4px; background: bg-tertiary;
-      //   border: 1px glass-border; border-radius: 4px }`.
       padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(
         color: c.bgTertiary,
@@ -3515,11 +3022,8 @@ class _VpCol extends StatelessWidget {
             if (i > 0) const SizedBox(height: 4),
             FractionallySizedBox(
               alignment: Alignment.centerLeft,
-              // `.vp-bar.short { width: 60% }` else 100%.
               widthFactor: bars[i] ? 1.0 : 0.6,
               child: Container(
-                // `.vp-bar { height: 5px; border-radius: 3px; background:
-                //   text-dim; opacity: .5 }`.
                 height: 5,
                 decoration: BoxDecoration(
                   color: c.textDim.withValues(alpha: 0.5),
@@ -3534,9 +3038,7 @@ class _VpCol extends StatelessWidget {
   }
 }
 
-/// Chat-View picker: two `.view-option` cards with miniature column-layout
-/// previews (single = one 60%-width column; columns = three columns), mirroring
-/// index.html:1389-1404.
+/// Single vs columns picker with miniature previews.
 class _ViewPicker extends StatelessWidget {
   const _ViewPicker({required this.value, required this.onChanged});
   final String value;
@@ -3546,10 +3048,6 @@ class _ViewPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
 
-    // `.view-preview { min-height: 90px; padding: 8px; gap: 4px; background:
-    //   rgba(0,0,0,.3); border-radius: var(--radius-xs) }`; selected →
-    //   primary@.08 dark / primary@.12 light (styles-columns.css:480-486
-    //   `body.light-mode .view-option.selected .view-preview`).
     Widget previewBox(
         bool selected, MainAxisAlignment align, List<Widget> cols) {
       return Container(
@@ -3572,7 +3070,7 @@ class _ViewPicker extends StatelessWidget {
 
     final singleSel = value == 'single';
     final columnsSel = value == 'columns';
-    // `.view-grid { display: flex; gap: 12px }` with equal-height cards.
+    // Equal-height cards.
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3581,8 +3079,7 @@ class _ViewPicker extends StatelessWidget {
             selected: singleSel,
             label: tr('Single Chat (Default)'),
             onTap: () => onChanged('single'),
-            // Single: one centered column at 60% width (`.vp-col{flex:0 0 60%}`)
-            // — flex 1:3:1 spacers give the 3/5 = 60% centered column.
+            // Flex 1:3:1 spacers make a centered 60% column.
             preview: previewBox(singleSel, MainAxisAlignment.center, const [
               Spacer(),
               Expanded(
@@ -3595,7 +3092,6 @@ class _ViewPicker extends StatelessWidget {
             selected: columnsSel,
             label: tr('Column View'),
             onTap: () => onChanged('columns'),
-            // Columns: three equal-flex columns (`.vp-col{flex:1}`).
             preview: previewBox(columnsSel, MainAxisAlignment.start, const [
               Expanded(child: _VpCol(bars: [true, false])),
               SizedBox(width: 4),
@@ -3610,15 +3106,13 @@ class _ViewPicker extends StatelessWidget {
   }
 }
 
-/// Message-layout picker (Bubbles / IRC) as two `.layout-option` cards, each
-/// previewing a realistic 3-line mini chat (bubbles or IRC), mirroring
-/// index.html:1481-1496.
+/// Bubbles vs IRC picker with 3-line mock chats.
 class _LayoutPicker extends StatelessWidget {
   const _LayoutPicker({required this.value, required this.onChanged});
   final String value;
   final ValueChanged<String> onChanged;
 
-  // The mock messages the PWA hardcodes into the preview.
+  // The mock preview messages.
   static const _rows = <({String nick, String suffix, String msg, bool self})>[
     (nick: 'alice', suffix: '#e45f', msg: 'hey there!', self: false),
     (nick: 'you', suffix: '#6si9', msg: 'hello!', self: true),
@@ -3630,7 +3124,7 @@ class _LayoutPicker extends StatelessWidget {
     final c = context.nym;
     final bubblesSel = value == 'bubbles';
     final ircSel = value == 'irc';
-    // `.layout-grid { display: flex; gap: 12px }` with equal-height cards.
+    // Equal-height cards.
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3653,9 +3147,6 @@ class _LayoutPicker extends StatelessWidget {
     );
   }
 
-  /// `.layout-preview { min-height: 72px; padding: 8px; background:
-  /// rgba(0,0,0,.3); border-radius: var(--radius-xs); gap: 3px }` (bubbles
-  /// variant: padding 6/4, gap 4).
   Widget _layoutPreviewBox(NymColors c, {required bool bubbles}) {
     return Container(
       constraints: const BoxConstraints(minHeight: 72),
@@ -3680,25 +3171,19 @@ class _LayoutPicker extends StatelessWidget {
     );
   }
 
-  /// A mini chat bubble (`.lp-bubble`): other = left `white@.14`, self = right
-  /// `primary@.2`; nick block in `--secondary`, text in `--text`.
+  /// Mini chat bubble: others left, self right.
   Widget _bubble(
       NymColors c, ({String nick, String suffix, String msg, bool self}) r) {
     final bubble = Container(
-      // `.lp-bubble { padding: 3px 7px; border-radius: 8px; max-width: 80% }`.
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
-        // Light-mode flips both bubbles (09-L). other:
-        // `light-mode .lp-bubble-other { background: rgba(0,0,0,0.07) }`
-        // (responsive:1384-1386); self:
-        // `light-mode .lp-bubble-self { background: primary/0.15 }`
-        // (responsive:1388-1390) vs dark primary/0.2 (features:3398-3401).
+        // Light mode flips both bubble fills.
         color: r.self
             ? c.primaryA(c.isLight ? 0.15 : 0.2)
             : (c.isLight
-                ? const Color(0x12000000) // black@.07
+                ? const Color(0x12000000)
                 : Colors.white.withValues(alpha: 0.14)),
-        // radius 8, with the inner top corner squared to 2px.
+        // Radius 8 with the inner top corner squared.
         borderRadius: BorderRadius.only(
           topLeft: Radius.circular(r.self ? 8 : 2),
           topRight: Radius.circular(r.self ? 2 : 8),
@@ -3710,8 +3195,6 @@ class _LayoutPicker extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // `.lp-bubble-nick { color: secondary; font-size: 7px; weight: 600 }`
-          // + the dim `.nym-suffix`.
           Text.rich(
             TextSpan(
               children: [
@@ -3733,7 +3216,6 @@ class _LayoutPicker extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 1),
-          // `.lp-bubble-text { color: text; font-size: 8px }`.
           Text(
             r.msg,
             style: TextStyle(color: c.text, fontSize: 8, height: 1.3),
@@ -3741,7 +3223,7 @@ class _LayoutPicker extends StatelessWidget {
         ],
       ),
     );
-    // `max-width: 80%` of the preview, aligned left (other) / right (self).
+    // Max 80% width, left for others, right for self.
     return FractionallySizedBox(
       widthFactor: 0.8,
       alignment: r.self ? Alignment.centerRight : Alignment.centerLeft,
@@ -3752,8 +3234,7 @@ class _LayoutPicker extends StatelessWidget {
     );
   }
 
-  /// An IRC preview line (`.layout-line`): `<nick#suffix> msg`, mono 9px, nick
-  /// in `--secondary` (self → `--primary`), msg in `--text`.
+  /// IRC preview line `<nick#suffix> msg`.
   Widget _ircLine(
       NymColors c, ({String nick, String suffix, String msg, bool self}) r) {
     final nickColor = r.self ? c.primary : c.secondary;
@@ -3790,7 +3271,7 @@ class _LayoutPicker extends StatelessWidget {
   }
 }
 
-/// Text-size slider row: small "A", slider, large "A", value badge, Reset.
+/// Text-size slider row with value badge and Reset.
 class _TextSizeRow extends StatelessWidget {
   const _TextSizeRow({
     required this.value,
@@ -3812,8 +3293,7 @@ class _TextSizeRow extends StatelessWidget {
         Text('A', style: TextStyle(color: c.textDim, fontSize: 12)),
         Expanded(
           child: SliderTheme(
-            // `.form-range`: track height 4px, uniform `glass-border` (no
-            // active/inactive split); thumb 16px (radius 8) `--primary`.
+            // Uniform 4px track, 16px primary thumb.
             data: SliderThemeData(
               activeTrackColor: c.glassBorder,
               inactiveTrackColor: c.glassBorder,
@@ -3834,8 +3314,6 @@ class _TextSizeRow extends StatelessWidget {
         ),
         Text('A', style: TextStyle(color: c.textDim, fontSize: 20)),
         const SizedBox(width: 8),
-        // `#textSizeValue` (`.nm-h-57`): 12px `--text-dim`, min-width 32,
-        // centered (no-inline.css:75).
         Container(
           constraints: const BoxConstraints(minWidth: 32),
           alignment: Alignment.center,
@@ -3852,9 +3330,7 @@ class _TextSizeRow extends StatelessWidget {
   }
 }
 
-// === Static option lists ====================================================
-
-/// Notification-sound options, verbatim and in order from `#soundSelect`.
+/// Notification-sound options in order.
 List<({String value, String label})> _soundOptions() => [
       (value: 'beep', label: tr('Classic Beep')),
       (value: 'low', label: tr('Low Tone')),
@@ -3877,11 +3353,7 @@ List<({String value, String label})> _soundOptions() => [
       (value: 'none', label: tr('Silent')),
     ];
 
-/// Translation-language options, verbatim and in order from
-/// `#translateLanguageSelect` (empty value = Disabled).
-/// The Appearance → Language control: a select-styled row showing the active
-/// UI language that opens the full [showLanguagePickerDialog] chooser on tap
-/// (the ~130-language list is too long for an inline dropdown).
+/// Opens the full language chooser, since the list is too long for a dropdown.
 class _LanguageSelectRow extends StatelessWidget {
   const _LanguageSelectRow({required this.currentName, required this.onTap});
 
@@ -3917,8 +3389,7 @@ class _LanguageSelectRow extends StatelessWidget {
   }
 }
 
-/// The post-quantum diagnostics readout: an expandable, copyable dump of the
-/// live terms behind every conversation's shield.
+/// Expandable, copyable dump of the live post-quantum terms.
 class _PqDiagnostics extends ConsumerStatefulWidget {
   const _PqDiagnostics();
 

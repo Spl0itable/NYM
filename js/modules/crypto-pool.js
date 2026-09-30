@@ -1,13 +1,7 @@
-// crypto-pool.js - Routes heavy crypto across a pool of Web Workers
-
 (function () {
     const MAX_WORKERS = 4;
 
-    // Worker dispatcher source (runs inside the blob worker).
-    // `needPq`: a worker whose ML-KEM script defined nothing still has a whole
-    // NymCrypto, and unwrapGiftWrap then returns null for every PQ wrap — which
-    // is this op's "no candidate matched", so the pool called it a success and
-    // never asked the main thread. Refuse the worker instead.
+    // `needPq` refuses workers without ML-KEM, since their null PQ unwrap would look like "no match".
     const WORKER_SRC = "let ready=false;self.onmessage=function(e){var d=e.data||{},id=d.id,op=d.op,args=d.args;" +
         "if(op==='__init'){try{self.importScripts.apply(self,args[0].scripts);" +
         "ready=!!self.NymCrypto&&(!args[0].needPq||!!(self.NymCrypto.pqAvailable&&self.NymCrypto.pqAvailable()));" +
@@ -31,8 +25,7 @@
             this._cryptoPool = null;
             this._cryptoPoolReady = new Promise((resolve) => {
                 const ntUrl = scriptUrl('nostr-tools'), ncUrl = scriptUrl('nym-crypto');
-                // ML-KEM is optional: without it the workers still handle every
-                // classical op and the PQ paths fall back to the main thread.
+                // ML-KEM is optional; without it PQ paths fall back to the main thread.
                 const mkUrl = scriptUrl('vendor/ml-kem');
                 if (typeof Worker === 'undefined' || typeof Blob === 'undefined' ||
                     typeof window.NymCrypto === 'undefined' || !ntUrl || !ncUrl ||
@@ -41,7 +34,6 @@
                 try { blobUrl = URL.createObjectURL(new Blob([WORKER_SRC], { type: 'text/javascript' })); }
                 catch (_) { resolve(null); return; }
                 const scripts = mkUrl ? [ntUrl, mkUrl, ncUrl] : [ntUrl, ncUrl];
-                // Only demanded of the workers when this page has it.
                 const needPq = !!(mkUrl && window.NymCrypto.pqAvailable
                     && window.NymCrypto.pqAvailable());
                 const n = Math.max(1, Math.min(navigator.hardwareConcurrency || 2, MAX_WORKERS));

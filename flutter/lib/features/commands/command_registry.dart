@@ -1,44 +1,25 @@
-// Slash-command registry — a 1:1 port of `js/modules/commands.js`
-// `setupCommands()` + `handleCommand()` (docs/specs/03 §7).
-//
-// This file is the PURE data + parse layer: it knows every command, its
-// aliases, category, description, the context it is allowed to run in, and how
-// formatting commands transform their argument into wire text. The side
-// effects (joining channels, opening PMs, publishing, etc.) live in the
-// controller, which dispatches on [CommandSpec.id] — see
-// `command_handler.dart`. Keeping the registry side-effect-free makes the
-// parser, alias resolution, gating, and formatting unit-testable without a
-// running engine (test/commands_test.dart).
+// Pure slash-command data and parse layer; effects live in the controller, dispatched on [CommandSpec.id].
 
 import '../nymbot/bot_commands.dart';
 
-/// Where a command is allowed to run, mirroring the "Context" column of the
-/// §7 table. The PWA enforces this inside each `cmd*` handler (e.g. `/who`
-/// errors in PMs, `/poll` errors in PM/group, group-only commands require an
-/// active group). We model the gate declaratively so the controller can reject
-/// before dispatching and the palette can still show everything (the PWA lists
-/// all commands regardless of context).
+/// Where a command may run; gated declaratively so the palette can still list everything.
 enum CommandContext {
-  /// Runs anywhere (channel, PM, or group).
+  /// Runs anywhere.
   all,
 
-  /// Public-channel only (`/who`). Rejected in PM/group.
+  /// Public channels only; rejected in PM or group.
   channel,
 
-  /// Channel-only AND never in a PM (`/poll`). Same as [channel] for gating
-  /// but kept distinct to match the §7 "channels only" wording.
+  /// Channel-only like [channel], kept distinct to match the spec's "channels only".
   channelOnly,
 
-  /// Group conversation only (`/groupinfo`, `/kick`, `/ban`, `/unban`,
-  /// `/addmod`, `/removemod`, `/transferowner`). Rejected outside a group.
+  /// Group conversations only.
   groupOnly,
 }
 
-/// The category buckets used by the command palette + `/help`, in PWA order
-/// (`commandCategories`, commands.js:324).
+/// Palette and `/help` categories, in PWA order.
 enum CommandCategory { channels, pms, groups, formatting, misc }
 
-/// Category display labels, verbatim from `commandCategories` (commands.js:324).
 const Map<CommandCategory, String> kCommandCategoryLabels = {
   CommandCategory.channels: 'Public Channels',
   CommandCategory.pms: 'Private Messages',
@@ -47,7 +28,6 @@ const Map<CommandCategory, String> kCommandCategoryLabels = {
   CommandCategory.misc: 'Misc',
 };
 
-/// Ordered category list (palette/help iterate in this order).
 const List<CommandCategory> kCommandCategoryOrder = [
   CommandCategory.channels,
   CommandCategory.pms,
@@ -56,8 +36,7 @@ const List<CommandCategory> kCommandCategoryOrder = [
   CommandCategory.misc,
 ];
 
-/// A single command definition. The canonical key is [name] (e.g. `/join`).
-/// [aliases] are single-letter shortcuts that resolve to the same [id].
+/// One command; [aliases] are single-letter shortcuts resolving to the same [id].
 class CommandSpec {
   const CommandSpec({
     required this.id,
@@ -70,13 +49,12 @@ class CommandSpec {
     this.formatter,
   });
 
-  /// Stable dispatch id (matches the PWA `cmd*` method, sans prefix).
+  /// Stable dispatch id (the PWA `cmd*` method name without the prefix).
   final String id;
 
-  /// Canonical command token including the leading slash (`/join`).
+  /// Canonical token including the leading slash (`/join`).
   final String name;
 
-  /// One-line description (palette/help). Verbatim from the PWA registry.
   final String desc;
 
   final CommandCategory category;
@@ -86,28 +64,21 @@ class CommandSpec {
 
   final CommandContext context;
 
-  /// Whether the command consumes an argument string (drives palette
-  /// completion inserting a trailing space, and usage hints).
+  /// Whether it takes arguments; completion then inserts a trailing space.
   final bool takesArgs;
 
-  /// For formatting commands (`/bold`, `/italic`, …): turns the raw arg into
-  /// the exact wire text the PWA sends (`/bold x` → `**x**`). Null otherwise.
+  /// For formatting commands, maps the raw arg to the exact wire text (`/bold x` -> `**x**`); null otherwise.
   final String Function(String args)? formatter;
 }
 
-/// The full command table — the 33 canonical commands `setupCommands()`
-/// (commands.js:282) defines (the §7 prose says "34" but its own enumerated
-/// list, and the authoritative `this.commands` object, both have 33), with the
-/// same descriptions, categories, aliases, and the §7 context gates.
+/// The 33 canonical commands with the PWA's descriptions, categories, aliases and context gates.
 const List<CommandSpec> kCommandSpecs = [
-  // --- misc ---------------------------------------------------------------
   CommandSpec(
     id: 'help',
     name: '/help',
     desc: 'Show all commands',
     category: CommandCategory.misc,
   ),
-  // --- channels -----------------------------------------------------------
   CommandSpec(
     id: 'join',
     name: '/join',
@@ -116,7 +87,6 @@ const List<CommandSpec> kCommandSpecs = [
     aliases: ['/j'],
     takesArgs: true,
   ),
-  // --- pms ----------------------------------------------------------------
   CommandSpec(
     id: 'pm',
     name: '/pm',
@@ -124,7 +94,6 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.pms,
     takesArgs: true,
   ),
-  // --- misc ---------------------------------------------------------------
   CommandSpec(
     id: 'nick',
     name: '/nick',
@@ -132,7 +101,6 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.misc,
     takesArgs: true,
   ),
-  // --- channels -----------------------------------------------------------
   CommandSpec(
     id: 'who',
     name: '/who',
@@ -153,7 +121,7 @@ const List<CommandSpec> kCommandSpecs = [
     desc: 'Action message',
     category: CommandCategory.misc,
     takesArgs: true,
-    // `/me x` is sent verbatim as `/me x` (rendered "* nym x *").
+    // `/me x` is sent verbatim.
     formatter: _meFormatter,
   ),
   CommandSpec(
@@ -221,7 +189,6 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.misc,
     takesArgs: true,
   ),
-  // --- pms ----------------------------------------------------------------
   CommandSpec(
     id: 'block',
     name: '/block',
@@ -243,7 +210,6 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.pms,
     takesArgs: true,
   ),
-  // --- groups -------------------------------------------------------------
   CommandSpec(
     id: 'group',
     name: '/group',
@@ -265,24 +231,19 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.groups,
     context: CommandContext.groupOnly,
   ),
-  // --- channels -----------------------------------------------------------
   CommandSpec(
     id: 'share',
     name: '/share',
     desc: 'Share #channel URL',
     category: CommandCategory.channels,
-    // No context gate: `cmdShare` → `shareChannel()` (channels.js:411-427)
-    // runs even in PM mode — the URL falls back to
-    // `currentChannel || 'nymchat'`.
+    // No context gate: share works in PM mode too.
   ),
-  // --- pms ----------------------------------------------------------------
   CommandSpec(
     id: 'leave',
     name: '/leave',
     desc: 'Leave conversation',
     category: CommandCategory.pms,
   ),
-  // --- channels -----------------------------------------------------------
   CommandSpec(
     id: 'poll',
     name: '/poll',
@@ -290,7 +251,6 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.channels,
     context: CommandContext.channelOnly,
   ),
-  // --- groups -------------------------------------------------------------
   CommandSpec(
     id: 'kick',
     name: '/kick',
@@ -355,7 +315,6 @@ const List<CommandSpec> kCommandSpecs = [
     context: CommandContext.groupOnly,
     takesArgs: true,
   ),
-  // --- misc ---------------------------------------------------------------
   CommandSpec(
     id: 'slap',
     name: '/slap',
@@ -378,44 +337,25 @@ const List<CommandSpec> kCommandSpecs = [
   ),
 ];
 
-// --- Public `?` Nymbot command palette ------------------------------------
-// The `?`-prefixed bot command palette reuses the SAME `#commandPalette` surface
-// as `/`, but with the PUBLIC bot command set (`showBotCommandPalette`,
-// commands.js:436). Unlike `/`, the bot list is FLAT (no category headers) and
-// renders in catalog order, the first row pre-selected, filtered by
-// `cmd.startsWith(input.toLowerCase())` where `cmd` includes its `?` prefix.
-//
-// We DERIVE the rows from the real bot-command catalog (`kBotCommands` in
-// features/nymbot/bot_commands.dart) rather than duplicating the list. The
-// public channel palette excludes the "Credits (private Nymbot chat)" group
-// (`?balance/?buy/?model/?gift/?transfer`) — those are PM-only and live in
-// the bot's private chat (`botPMCommands`), not the public `?` palette.
+// Public `?` palette rows derived from [kBotCommands], flat and excluding the PM-only credit commands.
 
-/// One selectable row of the public `?` bot-command palette: the command token
-/// (including the leading `?`, e.g. `?flip`) and its one-line description. This
-/// is the bot-command analog of [CommandSpec] for the shared palette surface.
+/// One public `?` palette row: token with its `?` prefix and description.
 class BotPaletteCommand {
   const BotPaletteCommand({required this.command, required this.desc});
 
-  /// The full command token shown as `.command-name`, including `?` (`?flip`).
   final String command;
 
-  /// `.command-desc` text (the catalog's README description).
   final String desc;
 }
 
-/// The public `?` palette catalog, derived from [kBotCommands] in
-/// catalog order with the credit/PM-only commands filtered out. Built once.
+/// Public `?` palette catalog in catalog order, without credit/PM-only commands.
 final List<BotPaletteCommand> kBotPaletteCommands = [
   for (final c in kBotCommands)
     if (!c.creditCommand)
       BotPaletteCommand(command: '?${c.name}', desc: c.description),
 ];
 
-/// Filters the public bot palette for [input] (the raw `?needle`). Mirrors
-/// `showBotCommandPalette` (commands.js:442-443): a command matches when its
-/// `?cmd` token starts with the lower-cased input. Returns the rows in
-/// catalog order, or an empty list when nothing matches (hide the palette).
+/// Rows whose `?cmd` starts with the lowercased input, in catalog order; empty hides the palette.
 List<BotPaletteCommand> buildBotPaletteRows(String input) {
   final needle = input.toLowerCase();
   return [
@@ -424,7 +364,7 @@ List<BotPaletteCommand> buildBotPaletteRows(String input) {
   ];
 }
 
-// Formatting transforms — exact strings the PWA's cmd* handlers send.
+// Exact strings the PWA's formatting commands send.
 String _meFormatter(String args) => '/me $args';
 String _boldFormatter(String args) => '**$args**';
 String _italicFormatter(String args) => '*$args*';
@@ -432,11 +372,10 @@ String _strikeFormatter(String args) => '~~$args~~';
 String _codeFormatter(String args) => '```\n$args\n```';
 String _quoteFormatter(String args) => '> $args';
 
-/// The three action commands that share the rate limit (`/me`, `/slap`,
-/// `/hug`) — `_checkActionCommandRateLimit` in commands.js.
+/// The action commands that share the rate limit.
 const Set<String> kActionCommandIds = {'me', 'slap', 'hug'};
 
-/// Lookup table: every canonical name AND alias → its [CommandSpec]. Built once.
+/// Every canonical name and alias -> its [CommandSpec].
 final Map<String, CommandSpec> _byToken = _buildTokenIndex();
 
 Map<String, CommandSpec> _buildTokenIndex() {
@@ -450,7 +389,6 @@ Map<String, CommandSpec> _buildTokenIndex() {
   return map;
 }
 
-/// Result of parsing a raw `/cmd args` line.
 class ParsedCommand {
   const ParsedCommand({
     required this.token,
@@ -458,22 +396,18 @@ class ParsedCommand {
     required this.spec,
   });
 
-  /// The lowercased command token as typed (`/j`).
   final String token;
 
-  /// Everything after the first space, joined back with single spaces — exactly
-  /// `parts.slice(1).join(' ')` in the PWA. Empty string if no args.
+  /// Everything after the first space, rejoined with single spaces; empty if none.
   final String args;
 
-  /// The resolved spec (alias-collapsed), or null if unknown.
+  /// Alias-collapsed spec, or null if unknown.
   final CommandSpec? spec;
 
   bool get isKnown => spec != null;
 }
 
-/// Parses a slash-command line the way `handleCommand` does:
-/// `parts = command.split(' ')`, `cmd = parts[0].toLowerCase()`,
-/// `args = parts.slice(1).join(' ')`. Alias resolution is via the token index.
+/// Splits on spaces like the PWA: lowercased first token, rest rejoined as args.
 ParsedCommand parseCommand(String command) {
   final parts = command.split(' ');
   final token = parts[0].toLowerCase();
@@ -481,26 +415,20 @@ ParsedCommand parseCommand(String command) {
   return ParsedCommand(token: token, args: args, spec: _byToken[token]);
 }
 
-/// Resolves a token (canonical or alias) to its spec, or null.
 CommandSpec? resolveCommand(String token) => _byToken[token.toLowerCase()];
 
-/// Whether [text] should be routed to the command handler instead of being
-/// published — the PWA checks `content.startsWith('/')` (messages.js:2367).
+/// Whether [text] routes to the command handler instead of being published.
 bool isCommandLine(String text) => text.startsWith('/');
 
-/// Visible command entries for palette/help (the PWA hides `aliasOf` rows;
-/// here every [CommandSpec] is already canonical, so all are visible).
 List<CommandSpec> visibleCommands() => kCommandSpecs;
 
-/// `"/join, /j"` display form (`_formatCommandDisplay`, commands.js:351).
+/// `"/join, /j"` display form.
 String formatCommandDisplay(CommandSpec spec) {
   if (spec.aliases.isEmpty) return spec.name;
   return '${spec.name}, ${spec.aliases.join(', ')}';
 }
 
-/// True if [spec] may run in the given context. Mirrors the per-handler guards:
-/// channel/channelOnly reject PMs+groups; groupOnly rejects everything but a
-/// group.
+/// channel/channelOnly reject PMs and groups; groupOnly rejects all but a group.
 bool isAllowedIn(CommandSpec spec,
     {required bool inPM, required bool inGroup}) {
   switch (spec.context) {

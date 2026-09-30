@@ -1,16 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// A CSS `box-shadow: 0 0 0 3px <color>` focus ring: paints ONLY the band
-/// OUTSIDE [child]'s rounded box (`.message-input:focus`, styles-chat.css:
-/// 1678-1682).
-///
-/// A Flutter [BoxShadow] with `spreadRadius` also fills the area BEHIND the
-/// child — with the composer's translucent field fill (white@0.07 focused)
-/// the primary tint bled through the whole field and read as a full-field
-/// highlight on focus, which the PWA never shows (its box-shadow hugs the
-/// outline only). This widget adds no layout size (the band overhangs, like
-/// CSS box-shadow) and keeps [child] in a stable Stack slot so a focused
-/// TextField is never re-parented (which would drop its IME connection).
+/// CSS `box-shadow: 0 0 0 3px` focus ring painted only outside [child], unlike a spread [BoxShadow].
 class CssFocusRing extends StatelessWidget {
   const CssFocusRing({
     super.key,
@@ -21,14 +11,11 @@ class CssFocusRing extends StatelessWidget {
     required this.child,
   });
 
-  /// Whether the ring is visible (the band is always laid out; only its color
-  /// toggles, so showing/hiding never restructures the tree).
+  /// The band is always laid out and only its color toggles, so a focused TextField is never re-parented.
   final bool show;
 
   final Color color;
 
-  /// The child's own border radius; the band's outer radius follows the CSS
-  /// rule (non-zero corner radii grow by [width], sharp corners stay sharp).
   final BorderRadius radius;
 
   final double width;
@@ -68,8 +55,7 @@ class CssFocusRing extends StatelessWidget {
         bottomRight: _grow(r.bottomRight, by),
       );
 
-  // CSS box-shadow corner rule: non-zero radii expand by the spread; zero
-  // (sharp) corners stay sharp.
+  // CSS box-shadow corner rule: non-zero radii grow by the spread; sharp corners stay sharp.
   static Radius _grow(Radius r, double by) =>
       Radius.elliptical(r.x <= 0 ? 0 : r.x + by, r.y <= 0 ? 0 : r.y + by);
 }

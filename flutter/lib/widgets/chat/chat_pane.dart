@@ -44,16 +44,12 @@ import 'message_row.dart' show formatRelativeTime;
 import 'composer.dart';
 import 'messages_list.dart';
 
-/// Signature for the call-start hook the calls feature wires later. [peer] is
-/// the PM peer pubkey (or '' for a channel/group), [video] selects video vs
-/// audio. The header never implements calls itself — it only invokes this.
+/// Call-start hook; [peer] is the PM peer pubkey, or '' for a channel/group.
 typedef OnStartCall = void Function(String peer, {required bool video});
 
-/// Signature for starting a group call (group id + video flag).
 typedef OnStartGroupCall = void Function(String groupId, {required bool video});
 
-/// The main chat column: header + messages list + composer
-/// (`main.main-content`, docs/specs/02 §1.1, §5.4–5.5).
+/// The main chat column: header, messages list and composer.
 class ChatPane extends ConsumerWidget {
   const ChatPane({
     super.key,
@@ -64,59 +60,29 @@ class ChatPane extends ConsumerWidget {
     this.useColumns = false,
   });
 
-  /// Mobile/tablet: opens the off-canvas sidebar drawer (hamburger).
   final VoidCallback? onOpenSidebar;
 
-  /// Mobile/tablet chrome (hamburger + stacked composer). Driven by
-  /// `width <= 1024` so the mobile header shows across the whole 0–1024 range.
+  /// Mobile/tablet chrome, driven by `width <= 1024`.
   final bool compact;
 
-  /// Optional call-start hooks (wired by the calls feature; null = no calls).
+  /// Null means no calls.
   final OnStartCall? onStartCall;
   final OnStartGroupCall? onStartGroupCall;
 
-  /// Columns (deck) mode (`body.columns-mode`). The PWA hides ONLY
-  /// `#messagesScroller` (styles-columns.css:9-11) and shows `#columnsStrip` in
-  /// its place — the `.chat-header` and `.input-container` stay mounted, driven
-  /// by the focused column (`_cvFocusColumn` points the shared composer at the
-  /// focused column's conversation, columns.js:542-559). So in columns mode we
-  /// substitute the deck for the messages region only, keeping the header above
-  /// and the composer below.
+  /// Columns mode replaces only the messages region with the deck; the header and composer stay mounted.
   final bool useColumns;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Custom-emoji image prefetch (emoji.js `_prefetchCustomEmojiImages`,
-    // :52-97): the PWA schedules a deferred warm-up from `registerCustomEmoji`
-    // / `_storeEmojiPack`; here the live provider's state change is the same
-    // signal (plus one kick for the already-hydrated cache). The container —
-    // not `ref` — is captured so the 3s-deferred run can't touch a disposed
-    // widget ref.
+    // Capture the container, not `ref`, so the 3s-deferred emoji prefetch can't touch a disposed ref.
     final container = ProviderScope.containerOf(context, listen: false);
     ref.listen(liveCustomEmojiProvider,
         (_, __) => scheduleCustomEmojiPrefetch(container));
     kickCustomEmojiPrefetch(container);
 
-    // Opening the Nymbot PM (sidebar row / profile "Message" / ?help / a
-    // focused bot column) lands on the dedicated paid-chat surface: its header
-    // carries the bot credit meta (`E2E encrypted · N credits left`,
-    // pms.js:2934-2938) and its engine owns the `?` command interception /
-    // welcome intro / thinking strip. This swap applies in BOTH view modes —
-    // the premium bot chat is an intentional native deviation and must be the
-    // surface for EVERY entry into the bot 1:1 (product decision; the deck
-    // returns as soon as another conversation is focused, its layout persists).
-    //
-    // The detection is the known bot-pubkey CONSTANT (`verifiedBot.pubkey`,
-    // app.js:1096) compared case-insensitively — never an async-loaded list —
-    // so a conversation restored from D1/cache before anything else has
-    // loaded, or a row whose stored id predates the lowercase-hex
-    // canonicalization in `switchView`, still routes here on every entry path
-    // (sidebar tap, new-PM, notification, deep link, boot restore).
+    // The Nymbot PM always opens the paid bot surface; detection uses the bot pubkey constant, not an async list.
     final view = ref.watch(currentViewProvider);
-    // A view change closes an open thread that belongs to a DIFFERENT
-    // conversation (sidebar tap, column focus), so the shared composer can
-    // never mis-thread a send. Navigation that reopens a thread sets the
-    // provider after the switch, which this listener leaves alone.
+    // Close a thread from a different conversation on view change, so the shared composer can't mis-thread a send.
     ref.listen(appStateProvider.select((s) => s.view), (_, next) {
       final at = ref.read(activeThreadProvider);
       if (at != null && at.view != next) {
@@ -124,17 +90,7 @@ class ChatPane extends ConsumerWidget {
       }
     });
     if (view.kind == ViewKind.pm && view.id.toLowerCase() == kNymbotPubkey) {
-      // The premium Nymbot chat keeps the SHARED `_ChatHeader` (back/forward
-      // nav, audio/video call buttons, notification bell + hamburger on the
-      // right, presence + `E2E encrypted · <credits>` meta, verified badge) —
-      // the same header the PWA renders for the bot PM — and swaps only the
-      // body below it for the paid surface ([BotChatScreen]: control bar +
-      // thread + bot composer). This keeps the single header instance (so its
-      // back/forward history survives entering/leaving the bot) and fixes the
-      // mobile divergence where BotChatScreen's own AppBar put the hamburger on
-      // the wrong side and dropped the notif bell + nav/call buttons. Applies
-      // in both single-pane and columns mode (the deck is replaced by the bot
-      // body when the bot column is focused, exactly as before).
+      // The bot chat keeps this shared header (preserving nav history) and swaps only the body.
       return Container(
         color: Colors.transparent,
         child: Column(
@@ -153,14 +109,7 @@ class ChatPane extends ConsumerWidget {
     }
 
     return Container(
-      // `.main-content` is TRANSPARENT (styles-shell.css:730 — no background) so
-      // the fixed `#wallpaperLayer` (mounted behind this pane in `home_shell`)
-      // shows through. The opaque base comes from the Scaffold (`c.bg`); the
-      // header/composer paint their own `--glass-bg` surfaces and the messages
-      // area paints only a translucent wash (`rgba(0,0,0,0.15)` / light
-      // `rgba(255,255,255,0.3)`), so the wallpaper reads through the message
-      // region in both single-chat and columns views. Painting an opaque `c.bg`
-      // here (the old behavior) covered the wallpaper everywhere.
+      // Transparent so the wallpaper layer behind the pane shows through.
       color: Colors.transparent,
       child: Column(
         children: [
@@ -171,17 +120,9 @@ class ChatPane extends ConsumerWidget {
             onStartGroupCall: onStartGroupCall,
             columnsMode: useColumns,
           ),
-          // `#messagesContainer` (single view) / `#columnsStrip` (columns mode)
-          // — the deck replaces only the messages list, not the header/composer.
-          // An open thread swaps the messages list for the in-place ThreadView
-          // (same composer below; the header's back/forward steps in and out).
+          // The deck or an open thread replaces only the messages list, not the header or composer.
           Expanded(
-            // Tap-outside dismisses the soft keyboard (01-B3): a translucent
-            // GestureDetector over the messages region drops focus when a tap
-            // isn't consumed by an interactive child (message rows / buttons
-            // still win the arena). Swipe-down dismissal lives in `MessagesList`
-            // (`keyboardDismissBehavior: onDrag`). On the web/browser PWA this is
-            // native browser behavior; Flutter needs it wired explicitly.
+            // Tap-outside dismisses the soft keyboard; interactive children still win the gesture arena.
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: () => FocusScope.of(context).unfocus(),
@@ -201,9 +142,7 @@ class ChatPane extends ConsumerWidget {
               ),
             ),
           ),
-          // `.input-container` — tutorial spotlight target. Stays mounted in
-          // columns mode; sends to the focused column's conversation (the deck
-          // re-points `currentViewProvider` on focus, mirroring `_cvFocusColumn`).
+          // The composer stays mounted in columns mode and sends to the focused column's conversation.
           const _AwaitingMeshRangeNotice(),
           KeyedSubtree(
             key: TutorialTargets.keyFor(TutorialTarget.composer),
@@ -215,8 +154,6 @@ class ChatPane extends ConsumerWidget {
   }
 }
 
-/// `.chat-header`: title (primary, textSize+3, weight700) + meta line + nav and
-/// action icon buttons. Mobile shows the hamburger + a notification toggle.
 class _ChatHeader extends ConsumerStatefulWidget {
   const _ChatHeader({
     this.onOpenSidebar,
@@ -230,12 +167,7 @@ class _ChatHeader extends ConsumerStatefulWidget {
   final OnStartCall? onStartCall;
   final OnStartGroupCall? onStartGroupCall;
 
-  /// `body.columns-mode`: on desktop the header is pinned to a FIXED height
-  /// (`calc(37px + max(68px, (var(--user-text-size) + 3px) * 1.4 + 35px))`,
-  /// box-sizing border-box) and `.channel-header-controls` gets
-  /// `min-height: 68px; align-content: center` — so the deck below starts at a
-  /// stable y regardless of the focused column type (styles-columns.css:17-25).
-  /// The ≤768 phone breakpoint reverts to `height: auto` (:497-499).
+  /// Desktop columns mode pins the header to a fixed height so the deck starts at a stable y.
   final bool columnsMode;
 
   @override
@@ -244,39 +176,20 @@ class _ChatHeader extends ConsumerStatefulWidget {
 
 class _ChatHeaderState extends ConsumerState<_ChatHeader>
     with WidgetsBindingObserver {
-  // A simple back/forward navigation history (channels.js `navigationHistory` /
-  // `navigationIndex`). Each entry is a [ChatView] plus, when a thread was
-  // open, its root id — so Back closes an open thread and Forward reopens it
-  // (the PWA pushes `{type:'thread'}` entries the same way). Forward is
-  // disabled when at the tip; back is disabled at the start (like the PWA).
+  // Back/forward history; entries carry an open thread's root so Back closes it and Forward reopens it.
   final List<({ChatView view, String? threadRoot})> _history = [];
   int _index = -1;
   bool _navigating = false;
 
-  // Reverse-geocoded place names come from the shared [GeohashPlaceCache], not
-  // a Map on this State. That cache persists, is rate-limited to Nominatim's
-  // 1 req/s, and is the SAME instance the sidebar rows read — so opening a
-  // channel whose row already resolved its place costs no request, and neither
-  // survives-nothing-on-relaunch nor a duplicate lookup per surface applies any
-  // more.
-  //
-  // Geohashes whose lookup FAILED are tracked here so the header falls back to
-  // the coordinate label rather than sitting on "Loading location..." forever
-  // (the PWA's catch branch, channels.js:1029). Failures are deliberately not
-  // cached by the service, so they retry on a later visit.
+  // Failed [GeohashPlaceCache] lookups, so the header falls back to coordinates.
   final Set<String> _placeFailed = {};
 
-  /// Locally-derived descriptions ("Arctic Ocean", "Antarctica", "Off the coast
-  /// of Ireland") for cells the geocoder cannot name, keyed by geohash. Never
-  /// promoted into the place cache: a real name still wins if one arrives.
+  /// Local descriptions for cells the geocoder cannot name; a real name still wins.
   final Map<String, String> _placeRegions = {};
-  // Monotonic token (mirrors `_geocodeToken`, geohash_explorer.dart:382) so a
-  // late response can't force a redundant rebuild after the view moved on.
+  // Monotonic token so a late response can't force a redundant rebuild after the view moved on.
   int _geocodeToken = 0;
 
-  /// Pending retries for place names that missed, keyed by geohash. One shared
-  /// timer meant switching channels canceled the previous geohash's retry, so
-  /// whichever header you left behind kept its coordinates for good.
+  /// Retry timers per geohash, so switching channels doesn't cancel another header's retry.
   final Map<String, Timer> _placeRetries = {};
 
   bool get _canBack => _index > 0;
@@ -286,10 +199,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Columns mode: the deck may already be focused on the bot column when the
-    // header mounts (restored layout), so run the bot-header activation for
-    // the initial view too — `_renderPMHeader` fires on every open/focus in
-    // the PWA (pms.js:2905-2938).
+    // The deck may already focus the bot column at mount (restored layout), so activate for the initial view too.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _maybeActivateBotHeader(ref.read(currentViewProvider));
     });
@@ -297,12 +207,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Coming back to the app is the natural moment to retry a place name that
-    // failed earlier, INCLUDING one the backoff has given up on — the same
-    // rule the sidebar row already follows (`channel_list_item.dart`) and the
-    // PWA's `visibilitychange` → `refreshUnresolvedPlaces(true)`. Without it a
-    // header that burned its four attempts showed raw coordinates for the rest
-    // of the app's life.
+    // Resume is the natural moment to retry failed place names, including ones the backoff gave up on.
     if (state != AppLifecycleState.resumed) return;
     if (_placeFailed.isEmpty) return;
     for (final gh in _placeFailed.toList()) {
@@ -321,15 +226,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     super.dispose();
   }
 
-  /// Columns mode keeps this shared header while the deck renders the bot
-  /// column, so focusing/opening the Nymbot conversation must do what the
-  /// PWA's `_renderPMHeader` does for a verified bot ("Split out of openPM so
-  /// column-view focus can show the same header", pms.js:2905-2938): kick
-  /// `_refreshBotCreditMeta` → `_checkBotCredits(false)` so the
-  /// 'E2E encrypted · checking credits…' meta resolves, and run the engine's
-  /// empty-thread intro (`loadPMMessages`'s empty branch — start line, welcome,
-  /// silent refresh). Single-pane mode mounts [BotChatScreen] instead, whose
-  /// initState already does exactly this.
+  /// In columns mode, focusing the bot PM refreshes credit meta and runs the empty-thread intro like the PWA.
   void _maybeActivateBotHeader(ChatView view) {
     if (!widget.columnsMode) return;
     if (view.kind != ViewKind.pm) return;
@@ -349,7 +246,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         _history[_index].threadRoot == threadRoot) {
       return;
     }
-    // Truncate any forward entries, then push.
     if (_index < _history.length - 1) {
       _history.removeRange(_index + 1, _history.length);
     }
@@ -373,9 +269,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   void _go(({ChatView view, String? threadRoot}) entry) {
     _navigating = true;
     ref.read(appStateProvider.notifier).switchView(entry.view);
-    // Reopen (or close) the thread this entry captured. Post-frame so the
-    // ThreadPanelHost's view-change listener — which closes the panel on a
-    // view switch — has already run and cannot clobber the reopen.
+    // Post-frame so the thread host's view-change listener has already run and cannot clobber the reopen.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final target = entry.threadRoot == null
@@ -401,9 +295,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         threadRoot:
             activeThread?.view == view ? activeThread?.rootId : null);
 
-    // Columns-deck focus / sidebar switches onto the bot PM re-render this
-    // shared header — mirror `_renderPMHeader`'s bot branch (credit-meta
-    // refresh + empty-thread intro; see [_maybeActivateBotHeader]).
     ref.listen(currentViewProvider, (prev, next) {
       if (prev != next) _maybeActivateBotHeader(next);
     });
@@ -418,30 +309,18 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     final isPinned = isChannel && app.pinnedChannels.contains(channelKey);
     final isDefault = channelKey == kDefaultChannel;
 
-    // `.channel-info { gap: 15 }` (controls→title) + `.channel-title-wrap`
-    // margins: 20/20 on desktop, 10/0 below 768px (the PWA phone breakpoint —
-    // narrower than the ≤1024 `compact` chrome, so key off the real width).
+    // Margins key off the real 768px phone breakpoint, narrower than the 1024 `compact` chrome.
     final phone =
         MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint;
     final titleLeftGap = 15.0 + (phone ? 10.0 : 20.0);
     final titleRightGap = phone ? 0.0 : 20.0;
-    // `.channel-title { min-height: calc((user-text-size + 3) * 1.4 + 19px) }`
-    // reserves room for the title line + the meta line beneath it.
     final headerMinHeight = titleSize * 1.4 + 19;
-    // Desktop columns mode pins the whole header to a FIXED border-box height
-    // `calc(37px + max(68px, (user-text-size + 3px) * 1.4 + 35px))`
-    // (styles-columns.css:22-25) so the deck below starts at a stable y; the
-    // ≤768 phone block reverts to `height: auto` (:497-499). The inner content
-    // box is that height minus the 16px×2 vertical padding and the 1px bottom
-    // hairline.
+    // Inner box is the fixed height minus 16px vertical padding each side and the 1px hairline.
     final double? headerFixedHeight = (widget.columnsMode && !phone)
         ? 37 + math.max(68.0, titleSize * 1.4 + 35) - 32 - 1
         : null;
 
-    // `.chat-header`: padding 16px 24px; ONLY the ≤768 phone block shrinks it
-    // (`padding: 15px 10px; padding-top: 12px`, styles-themes-responsive.css:
-    // 293-302) — the 769–1024 tablet range keeps the desktop padding even
-    // though it shows the mobile header actions. Bg --glass-bg, bottom hairline.
+    // Only the 768px phone breakpoint shrinks the padding; tablets keep desktop padding.
     return Container(
       decoration: BoxDecoration(
         color: c.glassBg,
@@ -453,21 +332,13 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       child: SafeArea(
         bottom: false,
         child: ConstrainedBox(
-          // Columns mode (desktop): a TIGHT fixed height; otherwise only the
-          // `.channel-title` min-height reserves space.
           constraints: headerFixedHeight != null
               ? BoxConstraints.tightFor(height: headerFixedHeight)
               : BoxConstraints(minHeight: headerMinHeight),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // `.channel-header-controls`: the back/forward + favorite/share
-              // (channel) or audio/video (PM/group) cluster, LEFT of the title
-              // at ALL widths (no breakpoint hides it; the PWA shows it on
-              // mobile too — gap, MISSING). 28×28 desktop / 24×24 compact.
-              // Columns mode gives the cluster `min-height: 68px;
-              // align-content: center` (styles-columns.css:17-20) so a 1-row
-              // cluster still occupies the fixed header slot, centered.
+              // Nav/action cluster left of the title at all widths; in columns mode it fills the fixed header slot.
               widget.columnsMode
                   ? Container(
                       constraints: const BoxConstraints(minHeight: 68),
@@ -489,30 +360,18 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                     ),
               SizedBox(width: titleLeftGap),
               Expanded(
-                // `.channel-title-wrap`: 20px (desktop) / 10px (phone) side gaps.
                 child: Padding(
                   padding: EdgeInsets.only(right: titleRightGap),
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // `.channel-title` (#currentChannel): a plain `#name` for a
-                      // channel; `.pm-header-row` (26px avatar + status dot + name)
-                      // for a PM; `.group-header-row` (group glyph + stacked member
-                      // avatars + name) for a group. The PWA nests a second
-                      // `.channel-location` line (12px) inside `#currentChannel`
-                      // beneath the title row, so it lives in this same block.
                       _titleLine(c, app, view, title, titleSize),
                       _locationLine(c, app, view),
-                      // `.channel-meta` (#channelMeta): the 11px line below the
-                      // title block — online-nym count (channel) or the E2E lock
-                      // notice (PM/group).
                       if (metaText.isNotEmpty)
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // Lock glyph prefix for E2E PM/group meta (PWA
-                            // `lockSvg`, 12px). Channel meta has no glyph.
                             if (meta.svg != null) ...[
                               NymSvgIcon(meta.svg!, size: 12, color: c.textDim),
                               const SizedBox(width: 4),
@@ -535,8 +394,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
               if (compact)
                 _mobileActions()
               else
-                // `.header-actions`: bounded so the text pills can wrap
-                // (`flex-wrap:wrap`) rather than overflow on narrow desktops.
+                // Bounded so the text pills wrap rather than overflow on narrow desktops.
                 Flexible(child: _headerActionPills()),
             ],
           ),
@@ -545,11 +403,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     );
   }
 
-  /// The `.channel-title` content (`#currentChannel`). Channel → bare `#name`.
-  /// PM → `.pm-header-row`: a 26px avatar with a status dot + the nym. Group →
-  /// `.group-header-row`: the group glyph + up to four overlapping 18px member
-  /// avatars (or the custom group avatar) + the name. The title text itself is
-  /// primary / weight-700 / +3px in all three.
   Widget _titleLine(
     NymColors c,
     AppState app,
@@ -576,16 +429,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
 
       case ViewKind.pm:
         final user = app.users[view.id];
-        // `getEffectiveUserStatus` force-onlines a verified bot (the CC-2
-        // override), so the bot's header dot is green even without a live
-        // presence record — 'Always at your service' with an online dot.
+        // A verified bot is forced online, so its header dot is green without presence.
         final viewIsBot =
             ref.read(nostrControllerProvider).isVerifiedBot(view.id);
         final status = user?.effectiveStatus(isVerifiedBot: viewIsBot) ??
             (viewIsBot ? UserStatus.online : UserStatus.offline);
-        // `.pm-header-row`: `.pm-name-text` (base nym) + a dimmed `.nym-suffix`
-        // (`#abcd`, 0.9em / w100 / opacity 0.7) + flair/supporter + verified ✓ +
-        // friend badge, mirroring the PWA `displayNym` markup (pms.js:2920).
         final base = stripPubkeySuffix(title);
         final suffix = getPubkeySuffix(view.id);
         final nameRich = Text.rich(
@@ -614,8 +462,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         final isFriend = app.friends.contains(view.id);
         final cosmetics = ref.watch(userCosmeticsProvider(view.id));
 
-        // `.pm-header-avatar`: 26px round, margin-right 10, with a 7px status dot
-        // (bottom-right -2) ringed by a 2px ring. Hidden status drops the dot.
         final row = Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -631,12 +477,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                   Positioned(
                     right: -2,
                     bottom: -2,
-                    // `.user-status-dot` is `box-sizing: content-box`, so the 7px
-                    // is the COLOrED size and the 2px ring sits OUTSIDE (11px
-                    // box) — matching the sidebar `_AvatarWithStatus`. Drawing the
-                    // border INSIDE a 7px box (Flutter's default) left only a ~3px
-                    // color center, which read as "too small". Ring color is the
-                    // hardcoded `#0a0a0f` dark / `#f5f5f2` light, not `--bg`.
+                    // CSS content-box: the 7px dot is the colored size and the 2px ring sits outside it.
                     child: Container(
                       width: 11,
                       height: 11,
@@ -659,9 +500,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             ),
             const SizedBox(width: 10),
             Flexible(child: nameRich),
-            // `.flair-badge` (20px, margin-left 5), `.verified-badge` (20×20,
-            // margin-left 4), `.friend-badge` (20×20 svg) — the PWA sizes these
-            // independently of the title text, so they stay 20px in the header.
+            // Badges stay 20px independent of the title text size.
             CosmeticNymBadges(
               cosmetics: cosmetics,
               flairSize: 20,
@@ -677,8 +516,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             ],
           ],
         );
-        // `.pm-header-row.header-clickable`: tap opens the contact's profile
-        // context menu (pms.js:2931 `showContextMenu(..., profileOnly=true)`).
         return _HeaderClickable(
           onTap: () => _openPMProfile(view.id, '$base#$suffix', isBot),
           child: row,
@@ -700,9 +537,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             g.members.where((pk) => pk != app.selfPubkey).take(4).toList();
 
         if (hasCustom) {
-          // `.group-header-custom-wrap`: a 26px round custom avatar with
-          // margin-right 4 (styles-features.css:5365-5377). The name carries no
-          // extra margin in the custom-avatar case (`nameCls` is empty).
           return _HeaderClickable(
             onTap: () => GroupContextMenuPanel.show(context, g.id),
             child: Row(
@@ -716,20 +550,14 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           );
         }
 
-        // `.group-header-icon` (18px glyph) + stacked 18px `.group-header-avatar`s
-        // (overlap −4, 1px bg ring) + name. The PWA clips this row
-        // (`.group-header-row { overflow: hidden }`); to avoid a RenderFlex
-        // overflow on a very narrow header we instead drop trailing avatars that
-        // wouldn't fit, then let the name ellipsize in the remainder.
+        // Drop trailing avatars that don't fit instead of overflowing, then ellipsize the name.
         return LayoutBuilder(
           builder: (context, constraints) {
-            const double iconW = 18 + 5; // glyph + its 5px gap
-            const double avatarStep = 14; // 18px avatar minus the 4px overlap
-            // Reserve room for the glyph + a minimum name width; fit as many
-            // avatars as the rest allows (cap 4).
+            const double iconW = 18 + 5;
+            const double avatarStep = 14;
             final avail =
                 constraints.maxWidth.isFinite ? constraints.maxWidth : 9999.0;
-            final budget = avail - iconW - 40; // 40 ≈ minimum name slot
+            final budget = avail - iconW - 40; // Minimum name slot.
             var fit = others.length;
             if (budget < fit * avatarStep) {
               fit = (budget / avatarStep).floor().clamp(0, others.length);
@@ -737,9 +565,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             final shown = others.take(fit).toList();
 
             final prefix = <Widget>[
-              // `.group-header-icon` → `.group-header-svg` (18×18, stroke-width
-              // 1.75, currentColor = `.channel-title` `--primary`), margin-right
-              // 5 (groups.js:2910, styles-features.css:2480-2491).
               NymSvgIcon(NymIcons.groupGlyph, size: 18, color: c.primary),
               const SizedBox(width: 5),
             ];
@@ -749,10 +574,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                 child: Container(
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    // `.group-header-avatar { border: 1px solid var(--bg-primary) }`
-                    // — `--bg-primary` is undefined in the PWA, so the declaration
-                    // is invalid-at-computed-value and `border-color` falls back to
-                    // `currentColor` = the `.channel-title` `--primary`.
+                    // `--bg-primary` is undefined in the PWA, so the border falls back to `currentColor` (primary).
                     border: Border.all(color: c.primary, width: 1),
                   ),
                   child: NymAvatar(
@@ -763,14 +585,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                 ),
               ));
             }
-            // `.nm-grp-ml8`: 8px gap before the name when avatars are shown
-            // (offset by the cumulative overlap so the name doesn't drift right).
+            // Offset by the cumulative overlap so the name doesn't drift right.
             if (shown.isNotEmpty) {
               prefix.add(SizedBox(
                   width: (8 - 4.0 * (shown.length - 1)).clamp(0.0, 8.0)));
             }
-            // `.group-header-row.header-clickable`: tap opens the group context
-            // menu (groups.js:2982 `showGroupContextMenu`).
             return _HeaderClickable(
               onTap: () => GroupContextMenuPanel.show(context, g.id),
               child: Row(
@@ -786,8 +605,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     }
   }
 
-  /// Opens the PM contact's profile context menu (PWA `header-clickable` →
-  /// `showContextMenu(..., profileOnly=true)`, pms.js:2931).
   void _openPMProfile(String pubkey, String nym, bool isBot) {
     if (pubkey.isEmpty) return;
     final state = ref.read(appStateProvider);
@@ -803,37 +620,18 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     );
   }
 
-  /// The `.channel-location` line nested inside `#currentChannel` beneath the
-  /// title row (12px, text-dim, margin-top 2px). Per variant:
-  /// - Channel (geohash): the resolved place name + optional ` (N.Nkm)` proximity
-  ///   distance (channels.js `_renderChannelTitle`, 996-1032). We render the
-  ///   coordinate label (`getGeohashLocation`) the PWA shows as its pre-resolve
-  ///   fallback — async place-name resolution is owned by the channels service.
-  /// - Channel (non-geohash): "Not a geohash".
-  /// - PM: the live presence / last-seen line (pms.js `_pmLastSeenText`).
-  /// - Group: "{N} members" (groups.js:2927).
+  /// Location line: geohash place name (+ distance), "Not a geohash", PM last seen, or group member count.
   Widget _locationLine(NymColors c, AppState app, ChatView view) {
     final loc = _locationFor(app, view);
     if (loc.text.isEmpty) return const SizedBox.shrink();
-    // A geohash channel's place name is a LINK (`.channel-location a`), and the
-    // PWA declares no `text-decoration` on it, so it keeps the browser's
-    // default underline. Only the tappable variant gets one — the PM last-seen
-    // line and "Not a geohash" are plain text there too.
+    // Only the tappable geohash place name keeps the link underline, as in the PWA.
     final style = TextStyle(
       color: c.textDim,
       fontSize: 12,
       decoration: loc.geohash != null ? TextDecoration.underline : null,
-      // Match the text color rather than defaulting to the foreground, so the
-      // rule reads as dim as the words it sits under.
       decorationColor: c.textDim,
     );
-    // `_fillLocationLink` (channels.js:1037-1055) splits the resolved place at
-    // its last ', ' into `.loc-city` (flex:0 1 auto — the only part that
-    // ellipsizes) and `.loc-country` (flex:0 0 auto — never shrinks,
-    // styles-shell.css:882-892), so a narrow header shows
-    // "Long City Na…, Country" rather than losing the country. The split only
-    // applies to the geohash link's place text; the PM/group/plain variants
-    // stay a single run.
+    // Only the city half ellipsizes, so a narrow header keeps the country.
     final splitIdx = loc.geohash != null ? loc.text.lastIndexOf(', ') : -1;
     final Widget placeText;
     if (splitIdx > 0 && splitIdx < loc.text.length - 2) {
@@ -859,7 +657,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         style: style,
       );
     }
-    // `.channel-location`: font-size 12, color --text-dim, margin-top 2px.
     return Padding(
       padding: const EdgeInsets.only(top: 2),
       child: Row(
@@ -868,25 +665,18 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         textBaseline: TextBaseline.alphabetic,
         children: [
           Flexible(
-            // A geohash channel's place name is tappable and keeps the line's
-            // text-dim color, so only the tap action (and pointer) differ. The
-            // dist span stays OUTSIDE the tap target. The tap opens the
-            // in-app geohash explorer framed on this cell — no browser hand-off
-            // any more, so nothing here can fail on a third party's outage.
+            // The distance span stays outside the tap target, which opens the in-app geohash explorer.
             child: loc.geohash == null
                 ? placeText
                 : MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: GestureDetector(
-                      // Opaque: the tap target is the whole rendered text box,
-                      // not just glyph pixels.
                       behavior: HitTestBehavior.opaque,
                       onTap: () => _openExplorerAt(loc.geohash!),
                       child: placeText,
                     ),
                   ),
           ),
-          // `.channel-location-dist`: never shrinks (`flex:0 0 auto`).
           if (loc.dist.isNotEmpty)
             Text(
               loc.dist,
@@ -908,31 +698,23 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         );
         final gh = ch.isGeohash ? ch.geohashKey : view.id;
         if (!isValidGeohash(gh)) {
-          // `loc-country` → "Not a geohash" for a named channel (plain text —
-          // only the geohash branch below builds the decode hyperlink).
           return (text: tr('Not a geohash'), dist: '', geohash: null);
         }
-        // `.channel-location` text (channels.js:1005-1006,1029): the resolved
-        // reverse-geocoded place name when cached, "Loading location…" while a
-        // geocode is in flight, and the coordinate label (`getGeohashLocation`)
-        // only as the catch fallback. Kick off resolution for this geohash.
+        // Place name when cached, "Loading location..." while in flight, coordinates only as fallback.
         final ghKey = gh.toLowerCase();
         final cached = ref.read(geohashPlaceCacheProvider).cached(ghKey);
         final String place;
         if (cached != null) {
           place = cached;
         } else if (_placeFailed.contains(ghKey)) {
-          // Some cells genuinely have no address (open ocean, the Antarctic
-          // plateau). Say what the place IS from the bundled map data rather
-          // than showing raw coordinates; the coordinates remain the last
-          // resort while that description is still being worked out.
+          // Cells with no address (open ocean) get a region description from bundled map data.
           place = _placeRegions[ghKey] ?? geohashLocationLabel(ghKey);
         } else {
           _resolvePlaceName(ghKey);
-          // Three-dot literal, as the PWA writes it (channels.js:1006).
+          // Three-dot literal, as the PWA writes it.
           place = tr('Loading location...');
         }
-        // ` (N.Nkm)` proximity, only with a known location + sortByProximity on.
+        // Distance shown only with a known location and sortByProximity on.
         var dist = '';
         final settings = ref.watch(settingsProvider);
         final userLoc = ref.watch(userLocationProvider);
@@ -944,11 +726,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             dist = ' (${km.toStringAsFixed(1)}km)';
           } catch (_) {}
         }
-        // The place name opens OUR geohash explorer zoomed to this cell,
-        // rather than handing the user off to geohash.es — a third party we do
-        // not control, currently erroring on its own map provider's API key,
-        // and unnecessary: the cell's bounds are decoded locally
-        // (`geohashBounds`) and the explorer draws the map from data we ship.
+        // Opens our own geohash explorer rather than a third-party map site.
         return (text: place, dist: dist, geohash: ghKey);
       case ViewKind.pm:
         return (text: _pmLastSeenText(app, view.id), dist: '', geohash: null);
@@ -967,10 +745,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     }
   }
 
-  /// Opens the geohash explorer framed on [geohash], and switches to whatever
-  /// cell the user joins from there — the same contract the sidebar's Discover
-  /// entry point uses (`sidebar.dart` `_openDiscover`), so a join made from
-  /// either place behaves identically.
+  /// Same contract as the sidebar's Discover entry point, so joins behave identically.
   Future<void> _openExplorerAt(String geohash) async {
     final gh = await Navigator.of(context).push<String>(
       GeohashExplorer.route(focusGeohash: geohash),
@@ -979,13 +754,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     ref.read(nostrControllerProvider).switchChannel(gh, geohash: gh);
   }
 
-  /// Kicks off a reverse geocode for [ghKey] through the shared, persistent
-  /// [GeohashPlaceCache] and rebuilds when it lands.
-  ///
-  /// The service owns de-duplication (concurrent callers for one geohash share
-  /// a single request, including this header and its sidebar row), the >=1.1s
-  /// spacing Nominatim requires, and persistence. All this adds is the rebuild
-  /// and the failed-lookup fallback.
+  /// The cache owns de-duplication, Nominatim rate limiting and persistence; this adds the rebuild and fallback.
   void _resolvePlaceName(String ghKey, {bool force = false}) {
     if (!isValidGeohash(ghKey)) return;
     final cache = ref.read(geohashPlaceCacheProvider);
@@ -1000,13 +769,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             setState(() => _placeRegions[ghKey] = desc);
           });
         }
-        // Nothing else re-triggers a lookup, so schedule the retry the cache's
-        // backoff allows — otherwise the header keeps the coordinates. Keyed
-        // per geohash: one shared timer meant opening a second channel
-        // canceled the first one's retry and stranded it on coordinates. When
-        // the cache has run out of automatic attempts (`retryAt == null`) the
-        // key stays in `_placeFailed` and the app-resume handler above is what
-        // gives it another go.
+        // Schedule the retry the cache's backoff allows; once attempts run out, app resume retries.
         final at = cache.retryAt(ghKey);
         if (at != null) {
           final wait = at.difference(DateTime.now());
@@ -1022,20 +785,14 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           );
         }
       }
-      // A resolved place must repaint even when the token moved on: the token
-      // only guards against a STALE answer overwriting a newer one, and
-      // `resolve` hands every caller for a geohash the same future, so an
-      // extra rebuild during "Loading location…" bumps the token and used to
-      // swallow the very answer it was waiting for.
+      // A resolved place repaints even if the token moved: every caller shares the same future.
       if (!mounted) return;
       if (place.isEmpty && token != _geocodeToken) return;
       setState(() {});
     });
   }
 
-  /// PWA `_pmLastSeenText` (pms.js:36): bot → "Always at your service";
-  /// hidden → ""; online → "Active now"; away → "Away"; else the relative
-  /// last-seen ("Last seen 5m ago") or "Last seen unknown".
+  /// Bot "Always at your service", hidden "", online "Active now", away "Away", else relative last seen.
   String _pmLastSeenText(AppState app, String pubkey) {
     if (ref.read(nostrControllerProvider).isVerifiedBot(pubkey)) {
       return tr('Always at your service');
@@ -1055,14 +812,10 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     return tr('Last seen unknown');
   }
 
-  /// `.mobile-header-actions`: the `.icon-btn`-class notif + hamburger toggles,
-  /// gap 8, margin-left 12 (gap F14). The notif toggle carries the unread badge.
   Widget _mobileActions() {
     final unread =
         ref.watch(notificationHistoryProvider.select((s) => s.unread));
-    // `_doUpdateNotificationBadge` force-hides the badge while notifications
-    // are disabled (`if (!this.notificationsEnabled) … add('nm-hidden')`,
-    // notifications.js:404-413) — the count is suppressed, not recomputed.
+    // The badge is hidden while notifications are disabled.
     final notifEnabled =
         ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
     return Padding(
@@ -1070,9 +823,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // A FIXED bell glyph (index.html:663-668) — the PWA never swaps it
-          // for a bell-off when notifications are disabled (notifications.js
-          // only updates #notifBadgeMobile).
+          // Fixed bell glyph; the PWA never swaps to bell-off.
           _MobileToggle(
             svg: NymIcons.bell,
             tooltip: tr('Notifications'),
@@ -1090,14 +841,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     );
   }
 
-  /// `.channel-header-controls` (LEFT of the title, all widths): a 2-column grid
-  /// (`grid-template-columns:auto auto; row-gap:12; column-gap:2`) into which
-  /// `.channel-nav-buttons` (back/forward) and `.channel-action-buttons` flow
-  /// (both `display:contents`). The action buttons are **favorite + share** in a
-  /// channel; **audio + video** in a PM/group (the PWA `calls.js` keeps the call
-  /// buttons hidden unless `inPMMode && (currentPM||currentGroup)` — they are
-  /// `nm-call-hidden` in channel view). No discover/new-PM/poll buttons live
-  /// here — those are sidebar/composer actions in the PWA.
+  /// Header controls as a 2-column grid: back/forward, then favorite/share (channel) or audio/video (PM/group).
   Widget _channelControls({
     required ChatView view,
     required bool isChannel,
@@ -1109,7 +853,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     final isCall = view.kind == ViewKind.pm || view.kind == ViewKind.group;
 
     final buttons = <Widget>[
-      // `.channel-nav-buttons` — boxed (28×28, radius 4, hover bg), dimmed.
       _NavBtn(
         svg: NymIcons.chevronLeft,
         tooltip: tr('Go back'),
@@ -1122,11 +865,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         onTap: _canForward ? _forward : null,
         disabled: !_canForward,
       ),
-      // `.channel-action-buttons` — no box; hover scales 1.1 + tints primary.
       if (isChannel) ...[
         _ActionBtn(
-          // `.favorite-channel-btn`: outline star (text-dim) → FILLED gold
-          // (#f5c518) when `.active`.
           svg: isPinned ? NymIcons.starFilled : NymIcons.starOutline,
           tooltip: isDefault
               ? tr('#nymchat is always favorited')
@@ -1137,13 +877,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         ),
         _ActionBtn(
           key: TutorialTargets.keyFor(TutorialTarget.shareButton),
-          // `.share-channel-btn`: the filled share-NODES glyph (not iOS share).
           svg: NymIcons.shareNodes,
           tooltip: tr('Share channel URL'),
           onTap: () => ShareChannelModal.open(context, channelKey),
         ),
       ] else if (isCall) ...[
-        // PM/group only: audio + video (mirrors `_refreshCallButtons`).
         _ActionBtn(
           svg: NymIcons.phone,
           tooltip: tr('Start audio call'),
@@ -1157,20 +895,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       ],
     ];
 
-    // `.channel-header-controls` is a FIXED 2-column CSS grid
-    // (`grid-template-columns: auto auto; row-gap: 12; column-gap: 2`), so the
-    // four buttons always form a 2×2 quadrant square — back/forward on top,
-    // favorite/share (or audio/video) beneath. A `Wrap` would keep them on one
-    // row whenever the header is wide enough, so stack explicit 2-up Rows in a
-    // Column instead to force the 2×2 grid at every width.
-    // Each grid cell is a FIXED 28px column (the action buttons' footprint, and
-    // the widest a nav button ever gets) with the button CENTERED inside it.
-    // This is what the PWA's `grid-template-columns: auto auto` yields: the two
-    // columns share a width, so column 1 (back / favorite・audio) and column 2
-    // (forward / share・video) line up vertically. Without the fixed cell the
-    // top row collapses to the nav buttons' 24px phone width while the bottom
-    // row stays 28px, and the forward arrow drifts left of the share/call icon
-    // beneath it (the reported off-center glyph).
+    // Explicit 2x2 grid of fixed 28px centered cells so the two rows' glyphs line up at every width.
     const cell = 28.0;
     Widget gridCell(Widget child) =>
         SizedBox(width: cell, child: Center(child: child));
@@ -1182,7 +907,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           children: [
             gridCell(buttons[i]),
             if (i + 1 < buttons.length) ...[
-              const SizedBox(width: 2), // column-gap
+              const SizedBox(width: 2),
               gridCell(buttons[i + 1]),
             ],
           ],
@@ -1190,24 +915,20 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     ];
     return Column(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start, // justify-content: start
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var i = 0; i < rows.length; i++) ...[
-          if (i > 0) const SizedBox(height: 12), // row-gap
+          if (i > 0) const SizedBox(height: 12),
           rows[i],
         ],
       ],
     );
   }
 
-  /// `.header-actions` (desktop, RIGHT): the text-pill group (Notifications +
-  /// badge / Flair / Settings / About / Logout), wrapped (`flex-wrap:wrap`) —
-  /// tutorial `mainMenu` target.
   Widget _headerActionPills() {
     final unread =
         ref.watch(notificationHistoryProvider.select((s) => s.unread));
-    // Badge suppressed while notifications are disabled (`_doUpdateNotification
-    // Badge`, notifications.js:404-413) — see [_mobileActions].
+    // The badge is hidden while notifications are disabled.
     final notifEnabled =
         ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
     return KeyedSubtree(
@@ -1218,9 +939,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         alignment: WrapAlignment.end,
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          // `.icon-btn.notifications-btn` (index.html:644-650) is ICON-ONLY —
-          // just a 16×16 bell (vs the 14px icons on the labeled pills) + the
-          // count badge; no text node.
+          // The notifications button is icon-only (16px bell plus badge).
           _HeaderPill(
             svg: NymIcons.bell,
             label: tr('Notifications'),
@@ -1247,9 +966,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           _HeaderPill(
             svg: NymIcons.logout,
             label: tr('Logout'),
-            // `data-action="signOut"` → confirm, then real sign-out (app.js
-            // `signOut`, 6740-6741). `signOut()` clears the identity and bumps
-            // the boot generation so the app remounts the first-run gate.
+            // Sign-out clears the identity and bumps the boot generation so the first-run gate remounts.
             onTap: _confirmSignOut,
           ),
         ],
@@ -1257,8 +974,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     );
   }
 
-  /// Confirms then signs out (app.js `signOut`: `showAppConfirm('Sign out and
-  /// disconnect from Nymchat?', { okLabel: 'Sign out', danger: true })`).
   Future<void> _confirmSignOut() async {
     final ok = await showAppConfirm(
       context,
@@ -1270,14 +985,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     await ref.read(nostrControllerProvider).signOut();
   }
 
-  /// Opens the notifications modal. Entries are NOT bulk-marked viewed here:
-  /// the PWA marks a notification viewed only as its row actually scrolls
-  /// ≥60% into the modal viewport (`_setupNotificationSeenObserver`,
-  /// notifications.js:596-642), deducting the badge per item — the bulk flip
-  /// is the modal's own "Mark all as read" action. Flipping everything on
-  /// open would also push every entry's seen-key into the synced read-state,
-  /// silencing notifications on the user's other devices without them ever
-  /// being seen.
+  /// No bulk mark-viewed on open: a synced flip would silence other devices before items are seen.
   void _openNotifications() {
     showNotificationsPanel(context);
   }
@@ -1289,7 +997,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       case ViewKind.group:
         widget.onStartGroupCall?.call(view.id, video: video);
       case ViewKind.channel:
-        // Channel calls aren't a thing in the PWA; ignore.
+        // Channel calls don't exist in the PWA.
         break;
     }
   }
@@ -1312,32 +1020,16 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     }
   }
 
-  /// The `#channelMeta` line (11px text-dim). Channel: the live online-nym count
-  /// `"<n> online nyms"` (users.js `_renderUserList`, 1451). PM: lock glyph +
-  /// `"End-to-end encrypted private message"` (pms.js:2940). Group: lock glyph +
-  /// `"End-to-end encrypted group chat"` (groups.js:3264).
   ({String? svg, String text}) _metaFor(AppState app, ChatView view) {
     switch (view.kind) {
       case ViewKind.channel:
-        // `channelUserCount` (users.js:1387): channel-SCOPED — counts only users
-        // seen in THIS channel within the active window, non-hidden, excluding
-        // self. The bare-lowercased `view.id` is the membership key the store
-        // populates (`u.channels` ← `(geohash||channel).toLowerCase()`). PWA gates
-        // on `isRecent` (lastSeen < ACTIVE_THRESHOLD), not `==online`, so an
-        // away-but-recent member in-channel still counts — mirror with the raw
-        // lastSeen check.
+        // Channel-scoped count of recent (not strictly online) non-hidden users, excluding self.
         final now = DateTime.now().millisecondsSinceEpoch;
         final key = view.id.toLowerCase();
         final count = app.users.values.where((u) {
           if (u.pubkey == app.selfPubkey) return false;
           if (!u.channels.contains(key)) return false;
-          // `statusHidden = getEffectiveUserStatus(pk) === 'hidden'`
-          // (users.js:1387) — computed with the verified-bot override (CC-2) so
-          // the hidden gate matches the PWA's single effective-status read.
-          // NOTE: `channelUserCount` does NOT carry the bot always-online
-          // bypass that `activeCount` does — it gates purely on `isRecent`
-          // (users.js:1387 has no `|| verifiedBotSet`), so the recency check
-          // below is intentionally left to stand for bots too.
+          // Unlike `activeCount`, this has no bot always-online bypass, so the recency check applies to bots too.
           if (u.effectiveStatus(
                   isVerifiedBot: kVerifiedBotPubkeys.contains(u.pubkey)) ==
               UserStatus.hidden) {
@@ -1350,10 +1042,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
           text: tr('{count} online nyms', {'count': _abbreviateCount(count)})
         );
       case ViewKind.pm:
-        // The bot PM's meta is `E2E encrypted · <botCreditMeta>` (pms.js:
-        // 2934-2938 — `#botCreditMeta` starts at 'checking credits…' and
-        // `_refreshBotCreditMeta` fills in the live count). Watching the bot
-        // controller keeps the count live while the header is up.
+        // Bot PM meta shows live credits; watching the bot controller keeps it current.
         if (ref.read(nostrControllerProvider).isVerifiedBot(view.id)) {
           final botState = ref.watch(botChatControllerProvider);
           return (
@@ -1374,13 +1063,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     }
   }
 
-  /// The `#botCreditMeta` text (`_renderBotCreditMeta`, pms.js:2361-2380):
-  /// Pro pinned → `'<n> Pro credit(s) · <model>'`; otherwise the
-  /// standard count (`'<n> credit(s) left'`, or both pools when Pro credits
-  /// exist). 'checking credits…' until the first balance lands; a failed check
-  /// with no cached count settles on 'credits unavailable'
-  /// (`_refreshBotCreditMeta`, pms.js:2382-2389). Mirrors the premium
-  /// bot-chat screen's meta builder so both headers read identically.
+  /// Credit meta text for the bot header, matching the premium bot-chat screen's builder.
   String _botCreditMeta(BotChatState state) {
     final proModel = state.proModel;
     if (proModel != null) {
@@ -1406,8 +1089,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
             : tr('{n} credits left', {'n': std}));
   }
 
-  /// Mirrors the PWA `abbreviateNumber` (users.js:2069): <1000 raw; <1M → "N.Nk"
-  /// (1 decimal under 10k, 0 above); else "N.NM".
+  /// Port of the PWA `abbreviateNumber`: <1000 raw, then "N.Nk", then "N.NM".
   String _abbreviateCount(int n) {
     if (n < 1000) return '$n';
     if (n < 1000000) {
@@ -1417,12 +1099,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   }
 }
 
-/// `.channel-nav-btn`: 28×28 desktop / 24×24 compact, radius 4, textDim →
-/// primary; hover paints a white@0.08 fill (gap F18). Disabled buttons render at
-/// 0.3 opacity (PWA `.channel-nav-btn:disabled`).
-/// `.channel-nav-btn` (back / forward): a 28×28 box with radius 4, dim glyph,
-/// hover → bg `hoverOverlay` + primary tint, disabled → 0.3 opacity. Renders the
-/// exact PWA feather chevron SVG.
 class _NavBtn extends StatefulWidget {
   const _NavBtn({
     required this.svg,
@@ -1445,9 +1121,7 @@ class _NavBtnState extends State<_NavBtn> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `.channel-nav-btn` is 28×28; only the ≤768 phone breakpoint shrinks it to
-    // 24×24 (styles-themes-responsive.css:316, inside the max-width:768 block) —
-    // the 769–1024 tablet range keeps 28×28.
+    // Only the 768px phone breakpoint shrinks it to 24x24.
     final phone =
         MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint;
     final size = phone ? 24.0 : 28.0;
@@ -1467,9 +1141,6 @@ class _NavBtnState extends State<_NavBtn> {
           height: size,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            // `.channel-nav-btn:hover` is white@0.08 (dark) / black@0.06
-            // (`body.light-mode …`, styles-themes-responsive.css:1288) — exactly
-            // `hoverOverlay`, so the hover stays visible in light mode.
             color: (_hover && !widget.disabled)
                 ? c.hoverOverlay
                 : Colors.transparent,
@@ -1485,11 +1156,7 @@ class _NavBtnState extends State<_NavBtn> {
   }
 }
 
-/// `.favorite-channel-btn` / `.share-channel-btn` / `.call-channel-btn`: no box —
-/// just a 5px-padded 18px glyph that scales to 1.1 and tints `--primary` on
-/// hover. [activeColor] paints the resting glyph a fixed color (the favorite
-/// star's gold `#f5c518` when pinned); otherwise it rests at `--text-dim`.
-/// Disabled rests dim and ignores taps (the always-favorited `#nymchat`).
+/// Boxless header action button; disabled rests dim and ignores taps (the always-favorited `#nymchat`).
 class _ActionBtn extends StatefulWidget {
   const _ActionBtn({
     super.key,
@@ -1515,10 +1182,7 @@ class _ActionBtnState extends State<_ActionBtn> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // 18px glyph + 5px padding = 28px footprint at EVERY width — the PWA's
-    // `.favorite-channel-btn`/`.share-channel-btn`/`.call-channel-btn` keep
-    // `padding: 5px` with no responsive override (styles-components.css:
-    // 1480-1522); only `.channel-nav-btn` shrinks to 24×24 on phones.
+    // 28px footprint at every width; only the nav buttons shrink on phones.
     const pad = 5.0;
 
     final color = widget.disabled
@@ -1533,9 +1197,7 @@ class _ActionBtnState extends State<_ActionBtn> {
         behavior: HitTestBehavior.opaque,
         child: AnimatedScale(
           scale: (_hover && !widget.disabled) ? 1.1 : 1.0,
-          // `transition: transform 0.2s` on the share/favorite/call buttons
-          // (styles-components.css:1461/1485/1519) — 200ms CSS-default `ease`,
-          // NOT the global `--transition` token.
+          // CSS default `ease`, not the global `--transition` token.
           duration: const Duration(milliseconds: 200),
           curve: Curves.ease,
           child: Padding(
@@ -1551,7 +1213,6 @@ class _ActionBtnState extends State<_ActionBtn> {
   }
 }
 
-/// Resolved `.icon-btn` fill/border/foreground for the current mode + hover.
 @immutable
 class _IconBtnStyle {
   const _IconBtnStyle({
@@ -1564,14 +1225,6 @@ class _IconBtnStyle {
   final Color foreground;
 }
 
-/// The shared `.icon-btn` token set (`styles-shell.css:912-935` +
-/// `styles-themes-responsive.css:595-605`). Used by both `_HeaderPill` and
-/// `_MobileToggle`.
-///
-/// - Dark base: fill white@0.05, border `--glass-border`, fg `--text`.
-/// - Dark hover: fill `--primary`@0.12, border `--primary`@0.3, fg `--primary`.
-/// - Light base: fill black@0.03, border black@0.1, fg `--primary`.
-/// - Light hover: fill black@0.06, border `--primary`, fg `--primary`.
 _IconBtnStyle _iconBtnStyle(NymColors c, bool hover) {
   if (c.isLight) {
     return _IconBtnStyle(
@@ -1589,14 +1242,7 @@ _IconBtnStyle _iconBtnStyle(NymColors c, bool hover) {
   );
 }
 
-/// `.icon-btn` text pill in `.header-actions` (gap F6): white@0.05 fill, 1px
-/// glass border, radius xs, padding 7/14, 12px w500 uppercase ls 0.8, icon 14 +
-/// 5 gap. Hover → primary@12 fill / primary text / primary@30 border / glow.
-/// Light mode mirrors `body.light-mode .icon-btn` (black@0.03 fill / black@0.1
-/// border / `--primary` text). An optional unread [badge] overlays the top-right.
-/// [iconOnly] drops the text node (the `.notifications-btn`, whose glyph is
-/// also the odd one out at 16px via [iconSize] — index.html:644-650); [label]
-/// then only feeds the tooltip (the PWA `title`).
+/// `.icon-btn` text pill; [iconOnly] drops the label, which then only feeds the tooltip.
 class _HeaderPill extends StatefulWidget {
   const _HeaderPill({
     required this.svg,
@@ -1641,7 +1287,6 @@ class _HeaderPillState extends State<_HeaderPill> {
         mainAxisSize: MainAxisSize.min,
         children: [
           NymSvgIcon(widget.svg, size: widget.iconSize, color: fg),
-          // The 5px flex gap only exists between the icon and a text node.
           if (!widget.iconOnly) ...[
             const SizedBox(width: 5),
             Text(
@@ -1673,14 +1318,7 @@ class _HeaderPillState extends State<_HeaderPill> {
   }
 }
 
-/// `.mobile-menu-toggle` / `.mobile-notif-toggle` in `.mobile-header-actions`
-/// (gap F14). index.html:663/670 gives these buttons ONLY their own class (no
-/// `icon-btn`), so `styles-components.css:688-703` applies in full: a fixed
-/// 40×40 square (padding 0), bg rgba(20,20,35,0.8), 1px `--glass-border`,
-/// **border-radius var(--radius-sm) = 12**, glyph `--primary` at 20px. Light
-/// mode (`styles-themes-responsive.css:1220-1224`) flips the fill to
-/// white@0.85 and the border to black@0.08 — the glyph stays `--primary`.
-/// Optional unread [badge] overlay.
+/// 40x40 mobile header toggle with an optional unread [badge].
 class _MobileToggle extends StatelessWidget {
   const _MobileToggle({
     required this.svg,
@@ -1702,8 +1340,8 @@ class _MobileToggle extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: c.isLight
-            ? const Color(0xD9FFFFFF) // rgba(255,255,255,0.85)
-            : const Color(0xCC141423), // rgba(20,20,35,0.8)
+            ? const Color(0xD9FFFFFF)
+            : const Color(0xCC141423),
         borderRadius: NymRadius.rsm,
         border: Border.all(
           color:
@@ -1721,8 +1359,6 @@ class _MobileToggle extends StatelessWidget {
   }
 }
 
-/// `.notification-count-badge`: absolute top/right −4px, danger bg, white 10px
-/// w700, min 16×16 pill. Wraps [child] in a clip-free stack with the badge.
 Widget _withBadge(Widget child, int count) {
   return Stack(
     clipBehavior: Clip.none,
@@ -1767,10 +1403,7 @@ class _CountBadge extends StatelessWidget {
   }
 }
 
-/// `.header-clickable`: the PM/group title row becomes a pointer-cursor tap
-/// target (pms.js:2613 / groups.js:2982) that opens the contact-profile or
-/// group context menu. A bare wrapper so the row's intrinsic min-size layout is
-/// preserved (no extra padding/ink box — the PWA only sets `cursor:pointer`).
+/// Bare tap wrapper so the row's intrinsic layout is preserved.
 class _HeaderClickable extends StatelessWidget {
   const _HeaderClickable({required this.child, required this.onTap});
   final Widget child;
@@ -1789,9 +1422,6 @@ class _HeaderClickable extends StatelessWidget {
   }
 }
 
-/// `.friend-badge` (styles-features.css:1483-1495): a people-with-check glyph in
-/// #4fc3f7 (light-mode #0288d1, `body.light-mode .friend-badge`). Mirrors the
-/// call surface's friend badge so the glyph matches the rest of the app.
 class _FriendBadge extends StatelessWidget {
   const _FriendBadge({required this.size});
   final double size;
@@ -1805,20 +1435,13 @@ class _FriendBadge extends StatelessWidget {
 }
 
 
-/// Shown above the composer when the open conversation is pinned to the mesh by
-/// Ghost Mode and the peer is out of Bluetooth range.
-///
-/// Without it the send just stalls: the message is echoed locally and nothing
-/// is published, because publishing would route over Nostr under the real key
-/// and tell the peer that the ghost was us. That refusal is deliberate, so it
-/// has to be legible rather than look like a bug.
+/// Explains a stalled send: Ghost Mode refuses to fall back to Nostr, which would unmask the ghost.
 class _AwaitingMeshRangeNotice extends ConsumerWidget {
   const _AwaitingMeshRangeNotice();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Watch the mesh state, not just read the bridge: the notice has to clear
-    // itself the moment the peer comes back into range.
+    // Watch mesh state so the notice clears when the peer comes back into range.
     ref.watch(meshControllerProvider);
     final view = ref.watch(currentViewProvider);
     final bridge = ref.read(meshControllerProvider.notifier).bridge;

@@ -1,17 +1,10 @@
-/// Which messages the user asked to translate, and with what override.
-///
-/// This lived as `_showTranslation` in [MessageRow]'s State, which loses it in
-/// two ways: the list is lazy, so a row scrolled out of view is disposed, and
-/// the sliver rebuilds keyed children by index when a unit is inserted, so an
-/// arriving message tore down still-visible rows. Either way the translation
-/// vanished. Keyed by message id, it survives both.
+/// Per-message translate requests, kept outside row State so lazy-list disposal and re-parenting don't lose them.
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class TranslatedMessages extends Notifier<Map<String, String?>> {
-  /// Bounded: a long session in a busy channel would otherwise accumulate one
-  /// entry per translated message for the life of the process.
+  /// Bounded so a long session doesn't grow this forever.
   static const int _max = 500;
 
   @override
@@ -19,7 +12,6 @@ class TranslatedMessages extends Notifier<Map<String, String?>> {
 
   bool isShown(String messageId) => state.containsKey(messageId);
 
-  /// The per-message target-language override, or null for the default.
   String? langFor(String messageId) => state[messageId];
 
   void show(String messageId, {String? lang}) {

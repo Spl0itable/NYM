@@ -1,13 +1,4 @@
-// call_overlay.dart - #callOverlay port: full-screen active-call UI.
-//
-// Layout mirrors index.html #callOverlay:
-//   - top: call title (peer / group) + status (status text or m:ss timer)
-//   - body: participant video grid (RTCVideoView) + self preview + chat panel
-//   - floating reactions overlay + reactions bar + presenter menu
-//   - controls row: mute, camera, screenshare, presenter(mod), react, chat,
-//     switch-cam, end (red)
-//
-// Renders nothing unless there is an active call.
+// Full-screen active-call UI: title, video grid, chat, reactions, presenter menu and controls; nothing when idle.
 
 import 'dart:math' as math;
 
@@ -38,19 +29,10 @@ import 'call_service.dart';
 import 'call_signaling.dart';
 import 'call_state.dart';
 
-/// Opens the shared user context menu (block / friend / PM / report …) from a
-/// nickname tapped in the call overlay or call chat — a 1:1 port of the PWA's
-/// `showCallUserMenu` (calls.js:41), which calls `showContextMenu(..., /*
-/// profileOnly */ true)`. [profileOnly] trims the message-only actions that
-/// don't apply during a call (React/Quote/Copy/Translate/Slap/Hug/Edit), leaving
-/// PM / Create Group / Gift Credits / Friend / Report / Block. No-op for self /
-/// empty pubkey (calls.js:42). `ContextMenuPanel` re-derives the live
-/// friend/block flags from app_state, so only pubkey + base nym are needed.
+/// Opens the profile-only user context menu for a nick tapped in the call UI; no-op for self or empty pubkey.
 void showCallUserMenu(BuildContext context, String pubkey, {String? nym}) {
   if (pubkey.isEmpty) return;
-  // Resolve the display base nym: prefer a caller-supplied nym, else the live
-  // `usersProvider` entry (the call chat-from line carries no nym), else fall
-  // back to the pubkey (`_nymForPubkey`, calls.js).
+  // Prefer the supplied nym, else the live users entry, else the pubkey.
   final container = ProviderScope.containerOf(context);
   final live = container.read(usersProvider)[pubkey]?.nym;
   final resolved = !isPlaceholderNym(live)
@@ -86,8 +68,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
     super.dispose();
   }
 
-  /// Opens the full emoji picker (reactions-bar "+" / chat-react "more") as a
-  /// bottom sheet over the call overlay; [onPick] receives the chosen emoji.
+  /// Full emoji picker as a bottom sheet over the call; [onPick] gets the emoji.
   void _openEmojiPicker(ValueChanged<String> onPick) {
     final recents = ref.read(recentEmojisProvider);
     final c = context.nym;
@@ -116,9 +97,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
     );
   }
 
-  /// Builds the call-chat panel (`#callChatPanel`). On wide layouts it is a
-  /// fixed-320px flex sibling of the grid (so the grid resizes); on narrow
-  /// layouts it fills the body.
+  /// Chat panel: a fixed 320px sibling of the grid on wide layouts, full-body on narrow ones.
   Widget _buildChatPanel(CallService service) {
     final call = ref.watch(currentCallStateProvider);
     return _ChatPanel(
@@ -144,10 +123,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
     final service = ref.read(callServiceProvider);
 
     return Material(
-      // `.call-overlay`: dark rgba(5,5,10,0.96) (#05050a @ 0.96); light mode
-      // flips to rgba(245,245,242,0.95) (`body.light-mode .call-overlay`,
-      // styles-features.css:4799). The Material is the parent of SafeArea so
-      // the fill still reaches the screen edges (under the notch/status bar).
+      // The Material sits above SafeArea so the fill reaches under the notch.
       color: context.nym.isLight
           ? const Color(0xF2F5F5F2)
           : const Color(0xF505050A),
@@ -158,10 +134,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
             Expanded(
               child: Stack(
                 children: [
-                  // `.call-body` is `display:flex`: on wide layouts (>640) the
-                  // grid and the 320px chat panel are siblings, so opening chat
-                  // SHRINKS the grid; on narrow layouts the panel goes
-                  // fullscreen over the grid.
+                  // Above 640px chat is a sibling that shrinks the grid; narrower it covers the grid.
                   if (_chatOpen && MediaQuery.of(context).size.width > 640)
                     Row(
                       children: [
@@ -171,14 +144,12 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                     )
                   else
                     _Grid(call: call, service: service),
-                  // Floating reactions overlay (`#callReactionsFly`).
                   Positioned.fill(
                     child: IgnorePointer(
                       child: _FlyLayer(reactions: call.flyReactions),
                     ),
                   ),
-                  // Switch-camera button: top-right, gated on >1 video input,
-                  // hidden while the chat panel is open or sharing.
+                  // Top-right, with more than one video input, hidden while chat is open or sharing.
                   if (call.kind == CallKind.video &&
                       !call.sharing &&
                       !_chatOpen &&
@@ -194,8 +165,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                     ),
                   if (_presenterOpen && call.isMod)
                     Positioned(
-                      // `.call-presenter-menu`: right 16, bottom 92 (clear of
-                      // the controls row).
+                      // Clear of the controls row.
                       right: 16,
                       bottom: 92,
                       child: _PresenterMenu(
@@ -208,8 +178,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                     ),
                   if (_reactionsOpen)
                     Positioned(
-                      // `.call-reactions-bar`: bottom 92 (floats above the
-                      // 56px controls).
+                      // Floats above the controls.
                       left: 0,
                       right: 0,
                       bottom: 92,
@@ -225,8 +194,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
                         },
                       ),
                     ),
-                  // Narrow (<=640): the panel is `position:absolute; inset:0`
-                  // (fullscreen) over the grid.
+                  // Narrow: the panel covers the grid.
                   if (_chatOpen && MediaQuery.of(context).size.width <= 640)
                     Positioned.fill(child: _buildChatPanel(service)),
                 ],
@@ -261,10 +229,6 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
   }
 }
 
-// =============================================================================
-// Title (#callTitle) — `_callTitleHtml`
-// =============================================================================
-
 class _Top extends ConsumerWidget {
   const _Top({required this.call});
   final CallState call;
@@ -277,8 +241,7 @@ class _Top extends ConsumerWidget {
 
     Widget id;
     if (call.isGroup) {
-      // Resolve groupId → group name (literal "Group call" fallback) and the
-      // group roster.
+      // Group name (fallback "Group call") and roster.
       final app = ref.watch(appStateProvider);
       final selfPk = app.selfPubkey;
       String name = tr('Group call');
@@ -286,9 +249,7 @@ class _Top extends ConsumerWidget {
       for (final g in app.groups) {
         if (g.id == call.groupId) {
           if (g.name.isNotEmpty) name = g.name;
-          // `_callTitleHtml` (calls.js:737): the group's OTHER members —
-          // `g.members.filter(pk => pk !== this.pubkey)` — NOT the live call
-          // participants, and never self.
+          // The group's other members, not live participants, never self.
           others = [
             for (final pk in g.members)
               if (pk != selfPk) pk,
@@ -296,14 +257,12 @@ class _Top extends ConsumerWidget {
           break;
         }
       }
-      // Up to 4 member avatars (`group-header-avatar`) between the group icon
-      // and the name (`others.slice(0, 4)`, calls.js:738).
+      // Up to 4 member avatars between the group icon and name.
       final users = ref.watch(usersProvider);
       final members = others.take(4).toList();
       id = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // `.group-header-svg` (calls.js:740) — the three-figure group glyph.
           NymSvgIcon(NymIcons.groupGlyph, size: 18, color: c.textBright),
           if (members.isNotEmpty) ...[
             const SizedBox(width: 6),
@@ -322,7 +281,7 @@ class _Top extends ConsumerWidget {
             child: Text(name,
                 style: TextStyle(
                     color: c.textBright,
-                    fontSize: 16.8, // `.call-title` 1.05rem
+                    fontSize: 16.8,
                     fontWeight: FontWeight.w600),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),
@@ -345,7 +304,6 @@ class _Top extends ConsumerWidget {
               pubkey: call.peerPubkey!,
               nym: call.peerNym,
               baseColor: c.textBright,
-              // `.call-title` 1.05rem = 16.8px.
               baseStyle:
                   const TextStyle(fontSize: 16.8, fontWeight: FontWeight.w600),
             ),
@@ -356,12 +314,10 @@ class _Top extends ConsumerWidget {
       id = Text(call.peerNym ?? tr('Call'),
           style: TextStyle(
               color: c.textBright,
-              fontSize: 16.8, // `.call-title` 1.05rem
+              fontSize: 16.8,
               fontWeight: FontWeight.w600));
     }
 
-    // `.call-overlay-top { padding: 18px 16px 6px }` (styles-features.css:
-    // 4606-4608).
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
       child: Column(
@@ -369,7 +325,6 @@ class _Top extends ConsumerWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // `.call-title-kind`: dim, weight 500, at the 1.05rem title size.
               Text('$kindLabel · ',
                   style: TextStyle(
                       color: c.textDim,
@@ -379,7 +334,6 @@ class _Top extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 2),
-          // `.call-status` 0.85rem = 13.6px.
           Text(call.statusText,
               style: TextStyle(color: c.textDim, fontSize: 13.6)),
         ],
@@ -387,10 +341,6 @@ class _Top extends ConsumerWidget {
     );
   }
 }
-
-// =============================================================================
-// Video grid (#callGrid) — breakpoints from styles-features.css:4699-4722
-// =============================================================================
 
 class _Grid extends StatelessWidget {
   const _Grid({required this.call, required this.service});
@@ -426,13 +376,6 @@ class _Grid extends StatelessWidget {
     final width = MediaQuery.of(context).size.width;
     final wide = width >= 700;
 
-    // PWA mapping: narrow → 1/2:1col, 3/4:2col, 5-9:3col; wide → 2col base
-    // (1/2 centerd max 1100). Tiles have min-height 160 (no forced aspect).
-    // The `[data-count="5"…"9"]` selectors (specificity 0,2,0) BEAT the
-    // wide-media `.call-grid` override (0,1,0, styles-features.css:4718), so
-    // 5-9 tiles render 3 columns at ANY width. The `[data-count]` selectors
-    // only exist for 2-9 (styles-features.css:4708-4716), so 10+ tiles fall
-    // back to the `.call-grid` base: 1 column narrow, 2 columns wide.
     final int columns;
     if (count >= 5 && count <= 9) {
       columns = 3;
@@ -450,8 +393,6 @@ class _Grid extends StatelessWidget {
       crossAxisCount: columns,
       mainAxisSpacing: 10,
       crossAxisSpacing: 10,
-      // min-height 160 with cover video: a ~4:3 cell reads close to the PWA's
-      // flexible rows without a forced portrait squish.
       childAspectRatio: 4 / 3,
       shrinkWrap: true,
       physics: const ClampingScrollPhysics(),
@@ -501,21 +442,15 @@ class _Tile extends StatelessWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(minHeight: 160),
       child: Container(
-        // Decoration lives on the (clipping) Container itself — not inside a
-        // ClipRRect — so the light-mode drop shadow paints outside the tile.
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           color: c.bgTertiary,
-          // `.call-tile` border = `var(--border)` (primary@0.20), primary
-          // when presenting.
           border: Border.all(color: sharing ? c.primary : c.border, width: 1),
           borderRadius: BorderRadius.circular(14),
-          // `body.light-mode .call-tile { box-shadow: 0 2px 12px
-          // rgba(0,0,0,0.12) }` (styles-features.css:4800).
           boxShadow: c.isLight
               ? const [
                   BoxShadow(
-                    color: Color(0x1F000000), // black @ 0.12
+                    color: Color(0x1F000000),
                     blurRadius: 12,
                     offset: Offset(0, 2),
                   ),
@@ -532,8 +467,7 @@ class _Tile extends StatelessWidget {
                 objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
               )
             else
-              // `.call-tile-avatar`: 84px total (border-box) with a 2px
-              // `var(--border)` ring, so the avatar itself is 80px.
+              // 84px with a 2px ring, so the avatar is 80px.
               Center(
                 child: Container(
                   decoration: BoxDecoration(
@@ -550,10 +484,7 @@ class _Tile extends StatelessWidget {
                 child:
                     _Badge(text: tr('Presenting'), color: c.primary, fg: c.bg),
               ),
-            // `.call-tile-name`: bottom-left, black@0.55, radius 8, decorated,
-            // `max-width: calc(100% - 16px)` (styles-features.css:4756-4769) —
-            // pinning left AND right 8 caps it at tile width − 16; the Align
-            // shrink-wraps the pill back to its content, left-aligned.
+            // Pinned left and right to cap width; Align shrink-wraps the pill.
             Positioned(
               left: 8,
               right: 8,
@@ -572,8 +503,7 @@ class _Tile extends StatelessWidget {
                       ? Text(tr('You'),
                           style: const TextStyle(
                               color: Colors.white, fontSize: 12))
-                      // Tile name → shared user context menu (PWA
-                      // `callNickMenu` / `showCallUserMenu`, calls.js:1566).
+                      // Tile name opens the user context menu.
                       : GestureDetector(
                           behavior: HitTestBehavior.opaque,
                           onTap: () =>
@@ -619,10 +549,6 @@ class _Badge extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// Floating reactions (#callReactionsFly) — `.call-react-fly-item` callReactFly
-// =============================================================================
-
 class _FlyLayer extends StatelessWidget {
   const _FlyLayer({required this.reactions});
   final List<CallFlyReaction> reactions;
@@ -647,8 +573,7 @@ class _FlyLayer extends StatelessWidget {
   }
 }
 
-/// A single flying reaction: rises 0→-260px, scales 0.6→1, fades in then out
-/// over 3.1s (`@keyframes callReactFly`).
+/// Rises 0 to -260px, scales 0.6 to 1, fades in then out over 3.1s.
 class _FlyItem extends StatefulWidget {
   const _FlyItem({super.key, required this.reaction});
   final CallFlyReaction reaction;
@@ -676,14 +601,12 @@ class _FlyItemState extends State<_FlyItem>
       animation: _ctrl,
       builder: (context, child) {
         final t = _ctrl.value;
-        // @keyframes callReactFly: translateY 0→-26px(12%)→-260px(100%) [linear
-        // between keyframes], scale .6→1 by 12%, opacity 0→1 by 12%, hold to
-        // 80%, then 1→0 by 100%.
+        // Keyframes: y 0→-26 (12%)→-260 (100%) linear; scale and opacity reach 1 by 12%, fade out after 80%.
         final double dy;
         final double scale;
         if (t < 0.12) {
           final k = t / 0.12;
-          dy = -26 * k; // 12%: -10% of a phone tile height
+          dy = -26 * k;
           scale = 0.6 + 0.4 * k;
         } else {
           final k = (t - 0.12) / 0.88;
@@ -709,12 +632,7 @@ class _FlyItemState extends State<_FlyItem>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // `.call-react-emoji` 2.5rem = 40px. A custom `:shortcode:`
-          // fly-reaction renders as its image (PWA `renderReactionEmoji`,
-          // calls.js:1177 — whole-string only) at `.call-react-emoji
-          // .custom-emoji { width/height: 2.5rem; vertical-align: middle }`
-          // (styles-features.css:5185, margin 0 via `.custom-emoji-reaction`);
-          // unicode falls through to a plain Text.
+          // 40px; a whole-string custom `:shortcode:` renders as its image.
           InlineEmojiText(
               text: widget.reaction.emoji,
               style: const TextStyle(fontSize: 40),
@@ -723,7 +641,6 @@ class _FlyItemState extends State<_FlyItem>
               emojiMargin: EdgeInsets.zero,
               emojiAlignment: PlaceholderAlignment.middle),
           const SizedBox(height: 2),
-          // `.call-react-who`: white on black@0.5, radius 8.
           Container(
             constraints: const BoxConstraints(maxWidth: 160),
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -750,10 +667,6 @@ class _FlyItemState extends State<_FlyItem>
   }
 }
 
-// =============================================================================
-// Reactions bar (#callReactionsBar) — recents-first + "+" more
-// =============================================================================
-
 class _ReactionsBar extends StatelessWidget {
   const _ReactionsBar({
     required this.recents,
@@ -767,10 +680,7 @@ class _ReactionsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // recents-first padded with the 8 defaults. Keep a custom `:shortcode:`
-    // recent when its pack is still known (PWA `_callReactionBarEmojis`,
-    // calls.js:1106-1118 → `known()`); without the predicate every custom code
-    // is treated as unknown and dropped.
+    // Recents padded with defaults; custom codes are kept only while their pack is known.
     final codeToUrl = ProviderScope.containerOf(context)
         .read(liveCustomEmojiProvider)
         .codeToUrl;
@@ -784,7 +694,6 @@ class _ReactionsBar extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
         decoration: BoxDecoration(
           color: c.bgTertiary,
-          // `.call-reactions-bar` border = `var(--border)` (primary@0.20).
           border: Border.all(color: c.border),
           borderRadius: BorderRadius.circular(22),
           boxShadow: const [
@@ -800,13 +709,7 @@ class _ReactionsBar extends StatelessWidget {
             for (final e in emojis)
               _ReactBarBtn(
                 onTap: () => onPick(e),
-                // Known custom `:shortcode:` recents render as their image
-                // (PWA `renderReactionEmoji`, calls.js:1130 — whole-string
-                // only) at `.call-react-btn .custom-emoji { width/height:
-                // 1.9rem; vertical-align: middle }` = 30.4px
-                // (styles-features.css:5183, margin 0); unicode falls
-                // through `InlineEmojiText`'s fast path to a plain Text at
-                // the 1.75rem = 28px button font.
+                // Known custom recents render as 30.4px images; unicode stays 28px text.
                 child: InlineEmojiText(
                     text: e,
                     style: const TextStyle(fontSize: 28),
@@ -815,8 +718,7 @@ class _ReactionsBar extends StatelessWidget {
                     emojiMargin: EdgeInsets.zero,
                     emojiAlignment: PlaceholderAlignment.middle),
               ),
-            // `.call-react-more`: dim "+" (also a `.call-react-btn`,
-            // calls.js:1134) opens the full picker.
+            // Dim "+" opening the full picker.
             _ReactBarBtn(
               onTap: onMore,
               child:
@@ -829,11 +731,7 @@ class _ReactionsBar extends StatelessWidget {
   }
 }
 
-/// One `.call-react-btn`: padding 4, radius 8, transparent until hover.
-/// `:hover { transform: scale(1.25); background: var(--bg-hover,
-/// rgba(255,255,255,0.08)) }` with `transition: transform 0.12s, background
-/// 0.12s` (styles-features.css:5173-5182). `--bg-hover` is never defined in
-/// the PWA CSS, so the white@0.08 fallback applies in both themes.
+/// Reaction button that scales to 1.25 on hover; `--bg-hover` is undefined, so white@0.08 applies in both themes.
 class _ReactBarBtn extends StatefulWidget {
   const _ReactBarBtn({required this.onTap, required this.child});
   final VoidCallback onTap;
@@ -873,10 +771,6 @@ class _ReactBarBtnState extends State<_ReactBarBtn> {
     );
   }
 }
-
-// =============================================================================
-// Chat panel (#callChatPanel)
-// =============================================================================
 
 class _ChatPanel extends ConsumerWidget {
   const _ChatPanel({
@@ -922,8 +816,6 @@ class _ChatPanel extends ConsumerWidget {
                     style: TextStyle(
                         color: c.textBright, fontWeight: FontWeight.w600)),
                 const Spacer(),
-                // `.call-chat-close` is a literal "✕" char in the PWA — render as
-                // styled text, not an SVG glyph.
                 IconButton(
                   icon: Text('✕',
                       style:
@@ -935,9 +827,7 @@ class _ChatPanel extends ConsumerWidget {
           ),
           Expanded(
             child: ListView.separated(
-              // The 14px horizontal gutter lives on each row (not here) so a
-              // supporter/aura-gold row can pull its gold left border 8px into
-              // the gutter (`margin-left: -8px`, styles-features.css:4949).
+              // The gutter lives on each row so gold rows can pull their left border into it.
               padding: const EdgeInsets.symmetric(vertical: 12),
               itemCount: call.chatLog.length,
               separatorBuilder: (_, __) => const SizedBox(height: 8),
@@ -963,8 +853,7 @@ class _ChatPanel extends ConsumerWidget {
   }
 }
 
-/// One chat row: decorated from-line (non-self) + mention-highlighted text +
-/// reaction badges, with long-press → quick-react, plus a self read receipt.
+/// Chat row: from-line, highlighted text, reactions, long-press quick-react, and self read receipt.
 class _ChatRow extends ConsumerWidget {
   const _ChatRow({
     required this.msg,
@@ -981,11 +870,7 @@ class _ChatRow extends ConsumerWidget {
   void _openQuickReact(BuildContext context, Rect anchor) {
     final recents =
         ProviderScope.containerOf(context).read(recentEmojisProvider);
-    // A non-self chat row's quick-react popup exposes a "User options" affordance
-    // (PWA `_showCallChatQuickReact` 3-dot `data-qr="menu"`, calls.js:1526,1566)
-    // that opens the shared user context menu. Rendered as the inline
-    // quick-context-menu card below the pill (the native popup has no in-pill
-    // ⋮ slot; `showQuickReactPopup.contextItems` is the supported channel).
+    // Non-self rows get a "User options" item under the quick-react pill.
     final contextItems = (!msg.isSelf && msg.pubkey.isNotEmpty)
         ? [
             QuickContextItem(
@@ -1008,16 +893,9 @@ class _ChatRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    // `.call-chat-msg { font-size: 0.85rem }` = 13.6px (styles-features.css:
-    // 4866-4870); `.call-chat-text` inherits it.
     var base = TextStyle(color: c.textBright, fontSize: 13.6, height: 1.3);
 
-    // Carry the sender's purchased message flair (style / supporter / aura)
-    // onto the call-chat row, mirroring `_appendCallChat` (calls.js:1407-1414)
-    // which adds `shop.style` / `supporter-style` / `cosmetic-aura-gold`
-    // classes. The `.call-chat-text` rules (styles-features.css:4901-4946)
-    // tint the text; supporter wins over a base message style, matching the
-    // CSS cascade order.
+    // Carry the sender's style, supporter or gold aura onto the row; supporter wins over a style.
     var supporter = false;
     var auraGold = false;
     if (msg.pubkey.isNotEmpty) {
@@ -1038,7 +916,6 @@ class _ChatRow extends ConsumerWidget {
     Widget row = Stack(
       children: [
         _buildRow(context, c, base),
-        // `.call-chat-react-btn`: always-present 24×24 ＋ affordance, top-right.
         Positioned(
           top: 0,
           right: 0,
@@ -1054,24 +931,17 @@ class _ChatRow extends ConsumerWidget {
       ],
     );
 
-    // `.call-chat-msg.supporter-style, .call-chat-msg.cosmetic-aura-gold`
-    // (styles-features.css:4947-4951): a 2px solid #ffd700 left border with
-    // padding-left 6 / margin-left -8 (border + padding cancel the negative
-    // margin, so the text stays put and the gold rule sits 8px into the 14px
-    // list gutter). `.cosmetic-aura-gold` (4952-4956) additionally wraps the
-    // row in an inset 1px gold ring + soft gold glow, radius 8, padding 4/6.
+    // Supporter/gold rows get a 2px gold left rule inside the gutter; gold adds an inset ring and glow.
     const gold = Color(0xFFFFD700);
     if (auraGold) {
       row = Container(
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           boxShadow: const [
-            // `0 0 14px rgba(255,215,0,0.15)`.
             BoxShadow(color: Color(0x26FFD700), blurRadius: 14),
           ],
         ),
-        // `inset 0 0 0 1px rgba(255,215,0,0.3)` — the 1px gold ring, painted
-        // over the content like a CSS inset shadow.
+        // Inset gold ring painted over the content.
         foregroundDecoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: const Color(0x4DFFD700)),
@@ -1079,14 +949,12 @@ class _ChatRow extends ConsumerWidget {
         clipBehavior: Clip.antiAlias,
         child: Stack(
           children: [
-            // border-left: 2px solid #ffd700 (clipped to the radius-8 box).
             Positioned(
               left: 0,
               top: 0,
               bottom: 0,
               child: Container(width: 2, color: gold),
             ),
-            // padding: 4px 6px, after the 2px left border.
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 6, 4),
               child: row,
@@ -1104,8 +972,7 @@ class _ChatRow extends ConsumerWidget {
       );
     }
 
-    // The list's 14px horizontal gutter; a gold-edged row starts 8px earlier
-    // (`margin-left: -8px`).
+    // 14px gutter; gold-edged rows start 8px earlier.
     return Padding(
       padding:
           EdgeInsets.only(left: (supporter || auraGold) ? 6 : 14, right: 14),
@@ -1114,15 +981,7 @@ class _ChatRow extends ConsumerWidget {
   }
 
   Widget _buildRow(BuildContext context, NymColors c, TextStyle base) {
-    // `_setupCallChatInteractions` (calls.js:1598-1621): a 500ms hold
-    // (canceled once the touch drifts more than 10px on either axis) buzzes
-    // (`nymHapticTap` = a 30ms vibrate) and opens the quick-react popup
-    // centerd on the PRESS POINT — `_showCallChatQuickReact` places it
-    // `left = cx - w/2, top = cy - h - 10` from the recorded touch x/y
-    // (calls.js:1533-1537) — NOT on the row rect. A zero-size anchor at the
-    // touch point reproduces that. The tight 10px pre-fire cancel slop needs
-    // the custom recognizer: a stock long-press would ride the framework's
-    // ~18px kTouchSlop and still fire after a small scroll drift.
+    // 500ms hold (cancelled past 10px drift) buzzes and opens quick-react at the press point.
     return RawGestureDetector(
       gestures: <Type, GestureRecognizerFactory>{
         _CallChatLongPressRecognizer:
@@ -1138,17 +997,12 @@ class _ChatRow extends ConsumerWidget {
             },
         ),
       },
-      // `.call-chat-msg` is a left-aligned IRC-style log row (no align-self /
-      // text-align:right for self in the CSS); self ONLY dims the from-line.
-      // The receipt (`.call-chat-readers`) is the sole right-aligned element.
-      // Right padding clears the absolute react ＋ button.
+      // Left-aligned log row; only the receipt is right-aligned, and right padding clears the react button.
       child: Padding(
         padding: const EdgeInsets.only(right: 28),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // `.call-chat-from`: decorated nym (non-self primary, self dim
-            // "You"), `font-size: 0.75rem` = 12px (styles-features.css:4874-4877).
             if (msg.isSelf)
               Text(tr('You'),
                   style: TextStyle(
@@ -1156,8 +1010,7 @@ class _ChatRow extends ConsumerWidget {
                       fontSize: 12,
                       fontWeight: FontWeight.w600))
             else
-              // Chat-from nym → shared user context menu (PWA `callNickMenu` →
-              // `showCallUserMenu`, inline-bindings.js:289).
+              // From-line nym opens the user context menu.
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => showCallUserMenu(context, msg.pubkey),
@@ -1170,18 +1023,15 @@ class _ChatRow extends ConsumerWidget {
                 ),
               ),
             const SizedBox(height: 2),
-            // Bubble with @mention highlighting (`_formatCallChatText`).
             Text.rich(
               callChatTextSpans(msg.text, base, c.primary),
               textAlign: TextAlign.left,
             ),
-            // Reaction count badges.
             if (msg.reactions.isNotEmpty) ...[
               const SizedBox(height: 3),
               _ReactionBadges(msg: msg, onReact: onReact),
             ],
-            // Read receipt (self only): right-aligned ✓/✓✓ in 1:1, reader
-            // avatars in group (`.call-chat-readers { justify-content:flex-end }`).
+            // Self only: ✓/✓✓ in 1:1, reader avatars in groups.
             if (msg.isSelf) _Receipt(msg: msg, isGroup: isGroup),
           ],
         ),
@@ -1190,18 +1040,10 @@ class _ChatRow extends ConsumerWidget {
   }
 }
 
-/// A [LongPressGestureRecognizer] with the PWA's tighter pre-fire cancel slop
-/// for the call-chat quick-react hold (`_setupCallChatInteractions`,
-/// calls.js:1595,1611-1616): the pending 500ms timer is canceled once the
-/// touch drifts more than `MOVE = 10` px on EITHER axis — tighter than the
-/// framework's default ~18px kTouchSlop drift, which would still pop the popup
-/// on a slow call-chat scroll. Movement AFTER the 500ms deadline no longer
-/// matters (the popup is already up), so the check applies only before the
-/// deadline elapses.
+/// Long-press that cancels past 10px drift before the 500ms deadline, tighter than kTouchSlop.
 class _CallChatLongPressRecognizer extends LongPressGestureRecognizer {
   _CallChatLongPressRecognizer({super.debugOwner});
 
-  /// `MOVE` (calls.js:1595).
   static const double _moveThreshold = 10;
 
   Offset _downPosition = Offset.zero;
@@ -1233,9 +1075,7 @@ class _CallChatLongPressRecognizer extends LongPressGestureRecognizer {
   }
 }
 
-/// `.call-chat-react-btn`: a 24×24 ＋ button, top-right of each chat row,
-/// bordered (`var(--border)`) over `--bg-tertiary`, radius 8; opacity 0.65 → 1 +
-/// primary glyph on hover. Opens the same quick-react popup as long-press.
+/// 24x24 react button on each row, opening the same quick-react popup.
 class _ChatReactBtn extends StatefulWidget {
   const _ChatReactBtn({required this.onTap});
   final VoidCallback onTap;
@@ -1303,13 +1143,10 @@ class _ReactionBadges extends StatelessWidget {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                 decoration: BoxDecoration(
-                  // `.call-chat-reaction.self`: primary 22% bg + primary border.
                   color: entry.value.contains(selfPk)
                       ? c.primary.withValues(alpha: 0.22)
                       : c.bgTertiary,
                   border: Border.all(
-                      // `.call-chat-reaction` border = `var(--border)`
-                      // (primary@0.20); self adds the solid primary border.
                       color:
                           entry.value.contains(selfPk) ? c.primary : c.border),
                   borderRadius: BorderRadius.circular(10),
@@ -1317,12 +1154,7 @@ class _ReactionBadges extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Custom `:shortcode:` reaction renders as its image (PWA
-                    // `renderReactionEmoji`, calls.js:1689 — whole-string
-                    // only) at `.call-chat-reaction .custom-emoji { width/
-                    // height: 1.4em; vertical-align: -0.2em }` = 17.5px of the
-                    // 0.78rem = 12.5px badge font (styles-features.css:
-                    // 4989-5003); unicode falls through to a plain Text.
+                    // A whole-string custom `:shortcode:` renders as a 17.5px image.
                     InlineEmojiText(
                         text: entry.key,
                         style: const TextStyle(fontSize: 12.5),
@@ -1331,7 +1163,6 @@ class _ReactionBadges extends StatelessWidget {
                         emojiMargin: EdgeInsets.zero,
                         emojiBaselineDropEm: 0.2),
                     const SizedBox(width: 3),
-                    // `.call-chat-reaction-count` 0.72rem = 11.5px.
                     Text('${entry.value.length}',
                         style: TextStyle(color: c.textDim, fontSize: 11.5)),
                   ],
@@ -1348,11 +1179,7 @@ class _Receipt extends ConsumerWidget {
   final CallChatMessage msg;
   final bool isGroup;
 
-  /// `_bindCallReaderLongPress` (calls.js:1370-1395): a 500ms hold on the
-  /// reader strip (contextmenu suppressed, canceled on release/move) buzzes
-  /// (`nymHapticTap`) and opens the "Seen by" readers modal
-  /// (`_showReadersModalFromMap`, groups.js:2829-2880) lifted above the call
-  /// overlay (`z-index: 10060` — the root overlay here).
+  /// 500ms hold on the reader strip buzzes and opens "Seen by" above the call overlay.
   void _showSeenBy(BuildContext context, WidgetRef ref) {
     if (msg.readers.isEmpty) return;
     final users = ref.read(usersProvider);
@@ -1365,7 +1192,6 @@ class _Receipt extends ConsumerWidget {
       context,
       anchorRect: anchor,
       emoji: '',
-      // `.reactors-modal-header`: "Seen by <count>".
       title: tr(
           'Seen by {count}', {'count': abbreviateNumber(msg.readers.length)}),
       reactors: [
@@ -1378,10 +1204,7 @@ class _Receipt extends ConsumerWidget {
             imageUrl: users[e.key]?.profile?.picture,
           ),
       ],
-      // "Click user row to open their context menu" (groups.js:2861-2869):
-      // the modal closes itself, then `showContextMenu(e,
-      // `${baseNym}#${suffix}`, pubkey, null, null, false)` — NOT
-      // profile-only.
+      // The modal closes, then opens the full (not profile-only) context menu.
       onTapReactor: (r) => ContextMenuPanel.show(
         context,
         target: CtxTarget(pubkey: r.pubkey, nym: r.nym, isSelf: r.isYou),
@@ -1393,11 +1216,7 @@ class _Receipt extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     if (isGroup) {
-      // Reader avatars (`.call-chat-readers`, justify-end); empty until read.
-      // `_syncReaderAvatars` (groups.js:2644-2695) shows up to 3 overlapping
-      // 14px avatars (`.group-reader-avatar`: 1.5px bg ring, opacity 0.85,
-      // -5px stacking) + a `+N` overflow badge (9px dim,
-      // `.group-reader-overflow`).
+      // Up to 3 overlapping reader avatars plus a `+N` badge; empty until read.
       if (msg.readers.isEmpty) return const SizedBox.shrink();
       const maxVisible = 3;
       final entries = msg.readers.entries.toList();
@@ -1408,8 +1227,6 @@ class _Receipt extends ConsumerWidget {
         alignment: Alignment.centerRight,
         child: GestureDetector(
           onLongPress: () {
-            // The PWA buzzes (nymHapticTap = 30ms vibrate) as the 500ms
-            // reader long-press fires (calls.js:1373-1377).
             HapticFeedback.mediumImpact();
             _showSeenBy(context, ref);
           },
@@ -1451,7 +1268,6 @@ class _Receipt extends ConsumerWidget {
         ),
       );
     }
-    // 1:1 ✓ (sent) / ✓✓ (read) — right-aligned receipt.
     final read =
         msg.delivery == CallChatDelivery.read || msg.readers.isNotEmpty;
     return Align(
@@ -1474,12 +1290,9 @@ class _TypingLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // `.call-chat-typing { font-size: 0.72rem }` = 11.5px
-    // (styles-features.css:5006-5009).
     final style = TextStyle(
         color: c.textDim, fontSize: 11.5, fontStyle: FontStyle.italic);
-    // Bound each decorated nym so its internal Flexible has finite width inside
-    // the unbounded Wrap.
+    // Bound each nym so its Flexible has finite width inside the Wrap.
     Widget nym(String pk) => ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 140),
           child: CallNym(
@@ -1533,16 +1346,13 @@ class _InputRow extends ConsumerStatefulWidget {
 }
 
 class _InputRowState extends ConsumerState<_InputRow> {
-  /// Active mention matches (pubkeys) for the autocomplete overlay.
+  /// Active mention matches (pubkeys).
   List<String> _mentionMatches = const [];
 
-  /// Keyboard-selected match (`_callMentionIndex`, calls.js:1906/1912): first
-  /// item on open, ArrowUp/Down moves it with wrap-around.
+  /// Keyboard-selected match; first on open, arrows wrap.
   int _mentionIndex = 0;
 
-  /// PWA `callChatKeydown` (calls.js:1207-1213): while the autocomplete is
-  /// open, ArrowDown/Up move the `.selected` highlight, Escape closes it and
-  /// Enter/Tab complete the selected mention.
+  /// While open, arrows move the selection, Escape closes, Enter/Tab complete.
   KeyEventResult _onMentionKey(FocusNode node, KeyEvent event) {
     if (_mentionMatches.isEmpty || event is KeyUpEvent) {
       return KeyEventResult.ignored;
@@ -1570,7 +1380,7 @@ class _InputRowState extends ConsumerState<_InputRow> {
     return KeyEventResult.ignored;
   }
 
-  /// `_navigateCallMention` (calls.js:1915-1926): step with wrap-around.
+  /// Step with wrap-around.
   void _navigateMention(int direction) {
     if (_mentionMatches.isEmpty) return;
     var idx = _mentionIndex + direction;
@@ -1597,10 +1407,7 @@ class _InputRowState extends ConsumerState<_InputRow> {
     final blocked = ref.read(appStateProvider).blockedUsers;
     final selfPk = ref.read(appStateProvider).selfPubkey;
     final users = ref.read(usersProvider);
-    // `_showCallMentionAutocomplete` (calls.js:1880-1886) filters AND sorts on
-    // the lowercased `base#suffix` searchable string — not the raw pubkey —
-    // then slices the first 8, so both the row order and (with >8 candidates)
-    // which 8 appear are driven by the display nyms.
+    // Filter and sort on lowercased `base#suffix`, then take the first 8.
     final searchable = <String, String>{};
     final matches = widget.call.participants
         .map((p) => p.pubkey)
@@ -1615,8 +1422,7 @@ class _InputRowState extends ConsumerState<_InputRow> {
       ..sort((a, b) => searchable[a]!.compareTo(searchable[b]!));
     setState(() {
       _mentionMatches = matches.take(8).toList();
-      // `_showCallMentionAutocomplete` re-selects the first item on every
-      // refresh (calls.js:1891,1906).
+      // Re-select the first item on every refresh.
       _mentionIndex = 0;
     });
   }
@@ -1651,8 +1457,6 @@ class _InputRowState extends ConsumerState<_InputRow> {
       clipBehavior: Clip.none,
       children: [
         Container(
-          // `.call-chat-input-row { border-top: 1px solid var(--border) }`
-          // (styles-features.css:5035-5042) — the separator above the input.
           decoration: BoxDecoration(
             border: Border(top: BorderSide(color: c.border)),
           ),
@@ -1676,8 +1480,6 @@ class _InputRowState extends ConsumerState<_InputRow> {
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 8),
-                      // `.call-chat-input` border = `var(--border)`
-                      // (primary@0.20).
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                         borderSide: BorderSide(color: c.border),
@@ -1688,8 +1490,7 @@ class _InputRowState extends ConsumerState<_InputRow> {
                       ),
                     ),
                     onSubmitted: (t) {
-                      // A mention pick should complete the mention, not send
-                      // (`_selectCallMention` picks the `.selected` item).
+                      // A mention pick completes the mention instead of sending.
                       if (_mentionMatches.isNotEmpty) {
                         _insertMention(_mentionMatches[_mentionIndex.clamp(
                             0, _mentionMatches.length - 1)]);
@@ -1722,7 +1523,6 @@ class _InputRowState extends ConsumerState<_InputRow> {
             ],
           ),
         ),
-        // `.call-mention-autocomplete`: anchored above the input.
         if (_mentionMatches.isNotEmpty)
           Positioned(
             left: 12,
@@ -1747,7 +1547,6 @@ class _MentionAutocomplete extends StatefulWidget {
   });
   final List<String> pubkeys;
 
-  /// Keyboard-selected row (`.call-mention-item.selected`).
   final int selected;
   final ValueChanged<String> onPick;
 
@@ -1756,9 +1555,7 @@ class _MentionAutocomplete extends StatefulWidget {
 }
 
 class _MentionAutocompleteState extends State<_MentionAutocomplete> {
-  /// Fixed row extent (7px vertical padding + 22px avatar) so the keyboard
-  /// selection can be scrolled into view (`scrollIntoView({block:'nearest'})`,
-  /// calls.js:1925) with plain offset math.
+  /// Fixed row extent so keyboard selection scrolls into view with plain offset math.
   static const double _itemExtent = 36;
 
   final _scroll = ScrollController();
@@ -1797,7 +1594,6 @@ class _MentionAutocompleteState extends State<_MentionAutocomplete> {
         constraints: const BoxConstraints(maxHeight: 200),
         decoration: BoxDecoration(
           color: c.bgSecondary,
-          // `.call-mention-autocomplete` border = `var(--border)` (primary@0.20).
           border: Border.all(color: c.border),
           borderRadius: BorderRadius.circular(10),
           boxShadow: const [
@@ -1817,9 +1613,6 @@ class _MentionAutocompleteState extends State<_MentionAutocomplete> {
             for (var i = 0; i < widget.pubkeys.length; i++)
               InkWell(
                 onTap: () => widget.onPick(widget.pubkeys[i]),
-                // `.call-mention-item.selected, .call-mention-item:hover
-                // { background: var(--bg-tertiary) }`
-                // (styles-features.css:5077-5078).
                 hoverColor: c.bgTertiary,
                 child: Container(
                   color: i == widget.selected ? c.bgTertiary : null,
@@ -1864,10 +1657,6 @@ class _MentionAutocompleteState extends State<_MentionAutocomplete> {
   }
 }
 
-// =============================================================================
-// Presenter menu (#callPresenterMenu) — `_renderPresenterMenu`
-// =============================================================================
-
 class _PresenterMenu extends ConsumerWidget {
   const _PresenterMenu({
     required this.call,
@@ -1880,14 +1669,14 @@ class _PresenterMenu extends ConsumerWidget {
   final String selfPubkey;
   final VoidCallback onToggleRestrict;
 
-  /// Assign a presenter, or pass null to clear.
+  /// Assign a presenter, or null to clear.
   final ValueChanged<String?> onAssign;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final users = ref.watch(usersProvider);
-    // Participants = self + remote members (call.participants excludes self).
+    // Self plus remote members.
     final members = <String>[
       selfPubkey,
       ...call.participants.map((p) => p.pubkey),
@@ -1908,7 +1697,6 @@ class _PresenterMenu extends ConsumerWidget {
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: c.bgTertiary,
-          // `.call-presenter-menu` border = `var(--border)` (primary@0.20).
           border: Border.all(color: c.border),
           borderRadius: BorderRadius.circular(14),
           boxShadow: const [
@@ -1921,7 +1709,6 @@ class _PresenterMenu extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // "Only the presenter can share" checkbox row.
               InkWell(
                 onTap: onToggleRestrict,
                 child: Padding(
@@ -2064,10 +1851,6 @@ class _PresenterAction extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// Switch-camera button (#callSwitchCamBtn)
-// =============================================================================
-
 class _SwitchCamButton extends StatefulWidget {
   const _SwitchCamButton({
     required this.disabled,
@@ -2092,9 +1875,7 @@ class _SwitchCamButtonState extends State<_SwitchCamButton> {
       message: widget.facingMode == 'environment'
           ? tr('Switch to front camera')
           : tr('Switch to rear camera'),
-      // `.call-switch-cam-btn:hover { transform: scale(1.08) }` with
-      // `transition: transform 0.15s` (styles-features.css:4626-4629);
-      // `:disabled { transform: none }` (4630) suppresses the scale.
+      // Hover scales to 1.08 unless disabled.
       child: MouseRegion(
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
@@ -2104,10 +1885,7 @@ class _SwitchCamButtonState extends State<_SwitchCamButton> {
           child: Opacity(
             opacity: widget.disabled ? 0.5 : 1,
             child: Material(
-              // `.call-switch-cam-btn { background: rgba(15,15,22,0.6) }`
-              // (styles-features.css:4620) — #0F0F16 @ 0.6, not pure black.
               color: const Color(0x990F0F16),
-              // `.call-switch-cam-btn` border = `var(--border)` (primary@0.20).
               shape: CircleBorder(side: BorderSide(color: c.border)),
               child: InkWell(
                 customBorder: const CircleBorder(),
@@ -2128,10 +1906,6 @@ class _SwitchCamButtonState extends State<_SwitchCamButton> {
     );
   }
 }
-
-// =============================================================================
-// Controls (#callControls)
-// =============================================================================
 
 class _Controls extends StatelessWidget {
   const _Controls({
@@ -2164,10 +1938,7 @@ class _Controls extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final isVideo = call.kind == CallKind.video;
-    // `.call-controls`: no background (transparent over the overlay backdrop),
-    // gap 20, `padding: 16px; padding-bottom: calc(16px +
-    // env(safe-area-inset-bottom))` (styles-features.css:4771-4777) — the
-    // overlay's SafeArea already consumes the bottom inset.
+    // Transparent; the overlay's SafeArea already consumes the bottom inset.
     return Container(
       padding: const EdgeInsets.all(16),
       child: Wrap(
@@ -2176,7 +1947,7 @@ class _Controls extends StatelessWidget {
         runSpacing: 10,
         children: [
           _CtrlBtn(
-            // PWA toggles `.active` (red) on the SAME mic glyph when muted.
+            // Same glyph turns red when muted.
             svg: NymIcons.callMic,
             active: call.muted,
             tooltip:
@@ -2185,8 +1956,7 @@ class _Controls extends StatelessWidget {
           ),
           if (isVideo)
             _CtrlBtn(
-              // PWA `#callVideoBtn` keeps the same video glyph and goes `.active`
-              // (red) when the camera is off.
+              // Same glyph turns red when the camera is off.
               svg: NymIcons.video,
               active: call.cameraOff,
               tooltip:
@@ -2196,7 +1966,7 @@ class _Controls extends StatelessWidget {
           _CtrlBtn(
             svg: NymIcons.callScreenShare,
             active: call.sharing,
-            // request-mode: primary outline when we can't share (calls.js).
+            // Primary outline when we can't share.
             requestMode: !call.sharing && !call.canShareScreen,
             tooltip: call.sharing
                 ? tr('Stop sharing screen')
@@ -2205,7 +1975,7 @@ class _Controls extends StatelessWidget {
                     : tr('Request to present')),
             onTap: onShare,
           ),
-          // Presenter button — mods only, badge = pending requests.
+          // Mods only; badge shows pending requests.
           if (call.isMod)
             _CtrlBtn(
               svg: NymIcons.callPresenter,
@@ -2228,8 +1998,7 @@ class _Controls extends StatelessWidget {
             onTap: onChat,
           ),
           _CtrlBtn(
-            // `#callHangupBtn` — the feather phone ROTATED 135° (the hang-up
-            // glyph), danger bg, white icon.
+            // Phone glyph rotated 135° on a danger background.
             svg: NymIcons.phone,
             rotation: 0.375,
             tooltip: tr('End call'),
@@ -2265,9 +2034,7 @@ class _CtrlBtn extends StatefulWidget {
   final Color? background;
   final Color? foreground;
 
-  /// Glyph rotation in turns. The hangup button is the feather phone rotated
-  /// 135° (`.call-control-btn.hangup svg { transform: rotate(135deg) }`):
-  /// 135/360 = 0.375.
+  /// Glyph rotation in turns (0.375 = 135°).
   final double rotation;
 
   @override
@@ -2283,15 +2050,11 @@ class _CtrlBtnState extends State<_CtrlBtn> {
     final bg = widget.background ?? (widget.active ? c.danger : c.bgTertiary);
     final fg =
         widget.foreground ?? (widget.active ? Colors.white : c.textBright);
-    // `.call-control-btn` border = `var(--border)` (primary@0.20); request-mode
-    // gets the solid primary outline.
     final borderColor = widget.requestMode ? c.primary : c.border;
     final iconColor = widget.requestMode ? c.primary : fg;
     return Tooltip(
       message: widget.tooltip,
-      // `.call-control-btn:hover { transform: scale(1.08) }` with `transition:
-      // transform 0.15s` (styles-features.css:4779-4794). The badge is a child
-      // of the button in the PWA, so the whole stack scales.
+      // The whole stack, badge included, scales on hover.
       child: MouseRegion(
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),

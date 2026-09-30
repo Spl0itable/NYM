@@ -1,5 +1,3 @@
-// Enrollment endpoint for app attestation.
-
 import { CLIENT_CORS_HEADERS, verifyClientAuth } from "./_shared.js";
 import { isNymchatClient } from "./_client.js";
 import {
@@ -59,8 +57,7 @@ async function handleEnroll(context, body) {
   if (!isHex64(pubkey)) return json({ error: "Bad pubkey" }, 400);
   if (!PLATFORMS.has(platform)) return json({ error: "Bad platform" }, 400);
 
-  // The auth event proves the pubkey asked for this, and carrying the challenge
-  // in a tag means a captured auth cannot be paired with a fresh challenge.
+  // The challenge tag binds this auth event to a fresh challenge so a captured auth can't be replayed.
   if (!verifyClientAuth(body.auth, pubkey, { action: "attest-enroll", url: request.url, maxAgeSec: ENROLL_AUTH_MAX_AGE_SEC })) {
     return json({ error: "Bad auth" }, 401);
   }
@@ -68,20 +65,15 @@ async function handleEnroll(context, body) {
   if (!verifyChallenge(env, pubkey, challenge)) return json({ error: "Bad challenge" }, 401);
 
   await ensureAttestSchema(db);
-  // A revoked key stays revoked until an operator clears the row; letting it
-  // re-enroll would make revocation a speed bump rather than a decision.
+  // Revoked keys stay revoked until an operator clears the row.
   if (await isRevoked(db, pubkey)) return json({ error: "Revoked" }, 403);
 
   let tier = "origin";
   let deviceId = null;
-  // Why a native install is on the challenged tier rather than attested: the
-  // platform verdict when the app was not recognized, or the refusal the app
-  // reports when it comes back for the build-proof path after one.
+  // Why a native install landed on the challenged tier rather than attested.
   let reason = null;
 
-  // A native app that could not produce a platform proof (no Play Services,
-  // no Secure Enclave, a refused verdict) enrolls on the build-proof path
-  // like the web app does, but is still recorded as the platform it is.
+  // Native apps without a platform proof enroll on the build-proof path but keep their platform recorded.
   const hasPlatformProof = platform === "ios"
     ? typeof body.keyId === "string" && typeof body.attestation === "string"
     : platform === "android" ? typeof body.token === "string" && body.token.length > 0 : false;
@@ -151,14 +143,10 @@ async function routeAttestAction(context, body) {
     if (!isHex64(pubkey)) return json({ error: "Bad pubkey" }, 400);
     const issued = issueChallenge(env, pubkey);
     if (!issued) return json({ error: "Attestation not configured" }, 503);
-    // The paths this enrollment must account for. Derived from the challenge,
-    // so nothing is stored between here and the enroll call, and the caller
-    // cannot pick which files it is asked about.
+    // Derived from the challenge so nothing is stored and the caller cannot choose the paths.
     const files = await buildManifestFiles(new URL(context.request.url).origin, env);
     if (files) issued.buildProbe = buildProbePaths(files, issued.challenge, 4);
-    // Web clients mine their auth event to this before signing it. Native
-    // clients ignore it: hardware attestation is a stronger proof than any
-    // amount of hashing, and the per-device cap already bounds them.
+    // Web clients mine their auth event to this difficulty; native clients ignore it.
     issued.powBits = enrollPowBits(env);
     return json(issued);
   }

@@ -4,9 +4,7 @@ Object.assign(NYM.prototype, {
 
   _PANIC_HOLD_MS: 2000,   // press-and-hold the "Your Nym" section this long to wipe
 
-  // Bind the panic gesture to the "Your Nym" section: a normal click opens the
-  // nick editor, while a press-and-hold triggers the emergency wipe. Replaces
-  // the old five-tap gesture so a single tap edits with no detection delay.
+  // Click opens the nick editor; press-and-hold triggers the emergency wipe.
   bindNymPanicGesture() {
     const el = document.querySelector('.nym-display');
     if (!el || el._panicBound) return;
@@ -32,8 +30,7 @@ Object.assign(NYM.prototype, {
     el.addEventListener('touchmove', cancel, { passive: true });
     el.addEventListener('touchcancel', cancel);
     el.addEventListener('contextmenu', (e) => { e.preventDefault(); });
-    // Swallow the click that follows a hold so the editor doesn't open over the
-    // wipe overlay; capture phase runs before the delegated editNick handler.
+    // Capture phase: swallow the post-hold click before the delegated editNick handler opens the editor.
     el.addEventListener('click', (e) => {
       if (this._panicFired) { this._panicFired = false; e.stopPropagation(); e.preventDefault(); }
     }, true);
@@ -51,11 +48,7 @@ Object.assign(NYM.prototype, {
     }
   },
 
-  /// Asks the worker to delete this account's rows. Signed while the key is
-  /// still here; the worker verifies the signature, so nobody can purge a
-  /// pubkey they do not hold. Sent keepalive so the reload cannot cancel it.
-  ///
-  /// Skipped for a signer login: it would put a prompt in front of a panic.
+  // Signed while the key is still here, sent keepalive so the reload can't cancel it; skipped for signer logins.
   async purgeServerRecords(app) {
     try {
       if (!this.pubkey || !this.privkey) return false;
@@ -82,19 +75,15 @@ Object.assign(NYM.prototype, {
     this._panicking = true;
     const startedAt = Date.now();
 
-    // Cover the screen instantly with the encryption-scramble animation so
-    // nothing sensitive remains visible while we destroy the data underneath.
     const ui = this._panicShowOverlay();
 
-    // Before the key goes, and bounded: a wipe that waits on the network is a
-    // wipe that did not happen.
+    // Bounded: a wipe that waits on the network is a wipe that did not happen.
     const purged = Promise.race([
       this.purgeServerRecords('nymchat'),
       new Promise((done) => setTimeout(done, 2500))
     ]);
     try { await purged; } catch (e) { }
 
-    // Stop persistence and network so nothing re-writes data mid-wipe.
     try { this._cacheDisabled = true; } catch (e) {}
     for (const t of ['_trimTimer', '_dedupPersistTimer', '_poolStatePersistTimer', '_pendingPersistTimer']) {
       try { if (this[t]) { clearTimeout(this[t]); this[t] = null; } } catch (e) {}
@@ -106,18 +95,14 @@ Object.assign(NYM.prototype, {
     } catch (e) {}
     try { if (this.proxyWs && this.proxyWs.close) this.proxyWs.close(); } catch (e) {}
 
-    // Drop in-memory secrets/identity.
     try {
       this.privkey = null; this.pubkey = null;
       this._vaultKey = null; this._vaultMem = null; this._botAuthCache = null;
     } catch (e) {}
-    // The sweep below takes the stored post-quantum root; this drops the
-    // decoded copy, which alone rebuilds every ML-KEM key the identity had.
+    // The sweep below takes the stored PQ root; this drops the decoded copy that rebuilds every ML-KEM key.
     try { if (typeof this.pqRootWipe === 'function') this.pqRootWipe(); } catch (e) {}
 
-    // 1) Encrypt every web-storage value under a random, non-extractable key
-    //    that is immediately discarded — so any bytes that survive deletion are
-    //    ciphertext nobody can recover — then overwrite with junk and clear.
+    // Encrypt storage under a discarded key so surviving bytes are unrecoverable, then overwrite and clear.
     try { ui.setStatus('Encrypting local store with a random key…'); } catch (e) {}
     try { await this._panicEncryptStorage(); } catch (e) {}
     for (const store of [window.localStorage, window.sessionStorage]) {
@@ -129,7 +114,6 @@ Object.assign(NYM.prototype, {
       } catch (e) {}
     }
 
-    // 2) Overwrite + delete every IndexedDB database.
     try { ui.setStatus('Shredding local databases…'); } catch (e) {}
     try {
       const names = new Set(['nym-cache']);
@@ -142,7 +126,6 @@ Object.assign(NYM.prototype, {
       await Promise.all([...names].map((name) => this._panicWipeDb(name)));
     } catch (e) {}
 
-    // 3) Clear Cache Storage (app shell) and unregister service workers.
     try { ui.setStatus('Purging caches…'); } catch (e) {}
     try {
       if (window.caches && caches.keys) {
@@ -157,7 +140,6 @@ Object.assign(NYM.prototype, {
       }
     } catch (e) {}
 
-    // 4) Best-effort cookie clear (this app stores little to none in cookies).
     try {
       document.cookie.split(';').forEach((c) => {
         const name = c.split('=')[0].trim();
@@ -168,8 +150,6 @@ Object.assign(NYM.prototype, {
       });
     } catch (e) {}
 
-    // 5) Final clear + reload to a pristine first-run state (no banner). Hold
-    //    the animation for a brief minimum so the effect reads as deliberate.
     try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
     try { ui.setStatus('Keys destroyed.'); } catch (e) {}
     const minMs = 1500;
@@ -180,11 +160,7 @@ Object.assign(NYM.prototype, {
     }, wait);
   },
 
-  // Encrypt every web-storage value under a fresh, non-extractable AES-GCM key
-  // that is never stored and goes out of scope when this returns — turning the
-  // residual on-disk bytes into ciphertext that nobody (not even us) can
-  // decrypt. Best-effort and time-boxed; the subsequent junk overwrite + clear
-  // are what guarantee removal.
+  // Best-effort, time-boxed; the junk overwrite + clear that follow are what guarantee removal.
   async _panicEncryptStorage() {
     let key;
     try { key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt']); }
@@ -210,8 +186,7 @@ Object.assign(NYM.prototype, {
     }
   },
 
-  // Full-screen "encryption" animation themed to the active app palette. The
-  // backdrop stays opaque so sensitive content is hidden while destruction runs
+  // Backdrop stays opaque so sensitive content is hidden while destruction runs.
   _panicShowOverlay() {
     let interval = null;
     let statusEl = null;
@@ -268,9 +243,7 @@ Object.assign(NYM.prototype, {
     };
   },
 
-  // Open a DB, overwrite a few junk records into each store, clear the stores,
-  // then delete the database. Resolves (never rejects) and self-times-out so a
-  // blocked DB can't hang the wipe.
+  // Resolves (never rejects) and self-times-out so a blocked DB can't hang the wipe.
   _panicWipeDb(name) {
     return new Promise((resolve) => {
       let settled = false;
@@ -296,7 +269,6 @@ Object.assign(NYM.prototype, {
             try {
               const os = tx.objectStore(s);
               for (let i = 0; i < 3; i++) {
-                // Works for out-of-line key stores; harmless try/catch otherwise.
                 try { os.put({ _panic: this._panicJunk() }, '__panic_' + i); } catch (e) {}
               }
               os.clear();

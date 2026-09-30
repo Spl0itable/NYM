@@ -7,26 +7,10 @@ import 'package:flutter/foundation.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
 
-/// Deep-link routing for the native app, mirroring the PWA's URL hash routing
-/// (`parseUrlChannel` in app.js + `handleChannelLink` in channels.js).
-///
-/// The PWA encodes everything in the URL *fragment* (`#…`):
-///   * `#gjoin=<base64url token>` — a group invite (app.js `parseUrlChannel`).
-///   * `#<e|g|c>:<id>`            — a channel-ref chip (message-format.js /
-///                                  `handleChannelLink(data-channel-ref)`).
-///   * `#<channel-or-geohash>`    — a plain channel / geohash join.
-///
-/// There is no `#pm:` form in the PWA — `parseUrlChannel` never inspects a `pm:`
-/// fragment and no formatter emits one. We therefore do NOT invent one.
-// TODO(verify): the PWA has no PM deep-link form (`#pm:`); confirmed absent in
-// app.js `parseUrlChannel` and js/modules/message-format.js. Not implemented.
+/// Deep-link routing mirroring the PWA's URL-fragment routing (`#gjoin=`, `#<e|g|c>:<id>`, `#<channel>`).
+// TODO(verify): the PWA has no PM deep-link form (`#pm:`), so none is implemented.
 
-/// The hosts the app accepts deep links from — kept in sync with the
-/// AndroidManifest intent-filter + iOS associated-domains. `shareChannel()`
-/// builds links on the runtime origin (`web.nymchat.app` in production — the
-/// only OFFICIAL_HOST, `build-verify.js:10`); `nymchat.app` is the apex; the
-/// legacy `app.nymchat.app` is still parsed so older shared links keep working;
-/// `app.nym.bar` is the message-formatter chip host.
+/// Accepted deep-link hosts; keep in sync with the Android intent filter and iOS associated domains.
 const Set<String> kNymLinkHosts = {
   'web.nymchat.app',
   'nymchat.app',
@@ -34,26 +18,19 @@ const Set<String> kNymLinkHosts = {
   'app.nym.bar',
 };
 
-/// The kind of deep link a [parseNymLink] call resolved to.
 enum NymLinkKind {
-  /// A plain channel join (named channel). [NymLink.channel] holds the
-  /// sanitized, lowercased channel name.
+  /// Named channel; [NymLink.channel] is sanitized and lowercased.
   channel,
 
-  /// A geohash channel join. [NymLink.channel] holds the geohash.
   geohash,
 
-  /// A `#<e|g|c>:<id>` channel-ref chip. [NymLink.refPrefix] is `e`, `g` or `c`;
-  /// [NymLink.channel] is the resolved channel key (the PWA strips only the
-  /// legacy `g:` prefix before joining — see `handleChannelLink`).
+  /// `#<e|g|c>:<id>` chip; only the legacy `g:` prefix is stripped, as in the PWA.
   channelRef,
 
-  /// A `#gjoin=<token>` group invite. [NymLink.inviteToken] holds the raw
-  /// base64url token; [NymLink.invite] holds the parsed payload.
+  /// `#gjoin=<token>` invite with the raw token and its parsed payload.
   groupInvite,
 }
 
-/// A parsed Nymchat deep link. Pure data — no side effects.
 @immutable
 class NymLink {
   const NymLink._({
@@ -64,22 +41,18 @@ class NymLink {
     this.invite,
   });
 
-  /// Plain channel join (`#<name>`), already sanitized + lowercased.
   factory NymLink.channel(String channel) =>
       NymLink._(kind: NymLinkKind.channel, channel: channel);
 
-  /// Geohash channel join (`#<geohash>`).
   factory NymLink.geohash(String geohash) =>
       NymLink._(kind: NymLinkKind.geohash, channel: geohash);
 
-  /// Channel-ref chip (`#<e|g|c>:<id>`).
   factory NymLink.channelRef(String prefix, String channel) => NymLink._(
         kind: NymLinkKind.channelRef,
         refPrefix: prefix,
         channel: channel,
       );
 
-  /// Group invite (`#gjoin=<token>`).
   factory NymLink.groupInvite(String token, GroupInviteToken? invite) =>
       NymLink._(
         kind: NymLinkKind.groupInvite,
@@ -89,16 +62,14 @@ class NymLink {
 
   final NymLinkKind kind;
 
-  /// Channel name / geohash / resolved ref key (depending on [kind]).
+  /// Channel name, geohash or resolved ref key, depending on [kind].
   final String channel;
 
-  /// `e`, `g` or `c` for [NymLinkKind.channelRef]; empty otherwise.
   final String refPrefix;
 
-  /// Raw base64url token for [NymLinkKind.groupInvite]; empty otherwise.
   final String inviteToken;
 
-  /// Parsed invite payload (may be null if the token failed validation).
+  /// Parsed invite payload, or null if the token failed validation.
   final GroupInviteToken? invite;
 
   @override
@@ -118,10 +89,7 @@ class NymLink {
   int get hashCode => Object.hash(kind, channel, refPrefix, inviteToken);
 }
 
-/// Sanitizes a channel name the way the PWA's `sanitizeChannelName` does:
-/// lowercase, then **reject** (return '') if it contains anything other than
-/// Unicode letters or digits. Note: this rejects rather than strips — matching
-/// channels.js `sanitizeChannelName`.
+/// Lowercases, then rejects (returns '') anything with non-letter/digit characters, as the PWA does.
 String sanitizeChannelName(String name) {
   if (name.isEmpty) return '';
   final lower = name.toLowerCase();
@@ -129,14 +97,11 @@ String sanitizeChannelName(String name) {
   return lower;
 }
 
-/// Parses a `#gjoin=…`-style token (or a bare token) into a [GroupInviteToken],
-/// mirroring `parseGroupInvite` (message-format.js) / `parseGroupInviteInput`
-/// (groups.js): base64url-decode, require `v == 1`, a 64-hex / UUID group id,
-/// and a 64-hex approver pubkey. Returns null on any failure.
+/// Parses an invite token (v1, 64-hex/UUID group, 64-hex approver) as the PWA does; null on failure.
 GroupInviteToken? parseGroupInvite(String tokenOrInput) {
   if (tokenOrInput.isEmpty) return null;
   var token = tokenOrInput.trim();
-  // Accept a full `…#gjoin=<token>` (or `&`/`?` separator) or a bare token.
+  // Accept a full `…#gjoin=<token>` URL or a bare token.
   final m = RegExp(r'[#&?]gjoin=([A-Za-z0-9_-]+)').firstMatch(token);
   if (m != null) {
     token = m.group(1)!;
@@ -176,12 +141,7 @@ GroupInviteToken? parseGroupInvite(String tokenOrInput) {
   }
 }
 
-/// Parses a Nymchat deep-link [url] into a typed [NymLink], or null if the URL
-/// is not a recognized Nymchat link.
-///
-/// Mirrors app.js `parseUrlChannel` ordering: the `#gjoin=` invite is matched
-/// first (its token is case-sensitive and must never be lowercased), then the
-/// `#<e|g|c>:<id>` channel-ref chip, then a plain `#<channel>` / `#<geohash>`.
+/// Parses in the PWA's order: invite first (case-sensitive token), then channel-ref chip, then plain channel.
 NymLink? parseNymLink(String url) {
   Uri uri;
   try {
@@ -190,40 +150,31 @@ NymLink? parseNymLink(String url) {
     return null;
   }
 
-  // Only http(s) links to a known Nymchat host carry deep links. (A custom
-  // scheme could be added later; the PWA only uses https.)
+  // Only http(s) links to a known Nymchat host carry deep links.
   final host = uri.host.toLowerCase();
   if (!kNymLinkHosts.contains(host)) return null;
 
-  // The PWA routes entirely on the URL fragment.
   final fragment = uri.fragment;
   if (fragment.isEmpty) return null;
 
-  // 1) Group invite — case-sensitive base64url token, matched first.
+  // 1) Group invite: case-sensitive token, matched first.
   final invite = RegExp(r'^gjoin=([A-Za-z0-9_-]+)').firstMatch(fragment);
   if (invite != null) {
     final token = invite.group(1)!;
     return NymLink.groupInvite(token, parseGroupInvite(token));
   }
 
-  // 2) Channel-ref chip `#<e|g|c>:<id>` (message-format.js formatter +
-  //    handleChannelLink). `handleChannelLink` strips only the legacy `g:`
-  //    prefix before sanitizing; `e:`/`c:` ids fall through as channel names.
+  // 2) Channel-ref chip `#<e|g|c>:<id>`.
   final ref =
       RegExp(r'^([egc]):(.+)$', caseSensitive: false).firstMatch(fragment);
   if (ref != null) {
     final prefix = ref.group(1)!.toLowerCase();
-    // The fragment regex already split the `<prefix>:` off; the id after it is
-    // the channel input. `handleChannelLink` only strips the legacy `g:`, which
-    // is exactly what we did here, so no further stripping is needed.
     final channel = sanitizeChannelName(ref.group(2)!);
     if (channel.isEmpty) return null;
     return NymLink.channelRef(prefix, channel);
   }
 
-  // 3) Plain channel / geohash (`parseUrlChannel`: lowercase the fragment, then
-  //    `routeToUrlChannel`/`handleChannelLink` strip a legacy `g:` prefix and
-  //    sanitize).
+  // 3) Plain channel or geohash.
   var channelInput = fragment.toLowerCase();
   if (channelInput.startsWith('g:')) {
     channelInput = channelInput.substring(2);
@@ -235,8 +186,7 @@ NymLink? parseNymLink(String url) {
       : NymLink.channel(channel);
 }
 
-/// Minimal surface of the controller a [DeepLinkService] dispatches into. The
-/// real `NostrController` already satisfies this; tests pass a fake.
+/// Controller surface [DeepLinkService] dispatches into; tests pass a fake.
 abstract class DeepLinkTarget {
   void switchChannel(String channel, {String geohash});
   void startPM(String peerPubkey, {String? nym});
@@ -251,11 +201,7 @@ Future<bool> confirmAndJoinGroupInvite(
   return true;
 }
 
-/// Routes a parsed [NymLink] to the right controller call. Pure decision logic
-/// (no `app_links`), so it is unit-testable with a fake [DeepLinkTarget].
-///
-/// Returns true if the link was dispatched, false if it could not be (e.g. an
-/// invite whose token failed to parse).
+/// Routes a parsed [NymLink]; false when it could not be dispatched.
 bool dispatchNymLink(NymLink link, DeepLinkTarget target) {
   switch (link.kind) {
     case NymLinkKind.geohash:
@@ -263,8 +209,7 @@ bool dispatchNymLink(NymLink link, DeepLinkTarget target) {
       return true;
     case NymLinkKind.channel:
     case NymLinkKind.channelRef:
-      // Named channel join. A geohash-shaped ref still registers its geohash
-      // (channelWire decides the wire kind); mirror handleChannelLink.
+      // A geohash-shaped ref still registers its geohash, as handleChannelLink does.
       final geohash = isValidGeohash(link.channel) ? link.channel : '';
       target.switchChannel(link.channel, geohash: geohash);
       return true;
@@ -276,9 +221,7 @@ bool dispatchNymLink(NymLink link, DeepLinkTarget target) {
   }
 }
 
-/// Listens for incoming deep links (initial launch + live stream) via
-/// `app_links` and dispatches them into the controller. Wired from `app.dart`'s
-/// root so it runs without touching `main.dart`.
+/// Listens for initial and live deep links via `app_links` and dispatches them.
 class DeepLinkService {
   DeepLinkService(this._target, {AppLinks? appLinks})
       : _appLinks = appLinks ?? AppLinks();
@@ -288,14 +231,12 @@ class DeepLinkService {
   StreamSubscription<Uri>? _sub;
   bool _started = false;
 
-  /// Begins listening. Idempotent. No-ops on web / unsupported platforms or if
-  /// the plugin throws (e.g. in a test environment without a platform channel).
+  /// Idempotent; no-ops where the plugin is unavailable.
   Future<void> start() async {
     if (_started) return;
     _started = true;
     if (kIsWeb) return;
     try {
-      // Cold-start link: the URL that launched the app (if any).
       final initial = await _appLinks.getInitialLink();
       if (initial != null) _handleUri(initial);
     } catch (e) {
@@ -313,8 +254,7 @@ class DeepLinkService {
     }
   }
 
-  /// Routes a raw URL string (used by the notification-tap path, which carries a
-  /// deep-link payload). Returns true if handled.
+  /// Routes a raw URL string, e.g. from a notification tap; true if handled.
   bool handleUrl(String url) {
     final link = parseNymLink(url);
     if (link == null) return false;

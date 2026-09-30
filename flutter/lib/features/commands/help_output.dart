@@ -1,24 +1,4 @@
-// `/help` output — a 1:1 port of `showHelp()` (commands.js:522-546) and the
-// `.help-output` component styles (styles-components.css:879-915).
-//
-// The PWA posts a rich `displaySystemMessage(html)` block:
-//   <div class="help-output">
-//     <div class="help-title">Available commands</div>
-//     <div class="help-category">…</div>       (one per non-empty category)
-//     <div class="help-cmd"><span class="help-cmd-name">/name, /alias</span>
-//       — desc</div>                            (one per visible command)
-//     <div class="help-footer">line<br><br>line…</div>
-//   </div>
-//
-// This file provides both forms:
-//  * [buildHelpGroups] + [kHelpFooterLines] — the structured data (exact PWA
-//    strings, category order, alias folding via [formatCommandDisplay]);
-//  * [buildHelpMessageText] — the plain-text rendering the dispatcher hands to
-//    `engine.systemMessage` (the string sink);
-//  * [HelpOutputBlock] — the styled widget for the system-message pill, with
-//    parameter parity to the `.help-output` CSS in both themes (all colors are
-//    mode-aware [NymColors] tokens; the CSS has no light-mode overrides for
-//    `.help-*` beyond the `--primary`/`--glass-border` variable swaps).
+// `/help` output as structured data, plain text for the system-message sink, and a styled block.
 
 import 'package:flutter/material.dart';
 
@@ -27,21 +7,17 @@ import '../i18n/i18n.dart';
 import 'command_i18n.dart';
 import 'command_registry.dart';
 
-/// One `/help` category section: the verbatim header label plus its commands
-/// in registry order (`_groupCommandsByCategory`, commands.js:357-363).
+/// One `/help` category: its header label and commands in registry order.
 class HelpCategoryGroup {
   const HelpCategoryGroup(this.label, this.commands);
 
-  /// Display label from `commandCategories` (e.g. 'Public Channels'). The CSS
-  /// uppercases it visually (`text-transform: uppercase`) — the content stays
-  /// title-case.
+  /// Title-case label; uppercased visually only.
   final String label;
 
   final List<CommandSpec> commands;
 }
 
-/// Groups the visible commands by category in the fixed PWA order, dropping
-/// empty categories — `_groupCommandsByCategory(_visibleCommandEntries())`.
+/// Visible commands grouped by category in fixed order, dropping empty categories.
 List<HelpCategoryGroup> buildHelpGroups() {
   return [
     for (final cat in kCommandCategoryOrder)
@@ -53,11 +29,9 @@ List<HelpCategoryGroup> buildHelpGroups() {
   ];
 }
 
-/// `.help-title` text (commands.js:534).
 String get kHelpTitle => tr('Available commands');
 
-/// The five `.help-footer` lines, verbatim (commands.js:531-537). Joined with
-/// `<br><br>` in the PWA — i.e. one blank line between each.
+/// The five footer lines, separated by blank lines.
 List<String> get kHelpFooterLines => [
       tr('Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, > quote'),
       tr('Type : to quickly pick an emoji'),
@@ -67,15 +41,11 @@ List<String> get kHelpFooterLines => [
       tr('Click on users for more options'),
     ];
 
-/// One `.help-cmd` line: `"/name, /alias — desc"` (commands.js:526).
+/// One help line: `"/name, /alias — desc"`.
 String helpCommandLine(CommandSpec spec) =>
     '${localizedCommandDisplay(spec)} — ${spec.desc}';
 
-/// The full `/help` output as plain text for the system-message sink: title,
-/// blank line, each category header followed by its command lines, then the
-/// footer lines separated by blank lines (the `<br><br>` joins). Content is
-/// identical to the PWA block; the `.help-output` STYLING lives in
-/// [HelpOutputBlock].
+/// Plain-text `/help`: title, category headers with command lines, then footer lines separated by blank lines.
 String buildHelpMessageText() {
   final buf = StringBuffer(kHelpTitle);
   for (final group in buildHelpGroups()) {
@@ -90,33 +60,16 @@ String buildHelpMessageText() {
   return buf.toString();
 }
 
-/// The styled `.help-output` block (styles-components.css:879-915), rendered
-/// inside the `.system-message` pill:
-///  * `.help-output` — left-aligned, shrink-wrapped (`display: inline-block`
-///    overriding the pill's centered text);
-///  * `.help-title` — w700, 8px bottom margin;
-///  * `.help-category` — 10px w700 UPPERCASE, letter-spacing 0.06em (0.6px),
-///    `--primary` @0.85 opacity, 10px top / 3px bottom margins;
-///  * `.help-cmd` — 1px vertical padding, line-height 1.4; the
-///    `.help-cmd-name` span is `--primary` w600, then " — desc" in the
-///    inherited pill color;
-///  * `.help-footer` — 12px top margin, 10px top padding, 1px `--glass-border`
-///    top rule, the whole footer (rule included) @0.85 opacity, lines
-///    separated by blank lines.
-///
-/// [fontSize] is the pill's inherited size (`settings.textSize - 3`); the base
-/// color/weight/line-height mirror `.system-message` (text-dim, w500 for the
-/// CSS 450, height 1.3) so unstyled runs inherit exactly what the pill shows.
+/// Styled help block inside the system-message pill; [fontSize] is the pill's inherited size.
 class HelpOutputBlock extends StatelessWidget {
   const HelpOutputBlock({super.key, required this.fontSize});
 
-  /// Inherited `.system-message` font size.
   final double fontSize;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Inherited `.system-message` text style (w500 ≈ CSS 450, height 1.3).
+    // Pill text style (w500 ≈ CSS 450, height 1.3).
     final base = TextStyle(
       color: c.textDim,
       fontSize: fontSize,
@@ -128,7 +81,6 @@ class HelpOutputBlock extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // `.help-title` — bold, 8px below.
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Text(kHelpTitle,
@@ -136,7 +88,6 @@ class HelpOutputBlock extends StatelessWidget {
               style: base.copyWith(fontWeight: FontWeight.w700)),
         ),
         for (final group in buildHelpGroups()) ...[
-          // `.help-category` — 10px uppercase w700 primary @0.85, ls 0.06em.
           Padding(
             padding: const EdgeInsets.only(top: 10, bottom: 3),
             child: Text(
@@ -152,7 +103,6 @@ class HelpOutputBlock extends StatelessWidget {
             ),
           ),
           for (final spec in group.commands)
-            // `.help-cmd` — primary w600 name + " — " + desc, lh 1.4.
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 1),
               child: Text.rich(
@@ -173,8 +123,7 @@ class HelpOutputBlock extends StatelessWidget {
               ),
             ),
         ],
-        // `.help-footer` — the 1px glass top rule and the text both sit inside
-        // the 0.85-opacity element.
+        // Both the top rule and the text sit inside the 0.85-opacity footer.
         Opacity(
           opacity: 0.85,
           child: Container(

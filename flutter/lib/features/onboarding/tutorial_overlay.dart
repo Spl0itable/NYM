@@ -8,52 +8,34 @@ import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/secret_screen.dart';
 import '../i18n/i18n.dart';
 
-/// The element each tutorial step points at (the PWA step `selector`s, see
-/// `js/app.js` `buildSteps`). The shell + sidebar register a [GlobalKey] for
-/// each of these via [TutorialTargets] so the overlay can measure the target's
-/// on-screen rect and draw the spotlight ring around it.
-///
-/// CROSS-FILE NEED: `HomeShell` / the sidebar widgets must attach
-/// `TutorialTargets.keyFor(target)` to the matching widget (e.g.
-/// `key: TutorialTargets.keyFor(TutorialTarget.nymDisplay)`). When a target is
-/// not registered (key has no `RenderBox`) the step degrades gracefully to the
-/// centered card (same as the welcome/final steps).
+/// Tutorial step targets; unregistered targets fall back to a centered card.
 enum TutorialTarget {
-  nymDisplay, // `.nym-display`
-  statusIndicator, // `.status-indicator`
-  mainMenu, // `.header-actions` (>1024) / `.sidebar-actions` (<=1024)
-  channelList, // `#channelList`
-  discoverIcon, // `.discover-icon` (globe)
-  pmList, // `#pmList`
-  userList, // `#userList`
-  messagesContainer, // `#messagesContainer`
-  composer, // `.input-container`
-  shareButton, // `#shareChannelBtn`
+  nymDisplay,
+  statusIndicator,
+  mainMenu,
+  channelList,
+  discoverIcon,
+  pmList,
+  userList,
+  messagesContainer,
+  composer,
+  shareButton,
 }
 
-/// A registry of [GlobalKey]s, one per [TutorialTarget], shared between the
-/// shell (which keys its widgets) and [TutorialOverlay] (which measures them).
-///
-/// Kept here (in the onboarding feature this overlay owns) so the cross-file
-/// contract is a single import. Keys are created lazily and are stable for the
-/// app lifetime.
+/// Lazily created, app-lifetime [GlobalKey]s shared between the shell and the overlay.
 class TutorialTargets {
   TutorialTargets._();
 
   static final Map<TutorialTarget, GlobalKey> _keys = {};
 
-  /// The stable key the shell should attach to the widget for [target].
+  /// The stable key the shell attaches to the widget for [target].
   static GlobalKey keyFor(TutorialTarget target) => _keys.putIfAbsent(
       target, () => GlobalKey(debugLabel: 'tutorial_$target'));
 
-  /// Drop all registered keys so the next shell mount allocates fresh ones.
-  /// Called from `HomeShell.initState` — a single live shell never shares a
-  /// [GlobalKey] with a previously-disposed one (which would otherwise reparent
-  /// across sequential mounts, e.g. in widget tests, and corrupt teardown).
+  /// Called from `HomeShell.initState` so a new shell never shares a [GlobalKey] with a disposed one.
   static void reset() => _keys.clear();
 
-  /// The global on-screen rect of [target]'s widget, or null when the target
-  /// isn't mounted/laid-out (mirrors the PWA's "no element" → center fallback).
+  /// Global rect of [target]'s widget, or null when not laid out.
   static Rect? rectOf(TutorialTarget target) {
     final ctx = _keys[target]?.currentContext;
     final box = ctx?.findRenderObject();
@@ -62,34 +44,26 @@ class TutorialTargets {
     return topLeft & box.size;
   }
 
-  /// The live [BuildContext] of [target]'s widget (null when not mounted). Used
-  /// to scroll the target into view via [Scrollable.ensureVisible], the native
-  /// analog of the PWA `positionStep`'s `target.scrollIntoView` (app.js:224).
+  /// Live context of [target]'s widget, for [Scrollable.ensureVisible]; null when not mounted.
   static BuildContext? contextOf(TutorialTarget target) =>
       _keys[target]?.currentContext;
 }
 
-/// Drives the sidebar/drawer open/close per step on narrow layouts
-/// (`ensureSidebarOpenOnMobile` / `ensureSidebarClosedOnMobile`, app.js:97-175).
-///
-/// CROSS-FILE NEED: `HomeShell` supplies an implementation that toggles its
-/// drawer and resolves once the slide settles. When absent, sidebar-anchored
-/// steps simply rely on whatever is already on screen (desktop has no drawer).
+/// Opens and closes the drawer per step on narrow layouts; absent on desktop.
 abstract class TutorialSidebarDriver {
-  /// Opens the drawer (narrow layouts) and resolves after the transition.
+  /// Opens the drawer and resolves after the transition.
   Future<void> openSidebar();
 
-  /// Closes the drawer (narrow layouts) and resolves after the transition.
+  /// Closes the drawer and resolves after the transition.
   Future<void> closeSidebar();
 
-  /// Restores the drawer to its pre-tour state (`restoreSidebarAfterTutorial`).
+  /// Restores the drawer to its pre-tour state.
   void restore();
 }
 
 /// What the overlay does to the sidebar before measuring a step.
 enum TutorialSidebarAction { open, close, none }
 
-/// One guided-tutorial step (`buildSteps()` in app.js IIFE).
 @immutable
 class TutorialStep {
   const TutorialStep({
@@ -102,17 +76,14 @@ class TutorialStep {
   final String title;
   final String body;
 
-  /// The element this step spotlights, or null for a centered card
-  /// (welcome + "All set!" steps).
+  /// Spotlighted element, or null for a centered card.
   final TutorialTarget? target;
 
-  /// On narrow layouts, whether to open/close the sidebar before measuring.
+  /// On narrow layouts, whether to open or close the sidebar before measuring.
   final TutorialSidebarAction sidebar;
 }
 
-/// The 12 tutorial steps, text matching the PWA verbatim, each mapped to the
-/// [TutorialTarget] its PWA `selector` points at and the per-step sidebar
-/// action (`onBefore`).
+/// The 12 steps with the PWA's text, targets and sidebar actions.
 const List<TutorialStep> kTutorialSteps = [
   TutorialStep(
     title: 'Nymchat Tutorial',
@@ -232,11 +203,7 @@ const List<TutorialStep> kTutorialSteps = [
   ),
 ];
 
-/// Every user-facing string the guided tutorial renders — each step's title and
-/// body plus the fixed chrome labels — so onboarding can pre-translate the WHOLE
-/// tutorial the moment a language is chosen (before its first step mounts),
-/// rather than letting each step flash English and swap in translation. Kept in
-/// lockstep with the literals `_card` passes to `tr(...)`.
+/// Every tutorial string, for pre-translation when a language is chosen; keep in step with `_card`'s `tr(...)` literals.
 List<String> tutorialStringsForPretranslate() => <String>[
       for (final step in kTutorialSteps) ...[step.title, step.body],
       'Skip',
@@ -260,22 +227,7 @@ List<String> tutorialStringsForPretranslate() => <String>[
           'back to you.',
     ];
 
-/// The guided tutorial overlay (`#tutorialOverlay`).
-///
-/// For each step with a [TutorialStep.target] it measures the target widget's
-/// global rect (via [TutorialTargets]), inflates it 8px, paints a dim
-/// `rgba(0,0,0,0.5)` cut-out around it with a 2px `--secondary` (#00ffff
-/// default) highlight ring + 30px glow, and anchors the step card below (or
-/// above) the
-/// target — mirroring `positionStep` (app.js:206-283). Welcome + "All set!"
-/// steps (no target) show the card centered.
-///
-/// Keyboard (desktop): Esc ends the tour, →/Enter = Next, ← = Back
-/// (`keyHandler`, app.js:401-410). Steps whose target can't be measured are
-/// auto-skipped (`skipIfTargetMissingForward/Backward`, app.js:332-356).
-///
-/// Any dismissal path (Skip, Done, Escape) marks the tutorial seen via
-/// [onDismiss].
+/// Guided tour: spotlights each step's target with a dim cut-out and ring; any dismissal marks it seen via [onDismiss].
 class TutorialOverlay extends StatefulWidget {
   const TutorialOverlay({
     super.key,
@@ -285,13 +237,13 @@ class TutorialOverlay extends StatefulWidget {
     this.recoveryCode,
   });
 
-  /// Called when the tutorial is dismissed (always marks `nym_tutorial_seen`).
+  /// Called on dismissal; always marks the tutorial seen.
   final VoidCallback onDismiss;
 
-  /// Optional sidebar driver (narrow layouts open/close the drawer per step).
+  /// Optional drawer driver for narrow layouts.
   final TutorialSidebarDriver? sidebar;
 
-  /// The `nsec1…` for this session, or null when a signer holds the key.
+  /// This session's `nsec1…`, or null when a signer holds the key.
   final String? Function()? nsec;
 
   /// The `nympq1…` recovery code, or null before the account has one.
@@ -308,15 +260,14 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
   bool _nsecShown = false;
   bool _codeShown = false;
 
-  /// A fresh account mints its root while the tour is already up, so the first
-  /// step keeps looking for the code for a little while.
+  /// A fresh account mints its root while the tour is up, so the first step keeps checking briefly.
   Timer? _codeWait;
   int _codeTries = 0;
 
-  /// Measured target rect for the current step (null → centered card).
+  /// Measured target rect; null means a centered card.
   Rect? _targetRect;
 
-  /// Pass to re-measure the step once a frame has settled (sidebar slide, etc).
+  /// Re-measure once a frame settles (sidebar slide, etc.).
   bool _measureScheduled = false;
 
   @override
@@ -353,8 +304,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
   bool _narrow(BuildContext context) =>
       MediaQuery.of(context).size.width < NymDimens.tabletBreakpoint;
 
-  /// Runs the step's `onBefore` (sidebar open/close on narrow), scrolls the
-  /// target into view if it's off-screen, then measures.
+  /// Runs the sidebar action, scrolls the target into view, then measures.
   Future<void> _enterStep(int index) async {
     final step = kTutorialSteps[index];
     final sidebar = widget.sidebar;
@@ -371,19 +321,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     _remeasure();
   }
 
-  /// Scrolls the step's target into view — the native analog of the PWA
-  /// `positionStep`'s `scrollIntoView` (app.js:216-227). Without this, a
-  /// sidebar-anchored step lower down the scroll list (Private Messages, Active
-  /// Nyms) never scrolls into view and its spotlight lands off-screen.
-  ///
-  /// Fires whenever the target isn't ALREADY fully on-screen (top above the
-  /// viewport, bottom below it, or entirely off) — not only when fully
-  /// off-screen — so a section body whose first row sits just below the fold is
-  /// pulled fully into view. It aligns toward the target's TOP rather than
-  /// centering: a section body (e.g. `#pmList`) is the whole stack of rows with
-  /// the newest/highlighted conversation FIRST, so the Nymbot welcome PM lives
-  /// at the top — centering a multi-row list would push that top row away from
-  /// where the spotlight lands.
+  /// Scrolls the target fully into view, aligned toward its top so a list's first row stays under the spotlight.
   Future<void> _ensureTargetVisible(TutorialStep step) async {
     final target = step.target;
     if (target == null) return;
@@ -400,21 +338,17 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     try {
       await Scrollable.ensureVisible(
         ctx,
-        // Sit the target's top ~12% down the viewport so the FIRST row (the
-        // Nymbot welcome PM for `#pmList`) is prominently shown with headroom,
-        // even when the section is taller than the viewport.
+        // Target top ~12% down the viewport so the first row shows with headroom.
         alignment: 0.12,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeInOut,
       );
     } catch (_) {
-      // Header-anchored targets have no scrollable ancestor — nothing to do.
+      // Header targets have no scrollable ancestor.
     }
   }
 
-  /// Measures the active step's target rect and repaints **only when it
-  /// changed** (so the per-frame re-measure in `build` can't loop). Mirrors
-  /// `positionStep`'s resize/scroll re-positioning.
+  /// Re-measures and repaints only on change, so the per-frame re-measure can't loop.
   void _remeasure() {
     if (!mounted) return;
     final step = kTutorialSteps[_index];
@@ -423,8 +357,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     if (rect != _targetRect) setState(() => _targetRect = rect);
   }
 
-  /// Defers a single re-measure to the next frame (used after `setState` that
-  /// changes the index, so the freshly-shown layout is captured).
+  /// Defers one re-measure to the next frame so the new layout is captured.
   void _scheduleMeasure() {
     if (_measureScheduled) return;
     _measureScheduled = true;
@@ -434,7 +367,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     });
   }
 
-  /// Whether [index]'s target is reachable (no selector → always reachable).
+  /// Steps without a target are always reachable.
   bool _reachable(int index) {
     final step = kTutorialSteps[index];
     return step.target == null || TutorialTargets.rectOf(step.target!) != null;
@@ -446,7 +379,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
       return;
     }
     var i = _index + 1;
-    // skipIfTargetMissingForward: advance to the next reachable step.
+    // Advance to the next reachable step.
     var guard = 0;
     while (guard++ < kTutorialSteps.length &&
         i < kTutorialSteps.length - 1 &&
@@ -460,7 +393,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
   void _back() {
     if (_index <= 0) return;
     var i = _index - 1;
-    // skipIfTargetMissingBackward: retreat to the prior reachable step.
+    // Retreat to the previous reachable step.
     var guard = 0;
     while (guard++ < kTutorialSteps.length && i > 0 && !_reachable(i)) {
       i--;
@@ -492,12 +425,9 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     final c = context.nym;
     final screen = MediaQuery.of(context).size;
 
-    // Re-measure when the layout (size) changes, like the PWA's resize/scroll
-    // re-position handlers.
     _scheduleMeasure();
 
-    // Inflate the measured rect by 8px and clamp into the viewport (pad=8 →
-    // hlLeft/hlTop/hlWidth/hlHeight in positionStep).
+    // Inflate the rect by 8px and clamp into the viewport.
     Rect? ring;
     final raw = _targetRect;
     if (raw != null) {
@@ -515,11 +445,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
       onKeyEvent: _onKey,
       child: Stack(
         children: [
-          // Dim backdrop. With a target → a black cut-out around the ring;
-          // otherwise a flat scrim (matches the welcome/final steps).
-          // `.tutorial-highlight` box-shadow spread: dark `rgba(0,0,0,0.5)` →
-          // `body.light-mode .tutorial-highlight { … rgba(0,0,0,0.3) }`
-          // (styles-themes-responsive.css:693-695).
+          // Cut-out around the ring when there is a target, else a flat scrim.
           Positioned.fill(
             child: IgnorePointer(
               child: CustomPaint(
@@ -531,7 +457,6 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
               ),
             ),
           ),
-          // The highlight ring (2px secondary + 30px glow), drawn over the dim.
           if (ring != null)
             Positioned.fromRect(
               rect: ring,
@@ -540,10 +465,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
                   decoration: BoxDecoration(
                     borderRadius: NymRadius.rmd,
                     border: Border.all(color: c.secondary, width: 2),
-                    // `.tutorial-highlight` glow: dark `0 0 30px rgb(secondary
-                    // /0.3)` → `body.light-mode … 0 0 30px rgba(0,0,0,0.15)`
-                    // (styles-themes-responsive.css:693-695) — a neutral black
-                    // glow, not the saturated cyan, in light mode.
+                    // Light mode uses a neutral black glow instead of cyan.
                     boxShadow: [
                       BoxShadow(
                         color: c.isLight
@@ -557,21 +479,13 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
                 ),
               ),
             ),
-          // The step card: anchored to the target, or centered.
           _positionedCard(c, ring, screen),
         ],
       ),
     );
   }
 
-  /// Places the card per the PWA's `positionStep` measure-then-place pass
-  /// (app.js:242-269): below the ring only when the MEASURED card fits
-  /// (`spaceBelow > cardH + 16`), else above when that fits, else clamped
-  /// fully on-screen near the bottom (overlapping the target if necessary —
-  /// this is what keeps the "Messages" step's card from running off the
-  /// bottom edge when its target spans the whole viewport). Implemented with
-  /// a [CustomSingleChildLayout] so the real card size is known at placement
-  /// time, exactly like the PWA's hidden-render measurement frame.
+  /// Places the measured card below the ring if it fits, else above, else clamped on-screen near the bottom.
   Widget _positionedCard(NymColors c, Rect? ring, Size screen) {
     return Positioned.fill(
       child: CustomSingleChildLayout(
@@ -592,16 +506,13 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
         key: const Key('tutorialCard'),
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
-          color: c.bgTertiary, // PWA `.tutorial-card` background
-          borderRadius: NymRadius.rlg, // --radius-lg (20)
+          color: c.bgTertiary,
+          borderRadius: NymRadius.rlg,
           border: Border.all(color: c.glassBorder),
-          // `--shadow-lg` = 0 8px 32px black@0.5 (styles-core.css:93);
-          // `body.light-mode .tutorial-card { box-shadow: 0 8px 32px
-          // rgba(0,0,0,0.12) }` (styles-themes-responsive.css:697-699).
           boxShadow: [
             BoxShadow(
               color: c.isLight
-                  ? const Color(0x1F000000) // black @ 0.12
+                  ? const Color(0x1F000000)
                   : Colors.black.withValues(alpha: 0.5),
               blurRadius: 32,
               offset: const Offset(0, 8),
@@ -617,7 +528,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
               children: [
                 Expanded(
                   child: Text(
-                    tr(step.title).toUpperCase(), // uppercase, --primary, ls1
+                    tr(step.title).toUpperCase(),
                     style: TextStyle(
                       color: c.primary,
                       fontSize: 14,
@@ -643,7 +554,6 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
               style: TextStyle(color: c.textDim, fontSize: 11),
             ),
             const SizedBox(height: 12),
-            // Back + Next: two identical ghost pills, right-aligned (gap 8).
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -670,8 +580,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     );
   }
 
-  /// The nsec and the nympq1 code, on the first step, so they are saved before
-  /// anything else. A signer holds the key, so there is only ever a code there.
+  /// The nsec and recovery code on the first step, so they're saved first; signer logins get only the code.
   List<Widget> _keysPanel(NymColors c) {
     final nsec = _nsec;
     final code = _code;
@@ -805,7 +714,6 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     );
   }
 
-  /// `.tutorial-skip` — an uppercase outlined pill (11px, padding 6/12).
   Widget _skipBtn(NymColors c) {
     return InkWell(
       key: const Key('tutorialSkipBtn'),
@@ -814,8 +722,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          // `.tutorial-skip { background: rgba(255,255,255,0.05) }`
-          // (styles-components.css:2030-2043) — no light-mode override.
+          // No light-mode override.
           color: Colors.white.withValues(alpha: 0.05),
           borderRadius: NymRadius.rxs,
           border: Border.all(color: c.glassBorder),
@@ -833,8 +740,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
     );
   }
 
-  /// `.tutorial-btn` — `white@0.05` fill, glass border, radius 8, uppercase
-  /// 12px w500 ls1, `--text` color. Used for both Back and Next.
+  /// Ghost pill used for both Back and Next.
   Widget _ghostPill(
     NymColors c,
     String label, {
@@ -867,16 +773,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
   }
 }
 
-/// The PWA `positionStep` card placement, given the laid-out card size:
-///
-///  * sized to `max-width: min(420px, 92vw)` (phones: 94vw,
-///    styles-themes-responsive.css:104-107) and never taller than the
-///    viewport minus margins;
-///  * no ring → centered (min 12px margins);
-///  * below the ring when the card fits (`spaceBelow > cardH + 16`), else
-///    above when that fits, else `min(viewportH - cardH - 12,
-///    max(12, ringBottom + 12))` — clamped fully on-screen;
-///  * horizontally centered on the ring, clamped 12px from the edges.
+/// Card placement: max width min(420, 92vw), centered without a ring, else below/above/clamped and centered on the ring.
 class _TutorialCardLayoutDelegate extends SingleChildLayoutDelegate {
   const _TutorialCardLayoutDelegate({required this.ring, required this.phone});
 
@@ -896,7 +793,6 @@ class _TutorialCardLayoutDelegate extends SingleChildLayoutDelegate {
   Offset getPositionForChild(Size size, Size childSize) {
     final r = ring;
     if (r == null) {
-      // Centered (welcome / "All set!"), min 12px margins.
       final left = (size.width - childSize.width) / 2;
       final top = (size.height - childSize.height) / 2;
       return Offset(left < 12 ? 12 : left, top < 12 ? 12 : top);
@@ -909,8 +805,7 @@ class _TutorialCardLayoutDelegate extends SingleChildLayoutDelegate {
     } else if (spaceAbove > childSize.height + 16) {
       top = r.top - childSize.height - 12;
     } else {
-      // Fallback: keep the card fully on-screen in the bottom area (the card
-      // is height-capped above, so this is always >= 12).
+      // The card is height-capped, so this is always at least 12.
       final onScreen = size.height - childSize.height - 12;
       final below = r.bottom + 12 < 12 ? 12.0 : r.bottom + 12;
       top = onScreen < below ? onScreen : below;
@@ -927,9 +822,7 @@ class _TutorialCardLayoutDelegate extends SingleChildLayoutDelegate {
       old.ring != ring || old.phone != phone;
 }
 
-/// Fills the screen with [dim], punching a rounded-rect [hole] clear so the
-/// highlighted element shows through — the Flutter analog of the PWA's
-/// `box-shadow: 0 0 0 9999px rgba(0,0,0,0.5)` spread on `.tutorial-highlight`.
+/// Dims the screen with a rounded-rect [hole] punched clear.
 class _SpotlightPainter extends CustomPainter {
   const _SpotlightPainter({
     required this.hole,

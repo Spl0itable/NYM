@@ -2,10 +2,7 @@ import '../../models/group.dart';
 import '../../state/nostr_controller.dart';
 import 'deep_links.dart';
 
-/// Adapts the real [NostrController] to the pure [DeepLinkTarget] surface used
-/// by [DeepLinkService] / [dispatchNymLink]. Kept in its own file so the pure
-/// link parser (deep_links.dart) never has to import the controller — that lets
-/// the deep-link unit tests compile without pulling in networking/identity.
+/// Adapts [NostrController] to [DeepLinkTarget]; separate so deep_links.dart never imports the controller.
 class NostrControllerDeepLinkTarget implements DeepLinkTarget {
   NostrControllerDeepLinkTarget(this._controller,
       {required Future<bool> Function(GroupInviteToken token) confirmInvite})

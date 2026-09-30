@@ -17,27 +17,19 @@
         banners: 200
     };
 
-    // Debounce for the dedup-set persistence
     const DEDUP_PERSIST_DEBOUNCE_MS = 5000;
 
-    // Meta store keys.
     const META_PROCESSED_PM_EVENT_IDS = 'processedPMEventIds';
     const META_DELETED_EVENT_IDS = 'deletedEventIds';
     const META_NYMCHAT_PUBKEYS = 'nymchatPubkeys';
     const META_PQ_KEYS = 'pqKeys';
-    // The announcement TTL, mirrored from pq.js: a publish stamps
-    // `exp = now + TTL`, so a stored row's expiry doubles as its signing time.
+    // Mirrors pq.js: publish stamps `exp = now + TTL`, so a row's expiry doubles as its signing time.
     const PQ_KEY_TTL_SEC = 7 * 24 * 3600;
     const META_NYMCHAT_VOUCHES = 'nymchatVouches';
     const META_TRUSTED_PUBKEYS = 'trustedPubkeys';
     const META_AUTO_MUTED = 'autoMutedPubkeys';
     const META_POOL_SHARD_LAST_SEEN = 'poolShardLastSeen';
-    // Event ids whose BIP340 signature verified in past sessions (bounded,
-    // newest-biased). Restored at boot so the relay replay of already-seen
-    // reactions, profiles, presence and history skips the signature math in
-    // the verify workers — ids are content-bound hashes (sha256 of the
-    // serialized event, re-checked on every cache hit in _verifiedIdCheck),
-    // so a tampered event can never ride the cache.
+    // Ids verified in past sessions; safe to trust because _verifiedIdCheck re-hashes on every cache hit.
     const META_VERIFIED_EVENT_IDS = 'verifiedEventIds';
     const META_EVENT_TIME_CEILINGS = 'eventTimeCeilings';
 
@@ -163,7 +155,6 @@
             } catch (_) { }
         },
 
-        // Strip non-serializable / volatile fields before writing
         _serialiseMessage(m) {
             const c = m.__serCache;
             if (c
@@ -196,9 +187,7 @@
                 eventKind: m.eventKind,
                 isHistorical: m.isHistorical,
                 senderVerified: m.senderVerified,
-                // Confidentiality, separate from senderVerified's
-                // authentication. Group coverage rides along so a partly
-                // covered message doesn't restore looking fully protected.
+                // Confidentiality, separate from senderVerified; group coverage keeps partial protection visible.
                 pqEncrypted: m.pqEncrypted,
                 pqRoot: m.pqRoot,
                 pqCoverage: m.pqCoverage,
@@ -212,16 +201,12 @@
                 fileOffer: m.fileOffer,
                 isBot: m.isBot,
                 thinking: m.thinking,
-                // Thread root reference — without it, restored history loses
-                // its reply grouping and every reply reflows inline.
+                // Without it restored history loses reply grouping.
                 threadRoot: m.threadRoot,
-                // NIP-13 target from the sender's nonce tag. Without this the
-                // cache restore drops it and every reloaded message reports
-                // "no proof of work" regardless of what was actually mined.
+                // NIP-13 target from the sender's nonce tag; dropping it makes reloads report "no proof of work".
                 powTarget: m.powTarget
             };
-            // Non-enumerable so it never leaks into JSON/structured-clone of the
-            // live message object elsewhere.
+            // Non-enumerable so it never leaks into JSON/structured-clone of the live message.
             Object.defineProperty(m, '__serCache', {
                 value: {
                     ser,
@@ -241,14 +226,7 @@
             return ser;
         },
 
-        // Fold a cached history into whatever is already in memory for that
-        // conversation. Hydration used to SKIP any key a live event had already
-        // created while it yielded (`breathe`), so one relay/D1 event arriving
-        // first threw the channel's whole cached window away — including the
-        // thread ROOTS `_withPinnedThreadRoots` had pinned into it. After a
-        // reload the replies whose roots went with it re-rendered inline, as
-        // top-level messages. Merging keeps both: the live object wins on a
-        // shared id (it is the one other code already holds references to).
+        // Merge rather than skip a key live events already created; the live object wins on a shared id.
         _mergeCachedMessages(existing, cached) {
             if (!Array.isArray(existing) || existing.length === 0) return cached;
             if (!Array.isArray(cached) || cached.length === 0) return existing;
@@ -275,11 +253,10 @@
         },
 
         _hydrateMessage(m) {
-            // Convert serialized timestamp back to Date if needed
             if (m.timestamp && !(m.timestamp instanceof Date)) {
                 try { m.timestamp = new Date(m.timestamp); } catch (_) { }
             }
-            // Legacy false positive: a real event id means it reached the relays
+            // Legacy false positive: a real event id means it reached the relays.
             if (m.deliveryStatus === 'failed' && m.id && !String(m.id).startsWith('failed-')) {
                 m.deliveryStatus = 'sent';
             }
@@ -290,7 +267,6 @@
             await this._cacheClearStore('pms');
         },
 
-        // Public: wipe the entire cache. Useful on logout / nuke.
         async resetCache() {
             for (const s of STORES) {
                 await this._cacheClearStore(s);
@@ -328,7 +304,6 @@
             }
         },
 
-        // Schedule a trim run with a long debounce
         _scheduleTrim() {
             if (this._cacheDisabled) return;
             if (this._trimTimer) return;
@@ -361,11 +336,7 @@
                         ids: Array.from(this.nymchatPubkeys)
                     });
                 }
-                // Peers' post-quantum keys, so a reload does not start from
-                // nothing and send the next message classically while it looks
-                // them up again. Each entry carries the announcement's own
-                // expiry and is dropped on restore once past it — see
-                // _hydratePqKeys for why that bound matters.
+                // Restored so a reload doesn't send classically while re-looking up keys; expired entries drop on restore.
                 if (this.pqKeys && this.pqKeys.size > 0) {
                     const entries = [];
                     for (const [pubkey, rec] of this.pqKeys) {
@@ -375,20 +346,12 @@
                             rec.pk ? window.NymCrypto._b64uEncode(rec.pk) : null,
                             rec.exp,
                             rec.epoch || 0,
-                            // Without this a reload reads every peer as legacy
-                            // and downgrades their shields until the next
-                            // announcement lands.
+                            // Without this a reload reads every peer as legacy until the next announcement.
                             rec.root ? 1 : 0,
-                            // Which formats the peer accepts; without these a
-                            // reload would seal the legacy format to a signer
-                            // login that cannot open it.
+                            // Accepted formats; without them a reload would seal the legacy format to a signer that can't open it.
                             rec.pq1 ? 1 : 0,
                             rec.pq2 ? 1 : 0,
-                            // WHEN they announced. The send plan weighs this
-                            // against the last Bitchat-format message from the
-                            // same peer, so a restore that dropped it made that
-                            // comparison read "no announcement" and handed the
-                            // verdict to any Bitchat traffic, however old.
+                            // Announcement time, weighed by the send plan against the peer's last Bitchat-format message.
                             rec.at || 0,
                         ]);
                     }
@@ -448,7 +411,6 @@
             }, DEDUP_PERSIST_DEBOUNCE_MS);
         },
 
-        /// Restores peers' post-quantum keys from the last session.
         async _hydratePqKeys(meta) {
             if (!this.pqKeys) this.pqKeys = new Map();
             const nowSec = Math.floor(Date.now() / 1000);
@@ -464,22 +426,14 @@
                         try { pk = window.NymCrypto._b64uDecode(pkB64); } catch (_) { continue; }
                         if (!(pk instanceof Uint8Array) || pk.length !== 1184) continue;
                     }
-                    // A row written BEFORE the formats were recorded says
-                    // nothing about which one this peer accepts, and the only
-                    // format still produced is the layered one. Restoring such
-                    // a row's key would hand the send path a key it must refuse
-                    // to seal to (`pqLayeredKeyFor` needs `pq2`), so the entry
-                    // comes back KEYLESS: still proof the peer runs Nymchat —
-                    // which is what suppresses the Bitchat wrap — while leaving
-                    // the announcement lookup a reason to go and ask again.
+                    // Pre-format rows restore keyless: still marks the peer as Nymchat, but `pqLayeredKeyFor` needs `pq2`.
                     const preSplit = pq2 === undefined;
                     this.pqKeys.set(pubkey, {
                         pk: preSplit ? null : pk,
                         exp, epoch: epoch || 0, root: root === 1,
                         pq1: pq1 === undefined ? true : pq1 === 1,
                         pq2: pq2 === 1,
-                        // Every publish stamps `exp = now + TTL`, so the expiry
-                        // IS the signing time for a row written without one.
+                        // Every publish stamps `exp = now + TTL`, so the expiry implies the signing time.
                         at: at || (exp - PQ_KEY_TTL_SEC)
                     });
                 }
@@ -487,9 +441,7 @@
         },
 
         async _hydrateDedupSets() {
-            // Idempotent + run-once: init() awaits this EARLY (before the
-            // relays can connect) and hydrateFromCache still calls it in its
-            // normal sequence; the second call is a no-op.
+            // Idempotent: init() calls this early and hydrateFromCache calls it again as a no-op.
             if (this._dedupSetsHydrated) return;
             this._dedupSetsHydrated = true;
             try {
@@ -531,8 +483,7 @@
             } catch (_) { }
         },
 
-        /// Restores the processed-wrap dedup ids — LATE, only once the
-        /// PM/group stores are hydrated (see the note in _hydrateDedupSets).
+        // Runs late, only once the PM/group stores are hydrated (see _hydrateDedupSets).
         async _hydrateProcessedPmIds() {
             if (this._processedPmIdsHydrated) return;
             this._processedPmIdsHydrated = true;
@@ -546,12 +497,7 @@
             } catch (_) { }
         },
 
-        /// Marks every channel message restored from disk as already
-        /// signature-verified (it was verified when first received), so the
-        /// cold-boot relay replay of that history skips the verify workers —
-        /// the signature-side counterpart of _seedDecryptedWrapIds. The
-        /// content binding still holds: _verifiedIdCheck recomputes the id
-        /// hash on every cache hit.
+        // Restored channel messages count as verified; _verifiedIdCheck still re-hashes on every cache hit.
         _seedVerifiedEventIds() {
             if (!this.messages) return;
             if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
@@ -563,7 +509,6 @@
             }
         },
 
-        /// Marks every PM restored from disk as already unwrapped.
         _seedDecryptedWrapIds() {
             if (!this.pmMessages) return;
             if (!this._decryptedWrapIds) this._decryptedWrapIds = new Set();
@@ -575,7 +520,6 @@
             }
         },
 
-        // Hydrate in-memory Maps from IndexedDB
         async hydrateFromCache() {
             if (this._cacheDisabled) return;
             const cachePMsAllowed = this.settings && this.settings.cachePMs !== false;
@@ -602,7 +546,6 @@
                     this._cacheGetAll('banners')
                 ]);
 
-                // Profiles
                 let profileCount = 0;
                 for (const p of profiles) {
                     await breathe();
@@ -611,8 +554,7 @@
                     if (!this.users.has(p.pubkey)) {
                         this.users.set(p.pubkey, p.profile || p);
                     }
-                    // Restore the kind 0 source URL into the userAvatars/banners maps
-                    // so getAvatarUrl can return it before the blob hydrates.
+                    // Restore the kind 0 source URL so getAvatarUrl can return it before the blob hydrates.
                     if (p.profile) {
                         if (typeof p.profile.kind0Ts === 'number') {
                             if (!this._kind0Ts) this._kind0Ts = new Map();
@@ -630,10 +572,7 @@
                         if (p.profile.lnAddress && !this.userLightningAddresses.has(p.pubkey)) {
                             this.userLightningAddresses.set(p.pubkey, p.profile.lnAddress);
                         }
-                        // Restore when this profile was last fetched so a reload
-                        // inside the 5-minute window doesn't re-request every
-                        // profile it just hydrated. An older stamp still reads as
-                        // stale and refreshes normally.
+                        // Restore the fetch time so a reload inside the 5-minute window doesn't re-request every profile.
                         if (typeof p.profile.fetchedAt === 'number' && p.profile.fetchedAt > 0) {
                             if (!this.profileFetchedAt) this.profileFetchedAt = new Map();
                             if (!this.profileFetchedAt.has(p.pubkey)) {
@@ -643,12 +582,10 @@
                     }
                 }
 
-                // Avatars: rehydrate blobs as object URLs
                 for (const a of avatars) {
                     await breathe();
                     if (!a || !a.pubkey || !a.blob) continue;
                     try {
-                        // Skip if the cached blob doesn't match the current source URL
                         const currentSource = this.userAvatars.get(a.pubkey);
                         if (currentSource && a.sourceUrl && currentSource !== a.sourceUrl) {
                             this._cacheDelete('avatars', a.pubkey);
@@ -659,7 +596,6 @@
                     } catch (_) { }
                 }
 
-                // Banners: rehydrate blobs as object URLs
                 for (const b of banners) {
                     await breathe();
                     if (!b || !b.pubkey || !b.blob) continue;
@@ -674,7 +610,6 @@
                     } catch (_) { }
                 }
 
-                // Channel messages
                 const loadedChannelKeys = [];
                 for (const c of channels) {
                     if (!c || !c.key || !Array.isArray(c.messages)) continue;
@@ -683,27 +618,15 @@
                         await breathe();
                         msgs.push(this._hydrateMessage(m));
                     }
-                    // A cache written before the window rule, or simply left
-                    // unopened for a day, must not put aged-out history back
-                    // into memory.
+                    // Old or stale caches must not put aged-out history back into memory.
                     msgs = this._pruneChannelWindow(msgs);
                     if (!msgs.length) { this._cacheDelete('channels', c.key); continue; }
-                    // breathe() hands the event loop back, so a live relay
-                    // event may have arrived for this key while we yielded (and
-                    // may have arrived before the loop started). Merge rather
-                    // than overwrite OR skip: overwriting drops the live
-                    // message, skipping drops the entire cached window.
+                    // breathe() may have let a live event land for this key; merge so neither side is dropped.
                     this.messages.set(c.key, this._mergeCachedMessages(this.messages.get(c.key), msgs));
                     loadedChannelKeys.push(c.key);
                 }
 
-                // Column view paints a column once and then only ever appends
-                // to it, so a cached history written straight into
-                // `this.messages` never reaches the screen on its own. Ask the
-                // columns to reconcile HERE rather than only at the end of
-                // hydration: everything below can skip, throw or await
-                // something slow, and a column left showing three live
-                // messages for the session is the visible cost.
+                // Columns only append after first paint, so ask them to reconcile now rather than at the end.
                 if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile();
 
                 for (const key of loadedChannelKeys) {
@@ -720,14 +643,7 @@
                     if (lastTs > 0) this.channelLastActivity.set(key, lastTs);
                 }
 
-                // PM/group messages. Records come in two shapes: legacy
-                // plaintext ({key, messages}) and vault-encrypted
-                // ({key, enc:'v1', payload}). Encrypted records need the vault
-                // key (unlockVaultAtBoot runs before hydration); if the vault
-                // is off or the key is unavailable they are skipped — history
-                // re-fetches from D1/relays rather than sitting unreadable.
-                // Plaintext records found while the vault is on are re-written
-                // encrypted (in-place migration).
+                // Encrypted records are skipped without the vault key; plaintext ones are re-written encrypted when it's on.
                 if (cachePMsAllowed) {
                     const pmVaultOn = typeof this.vaultEnabled === 'function' && this.vaultEnabled();
                     const migrateKeys = [];
@@ -749,25 +665,20 @@
                             await breathe();
                             msgs.push(this._hydrateMessage(m));
                         }
-                        // Merged, not skipped — same reason as the channels above.
+                        // Merged, not skipped, same as the channels above.
                         this.pmMessages.set(p.key, this._mergeCachedMessages(this.pmMessages.get(p.key), msgs));
                         if (typeof this._pruneForeignBotThreads === 'function') this._pruneForeignBotThreads(p.key);
                     }
                     for (const k of migrateKeys) this.persistPMMessages(k);
                     if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile();
-                    // Rebuild peer-format sets from cached messages — receipt
-                    // sending and reply wrapping consult these, and relay copies
-                    // are dedup-dropped so they never repopulate after a reload
+                    // Rebuild peer-format sets; relay copies are dedup-dropped so they never repopulate after a reload.
                     for (const msgs of this.pmMessages.values()) {
                         if (!Array.isArray(msgs)) continue;
                         for (const m of msgs) {
                             await breathe();
                             if (!m || m.isOwn || m.isGroup || !m.pubkey) continue;
                             if (m.nymMessageId) this.nymUsers.add(m.pubkey);
-                            // Carries the message's own time forward: the
-                            // post-quantum send plan compares it against the
-                            // peer's announcement, and a rebuilt entry with no
-                            // time reads as older than any of them.
+                            // The PQ send plan compares this time against the peer's announcement.
                             if (m.bitchatMessageId) {
                                 this.noteBitchatFormatSeen(m.pubkey, m.created_at || 0);
                             }
@@ -777,11 +688,7 @@
                     this.clearPMCache().catch(() => { });
                 }
 
-                // Ids we still hold a message for, after the channel window
-                // prune above. A reaction row whose target is gone is dead
-                // weight that nothing can ever render, and for a pruned public
-                // channel message it is exactly the aged-out kind 7 the window
-                // is meant to drop — so it is deleted rather than reloaded.
+                // Drop reaction rows whose target message is gone rather than reload them.
                 const heldIds = new Set();
                 for (const list of this.messages.values()) {
                     for (const m of (list || [])) {
@@ -816,8 +723,7 @@
                     if (emojiMap.size > 0) this.reactions.set(r.messageId, emojiMap);
                 }
 
-                // PM/group bubbles render keyed by nymMessageId. Migrate any
-                // reactions still cached under the event ID so they reappear.
+                // PM/group bubbles render keyed by nymMessageId; migrate reactions cached under the event ID.
                 if (typeof this._migrateReactionKey === 'function') {
                     for (const msgs of this.pmMessages.values()) {
                         if (!Array.isArray(msgs)) continue;
@@ -837,11 +743,10 @@
 
                 this._populateSidebarFromHydration();
             } catch (_) {
-                // Cache failure is non-fatal — we'll just refetch from relays.
+                // Cache failure is non-fatal; we'll just refetch from relays.
             }
 
-            // The active view may have opened before hydration finished (the
-            // 1500ms boot race), leaving cached history unrendered. Paint it now.
+            // The active view may have opened before hydration finished (the 1500ms boot race).
             if (typeof this._refreshActiveViewsAfterHydration === 'function') {
                 this._refreshActiveViewsAfterHydration();
             }
@@ -851,9 +756,7 @@
         },
 
         _populateSidebarFromHydration() {
-            // Suppress addChannel's per-add sidebar sweeps for the whole run —
-            // each is a querySelectorAll over the list, so leaving them on makes
-            // this O(n^2) in DOM queries during boot.
+            // Suppress addChannel's per-add sidebar sweeps, which would make boot O(n^2) in DOM queries.
             this._bulkChannelAdd = true;
             try {
                 if (typeof this.addChannel === 'function') {
@@ -873,10 +776,8 @@
                 if (typeof this.addPMConversation === 'function') {
                     for (const [convKey, msgs] of this.pmMessages.entries()) {
                         if (!Array.isArray(msgs) || msgs.length === 0) continue;
-                        // Skip groups — _loadGroupConversations handles those
-                        // via its own metadata store.
+                        // Skip groups; _loadGroupConversations handles those.
                         if (msgs.some(m => m && m.isGroup)) continue;
-                        // Find any message that exposes the peer pubkey.
                         const sample = msgs.find(m => m && m.conversationPubkey);
                         if (!sample || !sample.conversationPubkey) continue;
                         const peer = sample.conversationPubkey;
@@ -902,9 +803,7 @@
                     this._clearSidebarSkel('pmList');
                 }
             } catch (_) {
-                // Fall through to the flush below — the sidebar must not be left
-                // with the bulk flag set, or later addChannel calls would stop
-                // refreshing pins and hidden state entirely.
+                // Leaving the bulk flag set would stop later addChannel calls refreshing pins and hidden state.
             } finally {
                 if (typeof this._flushBulkChannelAdd === 'function') {
                     this._flushBulkChannelAdd();
@@ -921,13 +820,12 @@
 
                 if (typeof window !== 'undefined' && !this._persistUnloadHooked) {
                     this._persistUnloadHooked = true;
-                    // Unload-path flushes must run to completion NOW — the
-                    // page may be gone before a sliced continuation fires.
+                    // Unload-path flushes must run to completion now; the page may be gone before a slice fires.
                     const flush = () => this.flushPendingPersists({ sync: true });
-                    // pagehide / beforeunload — desktop + most mobile.
+                    // pagehide / beforeunload: desktop + most mobile.
                     window.addEventListener('pagehide', flush);
                     window.addEventListener('beforeunload', flush);
-                    // visibilitychange — backgrounded PWAs.
+                    // visibilitychange: backgrounded PWAs.
                     document.addEventListener('visibilitychange', () => {
                         if (document.hidden) flush();
                     });
@@ -970,8 +868,7 @@
                 clearTimeout(this._pendingMsgPersistTimer);
                 this._pendingMsgPersistTimer = null;
             }
-            // A previous sliced flush may have left a remainder; drain it first
-            // (order preserved), then whatever accumulated since.
+            // Drain a previous sliced flush's remainder first to preserve order.
             const fns = this._persistFlushRemainder || [];
             this._persistFlushRemainder = null;
             if (this._pendingPersists && this._pendingPersists.size > 0) {
@@ -985,10 +882,7 @@
                 }
                 return;
             }
-            // Timer-driven flushes are TIME-SLICED (same discipline as the
-            // relay-queue drain): during a catch-up dozens of conversations
-            // are dirty at once, and serializing them all in one synchronous
-            // burst was a single long main-thread task every debounce period.
+            // Time-sliced so a catch-up with dozens of dirty conversations isn't one long main-thread task.
             const start = Date.now();
             let i = 0;
             for (; i < fns.length; i++) {
@@ -1001,21 +895,13 @@
             }
         },
 
-        // The oldest created_at (seconds) a public channel message may have and
-        // still be kept. Public channel history is a rolling 24-hour window —
-        // see channelHistoryMaxAgeMs in app.js for why.
+        // Public channel history is a rolling 24-hour window (see channelHistoryMaxAgeMs in app.js).
         _channelWindowFloorSec() {
             const maxAge = this.channelHistoryMaxAgeMs || (24 * 60 * 60 * 1000);
             return Math.floor((Date.now() - maxAge) / 1000);
         },
 
-        // Drop channel messages that have aged out of the 24-hour window, then
-        // pin back any thread ROOT the survivors still reply to. Without that
-        // pin an in-window reply whose root has aged out reflows INLINE, as a
-        // top-level message with a thread affordance that dead-ends — the same
-        // failure _withPinnedThreadRoots exists to prevent for the count-based
-        // window. A root kept this way is the context for a live thread, not
-        // stale history.
+        // Keep thread roots the surviving replies point at, so in-window replies don't reflow inline.
         _pruneChannelWindow(messages) {
             if (!Array.isArray(messages) || messages.length === 0) return messages;
             const floor = this._channelWindowFloorSec();
@@ -1028,13 +914,7 @@
             return this._withPinnedThreadRoots(messages, kept, m => m.id);
         },
 
-        // Keep thread ROOTS in the persisted window: the window is a plain
-        // last-N slice, so a root older than the window drops off while its
-        // replies stay — and after a reload those replies can never re-thread
-        // (the root is gone from the store, and the bounded relay replay
-        // doesn't reach that far back either): the replies render inline and
-        // their thread affordance dead-ends. Any message the kept window
-        // references as a thread root is pinned in front of the slice.
+        // Pin roots referenced by the kept window so replies can still re-thread after a reload.
         _withPinnedThreadRoots(messages, trimmed, keyOf) {
             if (trimmed === messages) return trimmed;
             const kept = new Set();
@@ -1062,8 +942,7 @@
                     return;
                 }
                 const limit = this.channelMessageLimit || 100;
-                // Age first, then the count cap — a channel quiet for a day must
-                // not write back a full window of messages that have all aged out.
+                // Age first, then the count cap.
                 const inWindow = this._pruneChannelWindow(messages);
                 let trimmed = inWindow.length > limit ? inWindow.slice(-limit) : inWindow;
                 // Channel thread keys are event ids (threadKeyForMessage).
@@ -1082,8 +961,6 @@
 
         persistPMMessages(key) {
             if (!key || this._cacheDisabled) return;
-            // Honor the opt-out setting: don't write decrypted PM/group
-            // content to disk if the user disabled it.
             if (this.settings && this.settings.cachePMs === false) return;
             this._scheduleMsgPersist('pm', key, () => {
                 const messages = this.pmMessages.get(key);
@@ -1093,17 +970,11 @@
                 }
                 const limit = this.pmStorageLimit || 500;
                 let trimmed = messages.length > limit ? messages.slice(-limit) : messages;
-                // PM/group thread keys are the shared nymMessageId when
-                // present (threadKeyForMessage), else the event id.
+                // PM/group thread keys are the shared nymMessageId when present, else the event id.
                 trimmed = this._withPinnedThreadRoots(
                     messages, trimmed, m => m.nymMessageId || m.id);
                 const serialised = trimmed.map(m => this._serialiseMessage(m));
-                // With Identity Encryption on, the PM/group cache is written
-                // AES-GCM-encrypted under the vault key — the plaintext mirror
-                // of end-to-end encrypted conversations must not sit readable
-                // in IndexedDB. While the vault is locked nothing is written
-                // (never plaintext over ciphertext). Public channel history
-                // stays plaintext: it is public content.
+                // With Identity Encryption on, PM/group cache is vault-encrypted and never written while locked.
                 if (typeof this.vaultEnabled === 'function' && this.vaultEnabled()) {
                     if (!this._vaultKey) return;
                     this._vaultEncrypt(JSON.stringify(serialised))
@@ -1121,8 +992,6 @@
             this._schedulePersist('pr', pubkey, () => {
                 const profile = this.users.get(pubkey);
                 if (!profile) return;
-                // Snapshot enriched profile fields alongside the user record so
-                // we can rehydrate them without a kind 0 round-trip.
                 const enriched = {
                     ...profile,
                     pictureUrl: this.userAvatars && this.userAvatars.get(pubkey) || null,
@@ -1130,10 +999,7 @@
                     bio: this.userBios && this.userBios.get(pubkey) || null,
                     lnAddress: this.userLightningAddresses && this.userLightningAddresses.get(pubkey) || null,
                     kind0Ts: this._kind0Ts && this._kind0Ts.get(pubkey) || profile.kind0Ts || null,
-                    // Freshness bookkeeping travels WITH the profile. Without it
-                    // a reload restored every cached profile but with no record
-                    // of when it was fetched, so all of them looked stale and the
-                    // app re-fetched the entire cache it had just loaded.
+                    // Fetch time travels with the profile so a reload doesn't treat every cached profile as stale.
                     fetchedAt: this.profileFetchedAt && this.profileFetchedAt.get(pubkey) || null
                 };
                 this._cachePut('profiles', { pubkey, profile: enriched });
@@ -1141,7 +1007,6 @@
             });
         },
 
-        // Persist an avatar blob keyed by pubkey
         persistAvatarBlob(pubkey, blob, sourceUrl, kind0Ts) {
             if (!pubkey || !blob || this._cacheDisabled) return;
             this._schedulePersist('av', pubkey, () => {
@@ -1185,17 +1050,7 @@
             });
         },
 
-        // Bring memory, the cache and the reaction store back inside the
-        // 24-hour window. The persist and hydrate boundaries already refuse to
-        // write or reload aged-out messages, but a session left open for days
-        // keeps accumulating in memory — and the whole point of the window is
-        // that those messages exist on no other client and cannot be re-fetched
-        // by any of them, this one included, after a reload.
-        //
-        // Reactions are keyed by the id of the message they target, so dropping
-        // the reaction rows for the ids we drop is exactly "kind 7 events whose
-        // `k` tag is 20000/23333" — a reaction on a PM or group message is keyed
-        // by an id in pmMessages and is never touched here.
+        // Sessions left open for days accumulate in memory; drop aged-out channel messages and their reactions.
         pruneChannelHistoryWindow() {
             if (!this.messages || typeof this._pruneChannelWindow !== 'function') return 0;
             let dropped = 0;
@@ -1216,8 +1071,7 @@
                 }
             }
             if (dropped) {
-                // The views hold their own rendered copies; columns reconcile
-                // against the store, single view re-renders the open channel.
+                // Columns reconcile against the store; single view re-renders the open channel.
                 if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
                 if (typeof this._refreshActiveViewsAfterHydration === 'function') {
                     this._refreshActiveViewsAfterHydration();
@@ -1226,7 +1080,6 @@
             return dropped;
         },
 
-        // Everything else keyed by a dropped channel message's id.
         _dropChannelMessageSideTables(m) {
             const ids = [m.id];
             if (m.nymMessageId && m.nymMessageId !== m.id) ids.push(m.nymMessageId);
@@ -1250,9 +1103,6 @@
             }, 600);
         },
 
-        // Run the sweep at boot (after hydration) and on a long interval, so a
-        // tab left open overnight converges on the window instead of holding
-        // history no other client can see.
         startChannelWindowPrune() {
             if (this._channelWindowPruneTimer) return;
             const run = () => { try { this.pruneChannelHistoryWindow(); } catch (_) { } };

@@ -4,46 +4,28 @@ import '../../models/group.dart';
 import '../../services/nostr/nostr_service.dart';
 import 'group_logic.dart';
 
-/// Holds per-group rotating ephemeral key state and drives the gift-wrapped
-/// group send / control paths via [NostrService]. Pure-ish: all crypto is
-/// delegated to the service; this class owns the key bookkeeping
-/// (docs/specs/03 §4.3).
+/// Owns per-group rotating ephemeral keys and drives gift-wrapped group sends; crypto is delegated to the service.
 class GroupManager {
   GroupManager(this._service);
 
   final NostrService _service;
 
-  /// Resolves a member's announced ML-KEM key, or null when they have none.
-  /// Supplied by the controller, which owns the announcement registry. Null
-  /// (the default) leaves every group send classical.
-  ///
-  /// Keyed by the member's REAL pubkey: the announcement is published by the
-  /// identity, not by the rotating ephemeral key the classical leg encrypts to.
+  /// Member's announced ML-KEM key by real pubkey, or null; unset leaves every send classical.
   Uint8List? Function(String memberPubkey)? kemKeyFor;
 
-  /// Whether a member's announced key is root-seeded. Same injection as
-  /// [kemKeyFor]; null leaves every send reading as legacy, which is the safe
-  /// default for a badge.
+  /// Whether a member's key is root-seeded; unset reads as legacy, the safe default for a badge.
   bool Function(String memberPubkey)? rootSeededFor;
 
-  /// Whether a member accepts the layered format. Same injection; null leaves
-  /// the fan-out on the combined one, which is what every peer understood
-  /// before the split.
+  /// Whether a member accepts the layered format; unset keeps the combined format.
   bool Function(String memberPubkey)? layeredFor;
 
-  /// Post-quantum coverage of the last message sent per group message id, so
-  /// the UI can say "quantum-resistant to 8 of 10 members" rather than implying
-  /// all-or-nothing. A group message counts as protected only when EVERY member
-  /// got a post-quantum wrap — one classical copy of the same plaintext is
-  /// enough for an attacker.
+  /// Per-message post-quantum coverage; a message counts as protected only if every member got a PQ wrap.
   final Map<String, ({int pq, int total})> _pqCoverage = {};
 
-  /// Coverage for [nymMessageId], or null if unknown.
   ({int pq, int total})? pqCoverageFor(String nymMessageId) =>
       _pqCoverage[nymMessageId];
 
-  /// Whether the whole fan-out went to root-seeded keys. Kept apart from
-  /// [pqCoverageFor] because the popup counts members, not key provenance.
+  /// Whether the whole fan-out went to root-seeded keys.
   final Map<String, bool> _pqAllRoot = {};
 
   bool pqAllRootFor(String nymMessageId) => _pqAllRoot[nymMessageId] ?? false;
@@ -57,14 +39,13 @@ class GroupManager {
     }
   }
 
-  /// groupId → rotating ephemeral key state.
+  /// groupId -> rotating ephemeral key state.
   final Map<String, GroupEphemeralKeys> _keys = {};
 
   GroupEphemeralKeys keysFor(String groupId) =>
       _keys.putIfAbsent(groupId, GroupEphemeralKeys.new);
 
-  /// All registered ephemeral secret keys (current + previous) across groups,
-  /// for the service's unwrap candidates / `#p` subscriptions.
+  /// Every ephemeral secret key (current and previous) across groups, for unwrap candidates.
   List<Uint8List> allEphemeralSecretKeys() {
     final out = <Uint8List>[];
     for (final ek in _keys.values) {
@@ -73,7 +54,7 @@ class GroupManager {
     return out;
   }
 
-  /// All advertised self ephemeral pubkeys (current + prev) for `#p` subs.
+  /// Every self ephemeral pubkey (current and previous), for `#p` subscriptions.
   List<String> allEphemeralPubkeys() {
     final out = <String>[];
     for (final ek in _keys.values) {
@@ -89,32 +70,20 @@ class GroupManager {
     _service.setEphemeralKeys(allEphemeralSecretKeys());
   }
 
-  /// Deletes [groupId]'s ephemeral key entry and re-arms the service's unwrap
-  /// candidates — the PWA's `groupEphemeralKeys.delete(groupId)` +
-  /// `_saveEphemeralKeys()` on leave (groups.js:1822-1824). Without it a left
-  /// group's keys keep riding [allEphemeralPubkeys] / [allEphemeralSecretKeys]
-  /// (and the local `nym_ephemeral_keys_<pubkey>` blob via
-  /// [ephemeralKeysForSync]) until restart. Called from
-  /// `NostrController.leaveGroup`.
+  /// Deletes a left group's keys and re-arms unwrap candidates so they stop riding subscriptions and sync.
   void removeGroup(String groupId) {
     if (_keys.remove(groupId) == null) return;
     _refreshServiceKeys();
   }
 
-  /// Serialized per-group ephemeral key state for the `nymchat-keys-<gid>`
-  /// cross-device sync categories (`gid → _serializeEphemeralKeys(ek)`, the map
-  /// the PWA iterates in `_publishEncryptedSettings`, settings.js:435-461).
+  /// Per-group ephemeral key state for the `nymchat-keys-<gid>` sync categories.
   Map<String, Map<String, dynamic>> ephemeralKeysForSync() {
     final out = <String, Map<String, dynamic>>{};
     _keys.forEach((groupId, ek) => out[groupId] = ek.toSyncJson());
     return out;
   }
 
-  /// Merges a synced ephemeral-key [entry] for [groupId] into the local state
-  /// (cross-device restore; `_mergeEphemeralKeys`, groups.js:221). Creates the
-  /// per-group entry if absent, then accumulates the synced keys. Returns true
-  /// when at least one previously-unknown self ephemeral pubkey was added — the
-  /// controller uses this to know it must re-arm decryption / backfill history.
+  /// Merges synced keys for [groupId]; true when a new self pubkey was added, meaning decryption must re-arm.
   bool mergeEphemeralKeys(String groupId, Map<String, dynamic> entry) {
     final ek = keysFor(groupId);
     final before = _selfPkCount(ek);
@@ -125,21 +94,13 @@ class GroupManager {
   int _selfPkCount(GroupEphemeralKeys ek) =>
       (ek.selfCurrent != null ? 1 : 0) + ek.selfPrev.length;
 
-  /// Records a peer member's advertised ephemeral pubkey (out-of-order guarded).
+  /// Records a member's advertised ephemeral pubkey, guarding against out-of-order updates.
   void recordMemberKey(
       String groupId, String memberPubkey, String ephemeralPk, int messageTs) {
     keysFor(groupId).updateMemberKey(memberPubkey, ephemeralPk, messageTs);
   }
 
-  /// Creates a group: generates the id + first ephemeral key, returns a [Group]
-  /// owned by [selfPubkey] and publishes the bootstrap `group-invite`.
-  ///
-  /// The optional [avatar] / [banner] / [description] / [allowMemberInvites]
-  /// extras mirror groups.js `createGroup(name, memberPubkeys, opts)` (1355):
-  /// they are stamped onto the [Group] and threaded into the invite rumor's
-  /// metadata tags so members learn the group's appearance + invite policy from
-  /// the first wrap. [allowMemberInvites] defaults to true (PWA
-  /// `opts.allowMemberInvites !== false`).
+  /// Creates a group and publishes the bootstrap `group-invite` carrying its metadata; [allowMemberInvites] defaults to true.
   Future<Group?> createGroup({
     required String selfPubkey,
     required String name,
@@ -180,7 +141,7 @@ class GroupManager {
       content: 'You\'ve been added to group "${group.name}".',
     );
 
-    // First invite always uses real pubkeys (no member keys established yet).
+    // The first invite uses real pubkeys; no member keys exist yet.
     await _service.publishGroupMessage(
       rumor: rumor,
       recipients: members,
@@ -193,18 +154,7 @@ class GroupManager {
     return group;
   }
 
-  /// Sends a group message: rotates the self ephemeral key, builds the rumor
-  /// advertising the new key, and gift-wraps to each member's encryption key.
-  /// Returns the shared nymMessageId, or null if we can't send.
-  ///
-  /// [extraTags] threads the optional NIP-30 custom-emoji, NIP-92 imeta, and
-  /// `['offer', JSON]` file-offer tags that groups.js `sendGroupMessage`
-  /// (1699-1707) pushes after `ms`. They are forwarded verbatim into
-  /// [GroupLogic.buildGroupMessageRumor], mirroring the channel send path where
-  /// the caller supplies the already-built tag list (`publishChannelMessage`'s
-  /// `emojiTags`). The caller owns the provider state needed to build them
-  /// (`LiveCustomEmojiNotifier.emojiTagsForContent`, the imeta builder, and
-  /// `fileOfferTag`), so the manager stays free of provider lookups (F04-M5).
+  /// Rotates the self ephemeral key and gift-wraps to each member; [extraTags] come prebuilt from the caller. Null if unsendable.
   Future<String?> sendGroupMessage({
     required Group group,
     required String selfPubkey,
@@ -240,11 +190,7 @@ class GroupManager {
     return ok ? nymMessageId : null;
   }
 
-  /// Broadcasts the owner-issued `group-metadata` control to the other members
-  /// (self excluded; groups.js `_broadcastGroupMetadata`). The group must already
-  /// carry the updated metadata + `metaUpdatedAt`. No-op (returns false) when
-  /// there are no other members. Role checks are the caller's responsibility
-  /// (owner-only).
+  /// Broadcasts owner-issued `group-metadata` to other members; false when there are none. Callers check roles.
   Future<bool> sendMetadata({
     required Group group,
     required String selfPubkey,
@@ -271,9 +217,7 @@ class GroupManager {
     );
   }
 
-  /// Sends the NIP-17 `group-leave` notification to the remaining members
-  /// (self excluded; groups.js `leaveGroup`). No-op (returns false) when there
-  /// are no other members. [content] is the "{nym} left the group." line.
+  /// Sends `group-leave` to remaining members; false when there are none.
   Future<bool> sendLeave({
     required Group group,
     required String selfPubkey,
@@ -304,12 +248,7 @@ class GroupManager {
     );
   }
 
-  /// Announces a `group-add-member` to every member of [group] (the [group]'s
-  /// `members` list must already include the new pubkeys; groups.js
-  /// `addMemberToGroup`). Advertises the self ephemeral key (current, not
-  /// rotated) so existing members and the new joiners learn it. [content] is the
-  /// "{nym} was added by {nym}." line. Newly-added members have no ephemeral key
-  /// yet, so their wrap targets their real pubkey via [encryptionPubkeyFor].
+  /// Announces `group-add-member` to all members; new joiners have no ephemeral key yet, so they get real-pubkey wraps.
   Future<bool> addMembers({
     required Group group,
     required String selfPubkey,
@@ -338,11 +277,7 @@ class GroupManager {
     );
   }
 
-  /// Sends a key-resync REQUEST to the other members: our stored view of their
-  /// rotating ephemeral keys may be stale after a long offline gap, so the
-  /// wraps target their REAL pubkeys (the stored keys are exactly what's
-  /// suspect), carrying our current key + `resync_req` so members reply with
-  /// theirs (PWA `_maybeSendGroupKeyResyncs`).
+  /// Key-resync request wrapped to members' real pubkeys, since our stored ephemeral keys are what's suspect.
   Future<bool> sendKeyResyncRequest({
     required Group group,
     required String selfPubkey,
@@ -375,10 +310,7 @@ class GroupManager {
     );
   }
 
-  /// Replies to a member's key-resync request with our current ephemeral key
-  /// (current, not rotated), wrapped to the key they just advertised (already
-  /// recorded via the generic `ephemeral_pk` extraction). Rate limiting is the
-  /// caller's responsibility (PWA `_maybeReplyKeyResync`).
+  /// Replies to a resync with our current key, wrapped to the key they advertised; callers rate-limit.
   Future<bool> sendKeyResyncReply({
     required Group group,
     required String selfPubkey,
@@ -410,8 +342,7 @@ class GroupManager {
     );
   }
 
-  /// Sends a control event of [type] with [extraTags] (role checks are the
-  /// caller's responsibility — see [GroupLogic.canModerate]).
+  /// Sends a control event; callers check roles.
   Future<bool> sendControl({
     required Group group,
     required String selfPubkey,

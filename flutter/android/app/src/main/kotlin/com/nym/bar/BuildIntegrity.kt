@@ -6,31 +6,10 @@ import android.os.Build
 import java.io.File
 import java.security.MessageDigest
 
-/**
- * What the app can measure about the copy of itself that is installed.
- *
- * The web app re-hashes every file it is running and looks the result up in the
- * repository's signed attestations. A native build cannot do that with its own
- * source — what runs here is AOT machine code, not the Dart in
- * `flutter/`, and nothing on the device relates one to the other. What
- * Android DOES offer is the installed APK itself, readable at
- * `ApplicationInfo.sourceDir`, so the same shape of proof is available: hash
- * the artifact locally, and compare against a hash the developer published and
- * signed. Neither half trusts the other, and a third party can repeat both.
- *
- * The catch is Google Play. Play App Signing re-signs the upload with Google's
- * key and delivers per-device split APKs generated from the App Bundle, so what
- * lands on a Play device is not the file the developer built and its hash
- * matches nothing publishable. Dart needs to know that, so the installer
- * package and the split count are reported alongside the hash rather than
- * being folded into a verdict here.
- */
+/** Measures the installed APK (hash, signer, installer, splits) for Dart to compare to the release. */
 object BuildIntegrity {
 
-    /**
-     * Measures the install. Blocking: hashing the APK reads tens of megabytes,
-     * so callers must run this off the main thread.
-     */
+    /** Blocking: hashing reads tens of megabytes, so call off the main thread. */
     fun inspect(context: Context): Map<String, Any?> {
         val pm = context.packageManager
         val pkg = context.packageName
@@ -40,9 +19,7 @@ object BuildIntegrity {
         return mapOf(
             "packageName" to pkg,
             "apkSha256" to sha256OfFile(appInfo.sourceDir),
-            // A universal sideloaded APK has none. A Play install almost always
-            // has several (per-ABI, per-density, per-language), which is on its
-            // own enough to know the base APK is not the published artifact.
+            // Sideloaded universal APKs have no splits; Play installs almost always do.
             "splitCount" to splits.size,
             "signerSha256" to signingCertSha256(pm, pkg),
             "installer" to installerPackage(pm, pkg),
@@ -71,15 +48,7 @@ object BuildIntegrity {
         }
     }
 
-    /**
-     * SHA-256 of the certificate the install is signed with — the same value
-     * `keytool -printcert -jarfile` prints for the built APK, and the value
-     * Play Console shows for the app-signing key on a Play build.
-     *
-     * Worth reporting even where the APK hash cannot be compared: it is what
-     * separates a Play install from a repackaged APK sideloaded under the same
-     * package name.
-     */
+    /** SHA-256 of the signing certificate, which separates Play installs from repackaged sideloads. */
     private fun signingCertSha256(pm: PackageManager, pkg: String): String? {
         return try {
             @Suppress("DEPRECATION")

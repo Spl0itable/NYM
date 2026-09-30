@@ -1,12 +1,5 @@
-// Cloudflare Pages Function: WebSocket proxy for Nostr relays
-// Proxies client WebSocket connections through Cloudflare Workers so relays
-// only see Cloudflare IP addresses instead of end-user IPs.
-//
-// Client connects to: wss://<host>/api/relay?relay=wss://relay.example.com
-// Worker connects to the target relay via new WebSocket() and forwards
-// messages bidirectionally through a WebSocketPair.
+// WebSocket relay proxy so relays see Cloudflare IPs, not users': /api/relay?relay=wss://...
 
-// One definition for every route; see _client.js.
 import { isNymchatClient } from './_client.js';
 import { ipv6Blocked } from './_shared.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
@@ -14,8 +7,7 @@ import { reviewSpamReport, spamEngine, frameBadgeRefused } from './_spam.js';
 
 const APP_RELAY = 'wss://relay.nymchat.app';
 
-// Reject relay hostnames that resolve to private/loopback/link-local space so
-// the proxy can't be used to reach internal services (SSRF).
+// Reject private/loopback/link-local relay hosts so the proxy can't reach internal services (SSRF).
 function isPrivateRelayHost(hostname) {
   let host = (hostname || '').toLowerCase().replace(/\.$/, '');
   if (!host) return true;
@@ -72,7 +64,6 @@ export async function onRequest(context) {
     return new Response('Missing relay parameter', { status: 400 });
   }
 
-  // Validate the relay URL
   try {
     const relayUrl = new URL(targetRelay);
     if (relayUrl.protocol !== 'wss:' && relayUrl.protocol !== 'ws:') {
@@ -93,7 +84,6 @@ export async function onRequest(context) {
   let sockHeld = null;
   const gateTimer = setInterval(() => { filterSet(env).then((s) => { gate = s; }, () => { }); }, 30000);
 
-  // Create the WebSocket pair for the client connection
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
 
@@ -114,29 +104,24 @@ export async function onRequest(context) {
         server.send(JSON.stringify(mode === 'reject'
           ? ['OK', ev.id, false, 'blocked: not accepted']
           : ['OK', ev.id, true, '']));
-      } catch { /* noop */ }
+      } catch {}
     }
     return true;
   }
 
-  // Connect to the upstream relay using the WebSocket constructor
-  // (the standard way to make outbound WebSocket connections from Workers)
   const upstream = new WebSocket(targetRelay);
 
-  // Buffer messages from the client until the upstream connection is open
   let upstreamOpen = false;
   const pendingMessages = [];
 
   upstream.addEventListener('open', () => {
     upstreamOpen = true;
-    // Flush any messages that arrived while upstream was connecting
     for (const msg of pendingMessages) {
-      try { upstream.send(msg); } catch { /* noop */ }
+      try { upstream.send(msg); } catch {}
     }
     pendingMessages.length = 0;
   });
 
-  // Forward messages from client to upstream (buffering if not yet open)
   server.addEventListener('message', (event) => {
     context.waitUntil(
       (async () => {
@@ -148,13 +133,11 @@ export async function onRequest(context) {
             pendingMessages.push(event.data);
           }
         } catch {
-          // Upstream closed
         }
       })()
     );
   });
 
-  // Forward messages from upstream to client
   upstream.addEventListener('message', (event) => {
     try {
       if (typeof event.data === 'string' && event.data.startsWith('["EVENT"') && frameHit(gate, event.data)) return;
@@ -163,17 +146,14 @@ export async function onRequest(context) {
         server.send(event.data);
       }
     } catch {
-      // Client closed
     }
   });
 
-  // Handle close events
   server.addEventListener('close', (event) => {
     clearInterval(gateTimer);
     try {
       upstream.close(event.code, event.reason);
     } catch {
-      // Already closed
     }
   });
 
@@ -182,17 +162,15 @@ export async function onRequest(context) {
     try {
       server.close(event.code, event.reason);
     } catch {
-      // Already closed
     }
   });
 
-  // Handle errors
   server.addEventListener('error', () => {
-    try { upstream.close(1011, 'Client error'); } catch { /* noop */ }
+    try { upstream.close(1011, 'Client error'); } catch {}
   });
 
   upstream.addEventListener('error', () => {
-    try { server.close(1011, 'Upstream relay error'); } catch { /* noop */ }
+    try { server.close(1011, 'Upstream relay error'); } catch {}
   });
 
   return new Response(null, {

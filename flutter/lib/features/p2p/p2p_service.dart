@@ -9,33 +9,24 @@ import 'package:share_plus/share_plus.dart';
 
 import 'p2p_models.dart';
 
-/// Transport the [P2PService] uses to move plain kind-25051 signaling +
-/// kind-25052 file-status events over the relay pool. Implemented by
-/// `NostrController` (`publishP2P` / `subscribeP2P`), stubbed in tests.
-///
-/// Signaling is **plain (not gift-wrapped) p-tagged relay events** — the key
-/// difference from call signaling (docs/specs/04 §4.1).
+/// Relay transport for plain (not gift-wrapped) p-tagged kind-25051/25052 events; implemented by NostrController.
 abstract class P2PTransport {
-  /// The local user's pubkey (seeder/initiator identity).
   String get selfPubkey;
 
-  /// Publishes a plain kind-[kind] event with [tags] + [content]. The
-  /// controller signs it with the local identity and pushes it to the pool.
+  /// Publishes a plain event signed with the local identity.
   Future<void> publishP2P({
     required int kind,
     required List<List<String>> tags,
     required String content,
   });
 
-  /// Subscribes to inbound kind-25051/25052 events p-tagged to us. The returned
-  /// callback unsubscribes. [onEvent] receives `(senderPubkey, kind, content)`.
+  /// Subscribes to kind-25051/25052 events p-tagged to us; the returned callback unsubscribes.
   void Function() subscribeP2P(
     void Function(String senderPubkey, int kind, String content) onEvent,
   );
 }
 
-/// One side of a peer connection keyed by `peerPubkey + '-' + transferId`
-/// (`connectionId`, p2p.js:266).
+/// One side of a peer connection keyed by `peerPubkey-transferId`.
 class _P2PConnection {
   _P2PConnection(this.pc);
   final RTCPeerConnection pc;
@@ -43,65 +34,39 @@ class _P2PConnection {
   bool haveRemote = false;
   final List<RTCIceCandidate> pending = [];
 
-  /// 30s establish timeout (`createP2PConnection`, p2p.js:309) — a transfer
-  /// stuck in `connecting` (peer offline) is errored out and cleaned up.
+  /// 30s establish timeout; a transfer stuck connecting is errored and cleaned up.
   Timer? connectTimeout;
 
-  /// 5s grace after `disconnected` before declaring the connection lost
-  /// (`oniceconnectionstatechange`, p2p.js:295).
+  /// 5s grace after `disconnected` before declaring the connection lost.
   Timer? disconnectGrace;
 }
 
-/// Direct WebRTC data-channel file sharing — 1:1 port of `js/modules/p2p.js`
-/// §4.1. Every native share/fetch uses the direct WebRTC data-channel path.
-///
-/// DESIGN BOUNDARY (deliberate, not a stub): the direct WebRTC path is the SAME
-/// transport the PWA uses by default and falls back to whenever WebTorrent is
-/// unavailable (p2p.js:909 "Falling back to direct P2P"), so native↔native and
-/// native↔(online PWA seeder) transfers all work. The PWA's OPTIONAL WebTorrent
-/// route for large/torrent files (`shareP2PFileTorrent`/`downloadTorrent`, magnet
-/// URIs) is intentionally not ported: WebTorrent is BitTorrent-over-WebRTC, so a
-/// native classic-BitTorrent client (e.g. libtorrent — TCP/uTP/DHT) cannot join
-/// its WebRTC swarms at all, and a from-scratch WebTorrent-over-`flutter_webrtc`
-/// client is out of scope. The only unreachable case is a magnet-only
-/// `?download torrent` offer from a browser peer whose seeder has since gone
-/// offline; it surfaces as "torrent (unsupported)" in the modal.
+/// Direct WebRTC data-channel file sharing; the PWA's optional WebTorrent route is intentionally not ported.
 class P2PService extends ChangeNotifier {
   P2PService(this._transport);
 
   final P2PTransport _transport;
   void Function()? _unsub;
 
-  /// Files we are seeding, by offerId (`p2pPendingFiles`).
+  /// Files we are seeding, by offerId.
   final Map<String, Uint8List> _pendingFiles = {};
 
-  /// Known offers (ours + peers'), by offerId (`p2pFileOffers`).
+  /// Known offers (ours and peers'), by offerId.
   final Map<String, FileOffer> _offers = {};
 
-  /// Active transfers, by transferId (`p2pActiveTransfers`).
   final Map<String, P2PTransfer> _transfers = {};
 
-  /// WebRTC connections, by connectionId (`p2pConnections`).
   final Map<String, _P2PConnection> _connections = {};
 
-  /// Received binary chunks, by transferId (`p2pReceivedChunks`).
   final Map<String, List<Uint8List>> _received = {};
 
-  /// Offers the seeder has stopped serving (`p2pUnseededOffers`).
+  /// Offers the seeder has stopped serving.
   final Set<String> _unseeded = {};
 
-  /// System-message sink (`displaySystemMessage`) + completed-download sink.
   void Function(String message)? onSystemMessage;
 
-  /// Completed-download sink. When unset (the default), [_complete] saves the
-  /// bytes to disk and offers the OS share sheet itself ([_saveDownload]) so a
-  /// finished transfer always lands somewhere the user can open — mirroring the
-  /// PWA's automatic `a.download` blob save (`completeFileTransfer`, p2p.js:586).
-  /// A host may override this to route the bytes elsewhere (e.g. a custom
-  /// save-as flow).
+  /// Completed-download sink; unset saves to disk and opens the share sheet so the file always lands somewhere.
   void Function(String filename, Uint8List bytes)? onDownloadReady;
-
-  // --- read-only views for the modal -----------------------------------------
 
   List<P2PTransfer> get transfers => _transfers.values.toList(growable: false);
   Map<String, FileOffer> get seeding => {
@@ -111,7 +76,7 @@ class P2PService extends ChangeNotifier {
   bool isUnseeded(String offerId) => _unseeded.contains(offerId);
   FileOffer? offer(String offerId) => _offers[offerId];
 
-  /// Begins listening for inbound signaling/status. Idempotent.
+  /// Begins listening for inbound signaling and status; idempotent.
   void start() {
     _unsub ??= _transport.subscribeP2P(_onSignalEvent);
   }
@@ -133,16 +98,7 @@ class P2PService extends ChangeNotifier {
     super.dispose();
   }
 
-  // ---------------------------------------------------------------------------
-  // Seeding (sender) — shareP2PFile
-  // ---------------------------------------------------------------------------
-
-  /// Hashes [bytes], builds + registers a [FileOffer], and stores the file for
-  /// seeding. Returns the offer so the caller (controller) can announce it as a
-  /// channel/PM message with a `['offer', JSON]` tag (`publishFileOffer`).
-  ///
-  /// Large files use the same direct WebRTC chunk path as small ones; the PWA's
-  /// optional WebTorrent route for big files is a documented boundary (class doc).
+  /// Hashes and registers a [FileOffer] for seeding; the caller announces it with an `['offer', JSON]` tag.
   FileOffer shareFile({
     required Uint8List bytes,
     required String name,
@@ -160,26 +116,16 @@ class P2PService extends ChangeNotifier {
     return offer;
   }
 
-  /// Registers a peer's offer parsed off an inbound message tag
-  /// (`parseFileOfferTag`) so the receiver can later [requestFile] it. Starts
-  /// the signaling subscription as a side effect so the offer card is live the
-  /// moment it renders, even for a user who has never shared a file themselves.
+  /// Registers a peer's offer and starts signaling so the offer card is live on render.
   void registerOffer(FileOffer offer) {
     _offers[offer.offerId] = offer;
     start();
     notifyListeners();
   }
 
-  // ---------------------------------------------------------------------------
-  // Receiving — requestP2PFile
-  // ---------------------------------------------------------------------------
-
-  /// Requests [offerId] from its seeder: creates the transfer state and the
-  /// initiating WebRTC connection (`requestP2PFile` → `createP2PConnection`).
+  /// Creates the transfer state and the initiating WebRTC connection.
   Future<void> requestFile(String offerId) async {
-    // A pure receiver may never have shared a file, so ensure the signaling
-    // subscription is live before we send our offer — otherwise the seeder's
-    // answer/ICE would never reach us and the transfer would hang `connecting`.
+    // A pure receiver may never have shared a file, so start signaling or the seeder's answer never arrives.
     start();
     final offer = _offers[offerId];
     if (offer == null) {
@@ -206,10 +152,6 @@ class P2PService extends ChangeNotifier {
     notifyListeners();
     await _createConnection(offer.seederPubkey, transferId, true);
   }
-
-  // ---------------------------------------------------------------------------
-  // Stop seeding — stopSeeding (broadcasts kind 25052 unseeded)
-  // ---------------------------------------------------------------------------
 
   Future<void> stopSeeding(String offerId,
       {String? geohash, String? channelName}) async {
@@ -250,10 +192,6 @@ class P2PService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ---------------------------------------------------------------------------
-  // Inbound signaling routing — handleP2PSignalingEvent / FileStatusEvent
-  // ---------------------------------------------------------------------------
-
   void _onSignalEvent(String senderPubkey, int kind, String content) {
     if (kind == P2PConstants.fileStatusKind) {
       try {
@@ -291,10 +229,6 @@ class P2PService extends ChangeNotifier {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // WebRTC plumbing — createP2PConnection / setupDataChannel
-  // ---------------------------------------------------------------------------
-
   Future<_P2PConnection> _createConnection(
       String peerPubkey, String transferId, bool isInitiator) async {
     final connectionId = '$peerPubkey-$transferId';
@@ -305,8 +239,7 @@ class P2PService extends ChangeNotifier {
     _connections[connectionId] = conn;
 
     pc.onIceCandidate = (c) {
-      // p2p.js `onicecandidate` guards `if (event.candidate)`: skip the empty
-      // end-of-gathering marker flutter_webrtc emits.
+      // Skip the empty end-of-gathering marker flutter_webrtc emits.
       if (c.candidate == null || c.candidate!.isEmpty) return;
       final sig = iceSignal(candidate: {
         'candidate': c.candidate,
@@ -326,7 +259,7 @@ class P2PService extends ChangeNotifier {
         }
         _cleanupConnection(connectionId);
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        // Give it a moment to recover before declaring error (p2p.js:295).
+        // Give it a moment to recover before declaring error.
         conn.disconnectGrace?.cancel();
         conn.disconnectGrace = Timer(const Duration(seconds: 5), () {
           final st = conn.pc.iceConnectionState;
@@ -341,7 +274,6 @@ class P2PService extends ChangeNotifier {
         });
       } else if (s == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           s == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
-        // Established — cancel the connect timeout (p2p.js:321).
         conn.connectTimeout?.cancel();
         conn.disconnectGrace?.cancel();
         if (transfer != null && transfer.status == P2PStatus.connecting) {
@@ -351,8 +283,7 @@ class P2PService extends ChangeNotifier {
       }
     };
 
-    // 30s establish timeout (p2p.js:309): a transfer still `connecting` after
-    // 30s (peer offline / no answer) is errored out and torn down.
+    // Peer offline or no answer: error out and tear down after 30s.
     conn.connectTimeout = Timer(const Duration(seconds: 30), () {
       final t = _transfers[transferId];
       if (t != null && t.status == P2PStatus.connecting) {
@@ -363,7 +294,7 @@ class P2PService extends ChangeNotifier {
     });
 
     if (isInitiator) {
-      // Receiver side opens the data channel to pull the file.
+      // The receiver opens the data channel to pull the file.
       final dc = await pc.createDataChannel(
           'fileTransfer', RTCDataChannelInit()..ordered = true);
       conn.channel = dc;
@@ -412,8 +343,7 @@ class P2PService extends ChangeNotifier {
     };
   }
 
-  /// Sender loop — metadata JSON first, then 16 KiB chunks with backpressure,
-  /// then `{type:'complete'}` (`startSendingFile`, p2p.js:405).
+  /// Sends metadata JSON, then 16 KiB chunks with backpressure, then `{type:'complete'}`.
   Future<void> _startSending(String transferId, RTCDataChannel dc) async {
     final transfer = _transfers[transferId];
     if (transfer == null) return;
@@ -442,8 +372,7 @@ class P2PService extends ChangeNotifier {
             transferId, P2PStatus.error, 'Connection closed during transfer');
         return;
       }
-      // Backpressure: flutter_webrtc surfaces bufferedAmount; pause above the
-      // high-water mark and poll until it drains below low-water (p2p.js:472).
+      // Pause above the high-water mark and poll until below low-water.
       var guard = 0;
       while ((await _bufferedAmount(dc)) > P2PConstants.highWater &&
           guard++ < 1000) {
@@ -471,8 +400,7 @@ class P2PService extends ChangeNotifier {
     }
   }
 
-  /// Receiver — accumulates chunks, verifies size + SHA-256 on `complete`
-  /// (`handleFileChunk` / `completeFileTransfer`, p2p.js:498/549).
+  /// Accumulates chunks and verifies size and SHA-256 on `complete`.
   void _handleChunk(String transferId, RTCDataChannelMessage msg) {
     final transfer = _transfers[transferId];
     if (transfer == null) return;
@@ -510,10 +438,7 @@ class P2PService extends ChangeNotifier {
     }
     chunks.add(bin);
     transfer.bytesReceived += bin.length;
-    // Live progress: %/speed status line (p2p.js:540-543 `handleFileChunk` →
-    // `updateTransferProgress`, p2p.js:606-621). pct is clamped to 100 and the
-    // throughput is bytesReceived over elapsed seconds since the transfer
-    // started, humanized with the shared `formatFileSize`.
+    // Progress percent (clamped to 100) and throughput since the transfer started.
     if (transfer.offer.size > 0) {
       final pct =
           ((transfer.bytesReceived / transfer.offer.size) * 100).clamp(0, 100);
@@ -553,17 +478,13 @@ class P2PService extends ChangeNotifier {
     if (handler != null) {
       handler(safeName, bytes);
     } else {
-      // No host save handler: persist + offer the OS share/save sheet so the
-      // file actually reaches the user (the PWA triggers a browser download).
+      // No host save handler: persist and offer the OS share sheet.
       unawaited(_saveDownload(safeName, bytes));
     }
     _system('File "${offer.name}" downloaded successfully');
   }
 
-  /// Writes [bytes] to a temp file and opens the OS share sheet so the user can
-  /// save it to Files/Downloads — the native stand-in for the PWA's blob
-  /// `a.download` (`completeFileTransfer`, p2p.js:586). Best-effort: a failure
-  /// only surfaces a system message, never throws.
+  /// Writes a temp file and opens the OS share sheet; failures only surface a system message.
   Future<void> _saveDownload(String filename, Uint8List bytes) async {
     try {
       final dir = await getTemporaryDirectory();
@@ -586,8 +507,6 @@ class P2PService extends ChangeNotifier {
     }
     _system(message);
   }
-
-  // --- offer/answer/ice handlers (seeder side answers) -----------------------
 
   Future<void> _handleOffer(
       String senderPubkey, Map<String, dynamic> data) async {
@@ -645,8 +564,7 @@ class P2PService extends ChangeNotifier {
     final conn = _connections['$senderPubkey-$transferId'];
     final c = data['candidate'];
     if (conn == null || c is! Map) return;
-    // p2p.js `handleP2PIceCandidate` requires a truthy candidate; drop the empty
-    // end-of-gathering marker.
+    // Drop the empty end-of-gathering marker.
     final candStr = c['candidate'] as String?;
     if (candStr == null || candStr.isEmpty) return;
     final candidate = RTCIceCandidate(
@@ -684,8 +602,6 @@ class P2PService extends ChangeNotifier {
       c.pc.close();
     } catch (_) {}
   }
-
-  // --- helpers ---------------------------------------------------------------
 
   void _updateStatus(String transferId, P2PStatus status, String message) {
     final t = _transfers[transferId];

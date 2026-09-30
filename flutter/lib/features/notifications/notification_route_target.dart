@@ -5,9 +5,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import 'notification_routing.dart';
 
-/// The live app's [NotificationRouteTarget]: opening a conversation is a
-/// channel switch, a PM open, or a group view switch — and, when the
-/// notification came from a thread, swapping that conversation to the thread.
+/// Opens the notified conversation and, for thread notifications, swaps it to the thread.
 class AppNotificationRouteTarget implements NotificationRouteTarget {
   const AppNotificationRouteTarget({
     required this.controller,
@@ -18,9 +16,7 @@ class AppNotificationRouteTarget implements NotificationRouteTarget {
   final NostrController controller;
   final AppStateNotifier appState;
 
-  /// Used to open a thread once its conversation is showing. Optional so a
-  /// caller with no container still routes conversations (thread taps then land
-  /// on the flat conversation, which is the pre-thread behavior).
+  /// Optional; without it thread taps land on the flat conversation.
   final ProviderContainer? container;
 
   @override
@@ -40,16 +36,7 @@ class AppNotificationRouteTarget implements NotificationRouteTarget {
   }
 }
 
-/// Swaps the just-opened conversation to the thread rooted at [threadRoot].
-///
-/// The conversation open that precedes this sets the current view, so that view
-/// IS the thread's conversation. Applied immediately AND post-frame, exactly
-/// like `openMessageThread`: a view switch can fire listeners that clear the
-/// active thread, and setting it in both orders wins either race.
-///
-/// Takes the container rather than a `WidgetRef` because the caller may pop its
-/// route first — the bell modal does — and reading through a disposed ref
-/// throws before the post-frame pass ever runs.
+/// Set immediately and post-frame to win the race with view-switch listeners; takes a container since the ref may be disposed.
 void openNotificationThread(ProviderContainer container, String threadRoot) {
   if (!appThreadsEnabled || threadRoot.isEmpty) return;
   final threads = container.read(activeThreadProvider.notifier);

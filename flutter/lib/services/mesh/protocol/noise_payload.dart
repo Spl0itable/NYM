@@ -3,9 +3,7 @@ import 'dart:typed_data';
 
 import 'mesh_message_type.dart';
 
-/// The decrypted plaintext carried inside a [MeshMessageType.noiseEncrypted]
-/// packet — a `[type:1][data]` envelope, byte-for-byte compatible with bitchat's
-/// `NoisePayload`. [type] is a [NoisePayloadType] value.
+/// Decrypted `[type:1][data]` envelope of a noiseEncrypted packet, compatible with bitchat's `NoisePayload`.
 class NoisePayload {
   NoisePayload(this.type, this.data);
 
@@ -28,27 +26,18 @@ class NoisePayload {
     return NoisePayload(type, data);
   }
 
-  /// A delivery acknowledgment for [messageID] — over the mesh the payload is
-  /// simply the UTF-8 message id (bitchat `.delivered`).
+  /// Delivery ack whose payload is the UTF-8 message id (bitchat `.delivered`).
   static NoisePayload delivered(String messageID) => NoisePayload(
       NoisePayloadType.delivered, Uint8List.fromList(utf8.encode(messageID)));
 
-  /// A read receipt for [messageID] — payload is the UTF-8 message id
-  /// (bitchat `.readReceipt`).
+  /// Read receipt whose payload is the UTF-8 message id (bitchat `.readReceipt`).
   static NoisePayload readReceipt(String messageID) => NoisePayload(
       NoisePayloadType.readReceipt, Uint8List.fromList(utf8.encode(messageID)));
 
-  /// The UTF-8 message id from a receipt payload ([delivered]/[readReceipt]).
   String receiptMessageId() => utf8.decode(data, allowMalformed: true);
 }
 
-/// A private text message — the TLV body of a [NoisePayloadType.privateMessage]
-/// payload. Byte-for-byte compatible with bitchat's `PrivateMessagePacket`.
-///
-/// TLV: `MESSAGE_ID(0x00)` then `CONTENT(0x01)`, each `type:1 | length:1 | value`
-/// with UTF-8 values. The single-byte length caps each field at 255 bytes; the
-/// mesh send path chunks longer text into multiple packets (see
-/// [maxContentBytes]).
+/// bitchat `PrivateMessagePacket` TLV: `MESSAGE_ID(0x00)`, `CONTENT(0x01)`, each with a 1-byte length.
 class PrivateMessagePacket {
   PrivateMessagePacket({required this.messageID, required this.content});
 
@@ -58,11 +47,10 @@ class PrivateMessagePacket {
   static const int _tlvMessageId = 0x00;
   static const int _tlvContent = 0x01;
 
-  /// Max UTF-8 content bytes that fit a single packet (1-byte TLV length).
+  /// Max UTF-8 content bytes per packet (1-byte TLV length).
   static const int maxContentBytes = 255;
 
-  /// Encodes the TLV. Returns null if either field exceeds 255 UTF-8 bytes,
-  /// matching bitchat — callers must pre-chunk long content.
+  /// Returns null when a field exceeds 255 UTF-8 bytes, as bitchat does; callers pre-chunk.
   Uint8List? encode() {
     final idBytes = utf8.encode(messageID);
     final contentBytes = utf8.encode(content);
@@ -96,7 +84,7 @@ class PrivateMessagePacket {
           content = utf8.decode(value, allowMalformed: true);
           break;
         default:
-          // Unknown TLV type — bitchat rejects the packet.
+          // Unknown TLV type: bitchat rejects the packet.
           return null;
       }
     }

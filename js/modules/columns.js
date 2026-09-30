@@ -1,15 +1,6 @@
-// columns.js - Optional multi-column chat view
-
 Object.assign(NYM.prototype, {
 
-    // A channel's identity across the app is `geohash || channel`, and its
-    // message store key is `#geohash` when it has one. A saved column desc can
-    // carry a stale half of that pair — {channel:'nymchat', geohash:''} for a
-    // channel every other surface registers as geohash 'nymchat' — and the
-    // column then keys on 'nymchat' while its messages store under '#nymchat':
-    // the column renders nothing, no message ever routes to it, and the sidebar
-    // row never lights up. Reconcile the desc against whatever already knows
-    // the real pair before the key is derived from it.
+    // A channel's identity is `geohash || channel`; repair saved descs carrying a stale half of that pair.
     _cvNormaliseDesc(desc) {
         if (!desc || desc.type !== 'channel') return desc;
         const id = desc.geohash || desc.channel;
@@ -19,9 +10,7 @@ Object.assign(NYM.prototype, {
             return { ...desc, channel: reg.channel, geohash: reg.geohash || '' };
         }
         if (reg) return desc;
-        // Not registered yet (columns can activate before the sidebar fills):
-        // the sidebar row shipped in the page, and a stored `#id` history, both
-        // prove the channel is the geohash-keyed kind.
+        // The shipped sidebar row or a stored `#id` history proves an unregistered channel is geohash-keyed.
         if (!desc.geohash) {
             const item = typeof document !== 'undefined'
                 ? document.querySelector(`.channel-item[data-geohash="${id}"]`) : null;
@@ -50,9 +39,7 @@ Object.assign(NYM.prototype, {
         return this._cvColumns.find(c => c.key === key) || null;
     },
 
-    // True when the conversation's column is the selected (focused) one, in view
-    // and pinned to the newest message; only then do we clear its unread badge so
-    // unopened/unfocused columns keep their sidebar and notification counts.
+    // Only the focused, pinned-to-bottom column clears its unread badge.
     _cvMarkColumnRead(key) {
         const col = this._cvColumnForKey(key);
         if (!this._cvActive || !col || !col.listEl) return false;
@@ -76,7 +63,6 @@ Object.assign(NYM.prototype, {
         else this._cvDisable();
     },
 
-    // Fill the static placeholder column frames
     _renderColumnSkeletons() {
         const strip = document.getElementById('columnsStrip');
         if (!strip || this._cvActive) return;
@@ -91,20 +77,13 @@ Object.assign(NYM.prototype, {
         this._cvColumns = this._cvColumns || [];
         this._cvKeyToList = this._cvKeyToList || new Map();
         this._cvBuildStrip();
-        // Replace any boot placeholder columns with the real ones.
         if (this._cvStrip) this._cvStrip.querySelectorAll('.cv-skeleton-col').forEach(el => el.remove());
         document.body.classList.add('columns-mode');
         this._cvActive = true;
-        // Clear the (now hidden) single-view container so its stale message
-        // nodes don't trip the global dedupe and leave columns empty.
+        // Clear the hidden single-view container so its stale nodes don't trip the global dedupe.
         const mc = document.getElementById('messagesContainer');
         if (mc) { mc.innerHTML = ''; mc.dataset.lastChannel = ''; }
-        // Seeding touches the channel registry, the relays and the D1 archive.
-        // Anything it throws must not cost the columns their first paint and
-        // their focus: an unpainted column stays empty for the whole session
-        // (nothing re-renders it), and an unfocused one leaves currentChannel
-        // pointing at whatever the boot last set, so the composer, the header
-        // and the sidebar highlight all name a different conversation.
+        // Seeding errors must not cost the columns their first paint and focus.
         try {
             this._cvSeedIfNeeded();
         } catch (e) {
@@ -117,27 +96,21 @@ Object.assign(NYM.prototype, {
         const first = this._cvColumns[0];
         if (first) this._cvFocusColumn(first.id);
         this._cvRebuildHeaderDots();
-        // The store is still filling at this point — cache hydration may not
-        // have finished, and the D1 archive has only just been asked for. Two
-        // settle passes catch whatever lands after this first paint.
+        // The store is still filling here, so two settle passes catch late arrivals.
         this._cvScheduleReconcile(600);
         setTimeout(() => this._cvScheduleReconcile(0), 2500);
     },
 
     _cvDisable() {
-        // Always clear the layout class — theme-init may have applied it at boot
-        // to avoid a flash, even before columns were ever activated.
+        // Always clear the layout class; theme-init may have applied it at boot.
         document.body.classList.remove('columns-mode');
-        // Drop boot placeholder columns if we never activated real ones.
         const strip0 = document.getElementById('columnsStrip');
         if (strip0) strip0.querySelectorAll('.cv-skeleton-col').forEach(el => el.remove());
         this._cvCancelPendingRender();
         if (!this._cvActive) return;
         const focused = this._cvColumns.find(c => c.id === this._cvFocusedId) || this._cvColumns[0];
         this._cvActive = false;
-        // Tear down in-memory column state (but keep the saved layout) so a later
-        // re-enable rebuilds the same columns from storage instead of reusing
-        // stale objects whose DOM was removed with the strip.
+        // Keep the saved layout so a re-enable rebuilds from storage rather than stale objects.
         for (const c of (this._cvColumns || [])) { if (c._observer) c._observer.disconnect(); }
         if (this._cvTabsOverlay) { this._cvTabsOverlay.remove(); this._cvTabsOverlay = null; }
         if (this._cvPager) { this._cvPager.remove(); this._cvPager = null; }
@@ -147,14 +120,12 @@ Object.assign(NYM.prototype, {
         this._cvSeeded = false;
         this._cvPrimaryId = null;
         this._cvFocusedId = null;
-        // Reset active-conversation state so the reopened conversation does a
-        // full render instead of being skipped as "already current".
+        // Reset so the reopened conversation fully renders instead of being skipped as current.
         this.inPMMode = false;
         this.currentChannel = null; this.currentGeohash = null;
         this.currentPM = null; this.currentGroup = null;
         const mc = document.getElementById('messagesContainer');
         if (mc) mc.dataset.lastChannel = '';
-        // Restore the single view by reopening the previously focused conversation
         if (focused) this._cvOpenInSingleView(focused);
         else this.switchChannel('nymchat', 'nymchat');
     },
@@ -169,9 +140,7 @@ Object.assign(NYM.prototype, {
         const anchor = document.getElementById('messagesScroller');
         if (!anchor || this._cvStrip) return;
 
-        // Reuse the skeleton strip shipped in the HTML (present at first paint so
-        // the column frame doesn't flash in); fall back to creating one after a
-        // disable/enable cycle removed it.
+        // Reuse the skeleton strip shipped in the HTML; recreate it after a disable/enable cycle.
         let strip = document.getElementById('columnsStrip');
         if (!strip) {
             strip = document.createElement('div');
@@ -197,8 +166,6 @@ Object.assign(NYM.prototype, {
             this._cvPager = pager;
         }
 
-        // Message swipe / double-click reply work inside every column via
-        // delegation on the strip.
         this.setupSwipeToReply(strip);
         this.setupDoubleClickToReply(strip);
 
@@ -233,14 +200,7 @@ Object.assign(NYM.prototype, {
             this._cvColumns = [];
             for (const d of saved) this.cvAddColumn(d, { render: false, save: false, focus: false });
             this._cvSeeded = true;
-            // Deliberately NOT saving here. _cvSaveLayout reaches
-            // nostrSettingsSave, and seeding runs inside _cvEnable during boot,
-            // before the synced settings have necessarily loaded — writing from
-            // here would publish a layout built from whatever is in memory at
-            // that moment, and anything it threw would abort _cvEnable before
-            // it painted or focused a single column. The in-memory repair is
-            // what makes the columns work; the stored copy is rewritten by the
-            // next ordinary layout change.
+            // Deliberately not saving here: this runs during boot before synced settings may have loaded.
         }
     },
 
@@ -284,7 +244,6 @@ Object.assign(NYM.prototype, {
         if (focus) this._cvFocusColumn(col.id);
     },
 
-    // Confirm before removing a column, with an opt-out the user can persist.
     cvRequestRemoveColumn(id) {
         const col = this._cvColumns.find(c => c.id === id);
         if (!col) return;
@@ -322,10 +281,7 @@ Object.assign(NYM.prototype, {
         this._cvRebuildHeaderDots();
     },
 
-    // Central entry point for opening a conversation in column view. Existing
-    // column -> focus it; channel with a live primary column -> navigate that
-    // column; otherwise add a new column. Mirrors single-view nav history so
-    // the back/forward buttons drive column navigation too.
+    // Mirrors single-view nav history so back/forward drive column navigation too.
     _cvOpenConversation(desc, opts = {}) {
         desc = this._cvNormaliseDesc(desc);
         const key = this._cvColKey(desc);
@@ -362,7 +318,6 @@ Object.assign(NYM.prototype, {
         if (idx >= 0) this._cvScrollToIndex(idx);
     },
 
-    // Focus and reveal an existing column.
     _cvSwitchToColumn(id) {
         const col = this._cvColumns.find(c => c.id === id);
         if (!col) return;
@@ -373,7 +328,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Step the visible column one slot left/right.
     _cvStepFocused(dir) {
         const idx = this._cvColumns.findIndex(c => c.id === this._cvFocusedId);
         if (idx < 0) return;
@@ -382,7 +336,6 @@ Object.assign(NYM.prototype, {
         this._cvSwitchToColumn(this._cvColumns[to].id);
     },
 
-    // Repurpose an existing column to show a different conversation in place.
     _cvNavigateColumn(col, desc) {
         desc = this._cvNormaliseDesc(desc);
         this._cvKeyToList.delete(col.key);
@@ -401,7 +354,6 @@ Object.assign(NYM.prototype, {
         this._cvSaveLayout();
     },
 
-    // Move a column one slot left/right (mobile reorder, no drag).
     _cvMoveColumn(id, dir) {
         const from = this._cvColumns.findIndex(c => c.id === id);
         if (from < 0) return;
@@ -416,7 +368,6 @@ Object.assign(NYM.prototype, {
         this._cvScrollToCol(moved);
     },
 
-    // Reset columns back to the seeded defaults.
     cvResetColumns() {
         try { localStorage.removeItem('nym_columns_layout'); } catch (_) { }
         this.columnsLayout = [];
@@ -494,8 +445,6 @@ Object.assign(NYM.prototype, {
         this._cvAttachDnd(col);
     },
 
-    // Pin a column to the latest message when new ones arrive and the user is
-    // already at the bottom (mirrors single-view autoscroll, per column).
     _cvAttachAutoScroll(col) {
         if (typeof MutationObserver === 'undefined') return;
         let pending = false;
@@ -563,12 +512,7 @@ Object.assign(NYM.prototype, {
         return `${title}<span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
     },
 
-    // Repaint column headers (and the mobile tab rows) after the data a title
-    // is derived from changes — a kind 0 profile landing for a PM peer, a group
-    // rename. A column's title is otherwise composed once when the column is
-    // built and only recomposed on navigate, so a PM column opened before its
-    // peer's profile arrived kept the placeholder nym for the whole session.
-    // Pass a [pubkey] to limit the repaint to that peer's columns.
+    // A column title is otherwise composed only at build/navigate; pass [pubkey] to limit to that peer.
     _cvRefreshColumnTitles(pubkey) {
         if (!this._cvActive || !Array.isArray(this._cvColumns)) return;
         for (const col of this._cvColumns) {
@@ -579,24 +523,12 @@ Object.assign(NYM.prototype, {
             const html = this._cvColTitleHtml(col);
             if (titleEl.innerHTML !== html) titleEl.innerHTML = html;
         }
-        // The mobile tab sheet carries the same titles; it reconciles rather
-        // than rebuilds, so this is cheap and keeps the two in step.
         if (this._cvTabsOverlay && this._cvTabsOverlay.classList.contains('active')) {
             this._cvBuildTabsRows();
         }
     },
 
-    // A column is painted once, when it is built, and then only ever appended to
-    // by displayMessage. Anything that fills the store WITHOUT going through
-    // displayMessage leaves it behind with no second chance — the IndexedDB
-    // hydration merge writes straight into `this.messages`, and a D1 archive
-    // replay whose event ids are already in the boot-restored dedup sets is
-    // dropped before it reaches the render path at all. Either one lands a
-    // reloaded column showing only the handful of genuinely new events that
-    // arrived after it was built, while single view (which re-renders from the
-    // store on every open) shows the whole history. Reconciling closes that
-    // gap wherever the race lands, instead of relying on one repaint firing at
-    // exactly the right moment.
+    // Columns are painted once then only appended to, so store fills that bypass displayMessage need reconciling.
     _cvColumnBehind(col) {
         if (!col || !col.listEl) return false;
         const isPM = col.type !== 'channel';
@@ -606,22 +538,16 @@ Object.assign(NYM.prototype, {
         const pageSize = isPM ? this.pmPageSize : this.channelPageSize;
         const expected = Math.min(store.length, pageSize);
         const rows = col.listEl.querySelectorAll('.message[data-message-id]');
-        // Short of what the store can fill: always behind, whatever the user is
-        // looking at — this is the empty/stub column case.
         if (rows.length < expected) return true;
         if (!rows.length || !store.length) return false;
-        // Same count but a different newest message: the store gained history
-        // the column never saw. Only repaint when the column is pinned to the
-        // bottom, so reconciling never yanks a column the user is reading.
+        // Only repaint when pinned to the bottom so reconciling never yanks a column the user is reading.
         if (col._atBottom === false) return false;
         const newest = store[store.length - 1];
         const newestId = (newest.isPM && newest.nymMessageId) ? newest.nymMessageId : newest.id;
         return rows[rows.length - 1].dataset.messageId !== newestId;
     },
 
-    // Repaint every column whose DOM no longer matches its store. Idempotent
-    // and cheap when nothing has changed, so it is safe to call from any of the
-    // points where the store may have been filled behind the view's back.
+    // Idempotent and cheap when nothing changed.
     _cvReconcileColumns() {
         if (!this._cvActive || !Array.isArray(this._cvColumns)) return;
         for (const col of this._cvColumns) {
@@ -631,8 +557,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Coalesce reconcile requests from the several callers that can fire in a
-    // burst during boot (per-key hydration merges, a D1 restore finishing).
+    // Coalesce bursts of reconcile requests during boot.
     _cvScheduleReconcile(delay = 150) {
         if (!this._cvActive) return;
         if (this._cvReconcileTimer) clearTimeout(this._cvReconcileTimer);
@@ -651,7 +576,6 @@ Object.assign(NYM.prototype, {
         this._cvMarkColumnRead(col.key);
     },
 
-    // Renders the focused column immediately, then the rest one per frame.
     _cvRenderAll() {
         this._cvCancelPendingRender();
         const cols = [...this._cvColumns];
@@ -665,7 +589,6 @@ Object.assign(NYM.prototype, {
             this._cvRenderRAF = null;
             if (!this._cvActive || i >= cols.length) return;
             const col = cols[i++];
-            // The column may have been closed while we were yielding.
             if (this._cvColumns.indexOf(col) !== -1) this._cvRenderColumn(col);
             this._cvRenderRAF = requestAnimationFrame(step);
         };
@@ -704,8 +627,7 @@ Object.assign(NYM.prototype, {
     _cvFocusColumn(id) {
         const col = this._cvColumns.find(c => c.id === id);
         if (!col) return;
-        // Focusing a different conversation exits an open thread view (its
-        // column gets its conversation back) so the composer never mis-threads.
+        // Focusing another conversation exits an open thread view so the composer never mis-threads.
         if (typeof this._threadOnColumnFocus === 'function') this._threadOnColumnFocus(col.key);
         this._cvFocusedId = id;
         for (const c of this._cvColumns) c.el && c.el.classList.toggle('focused', c.id === id);
@@ -735,14 +657,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Mirror the single-view sidebar active highlight onto the focused column.
     _cvUpdateSidebarActive(col) {
         const channelItems = document.querySelectorAll('.channel-item');
         const pmItems = document.querySelectorAll('.pm-item');
         if (col.type === 'channel') {
-            // Match on `geohash || channel` — the identity addChannel keys the
-            // sidebar on. Requiring BOTH halves to line up meant one stale half
-            // in a column desc silently dropped the highlight.
+            // Match on `geohash || channel`, the identity addChannel keys the sidebar on.
             const colId = col.geohash || col.channel;
             channelItems.forEach(i => i.classList.toggle('active', (i.dataset.geohash || i.dataset.channel) === colId));
             pmItems.forEach(i => i.classList.remove('active'));
@@ -772,7 +691,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Mirror the single-view header for the focused column's conversation type.
     _cvSetComposeHeader(col) {
         if (col.type === 'channel') {
             this._renderChannelTitle(col.channel, col.geohash || '');
@@ -828,7 +746,6 @@ Object.assign(NYM.prototype, {
         }, { passive: true });
     },
 
-    // Desktop column reordering via a custom pointer drag
     _cvAttachDnd(col) {
         const header = col.headerEl;
         header.addEventListener('mousedown', (e) => {
@@ -856,9 +773,7 @@ Object.assign(NYM.prototype, {
                 ghost.classList.add('cv-drag-ghost');
                 const gl = ghost.querySelector('.cv-list');
                 if (gl && col.scrollerEl) {
-                    // Keep only the messages visible in the column at grab time so
-                    // the clone mirrors what you see without cloning the whole
-                    // scrollback.
+                    // Clone only the visible messages rather than the whole scrollback.
                     const scRect = col.scrollerEl.getBoundingClientRect();
                     const ghostKids = Array.from(gl.children);
                     Array.from(col.listEl.children).forEach((k, i) => {
@@ -896,7 +811,6 @@ Object.assign(NYM.prototype, {
         document.addEventListener('mouseup', onUp);
     },
 
-    // Add-column picker (a column-shaped panel inside the strip)
     _cvOpenAddColumn() {
         if (this._cvStrip.querySelector('.cv-picker')) return;
         const panel = document.createElement('div');
@@ -971,10 +885,6 @@ Object.assign(NYM.prototype, {
         return out;
     },
 
-    // Mobile pager (snap-scroll, one column per screen)
-    // Position dots shown in each column header (mobile, in place of the title).
-    // Each column highlights its own slot so the visible column shows where it
-    // sits in the order; tapping the dots opens the tabs view.
     _cvRebuildHeaderDots() {
         const n = this._cvColumns.length;
         this._cvColumns.forEach((col, idx) => {
@@ -987,8 +897,6 @@ Object.assign(NYM.prototype, {
         this._cvRebuildPager();
     },
 
-    // Desktop pager (centered, above the strip); the whole cluster opens the
-    // tabs view. Hidden when a single column makes it pointless.
     _cvRebuildPager() {
         const pager = this._cvPager;
         if (!pager) return;
@@ -1000,7 +908,6 @@ Object.assign(NYM.prototype, {
         pager.classList.add('show');
     },
 
-    // Built once and reused; opening refreshes rows and toggles visibility.
     _cvOpenTabsView() {
         const overlay = this._cvTabsOverlay || this._cvBuildTabsView();
         this._cvBuildTabsRows();
@@ -1045,9 +952,7 @@ Object.assign(NYM.prototype, {
         return overlay;
     },
 
-    // Reconcile rows against the current columns so reused rows keep their
-    // avatar <img> (no reload) while opening the sheet; only new columns build
-    // fresh icons and removed columns drop out.
+    // Reconcile rows so reused ones keep their avatar <img> without reloading.
     _cvBuildTabsRows() {
         const listEl = this._cvTabsOverlay && this._cvTabsOverlay.querySelector('.cv-tabs-list');
         if (!listEl) return;
@@ -1135,9 +1040,7 @@ Object.assign(NYM.prototype, {
             this._cvStrip.scrollLeft = idx * this._cvStrip.clientWidth;
             return;
         }
-        // Desktop: columns sit side by side, so only scroll when the target is
-        // partly off-screen (keeps the strip's edge padding) — never nudge a
-        // column that's already fully visible.
+        // Desktop: only scroll when the target is partly off-screen, never nudge a fully visible column.
         const strip = this._cvStrip;
         const cr = col.el.getBoundingClientRect();
         const sr = strip.getBoundingClientRect();
@@ -1149,7 +1052,6 @@ Object.assign(NYM.prototype, {
         if (this._cvStrip) this._cvStrip.scrollTo({ left: this._cvStrip.scrollWidth, behavior: 'smooth' });
     },
 
-    // Persistence
     _cvDescForSave(col) {
         if (col.type === 'channel') return { type: 'channel', channel: col.channel, geohash: col.geohash || '' };
         if (col.type === 'pm') return { type: 'pm', pubkey: col.pubkey, nym: col.nym };

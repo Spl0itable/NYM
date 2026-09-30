@@ -1,13 +1,8 @@
-// call_signaling.dart - Pure, plugin-free signaling logic for WebRTC calls.
-//
-// Mirrors `../js/modules/calls.js` message shapes exactly. Everything here is
-// side-effect free so it can be unit-tested without flutter_webrtc, media
-// permissions or a relay. The CallService composes these with the actual
-// RTCPeerConnection plumbing.
+// Pure, plugin-free call signaling logic matching the PWA's message shapes.
 
 import 'dart:math';
 
-/// Call media kind. calls.js only ever uses the strings `'audio'` / `'video'`.
+/// Call media kind; the wire only uses `'audio'` / `'video'`.
 enum CallKind {
   audio,
   video;
@@ -18,22 +13,10 @@ enum CallKind {
       v == 'video' ? CallKind.video : CallKind.audio;
 }
 
-/// High-level call lifecycle exposed to the UI via `callStateProvider`.
-///
-/// - [idle]: no call.
-/// - [ringing]: we placed an outgoing call, waiting for the peer (calls.js
-///   `activeCall.status === 'outgoing'`).
-/// - [incoming]: an inbound invite is being presented (calls.js
-///   `incomingCall`).
-/// - [connecting]: accepted / answered, negotiating peers (calls.js
-///   `activeCall.status === 'connecting'`).
-/// - [active]: at least one peer connected (calls.js
-///   `activeCall.status === 'active'`).
-/// - [ended]: terminal — collapses back to [idle] for the next call.
+/// Call lifecycle for the UI; [ended] collapses back to [idle] for the next call.
 enum CallPhase { idle, ringing, incoming, connecting, active, ended }
 
-/// calls.js `_genCallId()`:
-///   'call-' + Math.random().toString(36).slice(2) + Date.now().toString(36)
+/// `'call-' + base36 random + base36 Date.now()`, like the PWA.
 String genCallId([Random? rng]) {
   final r = rng ?? Random();
   // 11 base36 chars approximates JS `Math.random().toString(36).slice(2)`.
@@ -45,22 +28,15 @@ String genCallId([Random? rng]) {
   return 'call-$buf$t';
 }
 
-/// Ring / incoming timeout — calls.js uses 45000ms on both the outgoing
-/// ringTimeout and the incomingCall.timeout.
+/// Timeout for both outgoing ringing and incoming invites.
 const Duration kCallRingTimeout = Duration(seconds: 45);
 
-/// Glare guard. calls.js `_connectToPeer`:
-///   `if (this.pubkey < peerPubkey) this._makeOffer(peerPubkey);`
-/// i.e. the lexicographically-smaller pubkey is the offerer for that pair.
+/// Glare guard: the lexicographically smaller pubkey offers for each pair.
 bool isOfferer({required String selfPubkey, required String peerPubkey}) {
   return selfPubkey.compareTo(peerPubkey) < 0;
 }
 
-/// `acceptCalls` preference gate, mirroring calls.js `_onCallInvite`:
-///   pref 'disabled' -> never ring
-///   pref 'friends'  -> ring only if the caller is a friend
-///   pref 'enabled'  -> always ring
-/// [isFriend] is supplied by the host (engine `isFriend`).
+/// `acceptCalls` gate: 'disabled' never rings, 'friends' only for friends, 'enabled' always.
 bool shouldRingForInvite({
   required String acceptCalls,
   required bool isFriend,
@@ -70,15 +46,10 @@ bool shouldRingForInvite({
   return true;
 }
 
-/// Builders for the signaling payloads that ride inside a kind-25053 rumor's
-/// `content`. Each returns the exact JSON shape calls.js emits (the engine's
-/// `sendCallSignal` adds nothing but the `nym` field at send time — calls.js
-/// merges `{ ...payload, nym }` in `_sendCallSignal`; we let the caller attach
-/// `nym` so these stay pure and comparable in tests).
+/// Payload builders for kind-25053 rumor content; the caller attaches `nym` at send.
 class CallSignal {
   CallSignal._();
 
-  /// `{ type:'invite', callId, kind, isGroup, groupId, members }`
   static Map<String, dynamic> invite({
     required String callId,
     required CallKind kind,
@@ -95,23 +66,19 @@ class CallSignal {
         'members': members,
       };
 
-  /// `{ type:'accept', callId }`
   static Map<String, dynamic> accept(String callId) =>
       {'type': 'accept', 'callId': callId};
 
-  /// `{ type:'reject', callId, reason }` — reason ∈ busy|declined|media.
+  /// Reason is busy, declined or media.
   static Map<String, dynamic> reject(String callId, String reason) =>
       {'type': 'reject', 'callId': callId, 'reason': reason};
 
-  /// `{ type:'cancel', callId }`
   static Map<String, dynamic> cancel(String callId) =>
       {'type': 'cancel', 'callId': callId};
 
-  /// `{ type:'hangup', callId }`
   static Map<String, dynamic> hangup(String callId) =>
       {'type': 'hangup', 'callId': callId};
 
-  /// `{ type:'offer', callId, sdp:{ type, sdp } }`
   static Map<String, dynamic> offer({
     required String callId,
     required String sdpType,
@@ -123,7 +90,6 @@ class CallSignal {
         'sdp': {'type': sdpType, 'sdp': sdp},
       };
 
-  /// `{ type:'answer', callId, sdp:{ type, sdp } }`
   static Map<String, dynamic> answer({
     required String callId,
     required String sdpType,
@@ -135,7 +101,6 @@ class CallSignal {
         'sdp': {'type': sdpType, 'sdp': sdp},
       };
 
-  /// `{ type:'ice', callId, candidate:{ candidate, sdpMid, sdpMLineIndex } }`
   static Map<String, dynamic> ice({
     required String callId,
     required String candidate,
@@ -152,16 +117,11 @@ class CallSignal {
         },
       };
 
-  /// `{ type:'share', callId, on }`
   static Map<String, dynamic> share(
           {required String callId, required bool on}) =>
       {'type': 'share', 'callId': callId, 'on': on};
 
-  /// `{ type:'reaction', callId, emoji }`, plus an optional `emojiTags` array of
-  /// `['emoji', code, url]` tuples when [emoji] is a custom `:shortcode:` whose
-  /// pack the receiver may not have. calls.js `sendCallReaction` (1149-1160):
-  /// `const tags = customEmojiTagsForContent(emoji); if (tags.length)
-  /// payload.emojiTags = tags;` — the field is omitted entirely when empty.
+  /// Adds `emojiTags` only for a custom `:shortcode:` the receiver may lack; omitted when empty.
   static Map<String, dynamic> reaction({
     required String callId,
     required String emoji,
@@ -174,7 +134,6 @@ class CallSignal {
         if (emojiTags != null && emojiTags.isNotEmpty) 'emojiTags': emojiTags,
       };
 
-  /// `{ type:'chat', callId, text, mid }`
   static Map<String, dynamic> chat({
     required String callId,
     required String text,
@@ -183,15 +142,12 @@ class CallSignal {
       {
         'type': 'chat',
         'callId': callId,
-        // calls.js slices outbound chat to 2000 chars.
+        // Outbound chat is capped at 2000 chars.
         'text': text.length > 2000 ? text.substring(0, 2000) : text,
         'mid': mid,
       };
 
-  /// `{ type:'chat-reaction', callId, mid, emoji, op }` (op ∈ add|remove), plus
-  /// an optional `emojiTags` array when [emoji] is a custom `:shortcode:`. calls.js
-  /// `_toggleCallChatReaction` (1644-1646) attaches `customEmojiTagsForContent(emoji)`
-  /// the same way the fly-reaction does, omitting the field when empty.
+  /// op is add or remove; `emojiTags` as in [reaction].
   static Map<String, dynamic> chatReaction({
     required String callId,
     required String mid,
@@ -208,27 +164,22 @@ class CallSignal {
         if (emojiTags != null && emojiTags.isNotEmpty) 'emojiTags': emojiTags,
       };
 
-  /// `{ type:'chat-typing', callId, status }` (status ∈ start|stop).
-  /// calls.js `_sendCallTypingSignal` (1246).
+  /// status is start or stop.
   static Map<String, dynamic> chatTyping({
     required String callId,
     required String status,
   }) =>
       {'type': 'chat-typing', 'callId': callId, 'status': status};
 
-  /// `{ type:'chat-read', callId, mid }`. calls.js `_sendCallChatRead` (1324).
   static Map<String, dynamic> chatRead({
     required String callId,
     required String mid,
   }) =>
       {'type': 'chat-read', 'callId': callId, 'mid': mid};
 
-  /// `{ type:'present-request', callId }`. calls.js `requestToPresent` (1038).
   static Map<String, dynamic> presentRequest(String callId) =>
       {'type': 'present-request', 'callId': callId};
 
-  /// `{ type:'present-state', callId, restricted, presenter }`.
-  /// calls.js `_broadcastPresentState` (1055).
   static Map<String, dynamic> presentState({
     required String callId,
     required bool restricted,
@@ -242,7 +193,7 @@ class CallSignal {
       };
 }
 
-/// The 8 default reaction-bar emoji (calls.js `_callReactionDefaults`, 1102).
+/// The 8 default reaction-bar emoji.
 const List<String> kCallReactionDefaults = [
   '👍',
   '❤️',
@@ -254,12 +205,7 @@ const List<String> kCallReactionDefaults = [
   '🔥'
 ];
 
-/// Builds the call reactions-bar emoji list: recents-first, padded with the 8
-/// defaults, deduped, custom `:code:` shortcodes whose pack is unknown dropped,
-/// capped at 8. Mirrors `_callReactionBarEmojis` (calls.js 1106-1118).
-///
-/// [isKnownCustom] decides whether a `:shortcode:` token's pack is still
-/// available; unicode emoji are always kept.
+/// Recents first, padded with defaults, deduped, unknown custom packs dropped, capped at 8.
 List<String> callReactionBarEmojis(
   List<String> recents, {
   bool Function(String code)? isKnownCustom,

@@ -13,17 +13,7 @@ import '../api/api_config.dart';
 import '../nostr/event_signer.dart';
 import 'attest_badge.dart';
 
-/// Enrolls this identity with `/api/attest` and keeps the badge it gets back.
-///
-/// The platform proof is the whole point. Apple App Attest and Google Play
-/// Integrity each return something their own root signs, covering the app's
-/// identity and the device's state, over a challenge the server chose — which
-/// a repackaged build, an emulator harness or a script cannot produce. The
-/// badge the server returns in exchange is what other clients verify.
-///
-/// This mirrors `ensureAttestBadge` in nym-staging's `js/modules/attest.js`,
-/// minus the web tier: a native install always has a real proof to offer, so
-/// it never enrolls at `origin`.
+/// Enrolls with `/api/attest` via App Attest or Play Integrity and keeps the returned badge.
 class AttestService {
   AttestService({
     required KeyValueStore kv,
@@ -37,9 +27,7 @@ class AttestService {
         _host = host ?? ApiConfig.apiHost,
         _platform = platform ?? Platform.operatingSystem;
 
-  /// The tier the server named, defaulting to the weakest reading. An
-  /// unknown name is a server newer than this build, and treating it as
-  /// `attested` on a guess is the one wrong answer.
+  /// Unknown tier names fall back to the weakest tier, never `attested`.
   static AttestTier _tierFromName(String? name) {
     switch (name) {
       case 'attested':
@@ -51,21 +39,14 @@ class AttestService {
     }
   }
 
-  /// Native side: `ios/Runner/AppAttestPlugin.swift` and
-  /// `android/app/src/main/kotlin/.../PlayIntegrityPlugin.kt`.
+  /// Native side: `AppAttestPlugin.swift` and `PlayIntegrityPlugin.kt`.
   static const String channelName = 'app.nymchat/attest';
 
-  /// Public key of the server's `ATTEST_AUTHORITY_SECRET`, as
-  /// npub1rfymj0vm6dtjvuujj27556phcj2va0qxuarmhphnx29pgy8ugq8s3l03yh.
-  /// Pinning it here is what stops a badge signed by anyone else from being
-  /// accepted; when it is empty the service falls back to the key the API
-  /// reports on first enrollment and remembers that, which is weaker (trust on
-  /// first use).
+  /// Pinned authority pubkey; when empty, the key from the first enrollment is trusted on first use.
   static const String pinnedAuthority =
       '1a49b93d9bd35726739292bd4a6837c494cebc06e747bb86f3328a1410fc400f';
 
-  /// Renew with this much of the term left, so a device that spends a while
-  /// offline still renews before peers stop trusting it.
+  /// Renew this early so a device offline for a while still renews before peers stop trusting it.
   static const Duration renewBefore = Duration(days: 7);
   static const Duration retryAfter = Duration(hours: 6);
 
@@ -87,8 +68,7 @@ class AttestService {
 
   Future<void>? get inFlight => _inFlight;
 
-  /// The badge to attach to outgoing channel messages, or null when this
-  /// install has not enrolled (or its enrollment lapsed).
+  /// The badge for outgoing channel messages, or null when not enrolled or lapsed.
   String? get badge => _badge;
   AttestTier? get tier => _tier;
 
@@ -97,15 +77,13 @@ class AttestService {
     return _kv.getString(StorageKeys.attestAuthority) ?? '';
   }
 
-  /// Tag list for [NostrService.publishChannelMessage].
   List<List<String>> tagsForEvent() => _badge == null
       ? const []
       : [
           [AttestBadge.tagName, _badge!]
         ];
 
-  /// Loads a stored badge for [pubkey] into memory. Returns true when one is
-  /// live; the caller still runs [ensureBadge] to renew a near-expired one.
+  /// Loads a stored badge for [pubkey]; true when live. Callers still run [ensureBadge] to renew.
   bool restore(String pubkey) {
     final raw = _kv.getString(StorageKeys.attestBadge);
     if (raw == null || raw.isEmpty) return false;
@@ -135,9 +113,7 @@ class AttestService {
     }
   }
 
-  /// Enrolls, or renews a badge nearing its end. Never throws: a failure just
-  /// leaves this install unbadged, which costs it visibility to peers running
-  /// the filter but does not stop it sending.
+  /// Enrolls or renews; never throws, since failure only leaves this install unbadged.
   Future<void> ensureBadge(EventSigner signer, {bool force = false}) {
     final existing = _inFlight;
     if (existing != null) return existing;
@@ -265,10 +241,7 @@ class AttestService {
     return body['challenge'] is String ? body : null;
   }
 
-  /// Asks the native side for a platform proof over [challenge]. Returns the
-  /// enrollment fields for this platform, or null when the device cannot
-  /// attest — an older OS, a device without the hardware, a Play Services gap.
-  /// Null enrolls nothing rather than falling back to a weaker claim.
+  /// Platform proof over [challenge], or null when the device cannot attest; never falls back to a weaker claim.
   Future<Map<String, dynamic>?> _platformProof(String challenge) async {
     try {
       final result = await _channel.invokeMapMethod<String, dynamic>(
@@ -301,11 +274,7 @@ class AttestService {
     }
   }
 
-  /// The build-proof enrollment: the web app's only path, and the fallback
-  /// for a native install that could not produce a platform proof. It still
-  /// names the platform it runs on — a phone that failed Play Integrity is
-  /// an Android install, not a browser — and says why the platform proof
-  /// was not accepted, so the server can record the reason.
+  /// Build-proof enrollment for the web app and failed native proofs; reports platform and failure reason.
   Future<Map<String, dynamic>?> _webProof(Map<String, dynamic> issued) async {
     final probe = issued['buildProbe'];
     if (probe is! List || probe.isEmpty) return null;
@@ -381,12 +350,7 @@ class EnrollRefused implements Exception {
   String toString() => describe();
 }
 
-/// Everyone whose badge this session has verified, and what it proved.
-///
-/// Remembered per pubkey rather than per message so a sender stays verified
-/// across messages that arrive without the tag — an older build of theirs, a
-/// mesh replay, an edit. `attested` never decays to `origin`: the same person
-/// on a phone and on the web is still that person.
+/// Verified badge tiers per pubkey, keeping the strongest seen so senders stay verified without the tag.
 class AttestRegistry {
   final Map<String, AttestTier> _tiers = <String, AttestTier>{};
   final Map<String, AttestTier?> _badgeCache = <String, AttestTier?>{};
@@ -396,16 +360,14 @@ class AttestRegistry {
 
   AttestTier? tierOf(String pubkey) => _tiers[pubkey];
 
-  /// Verifies the badge on [event] (if any) and records what it proves.
-  /// [now] is injectable so expiry is testable against a fixed badge.
+  /// Verifies the badge on [event], if any, and records what it proves.
   AttestTier? ingest(NostrEvent event, String authorityPubkey,
       {DateTime? now}) {
     if (authorityPubkey.length != 64) return null;
     final badge = AttestBadge.badgeFromTags(event.tags);
     if (badge == null) return null;
 
-    // Keyed by the authority too: before enrollment there is no key to verify
-    // against, and those misses must not outlive the moment one arrives.
+    // Keyed by authority too, so misses before enrollment don't outlive the key's arrival.
     final cacheKey = '$authorityPubkey|${event.pubkey}|$badge';
     final AttestTier? tier;
     if (_badgeCache.containsKey(cacheKey)) {
@@ -422,10 +384,7 @@ class AttestRegistry {
     }
     if (tier == null) return null;
 
-    // Keep the strongest tier ever seen for a key rather than the most recent.
-    // AttestTier is declared strongest first, so a lower index wins: the same
-    // person on a phone and on the web is still that person, and a challenged
-    // sender must not decay to origin either.
+    // Keep the strongest tier seen; AttestTier is declared strongest first, so a lower index wins.
     final prev = _tiers[event.pubkey];
     if (prev == null || tier.index < prev.index) {
       _tiers[event.pubkey] = tier;

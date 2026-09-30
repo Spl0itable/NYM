@@ -1,11 +1,8 @@
-// Shared D1 accessors for the Pages Functions and the NymLedger Durable Object
-
 export function hasD1(db) {
   return !!(db && typeof db.prepare === "function");
 }
 
-// Route a read at a read replica when replication is enabled. Falls back to the
-// primary transparently when the Sessions API or replication is unavailable.
+// Reads go to a replica when available, falling back to the primary transparently.
 export function replica(db) {
   if (db && typeof db.withSession === "function") {
     try { return db.withSession("first-unconstrained"); } catch (e) { return db; }
@@ -214,12 +211,7 @@ export async function botThreadDelete(db, pk) {
   try { await db.prepare("DELETE FROM botpm_thread WHERE pubkey = ?").bind(pk).run(); } catch (e) {}
 }
 
-// Created on first use rather than only by schema.sql: every other table the
-// bot needs is made lazily, and a deployment that had not re-run the migration
-// lost the cache silently — the missing table was caught, the read came back
-// empty, and every turn went to the relays as if nothing had been cached.
-// What the cache last did, so a failure is something that can be read rather
-// than guessed at. Per isolate, and tiny.
+// Created lazily since deployments may not have re-run schema.sql; last status kept per isolate for diagnostics.
 var botWrapsDiag = { ok: 0, repaired: 0, err: "" };
 
 export function botWrapsStatus() {
@@ -230,9 +222,7 @@ function noteWrapErr(e) {
   botWrapsDiag.err = String((e && e.message) || e || "").slice(0, 160);
 }
 
-// Every statement on its own, every one survivable. A table from an earlier
-// deploy is missing the scope columns; ALTER throws once they are there. None
-// of it may be allowed to decide that the cache is off for good.
+// Each statement is independently survivable; ALTER throws once the scope columns already exist.
 async function repairBotWraps(db) {
   botWrapsDiag.repaired++;
   var ddl = [
@@ -252,9 +242,7 @@ async function repairBotWraps(db) {
   }
 }
 
-// Returns `ok` as well as the rows, because "the store does not have it" and
-// "the store could not be asked" are different answers and only the second is
-// a reason to go near a relay.
+// Returns `ok` separately: "not stored" and "store unreachable" differ, and only the latter justifies a relay fetch.
 export async function botWrapsGet(db, pk, ids) {
   var out = {};
   if (!hasD1(db)) return { ok: false, rows: out };
@@ -265,8 +253,7 @@ export async function botWrapsGet(db, pk, ids) {
   try {
     rs = await db.prepare(sql).bind(pk, ...ids).all();
   } catch (e) {
-    // A table that is not there yet, or one without the scope columns. Both
-    // are repairable, and neither is a reason to stop having a cache.
+    // A missing table or missing scope columns is repairable and must not disable the cache.
     noteWrapErr(e);
     await repairBotWraps(db);
     try {
@@ -278,8 +265,7 @@ export async function botWrapsGet(db, pk, ids) {
   }
   for (var i = 0; i < ((rs && rs.results) || []).length; i++) {
     var row = rs.results[i];
-    // A row with no event is the memory of having looked: the wrap was not
-    // cached and no relay had it. Kept so it is not asked for forever.
+    // A row with no event records a miss (not cached, no relay had it) so it isn't re-requested forever.
     if (!row.json) {
       out[row.id] = { event: null, gone: true, misses: row.misses || 0, labelled: false };
       continue;
@@ -341,9 +327,7 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
   }
 }
 
-// A wrap that is in the thread, is not cached, and that no relay will hand
-// over. Counted rather than dropped outright, so one bad fetch does not lose a
-// turn of context that was really there.
+// Counted rather than dropped outright, so one bad fetch doesn't lose real thread context.
 export async function botWrapsMiss(db, pk, ids) {
   if (!hasD1(db) || !ids || !ids.length) return;
   var now = Date.now();

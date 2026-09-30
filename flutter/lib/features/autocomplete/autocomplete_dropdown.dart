@@ -1,8 +1,4 @@
-// The composer autocomplete dropdown (`.autocomplete-dropdown` /
-// `#emojiAutocomplete` / `#channelAutocomplete` / `#kaomojiAutocomplete`). One
-// widget renders whichever of the four query types is active, anchored above
-// the input. Selection + keyboard nav are owned by the parent (the composer),
-// which holds the selected index and splices the chosen token into the field.
+// Composer autocomplete dropdown for all four query types; the composer owns selection and splicing.
 
 import 'package:flutter/material.dart';
 
@@ -18,19 +14,10 @@ import '../shop/cosmetics.dart';
 import '../shop/shop_widgets.dart';
 import 'autocomplete_queries.dart';
 
-/// Per-pubkey badge flags resolved by the host (the composer holds `ref`):
-/// whether the pubkey is a verified developer/bot and/or a friend. The pure
-/// query layer can't reach the controller, so these are looked up at render
-/// time (mirrors autocomplete.js:406-414 `isVerifiedDeveloper`/`isVerifiedBot`/
-/// `getFriendBadgeHtml`).
-///
-/// [verifiedTitle] is the verified badge's tooltip — `verifiedDeveloper.title`
-/// ("Nymchat Developer") for a dev, "Nymchat Bot" for the bot (autocomplete.js
-/// :430 `badge.title = isDev ? this.verifiedDeveloper.title : 'Nymchat Bot'`).
-/// Null when [verified] is false.
+/// Badge flags resolved by the host at render time; [verifiedTitle] is the tooltip, null when not verified.
 typedef MentionBadges = ({bool verified, bool friend, String? verifiedTitle});
 
-/// Which dropdown content to render + its flat selectable items.
+/// Which dropdown content to render and its flat selectable items.
 class AutocompleteView {
   const AutocompleteView.mentions(this.mentions)
       : kind = AutocompleteKind.mention,
@@ -59,11 +46,10 @@ class AutocompleteView {
   final List<EmojiResult> emoji;
   final List<KaomojiSection> kaomojiSections;
 
-  /// Flat list of the selectable kaomoji strings (headers are not selectable).
+  /// Selectable kaomoji strings; headers aren't selectable.
   List<String> get kaomojiItems =>
       [for (final s in kaomojiSections) ...s.items];
 
-  /// Number of navigable items.
   int get itemCount {
     switch (kind) {
       case AutocompleteKind.mention:
@@ -104,14 +90,10 @@ class AutocompleteDropdown extends StatefulWidget {
   final void Function(String kaomoji) onSelectKaomoji;
   final CustomEmojiState custom;
 
-  /// Resolves the verified/friend badge flags for a mention-row pubkey. When
-  /// null (e.g. tests), rows render avatar + name without badges.
+  /// Resolves badge flags for a mention row; null renders no badges.
   final MentionBadges Function(String pubkey)? badgesFor;
 
-  /// Resolves the active shop flair/supporter cosmetics for a mention-row pubkey
-  /// (`getFlairForUser`, autocomplete.js:405). The pure query layer can't reach
-  /// the shop/user state, so the host (composer, holds `ref`) supplies it. When
-  /// null (e.g. tests) the flair glyph is omitted.
+  /// Resolves flair for a mention row; null omits the glyph.
   final UserCosmetics Function(String pubkey)? cosmeticsFor;
 
   @override
@@ -120,9 +102,7 @@ class AutocompleteDropdown extends StatefulWidget {
 
 class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   final ScrollController _scroll = ScrollController();
-  // Key on the currently-selected row so keyboard nav can scroll it into view
-  // (PWA: `items[idx].scrollIntoView({block:'nearest'})`, autocomplete.js:163/
-  // 239/500/669). Re-created each build; the post-frame ensureVisible reads it.
+  // Key on the selected row so keyboard nav can scroll it into view.
   final GlobalKey _selectedKey = GlobalKey();
 
   @override
@@ -135,8 +115,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = _selectedKey.currentContext;
       if (ctx == null || !_scroll.hasClients) return;
-      // `block:'nearest'` — only scroll enough to reveal the row; alignment 0.5
-      // keeps a wrapped top↔bottom selection comfortably visible.
+      // Scroll only enough to reveal the row.
       Scrollable.ensureVisible(
         ctx,
         alignment: 0.5,
@@ -158,27 +137,14 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // The kaomoji palette (`.command-palette.kaomoji-autocomplete`) is taller and
-    // padded (max-height 200, padding 6); the mention/channel/emoji dropdowns are
-    // max-height 150 with no padding (styles-components.css:849-863).
+    // Kaomoji palette is taller and padded; the others cap at 150 with no padding.
     final isKaomoji = view.kind == AutocompleteKind.kaomoji;
     return Container(
       constraints: BoxConstraints(maxHeight: isKaomoji ? 200 : 150),
       margin: const EdgeInsets.only(bottom: 8),
       padding: isKaomoji ? const EdgeInsets.all(6) : null,
       decoration: BoxDecoration(
-        // Fill. solid-ui (the DEFAULT — `applyTransparency(... === true)`,
-        // app.js:643) repaints BOTH surfaces with the opaque `--glass-bg`
-        // (#14141e dark / #ffffff light): `body.solid-ui[.light-mode]
-        // .autocomplete-dropdown/.emoji-autocomplete/.command-palette`
-        // (themes-responsive.css:1555-1565,1593-1627). NymColors carries no
-        // solid flag, but solid-ui is the only mode whose --glass-bg is fully
-        // opaque, so detect it from the resolved token. In glass mode the
-        // base fills apply: `.autocomplete-dropdown`/`.emoji-autocomplete` use
-        // bg-tertiary (styles-components.css:718-724); the kaomoji palette is
-        // a `.command-palette` — rgba(20,20,35,0.9) dark
-        // (styles-components.css:849-854), white@0.92 light
-        // (themes-responsive.css:1155-1158).
+        // Solid-ui (default) is detected by the fully opaque glass background token.
         color: c.glassBg.a == 1.0
             ? c.glassBg
             : isKaomoji
@@ -188,8 +154,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
                 : c.bgTertiary,
         border: Border.all(color: c.glassBorder),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        // `--shadow-lg`: 0 8px 32px rgba(0,0,0,0.5) dark; light mode overrides to
-        // 0 8px 32px rgba(0,0,0,0.12) (themes-responsive.css:1149-1153).
         boxShadow: [
           BoxShadow(
             color:
@@ -199,9 +163,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
           ),
         ],
       ),
-      // Clip the scrolling rows to the dropdown's rounded top so the first row's
-      // selected highlight can't poke past the 16px corner (styles-components.css
-      // rows have no inset margin).
+      // Clip rows to the rounded top so the selected highlight can't poke past the corner.
       child: ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
         child: SingleChildScrollView(
@@ -252,7 +214,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
       required VoidCallback onTap,
       required Widget child}) {
     return Material(
-      // Key the selected row so `_scrollSelectedIntoView` can ensureVisible it.
       key: selected ? _selectedKey : null,
       type: MaterialType.transparency,
       child: InkWell(
@@ -261,8 +222,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
-            // `.autocomplete-item.selected` highlight (white@0.08 dark;
-            // mode-aware so the selected row stays visible in light mode).
             color: selected ? c.hoverOverlay : null,
             borderRadius: const BorderRadius.all(Radius.circular(8)),
           ),
@@ -272,9 +231,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
     );
   }
 
-  /// 18×18 avatar with the status dot overlaid bottom-right
-  /// (`.user-avatar-wrap` + `.user-status-dot`, styles-components.css:745-750).
-  /// When the user is `hidden` the PWA marks the wrap `.no-status` (no dot).
+  /// 18x18 avatar with a status dot, omitted for `hidden` users.
   Widget _mentionAvatar(NymColors c, MentionResult m) {
     final hidden = m.status == UserStatus.hidden;
     return SizedBox(
@@ -292,8 +249,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
             Positioned(
               right: -1,
               bottom: -1,
-              // `.user-status-dot`: 8×8, `border: 2px solid #0a0a0f` (=--bg)
-              // (styles-features.css:2346-2369).
               child: Container(
                 width: 8,
                 height: 8,
@@ -312,11 +267,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   Widget _mentionRow(NymColors c, MentionResult m, bool selected) {
     final badges = widget.badgesFor?.call(m.pubkey);
     final cosmetics = widget.cosmeticsFor?.call(m.pubkey);
-    // FLAIR ONLY. The dropdown row's `<strong>` is built from flair
-    // (`getFlairForUser`) + verified + friend — it NEVER reads
-    // `getUserShopItems().supporter` (autocomplete.js:404-438). The supporter
-    // pill appears only on other surfaces (context menu / PM rows). Rendering it
-    // here is the `.std-badge`-class over-render; emit the flair glyph only.
+    // Flair only; the supporter pill never shows in this dropdown.
     final flairId = cosmetics?.flairId;
     final hasFlair = flairId != null && flairId.isNotEmpty;
     return _selectable(
@@ -346,9 +297,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
               ),
             ),
           ),
-          // Shop flair glyph after the nym (before verified), matching the PWA's
-          // `getFlairForUser` insertion (autocomplete.js:407). `.flair-badge` is
-          // 20px (styles-features.css:316). No supporter pill here.
           if (hasFlair) ...[
             const SizedBox(width: 4),
             FlairBadge(
@@ -357,9 +305,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
               size: 20,
             ),
           ],
-          // `.verified-badge` / `.friend-badge svg` are 20×20 in this dropdown.
-          // The badge title distinguishes dev ("Nymchat Developer") from bot
-          // ("Nymchat Bot") — autocomplete.js:430.
           if (badges != null && badges.verified) ...[
             const SizedBox(width: 4),
             VerifiedBadge(size: 20, tooltip: badges.verifiedTitle),
@@ -378,11 +323,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
       c,
       selected: selected,
       onTap: () => widget.onSelectChannel(ch),
-      // Flat `.channel-ac-item` row (gap 8). The name + location + count are all
-      // tight `Expanded` (weighted) so they ellipsize within their share and the
-      // row can never overflow at a tight width; the count is right-aligned so it
-      // hugs the right edge (`.channel-ac-count { margin-left:auto }`). The badge
-      // is the only fixed child.
+      // Weighted children so the row never overflows; the count hugs the right edge.
       child: Row(
         children: [
           Expanded(
@@ -395,9 +336,7 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
                     TextStyle(color: c.primary, fontWeight: FontWeight.bold)),
           ),
           if (ch.isCurrent) ...[
-            // `.channel-ac-badge`: margin-left 4px.
             const SizedBox(width: 4),
-            // `.channel-ac-badge`: 0.7em, primary bg, bg text, radius-xs.
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
               decoration: BoxDecoration(
@@ -411,7 +350,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
                   style: TextStyle(color: c.bg, fontSize: 10)),
             ),
           ],
-          // `.channel-ac-location`: 0.8em, opacity 0.5 — decoded place.
           if (ch.location.isNotEmpty) ...[
             const SizedBox(width: 8),
             Expanded(
@@ -428,7 +366,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
               ),
             ),
           ],
-          // `.channel-ac-count { margin-left:auto }` — right-aligned in its share.
           if (ch.messageCount > 0) ...[
             const SizedBox(width: 8),
             Expanded(
@@ -454,31 +391,21 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   }
 
   Widget _emojiRow(NymColors c, EmojiResult e, bool selected) {
-    // `.emoji-item-emoji .custom-emoji { width/height: 25px }` (styles-chat.css
-    // :869-874) — the custom-emoji image is 25px, while a unicode glyph is the
-    // 23px `.emoji-item-emoji` font (styles-components.css:813-817).
+    // Custom-emoji images are 25px; unicode glyphs use the 23px font.
     final side = e.isCustom ? 25.0 : 23.0;
     final glyph = e.isCustom
-        // SVG-safe + IP-safe: route through the media proxy and the SVG-aware
-        // renderer (raw `Image.network` can't decode SVG — a large share of
-        // NIP-30 packs — and `proxiedEmojiUrl(url, null)` leaks the user's IP to
-        // the emoji host). Mirrors the picker grid (emoji_picker.dart:402-413).
+        // Route through the media proxy and SVG-aware renderer; `Image.network` can't decode SVG and leaks the IP.
         ? InlineNetworkImage(
             url: proxiedMedia(e.customUrl!, emoji: true),
             width: 25,
             height: 25,
             memoryOnly: true,
-            // An `img.custom-emoji` in the PWA, so the global load-retry
-            // handler applies (inline-bindings.js:167-181).
             retryOnError: true,
             placeholder: const SizedBox(width: 25, height: 25),
             errorChild: const SizedBox(width: 25, height: 25),
           )
         : Text(e.emoji, style: const TextStyle(fontSize: 23));
-    // `name` may already be a `:shortcode:` token (custom-emoji recents) — strip
-    // wrapping colons so the label isn't shown as `::shortcode::`. Mirrors the
-    // PWA's defensive strip at render time (autocomplete.js:129-131,
-    // `name.replace(/^:+|:+$/g, '')`).
+    // `name` may already be `:shortcode:`; strip colons so it isn't shown doubled.
     final label = e.name.replaceAll(RegExp(r'^:+|:+$'), '');
     return _selectable(
       c,
@@ -489,8 +416,6 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
           SizedBox(width: side, height: side, child: Center(child: glyph)),
           const SizedBox(width: 10),
           Flexible(
-            // `.emoji-item` is dim; `.selected/:hover` brightens to `--text`
-            // (styles-components.css:760-802).
             child: Text(':$label:',
                 style: TextStyle(
                     color: selected ? c.text : c.textDim, fontSize: 12),

@@ -1,5 +1,3 @@
-// geo-decode.js - Portable TopoJSON/GeoJSON decoding for the geohash globe
-
 (function () {
 
     function decodeTopoJson(topo, objectName) {
@@ -89,8 +87,6 @@
         feat.area = largestArea;
     }
 
-    // High-level decoders matching each data file's shape. Each takes parsed
-    // JSON and returns the render-ready feature array.
     function decodeWorld(topo) {
         if (!topo) return [];
         const feats = decodeTopoJson(topo, 'countries');
@@ -137,7 +133,6 @@
         return out;
     }
 
-    // Point-in-polygon (ray casting) over one ring.
     function pointInRing(ring, lng, lat) {
         let inside = false;
         for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -151,7 +146,6 @@
         return inside;
     }
 
-    // Inside the feature's outer ring and outside every hole.
     function pointInFeature(feat, lng, lat) {
         const b = feat.bounds;
         if (b && (lng < b[0] || lng > b[2] || lat < b[1] || lat > b[3])) return false;
@@ -167,9 +161,7 @@
         return false;
     }
 
-    /// The country containing this point, or ''. Walked smallest-first (the
-    /// decoder sorts largest-area first) so an enclave wins over the country
-    /// whose bounding box merely contains it.
+    // Walked smallest-first so an enclave wins over the country whose bbox contains it.
     function countryAt(features, lat, lng) {
         for (let i = features.length - 1; i >= 0; i--) {
             if (pointInFeature(features[i], lng, lat)) return features[i].name || '';
@@ -185,16 +177,12 @@
         return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
     }
 
-    /// Nearest country to a point at sea, as { name, km }. Measured to the
-    /// nearest polygon VERTEX rather than the nearest edge — at 110m resolution
-    /// the error is far below the thresholds this feeds, and it keeps the scan
-    /// a flat loop over the coordinates we already hold.
+    // Nearest country at sea as { name, km }, measured to the nearest vertex rather than edge.
     function nearestCountry(features, lat, lng) {
         let best = '', bestKm = Infinity;
         for (const feat of features) {
             const b = feat.bounds;
-            // Cheap reject: if even the bbox corner nearest in latitude is
-            // farther than the best so far, the polygon cannot beat it.
+            // Cheap reject: the nearest bbox corner in latitude is already farther than the best.
             if (b) {
                 const dLat = lat < b[1] ? b[1] - lat : (lat > b[3] ? lat - b[3] : 0);
                 if (dLat * 111 > bestKm) continue;
@@ -212,31 +200,14 @@
         return { name: best, km: bestKm };
     }
 
-    /// A human description of somewhere the geocoder could not name, from the
-    /// map data the app already ships. Never coordinates.
-    ///
-    /// Deliberately conservative about water. The two polar oceans are named
-    /// because their extent is unambiguous; everywhere else at sea is described
-    /// by what it is near, rather than by a basin name, because the
-    /// Atlantic/Pacific/Indian boundaries are irregular enough (the Gulf of
-    /// Mexico is Atlantic despite sitting west of Panama; the South China Sea
-    /// is Pacific despite sitting east of the Indian Ocean's longitudes) that a
-    /// hand-drawn table would state some of them confidently and wrongly.
-    /// "Somewhere in the ocean" is honest; "Pacific Ocean" pointing at the
-    /// Caribbean is not.
+    // Never coordinates; ocean basins other than the polar ones are deliberately not named.
     function describeRegion(features, lat, lng) {
         if (!features || !features.length) return '';
         const land = countryAt(features, lat, lng);
         if (land) return land;
-        // Natural Earth's Antarctica ring is CLIPPED at ~-85.6 and never closes
-        // around the pole, so plate-carrée point-in-polygon reports "not land"
-        // for the entire polar cap — every longitude at -85 and below. Below
-        // that clip line there is nothing but continent, so name it directly
-        // rather than letting the ocean branch call the South Pole a sea.
+        // Natural Earth's Antarctica ring is clipped at ~-85.6, so name the polar cap directly.
         if (lat <= -85.5) return 'Antarctica';
-        // Proximity BEFORE the polar names, so a point just off the Antarctic
-        // or Greenland coast says which coast rather than naming the whole
-        // ocean it technically sits in.
+        // Proximity before polar names, so points just off a coast name that coast.
         const near = nearestCountry(features, lat, lng);
         if (near.name && near.km <= 300) return `Off the coast of ${near.name}`;
         if (lat >= 66.5) return 'Arctic Ocean';
@@ -245,7 +216,6 @@
         return 'Open ocean';
     }
 
-    // 'world' | 'admin1' | 'cities' -> decoder over parsed JSON.
     function decodeByKind(kind, json) {
         if (kind === 'world') return decodeWorld(json);
         if (kind === 'admin1') return decodeAdmin1(json);

@@ -47,14 +47,7 @@ const htmlMinifyOptions = {
   minifyJS: true,
 };
 
-// Writes one pack per language whose cache covers at least one source string.
-// Returns a short line for the build summary.
-//
-// The pack is keyed the way the RUNTIME looks a string up (i18n/strings.mjs's
-// makeKey — whitespace collapsed, numbers and {placeholders} as sentinels), not
-// by the raw English of the cache. Shipped raw, roughly a fifth of every pack
-// was keys no client would ever ask for, and every one of those strings was
-// re-translated on the user's own connection.
+// Keyed like the runtime lookup (makeKey in i18n/strings.mjs), not raw English; returns a build-summary line.
 async function emitI18nPacks() {
   let languages;
   let sources;
@@ -70,8 +63,7 @@ async function emitI18nPacks() {
     return `i18n packs: skipped (${err.message})`;
   }
 
-  // Only strings still in the app: a stale entry would ship a translation for
-  // copy that no longer exists, and grow the pack every user downloads.
+  // Only strings still in the app.
   const live = new Set(sources);
   const liveKeys = new Set(sources.map((s) => makeKey(s).key));
 
@@ -89,9 +81,7 @@ async function emitI18nPacks() {
     let have = 0;
     for (const [source, translated] of Object.entries(cache)) {
       if (!live.has(source) || typeof translated !== 'string' || !translated) continue;
-      // Null when the translation cannot be templated back (a localised numeral,
-      // a dropped placeholder). Those stay live-translated rather than ship
-      // something that would render a sentinel on screen.
+      // Null when the translation can't be templated back; those stay live-translated.
       const entry = packEntry(source, translated);
       if (!entry) continue;
       const [key, value] = entry;
@@ -107,17 +97,12 @@ async function emitI18nPacks() {
     covered += have / liveKeys.size;
   }
 
-  // Where the strings came from. A build machine only checks out this
-  // repository, so this is normally the in-repo release mirror; saying which
-  // makes a pack that is missing the newest copy visible in the build log
-  // rather than only on someone's screen.
+  // Name the catalog source so a pack missing the newest copy shows in the build log.
   const from = counts.dartKind === 'none'
     ? 'markup only — no Flutter catalog found, so app strings are not covered'
     : `${counts.total} strings (${counts.dartKind} catalog + markup)`;
   if (written === 0) return `i18n packs: none (run \`npm run i18n\`) — ${from}`;
-  // Coverage rather than a "complete" count: entries whose translation cannot be
-  // templated back are dropped on purpose, so no pack is ever literally
-  // complete, and a count of zero read like a broken pipeline.
+  // Coverage, not "complete": untemplatable entries are dropped on purpose.
   return `i18n packs: ${written} languages from ${from}, `
     + `${((covered / written) * 100).toFixed(0)}% of strings covered, `
     + `${(bytes / written / 1024).toFixed(0)} KB each on average`;
@@ -138,8 +123,7 @@ async function run() {
   // public path ('/js/app.<hash>.js') -> 'sha256-<base64>' of the served bytes
   const manifestFiles = {};
 
-  // Compact + hash vendored data files under data/ first so '/data/...'
-  // references in JS get rewritten to hashed names.
+  // Hash data/ first so '/data/...' references in JS get rewritten to hashed names.
   for (const file of await walk(path.join(root, 'data'))) {
     if (!file.endsWith('.json')) continue;
     const rel = toPosix(path.relative(root, file));
@@ -158,14 +142,10 @@ async function run() {
     assetMap.set(rel, hashed);
   }
 
-  // Minify + hash every JS file under js/. Some JS references other JS by
-  // absolute path ('/js/...': worker scripts, importScripts, vendored libs),
-  // so leaves are processed first and those references rewritten to the
-  // hashed names before hashing the referrer.
+  // Leaves first so '/js/...' references are rewritten to hashed names before hashing the referrer.
   const jsWave = (rel) => {
     if (rel === 'js/nostr-tools.js' || rel.startsWith('js/vendor/')) return 0;
-    // Worker dependencies are imported by their workers, so they must be hashed
-    // before the worker; the workers must be hashed before their referrers.
+    // Worker dependencies before workers, workers before their referrers.
     if (rel === 'js/modules/syntax-highlight.js' || rel === 'js/geo-decode.js'
         || rel === 'js/modules/message-format.js') return 1;
     if (rel === 'js/verify-worker.js' || rel === 'js/highlight-worker.js'
@@ -186,7 +166,6 @@ async function run() {
     manifestFiles['/' + hashed] = sha256b64(Buffer.from(code));
   }
 
-  // Minify + hash every CSS file under css/.
   for (const file of await walk(path.join(root, 'css'))) {
     if (!file.endsWith('.css')) continue;
     const rel = toPosix(path.relative(root, file));
@@ -198,8 +177,7 @@ async function run() {
     manifestFiles['/' + hashed] = sha256b64(Buffer.from(code));
   }
 
-  // Replace original asset paths with hashed ones in HTML. Longest keys first
-  // so shorter paths can't partially shadow longer ones.
+  // Longest keys first so shorter paths can't partially shadow longer ones.
   const replacements = [...assetMap.entries()].sort((a, b) => b[0].length - a[0].length);
   const rewriteHtml = (html) => {
     for (const [orig, hashed] of replacements) html = html.split(orig).join(hashed);
@@ -211,37 +189,27 @@ async function run() {
   await emit('index.html', indexOut);
   manifestFiles['/index.html'] = sha256b64(Buffer.from(indexOut));
 
-  // 404.html
   const notFoundHtml = rewriteHtml(await fs.readFile(path.join(root, '404.html'), 'utf8'));
   const notFoundOut = await minifyHtml(notFoundHtml, htmlMinifyOptions);
   await emit('404.html', notFoundOut);
 
-  // robots.txt verbatim.
   await emit('robots.txt', await fs.readFile(path.join(root, 'robots.txt')));
 
-  // sitemap.xml verbatim — one URL, because the app is one page. The site's
-  // real sitemap is on the apex domain.
+  // The app is one page; the site's real sitemap is on the apex domain.
   await emit('sitemap.xml', await fs.readFile(path.join(root, 'sitemap.xml')));
 
-  // llms.txt verbatim — the markdown pointer file for AI agents and other
-  // automated readers. This origin is one page of client code, so a crawler
-  // finds nothing useful; llms.txt says what the app is and links to the
-  // documentation, source and protocol details that live elsewhere.
+  // Markdown pointer file for AI agents and automated readers.
   await emit('llms.txt', await fs.readFile(path.join(root, 'llms.txt')));
 
-  // _redirects verbatim — the retired /static/*.html pages point at their
-  // replacements on the apex domain, which app builds already in users' hands
-  // still link to.
+  // Retired /static/*.html pages redirect to the apex domain for shipped app builds.
   await emit('_redirects', await fs.readFile(path.join(root, '_redirects')));
 
   await emit('_routes.json', await fs.readFile(path.join(root, '_routes.json')));
 
-  // Vulnerability-disclosure pointer (RFC 9116) verbatim.
+  // Vulnerability-disclosure pointer (RFC 9116).
   await emit('.well-known/security.txt', await fs.readFile(path.join(root, '.well-known', 'security.txt')));
 
-  // version.json — the app version (NYMCHAT_VERSION, the single source of truth
-  // in js/app.js) as a tiny fetchable endpoint, so the native iOS/Android apps
-  // can display the LIVE main-project version instead of a hardcoded string.
+  // NYMCHAT_VERSION from js/app.js, served so native apps can show the live version.
   const appJsSource = await fs.readFile(path.join(root, 'js', 'app.js'), 'utf8');
   const versionMatch = appJsSource.match(/NYMCHAT_VERSION\s*=\s*['"]([^'"]+)['"]/);
   const appVersion = versionMatch ? versionMatch[1] : 'unknown';
@@ -249,11 +217,10 @@ async function run() {
 
   const packSummary = await emitI18nPacks();
 
-  // Service worker: stamp a per-build cache version so each deploy gets a fresh
-  // cache and old ones are pruned on activate.
+  // Per-build cache version so each deploy gets a fresh cache and old ones are pruned on activate.
   const swVersion = sha8([...assetMap.values()].sort().join('|'));
 
-  // Critical shell assets to precache on SW install (hashed names)
+  // Critical shell assets to precache on SW install (hashed names).
   const criticalSources = [
     'css/styles-core.css', 'css/styles-shell.css', 'css/styles-chat.css',
     'css/styles-components.css', 'css/styles-themes-responsive.css', 'css/styles-columns.css',
@@ -283,11 +250,7 @@ async function run() {
   await emit('sw.js', swOut);
   manifestFiles['/sw.js'] = sha256b64(Buffer.from(swOut));
 
-  // Build manifest: lets the app re-hash its own running bundle and lets anyone
-  // reproduce bundleHash from source at `commit`. bundleHash is derived only
-  // from the content-hashed asset set, and builtAt is the commit time rather
-  // than the build time, so rebuilds of the same source are byte-identical and
-  // the deployed manifest matches the digest attested by the provenance Action.
+  // Reproducible: bundleHash covers only hashed assets and builtAt is the commit time.
   const bundleHash = crypto.createHash('sha256')
     .update(Object.keys(manifestFiles).sort().map((p) => p + ':' + manifestFiles[p]).join('\n'))
     .digest('hex');
@@ -302,7 +265,7 @@ async function run() {
     files: manifestFiles,
   }, null, 2));
 
-  // _headers + immutable caching for hashed assets, no-cache for entry.
+  // Immutable caching for hashed assets, no-cache for entry.
   const headers = await fs.readFile(path.join(root, '_headers'), 'utf8');
   const cacheRules = `
 

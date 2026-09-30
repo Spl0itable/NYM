@@ -6,17 +6,13 @@ import '../../models/channel.dart';
 import '../../models/nostr_event.dart';
 import '../../models/poll.dart';
 
-/// Pure, socket-free logic for Nymchat polls (kind 30078, `nym-poll` /
-/// `nym-poll-vote`). Mirrors `js/modules/polls.js` verbatim: tag shapes, vote
-/// dedup (one per pubkey, latest-by-arrival), buffered votes that arrive before
-/// the poll, and `expiration` honoring. (docs/specs/03 §6)
+/// Socket-free poll logic (kind 30078): tag shapes, one vote per pubkey (latest wins), buffered early votes, expiration.
 class PollLogic {
   PollLogic._();
 
   static final Random _rng = Random.secure();
 
-  /// 8-char poll id fragment (`Math.random().toString(36).substring(2,10)`).
-  /// Used for the `['d','nym-poll-'+id8]` replaceable identifier.
+  /// 8-char base-36 poll id fragment used in the `nym-poll-<id8>` d-tag.
   static String generatePollId8() {
     const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
     final sb = StringBuffer();
@@ -26,10 +22,7 @@ class PollLogic {
     return sb.toString();
   }
 
-  /// Builds the kind-30078 poll-create rumor tags (polls.js `publishPoll`):
-  /// `['d','nym-poll-'+id8], ['t','nym-poll'], ['n',nym], ['g',geohash],
-  ///  ['poll_question',q], ['poll_option','0',o0], ['poll_option','1',o1] …`.
-  /// content = question.
+  /// Poll-create rumor: d/t/n/g tags, `poll_question`, then one `poll_option` per option; content is the question.
   static UnsignedEvent buildPollEvent({
     required String pubkey,
     required String nym,
@@ -60,9 +53,7 @@ class PollLogic {
     );
   }
 
-  /// Builds the kind-30078 poll-vote rumor tags (polls.js `votePoll`):
-  /// `['d','nym-poll-vote-'+pollId], ['t','nym-poll-vote'], ['e',pollId],
-  ///  ['n',nym], ['g',geohash], ['response', String(idx)]`. content = ''.
+  /// Poll-vote rumor: d/t/e/n/g tags plus `['response', idx]`; content is empty.
   static UnsignedEvent buildVoteEvent({
     required String pubkey,
     required String nym,
@@ -88,24 +79,17 @@ class PollLogic {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Inbound classification / parsing
-  // ---------------------------------------------------------------------------
-
-  /// True when a kind-30078 event is a poll-create (`['t','nym-poll']`).
   static bool isPollEvent(NostrEvent e) =>
       e.kind == EventKind.pollKind &&
       e.tagsNamed('t').any((t) => t.length > 1 && t[1] == AppDataTopic.poll);
 
-  /// True when a kind-30078 event is a poll-vote (`['t','nym-poll-vote']`).
   static bool isPollVoteEvent(NostrEvent e) =>
       e.kind == EventKind.pollVoteKind &&
       e
           .tagsNamed('t')
           .any((t) => t.length > 1 && t[1] == AppDataTopic.pollVote);
 
-  /// True if an `['expiration', ts]` tag is present and already in the past
-  /// (polls.js skips expired polls and votes on receive). [nowSec] injectable.
+  /// True if an `['expiration', ts]` tag is already in the past; expired polls and votes are dropped.
   static bool isExpired(NostrEvent e, {int? nowSec}) {
     final exp = e.tagValue('expiration');
     if (exp == null) return false;
@@ -115,8 +99,7 @@ class PollLogic {
     return ts < now;
   }
 
-  /// Parses a poll-create event into a [Poll] (no votes attached), or null when
-  /// it lacks a question or has < 2 options (polls.js `handlePollEvent` guard).
+  /// Parses a poll-create event, or null without a question or with fewer than 2 options.
   static Poll? parsePoll(NostrEvent e) {
     final question = e.tagValue('poll_question');
     final optionTags =
@@ -141,8 +124,7 @@ class PollLogic {
     );
   }
 
-  /// Parses a poll-vote event into (pollId, optionIndex), or null if it lacks
-  /// the `['e', …]` or `['response', …]` tags (polls.js `handlePollVoteEvent`).
+  /// Parses a vote, or null without the `e` or `response` tag.
   static PollVote? parseVote(NostrEvent e) {
     final pollId = e.tagValue('e');
     final response = e.tagValue('response');
@@ -153,7 +135,6 @@ class PollLogic {
   }
 }
 
-/// A parsed poll vote (kind 30078 `nym-poll-vote`).
 class PollVote {
   PollVote({
     required this.pollId,

@@ -9,10 +9,7 @@ import 'geo_projection.dart';
 import 'geohash_channel.dart';
 import 'topojson.dart';
 
-/// Resolved colors for the map, derived from `context.nym` tokens but mapped to
-/// the literal PWA canvas palette (`getMapStyles`) so the globe looks the same
-/// regardless of theme. Land/border/graticule come from the dark/light branch of
-/// the PWA; primary/warning/joined come from theme tokens.
+/// Map colors: land, border and graticule use the PWA's literal canvas palette; accents come from theme tokens.
 @immutable
 class GeoMapStyle {
   const GeoMapStyle({
@@ -55,8 +52,6 @@ class GeoMapStyle {
   final Color warning;
   final Color joined;
 
-  /// Builds the style from the active brightness + theme accent colors,
-  /// mirroring `getMapStyles()`'s light/dark branches.
   factory GeoMapStyle.resolve({
     required bool isLight,
     required Color primary,
@@ -66,21 +61,15 @@ class GeoMapStyle {
       ocean: isLight ? const Color(0xFFD6E8F1) : const Color(0xFF0A131E),
       land: isLight ? const Color(0xFFEEF2F4) : const Color(0xFF1C2A39),
       border: isLight ? const Color(0xFF9AAEBA) : const Color(0xFF2C4357),
-      // dark: rgba(180,200,220,0.22) -> 0x38 alpha;
-      // light: rgba(120,140,160,0.55) -> 0x8C alpha.
       adminBorder: isLight ? const Color(0x8C788CA0) : const Color(0x38B4C8DC),
       graticule: isLight
-          ? const Color(0x0D000000) // rgba(0,0,0,0.05)
-          : const Color(0x0AFFFFFF), // rgba(255,255,255,0.04)
+          ? const Color(0x0D000000)
+          : const Color(0x0AFFFFFF),
       label: isLight ? const Color(0xD91E2837) : const Color(0xD9DCE8F5),
-      // dark: rgba(190,205,220,0.65) -> 0xA6; light: rgba(70,80,95,0.75) -> 0xBF.
       adminLabel: isLight ? const Color(0xBF46505F) : const Color(0xA6BECDDC),
-      // dark: rgba(220,232,245,0.9) -> 0xE6; light: rgba(60,70,85,0.85) -> 0xD9.
       cityDot: isLight ? const Color(0xD93C4655) : const Color(0xE6DCE8F5),
-      // dark: rgba(220,232,245,0.85) -> 0xD9; light: rgba(50,60,75,0.85) -> 0xD9.
       cityLabel: isLight ? const Color(0xD9323C4B) : const Color(0xD9DCE8F5),
       labelStroke: isLight ? const Color(0xD9FFFFFF) : const Color(0xA6000000),
-      // dark: rgba(0,220,255,0.35) -> 0x59 alpha; light: rgba(0,100,140,0.45).
       gridLine: isLight ? const Color(0x73006490) : const Color(0x5900DCFF),
       gridLabel: isLight ? const Color(0xD9141E2D) : const Color(0xEBDCF0FF),
       gridLabelStroke:
@@ -95,8 +84,7 @@ class GeoMapStyle {
   }
 }
 
-/// Subsolar point ({lat, lng}) for [date] — a verbatim port of
-/// `solarPosition(date)` in geohash-globe.js (drives the day/night terminator).
+/// Subsolar point for [date], driving the day/night terminator.
 ({double lat, double lng}) solarPosition(DateTime date) {
   const rad = math.pi / 180;
   final n = (date.millisecondsSinceEpoch / 86400000) - 10957.5;
@@ -112,8 +100,7 @@ class GeoMapStyle {
   return (lat: decl / rad, lng: lng);
 }
 
-/// The 256-entry heat gradient palette (`getHeatPalette`): the PWA's exact
-/// color stops, sampled to an RGBA lookup keyed by accumulated alpha.
+/// 256-entry heat gradient palette keyed by accumulated alpha.
 class _HeatPalette {
   _HeatPalette._(this._argb);
   final List<int> _argb; // length 256, non-premultiplied ARGB.
@@ -121,12 +108,11 @@ class _HeatPalette {
   static _HeatPalette? _cached;
   static _HeatPalette get instance => _cached ??= _build();
 
-  /// The raw alpha-indexed ARGB table (0..255). Mirrors the PWA's 256px palette
-  /// canvas (`getHeatPalette`) read back via `getImageData`.
+  /// Raw alpha-indexed ARGB table (0..255).
   List<int> get argb => _argb;
 
   static _HeatPalette _build() {
-    // Stops: (offset, r, g, b, a) matching the canvas linear gradient.
+    // Stops: (offset, r, g, b, a) of the canvas linear gradient.
     const stops = <List<double>>[
       [0.00, 0, 0, 128, 0.0],
       [0.20, 0, 160, 255, 0.75],
@@ -156,10 +142,7 @@ class _HeatPalette {
   }
 }
 
-/// Immutable inputs that fully determine a precomputed heatmap image. Used as a
-/// cache key so the explorer only rebuilds the `ui.Image` when something that
-/// affects it actually changed (view/size/channel activity), matching the PWA's
-/// debounced `drawHeatmap`.
+/// Inputs that fully determine a heatmap image, used as a cache key so it rebuilds only on real changes.
 @immutable
 class HeatmapInput {
   const HeatmapInput({
@@ -171,7 +154,6 @@ class HeatmapInput {
   final GeoView view;
   final Size size;
 
-  /// (lng, lat, messages) per plotted channel.
   final List<({double lng, double lat, int messages})> points;
 
   @override
@@ -194,36 +176,23 @@ class HeatmapInput {
         view,
         size,
         points.length,
-        // Fold a cheap activity signature so repaints track message changes.
+        // Cheap activity signature so repaints track message changes.
         points.fold<int>(0, (h, p) => h ^ p.messages.hashCode),
       );
 }
 
-/// Precomputes the additive-accumulation heatmap as a half-resolution
-/// `ui.Image`, a faithful port of `drawHeatmap` (geohash-globe.js:736-797).
-///
-/// Pipeline (cannot run inside the synchronous `CustomPainter.paint`):
-///   1. draw each channel as a **grayscale** radial blob
-///      (`rgba(0,0,0,intensity)` → `rgba(0,0,0,0)`) additively (`BlendMode.plus`)
-///      into a `(w*0.5, h*0.5)` picture so overlapping alphas SUM;
-///   2. rasterize and read back the RGBA bytes;
-///   3. per pixel, look up the 256-entry heat palette by the accumulated alpha
-///      (`palette.argb[a]`) so dense overlaps climb blue→green→yellow→red;
-///   4. `decodeImageFromPixels` back into a `ui.Image` the painter blits to full
-///      size with `FilterQuality.low`.
-///
-/// Returns null when there are no channels (caller clears the image).
+/// Half-res additive heatmap: blobs summed with `BlendMode.plus`, then alpha mapped through the heat palette.
 Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   final points = input.points;
   if (points.isEmpty) return null;
 
-  const heatScale = 0.5; // HEAT_SCALE
+  const heatScale = 0.5;
   final size = input.size;
   final view = input.view;
   final w2 = math.max(1, (size.width * heatScale).floor());
   final h2 = math.max(1, (size.height * heatScale).floor());
 
-  // baseRadius = clamp(22,70, 24 + zoom*3.5); radius = baseRadius * HEAT_SCALE.
+  // baseRadius = clamp(22, 70, 24 + zoom*3.5); radius = baseRadius * heatScale.
   final baseRadius = (24 + view.zoom * 3.5).clamp(22.0, 70.0).toDouble();
   final radius = baseRadius * heatScale;
 
@@ -233,7 +202,6 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   }
   final denom = math.log(maxMsg + 1) == 0 ? 1.0 : math.log(maxMsg + 1);
 
-  // 1) Accumulate grayscale blobs additively into a half-res picture.
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(
     recorder,
@@ -249,8 +217,7 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
     final intensity = (0.18 + 0.82 * weight).clamp(0.0, 1.0);
     final a = (intensity * 255).round();
     final center = Offset(sx, sy);
-    // Grayscale (black) radial falloff: alpha at center, 0 at the edge. With
-    // BlendMode.plus the alpha channel sums across overlapping blobs.
+    // Alpha at center fading to 0; with `BlendMode.plus` alpha sums across overlaps.
     final shader = ui.Gradient.radial(center, radius, [
       Color.fromARGB(a, 0, 0, 0),
       const Color.fromARGB(0, 0, 0, 0),
@@ -271,20 +238,18 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   accum.dispose();
   if (bytes == null) return null;
 
-  // 2/3) Remap each pixel's accumulated alpha through the heat palette.
   final argb = _HeatPalette.instance.argb;
   final data = bytes.buffer.asUint8List();
   for (var i = 0; i < data.length; i += 4) {
     final a = data[i + 3];
     if (a == 0) continue;
     final c = argb[a]; // non-premultiplied ARGB at this accumulated alpha.
-    data[i] = (c >> 16) & 0xFF; // R
-    data[i + 1] = (c >> 8) & 0xFF; // G
-    data[i + 2] = c & 0xFF; // B
-    data[i + 3] = (c >> 24) & 0xFF; // A (the palette's own alpha at index `a`)
+    data[i] = (c >> 16) & 0xFF;
+    data[i + 1] = (c >> 8) & 0xFF;
+    data[i + 2] = c & 0xFF;
+    data[i + 3] = (c >> 24) & 0xFF; // A is the palette's own alpha at index `a`.
   }
 
-  // 4) Decode the remapped pixels back into an image.
   final completer = Completer<ui.Image>();
   ui.decodeImageFromPixels(
     data,
@@ -296,9 +261,7 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   return completer.future;
 }
 
-/// Paints the equirectangular world map exactly like geohash-globe.js `draw()`:
-/// ocean → graticule → countries (evenodd) → labels → heatmap-or-dots →
-/// day/night → geohash grid → user location.
+/// Paints the map in the PWA's order: ocean, graticule, countries, labels, heat or dots, day/night, grid, location.
 class GeoMapPainter extends CustomPainter {
   GeoMapPainter({
     required this.view,
@@ -320,12 +283,10 @@ class GeoMapPainter extends CustomPainter {
   final GeoMapStyle style;
   final List<GeoFeature> features;
 
-  /// Admin-1 (state/province) borders + labels, lazy-loaded once the view
-  /// reaches `_admin1ZoomThreshold` (F2/F3). Empty until loaded.
+  /// Admin-1 borders and labels, lazy-loaded past `_admin1ZoomThreshold`; empty until loaded.
   final List<GeoFeature> admin1Features;
 
-  /// Populated-place dots + labels, lazy-loaded once the view reaches
-  /// `_cityZoomThreshold` (F4). Empty until loaded.
+  /// City dots and labels, lazy-loaded past `_cityZoomThreshold`; empty until loaded.
   final List<CityPoint> cities;
   final List<GeohashChannelPoint> channels;
   final bool heatmap;
@@ -334,14 +295,12 @@ class GeoMapPainter extends CustomPainter {
   final String? hoveredGeohash;
   final ({double lat, double lng})? userLocation;
 
-  /// Precomputed half-res accumulation+palette heatmap (`buildHeatmapImage`).
-  /// Built off the paint pass by the explorer; blitted to full size here.
+  /// Precomputed half-res heatmap, blitted to full size here.
   final ui.Image? heatmapImage;
   final Listenable? repaint;
 
-  // Zoom thresholds for the lazy detail layers (geohash-globe.js:10-11).
-  static const double _admin1ZoomThreshold = 2.5; // ADMIN1_ZOOM_THRESHOLD
-  static const double _cityZoomThreshold = 2.5; // CITY_ZOOM_THRESHOLD
+  static const double _admin1ZoomThreshold = 2.5;
+  static const double _cityZoomThreshold = 2.5;
 
   bool _inView(Offset p, double pad, Size size) =>
       p.dx >= -pad &&
@@ -351,20 +310,17 @@ class GeoMapPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Ocean fill.
     canvas.drawRect(Offset.zero & size, Paint()..color = style.ocean);
 
     _drawGraticule(canvas, size);
     _drawWorld(canvas, size);
-    // Admin-1 (state/province) borders fade in from zoom 2.5 (F2), then country
-    // labels, then admin-1 labels at zoom >= 4 (F3) — mirrors `draw()` order.
+    // Admin-1 borders fade in from zoom 2.5, then country labels, then admin-1 labels at zoom 4+.
     _drawAdmin1(canvas, size);
     _drawLabels(canvas, size);
     _drawAdmin1Labels(canvas, size);
     if (heatmap) {
       _drawHeatmap(canvas, size);
     } else {
-      // City dots + progressive labels (F4) draw under the channel dots.
       _drawCities(canvas, size);
       _drawChannels(canvas, size);
     }
@@ -416,7 +372,7 @@ class GeoMapPainter extends CustomPainter {
           for (var i = 1; i < ring.length; i++) {
             final lng = ring[i][0];
             final p = view.project(lng, ring[i][1], size);
-            // Avoid drawing the wrap-around seam across the antimeridian.
+            // Don't draw the wrap-around seam across the antimeridian.
             if ((lng - prevLng).abs() > 180) {
               path.close();
               path.moveTo(p.dx, p.dy);
@@ -454,15 +410,11 @@ class GeoMapPainter extends CustomPainter {
     }
   }
 
-  /// Admin-1 (state/province) borders, faded in over [2.5, 4.0] (F2). Port of
-  /// `drawAdmin1` (geohash-globe.js:580-621): stroke `style.adminBorder` width
-  /// 0.4, bounds-culled, with the antimeridian seam broken via `moveTo` (NOT
-  /// closed — these are open border strokes, unlike the filled world polygons).
-  /// The PWA's `globalAlpha = t` is folded into the stroke color's alpha.
+  /// Admin-1 borders faded in over zoom 2.5–4.0 as open, bounds-culled strokes broken at the antimeridian.
   void _drawAdmin1(Canvas canvas, Size size) {
     if (view.zoom < _admin1ZoomThreshold || admin1Features.isEmpty) return;
     const fadeStart = _admin1ZoomThreshold;
-    const fadeEnd = fadeStart + 1.5; // [2.5 .. 4.0]
+    const fadeEnd = fadeStart + 1.5;
     final t = ((view.zoom - fadeStart) / (fadeEnd - fadeStart)).clamp(0.0, 1.0);
     if (t <= 0) return;
 
@@ -505,10 +457,7 @@ class GeoMapPainter extends CustomPainter {
     canvas.drawPath(path, stroke);
   }
 
-  /// Admin-1 labels at zoom >= 4 (F3). Port of `drawAdmin1Labels`
-  /// (geohash-globe.js:623-651): weight 500, fontSize 9, fill `style.adminLabel`,
-  /// stroke width 2.5, drawn only where the feature's projected span >=
-  /// max(40, name.length*5.5).
+  /// Admin-1 labels at zoom 4+, only where the projected span is at least max(40, name.length*5.5).
   void _drawAdmin1Labels(Canvas canvas, Size size) {
     if (view.zoom < 4 || admin1Features.isEmpty) return;
     for (final feat in admin1Features) {
@@ -529,14 +478,11 @@ class GeoMapPainter extends CustomPainter {
     }
   }
 
-  /// City dots + progressive labels at zoom >= 2.5 (F4). Port of `drawCities`
-  /// (geohash-globe.js:653-689): a zoom-stepped `rankCutoff` ladder filters
-  /// `cities` by scalerank, 1.5px dots in `style.cityDot`, and at zoom >= 3
-  /// left-aligned stroked labels (offset +4px) in `style.cityLabel`.
+  /// City dots at zoom 2.5+ filtered by a zoom-stepped rank cutoff, with labels from zoom 3.
   void _drawCities(Canvas canvas, Size size) {
     if (view.zoom < _cityZoomThreshold || cities.isEmpty) return;
 
-    // scalerank: 0 = world's largest. Higher zoom -> show smaller cities.
+    // scalerank 0 is the largest; higher zoom shows smaller cities.
     final rankCutoff = view.zoom < 3
         ? 2
         : view.zoom < 4
@@ -552,7 +498,7 @@ class GeoMapPainter extends CustomPainter {
     final dotPaint = Paint()..color = style.cityDot;
 
     for (final city in cities) {
-      // cities are rank-sorted ascending; once we pass the cutoff, stop.
+      // Cities are rank-sorted ascending, so stop past the cutoff.
       if (city.rank > rankCutoff) break;
       final p = view.project(city.lng, city.lat, size);
       if (!_inView(p, 80, size)) continue;
@@ -579,7 +525,7 @@ class GeoMapPainter extends CustomPainter {
         p,
         r,
         Paint()
-          ..color = const Color(0x8C000000) // rgba(0,0,0,0.55)
+          ..color = const Color(0x8C000000)
           ..strokeWidth = 1
           ..style = PaintingStyle.stroke,
       );
@@ -589,11 +535,7 @@ class GeoMapPainter extends CustomPainter {
   void _drawHeatmap(Canvas canvas, Size size) {
     if (channels.isEmpty) return;
 
-    // Blit the precomputed half-res accumulation+palette image to full size
-    // (PWA: `drawImage(heatCanvas, 0,0, cssWidth, cssHeight)` with
-    // imageSmoothingQuality='low'). If the image hasn't been built yet (the
-    // explorer recomputes it asynchronously on view/activity change) just skip
-    // this frame — the next rebuild paints it.
+    // Skip until the async heatmap build lands; the next rebuild paints it.
     final img = heatmapImage;
     if (img != null) {
       final src =
@@ -779,9 +721,7 @@ class GeoMapPainter extends CustomPainter {
     tpFill.paint(canvas, offset);
   }
 
-  /// Left-aligned, vertically-centered stroked label whose left edge sits at
-  /// [anchor].dx and whose vertical middle sits at [anchor].dy — matching the
-  /// PWA's `textAlign='left'` + `textBaseline='middle'` city labels.
+  /// Left-aligned stroked label, left edge at [anchor].dx and vertically centered on [anchor].dy.
   void _strokedTextLeft(
     Canvas canvas,
     String text,

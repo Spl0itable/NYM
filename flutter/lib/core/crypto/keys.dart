@@ -6,7 +6,7 @@ import 'package:convert/convert.dart' as convert;
 
 import 'native_schnorr.dart';
 
-/// secp256k1 curve order (n). A valid private key scalar is in [1, n-1].
+/// secp256k1 curve order n; a valid private key is in [1, n-1].
 final BigInt _secpN = BigInt.parse(
   'fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141',
   radix: 16,
@@ -14,17 +14,14 @@ final BigInt _secpN = BigInt.parse(
 
 final Random _rng = Random.secure();
 
-/// Encodes [bytes] as a lowercase hex string.
 String bytesToHex(List<int> bytes) => convert.hex.encode(bytes);
 
-/// Decodes a hex string into bytes. Accepts upper or lower case.
 Uint8List hexToBytes(String hexStr) {
   var s = hexStr;
   if (s.length.isOdd) s = '0$s';
   return Uint8List.fromList(convert.hex.decode(s));
 }
 
-/// Returns 32 cryptographically-random bytes.
 Uint8List randomBytes(int length) {
   final out = Uint8List(length);
   for (var i = 0; i < length; i++) {
@@ -33,8 +30,7 @@ Uint8List randomBytes(int length) {
   return out;
 }
 
-/// Generates a valid secp256k1 private key (32 random bytes that form a
-/// scalar in [1, n-1]).
+/// Generates a valid secp256k1 private key.
 Uint8List generatePrivateKey() {
   while (true) {
     final candidate = randomBytes(32);
@@ -43,11 +39,7 @@ Uint8List generatePrivateKey() {
   }
 }
 
-/// Derives the 32-byte x-only (BIP340) public key for [privkey] and returns
-/// it as 64-char lowercase hex. Native libsecp256k1 when loaded in this
-/// isolate (~30 µs); otherwise the pure-Dart bip340 derivation (~10 ms of
-/// BigInt point math — which profiled as the top main-isolate cost per
-/// ephemeral gift-wrap key once ECDH went native).
+/// Returns the x-only (BIP340) public key hex, using native libsecp256k1 when loaded in this isolate.
 String getPublicKeyHex(Uint8List privkey) {
   final native = NativeSchnorr.xOnlyPubkeyHex(privkey);
   if (native != null) return native;

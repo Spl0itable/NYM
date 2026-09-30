@@ -15,9 +15,7 @@ import '../i18n/i18n.dart';
 import 'nymbot_models.dart';
 import 'nymbot_providers.dart';
 
-/// The copy shown instead of the purchase UI where credits can't be sold,
-/// named so a test can hold the background-translation catalog to it: a string
-/// the catalog doesn't carry stays English in every other language, silently.
+/// Shown instead of the purchase UI where credits can't be sold; named so a test can hold the i18n catalog to it.
 const String kBotCreditsBuyNotice =
     'Nymbot credits cannot be purchased in this app. Credits are '
     'bought from the Nymchat web app in your browser. Credits you '
@@ -38,19 +36,7 @@ const List<String> kBotCreditsDisabledStrings = [
   kBotCreditsTitle,
 ];
 
-/// The Nymbot **buy / gift credits** modal — a 1:1 port of the PWA's
-/// `showBotCreditsModal` (zaps.js:530-660) presented as a bottom sheet.
-///
-/// Two modes share one surface, mirroring the PWA:
-///   * **Buy** (`giftRecipient == null`): "Buy Nymbot private message credits".
-///   * **Gift** (`giftRecipient != null`): "Gift Nymbot credits to @nym" — the
-///     created invoice carries `recipientPubkey`, so the worker credits THEM.
-///
-/// Layout matches the PWA: a Standard/Pro tier toggle (both segments use the
-/// lightning accent), a grid of sats presets (per-tier, with the bulk-bonus
-/// credit count shown on each), a custom-amount field, a live credit estimate,
-/// and — once an amount is picked — the Lightning invoice (QR placeholder +
-/// copyable bolt11).
+/// Nymbot buy/gift credits sheet; in gift mode the invoice carries `recipientPubkey` so the worker credits them.
 class BotCreditsModal extends ConsumerStatefulWidget {
   const BotCreditsModal({
     super.key,
@@ -62,19 +48,18 @@ class BotCreditsModal extends ConsumerStatefulWidget {
 
   final NymColors colors;
 
-  /// Recipient pubkey when gifting (PWA `giftRecipient.pubkey`). Null = self-buy.
+  /// Recipient pubkey when gifting; null for a self-buy.
   final String? giftRecipientPubkey;
 
-  /// Recipient base nym when gifting (PWA `giftRecipient.nym`).
+  /// Recipient base nym when gifting.
   final String? giftRecipientNym;
 
-  /// Opening tier (PWA passes `'pro'` when a Pro model is pinned).
+  /// Opening tier; Pro when a Pro model is pinned.
   final CreditTier initialTier;
 
   bool get isGift =>
       giftRecipientPubkey != null && giftRecipientPubkey!.isNotEmpty;
 
-  /// Presents the modal as a scroll-controlled bottom sheet.
   static Future<void> show(
     BuildContext context, {
     required NymColors colors,
@@ -103,14 +88,12 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   late CreditTier _tier;
   final _custom = TextEditingController();
 
-  /// The selected preset (null when the custom field drives the amount).
+  /// Selected preset; null when the custom field drives the amount.
   int? _selectedPreset;
   BotInvoice? _invoice;
   bool _loading = false;
   String? _error;
 
-  /// Preset purchase tiers (PWA `_botCreditTiers` / `_botProCreditPresets`,
-  /// zaps.js:349-352).
   static const List<int> _standardPresets = [100, 500, 1000, 2500, 5000, 10000];
   static const List<int> _proPresets = [
     2000,
@@ -145,7 +128,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   int _creditsForSats(int sats) =>
       _catalog.creditsForSats(sats < 0 ? 0 : sats, _tier == CreditTier.pro);
 
-  /// The effective amount in sats (custom field wins when non-empty).
+  /// Effective amount in sats; the custom field wins when non-empty.
   int? get _amountSats {
     final raw = _custom.text.trim();
     if (raw.isNotEmpty) {
@@ -164,11 +147,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   @override
   Widget build(BuildContext context) {
     final c = widget.colors;
-    // The PWA presents this purchase through the zap modal chrome
-    // (`showBotCreditsModal` reuses `#zapModal`, zaps.js:530): a
-    // `.modal-header "Send Lightning Zap"` with a bottom rule + the absolute
-    // `.modal-close` ✕ chip, with `#zapRecipientInfo` carrying the buy/gift
-    // line. Mirror that here over the bottom sheet.
+    // Presented in the zap modal's chrome, like the PWA.
     return Stack(
       children: [
         Padding(
@@ -183,7 +162,6 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // `.modal-header`: 22px UPPERCASE primary ls1.5 w700 + rule.
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.only(bottom: 14),
@@ -203,7 +181,6 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                     ),
                   ),
                 ),
-                // PWA `zapRecipientInfo`: gift vs buy heading.
                 Text(
                   botCreditPurchasesDisabled
                       ? tr(kBotCreditsTitle)
@@ -236,11 +213,6 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
                         style: TextStyle(color: c.danger, fontSize: 12)),
                   ],
                   const SizedBox(height: 14),
-                  // `.send-btn` chrome (styles-chat.css:1920-1943): translucent
-                  // primary/0.1 pill, primary/0.3 border, h42, 12px UPPERCASE
-                  // ls1.5 w600 primary label, disabled opacity 0.35. While
-                  // generating, the PWA pairs the 15px `.loader` with
-                  // "Generating invoice..." (zaps.js:588-590).
                   ModalChrome.sendButton(
                     c,
                     widget.isGift
@@ -278,17 +250,12 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
             ),
           ),
         ),
-        // `.modal-close`: 32×32 glass ✕ chip, absolute top-right (14,14).
         ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
       ],
     );
   }
 
-  /// Where credits are bought on a platform that can't sell them here. Mirrors
-  /// the flair shop's note (shop_modal.dart) down to the chrome, and like it is
-  /// deliberately a STATEMENT: no button, no tappable link, nothing that reads
-  /// as a call to action pointing at an outside purchase — see
-  /// shop_purchase_policy.dart.
+  /// Says where to buy credits when they can't be sold here, with no call to action (see shop_purchase_policy.dart).
   Widget _purchasesDisabledNote(NymColors c) {
     return Container(
       width: double.infinity,
@@ -306,8 +273,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
     );
   }
 
-  /// `.bot-credit-tier-toggle`: two equal pills; the active one uses the
-  /// lightning accent for BOTH Standard and Pro (zaps.js:432-440).
+  /// Two equal tier pills; the active one uses the lightning accent for both tiers.
   Widget _tierFraming(NymColors c) {
     return Text(
       tr('Standard picks a model for you, per question. Pro answers with the '
@@ -325,7 +291,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
           onTap: () => setState(() {
             _tier = tier;
             _invoice = null;
-            // Reset the selection — preset sets differ per tier.
+            // Reset the selection since preset sets differ per tier.
             _selectedPreset = null;
           }),
           child: AnimatedContainer(
@@ -334,9 +300,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
             decoration: BoxDecoration(
               color: active
                   ? c.lightning.withValues(alpha: 0.12)
-                  // Inactive fill: white@0.04 dark / black@0.04 light (mode-aware).
                   : c.insetFill,
-              // `.bot-credit-tier-btn`: radius --radius-sm (12).
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: active ? c.lightning.withValues(alpha: 0.5) : c.border,
@@ -372,8 +336,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
     );
   }
 
-  /// The sats-preset grid (`.zap-amounts` in credit mode): each cell shows the
-  /// sat label + the bulk-bonus credit count. Selected = lightning glow.
+  /// Sats presets, each showing its bulk-bonus credit count.
   Widget _amountGrid(NymColors c) {
     return GridView.count(
       crossAxisCount: 3,
@@ -400,7 +363,6 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
         decoration: BoxDecoration(
           color: selected
               ? c.lightning.withValues(alpha: 0.12)
-              // Unselected fill: white@0.04 dark / black@0.04 light (mode-aware).
               : c.insetFill,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
@@ -431,7 +393,6 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
     );
   }
 
-  /// Custom-amount field (`zapCustomAmount`).
   Widget _customRow(NymColors c) {
     return TextField(
       controller: _custom,
@@ -462,7 +423,6 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
     );
   }
 
-  /// Live credit estimate (`botCreditEstimate`).
   Widget _estimate(NymColors c) {
     final sats = _amountSats;
     if (sats == null) {
@@ -481,7 +441,6 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
     );
   }
 
-  /// Pricing note (`.bot-credit-pricing-note`, zaps.js:466-480).
   Widget _pricingNote(NymColors c) {
     final lines = _tier == CreditTier.pro
         ? [
@@ -525,8 +484,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
       _error = null;
     });
 
-    // Build the purchase comment exactly like the PWA (zaps.js:596-603) so the
-    // worker memo reads e.g. "Nymbot credits gift for @nym — 100 messages".
+    // Worker memo like "Nymbot credits gift for @nym — 100 messages".
     final isPro = _tier == CreditTier.pro;
     final credits = _creditsForSats(sats);
     final creditWord = isPro
@@ -537,9 +495,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
         ? 'Nymbot ${isPro ? 'Pro ' : ''}credits gift for @$giftNym — $creditWord'
         : 'Nymbot ${isPro ? 'Pro ' : ''}credits — $creditWord';
 
-    // Signed NIP-57 zap request riding the create-invoice body so the worker's
-    // `canNip57` receipt-verify fallback stays available (zaps.js:601-604) —
-    // best-effort, exactly like the PWA's try/catch (a signer failure omits it).
+    // Best-effort signed NIP-57 zap request so the worker's receipt-verify fallback stays available.
     Map<String, dynamic>? zapRequest;
     try {
       final zr = await ref.read(nostrControllerProvider).buildZapRequest(
@@ -560,8 +516,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
             comment: comment,
             zapRequest: zapRequest,
           );
-      // A null result means the chat isn't bound to an identity yet — the worker
-      // can't issue an invoice without a pubkey (PWA gates on `this.pubkey`).
+      // Null means the chat isn't bound to an identity yet; the worker needs a pubkey.
       if (inv == null) {
         err = tr(
             'Open the Nymbot chat once to bind your identity, then try again.');
@@ -570,8 +525,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
         inv = null;
       }
     } catch (e) {
-      // Surface the real failure (PWA: `Failed: ${error.message}`,
-      // zaps.js:627) — never fabricate a placeholder bolt11.
+      // Surface the real failure; never fabricate a placeholder bolt11.
       err = tr('Failed: {error}', {'error': _short(e)});
       inv = null;
     }
@@ -589,9 +543,7 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
   }
 }
 
-/// The invoice screen: a real bolt11 QR + copyable invoice + Open-wallet
-/// (`lightning:` URI) + live settlement polling, mirroring `displayZapInvoice`
-/// + `checkBotCreditPaymentViaServer` for the credit purchase (zaps.js:611-694).
+/// Invoice screen: bolt11 QR, copy, open-wallet, and settlement polling.
 class _InvoiceView extends ConsumerStatefulWidget {
   const _InvoiceView({
     required this.invoice,
@@ -610,7 +562,7 @@ class _InvoiceView extends ConsumerStatefulWidget {
 class _InvoiceViewState extends ConsumerState<_InvoiceView> {
   Timer? _poll;
   int _checks = 0;
-  static const int _maxChecks = 180; // PWA: 180 × 2s ≈ 6 min.
+  static const int _maxChecks = 180; // 180 × 2s ≈ 6 min.
   bool _paid = false;
   bool _checking = false;
   String _status = tr('Waiting for payment…');
@@ -618,7 +570,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
   @override
   void initState() {
     super.initState();
-    // Poll the worker every 2s for settlement (PWA: 2000ms interval).
     _poll = Timer.periodic(const Duration(seconds: 2), (_) => _check());
   }
 
@@ -630,8 +581,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
 
   Future<void> _check({bool manual = false}) async {
     if (_paid) return;
-    // PWA manualCheckPayment: `.zap-status.checking` + loader +
-    // "Checking payment..." while the server round-trip runs (zaps.js:707-712).
     if (manual) {
       setState(() {
         _checking = true;
@@ -648,8 +597,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
       setState(() {
         _paid = true;
         _checking = false;
-        // handleZapPaymentSuccess shows the same success line for credit
-        // purchases as for zaps (zaps.js:1130-1134).
         _status = tr('Zap sent successfully!');
       });
       return;
@@ -663,7 +610,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
         _status = tr(
             'Not paid yet — complete the payment in your wallet, then tap again.');
       } else if (_checks >= _maxChecks) {
-        // PWA gives up after 180 polls with a distinct hint (zaps.js:686-693).
+        // Give up after 180 polls with a distinct hint.
         _status = tr(
             'Payment not detected yet — if you paid, tap "I\'ve paid" or run ?balance shortly.');
       }
@@ -675,7 +622,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
     try {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } catch (_) {
-      // No Lightning wallet registered — leave the QR/copy path for the user.
+      // No Lightning wallet registered; leave the QR and copy path.
     }
   }
 
@@ -683,10 +630,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
   Widget build(BuildContext context) {
     final c = widget.colors;
     if (_paid) {
-      // `.zap-status.paid` (styles-chat.css:288-292): primary border + text
-      // over the white/0.03 status fill, with the `zapSuccess` 0.5s scale pop.
-      // Content mirrors handleZapPaymentSuccess (zaps.js:1130-1134): ⚡ 24px
-      // (mb 10), the status line, `${amount} sats` 20px (mt 10).
       final card = Container(
         width: double.infinity,
         padding: const EdgeInsets.all(12),
@@ -713,7 +656,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
       );
       return Column(
         children: [
-          // `@keyframes zapSuccess`: scale 1 → 1.05 → 1 over 0.5s.
           TweenAnimationBuilder<double>(
             tween: Tween(begin: 0, end: 1),
             duration: const Duration(milliseconds: 500),
@@ -735,7 +677,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
     }
     return Column(
       children: [
-        // Real bolt11 QR (200px module) in a white frame.
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -757,9 +698,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
               color: c.textDim, fontSize: 11, fontFamily: 'monospace'),
         ),
         const SizedBox(height: 10),
-        // `.zap-invoice-actions` (styles-chat.css:268-272): two `.icon-btn
-        // nm-flex1` pills — "Copy Invoice" / "Open Wallet" — stretched
-        // equally with a 10px gap (index.html:2075-2079).
         Row(
           children: [
             Expanded(
@@ -773,10 +711,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
             Expanded(child: _iconBtn(c, tr('Open Wallet'), _openWallet)),
           ],
         ),
-        // `.zap-status` (styles-chat.css:274-286): centered box, white/0.03
-        // fill, glass border, padding 12, margin 10 0; `.checking` swaps the
-        // border + text to `--warning` and shows the 15px `.loader`
-        // (manualCheckPayment, zaps.js:707-712).
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(12),
@@ -801,9 +735,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
             ],
           ),
         ),
-        // `.modal-actions` (index.html:2083-2086): an `.icon-btn` beside the
-        // `.send-btn` "I've paid" (an immediate re-check, PWA
-        // `manualCheckPayment`), centered with a 10px gap.
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -820,10 +751,6 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
     );
   }
 
-  /// An `.icon-btn.nm-flex1` — the bordered translucent uppercase pill
-  /// (styles-shell.css:912-926) stretched by its parent [Expanded]: white/0.05
-  /// fill + glass border + `--text` label in dark; black/0.03 fill + black/0.1
-  /// border + `--primary` label in light (styles-themes-responsive.css:595-599).
   Widget _iconBtn(NymColors c, String label, VoidCallback? onTap) {
     return InkWell(
       onTap: onTap,
@@ -851,8 +778,7 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
   }
 }
 
-/// The 15px `.loader` spinner (styles-components.css:2173-2182): a 2px
-/// `--text-dim` ring with a `--primary` sweep, spinning at 1s linear.
+/// 15px spinner: a 2px dim ring with a primary sweep at 1s linear.
 Widget _loader(NymColors c) {
   return SizedBox(
     width: 15,

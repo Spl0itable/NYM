@@ -8,127 +8,72 @@ import '../../services/api/api_client.dart';
 import '../../services/storage/key_value_store.dart';
 import '../translate/translate_service.dart';
 
-/// App-wide **static text** localization, distinct from the on-the-fly message
-/// translation ([TranslateService], which localizes user chat content).
-///
-/// The app ships its UI text in English (the source of truth lives inline in
-/// the widget tree). Rather than hand-author ARB catalogs for the ~130
-/// languages the message translator already supports, this service localizes
-/// the UI at runtime by routing each English source string through the SAME
-/// backend translate proxy the message translator uses, then caching the
-/// result **per language** on-device so a given string is only ever translated
-/// once.
-///
-/// ## How call sites use it
-///
-/// Every user-facing literal is wrapped with the top-level [tr] helper
-/// (`i18n.dart`), e.g. `Text(tr('Settings'))` or, with interpolation,
-/// `tr('Step {n} of {total}', {'n': i + 1, 'total': count})`. [tr] delegates
-/// to [LocalizationService.instance.translate].
-///
-/// ## Reactivity
-///
-/// [translate] is synchronous: it returns the cached translation when present,
-/// otherwise the English source **immediately** (so the UI never blocks) and
-/// enqueues the string for background translation. When a batch of
-/// translations lands, [onChanged] fires; the root widget bumps a Riverpod
-/// version provider it watches, rebuilding the whole tree so the freshly
-/// cached strings render. This means individual widgets need not be
-/// `Consumer`s to become localized — the rebuild flows from the root.
-///
-/// ## English is a no-op
-///
-/// When the selected language is empty or `en`, [translate] returns the source
-/// verbatim (after placeholder substitution) and never touches the network, so
-/// the default experience — and every widget test that doesn't configure a
-/// language — is unchanged.
+/// Runtime UI localization via the translate proxy; misses return English and repaint via [onChanged].
 class LocalizationService {
   LocalizationService._();
 
-  /// The process-wide instance. A plain singleton (not a provider) so [tr] can
-  /// be a bare top-level function callable from any widget, Consumer or not.
+  /// Plain singleton rather than a provider so [tr] can be a bare top-level function.
   static final LocalizationService instance = LocalizationService._();
 
-  /// Storage-key prefix for a per-language cache blob (`nym_ui_i18n_<lang>`),
-  /// a JSON object mapping English source → translated string.
+  /// Per-language cache key prefix; the blob maps English source to translation.
   static const String _cachePrefix = 'nym_ui_i18n_';
 
   KeyValueStore? _kv;
   TranslateService? _translator;
 
-  /// The active UI language code (e.g. `es`, `zh-tw`). Empty or `en` ⇒ English
-  /// source is shown verbatim and nothing is translated.
+  /// Active UI language code; empty or `en` shows the English source verbatim.
   String _lang = '';
   String get language => _lang;
 
-  /// Whether a non-English language is active.
   bool get isActive => _lang.isNotEmpty && _lang != 'en';
 
-  /// English source → translated string, for the [_lang] currently loaded.
+  /// English source -> translation for the loaded [_lang].
   final Map<String, String> _cache = {};
 
-  /// Every English source [translate] has ever been asked for, so that on a
-  /// language switch we can proactively translate the strings already on
-  /// screen (the rest fill in on demand as new screens are visited).
+  /// Every source ever requested, so a language switch can re-translate what's on screen.
   final Set<String> _seen = {};
 
-  /// Sources awaiting a background translation pass (misses not yet requested).
+  /// High-priority lane: misses rendered on screen, not yet requested.
   final Set<String> _pending = {};
 
-  /// Sources with an in-flight or completed request, so we never re-request
-  /// the same string within a language session.
+  /// Sources already requested this language session, never re-requested.
   final Set<String> _requested = {};
 
-  /// MIDDLE-priority queue: [prime]d screens that aren't on screen yet but
-  /// should be translated ahead of the bulk catalog — the onboarding tutorial,
-  /// primed the moment a language is chosen so it's ready before the user
-  /// reaches it. Drained after [_pending] (what's actually on screen) but
-  /// before [_sweepPending].
+  /// Middle-priority lane: [prime]d strings not yet on screen (the tutorial).
   final Set<String> _primePending = {};
 
-  /// LOW-priority queue: the full-app catalog [sweep]. Drained last, so the
-  /// visible screen (the welcome/signup modal) translates first, then the
-  /// primed tutorial, then the rest of the app fills in behind them.
+  /// Low-priority lane: the full-app catalog [sweep], drained last.
   final Set<String> _sweepPending = {};
 
   Timer? _debounce;
   bool _flushing = false;
   int _inFlight = 0;
 
-  /// Sources whose translation failed every in-line attempt, parked for a
-  /// delayed retry round so a transient proxy hiccup doesn't leave them stuck
-  /// in English. Cleared on a language switch.
+  /// Sources that failed every attempt, parked for delayed retry rounds; cleared on a language switch.
   final Set<String> _failed = {};
   Timer? _retryTimer;
   int _retryRounds = 0;
 
-  /// In-line attempts (with backoff) before a source is parked in [_failed].
+  /// In-line attempts with backoff before a source is parked in [_failed].
   static const int _attemptsPerString = 3;
 
-  /// How many delayed retry rounds to run for parked failures before giving up
-  /// (10s, 20s, 30s, 40s apart).
+  /// Delayed retry rounds for parked failures (10s, 20s, 30s, 40s apart).
   static const int _maxRetryRounds = 4;
 
-  /// Strings translated per flush chunk before persisting + repainting, so a
-  /// large background sweep localizes the app progressively rather than in one
-  /// long silent batch.
+  /// Strings per chunk before persisting and repainting, so a sweep localizes progressively.
   static const int _chunkSize = 40;
 
-  /// Fires after a batch of translations is cached, so the host can trigger a
-  /// rebuild (root widget bumps its version provider). Set by the root widget.
+  /// Fires after a batch is cached so the root widget can rebuild.
   VoidCallback? onChanged;
 
-  /// Wires the backing store + translator and loads the initial [language]'s
-  /// cache. Safe to call more than once (idempotent per language); the root
-  /// widget calls this at boot with the persisted UI-language setting.
+  /// Wires the store and translator and loads [language]'s cache; idempotent per language.
   void configure({
     required KeyValueStore kv,
     required String language,
     ApiClient? apiClient,
   }) {
     _kv = kv;
-    // An explicit [apiClient] forces a fresh translator (used by tests to inject
-    // a mock); otherwise create one lazily on first configure.
+    // An explicit [apiClient] forces a fresh translator (tests); otherwise create one lazily.
     if (apiClient != null) {
       _translator = TranslateService(api: apiClient);
     } else {
@@ -137,10 +82,7 @@ class LocalizationService {
     setLanguage(language);
   }
 
-  /// Switches the active UI language: loads that language's on-device cache and
-  /// kicks a background pass over every already-seen source so the current
-  /// screen localizes without waiting to be revisited. A no-op when [code] is
-  /// already active. Passing `''`/`en` returns the app to English instantly.
+  /// Loads [code]'s cache and re-translates already-seen sources; `''`/`en` returns to English instantly.
   void setLanguage(String code) {
     final next = code.trim();
     if (next == _lang) return;
@@ -160,9 +102,7 @@ class LocalizationService {
       return;
     }
     _loadCache();
-    // Fetch the pre-translated pack for this language before queueing anything.
-    // It usually answers the whole sweep in one request, so the queues below
-    // are left with only what it does not carry.
+    // Load the bundled pack first; it usually answers the whole sweep.
     unawaited(_primeFromPack(next));
     // Re-translate anything already rendered so the switch is visible at once.
     for (final s in _seen) {
@@ -172,45 +112,22 @@ class LocalizationService {
     onChanged?.call();
   }
 
-  /// Languages whose pack has already been fetched this session, so a switch
-  /// back does not re-download it.
+  /// Languages whose pack was already loaded this session.
   final Set<String> _packed = {};
 
-  /// Forgets which packs have been fetched, so the next language switch asks
-  /// again. Exists for tests: the service is a process-wide singleton, so
-  /// without it one test's fetch suppresses the next one's.
+  /// Test-only: the singleton would otherwise let one test's load suppress the next.
   @visibleForTesting
   void resetPackStateForTest() => _packed.clear();
 
-  /// Reads one bundled pack. Injectable so tests need no asset bundle.
+  /// Reads one bundled pack; injectable so tests need no asset bundle.
   Future<String> Function(String assetKey) packLoader = rootBundle.loadString;
 
-  /// The pre-translated pack for [code], merged into the cache.
-  ///
-  /// Every user who picked a language used to re-pay for the same ~1500
-  /// strings, one request each, and watch the interface fill in over tens of
-  /// seconds. The finished translations now ship with the app as a flat JSON
-  /// map per language (`assets/i18n/<lang>.json`), so switching language is a
-  /// single asset read and everything it carries is already in the cache by the
-  /// time the sweep looks.
-  ///
-  /// Bundled rather than fetched, deliberately. A phone that meshes over
-  /// Bluetooth with the network down still has to be able to switch language,
-  /// and this is the one part of the interface that used to need a server to
-  /// work at all. Flutter reads an asset only when asked, so carrying every
-  /// language costs bundle size rather than memory.
-  ///
-  /// On-device entries win: a string already translated here is either from the
-  /// pack already, or newer than it. Anything the pack lacks — a string added
-  /// since the last export, or one the extractor could not see — still goes
-  /// through the runtime queues exactly as before, so a missing or malformed
-  /// pack costs nothing but the old behavior.
+  /// Merges the bundled `assets/i18n/<lang>.json` pack (works offline); on-device entries win and gaps use the runtime queues.
   Future<void> _primeFromPack(String code) async {
     if (code.isEmpty || code == 'en' || !_packed.add(code)) return;
     try {
       final raw = await packLoader('assets/i18n/$code.json');
-      // A language switch while the asset was loading: those translations
-      // belong to a language that is no longer showing.
+      // The language switched while the asset loaded.
       if (_lang != code) return;
       final map = jsonDecode(raw);
       if (map is! Map) return;
@@ -219,7 +136,7 @@ class LocalizationService {
         if (k is! String || v is! String || v.isEmpty) return;
         if (_cache.containsKey(k)) return;
         _cache[k] = v;
-        // Nothing still queued for a string the pack just answered.
+        // Nothing stays queued for a string the pack answered.
         _pending.remove(k);
         _primePending.remove(k);
         _sweepPending.remove(k);
@@ -229,17 +146,11 @@ class LocalizationService {
       _persist();
       onChanged?.call();
     } catch (_) {
-      // No pack for this language yet, or a malformed one — the runtime queues
-      // still handle it, exactly as before packs existed.
+      // Missing or malformed pack: the runtime queues handle it.
     }
   }
 
-  /// Returns the localized form of [source] for the active language, applying
-  /// `{name}` placeholder substitution from [args] afterwards.
-  ///
-  /// Synchronous and non-blocking: on a cache miss it returns the English
-  /// [source] now and schedules a background translation; the eventual
-  /// [onChanged] repaint swaps in the translated text.
+  /// Synchronous: returns the cached translation or the English [source] and queues a miss; `{name}` args apply afterwards.
   String translate(String source, [Map<String, Object?>? args]) {
     if (source.isEmpty) return source;
     _seen.add(source);
@@ -247,11 +158,7 @@ class LocalizationService {
     final hit = _cache[source];
     if (hit != null) return _subst(hit, args);
     if (!_requested.contains(source) && !_failed.contains(source)) {
-      // A string actually being rendered jumps to the top lane (promoting it
-      // out of the prime/sweep lanes if it was queued there). A source parked
-      // in [_failed] is skipped: the repaint that follows its failure re-reads
-      // it, and re-queueing here would keep the top lane permanently busy and
-      // starve the sweep. Its delayed retry round owns it instead.
+      // Rendered strings jump to the top lane; parked failures are skipped so they can't starve the sweep.
       _sweepPending.remove(source);
       _primePending.remove(source);
       _pending.add(source);
@@ -261,13 +168,7 @@ class LocalizationService {
     return _subst(source, args);
   }
 
-  /// Registers [sources] as strings the app is about to render, so a bulk
-  /// [pretranslate] pass (and every future language switch) covers them even
-  /// before they first appear on screen. Used to pre-translate the onboarding
-  /// tutorial the moment a language is chosen — a static overlay that never
-  /// rebuilds on its own, so it must be translated up front rather than on
-  /// demand. If the active language already has some of these cached, they're
-  /// skipped; anything missing is queued.
+  /// Queues uncached [sources] in the middle lane before they render, for static overlays like the tutorial.
   void prime(Iterable<String> sources) {
     for (final s in sources) {
       if (s.isEmpty) continue;
@@ -276,7 +177,7 @@ class LocalizationService {
           !_cache.containsKey(s) &&
           !_requested.contains(s) &&
           !_pending.contains(s)) {
-        // MIDDLE lane: ahead of the background sweep, behind on-screen strings.
+        // Middle lane: ahead of the sweep, behind on-screen strings.
         _sweepPending.remove(s);
         _primePending.add(s);
       }
@@ -284,15 +185,7 @@ class LocalizationService {
     if (_primePending.isNotEmpty) _scheduleFlush();
   }
 
-  /// Kicks a LOW-PRIORITY background sweep translating [catalog] — the app's
-  /// full UI-string catalog (`kAppStringsCatalog`) — into the active language,
-  /// so every screen is eventually pre-populated in the cache and nothing has
-  /// to translate on demand. It NEVER render-blocks: the user can start using
-  /// the app immediately, and any string actually being rendered (or [prime]d —
-  /// the welcome/signup modal, then the tutorial) preempts the sweep via the
-  /// high-priority lane. Cheap when strings are already cached, safe to call
-  /// repeatedly, a no-op for English, chunked with retries, and resumable
-  /// (partial progress persists) across launches / language switches.
+  /// Low-priority, non-blocking, resumable background translation of the full catalog; no-op for English.
   void sweep(Iterable<String> catalog) {
     for (final s in catalog) {
       if (s.isEmpty) continue;
@@ -308,11 +201,7 @@ class LocalizationService {
     if (_sweepPending.isNotEmpty) _scheduleFlush();
   }
 
-  // --- internals ------------------------------------------------------------
-
-  /// Replaces every `{key}` token in [text] with `args[key]` (missing keys are
-  /// left intact). No args ⇒ the string is returned unchanged, so plain labels
-  /// pay no substitution cost.
+  /// Replaces `{key}` tokens from [args], leaving missing keys intact.
   static String _subst(String text, Map<String, Object?>? args) {
     if (args == null || args.isEmpty || !text.contains('{')) return text;
     return text.replaceAllMapped(_rxPlaceholder, (m) {
@@ -334,7 +223,7 @@ class LocalizationService {
         if (v is String) _cache[k] = v;
       });
     } catch (_) {
-      // Corrupt blob — discard and rebuild on demand.
+      // Corrupt blob: discard and rebuild on demand.
     }
   }
 
@@ -351,20 +240,13 @@ class LocalizationService {
       _primePending.isNotEmpty ||
       _sweepPending.isNotEmpty;
 
-  /// True while a translation pass is running or still queued. Drives the
-  /// sidebar's progress row.
-  ///
-  /// Deliberately does NOT read [_flushing]: the per-chunk notify fires from
-  /// inside the drain loop, so this has to read false on that last notify.
-  /// Adding a notify after the flag drops instead would rebuild the tree with
-  /// nothing in flight, and every failed-but-visible string would re-queue
-  /// itself and start another pass — a loop that starves the sweep lane.
+  /// Drives the sidebar progress row; must not read [_flushing] or failed strings would re-queue in a loop.
   bool get isTranslating => isActive && (_anyPending || _inFlight > 0);
 
   void _scheduleFlush() {
     if (_flushing || !_anyPending) return;
     _debounce?.cancel();
-    // Coalesce the many `tr()` calls a single screen makes into one batch.
+    // Coalesce a screen's many `tr()` calls into one batch.
     _debounce = Timer(const Duration(milliseconds: 200), _flush);
   }
 
@@ -373,14 +255,7 @@ class LocalizationService {
     _flushing = true;
     final lang = _lang;
     try {
-      // Drain in chunks, persisting + repainting after each so translation lands
-      // progressively (and survives an interruption with partial progress
-      // saved) rather than in one long silent batch. Lanes are drained strictly
-      // by priority: on-screen strings (_pending) first, then primed screens
-      // (_primePending: the tutorial), then the full-app [sweep] (_sweepPending)
-      // — so the welcome/signup modal translates first, the tutorial next (even
-      // before it's shown), and the rest fills in behind them regardless of the
-      // order the lanes were fed.
+      // Drain in chunks by lane priority (on-screen, primed, sweep), persisting and repainting after each.
       while (_anyPending && lang == _lang) {
         final queue = _pending.isNotEmpty
             ? _pending
@@ -410,10 +285,7 @@ class LocalizationService {
     }
   }
 
-  /// Translates a single [source] into [_lang] and stores it, retrying a few
-  /// times with backoff on failure. Placeholders are shielded so the upstream
-  /// can't translate/reorder them. If every attempt fails the source is parked
-  /// in [_failed] (and un-marked from [_requested]) for a later delayed retry.
+  /// Translates one source with placeholders shielded, retrying with backoff; parks it in [_failed] if all attempts fail.
   Future<void> _translateOne(String source) async {
     final translator = _translator;
     if (translator == null) return;
@@ -429,8 +301,7 @@ class LocalizationService {
         _failed.remove(source);
         return;
       } catch (_) {
-        // Backoff before the next attempt (300ms, 600ms, …); the last attempt
-        // falls through to parking the source for a delayed retry round.
+        // Backoff 300ms, 600ms, …; the last attempt falls through to parking.
         if (attempt + 1 < _attemptsPerString) {
           await Future<void>.delayed(
               Duration(milliseconds: 300 * (1 << attempt)));
@@ -442,9 +313,7 @@ class LocalizationService {
     _failed.add(source);
   }
 
-  /// Re-queues parked [_failed] sources after an increasing delay (10s, 20s, …),
-  /// up to [_maxRetryRounds] rounds, so a transient proxy/network outage doesn't
-  /// permanently leave strings in English. Canceled/reset on a language switch.
+  /// Re-queues parked failures after increasing delays, up to [_maxRetryRounds]; reset on a language switch.
   void _scheduleFailedRetry() {
     if (_failed.isEmpty || _retryTimer != null) return;
     if (_retryRounds >= _maxRetryRounds) return;
@@ -480,14 +349,13 @@ class LocalizationService {
     await Future.wait(workers);
   }
 
-  /// Replaces `{name}` tokens with an ASCII sentinel (`__NYMPH0__`) that survives
-  /// machine translation intact, returning the tokens to restore afterwards.
+  /// Replaces `{name}` tokens with a sentinel (`__NYMPH0__`) that survives machine translation.
   static _Shield _shieldPlaceholders(String text) {
     if (!text.contains('{')) return _Shield(text, const []);
     final tokens = <String>[];
     final shielded = text.replaceAllMapped(_rxPlaceholder, (m) {
       final idx = tokens.length;
-      tokens.add(m.group(0)!); // the whole `{name}`
+      tokens.add(m.group(0)!);
       return '__NYMPH${idx}__';
     });
     return _Shield(shielded, tokens);

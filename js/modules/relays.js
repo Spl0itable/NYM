@@ -8,17 +8,12 @@ const EDGE_CHALLENGE_NOTE_MIN_MS = 30000;
 
 Object.assign(NYM.prototype, {
 
-    /// localStorage key for the persisted geo-relay directory.
+    // localStorage key for the persisted geo-relay directory.
     _GEO_RELAY_CACHE_KEY: 'nym_geo_relays',
-    /// How long a cached directory is used before we look for changes.
-    /// Matches bitchat on both platforms: iOS `geoRelayFetchIntervalSeconds`
-    /// (TransportConfig.swift) and Android `ONE_DAY_MS` (RelayDirectory.kt) are
-    /// both 24h. The list changes rarely, and refetching it on every reload
-    /// costs a request before geohash channels can be joined.
+    // 24h, matching bitchat iOS (geoRelayFetchIntervalSeconds) and Android (ONE_DAY_MS).
     _GEO_RELAY_TTL_MS: 24 * 60 * 60 * 1000,
 
-    /// Reads the persisted directory. Returns null when absent or unusable —
-    /// never when merely stale, so a failed refresh can still fall back to it.
+    // Null when absent or unusable, never when merely stale, so a failed refresh can fall back to it.
     _loadGeoRelayCache() {
         try {
             const raw = localStorage.getItem(this._GEO_RELAY_CACHE_KEY);
@@ -43,17 +38,10 @@ Object.assign(NYM.prototype, {
                 relays: slim(relays),
                 vetted: slim(vetted),
             }));
-        } catch (_) { /* quota or private mode — the in-memory list still works */ }
+        } catch (_) { /* Quota or private mode; the in-memory list still works. */ }
     },
 
-    // Fetch geo relay list from the same remote CSV that bitchat uses.
-    // Falls back to the hardcoded list if fetch fails.
-    // Returns a promise so connectToGeoRelays can await the fresh data
-    // before selecting relays, ensuring we match bitchat's relay set.
-    //
-    // A directory cached within _GEO_RELAY_TTL_MS is adopted WITHOUT any
-    // network call, so a reload or reconnect starts from disk. Pass
-    // { force: true } to check for changes regardless of age.
+    // Same CSV as bitchat; a cache within _GEO_RELAY_TTL_MS skips the network unless { force: true }.
     fetchGeoRelays(opts = {}) {
         const directCsvUrl = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
         const base = this._getProxyBaseUrl();
@@ -62,9 +50,7 @@ Object.assign(NYM.prototype, {
 
         const cached = this._loadGeoRelayCache();
         if (cached) {
-            // Adopt the cached lists immediately either way: when fresh this is
-            // the whole operation, and when stale it keeps geohash channels
-            // working while the refresh is in flight.
+            // Adopt the cache immediately so geohash channels work while a refresh is in flight.
             this._adoptGeoRelays(cached.relays, cached.vetted, { persist: false });
             const age = Date.now() - cached.fetchedAt;
             if (!opts.force && age >= 0 && age < this._GEO_RELAY_TTL_MS) {
@@ -98,8 +84,7 @@ Object.assign(NYM.prototype, {
         return (async () => {
             let got = await tryProxyJson();
             if (!got || got.relays.length === 0) {
-                // Direct fallback. The vetted list is best-effort: without it we
-                // still match bitchat Android, which is what we did before.
+                // The vetted list is best-effort; without it we still match bitchat Android.
                 const [relays, vetted] = await Promise.all([
                     fetchCsv(directCsvUrl),
                     fetchCsv(vettedCsvUrl).catch(() => []),
@@ -110,19 +95,12 @@ Object.assign(NYM.prototype, {
                 this._adoptGeoRelays(got.relays, got.vetted, { persist: true });
             }
         })().catch((err) => {
-            // A cached directory (however old) has already been adopted above,
-            // so a failed refresh degrades to "keep using what we had".
+            // Any cached directory was already adopted above, so a failed refresh keeps what we had.
             console.warn(`[GeoRelays] CSV fetch failed (${this.geoRelays.length} geo relays):`, err.message);
         });
     },
 
-    /// Installs the two parsed directories, canonicalising urls, and optionally
-    /// persists them for the next launch.
-    ///
-    /// `geoRelays` stays the UNION so pool sharding and allRelayUrls cover
-    /// everything either directory names; the two are kept apart because
-    /// selection has to apply each client's own rule (see
-    /// getClosestRelaysForGeohash).
+    // `geoRelays` stays the union; the two lists stay apart so selection applies each client's own rule.
     _adoptGeoRelays(relays, vetted, { persist }) {
         const canon = (list) => (list || []).map(r => ({ ...r, url: this._canonicalRelayUrl(r.url) }));
         this._geoRelaysUpstream = canon(relays);
@@ -132,10 +110,7 @@ Object.assign(NYM.prototype, {
         for (const r of this._geoRelaysUpstream) byUrl.set(r.url, r);
         for (const r of this._geoRelaysVetted) if (!byUrl.has(r.url)) byUrl.set(r.url, r);
         this.geoRelays = [...byUrl.values()];
-        // Defensive: adopting the cached directory runs synchronously from
-        // inside the constructor (see app.js, where allRelayUrls is seeded
-        // just above the fetchGeoRelays call). Any future reordering that puts
-        // an adopt ahead of that assignment should degrade, not throw.
+        // Defensive: this can run from the constructor before allRelayUrls is seeded (see app.js).
         if (!this.allRelayUrls) this.allRelayUrls = new Set(this.defaultRelays || []);
         for (const r of this.geoRelays) this.allRelayUrls.add(r.url);
 
@@ -166,8 +141,7 @@ Object.assign(NYM.prototype, {
         return parsed;
     },
 
-    // The N closest relays to a geohash, as the UNION of what each bitchat
-    // client would pick.
+    // The union of what each bitchat client (iOS and Android) would pick.
     getClosestRelaysForGeohash(geohash, count = this.geoRelayCount) {
         try {
             const coords = this.decodeGeohash(geohash);
@@ -181,9 +155,7 @@ Object.assign(NYM.prototype, {
                 distance: this.calculateDistance(coords.lat, coords.lng, relay.lat, relay.lng),
             }));
 
-            // Android's rule: distance only. Array.prototype.sort is stable per
-            // spec, so ties keep directory order — which is what Kotlin's
-            // stable sortedBy over the same CSV produces.
+            // Android's rule: distance only; the stable sort keeps directory order on ties like Kotlin's sortedBy.
             const upstream = rank(this._geoRelaysUpstream || this.geoRelays || []);
             upstream.sort((a, b) => (a.distance - b.distance) || (a.index - b.index));
 
@@ -198,8 +170,7 @@ Object.assign(NYM.prototype, {
                 seen.add(r.url);
                 out.push({ url: r.url, distance: r.distance });
             }
-            // Closest-first overall, so callers that only take a prefix still
-            // get the nearest relays.
+            // Closest-first overall, so callers taking a prefix still get the nearest relays.
             out.sort((a, b) => a.distance - b.distance);
             return out;
         } catch (error) {
@@ -217,7 +188,7 @@ Object.assign(NYM.prototype, {
         if (closestRelays.length === 0) return;
         const geoUrls = new Set(closestRelays.map(r => r.url));
 
-        // Multiplexed pool mode: retry with GEO_EVENT to geo workers only
+        // Pool mode: retry with GEO_EVENT to geo workers only.
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             setTimeout(() => {
                 if (this._isAnyPoolOpen()) {
@@ -227,25 +198,21 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Legacy (direct connection) mode: explicitly send to each geo relay.
         const msg = JSON.stringify(['EVENT', signedEvent]);
 
         const trySend = () => {
             for (const url of geoUrls) {
                 const relay = this.relayPool.get(url);
                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                    try { relay.ws.send(msg); } catch (_) { /* noop */ }
+                    try { relay.ws.send(msg); } catch (_) {}
                 }
             }
         };
 
-        // Immediate attempt (may already be connected)
         trySend();
-        // Retry after geo relays have had more time to connect
         setTimeout(trySend, 2000);
     },
 
-    // Keep geo relays for the active geohash channel connected by periodically
     startGeoRelayKeepAlive(geohash) {
         if (this._geoRelayKeepAliveInterval) {
             clearInterval(this._geoRelayKeepAliveInterval);
@@ -289,17 +256,14 @@ Object.assign(NYM.prototype, {
         this._geoRelayKeepAliveGeohash = null;
     },
 
-    // Connect to geo-specific relays for a geohash channel
     async connectToGeoRelays(geohash) {
         if (!geohash || !this.isValidGeohash(geohash)) {
             return;
         }
 
-        // Skip geo relay connections in group chat & PM only mode
         if (this.settings.groupChatPMOnlyMode) return;
 
-        // Wait for the remote CSV relay list to load so we match
-        // the same relay set that bitchat uses for this geohash.
+        // Wait for the remote CSV so we match bitchat's relay set for this geohash.
         if (this._geoRelaysReady) {
             await this._geoRelaysReady;
         }
@@ -310,7 +274,6 @@ Object.assign(NYM.prototype, {
         }
         const geoRelayUrls = new Set(closestRelays.map(r => r.url));
 
-        // Multiplexed pool mode: keep geo relays in the pool config
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             const prev = this.geoRelayConnections.get(geohash);
             const changed = !prev || prev.size !== geoRelayUrls.size ||
@@ -318,7 +281,6 @@ Object.assign(NYM.prototype, {
             this.geoRelayConnections.set(geohash, geoRelayUrls);
             for (const url of geoRelayUrls) this.currentGeoRelays.add(url);
 
-            // Verify the mapped relays are actually connected in the pool
             const present = new Set(this.poolConnectedRelays || []);
             const anyMissing = [...geoRelayUrls].some(u => !present.has(u));
 
@@ -331,13 +293,12 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Direct connection mode
         this.geoRelayConnections.set(geohash, geoRelayUrls);
 
         const connectionPromises = [];
         let newlyConnected = 0;
         for (const { url: relayUrl } of closestRelays) {
-            // Already connected — ensure it has the standing kind-20000 sub
+            // Already connected: ensure it has the standing kind-20000 sub.
             const existing = this.relayPool.get(relayUrl);
             if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) {
                 this.currentGeoRelays.add(relayUrl);
@@ -345,7 +306,6 @@ Object.assign(NYM.prototype, {
                 continue;
             }
 
-            // Skip if blacklisted or recently failed
             if (this.blacklistedRelays.has(relayUrl) && !this.isBlacklistExpired(relayUrl)) {
                 continue;
             }
@@ -353,7 +313,6 @@ Object.assign(NYM.prototype, {
                 continue;
             }
 
-            // Connect concurrently — only 5 geo relays, no stagger needed
             connectionPromises.push(
                 this.connectToRelayWithTimeout(relayUrl, 'relay', 3000).then(() => {
                     const relay = this.relayPool.get(relayUrl);
@@ -367,10 +326,8 @@ Object.assign(NYM.prototype, {
             );
         }
 
-        // Wait for all connection attempts to complete
         await Promise.all(connectionPromises);
 
-        // Update network stats to reflect newly connected geo relays
         this.updateRelayStatus();
 
         if (newlyConnected > 0) {
@@ -378,23 +335,17 @@ Object.assign(NYM.prototype, {
             this.loadChannelFromRelays(geohash, 'geohash');
         }
 
-        // Always ensure default relays (first 5 broadcast relays) are connected
         this.ensureDefaultRelaysConnected();
-        // And the neighbourhoods of the other geohash channels in view, which
-        // the geo-origin gate now needs a source for.
+        // The geo-origin gate needs a source for the other geohash channels in view too.
         this.ensureGeoRelayCoverage();
     },
 
-    /// How many geo relays direct mode will hold open for coverage. The pool
-    /// carries the whole ~415-entry directory because a Worker holds those
-    /// sockets; a browser cannot, so direct mode covers what the user can
-    /// actually see and stops there.
+    // Direct mode covers only visible channels; the pool Worker can hold the whole ~415-entry directory.
     GEO_COVERAGE_MAX: 40,
 
-    /// Connects the nearest relays for every geohash channel in view, not just
-    /// the one on screen.
+    // Covers every geohash channel in view, not just the one on screen.
     async ensureGeoRelayCoverage() {
-        if (this.useRelayProxy) return;   // the pool already carries all of them
+        if (this.useRelayProxy) return;   // The pool already carries all of them.
         if (this.settings && this.settings.groupChatPMOnlyMode) return;
         if (this._geoRelaysReady) await this._geoRelaysReady;
 
@@ -433,12 +384,11 @@ Object.assign(NYM.prototype, {
                     this.currentGeoRelays.add(relayUrl);
                     this._ensureGeoRelayLiveSub(relay, relayUrl);
                 }
-            } catch (_) { /* one unreachable relay is not a failure */ }
+            } catch (_) { /* One unreachable relay is not a failure. */ }
         }
         this.updateRelayStatus();
     },
 
-    // Give a geo relay the kind-20000 subscription once
     _ensureGeoRelayLiveSub(relay, relayUrl) {
         if (!relay || relay._geoLiveSub) return;
         relay._geoLiveSub = true;
@@ -446,7 +396,7 @@ Object.assign(NYM.prototype, {
         this.subscribeToSingleRelay(relayUrl);
     },
 
-    // Force the app relay (wss://relay.nymchat.app) to be connected
+    // Force the app relay (wss://relay.nymchat.app) to be connected.
     async ensureAppRelayConnected() {
         const url = this.appRelay;
         if (!url) return;
@@ -497,9 +447,7 @@ Object.assign(NYM.prototype, {
         }, 15000);
     },
 
-    // Ensure the first 5 broadcast relays are always connected regardless of channel
     async ensureDefaultRelaysConnected() {
-        // Pool mode: proxy manages all connections
         if (this.useRelayProxy) return;
 
         for (const relayUrl of this.defaultRelays) {
@@ -520,12 +468,9 @@ Object.assign(NYM.prototype, {
     applyLowDataMode(enabled) {
         if (enabled) {
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                // Pool mode: _poolSendRelayConfig respects lowDataMode
-                // and sends only defaults + DM relays + active geo relays
+                // _poolSendRelayConfig respects lowDataMode (defaults + DM relays + active geo relays).
                 this._poolSendRelayConfig();
             } else {
-                // Direct mode: disconnect all relays except the 5 defaults
-                // and active geo relays for the current channel
                 const keepRelays = new Set(this.defaultRelays);
                 for (const url of this.currentGeoRelays) {
                     keepRelays.add(url);
@@ -540,10 +485,8 @@ Object.assign(NYM.prototype, {
             }
         } else {
             if (this.useRelayProxy) {
-                // Pool mode: restore full relay config
                 this._poolSendRelayConfig();
             } else {
-                // Direct mode: reconnect to all broadcast and geo relays
                 this.defaultRelays.forEach(relayUrl => {
                     if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                         this.connectToRelay(relayUrl, 'relay').then(() => {
@@ -576,11 +519,9 @@ Object.assign(NYM.prototype, {
     cleanupGeoRelays(previousGeohash) {
         if (!previousGeohash) return;
 
-        // Get relays that were connected for the previous geohash
         const previousGeoRelays = this.geoRelayConnections.get(previousGeohash);
         if (!previousGeoRelays) return;
 
-        // Check if any of these relays are still needed for other geohash channels
         const stillNeededRelays = new Set();
         for (const [geohash, relays] of this.geoRelayConnections) {
             if (geohash !== previousGeohash) {
@@ -590,18 +531,15 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Build set of relays that should never be disconnected
         const keepRelays = new Set(this.defaultRelays);
 
         for (const url of previousGeoRelays) {
             if (!stillNeededRelays.has(url) && !keepRelays.has(url)) {
                 this.currentGeoRelays.delete(url);
 
-                // Low data mode: actively close the connection to free resources
                 if (this.settings && this.settings.lowDataMode) {
                     if (this.useRelayProxy) {
-                        // Pool mode: send updated config so proxy drops the relay
-                        // (batched after the loop below)
+                        // Pool mode: config is sent after the loop so the proxy drops the relay.
                     } else {
                         const relay = this.relayPool.get(url);
                         if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) {
@@ -613,11 +551,8 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Remove the cached connection entry for the old geohash
         this.geoRelayConnections.delete(previousGeohash);
 
-        // Low data mode + pool: send updated relay config so the proxy
-        // disconnects relays that are no longer in the set
         if (this.settings && this.settings.lowDataMode && this.useRelayProxy) {
             this._poolSendRelayConfig();
         }
@@ -666,7 +601,6 @@ Object.assign(NYM.prototype, {
     },
 
     setupVisibilityMonitoring() {
-        // Reconcile any purchase paid while the PWA was backgrounded or closed.
         const reconcile = () => {
             if (typeof this.reconcilePendingPurchases === 'function') {
                 try { this.reconcilePendingPurchases(); } catch (e) { }
@@ -677,7 +611,6 @@ Object.assign(NYM.prototype, {
         window.addEventListener('online', reconcile);
         setTimeout(reconcile, 4000);
 
-        // Track when app becomes visible/hidden
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
                 const delay = this.isFlutterWebView ? 200 : 500;
@@ -710,9 +643,7 @@ Object.assign(NYM.prototype, {
                     if (typeof this._markVisibleGroupMessagesRead === 'function') {
                         this._markVisibleGroupMessagesRead();
                     }
-                    // History can arrive while the tab is backgrounded, where a
-                    // column's own render hooks may never have run. Coming back
-                    // is the natural moment to make each column match its store.
+                    // Background tabs may skip column render hooks, so reconcile columns on return.
                     if (typeof this._cvScheduleReconcile === 'function') {
                         this._cvScheduleReconcile(0);
                     }
@@ -732,21 +663,17 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Also listen for page focus (for desktop)
         window.addEventListener('focus', () => {
             const delay = this.isFlutterWebView ? 200 : 500;
             setTimeout(() => {
-                // Clear failed relays and blacklist to allow immediate reconnection
                 this.clearRelayBlocksForReconnection();
 
                 this.checkConnectionHealth();
 
-                // If disconnected, immediately start reconnection attempts
                 if (!this.connected && navigator.onLine) {
                     this.attemptReconnection();
                 }
 
-                // Pool mode: only resubscribe if sockets are healthy
                 if (this.useRelayProxy) {
                     if (this._isAnyWorkerPoolOpen()) {
                         this._poolSubscribe();
@@ -755,7 +682,6 @@ Object.assign(NYM.prototype, {
                         this._schedulePoolReconnect();
                     }
                 } else {
-                    // Always refresh subscriptions when window regains focus
                     setTimeout(() => this.resubscribeAllRelays(), 250);
                     if (this._poolFallbackActive && navigator.onLine) {
                         this._schedulePoolReconnectInBackground(true);
@@ -776,21 +702,17 @@ Object.assign(NYM.prototype, {
             }, delay);
         });
 
-        // For Flutter WebView, also check on resume event
         if (this.isFlutterWebView) {
             window.addEventListener('resume', () => {
                 setTimeout(() => {
-                    // Clear failed relays and blacklist to allow immediate reconnection
                     this.clearRelayBlocksForReconnection();
 
                     this.checkConnectionHealth();
 
-                    // If disconnected, immediately start reconnection attempts
                     if (!this.connected && navigator.onLine) {
                         this.attemptReconnection();
                     }
 
-                    // Pool mode: only resubscribe if sockets are healthy
                     if (this.useRelayProxy) {
                         if (this._isAnyWorkerPoolOpen()) {
                             this._poolSubscribe();
@@ -799,7 +721,6 @@ Object.assign(NYM.prototype, {
                             this._schedulePoolReconnect();
                         }
                     } else {
-                        // Always refresh subscriptions when app resumes
                         setTimeout(() => this.resubscribeAllRelays(), 250);
                         if (this._poolFallbackActive && navigator.onLine) {
                             this._schedulePoolReconnectInBackground(true);
@@ -812,13 +733,10 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Clear relay blocks (failed list, blacklist, reconnecting set) to allow fresh reconnection attempts
     clearRelayBlocksForReconnection() {
-        // Clear failed relays so they can be retried immediately
         this.failedRelays.clear();
 
-        // Clear blacklist and timestamps, but preserve permanent rejections
-        // (auth-required, unsupported filter) since those won't change.
+        // Preserve permanent rejections (auth-required, unsupported filter); those won't change.
         const keep = this._permanentBlacklist || new Set();
         this.blacklistedRelays.clear();
         this.blacklistTimestamps.clear();
@@ -827,12 +745,10 @@ Object.assign(NYM.prototype, {
             this.blacklistTimestamps.set(url, Date.now() + (10 * 365 * 24 * 3600 * 1000));
         }
 
-        // Clear reconnecting set to allow fresh attempts
         if (this.reconnectingRelays) {
             this.reconnectingRelays.clear();
         }
 
-        // Reset reconnection attempt counter so we get a fresh set of attempts
         this.reconnectionAttempts = 0;
         this.isReconnecting = false;
         this._poolReconnecting = false;
@@ -860,25 +776,20 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Clean up dead relays
         deadRelays.forEach(url => {
             this.relayPool.delete(url);
         });
 
-        // If we have no actual connections, force reconnect
         if (actuallyConnected === 0) {
             this.connected = false;
             this.updateConnectionStatus('Disconnected');
 
-            // Clear reconnecting set to allow fresh attempts
             if (this.reconnectingRelays) {
                 this.reconnectingRelays.clear();
             }
 
-            // Try to reconnect to broadcast relays
             await this.reconnectToBroadcastRelays();
 
-            // Reconnect to geo relays if we're in a geohash channel
             if (this.currentGeohash) {
                 setTimeout(() => {
                     this.connectToGeoRelays(this.currentGeohash);
@@ -886,28 +797,23 @@ Object.assign(NYM.prototype, {
             }
 
         } else {
-            // We have some connections, but update status to reflect actual count
             this.updateConnectionStatus();
 
-            // If we're missing default relays, try to restore them
             const missingEssential = this.defaultRelays.filter(url => !this.relayPool.has(url));
             if (missingEssential.length > 0) {
                 this.reconnectToBroadcastRelays();
             }
 
-            // Check geo relay health if we're in a geohash channel
             if (this.currentGeohash) {
                 this.connectToGeoRelays(this.currentGeohash);
             }
 
-            // Always ensure default relays (first 5 broadcast) are connected
             this.ensureDefaultRelaysConnected();
             this.ensureGeoRelayCoverage();
         }
     },
 
     async reconnectToBroadcastRelays() {
-        // Multiplexed pool mode: just reconnect the single pool socket
         if (this.useRelayProxy) {
             if (this._isAnyPoolOpen()) return;
             this._schedulePoolReconnect();
@@ -916,7 +822,6 @@ Object.assign(NYM.prototype, {
 
         let connectedCount = 0;
 
-        // Always reconnect default relays so PMs/groups stay reachable
         const relaysToConnect = [...this.defaultRelays];
         if (this.previouslyConnectedRelays && this.previouslyConnectedRelays.size > 0) {
             relaysToConnect.sort((a, b) => {
@@ -940,13 +845,11 @@ Object.assign(NYM.prototype, {
                     connectedCount++;
 
                     if (connectedCount === 1) {
-                        // After first successful connection
                         this.connected = true;
                         this.updateConnectionStatus();
                     }
                 }
 
-                // Small delay between connections to avoid overwhelming
                 await new Promise(resolve => setTimeout(resolve, 50));
             }
         }
@@ -955,46 +858,38 @@ Object.assign(NYM.prototype, {
     },
 
     setupNetworkMonitoring() {
-        // Track reconnection attempts
         this.reconnectionAttempts = 0;
         this.maxReconnectionAttempts = 10;
         this.reconnectionInterval = null;
 
-        // Listen for online/offline events
         window.addEventListener('online', () => {
             this.displaySystemMessage('Network connection restored, reconnecting...');
-            this.reconnectionAttempts = 0; // Reset attempts on network restore
+            this.reconnectionAttempts = 0;
 
-            // Force update connection status
             this.updateConnectionStatus('Reconnecting...');
 
-            // Multiplexed pool mode: just reconnect the pool
             if (this.useRelayProxy) {
-                this._poolReconnecting = false; // Reset so schedule can run
-                this._poolReconnectRetries = 0;  // Reset backoff on network restore
-                this._lastPoolReconnectSchedule = 0; // Clear debounce for network restore
+                this._poolReconnecting = false;
+                this._poolReconnectRetries = 0;
+                this._lastPoolReconnectSchedule = 0;
                 this._schedulePoolReconnect();
                 this._ensureAllShardsConnected();
                 return;
             }
 
-            // Fell back to direct mode earlier — try to restore the pool now
             if (this._poolFallbackActive) {
                 this._schedulePoolReconnectInBackground(true);
             }
 
-            // Clear any existing reconnection interval
             if (this.reconnectionInterval) {
                 clearInterval(this.reconnectionInterval);
                 this.reconnectionInterval = null;
             }
 
-            // Clear all reconnecting flags to allow fresh attempts
             if (this.reconnectingRelays) {
                 this.reconnectingRelays.clear();
             }
 
-            // Clear relay pool of dead connections
             this.relayPool.forEach((relay, url) => {
                 if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) {
                     this.relayPool.delete(url);
@@ -1002,31 +897,24 @@ Object.assign(NYM.prototype, {
                 }
             });
 
-            // Clear blacklist temporarily to allow retry
             this.blacklistedRelays.clear();
             this.blacklistTimestamps.clear();
             this.isReconnecting = false;
 
-            // Reconnect via the serialized helper
             this.reconnectToBroadcastRelays();
 
-            // Retry any pending DMs after network restore
             setTimeout(() => this.retryPendingDMsOnReconnect(), 3000);
-            // Publish whatever the Bluetooth mesh carried while the internet
-            // was down (mesh-outbox.js). Until this existed those messages
-            // reached whoever was in radio range and nobody else, ever.
+            // Publish what the Bluetooth mesh carried while offline (mesh-outbox.js).
             setTimeout(() => this.flushMeshOutbox && this.flushMeshOutbox(), 3500);
         });
 
         window.addEventListener('offline', () => {
 
-            // Force cleanup of relay pool
             this.relayPool.forEach((relay, url) => {
                 if (relay.ws) {
                     try {
                         relay.ws.close();
                     } catch (e) {
-                        // Ignore close errors
                     }
                 }
                 this.relayPool.delete(url);
@@ -1037,37 +925,30 @@ Object.assign(NYM.prototype, {
             this.updateConnectionStatus('Disconnected');
         });
 
-        // Start automatic reconnection monitoring
         this.startReconnectionMonitoring();
     },
 
     startReconnectionMonitoring() {
-        // Only monitor when app is visible/active
         this.reconnectionInterval = null;
 
         const startMonitoring = () => {
-            // Clear any existing interval
             if (this.reconnectionInterval) {
                 clearInterval(this.reconnectionInterval);
             }
 
-            // Don't start monitoring during initial connection - let connectToRelays() handle it
+            // Don't monitor during the initial connection; connectToRelays() handles it.
             if (this.initialConnectionInProgress) {
                 return;
             }
 
-            // Only start if disconnected and visible
             if (!this.connected && !document.hidden) {
                 this.reconnectionInterval = setInterval(() => {
-                    // Skip during initial connection
                     if (this.initialConnectionInProgress) {
                         return;
                     }
-                    // Only attempt if still visible
                     if (!document.hidden && !this.connected && navigator.onLine) {
                         this.attemptReconnection();
                     } else if (document.hidden) {
-                        // Stop monitoring if app goes to background
                         clearInterval(this.reconnectionInterval);
                         this.reconnectionInterval = null;
                     }
@@ -1082,10 +963,8 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Listen for visibility changes
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
-                // App came to foreground - check immediately then start monitoring
                 setTimeout(() => {
                     this.checkConnectionHealth();
                     if (!this.connected && navigator.onLine) {
@@ -1094,33 +973,28 @@ Object.assign(NYM.prototype, {
                     }
                 }, 200);
             } else {
-                // App went to background - stop monitoring
                 stopMonitoring();
             }
         });
 
-        // Start monitoring if currently visible and needed
         if (!document.hidden) {
             startMonitoring();
         }
     },
 
     async attemptReconnection() {
-        // Pool mode: delegate to the guarded pool reconnect
         if (this.useRelayProxy) {
-            // Don't reset _poolReconnecting — let _schedulePoolReconnect's guard prevent duplicate attempts
+            // Don't reset _poolReconnecting; _schedulePoolReconnect's guard prevents duplicate attempts.
             if (!this._poolReconnecting) {
                 this._schedulePoolReconnect();
             }
             return;
         }
 
-        // Prevent multiple simultaneous reconnection attempts
         if (this.isReconnecting) {
             return;
         }
 
-        // Check if we've exceeded max attempts
         if (this.reconnectionAttempts >= this.maxReconnectionAttempts) {
             this.updateConnectionStatus('Disconnected - Click to reconnect');
             return;
@@ -1132,7 +1006,6 @@ Object.assign(NYM.prototype, {
         this.updateConnectionStatus(`Reconnecting (${this.reconnectionAttempts}/${this.maxReconnectionAttempts})...`);
 
         try {
-            // Clear dead connections first
             this.relayPool.forEach((relay, url) => {
                 if (!relay.ws || relay.ws.readyState !== WebSocket.OPEN) {
                     this.relayPool.delete(url);
@@ -1140,8 +1013,7 @@ Object.assign(NYM.prototype, {
                 }
             });
 
-            // Try to connect to at least one broadcast relay
-            // In low data mode, only try the 5 defaults
+            // In low data mode, only try the 5 defaults.
             const reconnectCandidates = this.settings && this.settings.lowDataMode
                 ? this.defaultRelays
                 : this.defaultRelays;
@@ -1166,26 +1038,21 @@ Object.assign(NYM.prototype, {
 
             if (connected) {
                 this.connected = true;
-                this.reconnectionAttempts = 0; // Reset on success
+                this.reconnectionAttempts = 0;
                 this.updateConnectionStatus();
 
-                // Reconnect to other relays in background
                 this.reconnectToBroadcastRelays();
 
-                // Always ensure default relays (first 5 broadcast) are connected
                 this.ensureDefaultRelaysConnected();
 
-                // Also reconnect to geo relays if we're in a geohash channel
                 if (this.currentGeohash) {
                     this.connectToGeoRelays(this.currentGeohash);
                 }
 
-                // Retry any pending DMs that haven't been delivered
                 setTimeout(() => this.retryPendingDMsOnReconnect(), 2000);
                 setTimeout(() => this.flushMeshOutbox && this.flushMeshOutbox(), 2500);
             }
         } catch (error) {
-            //
         } finally {
             this.isReconnecting = false;
         }
@@ -1216,7 +1083,6 @@ Object.assign(NYM.prototype, {
             this.updateConnectionStatus('Connecting...');
             this.startAppRelayWatchdog();
 
-            // Use multiplexed relay pool when running on Cloudflare (or remote proxy)
             if (this.useRelayProxy) {
                 let poolConnected = false;
                 const maxRetries = 2;
@@ -1234,13 +1100,11 @@ Object.assign(NYM.prototype, {
                     } catch (poolErr) {
                         console.warn(`[NYM] Relay pool attempt ${attempt + 1}/${maxRetries} failed:`, poolErr.message);
                         if (attempt === maxRetries - 1) {
-                            // All retries exhausted — temporarily use direct relay
-                            // connections and keep retrying the pool in the background.
+                            // All retries exhausted: use direct connections and keep retrying the pool in the background.
                             console.warn('[NYM] Relay pool failed, falling back to direct connections');
                             this.useRelayProxy = false;
                             this._poolFallbackActive = true;
                             this._schedulePoolReconnectInBackground();
-                            // Fall through to direct relay connection code below
                         }
                     }
                 }
@@ -1253,29 +1117,22 @@ Object.assign(NYM.prototype, {
                     if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
                     this.updateConnectionStatus();
 
-                    // Subscribe to events via the pool
                     this._poolSubscribe();
 
-                    // Announce our post-quantum capability. The reconnect
-                    // paths do this too, but this is a FIRST connect and they
-                    // never run on one — without this a fresh login never
-                    // publishes a key, and every peer silently falls back to
-                    // classical.
+                    // This is a first connect, which the reconnect paths never cover; without it a fresh login never announces.
                     try { this.schedulePqAnnouncement(); } catch (_) { }
                     try { if (typeof this.ensureAttestBadge === 'function') this.ensureAttestBadge(); } catch (_) { }
 
-                    // Set initial channel label
                     if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
                         this._renderChannelTitle(this.currentChannel, this.currentGeohash || this.currentChannel);
                     }
 
-                    // Switch to pinned landing channel (or PM-only mode landing)
                     setTimeout(() => {
                         if (this.settings.chatViewMode === 'columns' && typeof this.applyChatViewMode === 'function') {
                             this.applyChatViewMode('columns');
                         }
                         if (window.pendingChannel || window.urlChannelRouted) return;
-                        // Don't override if user already navigated (e.g. joined a channel from search, created a group)
+                        // Don't override if the user already navigated.
                         if (this.navigationHistory.length > 0) return;
                         if (this.settings.groupChatPMOnlyMode) {
                             this.navigateToLatestPMOrGroup();
@@ -1291,7 +1148,6 @@ Object.assign(NYM.prototype, {
                         }
                     }, 100);
 
-                    // Process any queued messages
                     if (this.messageQueue.length > 0) {
                         const queuedMessages = [...this.messageQueue];
                         this.messageQueue = [];
@@ -1308,7 +1164,6 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Check if we're already connected to ANY default relay from pre-connection
             let initialConnected = false;
             let connectedRelayUrl = null;
 
@@ -1323,15 +1178,12 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // If not already connected, try to connect to default relays in parallel for speed
             if (!initialConnected) {
-                // Get first 5 available relays for parallel connection attempt
                 const initialRelays = this.defaultRelays
                     .filter(url => this.shouldRetryRelay(url))
                     .slice(0, 5);
 
                 if (initialRelays.length > 0) {
-                    // Create connection promises that resolve with relay URL on success
                     const connectionPromises = initialRelays.map(relayUrl =>
                         this.connectToRelayWithTimeout(relayUrl, 'relay', 2000).then(() => {
                             const relay = this.relayPool.get(relayUrl);
@@ -1342,7 +1194,6 @@ Object.assign(NYM.prototype, {
                         })
                     );
 
-                    // Wait for first successful connection (Promise.any-like behavior)
                     const firstSuccessful = await new Promise((resolve) => {
                         let pending = connectionPromises.length;
                         connectionPromises.forEach(p => {
@@ -1362,7 +1213,6 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                // If parallel attempt failed, fall back to sequential for remaining relays
                 if (!initialConnected) {
                     const remainingRelays = this.defaultRelays.slice(5);
                     for (const relayUrl of remainingRelays) {
@@ -1385,13 +1235,11 @@ Object.assign(NYM.prototype, {
                 throw new Error('Could not connect to any relay');
             }
 
-            // Enable input immediately after first relay connects
             document.getElementById('messageInput').disabled = false;
             document.getElementById('sendBtn').disabled = false;
             this.connected = true;
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
 
-            // Process any queued messages that were waiting for connection
             if (this.messageQueue.length > 0) {
                 const queuedMessages = [...this.messageQueue];
                 this.messageQueue = [];
@@ -1404,23 +1252,20 @@ Object.assign(NYM.prototype, {
                 });
             }
 
-            // Set initial channel label
             if (!this.settings.groupChatPMOnlyMode && this.currentChannel) {
                 this._renderChannelTitle(this.currentChannel, this.currentGeohash || this.currentChannel);
             }
 
-            // Start subscriptions on all connected relays
             this.subscribeToAllRelays();
 
-            // Announce our post-quantum capability (see the pool branch above).
+            // Announce post-quantum capability (see the pool branch above).
             try { this.schedulePqAnnouncement(); } catch (_) { }
             try { if (typeof this.ensureAttestBadge === 'function') this.ensureAttestBadge(); } catch (_) { }
 
-            // Switch to the pinned landing channel or PM-only mode landing
             setTimeout(() => {
-                // Skip if a URL channel is pending or was already routed
+                // Skip if a URL channel is pending or was already routed.
                 if (window.pendingChannel || window.urlChannelRouted) return;
-                // Don't override if user already navigated (e.g. joined a channel from search, created a group)
+                // Don't override if the user already navigated.
                 if (this.navigationHistory.length > 0) return;
 
                 if (this.settings.groupChatPMOnlyMode) {
@@ -1438,7 +1283,6 @@ Object.assign(NYM.prototype, {
                 }
             }, 100);
 
-            // Connect to remaining default relays in background
             this.defaultRelays.forEach(relayUrl => {
                 if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
                     this.connectToRelay(relayUrl, 'relay').then(() => {
@@ -1451,10 +1295,8 @@ Object.assign(NYM.prototype, {
                 }
             });
 
-            // GEO relays
             if (!this.settings.lowDataMode && !this.settings.groupChatPMOnlyMode) {
                 (this._geoRelaysReady || Promise.resolve()).then(() => {
-                    // Connect GEO relays (second priority after defaults)
                     const geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
                     for (const relayUrl of geoRelayUrls) {
                         if (!this.relayPool.has(relayUrl) && this.shouldRetryRelay(relayUrl)) {
@@ -1470,7 +1312,6 @@ Object.assign(NYM.prototype, {
                 });
             }
 
-            // Connect to any remaining known relays not yet in the pool
             if (!this.settings.lowDataMode && !this.settings.groupChatPMOnlyMode) {
                 setTimeout(() => {
                     const relaysToConnect = [...this.allRelayUrls]
@@ -1497,7 +1338,6 @@ Object.assign(NYM.prototype, {
             this.updateConnectionStatus('Connection Failed');
             this.displaySystemMessage('Failed to connect to relays: ' + error.message);
 
-            // Re-enable input anyway in case user wants to retry
             document.getElementById('messageInput').disabled = false;
             document.getElementById('sendBtn').disabled = false;
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
@@ -1506,10 +1346,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Debounced wrapper around resubscribeAllRelays. Used when the critical
-    // subscription's author lists change (e.g. PM contacts added during
-    // hydration) so we don't tear down and rebuild every relay subscription
-    // for each individual addition.
+    // Debounced so bursts of author-list changes don't rebuild every subscription each time.
     _scheduleCriticalResubscribe(delayMs = 750) {
         if (this._criticalResubscribeTimer) {
             clearTimeout(this._criticalResubscribeTimer);
@@ -1521,7 +1358,6 @@ Object.assign(NYM.prototype, {
     },
 
     resubscribeAllRelays() {
-        // Multiplexed pool mode: re-subscribe through proxy
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSubscribe();
             return;
@@ -1533,10 +1369,9 @@ Object.assign(NYM.prototype, {
             this.subscribeToSingleRelay(url);
         });
 
-        // Subscribe to ephemeral pubkeys as independent REQs
+        // Ephemeral pubkeys use independent REQs (metadata separation).
         this._refreshEphemeralSubscriptions();
 
-        // Re-send channel-targeted subscriptions lost during disconnect
         this._resubscribeChannels();
     },
 
@@ -1550,12 +1385,10 @@ Object.assign(NYM.prototype, {
             });
             relay.subscriptions.clear();
         } else {
-            // Initialize subscriptions set if it doesn't exist
             relay.subscriptions = new Set();
         }
     },
 
-    // Determine if a relay URL is a geo relay (not a default relay)
     _isGeoOrDiscoveredRelay(relayUrl) {
         const defaultSet = new Set(this.defaultRelays || []);
         return !defaultSet.has(relayUrl);
@@ -1611,9 +1444,7 @@ Object.assign(NYM.prototype, {
         this._broadcastAsync(targets, reqStr, { critical: true });
     },
 
-    // Register a subId as a short-lived backfill sub: auto-CLOSEs ~300ms
-    // after the first EOSE arrives, or after a hard timeout (default 4s) if
-    // no EOSE comes. Keeps concurrent sub count near zero in steady state.
+    // Auto-CLOSEs ~300ms after the first EOSE or after a hard timeout (default 4s).
     _registerBackfillSub(subId, opts) {
         if (!subId) return;
         if (!this._backfillSubs) this._backfillSubs = new Map();
@@ -1645,8 +1476,6 @@ Object.assign(NYM.prototype, {
         this._backfillSubs.set(subId, entry);
     },
 
-    // Open a persistent typing-only sub for the currently-viewed channel.
-    // No-op if not the current channel or if one already exists.
     _ensureChannelTypingSub(channelKey, channelType, force) {
         if (!channelKey) return;
         const isCurrent = channelKey === this.currentChannel || channelKey === this.currentGeohash;
@@ -1663,9 +1492,7 @@ Object.assign(NYM.prototype, {
         this._sendChannelReq(typingSubId, typingFilter, channelKey, channelType);
     },
 
-    // kind 20000 events are ephemeral and not stored by relays, so per-channel
-    // backfill is pointless. Live messages flow via the broad kind-20000 sub.
-    // Only open a typing sub (kind 24420/24421) for the currently-viewed channel.
+    // Kind 20000 is ephemeral and not stored, so only open a typing sub for the viewed channel.
     subscribeToChannelTargeted(channelKey, channelType) {
         if (this.channelLoadedFromRelays.has(channelKey)) {
             this._ensureChannelTypingSub(channelKey, channelType);
@@ -1675,9 +1502,7 @@ Object.assign(NYM.prototype, {
         this._ensureChannelTypingSub(channelKey, channelType);
     },
 
-    // Per-channel backfill REQs were causing massive relay spam. Now a no-op:
-    // the broad kind-20000 sub covers any stored events; typing subs are only
-    // opened for the currently-viewed channel via subscribeToChannelTargeted.
+    // No-op: per-channel backfill REQs spammed relays; the broad kind-20000 sub covers stored events.
     subscribeToChannelBatch(channels) {
         if (!channels || channels.length === 0) return;
         channels.forEach(({ key }) => {
@@ -1685,24 +1510,19 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Load messages for a channel from relays - called when switching channels
     loadChannelFromRelays(channelKey, channelType) {
-        // Already backfilled this session — just ensure typing sub exists for current channel
         if (this.channelLoadedFromRelays.has(channelKey)) {
             this._ensureChannelTypingSub(channelKey, channelType);
             return;
         }
 
-        // Check if we have few messages for this channel (under 50)
-        // Storage key uses #prefix for channels with a geohash/g-tag (both geohash and non-geohash)
+        // Storage key uses a # prefix for every channel with a g-tag.
         const storageKey = `#${channelKey}`;
         const currentMessages = this.messages.get(storageKey) || [];
 
-        // If we have very few messages, send a targeted request
         if (currentMessages.length < 50) {
             this._queueChannelSubscription(channelKey, channelType);
         } else {
-            // Mark as loaded so we don't recheck on every channel switch
             this.channelLoadedFromRelays.add(channelKey);
         }
     },
@@ -1717,7 +1537,6 @@ Object.assign(NYM.prototype, {
     shouldRetryRelay(relayUrl) {
         if (relayUrl === this.appRelay) return true;
 
-        // Persisted failure history
         if (this.relayPool.size > 0) {
             const s = this._getRelayStats().get(relayUrl);
             if (s && s.fails >= 3) {
@@ -1789,9 +1608,7 @@ Object.assign(NYM.prototype, {
         }, 3000);
     },
 
-    // True when the page is served from the app's own domain, so the browser
-    // can connect straight to wss://relay.nymchat.app instead of hopping
-    // through the relay-pool worker.
+    // True on the app's own domain, where the browser can reach wss://relay.nymchat.app directly.
     _getApiHost() {
         try {
             const p = window.location.protocol;
@@ -1801,11 +1618,10 @@ Object.assign(NYM.prototype, {
     },
 
     _fallbackToDirectConnections() {
-        if (!this.useRelayProxy) return; // Already in direct mode
+        if (!this.useRelayProxy) return;
 
         this._stopPoolShardHealthCheck();
 
-        // Close all pool sockets
         for (const p of this.poolSockets) {
             p._closing = true;
             try { if (p.ws) p.ws.close(); } catch (_) { }
@@ -1819,26 +1635,20 @@ Object.assign(NYM.prototype, {
         this._poolReconnecting = false;
         this._poolReconnectRetries = 0;
 
-        // Disable pool mode so all relay methods use direct connections
         this.useRelayProxy = false;
         this._poolFallbackActive = true;
         console.warn('[NYM] Pool mode disabled, switching to direct relay connections');
 
-        // Connect directly to relays
         this.reconnectToBroadcastRelays();
-        // A fallback session is still a session: without the neighbourhoods of
-        // the geohash channels in view, the geo-origin gate has no admissible
-        // source for any of them.
+        // Fallback sessions still need geo neighbourhoods for the geo-origin gate.
         this.ensureGeoRelayCoverage();
         if (this.currentGeohash) {
             this.connectToGeoRelays(this.currentGeohash);
         }
 
-        // Keep trying to restore pool mode in the background
         this._schedulePoolReconnectInBackground();
     },
 
-    // Try to restore pool mode in the background
     _schedulePoolReconnectInBackground(immediate = false) {
         if (!this._poolFallbackActive) return;
         if (!this._getApiHost()) return;
@@ -1908,14 +1718,12 @@ Object.assign(NYM.prototype, {
         return `wss://${host}/api/relay?relay=${encodeURIComponent(relayUrl)}`;
     },
 
-    // Multiplexed relay pool (multi-worker WebSocket proxy)
     _getRelayPoolUrl() {
         const host = this._getApiHost();
         if (!host) return null;
         return `wss://${host}/api/relay-pool`;
     },
 
-    // Returns true if any pool socket is open
     _isAnyPoolOpen() {
         return this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.OPEN);
     },
@@ -1924,10 +1732,7 @@ Object.assign(NYM.prototype, {
         return this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.OPEN);
     },
 
-    // Shard relays into role-keyed worker groups with STABLE ids, so a shard's
-    // membership stays fixed as geo/discovered relays load in asynchronously.
-    // (Positional pool-N ids reshuffled membership on every list change, which
-    // made the health check tear sockets down as zombies.)
+    // Stable role-keyed shard ids so membership doesn't reshuffle as geo/discovered relays load.
     _shardRelaysByRole(allRelays, geoRelayUrls, dmRelays) {
         if (this.settings && this.settings.groupChatPMOnlyMode) {
             allRelays = this.defaultRelays;
@@ -1941,17 +1746,15 @@ Object.assign(NYM.prototype, {
         const appRelay = this.appRelay;
         const appValid = appRelay && isValid(appRelay);
 
-        // Critical = default relays (+ DM relays), excluding the app relay
+        // Critical = default relays (+ DM relays), excluding the app relay.
         const critical = [...new Set([...this.defaultRelays, ...(dmRelays || [])])]
             .filter(url => isValid(url) && url !== appRelay);
 
         const reservedSet = new Set(critical);
         if (appValid) reservedSet.add(appRelay);
 
-        // Geo = CSV relays not already reserved
         const geo = [...geoSet].filter(url => !reservedSet.has(url));
 
-        // Discovered = anything in allRelays not already reserved or geo
         const geoForDiscovered = new Set(geo);
         const claimedCanon = new Set([...reservedSet, ...geoForDiscovered].map(u => this._canonicalRelayUrl(u)));
         const seenDiscoveredCanon = new Set();
@@ -1972,8 +1775,7 @@ Object.assign(NYM.prototype, {
         const size = this.RELAYS_PER_WORKER || 50;
         const shards = [];
 
-        // Dedicated app relay shard, so the default relays always have a live
-        // socket to wss://relay.nymchat.app via the proxy.
+        // Dedicated app relay shard so the default relays always have a live socket via the proxy.
         if (appValid) {
             shards.push({ id: 'app-0', role: 'critical', relays: [appRelay], dmRelays: [appRelay] });
         }
@@ -1994,14 +1796,12 @@ Object.assign(NYM.prototype, {
         if (shards.length === 0) shards.push({ id: 'critical-0', role: 'critical', relays: [], dmRelays: [] });
         return shards;
     },
-    // Add a message listener to all open pool sockets
     _poolAddMessageListener(handler) {
         for (const p of this.poolSockets) {
             if (p.ws) p.ws.addEventListener('message', handler);
         }
     },
 
-    // Remove a message listener from all pool sockets
     _poolRemoveMessageListener(handler) {
         for (const p of this.poolSockets) {
             if (p.ws) {
@@ -2093,7 +1893,6 @@ Object.assign(NYM.prototype, {
         if (!this.useRelayProxy) return;
         if (!this._getApiHost()) return;
 
-        // Debounce: prevent rapid-fire reconnect scheduling from multiple event handlers
         const now = Date.now();
         if (this._lastPoolReconnectSchedule && now - this._lastPoolReconnectSchedule < 2000) return;
         this._lastPoolReconnectSchedule = now;
@@ -2104,7 +1903,7 @@ Object.assign(NYM.prototype, {
                 return;
             }
             if (!navigator.onLine) {
-                // Wait for the 'online' event to trigger reconnection instead
+                // Wait for the 'online' event to trigger reconnection instead.
                 this._poolReconnecting = false;
                 return;
             }
@@ -2116,7 +1915,7 @@ Object.assign(NYM.prototype, {
                 : 'Reconnecting...');
 
             setTimeout(() => {
-                // Re-check: another path may have reconnected while we waited
+                // Another path may have reconnected while we waited.
                 if (this._isAnyWorkerPoolOpen()) {
                     this._poolReconnecting = false;
                     return;
@@ -2152,9 +1951,7 @@ Object.assign(NYM.prototype, {
         attempt(this._poolReconnectRetries || 0);
     },
 
-    // Reconnect a single failed pool worker shard.
-    // Retries until the shard reconnects or is no longer needed; the periodic
-    // health check (_ensureAllShardsConnected) acts as a final safety net.
+    // Retries until reconnected or no longer needed; _ensureAllShardsConnected is the safety net.
     _reconnectPoolShard(shard) {
         if (!this.useRelayProxy) return;
         if (!this._getApiHost()) return;
@@ -2162,8 +1959,7 @@ Object.assign(NYM.prototype, {
 
         if (!this._shardReconnecting) this._shardReconnecting = new Set();
         if (!this._shardReconnectAt) this._shardReconnectAt = new Map();
-        // Self-heal a stuck flag: if a prior loop set the flag but died without
-        // clearing it, a stale timestamp lets a fresh call take over.
+        // Self-heal a stuck flag: a stale timestamp lets a fresh call take over.
         if (this._shardReconnecting.has(shardId)) {
             const startedAt = this._shardReconnectAt.get(shardId) || 0;
             if (Date.now() - startedAt < 90000) return;
@@ -2205,8 +2001,7 @@ Object.assign(NYM.prototype, {
                         this._poolSubscribeOnWorker(shard.id);
                     })
                     .catch(() => {
-                        // Keep retrying — every shard matters for full relay coverage.
-                        // The health check will stop us if the shard is no longer expected.
+                        // The health check stops us if the shard is no longer expected.
                         attempt(retries + 1);
                     });
             }, delay);
@@ -2215,7 +2010,6 @@ Object.assign(NYM.prototype, {
         attempt(0);
     },
 
-    // Compute the current expected shard set from configured relays.
     _computeExpectedShards() {
         let geoRelayUrls = [];
         if (this.settings && this.settings.lowDataMode) {
@@ -2229,7 +2023,7 @@ Object.assign(NYM.prototype, {
         return this._shardRelaysByRole([...this.allRelayUrls], geoRelayUrls, this.defaultRelays);
     },
 
-    // Reconnect any expected shard that's missing, not OPEN, or a "zombie"
+    // Reconnect any expected shard that's missing, not OPEN, or a "zombie".
     _ensureAllShardsConnected() {
         if (!this.useRelayProxy) return;
         if (!this._getApiHost()) return;
@@ -2277,7 +2071,6 @@ Object.assign(NYM.prototype, {
     },
 
     _connectToRelayPool() {
-        // Prevent concurrent connection attempts
         if (this._poolConnecting) {
             return Promise.reject(new Error('Connection already in progress'));
         }
@@ -2286,11 +2079,10 @@ Object.assign(NYM.prototype, {
         }
         this._poolConnecting = true;
 
-        // Gather all relay URLs
         let geoRelayUrls = [];
 
         if (this.settings && this.settings.lowDataMode) {
-            // Low data: only defaults + DM relays (geo added on-demand)
+            // Low data: only defaults + DM relays (geo added on demand).
             geoRelayUrls = [];
         } else {
             geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
@@ -2302,7 +2094,7 @@ Object.assign(NYM.prototype, {
             this.defaultRelays
         );
 
-        // Close any existing pool sockets (mark as intentional to prevent reconnect loops)
+        // Mark old sockets as intentionally closed to prevent reconnect loops.
         const oldSockets = this.poolSockets;
         this.poolSockets = [];
         this.poolSocket = null;
@@ -2316,7 +2108,6 @@ Object.assign(NYM.prototype, {
             return Promise.reject(new Error('No relay shards to connect'));
         }
 
-        // Gate pool readiness on the first shard
         const [firstShard, ...restShards] = shards;
 
         return new Promise((resolve, reject) => {
@@ -2353,7 +2144,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Connect the relay-pool coordinator socket
     _connectSinglePoolWorker(shard) {
         return new Promise((resolve, reject) => {
             const url = this._getRelayPoolUrl();
@@ -2370,7 +2160,6 @@ Object.assign(NYM.prototype, {
                 lastMessage: Date.now()
             };
 
-            // Add to poolSockets array (replace if same id exists)
             const existingIdx = this.poolSockets.findIndex(p => p.id === shard.id);
             if (existingIdx >= 0) {
                 const old = this.poolSockets[existingIdx];
@@ -2458,17 +2247,14 @@ Object.assign(NYM.prototype, {
                         poolEntry.badgeGate = typeof status.badgeGate === 'string' ? status.badgeGate : null;
                         poolEntry.unbadged = Number(status.unbadged) || 0;
 
-                        // Update per-relay latency from this worker
                         if (status.latency) {
                             for (const [url, ms] of Object.entries(status.latency)) {
                                 this.relayStats.latencyPerRelay.set(url, ms);
                             }
                         }
 
-                        // Per-relay event counts are tracked in handleRelayMessage
-                        // post-dedup so counts match the headline unique-event total.
+                        // Per-relay event counts are tracked post-dedup in handleRelayMessage.
 
-                        // Merge connected relays from ALL workers
                         this._mergePoolStatus();
                     } else if (msgType === 'EVENT') {
                         const evt = msg[2];
@@ -2486,7 +2272,6 @@ Object.assign(NYM.prototype, {
                         this.handleRelayMessage(msg, 'relay-pool');
                     }
                 } catch {
-                    // Parse error
                 }
             };
 
@@ -2496,11 +2281,10 @@ Object.assign(NYM.prototype, {
             ws.onclose = () => {
                 clearTimeout(timeout);
 
-                // Skip reconnect logic if this socket was intentionally closed
+                // Skip reconnect logic if this socket was intentionally closed.
                 if (poolEntry._closing) return;
 
-                // If we never opened, onerror already rejected — don't schedule reconnects
-                // (the caller's retry loop handles reconnection for initial failures)
+                // Never opened: the caller's retry loop handles initial failures.
                 if (!wasOpen) {
                     if (!errorRejected) reject(new Error(`Pool worker ${shard.id} closed before open`));
                     return;
@@ -2515,15 +2299,13 @@ Object.assign(NYM.prototype, {
                 this._mergePoolStatus();
                 this._syncLegacyPoolSocket();
 
-                // If ALL workers are down, rebuild the whole pool. The direct
-                // app relay staying up must not suppress this.
+                // If all workers are down, rebuild the pool; the direct app relay staying up must not suppress this.
                 if (!this._isAnyWorkerPoolOpen()) {
                     this.poolReady = false;
                     this.connected = false;
                     this.updateConnectionStatus('Disconnected');
                     this._schedulePoolReconnect();
                 } else {
-                    // Only this worker died — reconnect just this shard
                     this._reconnectPoolShard(shard);
                 }
             };
@@ -2538,7 +2320,6 @@ Object.assign(NYM.prototype, {
 
 
 
-    // Merge POOL:STATUS from all workers into unified state
     _mergePoolStatus() {
         const allConnected = new Set();
         for (const p of this.poolSockets) {
@@ -2556,8 +2337,7 @@ Object.assign(NYM.prototype, {
             this._poolRelayLastSeen.set(url, now);
         }
 
-        // Anything seen within the grace window stays in the pool map as
-        // either connected (in allConnected) or recently-disconnected.
+        // Anything seen within the grace window stays as connected or recently-disconnected.
         for (const url of [...this._poolRelayLastSeen.keys()]) {
             const lastSeen = this._poolRelayLastSeen.get(url);
             const stillConnected = allConnected.has(url);
@@ -2583,13 +2363,10 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Anything in relayPool that isn't tracked any more (e.g. switched
-        // out of pool mode) gets cleaned up.
         for (const url of [...this.relayPool.keys()]) {
             if (!this._poolRelayLastSeen.has(url)) {
                 const entry = this.relayPool.get(url);
-                // Direct-mode entries have a ws other than the pool socket;
-                // leave those alone.
+                // Direct-mode entries have a ws other than the pool socket; leave those alone.
                 if (entry && entry.type === 'relay' && entry.ws === this.poolSocket) {
                     this.relayPool.delete(url);
                 }
@@ -2599,14 +2376,12 @@ Object.assign(NYM.prototype, {
         this.updateConnectionStatus();
     },
 
-    // Keep legacy this.poolSocket pointing to first open socket for external compat
+    // Legacy this.poolSocket points to the first open socket for external compat.
     _syncLegacyPoolSocket() {
         const open = this.poolSockets.find(p => p.ws && p.ws.readyState === WebSocket.OPEN);
         this.poolSocket = open ? open.ws : null;
     },
 
-    // Normalize a filter array: dedup values inside any array field (kinds,
-    // authors, ids, #X tags) and drop entirely-duplicate filter objects.
     // Strict relays (Pocket) reject filters with duplicate tag values.
     _normalizeFilters(filters) {
         if (!Array.isArray(filters)) return filters;
@@ -2758,19 +2533,15 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // All relays now share one subscription set, so role scoping is a no-op —
-    // kept as a thin alias so existing callers don't need rewiring.
+    // Role scoping is a no-op now; kept as an alias for existing callers.
     _poolSendToRole(role, data) {
         this._poolSend(data);
     },
 
-    // Single coordinator socket serves every role, so a (re)connected pool
-    // socket re-issues the full critical + geo subscription set.
     _poolSubscribeOnWorker(shardId) {
         const p = this.poolSockets.find(w => w.id === shardId);
         if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) return;
-        // Re-subscribe only this socket, reusing the live sub ids, so one shard
-        // recycle doesn't re-REQ the whole pool.
+        // Re-subscribe only this socket with the live sub ids, so one shard recycle doesn't re-REQ the pool.
         if (!this._lastPoolSubId || !this._lastPoolFilters) {
             this._poolSubscribe();
             return;
@@ -2802,7 +2573,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Geo relays now get the same subscription set as the default relays.
     _buildGeoFilters(since24h) {
         return this._buildCriticalFilters(since24h);
     },
@@ -2819,11 +2589,7 @@ Object.assign(NYM.prototype, {
             filters.push({ kinds: [1059], "#p": [this.pubkey], limit: d1Available ? 1 : 500 });
         }
         if (channelMode) {
-            // Deliberately unscoped. Channels are not subscribed to
-            // individually: every user is in every channel, and the sidebar
-            // learns what exists by watching this stream, so a #g/#d filter
-            // built from what is already known could only ever re-find what is
-            // already known.
+            // Deliberately unscoped: the sidebar discovers channels by watching this stream.
             filters.push({ kinds: [20000], since: chSince });
             filters.push({ kinds: [23333], since: chSince });
         }
@@ -2862,14 +2628,7 @@ Object.assign(NYM.prototype, {
         if (channelMode) {
             filters.push({ kinds: [30078], "#t": ["nym-poll", "nym-poll-vote"], since: chSince, limit: lim(100) });
         }
-        // Post-quantum key announcements. Unlike the vouch list — a broadcast
-        // web of trust — these are only needed for peers we actually message,
-        // so the filter is scoped to our conversation partners, group members
-        // and ourselves rather than fetched wholesale.
-        // Announcements are needed to SEND post-quantum, which an extension or
-        // NIP-46 login can now do (pqSendCapable), so this follows the send
-        // gate rather than the receive one — without a peer's announcement
-        // there is no key to encapsulate to.
+        // Scoped to conversation partners, group members and ourselves; follows the send gate (pqSendCapable).
         if (this.pubkey && typeof this.pqEnabled === 'function' && this.pqEnabled()) {
             const pqAuthors = new Set([this.pubkey]);
             if (this.pmConversations) {
@@ -2938,9 +2697,7 @@ Object.assign(NYM.prototype, {
         return typeof s === 'string' && s.length === 64 && /^[0-9a-f]{64}$/i.test(s);
     },
 
-    // On reconnect, raise each broad filter's since to its oldest per-kind
-    // watermark so we fetch only the gap. Author/recipient-scoped filters and
-    // gift wraps (backdated created_at) are left untouched.
+    // Raise broad filters' since to their oldest per-kind watermark; scoped filters and gift wraps are untouched.
     _applyReconnectSince(filters) {
         if (!this._poolKindNewest || this._poolKindNewest.size === 0) return;
         const GAP = 120;
@@ -2963,7 +2720,6 @@ Object.assign(NYM.prototype, {
     _poolSubscribe() {
         if (!this._isAnyPoolOpen()) return;
 
-        // One subscription set for every relay (default + geo share it now).
         if (this._lastPoolSubId) {
             this._poolSend(["CLOSE", this._lastPoolSubId]);
         }
@@ -2972,10 +2728,7 @@ Object.assign(NYM.prototype, {
         this._poolHasSubscribed = true;
         const subId = Math.random().toString(36).substring(2);
         this._lastPoolSubId = subId;
-        // Proxy archives channel events to D1, so when D1 backfill is available
-        // we only ask relays for a recent real-time window and let D1 supply the
-        // history instead of re-pulling 24h on every (re)connect. Fall back to
-        // the 24h window if D1 is unreachable.
+        // With D1 backfill available, ask relays for a short real-time window only; else 24h.
         const since24h = nowSec - 86400;
         const d1Available = !!(this._getApiHost && this._getApiHost());
         const channelSince = d1Available ? nowSec - 300 : since24h;
@@ -2984,21 +2737,17 @@ Object.assign(NYM.prototype, {
         this._lastPoolFilters = filters;
         this._poolSend(["REQ", subId, ...filters]);
 
-        // Subscribe to ephemeral pubkeys as independent REQs (metadata separation)
         this._refreshEphemeralSubscriptions();
 
-        // Re-subscribe to channel-targeted subscriptions that were lost on disconnect
         this._resubscribeChannels();
     },
 
-    // Only the direct-connection path needs this. In pool mode these come from
-    // D1 through the pool worker, which never sees a per-relay filter.
+    // Direct mode only; in pool mode these come from D1 via the pool worker.
     _shardEphemeralKeys(ephPks, relayUrls, redundancy = 2) {
         const out = new Map(relayUrls.map(u => [u, []]));
         const n = relayUrls.length;
         if (!n || !ephPks.length) return out;
-        // Fewer relays than the redundancy target: everyone gets everything,
-        // which is both what we did before and the best available.
+        // Fewer relays than the redundancy target: everyone gets everything.
         if (n <= redundancy) {
             for (const url of relayUrls) out.set(url, ephPks.slice());
             return out;
@@ -3020,7 +2769,6 @@ Object.assign(NYM.prototype, {
         return out;
     },
 
-    // Open, readable relays in a stable order.
     _readableRelayUrls() {
         const urls = [];
         this.relayPool.forEach((relay, url) => {
@@ -3030,9 +2778,7 @@ Object.assign(NYM.prototype, {
         return urls.sort();
     },
 
-    // Direct-mode ephemeral REQ: one filter per relay carrying only that
-    // relay's shard. `buildFilter` receives the shard so each caller keeps its
-    // own limit/since.
+    // One filter per relay carrying only that relay's shard.
     _sendShardedEphemeralReq(subId, ephPks, buildFilter) {
         const shards = this._shardEphemeralKeys(ephPks, this._readableRelayUrls());
         shards.forEach((keys, url) => {
@@ -3044,7 +2790,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // History fetch for ephemeral pubkeys
     async _recoverEphemeralHistory(ephPks) {
         if (!Array.isArray(ephPks) || ephPks.length === 0) return;
         const since = this._isFreshDevice
@@ -3053,27 +2798,14 @@ Object.assign(NYM.prototype, {
 
         if (this._getApiHost && this._getApiHost() && typeof this._storageApiStream === 'function') {
             try {
-                // Restore the full ephemeral-key inbox, exactly like the relay
-                // path REQs every '#p' ephemeral key — but against D1. Two things
-                // matter for parity:
-                //  - No `since` gate. Gift-wrap created_at is randomized/backdated
-                //    (NIP-59), so a lastPMSyncTime-based floor silently drops most
-                //    group wraps. pmRestoreFromD1 fetches from 0 for the same
-                //    reason; do the same here.
-                //  - Query ALL ephemeral keys, chunked to the server's 200-pubkey
-                //    cap, so groups whose keys have rotated past the first 200 are
-                //    still covered.
+                // No `since` gate (NIP-59 backdates created_at) and chunk to the server's 200-pubkey cap.
                 const evs = [];
                 for (let i = 0; i < ephPks.length; i += 200) {
                     const chunk = ephPks.slice(i, i + 200);
                     const resp = await this._storageApiStream('pm-get', { pubkeys: chunk }, false);
                     await this._readNdjsonStream(resp, (ev) => { if (ev) evs.push(ev); });
                 }
-                // Order oldest-first and replay sequentially as a D1 backfill.
-                // Passing fromD1 marks these as history so they fold into the
-                // group chat instead of being treated as live messages that only
-                // raise notifications, and the in-order replay keeps message
-                // sequence stable.
+                // Replay oldest-first as D1 history (fromD1) so it folds into the chat instead of raising notifications.
                 evs.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
                 for (const ev of evs) {
                     try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
@@ -3117,7 +2849,6 @@ Object.assign(NYM.prototype, {
         run();
     },
 
-    // Subscribe to gift wraps (kind 1059) for all of our ephemeral pubkeys
     async _refreshEphemeralSubscriptions() {
         if (this._ephRefreshInFlight) return;
         this._ephRefreshInFlight = true;
@@ -3154,9 +2885,7 @@ Object.assign(NYM.prototype, {
             if (this.useRelayProxy && this._isAnyPoolOpen()) {
                 this._poolSendToRole('critical', ['REQ', subId, filter]);
             } else {
-                // Sharded: no relay gets the whole ephemeral set. `filter` above
-                // stays the unsharded shape because the pool path still uses it
-                // and `_poolSubscribeOnWorker` replays it on shard recycle.
+                // Sharded; `filter` stays unsharded because the pool path and shard recycles reuse it.
                 this._sendShardedEphemeralReq(subId, ephPks, (keys) => {
                     const f = { kinds: [1059], '#p': keys };
                     if (this._getApiHost && this._getApiHost()) {
@@ -3175,24 +2904,18 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Re-subscribe to active channel subscriptions after a relay reconnection.
-    // Coalesces rapid back-to-back calls (e.g. multiple shard reconnects) so
-    // we don't wipe and re-fire every joined channel's REQ each time.
+    // Coalesced so back-to-back shard reconnects don't re-fire every channel's REQ.
     _resubscribeChannels() {
         const now = Date.now();
         if (this._lastResubscribeAt && now - this._lastResubscribeAt < 15000) return;
         this._lastResubscribeAt = now;
 
-        // Channel messages flow through the global 20000/23333 subscription and
-        // history is restored from D1, so we no longer fire per-channel targeted
-        // REQs on reconnect. Clear stale tracking so a later channel open
-        // re-subscribes cleanly.
+        // Channel history comes from the global sub and D1, so just clear stale tracking.
         this.channelLoadedFromRelays.clear();
         this.channelSubscriptions.clear();
         if (this._channelTypingSubs) this._channelTypingSubs.clear();
 
-        // Re-open only the typing sub (24420/24421) for the current channel —
-        // those kinds aren't in the global subscription.
+        // Typing kinds (24420/24421) aren't in the global subscription.
         const current = this.currentChannel || this.currentGeohash;
         if (current) this._ensureChannelTypingSub(current, 'geohash');
 
@@ -3205,19 +2928,13 @@ Object.assign(NYM.prototype, {
         if (this._lastD1BackfillAt && now - this._lastD1BackfillAt < 30000) return;
         this._lastD1BackfillAt = now;
 
-        // Collect the message-restoring promises so we can recompute the sidebar
         const restorePromises = [];
 
         if (typeof this.pmRestoreFromD1 === 'function') {
             restorePromises.push(this.pmRestoreFromD1().catch(() => { }));
         }
 
-        // 1:1 PMs and our own sent group messages restore via pmRestoreFromD1
-        // (keyed by our real pubkey). Group messages OTHER members sent are
-        // gift-wrapped to our per-group ephemeral keys and deposited into D1
-        // under those keys, so they must be pulled from the ephemeral inbox
-        // too — otherwise they only ever arrive live over relays and never
-        // rehydrate the group chat on reconnect.
+        // Other members' group messages are deposited under our ephemeral keys, so pull that inbox too.
         if (typeof this._recoverEphemeralHistory === 'function' &&
             typeof this._getAllSelfEphemeralPubkeys === 'function') {
             const ephPks = this._getAllSelfEphemeralPubkeys();
@@ -3252,14 +2969,12 @@ Object.assign(NYM.prototype, {
             this._emojiRestoreFromD1().catch(() => { });
         }
 
-        // Profile zaps to us are keyed on our pubkey, not a message id, so pull
-        // them explicitly from D1 since the relay window for #p zaps is tight.
+        // Profile zaps are keyed on our pubkey and the relay window for #p zaps is tight.
         if (this.pubkey && typeof this._backfillZapReceiptsFromD1 === 'function') {
             this._backfillZapReceiptsFromD1([this.pubkey], 'profile').catch(() => { });
         }
 
-        // Web of trust: rebuild from D1 vouch lists instead of REQ-ing every
-        // trusted peer's vouch list from relays.
+        // Rebuild the web of trust from D1 vouch lists instead of relays.
         if (typeof this._fetchVouchesFromD1 === 'function') {
             this._fetchVouchesFromD1().catch(() => { });
         }
@@ -3277,15 +2992,12 @@ Object.assign(NYM.prototype, {
     _poolSendRelayConfigNow() {
         if (!this._isAnyPoolOpen()) return;
 
-        // Gather current relay sets
         let geoRelayUrls = [];
 
         if (this.settings && this.settings.lowDataMode) {
-            // Low data: include current geo relays + defaults + DM
             geoRelayUrls = [...this.currentGeoRelays];
         } else {
             geoRelayUrls = (this.geoRelays || []).map(r => r.url || r).filter(Boolean);
-            // Include current geo relays for priority
             for (const url of this.currentGeoRelays) {
                 if (!geoRelayUrls.includes(url)) geoRelayUrls.unshift(url);
             }
@@ -3306,8 +3018,7 @@ Object.assign(NYM.prototype, {
             return true;
         };
 
-        // Each socket owns one shard; send it only its own relay set. Sockets
-        // whose shard no longer exists (e.g. the relay set shrank) are closed.
+        // Each socket gets only its own shard's relays; sockets for vanished shards are closed.
         for (const p of this.poolSockets) {
             const shard = shardById.get(p.id);
             if (!shard) {
@@ -3323,7 +3034,6 @@ Object.assign(NYM.prototype, {
         }
         this.poolSockets = this.poolSockets.filter(p => shardById.has(p.id));
 
-        // Pick up any newly-expected shards that have no socket yet.
         this._ensureAllShardsConnected();
     },
 
@@ -3342,19 +3052,17 @@ Object.assign(NYM.prototype, {
     },
 
     async connectToRelay(relayUrl, type = 'relay') {
-        // Pool mode: all relay connections are managed by the multiplexed pool worker
         if (this.useRelayProxy) return;
 
         if (relayUrl === this.appRelay) return;
 
         if (this._isUnsafeRelayUrl(relayUrl)) return;
 
-        // Block known-bad relays entirely - never connect
+        // Block known-bad relays entirely.
         if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
             return;
         }
 
-        // Skip blacklisted/retry-throttled relays (no pending tracking needed)
         if (this.blacklistedRelays.has(relayUrl) && !this.isBlacklistExpired(relayUrl)) {
             return;
         }
@@ -3362,7 +3070,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Skip if already connected
         if (this.relayPool.has(relayUrl)) {
             const existingRelay = this.relayPool.get(relayUrl);
             if (existingRelay.ws && existingRelay.ws.readyState === WebSocket.OPEN) {
@@ -3370,7 +3077,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Deduplicate: if a connection attempt is already in-flight, reuse its promise
+        // Reuse an in-flight connection attempt's promise.
         if (this.pendingConnections.has(relayUrl)) {
             return this.pendingConnections.get(relayUrl);
         }
@@ -3384,7 +3091,6 @@ Object.assign(NYM.prototype, {
                 let verificationTimeout;
                 let connectionTimeout;
 
-                // Add connection timeout (5 seconds)
                 connectionTimeout = setTimeout(() => {
                     if (ws.readyState !== WebSocket.OPEN) {
                         ws.close();
@@ -3399,7 +3105,6 @@ Object.assign(NYM.prototype, {
                 ws.onopen = () => {
                     clearTimeout(connectionTimeout);
 
-                    // Track connection latency
                     this.relayStats.latencyPerRelay.set(relayUrl, Date.now() - wsCreatedAt);
 
                     this.relayPool.set(relayUrl, {
@@ -3415,7 +3120,6 @@ Object.assign(NYM.prototype, {
 
                 ws.onmessage = (event) => {
                     try {
-                        // Track relay stats
                         const dataLen = typeof event.data === 'string' ? event.data.length : (event.data.byteLength || 0);
                         this.relayStats.bytesReceived += dataLen;
                         const msg = JSON.parse(event.data);
@@ -3428,7 +3132,6 @@ Object.assign(NYM.prototype, {
                     clearTimeout(verificationTimeout);
                     clearTimeout(connectionTimeout);
 
-                    // Immediately blacklist on connection error (but never the app relay)
                     if (relayUrl !== this.appRelay) {
                         this.blacklistedRelays.add(relayUrl);
                         this.blacklistTimestamps.set(relayUrl, Date.now());
@@ -3441,11 +3144,10 @@ Object.assign(NYM.prototype, {
                     clearTimeout(verificationTimeout);
                     clearTimeout(connectionTimeout);
 
-                    // Track if this relay was previously successfully connected
                     const wasConnected = this.relayPool.has(relayUrl) &&
                         this.relayPool.get(relayUrl).ws === ws;
 
-                    // Only blacklist on actual connection failures, not normal closes
+                    // Only blacklist on actual connection failures, not normal closes.
                     const isConnectionFailure = !wasConnected && event.code !== 1000 && event.code !== 1001;
 
                     if (isConnectionFailure && relayUrl !== this.appRelay) {
@@ -3453,7 +3155,6 @@ Object.assign(NYM.prototype, {
                         this.blacklistTimestamps.set(relayUrl, Date.now());
                     }
 
-                    // Track previously connected relays for prioritized reconnection
                     if (wasConnected) {
                         if (!this.previouslyConnectedRelays) {
                             this.previouslyConnectedRelays = new Set();
@@ -3461,49 +3162,38 @@ Object.assign(NYM.prototype, {
                         this.previouslyConnectedRelays.add(relayUrl);
                     }
 
-                    // Immediately remove from pool and update status
                     this.relayPool.delete(relayUrl);
 
-                    // Force status update after disconnect
                     this.updateConnectionStatus();
 
-                    // Reconnect ALL relay types (broadcast, nosflare, AND read relays)
-                    // Pool mode handles its own reconnections — skip individual relay reconnect
-                    // For previously connected relays, always attempt reconnection (no blacklist check)
+                    // Pool mode handles its own reconnections; previously connected relays skip the blacklist check.
                     if (!this.useRelayProxy && this.connected && (wasConnected || !this.blacklistedRelays.has(relayUrl))) {
-                        // Track disconnections
                         if (!this.reconnectingRelays) {
                             this.reconnectingRelays = new Set();
                         }
 
-                        // Only reconnect if not already reconnecting this URL
                         if (this.reconnectingRelays.has(relayUrl)) {
                             return;
                         }
 
                         this.reconnectingRelays.add(relayUrl);
 
-                        // Implement exponential backoff for reconnection
-                        // Use faster reconnection for previously connected relays
                         const isAppRelay = relayUrl === this.appRelay;
                         const attemptReconnect = (attempt = 0) => {
                             const maxAttempts = isAppRelay ? Infinity : 10;
-                            // Faster initial delay for previously connected relays (1s vs 5s)
+                            // Faster initial delay for previously connected relays (1s vs 5s).
                             const baseDelay = (wasConnected || isAppRelay) ? 1000 : 5000;
                             const maxDelay = (wasConnected || isAppRelay) ? 30000 : 60000;
 
-                            // Calculate exponential backoff delay
                             const delay = Math.min(baseDelay * Math.pow(1.5, attempt), maxDelay);
 
                             setTimeout(() => {
-                                // Check WebSocket state and network connectivity
                                 if (!navigator.onLine) {
                                     this.reconnectingRelays.delete(relayUrl);
                                     this.updateConnectionStatus();
                                     return;
                                 }
 
-                                // Check if we're still supposed to be connected
                                 if (!this.connected) {
                                     this.reconnectingRelays.delete(relayUrl);
                                     this.updateConnectionStatus();
@@ -3511,7 +3201,7 @@ Object.assign(NYM.prototype, {
                                 }
 
                                 this.connectToRelay(relayUrl, type).then(() => {
-                                    // Check if actually connected (connectToRelay resolves even on failure)
+                                    // connectToRelay resolves even on failure.
                                     const relay = this.relayPool.get(relayUrl);
                                     const isConnected = relay && relay.ws && relay.ws.readyState === WebSocket.OPEN;
 
@@ -3537,7 +3227,6 @@ Object.assign(NYM.prototype, {
                             }, delay);
                         };
 
-                        // Start reconnection attempts
                         attemptReconnect(0);
                     }
                 };
@@ -3552,7 +3241,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Track in-flight connection and clean up when settled
         this.pendingConnections.set(relayUrl, connectionPromise);
         connectionPromise.finally(() => {
             this.pendingConnections.delete(relayUrl);
@@ -3570,7 +3258,6 @@ Object.assign(NYM.prototype, {
         const now = Date.now();
 
         if (now - blacklistedAt > this.blacklistDuration) {
-            // Expired, remove from blacklist
             this.blacklistedRelays.delete(relayUrl);
             this.blacklistTimestamps.delete(relayUrl);
             return true;
@@ -3594,8 +3281,6 @@ Object.assign(NYM.prototype, {
     },
 
 
-    // Enqueue a fetch through the concurrency-limited proxy queue.
-    // Returns a Promise that resolves/rejects like a normal fetch.
     _throttledProxyFetch(url, opts) {
         return new Promise((resolve, reject) => {
             this._proxyFetchQueue.push({ url, opts, resolve, reject });
@@ -3616,8 +3301,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Returns the base URL for the Cloudflare proxy endpoint (translation, media, unfurl).
-    // Routes through the production host when running locally. Returns null if remote is down.
+    // Uses the production host when running locally; null if remote is down.
     _getProxyBaseUrl() {
         const host = this._getApiHost();
         if (!host) return null;
@@ -3659,8 +3343,7 @@ Object.assign(NYM.prototype, {
         return res.json();
     },
 
-    // Fetch trending or search Giphy results via the edge-cached proxy
-    // endpoint, with a direct Giphy fallback if the worker is unreachable.
+    // Edge-cached proxy, with a direct Giphy fallback if the worker is unreachable.
     async fetchGiphy({ trending = false, query = '', apiKey }) {
         const base = this._getProxyBaseUrl();
         const directUrl = trending
@@ -3681,10 +3364,8 @@ Object.assign(NYM.prototype, {
     },
 
     sendToRelay(message) {
-        // Multiplexed pool mode: send everything through the single socket
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
-            // For EVENT messages, route through broadcastEvent so geohash-tagged
-            // events use GEO_EVENT (geo relay prioritization) instead of plain EVENT.
+            // Route EVENTs through broadcastEvent so geohash-tagged events use GEO_EVENT.
             if (Array.isArray(message) && message[0] === 'EVENT') {
                 this.broadcastEvent(message);
             } else {
@@ -3709,7 +3390,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Send DM events (kind 1059) with priority to the default relays
     sendDMToRelays(message) {
         this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
@@ -3760,7 +3440,7 @@ Object.assign(NYM.prototype, {
     },
 
     sendRequestToFewRelays(message, maxRelays = 5) {
-        // Multiplexed pool mode: route to critical relays only (profiles don't need geo)
+        // Pool mode: critical relays only (profiles don't need geo).
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSendToRole('critical', message);
             return;
@@ -3801,9 +3481,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Close a sub that was opened via sendRequestToFewRelays. Routes through
-    // the same destinations the REQ used so we don't send CLOSE to relays
-    // that never received the REQ (which would respond "No such subscription").
+    // Uses the REQ's destinations so relays that never saw it don't answer "No such subscription".
     closeFewRelaysSub(subId) {
         if (!subId) return;
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
@@ -3901,7 +3579,6 @@ Object.assign(NYM.prototype, {
     },
 
     subscribeToAllRelays() {
-        // Multiplexed pool mode: subscription through all pool workers
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             this._poolSubscribe();
             this.discoverChannels();
@@ -3918,26 +3595,21 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Send discovery subscriptions to each relay (small limits)
         readableRelays.forEach(([url, relay]) => {
             this.subscribeToSingleRelay(url);
         });
 
-        // Also do channel discovery
         this.discoverChannels();
 
-        // Wait 2 seconds for initial discovery to populate channels, then load full history
         setTimeout(() => {
             this.loadJoinedChannelsFromRelays();
         }, 2000);
     },
 
-    // Pre-load messages for user-joined channels using batch subscriptions
     loadJoinedChannelsFromRelays() {
-        // Skip channel loading in group chat & PM only mode
         if (this.settings.groupChatPMOnlyMode) return;
 
-        // Debounce: don't re-batch joined channels more than once per 30s
+        // Debounce: don't re-batch joined channels more than once per 30s.
         const now = Date.now();
         if (this._lastJoinedChannelsLoadAt && now - this._lastJoinedChannelsLoadAt < 30000) return;
 
@@ -3957,18 +3629,16 @@ Object.assign(NYM.prototype, {
         if (channelsToLoad.length === 0) return;
         this._lastJoinedChannelsLoadAt = now;
 
-        // Batch load in chunks
         const batchSize = this.channelSubscriptionBatchSize;
         for (let i = 0; i < channelsToLoad.length; i += batchSize) {
             const batch = channelsToLoad.slice(i, i + batchSize);
-            // Stagger batch requests to avoid overwhelming relays
             setTimeout(() => {
                 this.subscribeToChannelBatch(batch);
             }, Math.floor(i / batchSize) * 500);
         }
     },
 
-    // true/false when the id is known-verified (cheap hash check), undefined when unknown
+    // true/false when the id is known-verified (cheap hash check), undefined when unknown.
     _verifiedIdCheck(event) {
         try {
             if (!this._verifiedEventIds) this._verifiedEventIds = new Set();
@@ -3993,12 +3663,10 @@ Object.assign(NYM.prototype, {
                 this._verifiedEventIds.delete(key);
             }
         }
-        // Debounced persist so the NEXT session's replay of this event skips
-        // the verify workers too (restored by _hydrateDedupSets).
+        // Persisted so the next session's replay skips the verify workers too (_hydrateDedupSets).
         if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
     },
 
-    // Sync fallback when the worker is unavailable
     _verifyRelayEvent(event) {
         try {
             const NT = window.NostrTools;
@@ -4023,7 +3691,6 @@ Object.assign(NYM.prototype, {
         return ok === true;
     },
 
-    // Lazily spins up a pool of verify workers
     _getVerifyWorker() {
         if (this._verifyWorkerFailed) return null;
         if (this._verifyPool) return this._verifyPool.length ? this._verifyPool : null;
@@ -4049,8 +3716,7 @@ Object.assign(NYM.prototype, {
                     p.resolve(d.ok === true);
                 }
             };
-            // On worker failure, drop just that worker and resolve its in-flight
-            // checks with null so callers fall back to sync verification.
+            // Resolve the failed worker's in-flight checks with null so callers fall back to sync verification.
             w.onerror = () => this._dropVerifyWorker(rec);
             w.onmessageerror = () => this._dropVerifyWorker(rec);
             this._verifyPool.push(rec);
@@ -4078,7 +3744,6 @@ Object.assign(NYM.prototype, {
         return new Promise((resolve) => {
             const pool = this._getVerifyWorker();
             if (!pool || !pool.length) { resolve(null); return; }
-            // Route to the least-busy worker to spread the burst evenly.
             let rec = pool[0];
             for (const r of pool) if (r.busy < rec.busy) rec = r;
             const seq = ++this._verifyWorkerSeq;
@@ -4094,8 +3759,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Per-relay, per-kind tally (count + bytes) so the network stats modal can
-    // show what each relay is actually sending and where data is going.
     _trackRelayKindData(relayUrl, kind, bytes) {
         if (typeof relayUrl !== 'string' || !relayUrl.startsWith('wss://')) relayUrl = 'relay-pool';
         if (!this.relayStats.kindStatsPerRelay) this.relayStats.kindStatsPerRelay = new Map();
@@ -4107,7 +3770,6 @@ Object.assign(NYM.prototype, {
         s.bytes += bytes || 0;
     },
 
-    /// Whether any relay in `urls` is one we currently hold a socket to.
     _anyRelayConnected(urls) {
         if (this.useRelayProxy) {
             for (const u of (this.poolConnectedRelays || [])) if (urls.has(u)) return true;
@@ -4120,25 +3782,7 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    /// A geohash channel message is admissible only from that geohash's own
-    /// neighbourhood of relays.
-    ///
-    /// The subscriptions stay open on purpose — the sidebar, the explorer and
-    /// the D1 archive are all built from seeing every channel on every relay.
-    /// What changes is what counts as a real message in a PLACE: bitchat
-    /// publishes a geohash message to the five relays nearest that geohash and
-    /// reads it back from the same five, so anything tagged `g=<geohash>` that
-    /// did not come from there was not sent by a participant in that place. It
-    /// was sprayed at the tag.
-    ///
-    /// The allowlist is the union of what iOS bitchat and Android bitchat would
-    /// each pick, because their two rankings differ and a flat nearest-five
-    /// would hide whichever half we did not copy.
-    ///
-    /// Kind 20000 only. `ensureGeoRelayDelivery` sends nothing else to geo
-    /// relays — reactions and polls on a geohash channel go to the default
-    /// relays like every other kind — so applying this to them would delete
-    /// every reaction in every geohash channel, ours included.
+    // Kind 20000 only: bitchat uses a geohash's nearest relays (iOS ∪ Android), so other sources sprayed the tag.
     _geoOriginAllows(event, relayUrl) {
         if (!event || event.kind !== 20000) return true;
         if (typeof relayUrl !== 'string' || !relayUrl) return true;
@@ -4148,17 +3792,12 @@ Object.assign(NYM.prototype, {
         if (!geohash || !this.isValidGeohash(geohash)) return true;
 
         const closest = this.getClosestRelaysForGeohash(geohash);
-        // Directory not loaded, or a geohash that will not decode. Refusing
-        // here would empty every geohash channel on a cold start or a failed
-        // CSV fetch, which is a worse failure than the one being prevented.
+        // Refusing here would empty every geohash channel on a cold start or failed CSV fetch.
         if (!closest.length) return true;
 
         const allow = new Set(closest.map(r => r.url));
         if (allow.has(relayUrl)) return true;
-        // We hold none of this neighbourhood, so there is no admissible source
-        // to wait for and rejecting would hide the channel rather than filter
-        // it. Direct mode and low-data mode land here for channels they do not
-        // cover; ensureGeoRelayCoverage narrows how often.
+        // No admissible source is held, so rejecting would hide the channel rather than filter it.
         if (!this._anyRelayConnected(allow)) return true;
         return false;
     },
@@ -4238,7 +3877,6 @@ Object.assign(NYM.prototype, {
     _dispatchRelayMessage(msg, relayUrl) {
         const [type, ...data] = msg;
 
-        // Per-subscription side-handlers (e.g. batched profile fetch)
         if (this._subscriptionHandlers && this._subscriptionHandlers.size) {
             const handler = this._subscriptionHandlers.get(data[0]);
             if (handler) handler(type, data, relayUrl);
@@ -4252,9 +3890,7 @@ Object.assign(NYM.prototype, {
                     const attributed = (typeof sourceRelay === 'string' && sourceRelay.startsWith('wss://'))
                         ? sourceRelay
                         : (relayUrl && relayUrl !== 'relay-pool' ? relayUrl : null);
-                    // Before the dedup return, not after: every layer below
-                    // exists to discard the second and later copies, and those
-                    // copies ARE the list of relays this event came from.
+                    // Before the dedup return: the duplicate copies are the list of relays this event came from.
                     if (typeof this.recordEventProvenance === 'function') {
                         this.recordEventProvenance(event, attributed);
                     }
@@ -4270,8 +3906,7 @@ Object.assign(NYM.prototype, {
                     if (attributedRelay) {
                         const cur = this.relayStats.eventsPerRelay.get(attributedRelay) || 0;
                         this.relayStats.eventsPerRelay.set(attributedRelay, cur + 1);
-                        // Track the per-kind breakdown from the same post-dedup
-                        // event so the expanded view sums to the collapsed count.
+                        // Same post-dedup event, so the per-kind view sums to the collapsed count.
                         if (typeof event.kind === 'number') {
                             this._trackRelayKindData(attributedRelay, event.kind, JSON.stringify(event).length);
                         }
@@ -4291,8 +3926,7 @@ Object.assign(NYM.prototype, {
                 this.handleEvent(event);
                 break;
             case 'POOL:SEEN': {
-                // A relay the proxy deduped away. The event itself already
-                // arrived; this only adds the source.
+                // A relay the proxy deduped away; this only adds the source.
                 if (typeof this.noteEventRelay === 'function') {
                     this.noteEventRelay(data[0], data[1]);
                 }
@@ -4345,16 +3979,14 @@ Object.assign(NYM.prototype, {
                 break;
             }
             case 'AUTH': {
-                // We don't implement NIP-42. Drop the relay that's asking
-                // for AUTH so we don't waste connections on it.
+                // We don't implement NIP-42; drop relays asking for AUTH.
                 const authRelay = (typeof data[0] === 'string' && data[0].startsWith('wss://'))
                     ? data[0] : relayUrl;
                 this._permanentlyBlacklistRelay(authRelay, 'auth-required');
                 break;
             }
             case 'CLOSED': {
-                // Direct: ["CLOSED", subId, reason]
-                // Pool (proxy-attributed): ["CLOSED", subId, reason, relayUrl]
+                // Direct: ["CLOSED", subId, reason]; pool: ["CLOSED", subId, reason, relayUrl].
                 const closedSubId = data[0];
                 const reason = data[1] || '';
                 const attributedRelay = (typeof data[2] === 'string' && data[2].startsWith('wss://'))
@@ -4379,8 +4011,7 @@ Object.assign(NYM.prototype, {
                 break;
             }
             case 'NOTICE': {
-                // Direct: ["NOTICE", reason]
-                // Pool (proxy-attributed): ["NOTICE", reason, relayUrl]
+                // Direct: ["NOTICE", reason]; pool: ["NOTICE", reason, relayUrl].
                 const notice = data[0];
                 const attributedRelay = (typeof data[1] === 'string' && data[1].startsWith('wss://'))
                     ? data[1] : relayUrl;
@@ -4401,15 +4032,12 @@ Object.assign(NYM.prototype, {
 
     async fetchProfileFromRelay(pubkey) {
         return new Promise((resolve) => {
-            // Add to queue
             this.profileFetchQueue.push({ pubkey, resolve });
 
-            // Clear existing timer
             if (this.profileFetchTimer) {
                 clearTimeout(this.profileFetchTimer);
             }
 
-            // Set timer to process batch
             this.profileFetchTimer = setTimeout(() => {
                 this.processBatchedProfileFetch();
             }, this.profileFetchBatchDelay);
@@ -4420,11 +4048,9 @@ Object.assign(NYM.prototype, {
         const statusEl = document.getElementById('connectionStatus');
         const dot = document.getElementById('statusDot');
 
-        // If status is a custom message, show it
         if (status && typeof status === 'string') {
             statusEl.textContent = status;
 
-            // Update dot color based on status text
             if (status.includes('Connected') || status.includes('relays')) {
                 dot.style.background = 'var(--primary)';
             } else if (status.includes('Connecting') || status.includes('Discovering')) {
@@ -4433,8 +4059,7 @@ Object.assign(NYM.prototype, {
                 dot.style.background = 'var(--danger)';
             }
         } else {
-            // Pool mode: relayPool entries hold a stale legacy poolSocket ref
-            // and report disconnected during single-worker reconnects.
+            // Pool mode: relayPool entries hold a stale poolSocket ref during single-worker reconnects.
             if (this.useRelayProxy) {
                 const count = this.poolConnectedRelays.length;
                 if (this._isAnyPoolOpen() && count > 0) {
@@ -4471,31 +4096,28 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Apply +/- 25% jitter to a base delay to avoid thundering herd on reconnect
     _jitter(baseMs, spread = 0.25) {
         const factor = 1 - spread + Math.random() * spread * 2;
         return Math.max(0, Math.floor(baseMs * factor));
     },
 
-    // Track relays that have rate-limited us recently. We back off new
-    // REQs to those relays for a short window so we stop antagonizing them.
+    // Back off new REQs to relays that rate-limited us recently.
     _noteRateLimit(relayUrl) {
         if (!this._rateLimitedRelays) this._rateLimitedRelays = new Map();
         const now = Date.now();
         const key = relayUrl || 'relay-pool';
         const prev = this._rateLimitedRelays.get(key) || { count: 0, until: 0 };
         prev.count++;
-        // Back off 10s for first hit, doubling up to 5 min
+        // 10s for the first hit, doubling up to 5 min.
         const backoff = Math.min(10000 * Math.pow(2, prev.count - 1), 300000);
         prev.until = now + backoff;
         this._rateLimitedRelays.set(key, prev);
-        // Aggressively close all non-essential backfill subs to clear the queue
         if (this._backfillSubs) {
             for (const [, entry] of this._backfillSubs) {
                 try { entry.close(); } catch (_) { }
             }
         }
-        // Decay the count over time so a one-off doesn't punish forever
+        // Decay the count so a one-off doesn't punish forever.
         setTimeout(() => {
             const cur = this._rateLimitedRelays.get(key);
             if (cur && cur.count > 0) cur.count--;
@@ -4578,8 +4200,7 @@ Object.assign(NYM.prototype, {
             || /\blow\s+trust\b/i.test(reason);
     },
 
-    // Count error responses per relay. If a relay sends 5+ errors within
-    // 60s (rate-limit, malformed-filter, etc.), rest it for the blacklist window.
+    // 5+ errors within 60s rests the relay for the blacklist window.
     _recordRelayError(relayUrl, reason) {
         if (!relayUrl || relayUrl === 'relay-pool') return;
         if (this._permanentBlacklist && this._permanentBlacklist.has(relayUrl)) return;
@@ -4606,47 +4227,39 @@ Object.assign(NYM.prototype, {
         this._noteRateLimit(relayUrl);
     },
 
-    // Add a relay to the permanent (session-long) blacklist and disconnect it.
-    // Subsequent reconnect attempts skip it; in pool mode we also send a
-    // RELAYS update so the worker drops the upstream connection.
+    // Session-long; in pool mode a RELAYS update makes the worker drop the upstream connection.
     _permanentlyBlacklistRelay(relayUrl, reason) {
         if (!relayUrl || relayUrl === 'relay-pool') return;
         if (relayUrl === this.appRelay) return;
-        // Default relays are curated and must stay eligible — a transient or
-        // over-eager ban must not exclude them for the whole session.
+        // Default relays are curated and must stay eligible.
         if (this.defaultRelays && this.defaultRelays.includes(relayUrl)) return;
         if (!this._permanentBlacklist) this._permanentBlacklist = new Set();
         if (this._permanentBlacklist.has(relayUrl)) return;
         this._permanentBlacklist.add(relayUrl);
 
-        // Also push into the regular blacklist with a far-future timestamp
-        // so existing skip checks (shouldRetryRelay etc.) honor it.
+        // Far-future timestamp so existing skip checks (shouldRetryRelay etc.) honor it.
         this.blacklistedRelays.add(relayUrl);
         if (this.blacklistTimestamps) {
             this.blacklistTimestamps.set(relayUrl, Date.now() + (10 * 365 * 24 * 3600 * 1000));
         }
 
-        // Direct mode: close + remove from pool
         const direct = this.relayPool && this.relayPool.get(relayUrl);
         if (direct && direct.ws) {
             try { direct.ws.close(); } catch (_) { }
             this.relayPool.delete(relayUrl);
         }
 
-        // Drop from our active geo sets so we stop trying to reach it
         if (this.currentGeoRelays) this.currentGeoRelays.delete(relayUrl);
         if (this.geoRelayConnections) {
             for (const set of this.geoRelayConnections.values()) set.delete(relayUrl);
         }
 
-        // Pool mode: re-send relay config so workers drop this upstream
         if (this.useRelayProxy && typeof this._poolSendRelayConfig === 'function') {
             this._poolSendRelayConfig();
         }
     },
 
-    // Resolve when EOSE arrives for the given subId (or after timeoutMs).
-    // Used to serialize ephemeral-pubkey REQs so they don't burst in parallel.
+    // Serializes ephemeral-pubkey REQs so they don't burst in parallel.
     _waitForEoseOrTimeout(subId, timeoutMs = 2000) {
         return new Promise(resolve => {
             if (!this._eoseWaiters) this._eoseWaiters = new Map();
@@ -4662,8 +4275,7 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Cap concurrent one-shot REQs (profile/LN/etc) so we don't trip
-    // per-relay "too many concurrent subscriptions" rate limits.
+    // Stay under per-relay "too many concurrent subscriptions" limits.
     _oneShotReqMax: 4,
     _oneShotReqAcquire(fn) {
         if (!this._oneShotReqState) this._oneShotReqState = { active: 0, queue: [] };
@@ -4685,7 +4297,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // bufferedAmount-aware send with optional per-socket queue for critical messages
+    // bufferedAmount-aware send with an optional per-socket queue for critical messages.
     _safeWsSend(ws, msg, opts) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return false;
         const threshold = (opts && opts.threshold) || 1048576;
@@ -4737,7 +4349,7 @@ Object.assign(NYM.prototype, {
         setTimeout(drain, 50);
     },
 
-    // Async fan-out: yields between chunks so slow relays don't block faster ones
+    // Yields between chunks so slow relays don't block faster ones.
     _broadcastAsync(relays, msg, opts) {
         const list = Array.isArray(relays) ? relays : Array.from(relays || []);
         const chunkSize = (opts && opts.chunkSize) || 6;
@@ -4756,8 +4368,7 @@ Object.assign(NYM.prototype, {
         step();
     },
 
-    // Close the persistent typing sub for a channel (if any). Backfill subs
-    // self-close on EOSE so they don't need explicit cleanup here.
+    // Backfill subs self-close on EOSE.
     closeChannelSubscription(channelKey, opts) {
         if (!channelKey) return;
 
@@ -4766,7 +4377,6 @@ Object.assign(NYM.prototype, {
             subIds.push(this._channelTypingSubs.get(channelKey));
             this._channelTypingSubs.delete(channelKey);
         }
-        // Legacy: any leftover sub tracked via channelSubscriptions
         if (this.channelSubscriptions.has(channelKey)) {
             const sid = this.channelSubscriptions.get(channelKey);
             if (sid && !subIds.includes(sid)) subIds.push(sid);
@@ -4794,8 +4404,7 @@ Object.assign(NYM.prototype, {
         for (const id of subIds) sendCloseFor(id);
     },
 
-    // Coalesce channel subscription requests over a short window so multiple
-    // channels share one batched REQ instead of firing one REQ each.
+    // Coalesce so multiple channels share one batched REQ.
     _queueChannelSubscription(channelKey, channelType) {
         if (!channelKey) return;
         if (this.channelLoadedFromRelays.has(channelKey)) return;
@@ -4815,9 +4424,7 @@ Object.assign(NYM.prototype, {
             clearTimeout(this._pendingChannelLoadTimer);
             this._pendingChannelLoadTimer = null;
         }
-        // If we're being rate-limited, defer the flush to give relays time
-        // to clear their concurrent-sub counter. The queue accumulates
-        // channels in the meantime so the next flush is a single batch.
+        // Rate-limited: defer so relays can clear their concurrent-sub counter; the queue keeps accumulating.
         if (this._isRateLimited('relay-pool')) {
             this._pendingChannelLoadTimer = setTimeout(() => this._flushPendingChannelLoad(), 5000);
             return;

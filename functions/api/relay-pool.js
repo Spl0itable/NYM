@@ -1,28 +1,4 @@
-// Cloudflare Pages Function: Multiplexed WebSocket relay pool proxy
-// Single WebSocket from client, fans out to many upstream Nostr relays.
-// Uses string-based deduplication (no JSON.parse) to minimize CPU usage.
-//
-// Client connects to: wss://<host>/api/relay-pool
-//
-// Protocol (client → proxy):
-//   ["RELAYS", { critical: [...], geo: [...], dmRelays: [...] }] - relay set tagged by role
-//   ["EVENT", eventObj]          - fans out to all connected relays
-//   ["GEO_EVENT", eventObj, ["wss://geo1", ...]]  - fans out to listed geo relays first, then all others
-//   ["DM_EVENT", eventObj]       - fans out to DM relays first, then all others
-//   ["REQ", subId, ...filters]   - fans out to all relays
-//   ["CLOSE", subId]             - fans out to all relays
-//   ["ROLE", role, <inner msg>]  - routes REQ/CLOSE only to relays tagged with that role
-//   ["KIND_BLACKLIST", { "wss://relay": [kind, ...], ... }] - skip relay for REQs whose kinds are all in its set
-//
-// Protocol (proxy → client):
-//   ["EVENT", subId, eventObj]   - deduplicated via string extraction (no JSON.parse)
-//   ["OK", eventId, bool, msg]   - first OK per event ID
-//   ["EOSE", subId]              - deduplicated (first per subscription ID)
-//   ["NOTICE", reason, relayUrl] - attributed to originating relay
-//   ["CLOSED", subId, reason, relayUrl] - attributed to originating relay
-//   ["POOL:RELAY_BAN", relayUrl, reason] - relay permanently dropped (auth, restricted, etc.)
-//   ["POOL:RETRACT", eventId, reason] - an event forwarded earlier was judged spam; remove it
-//   ["POOL:STATUS", { connected, count, latency, events }]
+// Multiplexed relay pool: one client socket fans out to many relays, deduping frames by string extraction.
 
 import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake } from './_shared.js';
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
@@ -32,8 +8,7 @@ import { spamEngine, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTi
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 
-// Reject relay hostnames that resolve to private/loopback/link-local space so
-// the proxy can't be used to reach internal services (SSRF).
+// Reject private/loopback/link-local relay hosts so the proxy can't reach internal services (SSRF).
 function isPrivateRelayHost(hostname) {
   let host = (hostname || '').toLowerCase().replace(/\.$/, '');
   if (!host) return true;
@@ -282,11 +257,10 @@ export async function onRequest(context) {
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
 
-  // Relay pool state
   const upstreams = new Map();       // relayUrl -> { ws, type, status, eventCount, handled }
   const activeSubscriptions = new Map(); // subId -> raw JSON string of the REQ message
   const subRelays = new Map();       // subId -> Set<relayUrl> the REQ was sent to
-  const seenEvents = new Map();      // eventId -> 1 (string-based dedup, no JSON.parse)
+  const seenEvents = new Map();      // eventId -> 1
   const seenOKs = new Set();         // eventId (only forward first OK per event)
   const seenEOSE = new Set();        // subId (only forward first EOSE per subscription)
   const relayLatency = new Map();    // relayUrl -> latency ms
@@ -319,7 +293,6 @@ export async function onRequest(context) {
   let ipEventUnits = 0;
   let ipEventBlockedUntil = 0;
 
-  // Dedup housekeeping
   const DEDUP_MAX = 50000;
   let dedupCounter = 0;
 
@@ -330,7 +303,7 @@ export async function onRequest(context) {
   const ARCHIVE_BATCH = 100;
   const archiveBuf = new Map();   // eventId -> { id, channel, kind, pubkey, created_at, json }
 
-  // NIP-30 emoji lists (kind 30030 packs, 10030 user lists)
+  // NIP-30 emoji lists (kind 30030 packs, 10030 user lists).
   const EMOJI_EVENT_MAX = 64 * 1024;
   const emojiBuf = new Map();     // coord -> { coord, kind, pubkey, d, created_at, json }
   let emojiSchemaReady = false;
@@ -366,7 +339,7 @@ export async function onRequest(context) {
     }
   }
 
-  // Keepalive: send periodic POOL:PING to prevent Cloudflare idle timeout
+  // Periodic POOL:PING prevents the Cloudflare idle timeout.
   let keepaliveTimer = setInterval(() => {
     try {
       if (serverOpen && server.readyState === 1) {
@@ -384,37 +357,30 @@ export async function onRequest(context) {
     }
   }, 30000);
 
-  // Relays that must never be banned, skipped, or backed off
+  // Relays that must never be banned, skipped, or backed off.
   const APP_RELAY = 'wss://relay.nymchat.app';
   const WRITE_ONLY_RELAYS = new Set(['wss://sendit.nosflare.com']);
 
-  // Track failed relays to avoid wasting cycles
   const failedRelays = new Map();      // relayUrl -> { failedAt, attempts }
   const FAILED_COOLDOWN = 60000;
   const MAX_BACKOFF = 180000;
 
-  // Track reconnection attempts
   const reconnectAttempts = new Map();
   const everConnected = new Set();
   const STABLE_SESSION_MS = 15000;
   const RECONNECT_BASE_MS = 3000;
   const RECONNECT_CAP_MS = 120000;
 
-  // Track relays pending reconnection
   const pendingReconnect = new Set();
   const reconnectTimers = new Map();
   const intentionallyClosed = new Set();
-  // Relays that returned auth-required / unsupported-query CLOSED; never reconnect
+  // Relays that returned auth-required / unsupported-query CLOSED; never reconnect.
   const permanentlySkipped = new Set();
 
-  // Buffered GEO_EVENTs waiting for geo relays to connect
-  // Map<relayUrl, Array<geoMsg string>>
+  // Map<relayUrl, Array<geoMsg string>> of GEO_EVENTs waiting for geo relays to connect.
   const pendingGeoEvents = new Map();
 
-  // Bounded connection establishment. Cloudflare allows only 6 connections to
-  // be establishing (waiting for headers) at once; with the whole relay set on
-  // one socket we must not fire every WebSocket synchronously or queued ones
-  // would hit their connect timeout before they even start.
+  // Cloudflare allows only 6 connections establishing at once, so queue the rest to avoid connect timeouts.
   let connectionTimer = null;
   let connectionQueue = [];
   const MAX_CONCURRENT_CONNECTS = 6;
@@ -422,7 +388,6 @@ export async function onRequest(context) {
   let inFlightConnects = 0;
   const pendingConnect = new Set();
 
-  // Throttle pool status updates
   let statusTimer = null;
   function schedulePoolStatus() {
     if (statusTimer) return;
@@ -438,7 +403,6 @@ export async function onRequest(context) {
         server.send(typeof data === 'string' ? data : JSON.stringify(data));
       }
     } catch {
-      // Client disconnected
     }
   }
 
@@ -448,8 +412,7 @@ export async function onRequest(context) {
     upstreams.forEach((info, url) => {
       if (info.status === 'connected') connected.push(url);
     });
-    // Only include latency for connected relays. Per-relay event counts are
-    // omitted — the client tracks its own post-dedup counts.
+    // Latency only for connected relays; the client tracks its own post-dedup event counts.
     relayLatency.forEach((ms, url) => {
       if (connected.includes(url)) latency[url] = ms;
     });
@@ -466,8 +429,7 @@ export async function onRequest(context) {
 
   function shouldSkipRelay(relayUrl) {
     if (relayUrl === APP_RELAY) return false;
-    // Permanent skip: relays that have rejected us with auth-required,
-    // unsupported filter shape, etc. won't recover, don't retry.
+    // Relays that rejected us (auth-required, unsupported filters) won't recover; don't retry.
     if (permanentlySkipped.has(relayUrl)) return true;
     const failure = failedRelays.get(relayUrl);
     if (failure) {
@@ -554,9 +516,7 @@ export async function onRequest(context) {
     } catch { return null; }
   }
 
-  // Upstream relays reject REQs with more than ~10 filters ("too many filters").
-  // Split an over-sized REQ into child subscriptions of <= MAX_FILTERS_PER_REQ
-  // filters each so no single upstream REQ trips that limit.
+  // Relays reject REQs with more than ~10 filters, so split into child subscriptions of <= MAX_FILTERS_PER_REQ.
   const MAX_FILTERS_PER_REQ = 10;
 
   function buildChildrenForParent(parentSubId, msg) {
@@ -651,10 +611,7 @@ export async function onRequest(context) {
     return canonicalRelayUrl(url) === url;
   }
 
-  // Extract Nostr event ID from raw JSON string without JSON.parse.
-  // Searches for "id":" AFTER the first '{' (start of the event object)
-  // to avoid false matches in subscription IDs or other envelope fields.
-  // Validates the extracted ID is exactly 64 characters (Nostr event ID length).
+  // Searches after the first '{' to skip envelope fields; accepts only a 64-char id.
   function extractEventId(raw) {
     const braceIdx = raw.indexOf('{');
     if (braceIdx === -1) return null;
@@ -662,13 +619,11 @@ export async function onRequest(context) {
     if (idx === -1) return null;
     const start = idx + 6;
     const end = raw.indexOf('"', start);
-    if (end === -1 || end - start !== 64) return null; // Nostr event IDs are exactly 64 hex chars
+    if (end === -1 || end - start !== 64) return null;
     return raw.substring(start, end);
   }
 
-  // Extract a JSON string field from an event object embedded in a raw frame.
-  // Limited to the substring after the first '{' so it skips envelope fields.
-  // Returns the decoded value (handling common \" / \\ / \n escapes) or null.
+  // Searches after the first '{' to skip envelope fields; decodes common \" / \\ / \n escapes, else null.
   function extractEventStringField(raw, fieldName) {
     const braceIdx = raw.indexOf('{');
     if (braceIdx === -1) return null;
@@ -717,8 +672,7 @@ export async function onRequest(context) {
     return saw ? n : -1;
   }
 
-  // Find a tag value in the raw "tags":[["n","<value>"], ...] structure.
-  // Conservative pattern match keyed on `["<tagName>","` — no JSON.parse.
+  // Conservative match on `["<tagName>","` in the raw tags, without JSON.parse.
   function extractTagValue(raw, tagName) {
     const braceIdx = raw.indexOf('{');
     if (braceIdx === -1) return null;
@@ -757,7 +711,6 @@ export async function onRequest(context) {
     return n;
   }
 
-  // Numeric created_at from an event frame, without JSON.parse.
   function extractEventCreatedAt(raw) {
     const braceIdx = raw.indexOf('{');
     if (braceIdx === -1) return 0;
@@ -793,8 +746,7 @@ export async function onRequest(context) {
   const ARCHIVE_RECORD_TOPICS = new Set(['nym-poll', 'nym-poll-vote', 'nym-vouches', 'nym-pq']);
   const RX_GEOHASH_KEY = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
 
-  // Channel name for an event: 'g' for geohash (20000), 'd' for named (23333),
-  // either for reactions (7) and polls (30078).
+  // 'g' for geohash (20000), 'd' for named (23333), either for reactions (7) and polls (30078).
   function channelFromTags(getTag, kind) {
     if (kind === 20000) return getTag('g');
     if (kind === 23333) return getTag('d');
@@ -837,24 +789,18 @@ export async function onRequest(context) {
     };
   }
 
-  // How many extra relays one event reports before the notes stop. Past a
-  // handful the list tells a reader nothing new, and the cap is what keeps a
-  // widely-relayed event from costing one frame per relay.
+  // Caps relay notes per event so a widely relayed event doesn't cost one frame per relay.
   const SEEN_REPORT_CAP = 8;
   // Only the kinds a person can open the details panel on.
   const isSeenReportKind = (k) => k === 20000 || k === 23333 || k === 7;
 
   const APP_RELAY_ONLY_CHANNEL = 'nymchat';
-  // Every kind that names a channel and shows up in it: the message itself, and
-  // the reactions, polls, typing strips and read receipts that hang off it.
-  // Gating only the messages would leave four other ways to put a nym and a
-  // payload in front of everyone in #nymchat.
+  // Every channel-scoped kind (messages, reactions, polls, typing, receipts) is gated, not just messages.
   const APP_RELAY_ONLY_KINDS = new Set([23333, 7, 30078, 24420, 24421]);
 
   function isAppChannelOnly(kind, getTag) {
     if (!APP_RELAY_ONLY_KINDS.has(kind)) return false;
-    // Same derivation as channelFromTags: 'd' names a named channel, and the
-    // hangers-on may carry either tag.
+    // Same derivation as channelFromTags: 'd' names a named channel; the others may carry either tag.
     const name = kind === 23333 ? getTag('d') : (getTag('g') || getTag('d'));
     return !!name && name.toLowerCase() === APP_RELAY_ONLY_CHANNEL;
   }
@@ -877,7 +823,7 @@ export async function onRequest(context) {
   const outboundArchived = new Map();
 
   function runArchive(work) {
-    if (context && context.waitUntil) { try { context.waitUntil(work); } catch { /* noop */ } }
+    if (context && context.waitUntil) { try { context.waitUntil(work); } catch {} }
   }
 
   function bufferArchive(channel, eventId, kind, pubkey, createdAt, objJson) {
@@ -901,9 +847,7 @@ export async function onRequest(context) {
     }
   }
 
-  // The relay directory, loaded once per isolate. Held in a plain variable so
-  // the archive path can stay synchronous; null until the first load lands,
-  // and null means admit everything.
+  // The relay directory, loaded once per isolate so archiving stays synchronous; null means admit everything.
   let geoDirectory = null;
   runArchive((async () => { geoDirectory = await loadGeoDirectory(); })());
   const GEO_ALLOW_CACHE_MAX = 512;
@@ -924,9 +868,7 @@ export async function onRequest(context) {
     return allow;
   }
 
-  // Fails open on an unloaded directory or an undecodable geohash. In proxy
-  // mode the pool holds the whole directory, so the neighbourhood is always
-  // connected and there is no third case to fail open on.
+  // Fails open on an unloaded directory or undecodable geohash.
   function geoOriginAllowsFrame(raw, kind, relayUrl) {
     if (kind !== 20000) return true;
     if (!geoDirectory || typeof relayUrl !== 'string' || !relayUrl) return true;
@@ -937,7 +879,6 @@ export async function onRequest(context) {
     return allow.has(relayUrl);
   }
 
-  // Inbound event from a relay (string frame).
   function archiveInboundEvent(raw, kind, eventId) {
     if (!archiveEnabled || !eventId) return;
     const getTag = (n) => extractTagValue(raw, n);
@@ -951,9 +892,7 @@ export async function onRequest(context) {
     bufferArchive(channel, eventId, kind, pubkey, extractEventCreatedAt(raw), objJson);
   }
 
-  // A NIP-09 deletion (kind 5) removes the referenced events from the channel
-  // archive so they don't resurface in D1 backfill. Verified, and scoped to the
-  // deleter's own events.
+  // NIP-09 kind 5 removes referenced events from the archive; verified and scoped to the deleter's own events.
   function deleteArchivedFromDeletion(raw) {
     if (!archiveEnabled) return;
     const objJson = extractEventObjectJson(raw);
@@ -974,7 +913,7 @@ export async function onRequest(context) {
       await CHANNELS_DB.prepare(
         'DELETE FROM events WHERE pubkey = ? AND id IN (' + ph + ')'
       ).bind(ev.pubkey, ...targets).run();
-    } catch { /* best-effort */ }
+    } catch {}
   }
 
   function outboundChannelRefused(ev) {
@@ -986,8 +925,7 @@ export async function onRequest(context) {
     return isSpamEventFrame(frame, false);
   }
 
-  // Outbound event the client is publishing — archived immediately so sends
-  // land in D1 without waiting for the relay echo (deduped, so saved once).
+  // Archived immediately so sends land in D1 without waiting for the relay echo.
   function archiveOutgoingEvent(ev) {
     if (!archiveEnabled || !ev || typeof ev.id !== 'string' || !isArchivableChannelKind(ev.kind)) return;
     if (typeof ev.pubkey !== 'string') return;
@@ -1024,9 +962,7 @@ export async function onRequest(context) {
       typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev));
   }
 
-  // Verify id hash + schnorr signature before persisting so forged events can't
-  // be archived to D1. Bounded work: runs once per unique event in the
-  // background flush.
+  // Verify id hash and signature before persisting so forged events can't be archived.
   function archiveRowFrom(buffered, nowSec) {
     const ev = verifiedEventJson(buffered.json, buffered.id);
     if (!ev || ev.created_at > nowSec + ARCHIVE_FUTURE_SKEW_S) return null;
@@ -1038,14 +974,12 @@ export async function onRequest(context) {
     return { id: ev.id, channel, kind: ev.kind, pubkey: ev.pubkey, created_at: ev.created_at, json };
   }
 
-  // Flush buffered events as batched INSERT OR IGNORE statements. The id primary
-  // key drops duplicates; an occasional failed flush is backfilled by relays.
+  // The id primary key drops duplicates; an occasional failed flush is backfilled by relays.
   async function flushArchive() {
     if (!archiveEnabled || archiveBuf.size === 0) return;
     const buffered = Array.from(archiveBuf.values());
     archiveBuf.clear();
 
-    // INSERT OR IGNORE dedupes on the id PK; no Cache layer needed.
     const stmt = CHANNELS_DB.prepare(
       'INSERT OR IGNORE INTO events (id, channel, kind, pubkey, created_at, json, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
@@ -1065,7 +999,7 @@ export async function onRequest(context) {
       const chunk = keep.map(
         (r) => stmt.bind(r.id, r.channel, r.kind, r.pubkey, r.created_at, r.json, now)
       );
-      try { await CHANNELS_DB.batch(chunk); } catch { /* best-effort */ }
+      try { await CHANNELS_DB.batch(chunk); } catch {}
     }
   }
 
@@ -1140,12 +1074,11 @@ export async function onRequest(context) {
       const chunk = rows.slice(i, i + ARCHIVE_BATCH).map(
         (r) => stmt.bind(r.coord, r.kind, r.pubkey, r.d, r.created_at, r.json, now)
       );
-      try { await CHANNELS_DB.batch(chunk); } catch { /* best-effort */ }
+      try { await CHANNELS_DB.batch(chunk); } catch {}
     }
   }
 
-  // Mirror of the client-side _looksLikeRandomToken heuristic.
-  // Recognizes nanoid-style spam strings like "IBLm9lyTuP", "AJvgLLPASR".
+  // Mirror of the client-side _looksLikeRandomToken heuristic for nanoid-style spam strings.
   function looksLikeRandomToken(token) {
     if (!token || token.length < 8) return false;
     if (!/^[A-Za-z0-9]+$/.test(token)) return false;
@@ -1278,7 +1211,6 @@ export async function onRequest(context) {
     return score;
   }
 
-  // Drop gibberish channel events before they reach the client
   function contentSpamScore(content) {
     if (typeof content !== 'string') return 0;
     const trimmed = content.trim();
@@ -1321,7 +1253,6 @@ export async function onRequest(context) {
     return h >>> 0;
   }
 
-  // Per-pubkey content flood
   const contentFloodTracking = new Map();
   const CONTENT_FLOOD_MAX_KEYS = 5000;
   const AUTO_MUTED_MAX = 5000;
@@ -1494,7 +1425,6 @@ export async function onRequest(context) {
     return m ? parseInt(m[1], 10) * 1000 : 0;
   }
 
-  // Channel spam suppression at the pool boundary
   const RX_BLOCKED_CONTENT_BLOB = /"content":"(?:(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}|test_\d+_\d+)"/;
   function hasBlockedContentPrefix(raw) {
     return RX_BLOCKED_CONTENT_BLOB.test(raw);
@@ -1635,7 +1565,6 @@ export async function onRequest(context) {
     });
   }
 
-  // Enqueue a connection, capping concurrent establishment to MAX_CONCURRENT_CONNECTS.
   function queueConnection(relayUrl, type) {
     if (upstreams.has(relayUrl) || pendingConnect.has(relayUrl)) return;
     if (upstreams.size + pendingConnect.size >= MAX_UPSTREAMS) return;
@@ -1669,8 +1598,7 @@ export async function onRequest(context) {
     }
   }
 
-  // The app relay and the client's curated default relays (sent as dmRelays)
-  // must never be permanently skipped — they always stay reconnectable.
+  // The app relay and the client's default relays (dmRelays) must never be permanently skipped.
   function isProtectedRelay(relayUrl) {
     return relayUrl === APP_RELAY || dmRelays.includes(relayUrl);
   }
@@ -1692,7 +1620,7 @@ export async function onRequest(context) {
     pendingReconnect.delete(relayUrl);
     const info = upstreams.get(relayUrl);
     if (info && info.ws) {
-      try { info.ws.close(); } catch { /* noop */ }
+      try { info.ws.close(); } catch {}
     }
     upstreams.delete(relayUrl);
     for (const targets of subRelays.values()) targets.delete(relayUrl);
@@ -1733,7 +1661,7 @@ export async function onRequest(context) {
       for (const child of children) {
         const payload = buildChildPayload(child, blocked);
         if (payload === null) continue;
-        try { ws.send(payload); anySent = true; } catch { /* noop */ }
+        try { ws.send(payload); anySent = true; } catch {}
       }
     } else {
       const rawReq = activeSubscriptions.get(parentSubId);
@@ -1744,7 +1672,7 @@ export async function onRequest(context) {
         if (stripped === '') return;
         if (stripped !== null) payload = stripped;
       }
-      try { ws.send(payload); anySent = true; } catch { /* noop */ }
+      try { ws.send(payload); anySent = true; } catch {}
     }
     if (anySent) {
       let targets = subRelays.get(parentSubId);
@@ -1759,8 +1687,7 @@ export async function onRequest(context) {
     }
   }
 
-  // Fan a new subscription out to relays in small batches instead of blasting
-  // all ~150 at once, which destabilizes the relays and the client socket.
+  // Fan out in small batches; blasting ~150 relays at once destabilizes relays and the client socket.
   function staggerSubscribe(subId) {
     const targets = [];
     upstreams.forEach((info, url) => {
@@ -1782,8 +1709,7 @@ export async function onRequest(context) {
     pump();
   }
 
-  // Caller (pumpConnectQueue) has already incremented inFlightConnects and
-  // validated the relay; this releases that establishment slot exactly once.
+  // The caller already took the establishment slot; release it exactly once.
   function connectUpstream(relayUrl, type) {
     let slotReleased = false;
     const releaseSlot = () => {
@@ -1818,7 +1744,7 @@ export async function onRequest(context) {
           info.handled = true;
           info.status = 'failed';
           trackRelayFailure(relayUrl);
-          try { ws.close(); } catch { /* noop */ }
+          try { ws.close(); } catch {}
           upstreams.delete(relayUrl);
           pendingGeoEvents.delete(relayUrl);
           releaseSlot();
@@ -1836,11 +1762,10 @@ export async function onRequest(context) {
         clearRelayFailure(relayUrl);
         relayLatency.set(relayUrl, Date.now() - connectStartTime);
         replaySubscriptions(relayUrl, ws);
-        // Flush any buffered GEO_EVENTs that were waiting for this relay
         const buffered = pendingGeoEvents.get(relayUrl);
         if (buffered && buffered.length > 0) {
           for (const geoMsg of buffered) {
-            try { ws.send(geoMsg); } catch { /* noop */ }
+            try { ws.send(geoMsg); } catch {}
           }
           pendingGeoEvents.delete(relayUrl);
         }
@@ -1863,11 +1788,7 @@ export async function onRequest(context) {
           if (!eventId) return;
           const prior = seenEvents.get(eventId);
           if (prior !== undefined) {
-            // The whole event is a duplicate and is not forwarded again, but
-            // WHICH relays carried it is information the first copy could not
-            // contain — the client's event-details panel has no other way to
-            // learn it, because this dedup is exactly what hides it. A 40-byte
-            // note costs far less than the event and answers the question.
+            // Duplicates aren't forwarded, but a small note tells the client's details panel which relays carried it.
             const dupKind = extractEventKind(raw);
             if (prior < SEEN_REPORT_CAP && isSeenReportKind(dupKind) && geoOriginAllowsFrame(raw, dupKind, relayUrl)) {
               seenEvents.set(eventId, prior + 1);
@@ -1921,7 +1842,7 @@ export async function onRequest(context) {
           touchSubscription(raw);
           sendToClient(raw.slice(0, -1) + relayTail);
 
-        // OK: ["OK","eventId",bool,"msg"]
+        // ["OK","eventId",bool,"msg"]
         } else if (raw.startsWith('["OK",')) {
           const okMatch = raw.match(/^\["OK",\s*(?:"([^"\\]{0,128})"|null),\s*(true|false)\s*(?:,\s*"((?:[^"\\]|\\.)*)")?/);
           if (!okMatch) return;
@@ -1951,9 +1872,7 @@ export async function onRequest(context) {
           sendToClient(JSON.stringify(['EOSE', parent]));
 
         } else if (raw.startsWith('["AUTH",')) {
-          // NIP-42 challenge only; we don't authenticate. Most relays still
-          // serve reads after sending it, so don't skip — a real auth wall
-          // arrives as a CLOSED/NOTICE rejection and is handled there.
+          // NIP-42 challenge only; we don't authenticate, and a real auth wall arrives as a CLOSED/NOTICE rejection.
           return;
 
         } else if (raw.startsWith('["NOTICE",')) {
@@ -1996,21 +1915,21 @@ export async function onRequest(context) {
             const retries = closedKindRetries.get(retryKey) || 0;
             const ready = upstreamInfo && upstreamInfo.ws && upstreamInfo.ws.readyState === 1;
             let resent = false;
-            // Resend only if the request actually changed, capped, to avoid loops
+            // Resend only if the request actually changed, capped, to avoid loops.
             if (ready && retries < 3) {
               if (children) {
                 const child = children.find(c => c.childSubId === closedSubId);
                 if (child) {
                   const newPayload = buildChildPayload(child, blockedSet);
                   if (newPayload && newPayload !== child.rawChild) {
-                    try { upstreamInfo.ws.send(newPayload); resent = true; } catch { /* noop */ }
+                    try { upstreamInfo.ws.send(newPayload); resent = true; } catch {}
                   }
                 }
               } else if (activeSubscriptions.has(parentSubId) && blockedSet && blockedSet.size > 0) {
                 const rawReq = activeSubscriptions.get(parentSubId);
                 const stripped = stripKindsFromReq(rawReq, blockedSet);
                 if (stripped && stripped !== rawReq) {
-                  try { upstreamInfo.ws.send(stripped); resent = true; } catch { /* noop */ }
+                  try { upstreamInfo.ws.send(stripped); resent = true; } catch {}
                 }
               }
             }
@@ -2149,13 +2068,13 @@ export async function onRequest(context) {
       const info = upstreams.get(url);
       if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
       if (filter && !filter(url, info)) return;
-      try { info.ws.send(msg); } catch { /* noop */ }
+      try { info.ws.send(msg); } catch {}
     });
     upstreams.forEach((info, url) => {
       if (WRITE_ONLY_RELAYS.has(url)) return;
       if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) {
         if (!filter || filter(url, info)) {
-          try { info.ws.send(msg); } catch { /* noop */ }
+          try { info.ws.send(msg); } catch {}
         }
       }
     });
@@ -2247,7 +2166,7 @@ export async function onRequest(context) {
     for (const [url, info] of upstreams) {
       if (!newRelaySet.has(url)) {
         intentionallyClosed.add(url);
-        try { if (info.ws) info.ws.close(); } catch { /* noop */ }
+        try { if (info.ws) info.ws.close(); } catch {}
         upstreams.delete(url);
       }
     }
@@ -2276,15 +2195,13 @@ export async function onRequest(context) {
     }
   }
 
-  // Handle messages from client
   server.addEventListener('message', (event) => {
     try {
       if (typeof event.data !== 'string' || event.data.length > CLIENT_FRAME_MAX) return;
       let msg = JSON.parse(event.data);
       if (!Array.isArray(msg)) return;
 
-      // Role-scoped envelope: ["ROLE", role, <inner message...>] routes the
-      // inner message only to relays tagged with that role.
+      // ["ROLE", role, <inner message...>] routes the inner message only to relays tagged with that role.
       let routedRole = null;
       if (msg[0] === 'ROLE') {
         routedRole = msg[1];
@@ -2348,17 +2265,15 @@ export async function onRequest(context) {
               const info = upstreams.get(url);
               if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
               if (isBlockedFor(url)) return;
-              try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
+              try { info.ws.send(geoMsg); sentGeo.add(url); } catch {}
             });
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
               if (geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
-                try { info.ws.send(geoMsg); sentGeo.add(url); } catch { /* noop */ }
+                try { info.ws.send(geoMsg); sentGeo.add(url); } catch {}
               }
             });
-            // Buffer for target relays this worker is still connecting to. New
-            // connections are driven by the RELAYS config (which shards relays),
-            // so a worker never reaches outside its assigned set here.
+            // Connections are driven by the sharded RELAYS config, so a worker never reaches outside its assigned set.
             for (const url of geoUrls) {
               if (sentGeo.has(url)) continue;
               if (isBlockedFor(url)) continue;
@@ -2369,7 +2284,7 @@ export async function onRequest(context) {
               if (WRITE_ONLY_RELAYS.has(url)) return;
               if (sentGeo.has(url)) return;
               if (!geoSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
-                try { info.ws.send(geoMsg); } catch { /* noop */ }
+                try { info.ws.send(geoMsg); } catch {}
               }
             });
           } else if (msgType === 'DM_EVENT') {
@@ -2390,19 +2305,19 @@ export async function onRequest(context) {
               const info = upstreams.get(url);
               if (!info || info.status !== 'connected' || !info.ws || info.ws.readyState !== WebSocket.OPEN) return;
               if (isBlockedFor(url)) return;
-              try { info.ws.send(dmMsg); } catch { /* noop */ }
+              try { info.ws.send(dmMsg); } catch {}
             });
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
               if (dmSet.has(url) && info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
-                try { info.ws.send(dmMsg); } catch { /* noop */ }
+                try { info.ws.send(dmMsg); } catch {}
               }
             });
             upstreams.forEach((info, url) => {
               if (WRITE_ONLY_RELAYS.has(url)) return;
               if (dmSet.has(url)) return;
               if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN && !isBlockedFor(url)) {
-                try { info.ws.send(dmMsg); } catch { /* noop */ }
+                try { info.ws.send(dmMsg); } catch {}
               }
             });
           } else if (msgType === 'REQ') {
@@ -2447,21 +2362,18 @@ export async function onRequest(context) {
             closeSubscription(subId);
           }
     } catch {
-      // Parse error
     }
   });
 
-  // Handle client disconnect
   function cleanupAll() {
     serverOpen = false;
-    // Final flush of any buffered channel events.
     if (archiveEnabled && archiveBuf.size > 0) {
       const finalFlush = flushArchive().catch(() => { });
-      if (context && context.waitUntil) { try { context.waitUntil(finalFlush); } catch { /* noop */ } }
+      if (context && context.waitUntil) { try { context.waitUntil(finalFlush); } catch {} }
     }
     if (archiveEnabled && emojiBuf.size > 0) {
       const finalEmojiFlush = flushEmojiArchive().catch(() => { });
-      if (context && context.waitUntil) { try { context.waitUntil(finalEmojiFlush); } catch { /* noop */ } }
+      if (context && context.waitUntil) { try { context.waitUntil(finalEmojiFlush); } catch {} }
     }
     if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = null; }
     connectionQueue = [];
@@ -2481,7 +2393,7 @@ export async function onRequest(context) {
     subActivity.clear();
     subRelays.clear();
     upstreams.forEach((info) => {
-      try { if (info.ws) info.ws.close(); } catch { /* noop */ }
+      try { if (info.ws) info.ws.close(); } catch {}
     });
     upstreams.clear();
     relayRole.clear();

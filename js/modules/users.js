@@ -12,17 +12,14 @@ Object.assign(NYM.prototype, {
         if (this.settings.theme !== 'bitchat') return '';
         if (!pubkey) return '';
 
-        // Your own messages are always orange
         if (pubkey === this.pubkey) {
             return 'bitchat-theme';
         }
 
-        // Return cached color if exists
         if (this.userColors.has(pubkey)) {
             return this.userColors.get(pubkey);
         }
 
-        // Generate unique color based on pubkey hash
         const colorClass = this.generateUniqueColor(pubkey);
         this.userColors.set(pubkey, colorClass);
         return colorClass;
@@ -95,8 +92,7 @@ Object.assign(NYM.prototype, {
         this.updateSidebarAvatar();
     },
 
-    // Decode a private key from either accepted form — an `nsec1…` or a bare
-    // 64-char hex key — to the raw 32 bytes the signer wants.
+    // Accepts an `nsec1…` or a bare 64-char hex key; returns the raw 32 bytes the signer wants.
     decodeNsec(nsec) {
         const hex = this.normalizePrivkeyInput(nsec);
         if (!hex) throw new Error('Failed to decode nsec: expected an nsec1… or a 64-character hex private key');
@@ -124,7 +120,6 @@ Object.assign(NYM.prototype, {
             this.updateKeywordList();
             input.value = '';
 
-            // Hide messages containing this keyword (check both content and nickname)
             document.querySelectorAll('.message').forEach(msg => {
                 const content = msg.querySelector('.message-content');
                 const author = msg.dataset.author || '';
@@ -148,7 +143,6 @@ Object.assign(NYM.prototype, {
         this.saveBlockedKeywords();
         this.updateKeywordList();
 
-        // Re-check all messages (check both content and nickname against remaining keywords)
         document.querySelectorAll('.message').forEach(msg => {
             const author = msg.dataset.author || '';
             const content = msg.querySelector('.message-content');
@@ -204,7 +198,6 @@ Object.assign(NYM.prototype, {
     generateRandomNym() {
         const style = localStorage.getItem('nym_nick_style') || 'fancy';
 
-        // Use the last 4 chars of pubkey
         const suffix = this.getPubkeySuffix(this.pubkey);
 
         if (style === 'simple') {
@@ -212,7 +205,6 @@ Object.assign(NYM.prototype, {
             return `nym${randomNum}#${suffix}`;
         }
 
-        // Fancy style: adjective_noun
         const adjectives = [
             'quantum', 'neon', 'cyber', 'shadow', 'plasma',
             'echo', 'nexus', 'void', 'flux', 'ghost',
@@ -252,7 +244,7 @@ Object.assign(NYM.prototype, {
 
     stripPubkeySuffix(nym) {
         if (!nym) return nym;
-        // Only strip a trailing #xxxx where xxxx is exactly 4 hex chars (pubkey suffix)
+        // Only strip a trailing #xxxx where xxxx is exactly 4 hex chars (pubkey suffix).
         return nym.replace(/#[0-9a-f]{4}$/i, '');
     },
 
@@ -291,9 +283,7 @@ Object.assign(NYM.prototype, {
         return /^[0-9a-f]{4}$/i.test(tail) ? tail : '????';
     },
 
-    // npub / hex public keys 
-    // Either a 64-char hex pubkey or an npub/nprofile, normalized to lowercase
-    // hex. Returns null when the input is neither.
+    // 64-char hex pubkey or npub/nprofile, normalized to lowercase hex; null otherwise.
     normalizePubkeyInput(value) {
         const raw = String(value == null ? '' : value)
             .trim()
@@ -313,12 +303,10 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // True when `value` is a public key in either accepted form.
     isPubkeyInput(value) {
         return this.normalizePubkeyInput(value) !== null;
     },
 
-    // The npub form of a hex pubkey, or '' if it can't be encoded.
     npubFromPubkey(pubkey) {
         if (!/^[0-9a-f]{64}$/i.test(pubkey || '')) return '';
         const nip19 = window.NostrTools && window.NostrTools.nip19;
@@ -326,8 +314,7 @@ Object.assign(NYM.prototype, {
         try { return nip19.npubEncode(String(pubkey).toLowerCase()); } catch (_) { return ''; }
     },
 
-    // 'npub' (default) or 'hex'. Persisted so the choice survives reloads, and
-    // toggled from the user context menu.
+    // 'npub' (default) or 'hex'; persisted and toggled from the user context menu.
     getPubkeyDisplayFormat() {
         try {
             return localStorage.getItem('nym_pubkey_format') === 'hex' ? 'hex' : 'npub';
@@ -345,8 +332,7 @@ Object.assign(NYM.prototype, {
             this.getPubkeyDisplayFormat() === 'npub' ? 'hex' : 'npub');
     },
 
-    // A full public key rendered in the user's chosen format. Falls back to hex
-    // when nostr-tools hasn't loaded or the key isn't encodable.
+    // Falls back to hex when nostr-tools hasn't loaded or the key isn't encodable.
     formatPubkeyForDisplay(pubkey, format) {
         const hex = String(pubkey == null ? '' : pubkey);
         const want = format || this.getPubkeyDisplayFormat();
@@ -354,10 +340,7 @@ Object.assign(NYM.prototype, {
         return this.npubFromPubkey(hex) || hex;
     },
 
-    // nsec / hex private keys 
-    // The canonical `nsec1…` for a private key given in either form. Used when
-    // persisting a login so what we store (and later reveal to the user) is
-    // always the nsec, whichever form they pasted.
+    // Canonical `nsec1…` from either form, so a stored login always reveals the nsec.
     nsecFromPrivkeyInput(value) {
         const hex = this.normalizePrivkeyInput(value);
         if (!hex) return '';
@@ -368,8 +351,7 @@ Object.assign(NYM.prototype, {
         try { return nip19.nsecEncode(bytes); } catch (_) { return ''; }
     },
 
-    // Either an nsec or a 64-char hex private key, normalized to lowercase hex.
-    // Returns null when the input is neither.
+    // nsec or 64-char hex private key, normalized to lowercase hex; null otherwise.
     normalizePrivkeyInput(value) {
         const raw = String(value == null ? '' : value).trim().replace(/^nostr:/i, '');
         if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase();
@@ -380,7 +362,6 @@ Object.assign(NYM.prototype, {
             const decoded = nip19.decode(raw);
             if (decoded.type === 'nsec') {
                 const data = decoded.data;
-                // nip19 hands back the 32 raw bytes; the app works in hex.
                 if (typeof data === 'string') return data.toLowerCase();
                 return Array.from(data).map(b => b.toString(16).padStart(2, '0')).join('');
             }
@@ -391,23 +372,17 @@ Object.assign(NYM.prototype, {
     parseNymFromDisplay(displayNym) {
         if (!displayNym) return 'nym';
 
-        // Strip flair and everything after the nym-suffix span first
-        // Use [\s\S]* instead of .* to match across newlines (SVG flair icons contain newlines)
+        // [\s\S]* because SVG flair icons contain newlines.
         let cleaned = displayNym.replace(/<span class="nym-suffix">[\s\S]*$/, '').trim();
 
-        // Strip all remaining HTML tags (avatar img, formatting, etc.)
         cleaned = cleaned.replace(/<[^>]*>/g, '').trim();
 
-        // Decode HTML entities (e.g., &lt; &gt; from display formatting)
         cleaned = cleaned.replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/&amp;/g, '&').replace(/&quot;/g, '"').trim();
 
-        // Strip pubkey suffix if still present (#xxxx where xxxx is 4 hex chars)
         return cleaned.replace(/#[0-9a-f]{4}$/i, '') || cleaned || 'nym';
     },
 
-    // Generate a deterministic identicon SVG from a seed (pubkey or any string).
-    // Returned as a data URI so it can be used directly as an <img> src without
-    // any external network requests. Cached per-seed for performance.
+    // Deterministic identicon as a data URI, so no external network requests; cached per seed.
     generateAvatarSvg(seed) {
         const key = String(seed == null ? '' : seed);
         const cache = this._avatarSvgCache;
@@ -518,15 +493,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Fetch an avatar image and cache it as a blob object URL.
-    // Deduplicates concurrent requests for the same pubkey.
     cacheAvatarImage(pubkey, url) {
         if (this.isVerifiedBot(pubkey)) return Promise.resolve();
         if (this.avatarBlobCache.has(pubkey)) return Promise.resolve();
         if (this.avatarBlobInflight.has(pubkey)) return this.avatarBlobInflight.get(pubkey);
-        // Negative cache: don't re-fetch a recently failed URL on every kind 0 /
-        // presence redelivery, and don't re-push it into rendered imgs (where it
-        // errors back to the identicon and flickers).
+        // Negative cache: don't re-fetch a failed URL on every redelivery (causes identicon flicker).
         if (!this._avatarFetchFailed) this._avatarFetchFailed = new Map();
         const failed = this._avatarFetchFailed.get(pubkey);
         const recentlyFailed = failed && failed.url === url && (Date.now() - failed.at) < 10 * 60 * 1000;
@@ -534,14 +505,12 @@ Object.assign(NYM.prototype, {
         const p = this._fetchProfileMedia(url)
             .then(blob => {
                 this._avatarFetchFailed.delete(pubkey);
-                // Revoke old blob URL if avatar changed
                 const old = this.avatarBlobCache.get(pubkey);
                 if (old) URL.revokeObjectURL(old);
                 const objectUrl = URL.createObjectURL(blob);
                 this.avatarBlobCache.set(pubkey, objectUrl);
                 this._evictAvatarBlobIfFull();
                 this.updateRenderedAvatars(pubkey, objectUrl);
-                // Persist to IndexedDB so we can render it immediately on next load
                 if (typeof this.persistAvatarBlob === 'function') {
                     const ts = (this._kind0Ts && this._kind0Ts.get(pubkey)) || null;
                     this.persistAvatarBlob(pubkey, blob, url, ts);
@@ -557,7 +526,6 @@ Object.assign(NYM.prototype, {
         return p;
     },
 
-    // Fetch a banner image and cache it as a blob object URL.
     cacheBannerImage(pubkey, url) {
         if (this.isVerifiedBot(pubkey)) return Promise.resolve();
         if (this.bannerBlobCache.has(pubkey)) return Promise.resolve();
@@ -568,9 +536,7 @@ Object.assign(NYM.prototype, {
                 if (old) URL.revokeObjectURL(old);
                 const objectUrl = URL.createObjectURL(blob);
                 this.bannerBlobCache.set(pubkey, objectUrl);
-                // Repaint the open profile card THROUGH _applyCtxBanner: setting
-                // src alone left the <img> hidden whenever the card had opened
-                // before the banner was known.
+                // Go through _applyCtxBanner; setting src alone leaves the <img> hidden if the card opened first.
                 if (typeof this.updateRenderedBanner === 'function') {
                     this.updateRenderedBanner(pubkey);
                 }
@@ -611,7 +577,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Returns a proxied URL for media (images/videos) to hide the user's IP
+    // Returns a proxied URL for media to hide the user's IP.
     getProxiedMediaUrl(originalUrl) {
         if (this.isOwnMediaUrl(originalUrl)) return originalUrl;
         const base = this._getProxyBaseUrl();
@@ -619,8 +585,7 @@ Object.assign(NYM.prototype, {
         return `${base}?url=${encodeURIComponent(originalUrl)}`;
     },
 
-    // Proxied URL for a custom emoji image. The emoji flag tells the proxy to
-    // apply a long edge-cache TTL so emoji render instantly on repeat views.
+    // The emoji flag tells the proxy to apply a long edge-cache TTL.
     getProxiedEmojiUrl(originalUrl) {
         if (this.isOwnMediaUrl(originalUrl)) return originalUrl;
         const base = this._getProxyBaseUrl();
@@ -694,7 +659,6 @@ Object.assign(NYM.prototype, {
         throw lastErr || new Error('All Blossom servers failed');
     },
 
-    // Upload one file showing a progress bar
     async _uploadFileWithProgress(file, labelText, opts = {}) {
         const usingGlobalBar = !opts.container;
         const container = opts.container || document.getElementById('uploadProgress');
@@ -793,9 +757,7 @@ Object.assign(NYM.prototype, {
         return mirrors;
     },
 
-    // For list UIs that render arbitrary users (reactors, voters, readers,
-    // group members, call peers): pull kind 0 profiles for any sender we don't
-    // already have cached so default nyms/avatars get replaced.
+    // Fetch missing kind 0 profiles for list UIs so default nyms/avatars get replaced.
     ensureListProfiles(rootEl, pubkeys, onResolved) {
         const list = Array.isArray(pubkeys) ? pubkeys : Array.from(pubkeys || []);
         const wanted = new Set();
@@ -822,12 +784,10 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Rebuild the nym text of a single list row in place, preserving the
-    // surrounding markup (suffix, flair) for each row variant.
     _refreshListRowNym(row, pubkey) {
         const user = this.users.get(pubkey);
         const baseNym = this.parseNymFromDisplay(user ? user.nym : this.getNymFromPubkey(pubkey));
-        // Never clobber an authoritative nym the row already shows
+        // Never clobber an authoritative nym the row already shows.
         if (baseNym === 'nym') return;
         const suffix = this.getPubkeySuffix(pubkey);
         const nameHtml = `${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span>`;
@@ -904,7 +864,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Update already-rendered message avatars when a kind 0 profile picture arrives
     updateRenderedAvatars(pubkey, avatarUrl) {
         const safePk = this._safePubkey(pubkey);
         if (!safePk) return;
@@ -927,19 +886,16 @@ Object.assign(NYM.prototype, {
             if (f === undefined) { f = this.generateAvatarSvg(pk); fallbackCache.set(pk, f); }
             return f;
         };
-        // One scan of the document handles every pending pubkey at once.
         document.querySelectorAll('img[data-avatar-pubkey]').forEach(img => {
             const pk = img.getAttribute('data-avatar-pubkey');
             const entry = queue.get(pk);
             if (!entry) return;
-            // Skip if already showing the desired URL — avoids canceling an
-            // in-flight load and triggering a spurious error → SVG swap.
+            // Skip rows already showing this URL to avoid canceling an in-flight load (spurious error swap).
             if (img.getAttribute('src') === entry.url) return;
             const fallback = fallbackFor(pk);
             img.onerror = function () { this.onerror = null; this.src = fallback; };
             img.src = entry.url;
         });
-        // Update context menu avatar if open for one of the updated users.
         const ctxImg = document.getElementById('ctxAvatarImg');
         const ctxPk = this.contextMenuData ? this._safePubkey(this.contextMenuData.pubkey) : null;
         if (ctxImg && ctxPk && queue.has(ctxPk)) {
@@ -989,7 +945,6 @@ Object.assign(NYM.prototype, {
         this.updateSidebarAvatar();
         this.updateRenderedAvatars(this.pubkey, this.getAvatarUrl(this.pubkey));
         this.saveToNostrProfile();
-        // Broadcast avatar removal so other users clear their cache
         this.publishAvatarUpdate('');
     },
 
@@ -1025,9 +980,7 @@ Object.assign(NYM.prototype, {
         this.saveToNostrProfile();
     },
 
-    // Wallpaper Methods
     async uploadWallpaper(file) {
-        // Validate minimum image size
         const minWidth = 1920;
         const minHeight = 1080;
 
@@ -1086,7 +1039,6 @@ Object.assign(NYM.prototype, {
             targetImage = `linear-gradient(${overlay}, ${overlay}), url('${src}')`;
         }
 
-        // Skip DOM mutation when nothing changed
         const currentClass = [...layer.classList].find(c => c.startsWith('wallpaper-pattern-') || c === 'has-custom-wallpaper') || '';
         if (currentClass === targetClass && layer.style.backgroundImage === targetImage) return;
 
@@ -1136,7 +1088,6 @@ Object.assign(NYM.prototype, {
         this._wallpaperCachedUrl = null;
     },
 
-    // Render the custom wallpaper from a local blob
     async _ensureWallpaperCached(customUrl) {
         if (this.wallpaperBlobUrl && this._wallpaperCachedUrl === customUrl) return;
         if (this._wallpaperCacheLoading === customUrl) return;
@@ -1184,10 +1135,6 @@ Object.assign(NYM.prototype, {
 
         if (!this.mediaFallbacks) this.mediaFallbacks = new Map();
 
-        // Each file gets a tile with its own wheel. There is no batch-wide
-        // progress bar any more: it could only ever describe the batch, so with
-        // several files in flight it could not say which one it was waiting on,
-        // and it covered the previews while doing it.
         const records = typeof this.addComposerAttachments === 'function'
             ? this.addComposerAttachments(files) : [];
         if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
@@ -1206,10 +1153,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Uploads one attachment and reflects the outcome on its tile. Never
-    // throws: a failure marks that ONE tile retryable and leaves the rest of
-    // the batch alone, which is the whole reason the batch is not a single
-    // all-or-nothing operation any more.
+    // Never throws: a failure marks only this tile retryable.
     async _uploadOneAttachment(rec, signal) {
         if (!rec || !rec.file) return;
         this.updateComposerAttachment(rec.id, { status: 'uploading', error: '' });
@@ -1225,7 +1169,6 @@ Object.assign(NYM.prototype, {
             this._registerMediaFallbacks(url, hashHex, server);
         } catch (error) {
             if (error && error.name === 'AbortError') {
-                // Canceled, not failed: the tile goes away with the batch.
                 if (typeof this.removeComposerAttachment === 'function') {
                     this.removeComposerAttachment(rec.id);
                 }
@@ -1238,7 +1181,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Re-runs one failed upload, from the file the tile still holds.
     async retryComposerAttachment(id) {
         const rec = typeof this.composerAttachmentById === 'function'
             ? this.composerAttachmentById(id) : null;
@@ -1253,8 +1195,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Predicted + real mirrors for a freshly uploaded blob, so a dead primary
-    // host does not take the message's media down with it.
+    // Predicted + real mirrors, so a dead primary host doesn't take the message's media down.
     _registerMediaFallbacks(url, hashHex, server) {
         if (!this.mediaFallbacks) this.mediaFallbacks = new Map();
         const predicted = BLOSSOM_SERVERS
@@ -1275,7 +1216,6 @@ Object.assign(NYM.prototype, {
             .catch(() => { });
     },
 
-    // Stop in-flight uploads when the progress modal's close button is clicked.
     cancelUpload() {
         if (this._uploadAbort) {
             try { this._uploadAbort.abort(); } catch (_) { }
@@ -1289,12 +1229,10 @@ Object.assign(NYM.prototype, {
     getNymFromPubkey(pubkey) {
         const user = this.users.get(pubkey);
         if (user) {
-            // Get clean nym without existing HTML
             const cleanNym = this.parseNymFromDisplay(user.nym);
             return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
         }
 
-        // Check if we've seen this user in PM conversations
         const pmConvo = Array.from(this.pmConversations.values())
             .find(conv => conv.pubkey === pubkey);
         if (pmConvo && pmConvo.nym) {
@@ -1302,7 +1240,6 @@ Object.assign(NYM.prototype, {
             return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
         }
 
-        // Return shortened pubkey as fallback with nym prefix
         return `nym#${pubkey.slice(-4)}`;
     },
 
@@ -1310,8 +1247,6 @@ Object.assign(NYM.prototype, {
         return this.dimNymSuffix(this.getNymFromPubkey(pubkey));
     },
 
-    // Escape a plain `name#xxxx` display string and wrap its trailing 4-hex
-    // pubkey suffix in a dimmed .nym-suffix span.
     dimNymSuffix(text) {
         const s = String(text == null ? '' : text);
         const m = s.match(/^([\s\S]*?)#([0-9a-f]{4})$/i);
@@ -1319,15 +1254,12 @@ Object.assign(NYM.prototype, {
         return `${this.escapeHtml(m[1])}<span class="nym-suffix">#${m[2]}</span>`;
     },
 
-    // Compute the effective status (online / away / offline / hidden) for a user.
-    // Returns 'hidden' when the user has opted out of broadcasting their status
-    // — callers should suppress the status indicator entirely in that case.
+    // Returns 'hidden' when the user opted out of broadcasting status; callers suppress the indicator.
     getEffectiveUserStatus(pubkey) {
         if (!pubkey) return 'offline';
         // Reflect our own hidden broadcast back to us so disabling clearly works.
         if (pubkey === this.pubkey && this.settings && this.settings.showStatus === false) return 'hidden';
-        // A friend who privately shared their real status with us (their
-        // "Friends only" mode) overrides the 'hidden' they broadcast publicly.
+        // A friend sharing their real status privately ("Friends only") overrides the public 'hidden'.
         const sharesWithUs = this.friendsSharingStatus && this.friendsSharingStatus.has(pubkey);
         if (!sharesWithUs && this.statusHiddenUsers && this.statusHiddenUsers.has(pubkey)) return 'hidden';
         if (this.verifiedBotPubkeys && this.verifiedBotPubkeys.has(pubkey)) return 'online';
@@ -1341,12 +1273,9 @@ Object.assign(NYM.prototype, {
         return isRecent ? 'online' : 'offline';
     },
 
-    // A friend running in "Friends only" mode shared their real status with us
-    // via a private gift wrap. Record it and let it override the public 'hidden'.
     handleFriendPresenceRumor(rumor, pubkey) {
         if (!pubkey || pubkey === this.pubkey) return;
-        // Only honor presence from someone we already know or have friended, so
-        // a stranger can't inject themselves into our user list as "online".
+        // Only honor presence from known users or friends so strangers can't inject themselves as online.
         if (!this.isFriend?.(pubkey) && !this.users.has(pubkey)) return;
         const statusTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'status');
         const status = statusTag ? statusTag[1] : null;
@@ -1397,19 +1326,14 @@ Object.assign(NYM.prototype, {
         const nym = nymTag ? this.stripPubkeySuffix(nymTag[1]) : null;
         const eventTime = event.created_at || 0;
 
-        // Ignore our own presence events
         if (pubkey === this.pubkey) return;
 
-        // Skip stale presence events - only process if newer than last seen
         if (!this.presenceTimestamps) this.presenceTimestamps = new Map();
         const lastTimestamp = this.presenceTimestamps.get(pubkey) || 0;
         if (eventTime < lastTimestamp) return;
         this.presenceTimestamps.set(pubkey, eventTime);
 
-        // Handle avatar update. The avatar-update presence event is replaceable
-        // (kind 30078) and gets redelivered by every relay on each (re)subscribe,
-        // so only an actual URL change may bust the cache — otherwise every
-        // redelivery reloads all rendered avatars and they visibly flicker.
+        // Kind 30078 is redelivered on every resubscribe; only a real URL change may bust the cache (avoids flicker).
         if (avatarUpdateTag) {
             const newAvatarUrl = avatarUpdateTag[1];
             const prevUrl = this.userAvatars.get(pubkey);
@@ -1430,25 +1354,20 @@ Object.assign(NYM.prototype, {
                     this.cacheAvatarImage(pubkey, newAvatarUrl);
                 }
             } else if (prevUrl || this.avatarBlobCache.has(pubkey)) {
-                // Avatar removed - fall back to generated identicon
                 clearCachedAvatar();
                 this.userAvatars.delete(pubkey);
                 this.updateRenderedAvatars(pubkey, this.getAvatarUrl(pubkey));
             }
         }
 
-        // Handle shop update: drop cached active items and re-fetch so the
-        // user's new flair/style shows up immediately for everyone.
         const shopUpdateTag = event.tags.find(t => t[0] === 'shop-update');
         if (shopUpdateTag && typeof this.invalidateShopCache === 'function') {
             this.invalidateShopCache(pubkey);
         }
 
-        // Track users who have opted to hide their status indicator
         if (!this.statusHiddenUsers) this.statusHiddenUsers = new Set();
         if (status === 'hidden') {
-            // A friend in "Friends only" mode broadcasts 'hidden' publicly but
-            // shares the real status with us privately — don't hide those.
+            // "Friends only" friends broadcast 'hidden' but share real status privately; don't hide those.
             if (!(this.friendsSharingStatus && this.friendsSharingStatus.has(pubkey))) {
                 this.statusHiddenUsers.add(pubkey);
             }
@@ -1457,19 +1376,15 @@ Object.assign(NYM.prototype, {
             this.statusHiddenUsers.delete(pubkey);
         }
 
-        // Update away messages map for this user
         if (status === 'away' && awayTag) {
             this.awayMessages.set(pubkey, awayTag[1]);
         } else if (status === 'online') {
             this.awayMessages.delete(pubkey);
         }
 
-        // Update user status if we know this user
         if (this.users.has(pubkey)) {
             const user = this.users.get(pubkey);
-            // Don't overwrite the activity-derived status with 'hidden' —
-            // visibility is tracked separately via statusHiddenUsers so the
-            // user still appears in the list, just without a status dot.
+            // Visibility is tracked in statusHiddenUsers so the user stays listed, just without a status dot.
             if (status !== 'hidden') user.status = status;
             if (nym) {
                 const prevBase = this.parseNymFromDisplay(user.nym);
@@ -1486,11 +1401,9 @@ Object.assign(NYM.prototype, {
     updateUserPresence(nym, pubkey, channel, geohash, createdAt) {
         const channelKey = geohash || channel;
 
-        // Use the event's created_at timestamp (seconds) converted to ms,
-        // so historical messages don't falsely mark users as online
+        // Use created_at so historical messages don't falsely mark users as online.
         const eventTime = createdAt ? createdAt * 1000 : Date.now();
 
-        // Determine base status from away messages or event age
         const activeThreshold = 300000; // 5 minutes
         const isRecent = (Date.now() - eventTime) < activeThreshold;
         let baseStatus;
@@ -1502,7 +1415,6 @@ Object.assign(NYM.prototype, {
             baseStatus = 'offline';
         }
 
-        // Update or create user with deduplication by pubkey
         if (!this.users.has(pubkey)) {
             this.users.set(pubkey, {
                 nym: nym,
@@ -1513,19 +1425,17 @@ Object.assign(NYM.prototype, {
             });
         } else {
             const user = this.users.get(pubkey);
-            // Only update lastSeen if this event is more recent
             if (eventTime > user.lastSeen) {
                 user.lastSeen = eventTime;
                 user.status = baseStatus;
             }
             const prevBase = this.parseNymFromDisplay(user.nym);
-            user.nym = nym; // Update nym in case it changed
+            user.nym = nym;
             this._propagateNymChange(pubkey, nym, prevBase);
             if (!user.channels) user.channels = new Set();
             user.channels.add(channelKey);
         }
 
-        // Track users per channel
         if (!this.channelUsers.has(channelKey)) {
             this.channelUsers.set(channelKey, new Set());
         }
@@ -1536,9 +1446,7 @@ Object.assign(NYM.prototype, {
         this.updateUserList();
     },
 
-    // Mark a remote user as recently active without an explicit message —
-    // e.g. after receiving a "read" receipt, so lurkers who only view
-    // messages still appear online.
+    // E.g. after a read receipt, so lurkers who only view messages still appear online.
     recordUserActivity(pubkey) {
         if (!pubkey || pubkey === this.pubkey) return;
         if (this.awayMessages && this.awayMessages.has(pubkey)) return;
@@ -1605,7 +1513,6 @@ Object.assign(NYM.prototype, {
                 this.isGibberishNym(user.nym)) return;
 
             const isRecent = (now - user.lastSeen) < ACTIVE_THRESHOLD;
-            // 'hidden' for opted-out users (unless a friend shares privately).
             const effectiveStatus = this.getEffectiveUserStatus(pubkey);
             const statusHidden = effectiveStatus === 'hidden';
             if (!statusHidden && effectiveStatus !== 'offline' && (isRecent || verifiedBotSet.has(pubkey))) {
@@ -1684,8 +1591,7 @@ Object.assign(NYM.prototype, {
     },
 
     _renderUserListItems(container, displayUsers, themeBitchat) {
-        // Hold the boot shimmer until real nyms arrive; the container wipe below
-        // drops it once we have users to render.
+        // Hold the boot shimmer until real nyms arrive.
         if (displayUsers.length === 0 && container.querySelector('.sidebar-skeleton')) return;
 
         const existing = new Map();
@@ -2009,12 +1915,10 @@ Object.assign(NYM.prototype, {
     },
 
     async loadBlockedUsersAsync(listElement) {
-        // Initialize nymCache if it doesn't exist
         if (!this.nymCache) {
             this.nymCache = {};
         }
 
-        // Fetch metadata for blocked users who aren't in cache
         const blockedArray = Array.from(this.blockedUsers);
         const uncachedPubkeys = blockedArray.filter(pk => !this.nymCache[pk]);
 
@@ -2042,7 +1946,6 @@ Object.assign(NYM.prototype, {
         listElement.appendChild(frag);
     },
 
-    // Fetch metadata for blocked users
     async fetchMetadataForBlockedUsers(pubkeys) {
         if (pubkeys.length === 0) return;
 
@@ -2084,17 +1987,14 @@ Object.assign(NYM.prototype, {
                 if (type === 'EVENT' && data[0] === subId) {
                     const event = data[1];
                     if (event && event.kind === 0) {
-                        // Temporarily process metadata ONLY for caching the nym
                         try {
                             const metadata = JSON.parse(event.content);
                             const name = metadata.name || metadata.display_name || metadata.displayName;
                             if (name) {
-                                // Store in nym cache (without adding to profile cache)
                                 this.nymCache[event.pubkey] = name;
                             }
                             receivedCount++;
 
-                            // If we got all metadata, resolve early
                             if (receivedCount >= pubkeys.length) {
                                 clearTimeout(timeout);
                                 cleanup();
@@ -2118,7 +2018,6 @@ Object.assign(NYM.prototype, {
             this.relayMessageHandlers.push(handleMessage);
             messageHandlers.push(handleMessage);
 
-            // Request metadata for blocked users
             const subscription = [
                 "REQ",
                 subId,
@@ -2152,7 +2051,7 @@ Object.assign(NYM.prototype, {
     },
 
     async toggleFriend(target) {
-        // A public key in either accepted form — npub or hex — otherwise a nym.
+        // A public key in either form (npub or hex), otherwise a nym.
         let targetPubkey = this.normalizePubkeyInput(target);
         if (!targetPubkey) {
             targetPubkey = await this.findUserPubkey(target);
@@ -2200,8 +2099,6 @@ Object.assign(NYM.prototype, {
             if (profileName) {
                 this.updatePMNicknameFromProfile(pubkey, profileName);
             } else {
-                // No cached profile name to drive a full author rewrite, so
-                // just add/remove the badge on existing public messages.
                 this._toggleFriendBadgeInMessages(pubkey);
             }
         } else {
@@ -2224,7 +2121,7 @@ Object.assign(NYM.prototype, {
             } else if (!isFriend && existing) {
                 existing.remove();
             }
-            // Drop the cached signature so a later profile rewrite isn't skipped
+            // Drop the cached signature so a later profile rewrite isn't skipped.
             if (clickable.dataset.authorSig) delete clickable.dataset.authorSig;
         });
     },
@@ -2308,8 +2205,7 @@ Object.assign(NYM.prototype, {
     },
 
     async findUserPubkey(input) {
-        // A public key in either form resolves as itself — no caller can
-        // regress by forgetting to normalize before the nym search.
+        // A public key in either form resolves as itself.
         const asPubkey = this.normalizePubkeyInput(input);
         if (asPubkey) return asPubkey;
 
@@ -2325,7 +2221,6 @@ Object.assign(NYM.prototype, {
 
         const matches = [];
 
-        // First, search in active users
         this.users.forEach((user, pubkey) => {
             const baseNym = this.stripPubkeySuffix(user.nym);
             if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
@@ -2339,9 +2234,7 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // If no matches in active users, search in stored messages
         if (matches.length === 0) {
-            // Search through all stored messages
             this.messages.forEach((channelMessages, channel) => {
                 channelMessages.forEach(msg => {
                     if (msg.pubkey && msg.author) {
@@ -2349,13 +2242,11 @@ Object.assign(NYM.prototype, {
                         if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                             if (searchSuffix) {
                                 if (msg.pubkey.endsWith(searchSuffix)) {
-                                    // Check if not already in matches
                                     if (!matches.find(m => m.pubkey === msg.pubkey)) {
                                         matches.push({ nym: msg.author, pubkey: msg.pubkey });
                                     }
                                 }
                             } else {
-                                // Check if not already in matches
                                 if (!matches.find(m => m.pubkey === msg.pubkey)) {
                                     matches.push({ nym: msg.author, pubkey: msg.pubkey });
                                 }
@@ -2365,7 +2256,6 @@ Object.assign(NYM.prototype, {
                 });
             });
 
-            // Also search in PM messages
             this.pmMessages.forEach((conversationMessages, conversationKey) => {
                 conversationMessages.forEach(msg => {
                     if (msg.pubkey && msg.author) {
@@ -2373,13 +2263,11 @@ Object.assign(NYM.prototype, {
                         if (baseNym === searchNym || baseNym.toLowerCase() === searchNym.toLowerCase()) {
                             if (searchSuffix) {
                                 if (msg.pubkey.endsWith(searchSuffix)) {
-                                    // Check if not already in matches
                                     if (!matches.find(m => m.pubkey === msg.pubkey)) {
                                         matches.push({ nym: msg.author, pubkey: msg.pubkey });
                                     }
                                 }
                             } else {
-                                // Check if not already in matches
                                 if (!matches.find(m => m.pubkey === msg.pubkey)) {
                                     matches.push({ nym: msg.author, pubkey: msg.pubkey });
                                 }

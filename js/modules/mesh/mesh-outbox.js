@@ -2,15 +2,13 @@
 
 const MESH_OUTBOX_KEY = 'nym_mesh_outbox';
 
-// 24 hours, the same window the mesh's own store-and-forward keeps. Past it a
-// message is stale enough that surfacing it would confuse rather than help.
+// 24 hours, the same window the mesh's own store-and-forward keeps.
 const MESH_OUTBOX_TTL_MS = 24 * 60 * 60 * 1000;
 
-// Most retained sends. Bounded because this survives reloads.
+// Bounded because this survives reloads.
 const MESH_OUTBOX_CAP = 200;
 
-// Publish attempts before an entry is given up on, so a relay set that is up
-// but rejecting cannot loop forever.
+// So a relay set that is up but rejecting can't loop forever.
 const MESH_OUTBOX_MAX_ATTEMPTS = 3;
 
 Object.assign(NYM.prototype, {
@@ -47,8 +45,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Fails the local bubble for a message that left the queue undelivered, so
-    // the user is not left with something that still looks sent.
+    // Fail the local bubble so an undelivered message doesn't still look sent.
     _meshOutboxDropped(entry) {
         if (!entry || !entry.localId) return;
         if (typeof this._markOptimisticFailed !== 'function') return;
@@ -76,35 +73,23 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Retains a mesh-carried send so it reaches Nostr once relays return.
-    //
-    // Only a send made while OFFLINE belongs here — one made with the internet
-    // up already went out both ways. `_sendChannelOverMesh` applies that test
-    // before calling. `#mesh` is retained like any other channel: it is backed
-    // by a real kind-20000 channel, so the Nostr copy is where it belongs.
+    // Only offline sends belong here (`_sendChannelOverMesh` checks); `#mesh` is a real kind-20000 channel.
     meshOutboxQueue(entry) {
         if (!entry || !entry.localId || !entry.target || !entry.content) return;
         if (entry.kind !== 'channel') return;
         const list = this._meshOutboxLoad();
-        // One echo, one entry: a retry path calling this again must not publish
-        // the same message twice.
+        // One echo, one entry: a retry must not publish the same message twice.
         if (list.some(e => e.localId === entry.localId)) return;
         list.push({
             kind: entry.kind,
             target: entry.target,
             content: entry.content,
-            // Replayed with the time the user actually sent, so the message
-            // keeps its place in the conversation rather than jumping to the
-            // bottom whenever the internet happened to come back.
+            // Original send time, so the message keeps its place in the conversation.
             createdAt: entry.createdAt || Math.floor(Date.now() / 1000),
             localId: entry.localId,
             ...(entry.threadRoot ? { threadRoot: entry.threadRoot } : {}),
             ...(entry.meshMessageId ? { meshMessageId: entry.meshMessageId } : {}),
-            // The event signed at send time, when there was one. Gateway mode
-            // may already be carrying this exact event to the relays; reusing
-            // it means the two copies share an id and the relays treat the
-            // second as a duplicate, instead of the proof-of-work nonce alone
-            // making them two different messages.
+            // Reusing the send-time event means a gateway's copy shares the id and relays dedup it.
             ...(entry.signedEvent ? { signedEvent: entry.signedEvent } : {}),
             attempts: 0,
         });
@@ -112,13 +97,7 @@ Object.assign(NYM.prototype, {
         this._meshOutboxSave();
     },
 
-    // Publishes everything the queue still holds, oldest first.
-    //
-    // Called on every relay-connected edge and once after startup, which
-    // between them cover both ways the internet comes back: regaining signal
-    // mid-session, and loading online after a session that queued while
-    // offline. Re-entrant calls are ignored — a flush already running will
-    // publish anything a second call would have.
+    // Oldest first; called on every relay-connected edge and after startup; re-entrant calls are ignored.
     async flushMeshOutbox() {
         if (this._meshOutboxFlushing) return;
         this._meshOutboxPrune();
@@ -150,26 +129,15 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Publishes one retained send. Returns whether it went out.
-    //
-    // Only channels: the composer never routes a PM over the radio here (an
-    // offline PM is refused outright, `sendMessage`), so a channel message is
-    // the only thing the mesh carries that Nostr can still deliver later. The
-    // published event lands in D1 the same way any other channel message does —
-    // the relay proxy that carries the broadcast is what archives it — so the
-    // replay restores the message for late readers, not just live ones.
+    // Channels only (offline PMs are refused in `sendMessage`); the relay proxy archives it to D1.
     async _publishMeshOutboxEntry(entry) {
         if (entry.kind !== 'channel') return false;
-        // Prefer the event signed at send time. Beyond matching whatever a
-        // gateway already published, it is what the user actually wrote: a
-        // rebuild would re-read the current nym and settings, which may have
-        // changed in the hours this sat queued.
+        // Prefer the send-time event: a rebuild would re-read nym and settings that may have changed.
         if (entry.signedEvent && entry.signedEvent.sig) {
             try {
                 this.sendToRelay(['EVENT', entry.signedEvent]);
                 this.ensureGeoRelayDelivery(entry.signedEvent, entry.target);
-                // Reconcile the bubble the mesh send drew, so it stops looking
-                // pending — publishMessage does this for the rebuilt path.
+                // Reconcile the pending bubble the mesh send drew.
                 this._replaceOptimisticMessage(
                     entry.localId, entry.signedEvent, `#${entry.target}`, false);
                 return true;
@@ -178,8 +146,7 @@ Object.assign(NYM.prototype, {
             }
         }
         if (typeof this.publishMessage !== 'function') return false;
-        // The `nymmesh` tag lets a peer who already received this over the radio
-        // drop the Nostr copy instead of showing it twice.
+        // The `nymmesh` tag lets radio recipients drop the Nostr copy.
         return !!await this.publishMessage(
             entry.content, entry.target, entry.target, null, entry.threadRoot || null,
             {

@@ -24,18 +24,14 @@ Future<void> main() async {
     if (details.stack != null) debugPrint(details.stack.toString());
   };
 
-  // Catch otherwise-fatal async errors (e.g. WebSocket DNS failures when the
-  // emulator/device is offline) so they don’t terminate the app.
+  // Catch otherwise-fatal async errors (e.g. offline WebSocket DNS failures) so they don't kill the app.
   await runZonedGuarded(() async {
-    // Open the key/value store (mirrors the PWA's synchronous localStorage).
     await SecureStore.settleInstall(await SharedPreferences.getInstance());
     final kv = await KeyValueStore.open();
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
-    // Manual container so we can boot the Nostr controller (identity + relays)
-    // here in the real app only — widget tests construct their own ProviderScope
-    // and never touch networking / secure storage.
+    // Manual container so only the real app boots the controller; widget tests use their own ProviderScope.
     final container = ProviderContainer(
       overrides: [keyValueStoreProvider.overrideWithValue(kv)],
     );
@@ -43,11 +39,7 @@ Future<void> main() async {
     runApp(
       UncontrolledProviderScope(
         container: container,
-        // The boot-unlock gate mirrors `DOMContentLoaded → await
-        // nym.unlockVaultAtBoot() BEFORE initialize()`: when the vault is enabled
-        // it blocks until the user unlocks (decrypting the stored secrets) and
-        // only THEN boots the controller. When the vault is off it boots
-        // immediately, behaving exactly as before.
+        // When the vault is enabled, block until unlock before booting the controller.
         child: const _BootUnlockGate(),
       ),
     );
@@ -57,12 +49,7 @@ Future<void> main() async {
   });
 }
 
-/// Top-level gate enforcing the PWA's boot ordering: identity-vault unlock runs
-/// before `nostrControllerProvider.init()` reads any identity secret.
-///
-/// * Vault not enabled → boot the controller immediately and show the app.
-/// * Vault enabled → show [VaultBootUnlock]; only on success (or "forget") do
-///   we boot the controller and proceed.
+/// Runs identity-vault unlock before `nostrControllerProvider.init()` reads any secret.
 class _BootUnlockGate extends ConsumerStatefulWidget {
   const _BootUnlockGate();
 
@@ -75,8 +62,7 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
   bool _wakeUnlocked = false;
   final GlobalKey _appKey = GlobalKey();
 
-  /// Claims the background-refresh channel while locked; `app.dart` re-claims
-  /// it with its own handler once the app tree mounts.
+  /// Claims the background-refresh channel while locked; `app.dart` re-claims it once mounted.
   final _bgRefresh = BackgroundRefreshService();
 
   @override
@@ -86,40 +72,24 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
     final vaultEnabled = kv.getBool(StorageKeys.vaultEnabled);
     _unlocked = !vaultEnabled;
     if (_unlocked) {
-      // No vault: boot the identity + relays now (was main()'s fire-and-forget).
       _bootController();
     }
     _armBackgroundWake();
   }
 
-  /// A locked process boots nothing — the app tree below this gate never
-  /// mounts, so no relays, no catch-up, and (because `app.dart` is where the
-  /// `runRefresh` handler is registered) nothing even answers the OS.
-  ///
-  /// That is fine while a person is looking at the unlock screen. It is not
-  /// fine when iOS relaunched us in the BACKGROUND for a `BGAppRefresh`
-  /// window: nobody is there to type a password, so the window is wasted and
-  /// the user gets no notifications until they next open the app by hand.
-  ///
-  /// So the handler is claimed here too. A wake arriving while locked unlocks
-  /// from the escrowed key ([IdentityVault.unlockForBackgroundWake]) and boots
-  /// exactly as a real unlock would. The wake itself is the signal that this is
-  /// a background launch — no native probe needed, and a foreground launch is
-  /// untouched and still prompts.
+  /// A background iOS refresh while locked unlocks from the escrowed key, since nobody can type a password.
   void _armBackgroundWake() {
     if (!BackgroundRefreshService.isSupported) return;
     _bgRefresh.start(() async {
       if (!_unlocked) {
         final secrets =
             await ref.read(identityVaultProvider).unlockForBackgroundWake();
-        // No escrow (or a stale one): nothing can run. Returning ends the
-        // window promptly, which is what keeps iOS granting more of them.
+        // No usable escrow; returning ends the window promptly so iOS keeps granting them.
         if (secrets == null) return false;
         if (!mounted) return false;
         _wakeUnlocked = true;
         _onUnlocked(secrets);
-        // Let the freshly-mounted app finish wiring up before the catch-up
-        // runs against it.
+        // Let the freshly mounted app finish wiring before the catch-up runs.
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
       return ref.read(nostrControllerProvider).runBackgroundCatchUp();
@@ -132,15 +102,14 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
 
   void _onUnlocked(Map<String, String> secrets) {
     if (!mounted) return;
-    // Decrypted secrets are held in memory (the native analog of `_vaultMem`)
-    // and handed to identity restore — never re-plaintexted at rest.
+    // Decrypted secrets stay in memory and are never re-plaintexted at rest.
     _bootController(unlockedSecrets: secrets);
     setState(() => _unlocked = true);
   }
 
   void _onForget() {
     if (!mounted) return;
-    // Vault + secrets discarded; boot proceeds to a clean ephemeral identity.
+    // Vault and secrets discarded; boot a clean ephemeral identity.
     _bootController();
     setState(() => _unlocked = true);
   }
@@ -164,10 +133,7 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
   }
 
   Widget _unlockScreen({bool resumed = false}) {
-    // The unlock screen needs the theme too; wrap it in a minimal MaterialApp
-    // so it matches the app's appearance (the PWA applies the saved color mode
-    // before showing the unlock modal). Reuses the same color provider the
-    // full app does so the look is identical.
+    // Minimal themed MaterialApp so the unlock screen matches the app's saved appearance.
     final colors = ref.watch(nymColorsProvider);
     return MaterialApp(
       title: 'Nymchat',

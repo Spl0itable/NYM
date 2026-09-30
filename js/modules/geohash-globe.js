@@ -1,5 +1,3 @@
-// geohash-globe.js - Flat 2D world map for geohash channel explorer
-
 (function () {
 
     // Vendored map data (world-atlas@2.0.2, natural-earth-geojson@0b9a6ce)
@@ -68,7 +66,6 @@
         });
     }
 
-    // Decode on the main thread when the worker is unavailable or fails.
     function decodeOnMain(kind, url) {
         return fetch(url, { cache: 'force-cache' })
             .then(r => r.ok ? r.json() : null)
@@ -77,7 +74,6 @@
                 : []);
     }
 
-    // Worker first, main thread on any failure, [] as a last resort.
     function loadFeatures(kind, url) {
         return decodeViaWorker(kind, url)
             .catch(() => decodeOnMain(kind, url))
@@ -200,9 +196,7 @@
 
 Object.assign(NYM.prototype, {
 
-    /// Opens the explorer. With [focusGeohash], the map zooms to that cell and
-    /// opens its info panel once the map exists — the "show me where this
-    /// channel is" entry point used by the channel header's location line.
+    // Opens the explorer; with focusGeohash, zooms to that cell and opens its info panel.
     showGeohashExplorer(focusGeohash) {
         const modal = document.getElementById('geohashExplorerModal');
         if (!modal) return;
@@ -210,16 +204,14 @@ Object.assign(NYM.prototype, {
         const gh = (typeof focusGeohash === 'string' && this.isValidGeohash(focusGeohash))
             ? focusGeohash.toLowerCase() : null;
         setTimeout(() => {
-            // initializeGeohashMap is async and builds `this.geohashMap`; the
-            // focus has to wait for it or it zooms nothing.
+            // initializeGeohashMap is async; the focus must wait for this.geohashMap.
             Promise.resolve(this.initializeGeohashMap()).then(() => {
                 if (gh && typeof this._selectGeohashCell === 'function') {
                     this._selectGeohashCell(gh);
                 }
             }).catch(() => { });
         }, 30);
-        // Quietly pull recent-activity counts from D1 so the globe reflects real
-        // activity (especially the default 24h view) without loading messages.
+        // Pull D1 activity counts so the globe reflects real activity without loading messages.
         if (typeof this.fetchGeohashActivityFromD1 === 'function') {
             this.fetchGeohashActivityFromD1();
         }
@@ -666,7 +658,7 @@ Object.assign(NYM.prototype, {
         const drawCities = () => {
             if (view.zoom < CITY_ZOOM_THRESHOLD || !cityFeatures.length) return;
 
-            // scalerank: 0 = world's largest. Higher zoom -> show smaller cities.
+            // scalerank 0 is the world's largest; higher zoom shows smaller cities.
             const rankCutoff = view.zoom < 3 ? 2
                 : view.zoom < 4 ? 4
                 : view.zoom < 6 ? 6
@@ -1032,8 +1024,6 @@ Object.assign(NYM.prototype, {
 
         const activeWindowTimer = setInterval(() => {
             if (!this.geohashMap) return;
-            // Refresh D1 activity counts too (throttled internally) so the globe
-            // stays current for channels we aren't actively loading.
             if (typeof this.fetchGeohashActivityFromD1 === 'function') {
                 this.fetchGeohashActivityFromD1();
             }
@@ -1233,12 +1223,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    /// The geohash cell's BOUNDS, not just its centre.
-    ///
-    /// A geohash names a rectangle, and a short one names an enormous rectangle
-    /// — `gc` is roughly 1250 km x 625 km. Callers that need to reason about
-    /// the area (rather than pick a single point in it) need the box, so the
-    /// bit-walk lives here once and `decodeGeohash` takes the centre of it.
+    // Returns the geohash cell's bounds; decodeGeohash takes its center.
     decodeGeohashBounds(geohash) {
         const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
         const bounds = {

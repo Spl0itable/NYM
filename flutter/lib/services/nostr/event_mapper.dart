@@ -9,18 +9,14 @@ import '../../models/nostr_event.dart';
 import '../../models/user.dart';
 import 'event_time_ceilings.dart';
 
-/// Pure mappers from Nostr [NostrEvent]s to app models. Kept side-effect free so
-/// they can be unit-tested without networking.
+/// Side-effect-free mappers from [NostrEvent]s to app models.
 class EventMapper {
   EventMapper._();
 
-  /// Registry of first-seen clamps for future-dated events. Null in tests and
-  /// before boot wires one up, where the clamp falls back to a volatile "now".
+  /// First-seen clamps for future-dated events; null in tests, where the clamp uses a volatile now.
   static EventTimeCeilings? ceilings;
 
-  /// The ceiling a future-dated event is pulled back to, and the `created_at`
-  /// that follows. A D1 `stored_at` is already stable and wins; otherwise the
-  /// clamp is remembered per event id so the next replay cannot re-stamp it.
+  /// Future-dated clamp: a D1 `stored_at` wins, else the first clamp is remembered per id.
   static ({int ceilingMs, int createdAt}) _clampFuture(NostrEvent e, int nowMs) {
     final nowSec = nowMs ~/ 1000;
     if (e.createdAt <= nowSec + 60) {
@@ -37,21 +33,7 @@ class EventMapper {
     return (ceilingMs: ceilingMs, createdAt: ceilingMs ~/ 1000);
   }
 
-  /// The channel a channel-message event names, bare, or null when the event
-  /// is not a well-formed channel message.
-  ///
-  /// The kind and the channel's SHAPE have to agree, exactly as [channelWire]
-  /// pairs them on the way out: a geohash channel is kind 20000 + `g`, a named
-  /// one is 23333 + `d`. The kind picks WHICH tag to read, but nothing checked
-  /// the value it found — so a kind 20000 carrying `['g','nymchat']` filed
-  /// itself under `#nymchat` and rendered among the real 23333 traffic, a
-  /// message in a kind this app would never send there and indistinguishable
-  /// from the rest. The reverse smuggled a 23333 into a geohash channel.
-  /// Nothing upstream stops it: the subscription is kind-only, with no tag
-  /// filter. Neither case can be repaired by guessing which the sender meant,
-  /// so both are refused here — the one place every reader of a channel key
-  /// goes through, so a refused event cannot be stored, keyed, notified on or
-  /// receipted either.
+  /// Bare channel name, or null unless kind and channel shape agree (20000 + geohash `g`, 23333 + named `d`).
   static String? channelNameOf(NostrEvent e) {
     final isGeo = e.kind == EventKind.geoChannel;
     if (!isGeo && e.kind != EventKind.namedChannel) return null;
@@ -61,22 +43,13 @@ class EventMapper {
     return name;
   }
 
-  /// The channel storage key for a channel-message event (`#<geohash|name>`),
-  /// or null if it isn't a channel message.
+  /// Channel storage key (`#<geohash|name>`), or null if not a channel message.
   static String? channelKeyOf(NostrEvent e) {
     final name = channelNameOf(e);
     return name == null ? null : '#$name';
   }
 
-  /// The event's authoritative display/age time in milliseconds — the same
-  /// value [channelMessage] stamps on the [Message] it builds.
-  ///
-  /// Exposed because callers that only hold the raw event (the notification
-  /// gate, say) must agree with what the message list renders. `createdAt` on
-  /// its own can be in the FUTURE — a sender whose clock runs fast, or a
-  /// proxy/relay that re-stamps an ephemeral event forward when it replays
-  /// cached history — and using it raw makes an old backfilled message look
-  /// newer than everything real.
+  /// Authoritative display time in ms, matching what [channelMessage] stamps; raw `created_at` can be future-dated.
   static int effectiveMsOf(NostrEvent e) {
     final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -134,16 +107,12 @@ class EventMapper {
     );
   }
 
-  /// Maps a channel message event (kind 20000/23333) to a [Message].
-  /// [selfPubkey] marks ownership. Returns null if the event isn't a valid
-  /// channel message.
+  /// Maps a kind 20000/23333 event to a [Message], or null if it isn't a valid channel message.
   static Message? channelMessage(NostrEvent e, {required String selfPubkey}) {
     if (e.kind != EventKind.geoChannel && e.kind != EventKind.namedChannel) {
       return null;
     }
-    // [channelNameOf] is the single shape gate: it refuses a kind whose channel
-    // does not match it, covering the live pool, the D1 backfill and the mesh
-    // carrier (handleMeshCarriedEvent) alike, since all three map through here.
+    // [channelNameOf] is the single shape gate for the pool, D1 backfill and mesh carrier alike.
     final isGeo = e.kind == EventKind.geoChannel;
     final name = channelNameOf(e);
     if (name == null) return null;
@@ -154,33 +123,13 @@ class EventMapper {
     final author = getNymFromPubkey(baseNym, e.pubkey);
     final ms = int.tryParse(e.tagValue('ms') ?? '') ?? 0;
 
-    // Clamp future timestamps to a stable ceiling (mirrors the PWA).
-    //
-    // When a sender's clock is ahead, their event's `created_at` is in the
-    // future. Capping to the volatile "now" at load time means an archived
-    // event gets re-stamped to the new "now" on every reload (channel dedup
-    // isn't persisted across reloads), so it never settles and always sorts as
-    // newest — the "stale D1 messages resurface as now" bug. The D1 backfill
-    // injects the archive row's `stored_at` (the pool's real receipt time, ms)
-    // which is a STABLE value once the event was archived, so it wins when
-    // present; an event with no `stored_at` has its first clamp REMEMBERED by
-    // [ceilings] instead, which stops each launch's replay re-stamping it.
+    // Clamp future timestamps to a stable ceiling, so reloads don't re-stamp archived events to now.
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final clamped = _clampFuture(e, nowMs);
     final ceilingMs = clamped.ceilingMs;
     final createdAt = clamped.createdAt;
 
-    // Authoritative display/age timestamp (PWA `_extractEventMs` + `message.
-    // timestamp`): the `ms` tag is the sender's REAL millisecond send time and is
-    // preferred over `created_at`, capped at now to absorb clock skew. This is not
-    // just sub-second polish — a proxy/relay can re-stamp an ephemeral geohash
-    // event's top-level `created_at` FORWARD when it re-broadcasts cached history,
-    // so minutes-old backfill arrives reading `created_at ≈ now`. `created_at*1000`
-    // then renders every such row as "now" and — because they all collapse into
-    // one ~2s window — trips the per-pubkey RATE flood gate, dimming legit senders
-    // to opacity 0.2 (the reported bug, seen only in a very busy channel). The `ms`
-    // tag rides untouched in the event body, so it recovers the true time. Falls
-    // back to `created_at` seconds for non-Nymchat senders that carry no `ms` tag.
+    // Prefer the `ms` tag, capped at now: relays can re-stamp `created_at` forward when replaying history.
     final effectiveMs = displayMs(
       ms: ms,
       createdAtRaw: e.createdAt,
@@ -188,18 +137,10 @@ class EventMapper {
       ceilingMs: ceilingMs,
     );
 
-    // A replayed-backlog message (PWA `messageAge > 10000` / [_isHistorical]):
-    // older than 10s by its REAL send time. Marking it historical keeps D1/relay
-    // BACKFILL out of the live-only flood tracker and the bubble snap-in entrance,
-    // matching the PWA (which tracks/animates LIVE arrivals only); genuine live
-    // sends (<10s) are still tracked so real spam is caught.
+    // Older than 10s by real send time: kept out of the live flood tracker and entrance animation.
     final isHistorical = nowMs - effectiveMs > 10000;
 
-    // A channel message can carry a P2P file offer on an `['offer', JSON]` tag
-    // (`shareP2PFile` → `publishFileOffer`). nostr-core.js:434/502 parses it off
-    // the inbound event and sets `isFileOffer`/`fileOffer` so the row renders a
-    // file-offer card. `parseFileOfferTag` binds the offer's seederPubkey to the
-    // actual sender (anti-spoof) and returns null when absent/mismatched.
+    // `parseFileOfferTag` binds the offer's seeder to the sender and returns null when mismatched.
     final fileOffer = parseFileOfferTag(e.tags, e.pubkey);
 
     final threadRoot = threadRootFromTags(e.tags);
@@ -212,9 +153,7 @@ class EventMapper {
       createdAt: createdAt,
       originalCreatedAt: e.createdAt,
       ms: ms,
-      // Display + flood-tracker time. Sorting still keys on created_at (primary)
-      // with ms as the sub-second tiebreak via [compareMessages]; this only fixes
-      // what the row SHOWS and how "live" the flood gate considers it.
+      // Display and flood-tracker time only; sorting still keys on created_at.
       timestamp: effectiveMs,
       eventKind: e.kind,
       isOwn: e.pubkey == selfPubkey,
@@ -225,18 +164,12 @@ class EventMapper {
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer?.toJson(),
       threadRoot: threadRoot,
-      // NIP-13 target the sender committed to, or null when there is no nonce
-      // tag at all — which is how the timestamp popup tells "no proof-of-work"
-      // (another client) from "mined to N bits". The work actually proven is
-      // recomputed from the id via [powBitsForId], never trusted from the tag.
+      // Committed NIP-13 target, or null with no nonce tag; proven work is recomputed from the id.
       powTarget: powTargetOf(e),
     );
   }
 
-  /// The thread root a NIP-10 marked `e` tag points at (threads): the first
-  /// `['e', id, …, 'root']` tag wins, falling back to a `'reply'` marker.
-  /// Only 64-char hex event ids are accepted; anything else is ignored so a
-  /// foreign client's stray `e` tags can't hide a message behind a bogus root.
+  /// NIP-10 thread root: the first 'root' marked `e` tag, else 'reply'; only 64-hex ids count.
   static String? threadRootFromTags(List<List<String>> tags) {
     String? root;
     String? reply;
@@ -255,9 +188,7 @@ class EventMapper {
     return isHex ? id : null;
   }
 
-  /// The difficulty a NIP-13 `nonce` tag commits to, or null when the event
-  /// carries no nonce tag. A tag with an unparseable/absent target still means
-  /// "mined", so it maps to 0 rather than null.
+  /// NIP-13 committed difficulty, or null without a nonce tag; an unparseable target maps to 0.
   static int? powTargetOf(NostrEvent e) {
     for (final t in e.tags) {
       if (t.isNotEmpty && t[0] == 'nonce') {
@@ -269,7 +200,6 @@ class EventMapper {
     return null;
   }
 
-  /// Parses a kind-0 profile event into a [UserProfile].
   static UserProfile? profile(NostrEvent e) {
     if (e.kind != EventKind.profile) return null;
     try {
@@ -282,7 +212,6 @@ class EventMapper {
     }
   }
 
-  /// Reaction descriptor parsed from a kind-7 event.
   static ReactionInfo? reaction(NostrEvent e) {
     if (e.kind != EventKind.reaction) return null;
     final target = e.tagValue('e');
@@ -299,7 +228,6 @@ class EventMapper {
   }
 }
 
-/// A parsed reaction (kind 7).
 class ReactionInfo {
   ReactionInfo({
     required this.messageId,

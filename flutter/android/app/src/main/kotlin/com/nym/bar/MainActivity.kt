@@ -30,11 +30,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-// local_auth's Android BiometricPrompt requires the host Activity to be a
-// FragmentActivity. With the default FlutterActivity, `authenticate()` throws
-// PlatformException("no_fragment_activity", …), which surfaced in-app as
-// "Biometric authentication failed." Extending FlutterFragmentActivity is the
-// plugin's documented requirement and makes fingerprint/face unlock work.
+// local_auth's BiometricPrompt requires a FragmentActivity host.
 class MainActivity : FlutterFragmentActivity() {
     private var shareChannel: MethodChannel? = null
     private val pendingShares = mutableListOf<Map<String, Any?>>()
@@ -65,9 +61,7 @@ class MainActivity : FlutterFragmentActivity() {
         }
         shareChannel = share
 
-        // "Stay Connected in Background": Dart asks for the foreground service
-        // when the app goes off-screen and releases it on resume. See
-        // NymBackgroundService and lib/services/platform/background_connectivity.dart.
+        // Foreground service for "Stay Connected in Background", started off-screen and released on resume.
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             BACKGROUND_CHANNEL,
@@ -85,16 +79,14 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
 
-        // "Build integrity": hash the installed APK and report who signed and
-        // installed it, so Dart can compare against the developer's published,
-        // signed release manifest. See BuildIntegrity.
+        // Build integrity: hash the installed APK and report signer and installer to Dart.
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             BUILD_INTEGRITY_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "inspect" -> {
-                    // Reads tens of megabytes — never on the platform thread.
+                    // Reads tens of megabytes; never on the platform thread.
                     Thread {
                         val payload = try {
                             BuildIntegrity.inspect(applicationContext)
@@ -139,10 +131,7 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
 
-        // App attestation: a Play Integrity verdict over a server challenge,
-        // which the backend exchanges for the badge that marks this install's
-        // pubkey as a real Nymchat client. See PlayIntegrity and
-        // lib/services/attest/attest_service.dart.
+        // App attestation: a Play Integrity verdict over a server challenge.
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             ATTEST_CHANNEL,
@@ -439,12 +428,7 @@ class MainActivity : FlutterFragmentActivity() {
             .authenticate(info, BiometricPrompt.CryptoObject(cipher))
     }
 
-    /**
-     * Returns whether the service was actually started. A start can be refused
-     * by the OS (background-start restrictions on Android 12+ when the app is
-     * already too far into the background), and Dart treats that as "not
-     * running" rather than pretending the connection is being held.
-     */
+    /** Returns whether the service started; Android 12+ can refuse background starts. */
     private fun startBackgroundService(mesh: Boolean): Boolean {
         val intent = Intent(this, NymBackgroundService::class.java).apply {
             putExtra(NymBackgroundService.EXTRA_MESH, mesh)
@@ -465,7 +449,7 @@ class MainActivity : FlutterFragmentActivity() {
         try {
             stopService(Intent(this, NymBackgroundService::class.java))
         } catch (t: Throwable) {
-            // Never started / already gone.
+            // Never started or already gone.
         }
     }
 

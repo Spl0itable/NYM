@@ -1,39 +1,20 @@
-// request_sync_packet.dart - The REQUEST_SYNC (0x21) payload.
-//
-// A port of bitchat's `RequestSyncPacket.swift` + `SyncTypeFlags.swift`. This
-// is the packet one peer sends to say "here is a compact set of everything I
-// already hold — send me what is missing". Interop with the real bitchat
-// clients depends on the TLV numbering and the bit↔type table below, so both
-// are transcriptions.
+// REQUEST_SYNC (0x21), transcribed from bitchat's `RequestSyncPacket`; TLV numbers and bit table must match.
 
 import 'dart:typed_data';
 
 import '../protocol/mesh_message_type.dart';
 import 'gcs_filter.dart';
 
-/// Which packet types a sync round covers, as a little-endian bitfield.
-///
-/// The wire form is 1–8 bytes with trailing zero bytes trimmed, and an unknown
-/// bit maps to no type — so a newer peer can widen the field and an older one
-/// simply answers with the types it understands. That forward-compatibility is
-/// the reason the field is a bitfield rather than a list.
+/// Packet types a sync round covers, as a trimmed little-endian bitfield; unknown bits map to no type.
 class SyncTypeFlags {
   const SyncTypeFlags(this.rawValue);
 
-  /// Only the bits that map to a type we know. An unmapped bit is dropped at
-  /// construction rather than kept as phantom membership that nothing matches
-  /// and `toBytes` would faithfully re-serialize.
+  /// Drops bits that map to no known type.
   factory SyncTypeFlags.masked(int raw) => SyncTypeFlags(raw & _knownMask);
 
   final int rawValue;
 
-  // Bit index → mesh packet type. Matches bitchat's table exactly; the values
-  // NOT listed are deliberate:
-  //  * courierEnvelope — a directed deposit between trusted peers, which must
-  //    never spread by gossip.
-  //  * voiceFrame — only useful live; a replayed audio frame is dead airtime.
-  //  * the Nymchat extensions (0x5x) — they are ours, bitchat has no bit for
-  //    them, and inventing one would collide the moment bitchat claims it.
+  // Bit to packet type, as bitchat; courier envelopes, voice frames and Nymchat 0x5x types are deliberately absent.
   static const Map<int, int> _bitToType = {
     0: MeshMessageType.announce,
     1: MeshMessageType.message,
@@ -43,10 +24,7 @@ class SyncTypeFlags {
     5: MeshMessageType.fragment,
     6: MeshMessageType.requestSync,
     7: MeshMessageType.fileTransfer,
-    // Bit 9 is bitchat's for prekey bundles. Extended bits are compat-safe by
-    // construction: the field encodes little-endian with trailing zeros
-    // trimmed, so bit 9 simply widens it from one byte to two, and a client
-    // that does not know the bit ignores it and answers with what it does.
+    // Bit 9 is bitchat's prekey-bundle bit.
     9: MeshMessageType.prekeyBundle,
   };
 
@@ -65,10 +43,7 @@ class SyncTypeFlags {
     return null;
   }
 
-  /// The set covering ordinary public history: announces (which carry the
-  /// signing keys everything else is verified against) plus public messages,
-  /// plus prekey bundles — which have to travel while their owner is AWAY,
-  /// since that is precisely when their mail is being couriered.
+  /// Announces, public messages and prekey bundles, which must travel while their owner is away.
   static SyncTypeFlags get publicMessages => SyncTypeFlags.masked(
         (1 << 0) | (1 << 1) | (1 << 9),
       );
@@ -95,7 +70,7 @@ class SyncTypeFlags {
     return Uint8List.fromList(out);
   }
 
-  /// Accepts 1–8 bytes; anything else is not a flags field.
+  /// Accepts 1–8 bytes only.
   static SyncTypeFlags? decode(Uint8List bytes) {
     if (bytes.isEmpty || bytes.length > 8) return null;
     var raw = 0;
@@ -106,15 +81,7 @@ class SyncTypeFlags {
   }
 }
 
-/// The REQUEST_SYNC payload: a GCS filter plus what it covers.
-///
-/// TLV layout (type, length16 big-endian, value), all optional fields skipped
-/// by decoders that do not know them:
-/// * `0x01` P (uint8) — Golomb-Rice parameter
-/// * `0x02` M (uint32 BE) — hash range
-/// * `0x03` data — the Golomb-Rice bitstream
-/// * `0x04` types — [SyncTypeFlags]
-/// * `0x05` sinceTimestamp (uint64 BE) — how far back the filter reaches
+/// REQUEST_SYNC TLV (len16 BE): 0x01 P, 0x02 M, 0x03 GCS data, 0x04 types, 0x05 sinceTimestamp.
 class RequestSyncPacket {
   const RequestSyncPacket({
     required this.p,
@@ -129,10 +96,7 @@ class RequestSyncPacket {
   final Uint8List data;
   final SyncTypeFlags? types;
 
-  /// The filter only covers packets at or after this. Older ones are outside
-  /// it but NOT missing — without the cursor a responder would re-send that
-  /// whole tail every single round, which is the difference between a sync
-  /// that converges and one that never stops talking.
+  /// Lower bound of the filter, so responders don't resend the older tail every round.
   final int? sinceTimestampMs;
 
   Uint8List encode() {
@@ -160,9 +124,7 @@ class RequestSyncPacket {
     return out.toBytes();
   }
 
-  /// Returns null for a payload that is malformed or claims parameters the
-  /// decoder would have to guess at. [maxAcceptBytes] bounds the filter a peer
-  /// can make us hold.
+  /// Null for a malformed payload; [maxAcceptBytes] bounds the filter a peer can make us hold.
   static RequestSyncPacket? decode(Uint8List data,
       {int maxAcceptBytes = 1024}) {
     var off = 0;
@@ -207,7 +169,7 @@ class RequestSyncPacket {
             since = ts;
           }
         default:
-        // Forward compatible: an unknown TLV is skipped, not fatal.
+        // Forward compatible: an unknown TLV is skipped.
       }
     }
 

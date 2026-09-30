@@ -1,28 +1,8 @@
-// prekey_bundle.dart - PREKEY_BUNDLE (0x24): forward secrecy for carried mail.
-//
-// A courier envelope is sealed to the recipient's long-lived Noise static key,
-// because that is the only key a sender has for someone who is not there to
-// handshake. The cost is that it is NOT forward secret: whoever later obtains
-// that static key can open every envelope they captured in transit.
-//
-// A prekey bundle removes that. Each device publishes a small batch of one-time
-// X25519 public keys, signed by the same Ed25519 key its announce is signed
-// with, and lets them spread by gossip sync. A sender seals to ONE of those
-// prekeys instead of the static key; the recipient deletes the private half
-// once it is used, and the envelope becomes unopenable to everyone, including
-// its own recipient's future self.
-//
-// The signature is what lets a bundle travel. Anyone holding the owner's
-// announce-verified signing key can check a bundle offline, so bundles keep
-// spreading mesh-wide while the owner is away — which is exactly when their
-// mail is being couriered.
-//
-// A port of bitchat's `PrekeyBundle`.
+// PREKEY_BUNDLE (0x24): signed one-time X25519 prekeys that give couriered mail forward secrecy (bitchat port).
 
 import 'dart:convert';
 import 'dart:typed_data';
 
-/// One unused key, and the id a sealed envelope names it by.
 class Prekey {
   const Prekey({required this.id, required this.publicKey});
 
@@ -32,7 +12,6 @@ class Prekey {
   final Uint8List publicKey;
 }
 
-/// A signed batch of one-time prekeys belonging to one device.
 class PrekeyBundle {
   const PrekeyBundle({
     required this.noiseStaticPublicKey,
@@ -41,14 +20,12 @@ class PrekeyBundle {
     required this.signature,
   });
 
-  /// Whose prekeys these are (32 bytes).
+  /// Owner's Noise static key (32 bytes).
   final Uint8List noiseStaticPublicKey;
 
   final List<Prekey> prekeys;
 
-  /// When the bundle was made. A newer bundle replaces an older one for the
-  /// same device — a peer that has rotated should not keep being sealed to
-  /// keys it has already deleted.
+  /// A newer bundle replaces an older one, so senders stop using deleted keys.
   final int generatedAtMs;
 
   /// Ed25519 over [signableBytes] by the owner's announce-bound signing key.
@@ -59,13 +36,11 @@ class PrekeyBundle {
   static const int maxPrekeys = 8;
   static const int _prekeyEntryLength = 4 + keyLength;
 
-  /// Domain separation, so a bundle signature can never be mistaken for an
-  /// announce or packet signature.
+  /// Domain separation from announce and packet signatures.
   static final Uint8List _signingContext =
       Uint8List.fromList(utf8.encode('bitchat-prekey-bundle-v1'));
 
-  /// The canonical bytes the signature covers. Encoders and verifiers must
-  /// derive these identically or every bundle looks forged.
+  /// The canonical signed bytes; encoders and verifiers must derive them identically.
   Uint8List signableBytes() {
     final out = BytesBuilder();
     out.addByte(_signingContext.length > 255 ? 255 : _signingContext.length);
@@ -82,9 +57,7 @@ class PrekeyBundle {
     return out.toBytes();
   }
 
-  /// TLV (type, length16 BE, value): `0x01` owner key, `0x02` packed prekey
-  /// entries, `0x03` generatedAt, `0x04` signature. Null when a field is the
-  /// wrong shape — an unsignable bundle is worse than none.
+  /// TLV (type, len16 BE, value) 0x01 owner, 0x02 prekeys, 0x03 generatedAt, 0x04 sig; null if malformed.
   Uint8List? encode() {
     if (noiseStaticPublicKey.length != keyLength) return null;
     if (signature.length != signatureLength) return null;
@@ -169,8 +142,7 @@ class PrekeyBundle {
       return null;
     }
     if (prekeys.isEmpty) return null;
-    // Duplicate ids would let one consumed key shadow another, so a sender
-    // could be steered onto a prekey the owner has already thrown away.
+    // Duplicate ids could steer a sender onto a prekey the owner already deleted.
     final ids = prekeys.map((p) => p.id).toSet();
     if (ids.length != prekeys.length) return null;
     return PrekeyBundle(

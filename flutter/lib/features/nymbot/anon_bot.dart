@@ -250,9 +250,7 @@ class AnonBotManager {
   Map<String, dynamic>? _announcement;
   int _announcementExp = 0;
 
-  /// Which identity [_announcement] belongs to. Without this the cache can
-  /// outlive the identity it announces and the worker seals its reply to a
-  /// KEM key we no longer hold.
+  /// Identity [_announcement] belongs to, so a stale cache never seals replies to a dropped KEM key.
   String? _announcementPk;
   bool _flushing = false;
 
@@ -330,9 +328,7 @@ class AnonBotManager {
       _adoptPrev(parsed.current!);
       _mergeTokens(parsed.tokens);
       _save();
-      // prev gained an identity, so the unwrap candidate set changed — the
-      // other applySynced branches announce that, and this one has to as well
-      // or replies wrapped to the adopted key never decrypt.
+      // The unwrap candidate set changed; announce it or replies wrapped to the adopted key never decrypt.
       onKeysChanged?.call();
       return;
     }

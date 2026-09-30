@@ -1,20 +1,4 @@
-// Visibility-gated playback for ANIMATED images (GIF / animated WebP).
-//
-// Flutter's `Image` keeps an animated codec ticking for as long as the widget
-// is mounted — and a chat list keeps rows mounted well beyond the visible
-// screen (the viewport cache extent). Several animated GIFs therefore decode
-// + upload frames continuously even when none of them are on screen, a
-// permanent CPU/GPU load that reads as the whole conversation being laggy.
-//
-// [PausableAnimatedImage] renders frames from the raw [ImageStream] and
-// simply DETACHES its listener while the widget is not visible: with no
-// listeners the framework's `MultiFrameImageStreamCompleter` stops driving
-// the codec, freezing the image on its last decoded frame at zero cost. A
-// kept-alive handle pins the completer (and its decoded state) while paused,
-// so resuming never refetches or restarts the decode. Visibility comes from
-// `visibility_detector`, which reports through the render tree — scrolled
-// out, behind another route, or inside an offstage subtree all count as
-// hidden.
+// Animated image that detaches its stream listener while not visible, so offscreen GIFs stop decoding frames.
 
 import 'package:flutter/widgets.dart';
 import 'package:visibility_detector/visibility_detector.dart';
@@ -31,20 +15,18 @@ class PausableAnimatedImage extends StatefulWidget {
     this.errorBuilder,
   });
 
-  /// The (already resize-capped) provider for the animated image.
+  /// The already resize-capped provider.
   final ImageProvider image;
 
-  /// Stable identity for the visibility region (e.g. `ValueKey(url)`).
+  /// Stable identity for the visibility region, e.g. `ValueKey(url)`.
   final Key visibilityKey;
 
   final double? width;
   final double? height;
   final BoxFit fit;
 
-  /// Shown until the first frame decodes.
   final Widget? placeholder;
 
-  /// Shown when the stream reports an error.
   final WidgetBuilder? errorBuilder;
 
   @override
@@ -93,11 +75,7 @@ class _PausableAnimatedImageState extends State<PausableAnimatedImage> {
     try {
       stream.addListener(_listener!);
     } on Object {
-      // The completer was disposed while we were detached (the framework
-      // drops a completer with no listeners and no keep-alive handles, and
-      // addListener on a disposed one THROWS — in release builds too).
-      // Start over with a fresh resolve; the bytes are still in the disk /
-      // memory caches, so this is cheap.
+      // The completer was disposed while detached and addListener would throw, so resolve afresh (bytes are cached).
       _stream = null;
       _keepAlive?.dispose();
       _keepAlive = null;
@@ -105,23 +83,12 @@ class _PausableAnimatedImageState extends State<PausableAnimatedImage> {
       return;
     }
     _listening = true;
-    // Listening keeps the completer alive on its own; drop the pause pin.
+    // Listening keeps the completer alive; drop the pause pin.
     _keepAlive?.dispose();
     _keepAlive = null;
   }
 
-  /// Stops frame delivery (and thereby the codec) without losing the decoded
-  /// state: the keep-alive handle pins the completer so a later
-  /// [_attachIfVisible] resumes instantly from where it froze.
-  ///
-  /// Never pauses BEFORE the first frame: rows materialize inside the list's
-  /// cache extent, where the visibility detector reports `visibleFraction ==
-  /// 0` immediately — often while the network fetch is still in flight and
-  /// `stream.completer` is null. Detaching at that point leaves nothing
-  /// pinned, so the framework disposes the completer as soon as its own
-  /// bookkeeping listener drops, and the image can never load ("GIFs stopped
-  /// loading"). Once the first frame lands, [_onFrame] re-checks visibility
-  /// and freezes offscreen images on that frame.
+  /// Stops frames while pinning the completer; never before the first frame, or the image never loads.
   void _pause() {
     final stream = _stream;
     final completer = stream?.completer;
@@ -142,9 +109,7 @@ class _PausableAnimatedImageState extends State<PausableAnimatedImage> {
       _frame?.dispose();
       _frame = info;
     });
-    // Deferred pause (see [_pause]): the widget went offscreen before its
-    // first frame arrived — freeze on this frame now that there is a
-    // completer to pin and a sized frame to keep the layout alive.
+    // Deferred pause: went offscreen before the first frame arrived.
     if (!_visible) _pause();
   }
 

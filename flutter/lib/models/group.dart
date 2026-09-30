@@ -1,5 +1,4 @@
-/// Group control-event types carried in the `['type', …]` tag of a group rumor
-/// (docs/specs/03 §4.2).
+/// Group control-event types carried in a group rumor's `['type', …]` tag.
 class GroupControlType {
   GroupControlType._();
   static const message = 'group-message';
@@ -22,7 +21,6 @@ class GroupControlType {
   static const history = 'group-history';
 }
 
-/// A moderation-log entry (docs/specs/03 §4.1).
 class ModLogEntry {
   ModLogEntry({
     required this.type,
@@ -56,7 +54,6 @@ class ModLogEntry {
       );
 }
 
-/// A multi-member private group chat (docs/specs/03 §4.1).
 class Group {
   Group({
     required this.id,
@@ -120,16 +117,14 @@ class Group {
   /// Owner-controlled: newly added members receive recent chat history.
   bool shareHistory;
 
-  /// We already folded in one shared-history blob for this group.
+  /// One shared-history blob was already folded in for this group.
   bool historyReceived;
   final List<ModLogEntry> modLog;
 
-  /// Per-target moderation clocks: distinct mod events are ordered per target
-  /// pubkey, so an out-of-order promote for A isn't dropped because an
-  /// unrelated kick for B carried a newer timestamp.
+  /// Moderation clocks per target pubkey, so unrelated newer events don't drop an out-of-order one.
   final Map<String, int> modTsByTarget;
 
-  /// Recently-applied moderation event ids (x tag / wrap id) for replay dedup.
+  /// Recently applied moderation event ids (x tag / wrap id) for replay dedup.
   final List<String> modSeenIds;
 
   bool isOwner(String pubkey) => createdBy == pubkey;
@@ -211,7 +206,7 @@ class Group {
       );
 }
 
-/// An invite-link token payload (base64url JSON, docs/specs/03 §4.6).
+/// Invite-link token payload (base64url JSON).
 class GroupInviteToken {
   GroupInviteToken({
     this.v = 1,

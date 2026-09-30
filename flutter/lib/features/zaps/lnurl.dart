@@ -6,32 +6,18 @@ import '../../models/nostr_event.dart';
 import '../../services/api/api_client.dart';
 import 'zap_logic.dart';
 
-/// Pure helpers + lazy HTTP for the LNURL-pay zap flow (zaps.js
-/// `fetchLightningInvoice`, lines 95-162). No network is touched until
-/// [fetchInvoice] is called.
-///
-/// Every fetch rides the `/api/proxy?action=json` privacy proxy
-/// ([ApiClient.proxiedJsonFetch], the PWA's `proxiedJsonFetch`,
-/// relays.js:3192) so the Lightning provider only ever sees Cloudflare IPs;
-/// the direct URL is fetched only when the proxy itself is unreachable.
+/// LNURL-pay helpers; every fetch goes via the JSON privacy proxy, falling back to direct only if the proxy is down.
 class Lnurl {
   Lnurl._();
 
-  /// Splits a lightning address `name@domain` into its `.well-known/lnurlp`
-  /// metadata URL. Returns null when the address is malformed.
+  /// `.well-known/lnurlp` URL for `name@domain`, or null when malformed.
   static Uri? lnurlpUrl(String lightningAddress) {
     final parts = lightningAddress.split('@');
     if (parts.length != 2 || parts[0].isEmpty || parts[1].isEmpty) return null;
     return Uri.parse('https://${parts[1]}/.well-known/lnurlp/${parts[0]}');
   }
 
-  /// Builds the LNURL-pay callback URL (zaps.js lines 121-137): sets
-  /// `amount` in **millisats**, an optional `comment` (clamped to the
-  /// provider's `commentAllowed`), and the `nostr=<zap request JSON>` param when
-  /// the provider `allowsNostr` and advertises a `nostrPubkey`.
-  ///
-  /// Pure and synchronous — given a parsed [LnurlPayParams] and an already-built
-  /// (signed) [zapRequest], it returns the exact URL the PWA fetches.
+  /// LNURL-pay callback URL: amount in millisats, clamped comment, and `nostr=` when the provider allows it.
   static Uri buildCallbackUrl({
     required LnurlPayParams params,
     required int amountSats,
@@ -55,14 +41,10 @@ class Lnurl {
     return base.replace(queryParameters: qp);
   }
 
-  /// Builds the proxy-riding [ApiClient] for a call: an injected [api] wins;
-  /// otherwise one is wrapped around the (possibly injected) [http.Client] so
-  /// tests with a MockClient still intercept every request.
+  /// An injected [api] wins; otherwise wrap [client] so MockClient tests still intercept.
   static ApiClient _api(ApiClient? api, http.Client client) =>
       api ?? ApiClient(client: client);
 
-  /// Fetches the LNURL-pay metadata for [lightningAddress] (lazy network),
-  /// through the JSON privacy proxy (zaps.js:106).
   static Future<LnurlPayParams> fetchPayParams(String lightningAddress,
       {http.Client? client, ApiClient? api}) async {
     final url = lnurlpUrl(lightningAddress);
@@ -75,8 +57,7 @@ class Lnurl {
       if (resp.statusCode != 200) {
         throw const LnurlException('Failed to fetch LNURL endpoint');
       }
-      // `allowMalformed` mirrors the PWA's `response.json()` / TextDecoder
-      // (U+FFFD replacement, never throwing) like `ApiClient._utf8Body`.
+      // `allowMalformed` so bad UTF-8 becomes U+FFFD instead of throwing.
       return LnurlPayParams.fromJson(
           jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true))
               as Map<String, dynamic>);
@@ -85,9 +66,7 @@ class Lnurl {
     }
   }
 
-  /// Resolves a bolt11 invoice for [amountSats] (and optional [comment] / zap
-  /// request) against [params] (lazy network). Returns the invoice + the
-  /// LUD-21 `verify` URL when present.
+  /// Resolves a bolt11 invoice, plus the LUD-21 `verify` URL when present.
   static Future<LnInvoice> fetchInvoice({
     required LnurlPayParams params,
     required int amountSats,
@@ -111,7 +90,6 @@ class Lnurl {
     );
     final c = client ?? http.Client();
     try {
-      // Invoice callback rides the privacy proxy too (zaps.js:140).
       final resp = await _api(api, c).proxiedJsonFetch(url.toString());
       if (resp.statusCode != 200) {
         throw const LnurlException('Failed to fetch invoice');
@@ -129,8 +107,7 @@ class Lnurl {
       return LnInvoice(
         pr: pr,
         verify: data['verify'] as String?,
-        // The provider's Nostr pubkey lets the backend validate a NIP-57
-        // receipt (zaps.js:153 `providerPubkey: lnurlData.nostrPubkey`).
+        // Lets the backend validate the NIP-57 receipt.
         providerPubkey: params.nostrPubkey,
         amountSats: amountSats,
       );
@@ -139,9 +116,7 @@ class Lnurl {
     }
   }
 
-  /// Polls the LUD-21 `verify` URL once (through the JSON privacy proxy, like
-  /// the PWA's proxied verify poll — shop.js:1264); true when the invoice is
-  /// settled (`{settled|paid: true}`).
+  /// Polls the LUD-21 `verify` URL once; true when settled.
   static Future<bool> checkPaid(String verifyUrl,
       {http.Client? client, ApiClient? api}) async {
     final c = client ?? http.Client();
@@ -159,7 +134,6 @@ class Lnurl {
   }
 }
 
-/// Parsed LNURL-pay metadata (the subset zaps.js reads).
 class LnurlPayParams {
   const LnurlPayParams({
     required this.callback,
@@ -189,7 +163,6 @@ class LnurlPayParams {
   }
 }
 
-/// A resolved bolt11 invoice plus optional LUD-21 verify URL.
 class LnInvoice {
   const LnInvoice({
     required this.pr,
@@ -200,13 +173,11 @@ class LnInvoice {
   final String pr;
   final String? verify;
 
-  /// The LNURL provider's Nostr pubkey (for NIP-57 receipt validation in the
-  /// backend zap-verify path).
+  /// Provider's Nostr pubkey, for backend NIP-57 receipt validation.
   final String? providerPubkey;
   final int amountSats;
 
-  /// Lowercased bolt11 — the canonical zap dedup key (zaps.js:1250
-  /// `'b:' + bolt11.toLowerCase()`).
+  /// Lowercased bolt11, the canonical zap dedup key.
   String get dedupKey => pr.toLowerCase();
 }
 

@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'shop_models.dart';
 
-/// The full Nymchat shop catalog, ported verbatim from the PWA
-/// (`js/app.js` `this.shopItems`, docs/specs/04 §3.1). Item ids, names,
-/// descriptions, prices, types, tiers and inline SVG icons match the web 1:1.
+/// The full shop catalog; ids, prices, tiers and SVG icons match the PWA 1:1.
 class ShopCatalog {
   ShopCatalog._();
 
@@ -467,7 +465,6 @@ class ShopCatalog {
     ),
   ];
 
-  /// Every catalog item across all tabs.
   static final List<ShopItem> all = [
     ...styles,
     ...flair,
@@ -482,11 +479,7 @@ class ShopCatalog {
 
   static ShopItem? byId(String id) => _byId[id];
 
-  /// The component item ids granted by a bundle. For `bundle-everything` the
-  /// PWA fills the (empty) `bundle` array at startup from every non-limited,
-  /// non-bundle catalog item (`js/app.js` lines 2061-2069); we compute the same
-  /// list here so the Everything Pack actually grants its components. Other
-  /// bundles return their static [ShopItem.bundle] list.
+  /// Bundle component ids; `bundle-everything` is computed from every non-limited, non-bundle item.
   static List<String> bundleComponents(String id) {
     if (id == 'bundle-everything') {
       return _everythingComponents;
@@ -494,17 +487,14 @@ class ShopCatalog {
     return byId(id)?.bundle ?? const <String>[];
   }
 
-  /// Every non-limited (no `maxSupply`), non-bundle item id — the Everything
-  /// Pack's contents, mirroring the PWA's startup computation.
+  /// Every non-limited, non-bundle item id (the Everything Pack).
   static final List<String> _everythingComponents = [
     ...styles,
     ...flair,
     ...special,
   ].where((it) => it.maxSupply == null).map((it) => it.id).toList();
 
-  // ---------------------------------------------------------------------------
-  // Inline SVG trophy used for the supporter badge (PWA getSupporterTrophyIcon).
-  // ---------------------------------------------------------------------------
+  // Supporter badge trophy SVG.
   static const String trophyIcon =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
       'width="1em" height="1em" fill="none" stroke="currentColor" '
@@ -517,7 +507,6 @@ class ShopCatalog {
       '<path d="M12 15v3"/><path d="M9 21h6"/><path d="M10 18h4l.5 3h-5z"/></svg>';
 
   /// Flair SVG, stamping the edition number for numbered editions (Genesis).
-  /// Mirrors `_flairIconHtml(id, edition)`.
   static String flairIcon(String id, [int? edition]) {
     final item = byId(id);
     if (item == null) return '';
@@ -529,22 +518,16 @@ class ShopCatalog {
     return item.icon;
   }
 
-  // ---------------------------------------------------------------------------
-  // Visual tables for cosmetic previews (from css/styles-features.css).
-  // ---------------------------------------------------------------------------
-
-  /// Text color + glow per message style (`.message.style-X .message-content`).
+  /// Text color and glow per message style.
   static const Map<String, MessageStyleVisual> styleVisuals = {
     'style-satoshi': MessageStyleVisual(
       color: Color(0xFFF7931A),
       glow: Color(0x33F7931A),
-      // .message.style-satoshi .message-content { background: rgba(247,147,26,.2) }
       contentBackground: Color(0x33F7931A),
     ),
     'style-glitch': MessageStyleVisual(
       color: Color(0xFF00FF00),
       glow: Color(0x6600FFFF),
-      // text-shadow: -2px 0 #ff0000, 2px 0 #00ffff (styles-features.css:625-628).
       glyphShadows: [
         Shadow(color: Color(0xFFFF0000), offset: Offset(-2, 0)),
         Shadow(color: Color(0xFF00FFFF), offset: Offset(2, 0)),
@@ -552,9 +535,7 @@ class ShopCatalog {
     ),
     'style-aurora': MessageStyleVisual(
       color: Color(0xFF5B8CFF),
-      // linear-gradient(120deg,#00ffd5,#5b8cff,#ff00ea,#00ffd5) — the trailing
-      // #00ffd5 closes the cyan wrap (was a 3-stop that dropped it). The 120°
-      // diagonal + blue glow are applied in message_row's ShaderMask.
+      // The 120° diagonal and blue glow are applied in message_row's ShaderMask.
       gradient: [
         Color(0xFF00FFD5),
         Color(0xFF5B8CFF),
@@ -625,24 +606,18 @@ class ShopCatalog {
     'style-eclipse': MessageStyleVisual(
       color: Color(0xFFFFCAA0),
       glow: Color(0x8CFFAA5A),
-      // .message.style-eclipse .message-content { background: rgba(18,14,28,.72) }
       contentBackground: Color(0xB8120E1C),
     ),
     'style-crt': MessageStyleVisual(
       color: Color(0xFFFFB000),
       glow: Color(0xD9FFB000),
       monospace: true,
-      // .message.style-crt .message-content { background: rgba(10,8,2,.82) }
       contentBackground: Color(0xD10A0802),
     ),
   };
 
-  /// Aura accent + gradient + exact box-shadow layers per cosmetic
-  /// (`.message.cosmetic-X`, `styles-features.css:1099-1211`). The preview
-  /// bubble (and rendered message) compose [CosmeticVisual.boxShadows] onto the
-  /// bubble; legendary ring/sheen flagged via [ringGradient]/[sheenGradient].
+  /// Aura accent, gradient and exact box-shadow layers per cosmetic.
   static const Map<String, CosmeticVisual> cosmeticVisuals = {
-    // inset 0 0 0 1px rgba(255,215,0,.35), 0 0 18px rgba(255,215,0,.18)
     'cosmetic-aura-gold': CosmeticVisual(
       accent: Color(0xFFFFD700),
       gradient: [Color(0x0DFFD700), Color(0x05FFD700)],
@@ -652,7 +627,6 @@ class ShopCatalog {
         BoxShadow(color: Color(0x2EFFD700), blurRadius: 18),
       ],
     ),
-    // inset 0 0 0 1px rgba(0,229,255,.55), 0 0 22px rgba(0,229,255,.32)
     'cosmetic-aura-neon': CosmeticVisual(
       accent: Color(0xFF00E5FF),
       gradient: [Color(0x0F00E5FF), Color(0x0500E5FF)],
@@ -662,7 +636,6 @@ class ShopCatalog {
         BoxShadow(color: Color(0x5200E5FF), blurRadius: 22),
       ],
     ),
-    // conic prism ring + 0 0 16px rgba(150,100,255,.3)
     'cosmetic-aura-rainbow': CosmeticVisual(
       accent: Color(0xFF9664FF),
       gradient: [
@@ -683,7 +656,6 @@ class ShopCatalog {
         Color(0xFFFF2D2D),
       ],
     ),
-    // inset 0 0 0 1px rgba(255,160,0,.6), 0 0 26px rgba(255,110,0,.4)
     'cosmetic-aura-phoenix': CosmeticVisual(
       accent: Color(0xFFFF6A00),
       gradient: [Color(0x12FF6A00), Color(0x08FF0000)],
@@ -693,7 +665,6 @@ class ShopCatalog {
         BoxShadow(color: Color(0x66FF6E00), blurRadius: 26),
       ],
     ),
-    // inset 0 0 0 1px rgba(160,130,255,.6), 0 0 26px rgba(140,100,255,.45)
     'cosmetic-aura-cosmic': CosmeticVisual(
       accent: Color(0xFF7C5CFF),
       gradient: [Color(0x29462D8C), Color(0x0F0F0C23)],
@@ -703,7 +674,6 @@ class ShopCatalog {
         BoxShadow(color: Color(0x738C64FF), blurRadius: 26),
       ],
     ),
-    // inset 0 0 0 1px rgba(225,246,255,.55), 0 0 10px rgba(150,210,255,.2)
     'cosmetic-frost': CosmeticVisual(
       accent: Color(0xFF68B8E6),
       gradient: [Color(0x29BEE6FF), Color(0x14BEE6FF)],
@@ -712,7 +682,6 @@ class ShopCatalog {
         BoxShadow(color: Color(0x3396D2FF), blurRadius: 10),
       ],
     ),
-    // inset 0 0 0 1px rgba(255,255,255,.5), 0 0 18px rgba(150,180,255,.5)
     'cosmetic-bubble-hologram': CosmeticVisual(
       accent: Color(0xFF96B4FF),
       gradient: [
@@ -736,12 +705,7 @@ class ShopCatalog {
     'cosmetic-redacted': CosmeticVisual(accent: Color(0xFFFFFFFF)),
   };
 
-  /// A representative repeating glyph for a textured style's watermark
-  /// (`--style-pattern`, `styles-features.css:946-990`). The PWA tiles a
-  /// per-style SVG behind the content; on native we approximate the highest-value
-  /// ones with a tiled character (satoshi `₿`, matrix `10`, gold `✦`, …). Styles
-  /// without a glyph return null and render with color + glow only. CRT/eclipse
-  /// use dedicated painters (scanlines / radial), not a glyph.
+  /// Tiled watermark glyph approximating a style's pattern; CRT and eclipse use dedicated painters.
   static const Map<String, String> _stylePatternGlyphs = {
     'style-satoshi': '₿',
     'style-matrix': '10',
@@ -760,14 +724,11 @@ class ShopCatalog {
     'style-rainbow': '◠',
   };
 
-  /// The watermark glyph for [styleId], or null when the style has no tiled
-  /// pattern (see [_stylePatternGlyphs]).
+  /// Watermark glyph for [styleId], or null when it has no tiled pattern.
   static String? stylePatternGlyph(String styleId) =>
       _stylePatternGlyphs[styleId];
 
-  /// The total value of a bundle's components — `sum(component.price)` — used to
-  /// render the "Save X% · N sats value" badge (`shop.js:896-902`). Returns 0
-  /// for non-bundles or empty bundles.
+  /// Sum of component prices, for the bundle "Save X%" badge; 0 for non-bundles.
   static int bundleValue(String id) {
     var sum = 0;
     for (final comp in bundleComponents(id)) {
@@ -776,8 +737,7 @@ class ShopCatalog {
     return sum;
   }
 
-  /// The discount percent of a bundle vs its component value, rounded like the
-  /// PWA (`Math.round((1 - price/sum) * 100)`); 0 when there is no saving.
+  /// Discount percent rounded like `Math.round((1 - price/sum) * 100)`; 0 when there is no saving.
   static int bundleSavePercent(String id) {
     final item = byId(id);
     if (item == null) return 0;
@@ -786,9 +746,7 @@ class ShopCatalog {
     return ((1 - item.price / sum) * 100).round();
   }
 
-  // ===========================================================================
-  // SVG icon constants (ported verbatim from js/app.js).
-  // ===========================================================================
+  // SVG icon constants.
   static const String _svgHead =
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" '
       'width="1em" height="1em" fill="none" stroke="currentColor" '

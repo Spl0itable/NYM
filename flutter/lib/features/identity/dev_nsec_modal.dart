@@ -7,38 +7,30 @@ import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
 import 'modal_chrome.dart';
 
-/// The reserved developer pubkey ("Luxas"), `verifiedDeveloper.pubkey`
-/// (app.js:1092). Picking a reserved nickname requires proving ownership of the
-/// matching nsec before the name is allowed.
+/// The reserved developer pubkey; picking a reserved nick requires proving the matching nsec.
 const String kVerifiedDeveloperPubkey =
     'd49a9023a21dba1b3c8306ca369bf3243d8b44b8f0b6d1196607f7b0990fa8df';
 
-/// Reserved nicknames (`isReservedNick`, users.js:66-69): a name is reserved
-/// when its base (lower-cased, `#suffix` stripped, trimmed) is in this set.
+/// A nick is reserved when its lowercased base, `#suffix` stripped, is in this set.
 const Set<String> kReservedNicks = {'luxas', 'nymbot'};
 
-/// Whether [nick] is a reserved nickname (matches the PWA's `isReservedNick`).
 bool isReservedNick(String nick) {
   final base = nick.toLowerCase().replaceFirst(RegExp(r'#.*$'), '').trim();
   return kReservedNicks.contains(base);
 }
 
-/// Result of a successful developer-nsec verification.
 class DevNsecResult {
   const DevNsecResult({required this.nsec, required this.pubkey});
 
-  /// The verified nsec (as entered), so callers can persist it for auto-login
-  /// (`nymSecretSet('nym_dev_nsec', cmdResult.nsec)`, app.js:2702).
+  /// The verified nsec as entered, so callers can persist it for auto-login.
   final String nsec;
 
-  /// The derived developer pubkey (equals [kVerifiedDeveloperPubkey]).
   final String pubkey;
 }
 
-/// Verifies [nsec] maps to the developer pubkey (`verifyDeveloperNsec`,
-/// users.js:75-86). Returns the result on a match, or null otherwise.
+/// Returns the result when [nsec] maps to the developer pubkey, else null.
 DevNsecResult? verifyDeveloperNsec(String nsec) {
-  // Either form of private key — `nsec1…` or bare 64-char hex.
+  // Accepts `nsec1…` or bare 64-char hex.
   final bytes = normalizePrivkeyInput(nsec);
   if (bytes == null || bytes.length != 32) return null;
   final derived = getPublicKeyHex(bytes);
@@ -48,22 +40,15 @@ DevNsecResult? verifyDeveloperNsec(String nsec) {
   return null;
 }
 
-/// "Reserved Nickname" verification modal (`#devNsecModal`, index.html:995-1014
-/// + `showDevNsecModal`/`verifyDevNsec`, app.js:3159-3190).
-///
-/// Shown when a user picks a reserved nickname ("Luxas" is the developer
-/// handle): a password field for the nsec, an inline error when it doesn't
-/// match, and Cancel/Verify actions. Resolves a [DevNsecResult] on success, or
-/// null on cancel.
+/// "Reserved Nickname" verification modal; resolves a [DevNsecResult] or null on cancel.
 class DevNsecModal extends StatefulWidget {
   const DevNsecModal({super.key});
 
-  /// Opens the modal, resolving the verified result or null (cancel).
   static Future<DevNsecResult?> open(BuildContext context) {
     return showDialog<DevNsecResult>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      // `.modal` has no backdrop close-action — only Cancel / ✕ dismiss it.
+      // No backdrop dismiss; only Cancel or the close button close it.
       barrierDismissible: false,
       builder: (_) => const DevNsecModal(),
     );
@@ -99,7 +84,6 @@ class _DevNsecModalState extends State<DevNsecModal> {
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
-          // `.modal-content`: default max-width 500.
           constraints: const BoxConstraints(maxWidth: 500),
           child: Material(
             color: Colors.transparent,
@@ -117,7 +101,6 @@ class _DevNsecModalState extends State<DevNsecModal> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // `.form-label`.
                             Text(
                               tr('"Luxas" is reserved for the Nymchat developer.'),
                               style: TextStyle(
@@ -128,7 +111,6 @@ class _DevNsecModalState extends State<DevNsecModal> {
                               ),
                             ),
                             const SizedBox(height: 8),
-                            // `.nm-h-19` hint.
                             Text(
                               tr('Paste your nsec to verify your identity:'),
                               style: TextStyle(color: c.textDim, fontSize: 11),
@@ -147,7 +129,6 @@ class _DevNsecModalState extends State<DevNsecModal> {
                             ),
                             if (_error) ...[
                               const SizedBox(height: 6),
-                              // `.nm-h-20` error.
                               Text(
                                 tr('Invalid nsec - does not match the developer '
                                     'pubkey.'),
@@ -157,7 +138,6 @@ class _DevNsecModalState extends State<DevNsecModal> {
                           ],
                         ),
                       ),
-                      // `.modal-actions`: center, gap 10.
                       Padding(
                         padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
                         child: Row(

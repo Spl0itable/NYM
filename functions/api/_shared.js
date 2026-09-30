@@ -2463,7 +2463,7 @@ function signEvent(evt, privkeyHex) {
   return evt;
 }
 
-// NIP-44 v2 encryption (private Nymbot conversations)
+// NIP-44 v2 encryption.
 function botBase64Encode(bytes) {
   var s = "";
   for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
@@ -2552,7 +2552,7 @@ function nip44Encrypt(plaintext, conversationKey) {
   return botBase64Encode(concatBytes(new Uint8Array([2]), nonce, ciphertext, mac));
 }
 
-// NIP-59 gift wrap (Nymbot private replies)
+// NIP-59 gift wrap.
 function secureRandomBelow(n) {
   var buf = new Uint32Array(1);
   var limit = Math.floor(4294967296 / n) * n;
@@ -2596,7 +2596,6 @@ function buildGiftWrappedDM(plaintext, botPrivkey, botPubkey, recipientPubkey) {
   return wrap;
 }
 
-// Build a reply gift wrap addressed to the user plus a self-addressed copy
 function buildGiftWrappedDMPair(plaintext, botPrivkey, botPubkey, recipientPubkey) {
   var rumor = {
     kind: 14,
@@ -2630,7 +2629,6 @@ function buildGiftWrappedDMPair(plaintext, botPrivkey, botPubkey, recipientPubke
   return { event: wrapFor(recipientPubkey), selfEvent: wrapFor(botPubkey) };
 }
 
-// NIP-44 v2 decryption (inverse of nip44Encrypt)
 function botBase64Decode(b64) {
   var s = atob(b64);
   var out = new Uint8Array(s.length);
@@ -2658,11 +2656,10 @@ function nip44Decrypt(payload, conversationKey) {
 }
 
 var BOT_LIGHTNING_ADDRESS = "69420@wallet.yakihonne.com";
-// Backup wallet for every project-owned payment
+// Backup wallet for every project-owned payment.
 var BOT_LIGHTNING_ADDRESS_FALLBACK = "69420@cake.cash";
 
-// Ordered invoice candidates: primary first, backup second, env overrides
-// winning over the built-ins. Duplicates and malformed entries are dropped.
+// Primary first, backup second, env overrides winning; duplicates and malformed entries dropped.
 function botLightningAddresses(env) {
   var out = [];
   var candidates = [
@@ -2708,15 +2705,13 @@ function verifyClientAuth(auth, expectedPubkey, binding) {
     if (auth.pubkey !== expectedPubkey) return false;
     if (auth.kind !== 27235) return false;
     var nowSec = Math.floor(Date.now() / 1000);
-    // Tightened window (was 300s) — auth events are short-lived request proofs.
+    // Auth events are short-lived request proofs.
     var maxAgeSec = binding && binding.maxAgeSec > 0 ? binding.maxAgeSec : AUTH_MAX_AGE_S;
     if (!auth.created_at || Math.abs(nowSec - auth.created_at) > maxAgeSec) return false;
     if (auth.created_at - nowSec > AUTH_MAX_FUTURE_S) return false;
     if (getEventHash(auth) !== auth.id) return false;
     if (!schnorr.verify(auth.sig, auth.id, auth.pubkey)) return false;
-    // Optional request binding (NIP-98 style): tie the signature to the exact
-    // endpoint + method + logical action so a captured auth can't be replayed
-    // against a different action/request.
+    // Optional NIP-98-style binding of endpoint, method and action so a captured auth can't be replayed elsewhere.
     if (binding) {
       var tags = Array.isArray(auth.tags) ? auth.tags : [];
       var tagVal = function (name) {
@@ -2755,8 +2750,7 @@ async function enforceAuthReplay(ledgerCall, env, authId, ttl) {
   return { ok: true };
 }
 
-// Validate a NIP-57 zap receipt (kind 9735) as proof an invoice was paid.
-// Returns an error string, or null when the receipt is valid.
+// NIP-57 zap receipt (kind 9735) check; returns an error string, or null when valid.
 function validateZapReceipt(receipt, pending) {
   if (!receipt || typeof receipt !== "object") return "Zap receipt missing.";
   if (receipt.kind !== 9735) return "Not a zap receipt.";
@@ -2779,7 +2773,6 @@ function validateZapReceipt(receipt, pending) {
   return null;
 }
 
-// Parse a NIP-47 nostr+walletconnect:// URI into its wallet pubkey, relay and secret.
 function parseNwcUri(uri) {
   if (typeof uri !== "string") return null;
   var m = uri.trim().match(/^nostr\+walletconnect:(?:\/\/)?([0-9a-f]{64})(?:\?(.*))?$/i);
@@ -2796,8 +2789,7 @@ function parseNwcUri(uri) {
   return { walletPubkey: m[1].toLowerCase(), relay: relay, secret: secret.toLowerCase() };
 }
 
-// NIP-04 (deprecated; used only as the negotiated fallback for legacy NWC
-// wallets that don't advertise nip44_v2). AES-256-CBC over the ECDH X coordinate.
+// NIP-04, only as the negotiated fallback for legacy NWC wallets without nip44_v2.
 async function nip04Encrypt(privHex, pubHex, text) {
   var key = secp256k1.getSharedSecret(hexToBytes(privHex), hexToBytes("02" + pubHex)).slice(1, 33);
   var ck = await crypto.subtle.importKey("raw", key, { name: "AES-CBC" }, false, ["encrypt"]);
@@ -2814,8 +2806,7 @@ async function nip04Decrypt(privHex, pubHex, payload) {
   return new TextDecoder().decode(pt);
 }
 
-// NIP-47 encryption negotiation from the kind 13194 info event. Prefer nip44_v2;
-// a tag without it, or an absent tag, means the wallet is nip04-only.
+// NIP-47 negotiation from the kind 13194 info event: prefer nip44_v2, otherwise nip04-only.
 function nwcSchemeFromInfo(infoEvt) {
   if (!infoEvt) return "nip44_v2";
   var tag = (infoEvt.tags || []).find(function (t) { return t[0] === "encryption"; });
@@ -2906,10 +2897,7 @@ function nwcReplyAuthentic(evt, walletPubkey, requestId) {
   return tags.some(function (t) { return Array.isArray(t) && t[0] === "e" && t[1] === requestId; });
 }
 
-// Ask the bot wallet directly whether an invoice was paid (NIP-47 lookup_invoice).
-// Negotiates encryption from the wallet's 13194 info event (preferring nip44_v2,
-// falling back to nip04). Independent of LUD-21 verify URLs and NIP-57 receipts,
-// so it works even when the wallet never publishes a zap receipt.
+// NIP-47 lookup_invoice against the bot wallet; works even when the wallet publishes no zap receipt.
 async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
   var cfg = parseNwcUri(nwcUri);
   if (!cfg || !bolt11) return false;
@@ -3043,9 +3031,7 @@ async function nwcInvoicePaid(nwcUri, bolt11, timeoutMs) {
   });
 }
 
-// Authoritative payment check shared by the credit and shop flows. Takes the
-// invoice's own LUD-21 verify URL or NIP-57 receipt first, then falls back to
-// the bot wallet's NWC lookup, which is the only proof some wallets can give.
+// Tries the invoice's LUD-21 verify URL or NIP-57 receipt first, then the bot wallet's NWC lookup.
 async function invoicePaymentConfirmed(env, pending, receipt) {
   if (pending.verifyMethod === "lud21" && pending.verifyUrl) {
     try {
@@ -3062,8 +3048,7 @@ async function invoicePaymentConfirmed(env, pending, receipt) {
   return false;
 }
 
-// Truncate on a character boundary, and drop any orphan that reached us
-// anyway, before the text can be handed to anyone else.
+// Truncate on a character boundary and drop orphan surrogates before handing the text on.
 function truncateText(text, max) {
   var s = typeof text === "string" ? text : String(text == null ? "" : text);
   if (s.length <= max) return s;
@@ -3076,7 +3061,7 @@ function truncateText(text, max) {
 
 function wellFormedText(text) {
   if (typeof text !== "string") return text;
-  // The overwhelmingly common case: no surrogate code units at all.
+  // Common case: no surrogate code units at all.
   if (!/[\uD800-\uDFFF]/.test(text)) return text;
   if (typeof text.isWellFormed === "function" && text.isWellFormed()) return text;
   var out = "";
@@ -3088,9 +3073,9 @@ function wellFormedText(text) {
         out += text.charAt(i) + text.charAt(i + 1);
         i++;
       }
-      // else: a high surrogate with nothing after it — drop it.
+      // A high surrogate with nothing after it: drop it.
     } else if (c >= 0xDC00 && c <= 0xDFFF) {
-      // A low surrogate with no high surrogate before it — drop it.
+      // A low surrogate with no high surrogate before it: drop it.
     } else {
       out += text.charAt(i);
     }
@@ -3100,9 +3085,8 @@ function wellFormedText(text) {
 
 function sanitizeInput(text, max) {
   if (typeof text !== "string") return "";
-  // Truncate excessively long inputs
   text = truncateText(text, max > 0 ? max : 1000);
-  // Strip zero-width and invisible unicode characters used for steganographic injection
+  // Strip zero-width/invisible characters used for steganographic injection.
   text = text.replace(/[\u200B-\u200F\u2028-\u202F\u2060-\u206F\uFEFF]/g, "");
   return wellFormedText(text).trim();
 }

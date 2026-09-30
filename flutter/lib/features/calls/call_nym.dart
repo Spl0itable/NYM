@@ -1,19 +1,3 @@
-// call_nym.dart - Decorated display name for the call UI (overlay tiles, chat
-// from-line, call title, fly-reaction "who" pill, incoming-call name, mention
-// rows). Native port of `calls.js:19-36 _callNymHtml`:
-//
-//   base nym + `#suffix` + purchased flair/supporter badges + verified ✓ badge
-//   (developer/bot) + friend icon.
-//
-// `self` renders a plain "You" with no decorations (calls.js line 21).
-//
-// The verified ✓ and friend badges are the shared [VerifiedBadge] /
-// [FriendBadge] widgets — the PWA reuses the global `.verified-badge` /
-// `.friend-badge` classes in `_callNymHtml`, so the unscoped light-mode
-// darkening (`#1a8cd8` / `#0288d1`, styles-themes-responsive.css:76-78 +
-// 1300-1307) applies in the call UI too. Flair/supporter reuse the shared shop
-// [CosmeticNymBadges] so the glyphs match the rest of the app.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -25,9 +9,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/context_menu/profile_badges.dart';
 import '../i18n/i18n.dart';
 
-/// A decorated call nym: `base` + dim `#suffix` + flair/supporter + verified ✓ +
-/// friend badge. Pass [self] (or a pubkey equal to the local identity) to render
-/// a plain "You" with no decorations.
+/// Decorated call nym (suffix, flair, verified and friend badges); [self] renders a plain "You".
 class CallNym extends ConsumerWidget {
   const CallNym({
     super.key,
@@ -40,19 +22,16 @@ class CallNym extends ConsumerWidget {
     this.badgeSize = 14,
   });
 
-  /// The participant's pubkey (drives suffix + verified/friend/cosmetics).
   final String pubkey;
 
-  /// Optional already-known nym (falls back to `usersProvider`/pubkey prefix).
+  /// Optional already-known nym; falls back to `usersProvider` or the pubkey prefix.
   final String? nym;
 
-  /// Render a plain "You" with no decorations (calls.js `opts.self`).
   final bool self;
 
-  /// Base-nym color (defaults to the surrounding text color).
   final Color? baseColor;
 
-  /// Base-nym text style override (size/weight). Color comes from [baseColor].
+  /// Base-nym text style override; color comes from [baseColor].
   final TextStyle? baseStyle;
 
   final double suffixOpacity;
@@ -91,10 +70,7 @@ class CallNym extends ConsumerWidget {
     // Genesis holders bold the base nym; the suffix stays weight 400.
     final genesis = hasGenesisFlair(cosmetics);
 
-    // The base + dim suffix as a single ellipsizing run. Sized to content in
-    // unbounded parents (Wrap / min-size Row) and ellipsized in bounded ones
-    // (tile / pill with a maxWidth) — so no `Flexible` is needed, which keeps
-    // this safe to drop anywhere in the call UI.
+    // Single ellipsizing run, so no `Flexible` is needed in bounded or unbounded parents.
     final nameRun = Text.rich(
       TextSpan(children: [
         TextSpan(
@@ -139,10 +115,7 @@ class CallNym extends ConsumerWidget {
   }
 }
 
-/// Inline `@mention` highlighting for call-chat text (calls.js
-/// `_formatCallChatText`, lines 1457-1472): `@name#suffix` segments rendered in
-/// the primary color, weight 600. Returns a [TextSpan] tree to drop into a
-/// `Text.rich`.
+/// Highlights `@name#suffix` mentions in call-chat text.
 TextSpan callChatTextSpans(String text, TextStyle base, Color mentionColor) {
   final raw = text;
   final re = RegExp(r'(^|\s)@([^\s#@]+)(#[0-9a-fA-F]{4})?');

@@ -3,14 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-/// Password-protected channel (group) encryption for the mesh — a byte-for-byte
-/// port of bitchat's `NoiseChannelEncryption`. This is how encrypted group chats
-/// work over Bluetooth: members share a channel password, everyone derives the
-/// same AES key, and channel broadcasts are sealed with AES-256-GCM. It is
-/// independent of the 1:1 Noise sessions.
-///
-/// * Key: `PBKDF2-HMAC-SHA256(password, salt = utf8(channelName), 100000, 256)`.
-/// * Message: `AES-256-GCM`, wire layout `IV(12) ‖ ciphertext ‖ tag(16)`.
+/// bitchat mesh channel encryption: PBKDF2-SHA256(password, channel, 100000) key, AES-256-GCM `IV(12)‖ct‖tag(16)`.
 class MeshChannelEncryption {
   MeshChannelEncryption();
 
@@ -23,7 +16,6 @@ class MeshChannelEncryption {
   final Map<String, SecretKey> _channelKeys = {};
   final Map<String, String> _channelPasswords = {};
 
-  /// Derives and stores the AES key for [channel] from [password].
   Future<void> setChannelPassword(String channel, String password) async {
     if (password.isEmpty) return;
     _channelKeys[channel] = await deriveKey(password, channel);
@@ -38,7 +30,7 @@ class MeshChannelEncryption {
   bool hasKey(String channel) => _channelKeys.containsKey(channel);
   String? passwordFor(String channel) => _channelPasswords[channel];
 
-  /// Derives the 256-bit channel key. Exposed for tests/interop checks.
+  /// Derives the 256-bit channel key; exposed for interop tests.
   static Future<SecretKey> deriveKey(String password, String channel) async {
     final pbkdf2 = Pbkdf2(
       macAlgorithm: Hmac.sha256(),
@@ -47,11 +39,10 @@ class MeshChannelEncryption {
     );
     return pbkdf2.deriveKey(
       secretKey: SecretKey(utf8.encode(password)),
-      nonce: utf8.encode(channel), // channel name is the salt
+      nonce: utf8.encode(channel), // Channel name is the salt.
     );
   }
 
-  /// Encrypts [message] for [channel] → `IV(12) ‖ ciphertext ‖ tag(16)`.
   Future<Uint8List> encrypt(String channel, String message) async {
     final key = _channelKeys[channel];
     if (key == null) throw StateError('No key for channel $channel');
@@ -70,7 +61,6 @@ class MeshChannelEncryption {
     return out;
   }
 
-  /// Decrypts `IV(12) ‖ ciphertext ‖ tag(16)` for [channel].
   Future<String> decrypt(String channel, Uint8List data) async {
     final key = _channelKeys[channel];
     if (key == null) throw StateError('No key for channel $channel');

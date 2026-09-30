@@ -6,21 +6,7 @@ import '../../models/nostr_event.dart';
 import '../../services/api/storage_sync.dart';
 import '../../services/nostr/verified_rows.dart';
 
-/// Ports the PWA's zap-receipt D1 archive (zaps.js:29-93):
-///
-///  * every valid public kind-9735 receipt observed (inbound OR our own
-///    published announce) is queued for an authed `zap-put`, deduped by event
-///    id (cap 6000, trimmed to 4000), flushed after 4s in batches of 100
-///    (`_archiveZapReceipt` / `_flushZapArchive`);
-///  * message-history hydration backfills archived receipts via the public
-///    NDJSON `zap-get` (`_backfillZapReceipts` / `_backfillZapReceiptsFromD1`),
-///    feeding each through the SAME ingest path live receipts take.
-///
-/// The archive scope comes from the `k` tag inside the receipt's zap-request
-/// `description`: 20000/23333 → `channel`, 1059 → `pm`, 0 → `profile`
-/// (zaps.js:46-56). Channel/pm receipts must carry a hex64 `e` tag (the
-/// zapped message id); profile receipts have none (the server keys them on
-/// the recipient pubkey).
+/// D1 archive of public kind-9735 receipts: batched `zap-put` uploads and `zap-get` backfill.
 class ZapArchive {
   ZapArchive(this._sync, {Future<bool> Function(NostrEvent event)? verify})
       : _verify = verify ?? _verifyInline;
@@ -31,11 +17,10 @@ class ZapArchive {
   static Future<bool> _verifyInline(NostrEvent event) async =>
       schnorr.verifyEvent(event);
 
-  /// Session receipt-id dedup (`_zapArchivedIds`, cap 6000 → trim 4000).
+  /// Session receipt-id dedup (cap 6000, trimmed to 4000).
   final Set<String> _archivedIds = <String>{};
 
-  /// Pending receipts awaiting the debounced `zap-put` (`_zapArchiveQueue`,
-  /// cap 300 — oldest dropped).
+  /// Pending receipts for the debounced `zap-put` (cap 300, oldest dropped).
   final List<Map<String, dynamic>> _queue = <Map<String, dynamic>>[];
 
   Timer? _flushTimer;
@@ -43,9 +28,7 @@ class ZapArchive {
 
   static final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
 
-  /// The archive scope from the receipt's `description` zap request
-  /// (zaps.js:46-56): `'channel'` | `'pm'` | `'profile'`, or null when the
-  /// description is absent/unparseable or its `k` tag isn't one we archive.
+  /// Archive scope from the receipt's zap-request `k` tag, or null if absent or not archived.
   static String? scopeFor(NostrEvent event) {
     final description = event.tagValue('description');
     if (description == null || description.isEmpty) return null;
@@ -64,22 +47,18 @@ class ZapArchive {
         }
       }
     } catch (_) {
-      // Ignore parse errors (zaps.js:55).
+      // Ignore parse errors.
     }
     return null;
   }
 
-  /// Queues [event] (a kind-9735 receipt WITH a bolt11 — the caller gates on
-  /// that, zaps.js:1164) for the batched `zap-put`. No-ops on a non-receipt,
-  /// an unarchivable scope, a channel/pm receipt without a hex64 `e` tag, or
-  /// an id already archived this session. Mirrors `_archiveZapReceipt`.
+  /// Queues a bolt11-bearing receipt for `zap-put`; skips unarchivable scopes, missing `e` tags and repeats.
   void archive(NostrEvent event) {
     if (_disposed) return;
     if (event.kind != 9735 || event.id.isEmpty) return;
     final scope = scopeFor(event);
     if (scope == null) return;
-    // Channel/pm zaps key on the zapped event id; profile zaps have no e tag
-    // (the server keys them on the recipient pubkey instead).
+    // Channel/pm zaps key on the zapped event id; profile zaps are keyed on the recipient server-side.
     if (scope != 'profile') {
       final targetId = event.tagValue('e');
       if (targetId == null || !_hex64.hasMatch(targetId)) return;
@@ -96,8 +75,7 @@ class ZapArchive {
     _flushTimer ??= Timer(const Duration(seconds: 4), _flush);
   }
 
-  /// Sends one 100-receipt batch (`zap-put`), re-arming the 4s timer while a
-  /// backlog remains (`_flushZapArchive`).
+  /// Sends one 100-receipt batch, re-arming the 4s timer while a backlog remains.
   Future<void> _flush() async {
     _flushTimer = null;
     if (_disposed || _queue.isEmpty) return;
@@ -110,12 +88,7 @@ class ZapArchive {
     }
   }
 
-  /// Backfills archived receipts for the zapped-message [ids] from D1
-  /// (`_backfillZapReceiptsFromD1`): a public `zap-get` for [scope]
-  /// (`'pm'` | `'channel'` | `'profile'`), routing every returned receipt
-  /// through [onReceipt] — the same handler live kind-9735 events take
-  /// (`handleZapReceipt`). Ids are validated/deduped and capped at 500
-  /// (`_backfillZapReceipts`). Best-effort; failures are swallowed.
+  /// Backfills receipts for [ids] (max 500) through [onReceipt]; best-effort.
   Future<void> backfill(
     List<String> ids,
     String scope,
@@ -130,7 +103,7 @@ class ZapArchive {
     }
   }
 
-  /// Cancels the pending flush (identity switch / shutdown).
+  /// Cancels the pending flush on identity switch or shutdown.
   void dispose() {
     _disposed = true;
     _flushTimer?.cancel();

@@ -1,4 +1,4 @@
-/* Shared base classes (used across index.html and multiple JS modules) */
+/* Shared base classes (used across index.html and multiple JS modules). */
 
 html .nm-hidden { display: none; }
 .nm-vam { vertical-align: middle; }
@@ -180,10 +180,10 @@ html .nm-hidden { display: none; }
 .nm-tr-6 { padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--glass-border); background: rgba(255,255,255,0.04); color: var(--text); cursor: pointer; font-size: 0.9em; transition: background 0.12s, border-color 0.12s; text-align: left; }
 .translate-lang-option.selected { background: rgba(255,255,255,0.12); border-color: var(--primary); color: var(--text-bright); }
 .translate-lang-option:disabled { opacity: 0.5; cursor: default; }
-/* The English name under the endonym, so a list stays scannable either way */
+/* The English name under the endonym. */
 .translate-lang-sub { display: block; margin-top: 2px; font-size: 0.78em; color: var(--text-dim); }
 
-/* i18n.js — app-wide UI translation */
+/* i18n.js */
 .nym-i18n-bg-indicator { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 8px; color: var(--text-dim); font-size: 11px; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }
 .nym-i18n-bg-indicator.visible { opacity: 1; }
 .nym-i18n-bg-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

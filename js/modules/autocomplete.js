@@ -1,14 +1,10 @@
-// autocomplete.js - Emoji, channel, mention, and command autocomplete UI
-
 Object.assign(NYM.prototype, {
 
-    // No longer needed - geohash links navigate directly
     insertMention(nym) {
         const input = document.getElementById('messageInput');
         const currentValue = input.value;
         const mention = `@${nym} `;
 
-        // Insert at cursor position or append
         const start = input.selectionStart;
         const end = input.selectionEnd;
 
@@ -25,21 +21,16 @@ Object.assign(NYM.prototype, {
     showEmojiAutocomplete(search) {
         const dropdown = document.getElementById('emojiAutocomplete');
 
-        // Build complete emoji list from all categories
         const allEmojiEntries = [];
 
-        // Add emoji shortcodes
         Object.entries(this.emojiMap).forEach(([name, emoji]) => {
             allEmojiEntries.push({ name, emoji, priority: 1 });
         });
 
-        // Add all categorized emojis with searchable names
         Object.entries(this.allEmojis).forEach(([category, emojis]) => {
             emojis.forEach(emoji => {
-                // Try to find a name for this emoji in emojiMap
                 const existingEntry = allEmojiEntries.find(e => e.emoji === emoji);
                 if (!existingEntry) {
-                    // Generate a searchable name from the emoji itself
                     allEmojiEntries.push({
                         name: emoji,
                         emoji,
@@ -49,17 +40,14 @@ Object.assign(NYM.prototype, {
             });
         });
 
-        // Add NIP-30 custom emoji (inserted as :shortcode: tokens)
         if (this.customEmojis) {
             this.customEmojis.forEach((url, shortcode) => {
                 allEmojiEntries.push({ name: shortcode, emoji: `:${shortcode}:`, priority: 1, customUrl: url });
             });
         }
 
-        // Filter based on search
         let matches = [];
         if (search === '') {
-            // Show recent emojis first, then common ones
             const recentSet = new Set(this.recentEmojis);
             matches = [
                 ...this.recentEmojis.map(emoji => ({
@@ -78,17 +66,13 @@ Object.assign(NYM.prototype, {
                 .sort((a, b) => {
                     const aName = a.name.toLowerCase();
                     const bName = b.name.toLowerCase();
-                    // Exact match first
                     const aExact = aName === searchLower ? 0 : 1;
                     const bExact = bName === searchLower ? 0 : 1;
                     if (aExact !== bExact) return aExact - bExact;
-                    // Prefix match before substring match
                     const aPrefix = aName.startsWith(searchLower) ? 0 : 1;
                     const bPrefix = bName.startsWith(searchLower) ? 0 : 1;
                     if (aPrefix !== bPrefix) return aPrefix - bPrefix;
-                    // Then by priority (emojiMap entries before category-only)
                     if (a.priority !== b.priority) return a.priority - b.priority;
-                    // Shorter names first (more likely what user wants)
                     return aName.length - bName.length;
                 })
                 .slice(0, 8);
@@ -126,8 +110,7 @@ Object.assign(NYM.prototype, {
             }
             const nameSpan = document.createElement('span');
             nameSpan.className = 'emoji-item-name';
-            // `name` may already be a :shortcode: token (custom emoji recents) —
-            // strip wrapping colons so the label isn't shown as ::shortcode::.
+            // Strip wrapping colons so custom emoji recents aren't shown as ::shortcode::.
             nameSpan.textContent = `:${String(name).replace(/^:+|:+$/g, '')}:`;
             item.appendChild(emojiSpan);
             item.appendChild(nameSpan);
@@ -278,7 +261,6 @@ Object.assign(NYM.prototype, {
         const currentChannelKey = this.currentGeohash || this.currentChannel;
         const priorityPubkeys = this._mentionPriorityPubkeys();
 
-        // Collect users with effective status (matching sidebar logic)
         const channelActiveUsers = [];
         const channelAwayUsers = [];
         const channelOfflineUsers = [];
@@ -287,7 +269,6 @@ Object.assign(NYM.prototype, {
         const otherOfflineUsers = [];
 
         this.users.forEach((user, pubkey) => {
-            // Create formatted nym for matching
             const baseNym = this.stripPubkeySuffix(user.nym);
             const suffix = this.getPubkeySuffix(pubkey);
             const searchableNym = `${baseNym}#${suffix}`;
@@ -323,7 +304,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Sort each group alphabetically
         const sortAlpha = (a, b) => a.searchableNym.localeCompare(b.searchableNym);
         channelActiveUsers.sort(sortAlpha);
         channelAwayUsers.sort(sortAlpha);
@@ -332,7 +312,6 @@ Object.assign(NYM.prototype, {
         otherAwayUsers.sort(sortAlpha);
         otherOfflineUsers.sort(sortAlpha);
 
-        // Channel members first (active > away > offline), then others (active > away > offline)
         const allUsers = [
             ...channelActiveUsers, ...channelAwayUsers, ...channelOfflineUsers,
             ...otherActiveUsers, ...otherAwayUsers, ...otherOfflineUsers
@@ -357,7 +336,7 @@ Object.assign(NYM.prototype, {
         img.className = 'avatar-message';
         img.alt = '';
         img.loading = 'lazy';
-        // Avatar fallback is handled by the delegated error listener in inline-bindings.js
+        // Avatar fallback is handled by the delegated error listener in inline-bindings.js.
         if (safePk) img.dataset.avatarPubkey = safePk;
         wrap.appendChild(img);
         const dot = document.createElement('span');
@@ -369,7 +348,7 @@ Object.assign(NYM.prototype, {
         return item;
     },
 
-    // Reconcile dropdown rows in place so avatars don't reload (flicker) on refresh
+    // Reconcile rows in place so avatars don't reload and flicker.
     _reconcileAutocompleteItems(dropdown, allUsers) {
         const existing = new Map();
         for (const el of dropdown.querySelectorAll('.autocomplete-item')) {
@@ -450,8 +429,7 @@ Object.assign(NYM.prototype, {
         const value = input.value;
         const lastAtIndex = value.lastIndexOf('@');
 
-        // Insert "@base#suffix" so the mention resolves to one specific pubkey,
-        // matching keyboard selection — identically-named users aren't cross-notified.
+        // Insert "@base#suffix" so the mention resolves to one pubkey and namesakes aren't notified.
         const baseNym = this.stripPubkeySuffix(nym);
         const suffix = this.getPubkeySuffix(pubkey);
         input.value = value.substring(0, lastAtIndex) + '@' + baseNym + '#' + suffix + ' ';
@@ -509,7 +487,6 @@ Object.assign(NYM.prototype, {
             const value = input.value;
             const lastAtIndex = value.lastIndexOf('@');
 
-            // Use base nym with suffix
             const baseNym = this.stripPubkeySuffix(nym);
             const suffix = this.getPubkeySuffix(pubkey);
             input.value = value.substring(0, lastAtIndex) + '@' + baseNym + '#' + suffix + ' ';
@@ -521,11 +498,9 @@ Object.assign(NYM.prototype, {
     showChannelAutocomplete(search) {
         const dropdown = document.getElementById('channelAutocomplete');
 
-        // Collect all known channels from multiple sources
         const channelMap = new Map(); // geohash -> { name, messageCount, isJoined, isCurrent }
         const currentKey = this.currentGeohash || this.currentChannel;
 
-        // From messages Map (channels we have messages for)
         this.messages.forEach((msgs, key) => {
             if (key.startsWith('#')) {
                 const name = key.substring(1);
@@ -538,7 +513,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // From channels Map (sidebar channels)
         this.channels.forEach((value, key) => {
             if (!channelMap.has(key)) {
                 const msgCount = (this.messages.get(`#${key}`) || []).length;
@@ -551,7 +525,6 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // From commonGeohashes
         this.commonGeohashes.forEach(g => {
             if (!channelMap.has(g)) {
                 const msgCount = (this.messages.get(`#${g}`) || []).length;
@@ -564,13 +537,11 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Filter by search, excluding invalid channel names
         const validChannelPattern = /^[\p{L}\p{N}]+$/u;
         const searchLower = search.toLowerCase();
         let matches = Array.from(channelMap.values())
             .filter(ch => validChannelPattern.test(ch.name) && ch.name.toLowerCase().includes(searchLower));
 
-        // Sort: current first, then joined with messages, then joined, then by name
         matches.sort((a, b) => {
             if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
             if (a.isJoined !== b.isJoined) return a.isJoined ? -1 : 1;
@@ -684,14 +655,12 @@ Object.assign(NYM.prototype, {
     insertChannelReference(channel) {
         const input = document.getElementById('messageInput');
         const value = input.value;
-        // Find the last # that triggered the autocomplete
         const lastHash = value.lastIndexOf('#');
         if (lastHash !== -1) {
             input.value = value.substring(0, lastHash) + '#' + channel + ' ';
         }
         input.focus();
         this.hideChannelAutocomplete();
-        // Trigger input change to update other autocompletes
         this.handleInputChange(input.value);
     },
 

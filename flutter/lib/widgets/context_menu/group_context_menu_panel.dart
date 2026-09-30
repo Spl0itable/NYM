@@ -25,28 +25,7 @@ import '../nym_icons.dart';
 import 'context_menu_actions.dart';
 import 'context_menu_panel.dart';
 
-/// The `#groupContextMenu` slide-in panel (PWA `showGroupContextMenu`,
-/// groups.js:2987-3088). A right-side panel mirroring the user context menu's
-/// chrome (width 320, `translateX(100%)→0` over 150ms, dimmed barrier) that:
-///
-///  * shows the group banner + icon + name + member count + description,
-///  * renders the owner-gated metadata controls (Edit Name / Description,
-///    Change/Remove Avatar+Banner, Transfer Ownership, the allow-member-invites
-///    toggle, the allow-invite-join toggle + Reset Invite Link), the
-///    Add-Members picker (owner or invite-allowed member), and the all-members
-///    **Leave Group** danger row — wired to [NostrController]
-///    (`updateGroupMetadata` / `setGroupAllowInvites` / `setGroupInviteEnabled`
-///    / `rotateGroupInviteEpoch` / `addGroupMembers` / `transferOwner` /
-///    `leaveGroup`),
-///  * shows the owner/inviter invite-link block (selectable URL + Copy Invite
-///    Link), built locally from group state (`buildGroupInviteLink`),
-///  * lists the members (owner → mods → members) with a role badge; tapping a
-///    member opens that user's context menu, which carries the group's
-///    PM / kick / ban / promote / make-owner actions gated by role (via
-///    `buildContextMenuActions` with the group context), and shows a back
-///    chevron that returns here (`backToGroupId`).
-///
-/// Role gates are read-only from group state (`group.createdBy` / `group.mods`).
+/// Right-side group context-menu panel: header, role-gated owner/member controls, invite link, and member list.
 class GroupContextMenuPanel extends ConsumerStatefulWidget {
   const GroupContextMenuPanel({
     super.key,
@@ -59,14 +38,12 @@ class GroupContextMenuPanel extends ConsumerStatefulWidget {
   final Animation<double> animation;
   final VoidCallback onClose;
 
-  /// Presents the panel in the root overlay with the slide-in transition,
-  /// mirroring [ContextMenuPanel.show].
   static Future<void> show(BuildContext context, String groupId) {
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
       barrierLabel: tr('group context menu'),
-      barrierColor: const Color(0x99000000), // rgba(0,0,0,0.6)
+      barrierColor: const Color(0x99000000),
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim, _) => const SizedBox.shrink(),
       transitionBuilder: (ctx, anim, _, __) => Align(
@@ -86,9 +63,7 @@ class GroupContextMenuPanel extends ConsumerStatefulWidget {
 }
 
 class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
-  /// "Select a member to make owner" mode (PWA `_groupCtxTransferMode`,
-  /// groups.js:3120). When on, member taps pick the new owner instead of opening
-  /// the user menu.
+  /// While on, member taps pick the new owner instead of opening the user menu.
   bool _transferMode = false;
 
   Group? _group(AppState s) {
@@ -123,15 +98,11 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         height: double.infinity,
         child: Container(
           decoration: BoxDecoration(
-            // `.context-menu` under `body.solid-ui` (default) → `var(--glass-bg)`
-            // opaque surface (matches the sidebar/chat-header), painted on the
-            // full-height Container so it fills the whole viewport
-            // (`.context-menu { height: 100vh }`), not just the content.
             color: c.glassBg,
             border: Border(left: BorderSide(color: c.glassBorder)),
             boxShadow: const [
               BoxShadow(
-                color: Color(0x66000000), // rgba(0,0,0,0.4)
+                color: Color(0x66000000),
                 blurRadius: 24,
                 offset: Offset(-4, 0),
               ),
@@ -143,9 +114,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
                 type: MaterialType.transparency,
                 child: SafeArea(child: body),
               ),
-              // Offset by the status-bar inset — the PWA's `top:14px` viewport
-              // already starts below the system chrome; without this the X
-              // sits under the status bar and can't be tapped.
+              // Offset by the status-bar inset, or the ✕ sits under the status bar and can't be tapped.
               Positioned(
                 top: MediaQuery.of(context).padding.top + 14,
                 right: 14,
@@ -164,7 +133,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final iCanAdminister = GroupLogic.canAdminister(group, self);
     final iCanModerate = GroupLogic.canModerate(group, self);
 
-    // Sort members: owner → mods → members (PWA `_memberRoleRank`).
     final sorted = [...group.members]
       ..sort((a, b) => _roleRank(group, a).compareTo(_roleRank(group, b)));
 
@@ -175,8 +143,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _header(c, group),
-          // `.context-menu-bio`: a separate, left-aligned block below the header
-          // with its own bottom hairline; collapses when empty (:empty).
           if (description.isNotEmpty)
             Container(
               width: double.infinity,
@@ -191,8 +157,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
                 style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
               ),
             ),
-          // Owner/member management rows (role-gated). `.context-menu-actions`:
-          // 6px padding + a 1px white@0.06 top hairline.
           Container(
             padding: const EdgeInsets.all(6),
             decoration: BoxDecoration(
@@ -205,8 +169,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
               children: _actionRows(c, group, iAmOwner, iCanAdminister),
             ),
           ),
-          // `.group-ctx-members-title`: 12px uppercase, 0.04em tracking,
-          // text-dim, padding 10/16/4, with a 1px white@0.06 top hairline.
           Container(
             width: double.infinity,
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
@@ -255,18 +217,12 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // Header (banner + icon + name + member count + invite link)
-  // ---------------------------------------------------------------------------
-
   Widget _header(NymColors c, Group group) {
     final bannerUrl = proxiedAvatarUrl(group.banner);
     final hasBanner = bannerUrl != null && bannerUrl.isNotEmpty;
     final avatarUrl = proxiedAvatarUrl(group.avatar);
 
-    // The PWA group menu *always* carries `has-banner` (groups.js:3001): a
-    // custom banner image when set, else a default gradient banner. The icon
-    // gets a 3px rgba(20,20,35,0.95) ring + bg and overlaps the banner by -36px.
+    // The PWA group menu always has a banner: the custom image, else a default gradient.
     final icon = SizedBox(
       width: 64,
       height: 64,
@@ -283,8 +239,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           : _defaultGroupIcon(c),
     );
 
-    // The 140px banner: custom image, else the default 135° primary→secondary
-    // gradient (both at 0.45 alpha) — `.group-ctx-default-banner`.
     final banner = SizedBox(
       height: 140,
       width: double.infinity,
@@ -309,7 +263,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ),
       child: Column(
         children: [
-          // Group name (`.context-menu-avatar-nym`): 13px / w600 / secondary.
           Text(
             group.name.isEmpty ? tr('Group') : group.name,
             textAlign: TextAlign.center,
@@ -326,15 +279,11 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
                 : tr('{count} members', {'count': group.members.length}),
             style: TextStyle(color: c.textDim, fontSize: 12),
           ),
-          // Invite-link row + Copy (owner/inviter only) — fills the same slot as
-          // the user menu's pubkey block (groups.js:3031-3041).
           ..._inviteLinkRows(c, group),
         ],
       ),
     );
 
-    // Banner with the icon straddling its bottom edge (`margin-top:-36px`),
-    // mirroring the user menu's banner overlap. The icon carries a 3px ring.
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -353,8 +302,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
             child: Container(
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                // `.has-banner .group-ctx-icon` ring/disc: rgba(20,20,35,0.95)
-                // dark; light-mode flips it to rgba(255,255,255,0.95).
                 color: _bannerRing(c),
                 border: Border.fromBorderSide(
                   BorderSide(color: _bannerRing(c), width: 3),
@@ -368,13 +315,9 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     );
   }
 
-  /// The banner-avatar ring/disc color (`.has-banner .group-ctx-icon`):
-  /// `rgba(20,20,35,0.95)` dark; `rgba(255,255,255,0.95)` light.
   Color _bannerRing(NymColors c) =>
       c.isLight ? const Color(0xF2FFFFFF) : const Color(0xF2141423);
 
-  /// The `.group-ctx-default-banner`: a 135° gradient from `--primary`@0.45 to
-  /// `--secondary`@0.45.
   Widget _defaultBanner(NymColors c) {
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -390,10 +333,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     );
   }
 
-  /// The header invite-link block: a selectable `.ctx-full-pubkey`-style URL +
-  /// a "Copy Invite Link" `.context-menu-copy-pubkey` row, both shown only when
-  /// the self user can add members AND invite links are enabled
-  /// (groups.js `buildGroupInviteLink`: returns null otherwise).
+  /// Shown only when self can add members and invite links are enabled.
   List<Widget> _inviteLinkRows(NymColors c, Group group) {
     final self = ref.read(appStateProvider).selfPubkey;
     final link = _buildInviteLink(group, self);
@@ -430,10 +370,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     ];
   }
 
-  /// Builds the `#gjoin=<token>` invite URL exactly as the PWA
-  /// `buildGroupInviteLink` does: null unless invites are enabled AND the self
-  /// user can add members; payload `{v,g,n,a,e}` base64url-encoded onto the
-  /// canonical web host.
+  /// Builds the `#gjoin=<token>` invite URL like the PWA; null unless invites are enabled and self can add members.
   String? _buildInviteLink(Group group, String self) {
     if (!group.inviteEnabled) return null;
     if (!group.canAddMembers(self)) return null;
@@ -451,20 +388,12 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   }
 
   Widget _defaultGroupIcon(NymColors c) {
-    // `.group-ctx-icon`: `--primary` (green) 34px glyph. The base rule fills
-    // white@0.06, but the live group menu always has a banner, so
-    // `.has-banner .group-ctx-icon` overrides the bg to rgba(20,20,35,0.95)
-    // (supplied by the surrounding ring Container) — keep this transparent so
-    // that dark disc shows through behind the glyph.
+    // Transparent so the banner ring's dark disc shows behind the glyph.
     return Container(
       alignment: Alignment.center,
       child: NymSvgIcon(NymIcons.groupGlyph, size: 34, color: c.primary),
     );
   }
-
-  // ---------------------------------------------------------------------------
-  // Action rows (role-gated owner/member controls)
-  // ---------------------------------------------------------------------------
 
   List<Widget> _actionRows(
       NymColors c, Group group, bool iAmOwner, bool iCanAdminister) {
@@ -492,8 +421,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         onTap: () => _changeImage(group, avatar: true),
       ));
       if ((group.avatar ?? '').isNotEmpty) {
-        // No distinct PWA glyph for "Remove Avatar" (the PWA only offers the
-        // change rows); reuse the avatar glyph so the row stays on-brand.
+        // The PWA has no "Remove Avatar" glyph, so reuse the avatar one.
         rows.add(_ActionRow(
           svg: NymIcons.groupChangeAvatar,
           label: tr('Remove Avatar'),
@@ -517,7 +445,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       }
     }
 
-    // Transfer Ownership — enters member-pick mode (PWA `groupCtxTransferOwner`).
     if (iAmOwner && group.members.length > 1) {
       rows.add(_ActionRow(
         svg: NymIcons.ctxTransferOwner,
@@ -527,7 +454,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ));
     }
 
-    // groups.js `groupCtxToggleInviteJoin`).
     if (iCanAdminister) {
       rows.add(_ActionRow(
         svg: group.inviteEnabled
@@ -537,8 +463,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         color: c.text,
         onTap: () => _toggleInviteJoin(group),
       ));
-      // Reset Invite Link — owner-only, shown only when invite joining is on
-      // (groups.js `groupCtxResetInviteLink`).
+      // Reset Invite Link shows only when invite joining is on.
       if (group.inviteEnabled) {
         rows.add(_ActionRow(
           svg: NymIcons.groupResetInvite,
@@ -549,7 +474,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       }
     }
 
-    // groups.js `groupCtxToggleInvites`).
     if (iCanAdminister) {
       rows.add(_ActionRow(
         svg: group.allowMemberInvites
@@ -559,8 +483,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         color: c.text,
         onTap: () => _toggleAllowInvites(group),
       ));
-      // Share history with new members (owner-only checkbox row, PWA
-      // `groupCtxToggleShareHistory`).
       rows.add(_ActionRow(
         svg: group.shareHistory
             ? NymIcons.checkboxChecked
@@ -571,7 +493,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ));
     }
 
-    // Add Members — owner, or a member when member-invites are allowed.
+    // Owner, or any member when member invites are allowed.
     if (canAdd) {
       rows.add(_ActionRow(
         svg: NymIcons.groupAddMembers,
@@ -581,7 +503,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ));
     }
 
-    // Leave Group — available to every member (danger, confirmed).
     rows.add(_ActionRow(
       svg: NymIcons.groupLeave,
       label: tr('Leave Group'),
@@ -592,12 +513,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     return rows;
   }
 
-  // ---------------------------------------------------------------------------
-  // Owner / membership action handlers (wired to NostrController).
-  // ---------------------------------------------------------------------------
-
-  /// Owner: prompt for a new name → `updateGroupMetadata(name:)`
-  /// (groups.js `groupCtxEditName`).
   Future<void> _editName(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     final name = await showAppPrompt(
@@ -612,8 +527,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     await controller.updateGroupMetadata(group.id, name: name);
   }
 
-  /// Owner: prompt for a description → `updateGroupMetadata(description:)`
-  /// (groups.js `groupCtxEditDescription`).
   Future<void> _editDescription(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     final desc = await showAppPrompt(
@@ -629,8 +542,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     await controller.updateGroupMetadata(group.id, description: desc);
   }
 
-  /// Owner: pick an image, upload it (Blossom), then set it as the group
-  /// avatar/banner via `updateGroupMetadata` (groups.js `_setGroupImage`).
   Future<void> _changeImage(Group group, {required bool avatar}) async {
     final controller = ref.read(nostrControllerProvider);
     Uint8List? bytes;
@@ -642,7 +553,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       bytes = await File(file.path).readAsBytes();
       contentType = _contentTypeFor(file.path);
     } catch (_) {
-      // Picker unavailable (tests / desktop) — nothing to do.
+      // Picker unavailable (tests/desktop).
       return;
     }
     final url = await controller.uploadImage(bytes, contentType: contentType);
@@ -654,8 +565,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     }
   }
 
-  /// Owner: clear the avatar/banner via `updateGroupMetadata('')`
-  /// (groups.js `_clearGroupImage`).
   Future<void> _removeImage(Group group, {required bool avatar}) async {
     final controller = ref.read(nostrControllerProvider);
     if (avatar) {
@@ -665,24 +574,17 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     }
   }
 
-  /// Owner: flip the "members can add others" permission → `setGroupAllowInvites`
-  /// (groups.js `groupCtxToggleInvites`).
   Future<void> _toggleAllowInvites(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     await controller.setGroupAllowInvites(group.id, !group.allowMemberInvites);
   }
 
-  /// Owner: flip "share history with new members" → `setGroupShareHistory`
-  /// (PWA `groupCtxToggleShareHistory`).
   Future<void> _toggleShareHistory(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     await controller.setGroupShareHistory(group.id, !group.shareHistory);
   }
 
-  /// Owner: flip "allow joining via invite link" → `setGroupInviteEnabled`
-  /// (groups.js `groupCtxToggleInviteJoin`). Closes the menu first, mirroring
-  /// the PWA which closes then toggles. The controller mutates the group,
-  /// bumps `metaUpdatedAt`, and rebroadcasts the metadata.
+  /// Closes the menu first, then toggles, as the PWA does.
   Future<void> _toggleInviteJoin(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     final next = !group.inviteEnabled;
@@ -690,8 +592,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     await controller.setGroupInviteEnabled(group.id, next);
   }
 
-  /// Owner: rotate the invite epoch so previously-shared links stop working
-  /// (groups.js `groupCtxResetInviteLink`). Confirms first, then rotates.
+  /// Rotates the invite epoch so previously shared links stop working.
   Future<void> _resetInviteLink(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     final ok = await showAppConfirm(
@@ -706,16 +607,13 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     await controller.rotateGroupInviteEpoch(group.id);
   }
 
-  /// Add Members: pick recipients (nym / pubkey / npub) → `addGroupMembers`
-  /// (groups.js `groupCtxAddMembers` → `openAddMembersModal`).
   Future<void> _addMembers(Group group) async {
     final picked = await _AddMembersDialog.show(context, group);
     if (picked == null || picked.isEmpty) return;
     await ref.read(nostrControllerProvider).addGroupMembers(group.id, picked);
   }
 
-  /// Leave Group: danger confirm → `leaveGroup` (groups.js `groupCtxLeave`).
-  /// Closes the panel first so it isn't left over the (now-gone) group.
+  /// Closes the panel first so it isn't left over the departed group.
   Future<void> _leaveGroup(Group group) async {
     final controller = ref.read(nostrControllerProvider);
     final name = group.name.isEmpty ? tr('this group') : '"${group.name}"';
@@ -739,10 +637,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     if (lower.endsWith('.webp')) return 'image/webp';
     return 'image/jpeg';
   }
-
-  // ---------------------------------------------------------------------------
-  // Member rows
-  // ---------------------------------------------------------------------------
 
   int _roleRank(Group group, String pubkey) =>
       GroupLogic.roleRank(group, pubkey);
@@ -781,8 +675,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final isAdmin = !isOwner && group.admins.contains(pubkey);
     final isMod = !isOwner && !isAdmin && group.mods.contains(pubkey);
 
-    // PWA `.group-ctx-member-avatar` is a bare 30×30 `<img>` — no status dot
-    // (the live member row is avatar + name + role badge only).
     return _MemberTile(
       colors: c,
       avatar: NymAvatar(
@@ -802,17 +694,12 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
 
   void _onMemberTap(Group group, String pubkey, String base, bool isSelf) {
     if (_transferMode) {
-      // Pick the new owner (PWA `_openMemberFromGroupCtx` transfer branch). The
-      // confirm dialog runs on THIS (still-mounted) panel; only on confirm do we
-      // pop + transfer, so `ref` stays valid.
+      // Confirm runs on this still-mounted panel; only on confirm do we pop and transfer, so `ref` stays valid.
       setState(() => _transferMode = false);
       _confirmTransfer(group.id, pubkey, base);
       return;
     }
-    // Open the user's context menu carrying this group as the back target so it
-    // shows a "back" chevron and the group kick/ban/mod actions stay visible
-    // (PWA `_openMemberFromGroupCtx`: showContextMenu(..., backToGroupId)).
-    // Capture the root navigator context before popping (ours is then defunct).
+    // Open the member's menu with this group as back target; capture the root navigator before popping.
     final rootContext = Navigator.of(context, rootNavigator: true).context;
     widget.onClose();
     final target = CtxTarget(
@@ -831,9 +718,6 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   Future<void> _confirmTransfer(
       String groupId, String pubkey, String base) async {
     final controller = ref.read(nostrControllerProvider);
-    // `.app-dialog` confirm — the PWA member-transfer branch runs
-    // `showAppConfirm(\`Transfer group ownership to ${nym}? You will lose owner
-    // privileges.\`, { danger: true, okLabel: 'Transfer' })` (groups.js:3136).
     final ok = await showAppConfirm(
       context,
       tr('Transfer group ownership to {name}? You will lose owner privileges.',
@@ -842,15 +726,13 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       danger: true,
     );
     if (ok) {
-      // Close the group menu, then run the transfer with the captured
-      // controller (safe even after this panel disposes).
+      // The captured controller is safe even after this panel disposes.
       widget.onClose();
       await controller.transferOwner(groupId, pubkey);
     }
   }
 }
 
-/// A `.context-menu-item` management row (icon + label + optional trailing).
 class _ActionRow extends StatefulWidget {
   const _ActionRow({
     required this.svg,
@@ -874,9 +756,6 @@ class _ActionRowState extends State<_ActionRow> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final isNeutral = widget.color == c.text;
-    // Neutral rows shift label + icon to `--primary` on hover
-    // (`.context-menu-item:hover { color: var(--primary) }`); colored rows keep
-    // their resting tint.
     final Color labelColor = isNeutral && _hover ? c.primary : widget.color;
     final Color iconColor =
         isNeutral ? (_hover ? c.primary : c.textDim) : widget.color;
@@ -899,7 +778,6 @@ class _ActionRowState extends State<_ActionRow> {
           child: Row(
             children: [
               NymSvgIcon(widget.svg, size: 16, color: iconColor),
-              // `.nm-ico8` → margin-right:8px on the leading SVG.
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -919,9 +797,6 @@ class _ActionRowState extends State<_ActionRow> {
   }
 }
 
-/// `.context-menu-copy-pubkey` row reading "Copy Invite Link" (groups.js
-/// `grpCtxCopyInvite`): 3×8 padding, radius 6, hover white@0.08 bg + primary
-/// text; copy glyph + label. Copies the link + closes on tap.
 class _CopyInviteRow extends StatefulWidget {
   const _CopyInviteRow({required this.onTap});
   final Future<void> Function() onTap;
@@ -965,8 +840,6 @@ class _CopyInviteRowState extends State<_CopyInviteRow> {
   }
 }
 
-/// A `.group-ctx-member` row: avatar, base nym + suffix (+ "you"), and a role
-/// badge (Owner/Mod). Tapping opens the member's menu.
 class _UnbanButton extends StatelessWidget {
   const _UnbanButton({required this.colors, required this.onTap});
 
@@ -1038,7 +911,6 @@ class _MemberTileState extends State<_MemberTile> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
-          // `.group-ctx-member`: padding 7px 16px, gap 10px.
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
           color: _hover ? c.hoverOverlay : null,
           child: Row(
@@ -1048,14 +920,11 @@ class _MemberTileState extends State<_MemberTile> {
               Expanded(
                 child: RichText(
                   overflow: TextOverflow.ellipsis,
-                  // `.group-ctx-member-name`: 14px, color `--text` (full green).
                   text: TextSpan(
                     style: TextStyle(
                         color: widget.dimmed ? c.textDim : c.text, fontSize: 14),
                     children: [
                       TextSpan(text: widget.base),
-                      // Generic `.nym-suffix`: `--text` @ opacity 0.7, 0.9em,
-                      // w100 (no dedicated group-member override).
                       TextSpan(
                         text: widget.suffix,
                         style: TextStyle(
@@ -1064,7 +933,6 @@ class _MemberTileState extends State<_MemberTile> {
                           fontWeight: FontWeight.w100,
                         ),
                       ),
-                      // `.group-ctx-you`: 6px left margin, 11px text-dim.
                       if (widget.isSelf) ...[
                         const WidgetSpan(child: SizedBox(width: 6)),
                         TextSpan(
@@ -1092,9 +960,6 @@ class _MemberTileState extends State<_MemberTile> {
   }
 }
 
-/// `.group-ctx-role`: a small chip. Owner = lightning orange `#f7931a` text on
-/// `rgba(247,147,26,0.12)`; Mod = `--secondary` text on `rgba(255,255,255,0.08)`.
-/// 10px/w600 uppercase, 0.03em tracking, padding 2px 7px, radius 10, no border.
 class _RoleBadge extends StatelessWidget {
   const _RoleBadge({required this.label, required this.colors});
   final String label;
@@ -1108,7 +973,7 @@ class _RoleBadge extends StatelessWidget {
     final Color fg =
         isOwner ? c.lightning : (isAdmin ? c.primary : c.secondary);
     final Color bg = isOwner
-        ? const Color(0x1FF7931A) // rgba(247,147,26,0.12)
+        ? const Color(0x1FF7931A)
         : (isAdmin ? c.primary.withValues(alpha: 0.12) : c.hoverOverlay);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -1122,17 +987,14 @@ class _RoleBadge extends StatelessWidget {
           color: fg,
           fontSize: 10,
           fontWeight: FontWeight.w600,
-          letterSpacing: 0.3, // 0.03em ≈ 0.3px at 10px
+          letterSpacing: 0.3, // 0.03em at 10px.
         ),
       ),
     );
   }
 }
 
-/// The Add-Members recipient picker (PWA `openAddMembersModal` → New PM modal in
-/// add-members mode). Accepts nym / hex pubkey / npub tokens, resolving each
-/// against the user directory into chips, and returns the picked pubkeys (or
-/// null on cancel). Existing members are excluded.
+/// Add-Members picker resolving nym/hex/npub tokens to pubkeys, excluding existing members; null on cancel.
 class _AddMembersDialog extends ConsumerStatefulWidget {
   const _AddMembersDialog({required this.group});
 
@@ -1248,7 +1110,6 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                                   contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 12, vertical: 11),
                                   filled: true,
-                                  // `body.light-mode input` → black@0.04 fill.
                                   fillColor: c.insetFill,
                                   border: OutlineInputBorder(
                                     borderRadius: NymRadius.rxs,
@@ -1314,7 +1175,6 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
   }
 }
 
-/// A picked-recipient chip: nym pill with a remove button.
 class _RecipientChip extends StatelessWidget {
   const _RecipientChip({required this.nym, required this.onRemove});
   final String nym;
@@ -1338,7 +1198,6 @@ class _RecipientChip extends StatelessWidget {
           InkWell(
             onTap: onRemove,
             borderRadius: const BorderRadius.all(Radius.circular(10)),
-            // Member-pick chip remove — a literal "✕" char in the PWA.
             child: Text('✕',
                 style: TextStyle(color: c.textDim, fontSize: 14, height: 1)),
           ),

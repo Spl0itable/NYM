@@ -10,9 +10,7 @@ import '../../services/storage/key_value_store.dart';
 import '../../services/storage/secure_store.dart';
 import 'biometric_secret_store.dart';
 
-/// The subset of [SecureStore] the vault uses. Declared as an interface so the
-/// real [SecureStore] (which matches structurally) can be passed in production
-/// while tests inject an in-memory fake. [SecureStore] satisfies this shape.
+/// The [SecureStore] subset the vault uses, so tests can inject an in-memory fake.
 abstract class SecureStoreLike {
   Future<String?> get(String key);
   Future<void> set(String key, String value);
@@ -20,7 +18,6 @@ abstract class SecureStoreLike {
   Future<void> wipeAll();
 }
 
-/// Adapts a concrete [SecureStore] to [SecureStoreLike].
 class SecureStoreAdapter implements SecureStoreLike {
   SecureStoreAdapter(this._store);
   final SecureStore _store;
@@ -34,15 +31,7 @@ class SecureStoreAdapter implements SecureStoreLike {
   Future<void> wipeAll() => _store.wipeAll();
 }
 
-/// Optional encryption-at-rest for the identity secret keys, ported from
-/// `js/modules/key-vault.js` (docs/specs/01 §2.2).
-///
-/// The factor (password / PIN — or biometric, handled by the UI via
-/// `local_auth`) derives an AES-GCM-256 key via PBKDF2-SHA256 (310 000
-/// iterations), which encrypts each identity secret in place. A known check
-/// token (`nymchat-vault-ok`) is stored encrypted so unlock can verify the key.
-///
-/// Blob format matches the PWA exactly: `enc:v1:<b64(iv)>:<b64(ciphertext)>`.
+/// Identity encryption at rest: PBKDF2-SHA256 (310k iterations) to AES-GCM-256, blobs `enc:v1:<b64 iv>:<b64 ct>` like the PWA.
 class IdentityVault {
   IdentityVault(this._kv, this._secure,
       {bool? escrow, BiometricSecretStore? biometric})
@@ -59,24 +48,13 @@ class IdentityVault {
   static const int _iterations = 310000;
   static const String _checkPlaintext = 'nymchat-vault-ok';
 
-  /// The identity secrets protected by the vault (matches the PWA's
-  /// `_VAULT_KEYS`).
-  ///
-  /// Includes the post-quantum root (docs/PQ-ROOT-SPEC.md §5.3): a user who
-  /// turned identity encryption on asked for their key material to be
-  /// encrypted at rest, and an encrypted nsec sitting next to a plaintext root
-  /// would defeat that on exactly the device where they asked for it.
+  /// Includes the post-quantum root, which must not sit in plaintext beside an encrypted nsec (PQ-ROOT-SPEC §5.3).
   static const List<String> vaultKeys = SecretKeys.all;
 
   bool get isEnabled => _kv.getBool(StorageKeys.vaultEnabled);
 
-  /// `'password'`, `'pin'`, or `'biometric'`. (Web also has `'passkey'`.)
+  /// `'password'`, `'pin'`, or `'biometric'`.
   String get method => _kv.getString(StorageKeys.vaultMethod) ?? 'password';
-
-  // ---------------------------------------------------------------------------
-  // Crypto primitives (PBKDF2 → AES-GCM), mirroring _deriveKeyFromPassword /
-  // _vaultEncrypt / _vaultDecrypt.
-  // ---------------------------------------------------------------------------
 
   static final _pbkdf2 = Pbkdf2(
     macAlgorithm: Hmac.sha256(),
@@ -85,15 +63,10 @@ class IdentityVault {
   );
   static final _aes = AesGcm.with256bits();
 
-  /// The derived AES session key, retained after a successful [enable] /
-  /// [unlock] — the native analog of the PWA's `this._vaultKey`
-  /// (key-vault.js `unlockVault`). Lets [secretSet] keep encrypting secrets
-  /// written AFTER boot (nsec login, NIP-46 session, key rotation) instead of
-  /// silently downgrading them to plaintext. Cleared by [disable] / [reset].
+  /// Derived key kept after [enable]/[unlock] so later [secretSet] writes stay encrypted; cleared by [disable]/[reset].
   SecretKey? _sessionKey;
 
-  /// Whether the vault is enabled AND its session key is in memory (the PWA's
-  /// `vaultUnlocked()`, key-vault.js:26).
+  /// Vault enabled and its session key is in memory.
   bool get isUnlocked => _sessionKey != null;
 
   Future<SecretKey> _deriveKey(String password, List<int> salt) {
@@ -110,8 +83,7 @@ class IdentityVault {
       secretKey: key,
       nonce: nonce,
     );
-    // The PWA appends the 16-byte GCM tag to the ciphertext, then base64s the
-    // whole thing. We match: ct = cipherText + mac.
+    // Ciphertext with the 16-byte GCM tag appended, as the PWA does.
     final ct = Uint8List.fromList([...box.cipherText, ...box.mac.bytes]);
     return 'enc:v1:${base64.encode(nonce)}:${base64.encode(ct)}';
   }
@@ -133,13 +105,7 @@ class IdentityVault {
     return utf8.decode(clear);
   }
 
-  // ---------------------------------------------------------------------------
-  // Enable / disable / unlock
-  // ---------------------------------------------------------------------------
-
-  /// Enable the vault: derive a key from [password], encrypt the existing
-  /// plaintext secrets, and persist the salt/method/check-token + flag.
-  /// Mirrors `enableVault`. [method] is `'password'`, `'pin'` or `'biometric'`.
+  /// Derives a key from [password], encrypts existing plaintext secrets, and persists salt, method and check token.
   Future<void> enable(
       {required String method, required String password}) async {
     if (isEnabled) throw StateError('Encryption is already enabled.');
@@ -150,7 +116,6 @@ class IdentityVault {
     final salt = _randomBytes(16);
     final key = await _deriveKey(password, salt);
 
-    // Encrypt each currently-plaintext secret in secure storage.
     for (final name in vaultKeys) {
       final cur = await _secure.get(name);
       if (cur == null || cur.startsWith('enc:v1:')) continue;
@@ -158,8 +123,7 @@ class IdentityVault {
     }
 
     await _kv.setString(StorageKeys.vaultSalt, base64.encode(salt));
-    // The PWA stores `'password'` for both password AND PIN factors (a PIN is a
-    // digit-only password); only biometric is distinct (key-vault.js:180).
+    // PIN persists as `'password'`; only biometric is distinct.
     await _kv.setString(
         StorageKeys.vaultMethod, isBio ? 'biometric' : 'password');
     await _kv.setString(
@@ -167,42 +131,12 @@ class IdentityVault {
     await _kv.setBool(StorageKeys.vaultEnabled, true);
     await _kv.setBool(StorageKeys.encryptAtRestPref, true);
     await _kv.remove(StorageKeys.encryptAtRestPromptDismissed);
-    // Enabling leaves the vault unlocked for this session (key-vault.js
-    // `enableVault` sets `this._vaultKey = key`), so later [secretSet] writes
-    // stay encrypted.
+    // Enabling leaves the vault unlocked for this session.
     _sessionKey = key;
     await _escrowBackgroundKey(key);
   }
 
-  // ---------------------------------------------------------------------------
-  // Background-wake escrow
-  // ---------------------------------------------------------------------------
-  //
-  // iOS can relaunch the app in the background for a `BGAppRefresh` window. That
-  // process comes up locked, and a locked process boots nothing — no relays, no
-  // catch-up — so the window is wasted and the user sees no notifications until
-  // they next open the app by hand.
-  //
-  // To let a background wake proceed without a human, the derived vault key is
-  // escrowed in the platform keystore. Three properties make that tolerable:
-  //
-  //  * It goes through the SAME [SecureStore] as the identity secrets, so it
-  //    inherits `kSecAttrAccessibleAfterFirstUnlock` — unreadable until the
-  //    device has been unlocked once since boot — and, more importantly, a panic
-  //    wipe clears it: [PanicWipe] calls `SecureStore.wipeAll()`, which deletes
-  //    every Keychain item under the app's service, this one included. Storing
-  //    it anywhere else (a separate store, its own service or access group)
-  //    would put it OUTSIDE that sweep, which is exactly why it doesn't.
-  //  * It is only ever consumed by a background wake. A foreground launch still
-  //    prompts for the password/PIN/biometric, so the vault keeps meaning what
-  //    it means to the person using the app.
-  //  * It is cleared whenever the vault stops existing — disable, reset, and
-  //    any wipe.
-  //
-  // The honest trade: while this is present, the identity secret is protected by
-  // the device passcode rather than the vault factor. That is the cost of
-  // catching up in the background at all; [clearBackgroundKey] is the escape
-  // hatch if a deployment would rather not pay it.
+  // Vault key escrow for iOS background wakes, kept in the same [SecureStore] so a panic wipe clears it.
   static const String _bgKeyName = 'nym_vault_bg_key';
 
   Future<void> _escrowBackgroundKey(SecretKey key) async {
@@ -211,25 +145,18 @@ class IdentityVault {
       final bytes = await key.extractBytes();
       await _secure.set(_bgKeyName, base64.encode(bytes));
     } catch (_) {
-      // A keystore that refuses the write costs background catch-up, nothing
-      // more — never fail an unlock over it.
+      // A refused keystore write only costs background catch-up; never fail an unlock over it.
     }
   }
 
-  /// Drop the escrow, so background wakes go back to doing nothing until the
-  /// next foreground unlock.
+  /// Drop the escrow so background wakes do nothing until the next foreground unlock.
   Future<void> clearBackgroundKey() async {
     try {
       await _secure.remove(_bgKeyName);
     } catch (_) {}
   }
 
-  /// Unlock using the escrowed key instead of a user factor, for a background
-  /// wake. Returns the decrypted secrets, or null when there is no escrow (or
-  /// it no longer decrypts — a stale key from a changed factor).
-  ///
-  /// Deliberately NOT wired to any UI: a person unlocking the app goes through
-  /// [unlock] and their real factor.
+  /// Unlocks with the escrowed key for a background wake only; null without a valid escrow.
   Future<Map<String, String>?> unlockForBackgroundWake() async {
     if (!isEnabled) return null;
     final stored = await _secure.get(_bgKeyName);
@@ -240,8 +167,7 @@ class IdentityVault {
     } catch (_) {
       return null;
     }
-    // Prove the key still matches the vault before trusting it — the factor may
-    // have been changed since the escrow was written.
+    // The factor may have changed since the escrow was written.
     final check = _kv.getString(StorageKeys.vaultCheck);
     if (check != null && check.startsWith('enc:v1:')) {
       try {
@@ -265,8 +191,7 @@ class IdentityVault {
     return out;
   }
 
-  /// Verify [password] against the stored check token without unlocking.
-  /// Returns true on a correct factor. Mirrors `_verifyPassword`.
+  /// Checks [password] against the stored check token without unlocking.
   Future<bool> verifyPassword(String password) async {
     try {
       final saltB64 = _kv.getString(StorageKeys.vaultSalt);
@@ -280,9 +205,7 @@ class IdentityVault {
     }
   }
 
-  /// Unlock the vault: derive the key from [password], verify the check token,
-  /// and return the decrypted secrets keyed by name. Mirrors `unlockVault`.
-  /// Throws on a wrong factor.
+  /// Derives the key, verifies the check token, and returns decrypted secrets by name; throws on a wrong factor.
   Future<Map<String, String>> unlock(String password) async {
     if (!isEnabled) return {};
     final saltB64 = _kv.getString(StorageKeys.vaultSalt);
@@ -291,8 +214,7 @@ class IdentityVault {
 
     final check = _kv.getString(StorageKeys.vaultCheck);
     if (check != null && check.startsWith('enc:v1:')) {
-      // The PWA wraps any check-token failure (bad decrypt OR a mismatched
-      // plaintext) into one user-facing message (key-vault.js:262-274).
+      // Any check-token failure surfaces as one user-facing message.
       try {
         final v = await _decrypt(key, check); // throws on wrong key
         if (v != _checkPlaintext) {
@@ -302,9 +224,7 @@ class IdentityVault {
         throw StateError('Wrong password/PIN or unrecognized passkey.');
       }
     }
-    // Verified — retain the key for the session (`this._vaultKey = key`,
-    // key-vault.js `unlockVault`) so [secretSet] keeps encrypting post-boot
-    // secret writes.
+    // Retain the key for the session so post-boot secret writes stay encrypted.
     _sessionKey = key;
     await _escrowBackgroundKey(key);
     final out = <String, String>{};
@@ -316,14 +236,12 @@ class IdentityVault {
     return out;
   }
 
-  /// Disable the vault: decrypt the secrets back to plaintext and clear the
-  /// metadata. Requires the correct [password]. Mirrors `disableVault`.
+  /// Decrypts secrets back to plaintext and clears metadata; requires the correct [password].
   Future<void> disable(String password) async {
     if (!isEnabled) return;
     final saltB64 = _kv.getString(StorageKeys.vaultSalt);
     if (saltB64 == null) throw StateError('Vault metadata is corrupt.');
     final key = await _deriveKey(password, base64.decode(saltB64));
-    // Verify first.
     if (!await verifyPassword(password)) {
       throw StateError('Re-authentication failed.');
     }
@@ -333,13 +251,12 @@ class IdentityVault {
         await _secure.set(name, await _decrypt(key, blob));
       }
     }
-    _sessionKey = null; // Secrets are plaintext again (key-vault.js:307).
+    _sessionKey = null; // Secrets are plaintext again.
     await clearBackgroundKey();
     await _clearMeta();
   }
 
-  /// Discard the vault and its encrypted secrets entirely (forgotten-password
-  /// escape hatch). Mirrors `resetVault`.
+  /// Discards the vault and its encrypted secrets (forgotten-password escape hatch).
   Future<void> reset() async {
     _sessionKey = null;
     final wasBiometric = method == 'biometric';
@@ -480,12 +397,7 @@ class IdentityVault {
     } catch (_) {}
   }
 
-  /// Vault-aware secret write — the PWA's `secretSet` (key-vault.js:38-48).
-  /// With the vault enabled AND unlocked ([_sessionKey] retained by [enable] /
-  /// [unlock]) the value is stored as an `enc:v1:` blob; otherwise it is
-  /// stored as-is (the vault-disabled else-branch). Wired into
-  /// `IdentityService(secretWrite: …)` so identity secrets persisted after
-  /// boot keep the encryption-at-rest guarantee.
+  /// Stores an `enc:v1:` blob while the vault is unlocked, otherwise plaintext.
   Future<void> secretSet(String name, String value) async {
     final key = _sessionKey;
     if (isEnabled && key != null) {
@@ -504,18 +416,7 @@ class IdentityVault {
     await _kv.remove(StorageKeys.vaultCheck);
   }
 
-  // ---------------------------------------------------------------------------
-  // Encrypt-at-rest prompt trigger (key-vault.js `maybePromptEncryptAtRest` /
-  // `_hasPersistedSecret`). The boot/setup flow calls [shouldPromptEncryptAtRest]
-  // to decide whether to offer turning on identity encryption; [declineEncryptAtRest]
-  // persists the user's "Not now" so we don't nag again.
-  // ---------------------------------------------------------------------------
-
-  /// Whether any identity secret is stored **in plaintext** (not already
-  /// `enc:v1:`-wrapped). Mirrors key-vault.js `_hasPersistedSecret` but, because
-  /// the native secrets live in the keystore, it also confirms the secret is
-  /// actually unencrypted-at-rest (an enabled vault stores `enc:v1:` blobs, so
-  /// those don't count as "exposed").
+  /// Whether any identity secret is stored in plaintext, not `enc:v1:`-wrapped.
   Future<bool> hasUnencryptedSecret() async {
     for (final name in vaultKeys) {
       final cur = await _secure.get(name);
@@ -526,20 +427,10 @@ class IdentityVault {
     return false;
   }
 
-  /// Whether the user previously dismissed the encrypt-at-rest prompt
-  /// (`nym_encrypt_at_rest_prompt_dismissed === '1'`).
   bool get encryptAtRestPromptDismissed =>
       _kv.getBool(StorageKeys.encryptAtRestPromptDismissed);
 
-  /// True when the boot/setup flow should offer to enable encryption-at-rest.
-  /// Mirrors key-vault.js `maybePromptEncryptAtRest` EXACTLY (lines 415-421):
-  /// the vault is **not** already enabled, the user hasn't dismissed the prompt,
-  /// the cross-device `encryptAtRestPreferred` hint is set (line 419 hard-requires
-  /// `nym_encrypt_at_rest_pref === '1'`), and an identity secret is sitting in
-  /// storage unencrypted. The flag is set when the user enables the vault on this
-  /// device (so it persists across a reset) OR when it arrives via settings sync
-  /// from another device — so the "protect your identity here too" offer only
-  /// appears when the user already uses encryption-at-rest somewhere.
+  /// Offer encryption only when the vault is off, not dismissed, preferred on some device, and a secret is unencrypted.
   Future<bool> shouldPromptEncryptAtRest() async {
     if (isEnabled) return false;
     if (encryptAtRestPromptDismissed) return false;
@@ -547,9 +438,7 @@ class IdentityVault {
     return hasUnencryptedSecret();
   }
 
-  /// Persists the user's "Not now" so [shouldPromptEncryptAtRest] won't fire
-  /// again (key-vault.js `dismiss()` →
-  /// `localStorage.setItem('nym_encrypt_at_rest_prompt_dismissed', '1')`).
+  /// Persists "Not now" so the prompt won't fire again.
   Future<void> declineEncryptAtRest() async {
     await _kv.setBool(StorageKeys.encryptAtRestPromptDismissed, true);
   }

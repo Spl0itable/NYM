@@ -1,12 +1,5 @@
-// FORMATTING: the tables below are dense on purpose, mirroring the web
-// client's source. `dart format` explodes them to one entry per line, and
-// the `// dart format off` directive cannot protect them because it needs
-// language version >= 3.7 while this package is on ^3.6.0 (legacy
-// formatter, which ignores the directive). Keep this file OUT of
-// repo-wide format passes.
-/// Google-Translate language code → display name (translate.js
-/// `NYM_TRANSLATE_LANGUAGES` / `NYM_TRANSLATE_LANG_NAMES`). Trimmed to the
-/// resolver the inline translation label needs (`_languageName`).
+// Tables are dense on purpose; keep this file out of format passes (`dart format off` needs language 3.7).
+/// Google Translate language code to English display name.
 const Map<String, String> kTranslateLanguageNames = {
   'af': 'Afrikaans', 'sq': 'Albanian', 'am': 'Amharic', 'ar': 'Arabic',
   'hy': 'Armenian', 'as': 'Assamese', 'ay': 'Aymara', 'az': 'Azerbaijani',
@@ -45,9 +38,7 @@ const Map<String, String> kTranslateLanguageNames = {
   'cy': 'Welsh', 'xh': 'Xhosa', 'yi': 'Yiddish', 'yo': 'Yoruba', 'zu': 'Zulu',
 };
 
-/// What speakers call their own language (CLDR endonyms, mirroring the web
-/// client's `NYM_TRANSLATE_LANG_NATIVE`). Only codes whose endonym differs from
-/// the English name are listed; the rest fall back to [kTranslateLanguageNames].
+/// CLDR endonyms, listed only where they differ from the English name.
 const Map<String, String> kTranslateLanguageNative = {
   'sq': "shqip", 'am': "አማርኛ", 'ar': "العربية", 'hy': "հայերեն",
   'as': "অসমীয়া", 'az': "azərbaycan", 'bm': "bamanakan", 'eu': "euskara",
@@ -80,9 +71,7 @@ const Map<String, String> kTranslateLanguageNative = {
   'xh': "IsiXhosa", 'yi': "ייִדיש", 'yo': "Èdè Yorùbá", 'zu': "isiZulu",
 };
 
-/// What a speaker of the language calls it, falling back to the English name.
-/// A picker labeled only in English is unusable to the very people looking for
-/// their own language in it.
+/// Endonym, falling back to the English name.
 String languageNative(String? code) {
   if (code == null || code.isEmpty) return '';
   final key = code.toLowerCase();
@@ -99,31 +88,25 @@ String languageSubtitle(String? code) {
   return native == english ? '' : english;
 }
 
-/// Everything a search over the language list should match.
 String languageSearchKey(String code, String name) =>
     '$name ${languageNative(code)}'.toLowerCase();
 
-/// Resolves a language code to its display name (translate.js `_languageName`),
-/// falling back to the raw code.
+/// Display name for a language code, falling back to the raw code.
 String languageName(String? code) {
   if (code == null || code.isEmpty) return '';
   return kTranslateLanguageNames[code.toLowerCase()] ?? code;
 }
 
-/// Languages sorted alphabetically by name — used by the language picker prompt
-/// (translate.js `_promptTranslateLanguage`).
 List<MapEntry<String, String>> sortedTranslateLanguages() {
   final list = kTranslateLanguageNames.entries
-      // drop the duplicate alias codes so each language appears once
+      // drop duplicate alias codes so each language appears once
       .where((e) => !{'zh-cn', 'iw', 'jw'}.contains(e.key))
       .toList()
     ..sort((a, b) => a.value.compareTo(b.value));
   return list;
 }
 
-/// Languages with [favorites] pinned to the top (in fav-list order), the rest
-/// alphabetical — the in-composer translate dropdown order (translate.js
-/// `_sortedTranslateLanguages`, lines 112-122). The prompt keeps plain alpha.
+/// [favorites] pinned first in list order, then the rest alphabetically.
 List<MapEntry<String, String>> sortedTranslateLanguagesWithFavorites(
     List<String> favorites) {
   final all = sortedTranslateLanguages();
@@ -138,5 +121,5 @@ List<MapEntry<String, String>> sortedTranslateLanguagesWithFavorites(
   return [...favList, ...rest];
 }
 
-/// localStorage key for the translate-dropdown favorites (translate.js:96/107).
+/// Storage key for the translate-dropdown favorites.
 const String kTranslateFavoritesKey = 'nym_translate_favorites';

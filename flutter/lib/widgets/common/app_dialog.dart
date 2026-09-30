@@ -9,40 +9,18 @@ import '../../features/i18n/i18n.dart';
 import '../../state/settings_provider.dart';
 import 'keyboard_inset_dialog.dart';
 
-/// Shared confirm / alert / prompt dialog — the native port of the PWA's
-/// `dialog.js` (`showAppConfirm` / `showAppAlert` / `showAppPrompt`), styled to
-/// the `.app-dialog` component (`styles-components.css:2349-2388`):
-///
-///  * `max-width: 440px` content
-///  * message `font-size: 14px; line-height: 1.45; white-space: pre-line`
-///  * optional checkbox row, optional single-line input OR `min-height: 110px`
-///    textarea, optional char counter (warning at 80%, limit at 100%)
-///  * `danger` OK button (`bg rgb(danger/.1)`, `border rgb(danger/.35)`,
-///    text `--danger`)
-///  * Esc = cancel, Enter = confirm (single-line only)
-///
-/// Other modal slices can reuse these helpers for a consistent danger-confirm /
-/// prompt-with-char-count / checkbox-confirm surface.
+/// Shared confirm, alert and prompt dialogs, the native port of the PWA's `dialog.js`.
 
-/// `.modal` overlay: glass default `rgba(0,0,0,0.7)` (styles-chat.css:1974);
-/// `body.solid-ui .modal { rgba(0,0,0,0.75) }` and
-/// `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-/// (styles-themes-responsive.css:1630-1636).
 Color _barrierColor(BuildContext context) {
   final solidUi =
       ProviderScope.containerOf(context).read(settingsProvider).solidUi;
   if (!solidUi) return Colors.black.withValues(alpha: 0.7);
   return context.nym.isLight
-      ? const Color(0x73000000) // black @ 0.45
-      : const Color(0xBF000000); // black @ 0.75
+      ? const Color(0x73000000)
+      : const Color(0xBF000000);
 }
 
-/// Shows a confirmation dialog. Resolves `true` on OK, `false` on Cancel/Esc.
-///
-/// When [checkboxLabel] is provided the result instead resolves to an
-/// [AppConfirmResult] carrying `{confirmed, checked}` (mirrors the PWA's
-/// checkbox-confirm shape). Use [showAppConfirmWithCheckbox] for that case so
-/// the return type is precise.
+/// Resolves `true` on OK, `false` on Cancel/Esc; use [showAppConfirmWithCheckbox] for the checkbox variant.
 Future<bool> showAppConfirm(
   BuildContext context,
   String message, {
@@ -65,8 +43,6 @@ Future<bool> showAppConfirm(
   return res?.confirmed ?? false;
 }
 
-/// Confirmation dialog with a checkbox row, resolving `{confirmed, checked}`
-/// (the PWA's `showAppConfirm(msg, {checkboxLabel})`).
 Future<AppConfirmResult> showAppConfirmWithCheckbox(
   BuildContext context,
   String message, {
@@ -94,10 +70,7 @@ Future<AppConfirmResult> showAppConfirmWithCheckbox(
   );
 }
 
-/// Shows an alert with a single OK button (the PWA's `showAppAlert`).
-/// [copyValue] renders a selectable monospace row with a Copy button under the
-/// message — for a value the dialog is ABOUT rather than asking for, so the
-/// user is never told to go and find something they are looking at.
+/// [copyValue] adds a selectable monospace row with a Copy button for the value the alert is about.
 Future<void> showAppAlert(
   BuildContext context,
   String message, {
@@ -124,10 +97,7 @@ Future<void> showAppAlert(
   );
 }
 
-/// Shows a prompt with a text field. Resolves the entered string on OK, or
-/// `null` on Cancel/Esc (the PWA's `showAppPrompt`). [multiline] swaps the
-/// single-line input for a 110px-min textarea; [maxLength] adds a live char
-/// counter.
+/// Resolves the entered string on OK or `null` on Cancel/Esc; [maxLength] adds a live char counter.
 Future<String?> showAppPrompt(
   BuildContext context,
   String message, {
@@ -158,14 +128,12 @@ Future<String?> showAppPrompt(
   return res.value ?? '';
 }
 
-/// The resolved shape of [showAppConfirmWithCheckbox].
 class AppConfirmResult {
   const AppConfirmResult({required this.confirmed, required this.checked});
   final bool confirmed;
   final bool checked;
 }
 
-/// Internal pop payload (so a single dialog can resolve confirm/checkbox/prompt).
 class AppDialogResult {
   const AppDialogResult(
       {required this.confirmed, this.checked = false, this.value});
@@ -224,10 +192,8 @@ class _AppDialogState extends State<_AppDialog> {
   @override
   void initState() {
     super.initState();
-    // Repaint the `.form-input:focus` glow/fill when focus changes.
     _inputFocus.addListener(() => setState(() {}));
-    // The PWA selects the whole default value on open so typing replaces it
-    // (`field.focus(); field.select()` — dialog.js:127).
+    // Select the whole default value on open so typing replaces it, as the PWA does.
     if (widget.isPrompt) {
       _input.selection =
           TextSelection(baseOffset: 0, extentOffset: _input.text.length);
@@ -260,16 +226,11 @@ class _AppDialogState extends State<_AppDialog> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // KeyboardInsetDialog (not a bare Center): shifts the dialog above the
-    // soft keyboard and caps its height to the visible area, so a prompt
-    // field — e.g. the post-quantum `nympq1…` recovery-code paste — is never
-    // hidden behind the keyboard on mobile (same fix as the other custom
-    // modals).
+    // Keeps prompt fields above the soft keyboard on mobile.
     return KeyboardInsetDialog(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: ConstrainedBox(
-          // `.app-dialog-content { max-width: 440px }`.
           constraints: const BoxConstraints(maxWidth: 440),
           child: Material(
             color: Colors.transparent,
@@ -288,14 +249,10 @@ class _AppDialogState extends State<_AppDialog> {
                     color: c.bgSecondary,
                     borderRadius: NymRadius.rxl,
                     border: Border.all(color: c.glassBorder),
-                    // `.modal-content` shadow stack: shadow-lg + shadow-glow +
-                    // a 1px white/0.05 ring. Light mode replaces it with a
-                    // single soft `0 8px 40px rgba(0,0,0,0.12)` — no glow, no
-                    // ring (styles-themes-responsive.css:1050-1052).
                     boxShadow: c.isLight
                         ? const [
                             BoxShadow(
-                              color: Color(0x1F000000), // black @ 0.12
+                              color: Color(0x1F000000),
                               blurRadius: 40,
                               offset: Offset(0, 8),
                             ),
@@ -321,8 +278,6 @@ class _AppDialogState extends State<_AppDialog> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // `.modal-header` — 22px primary UPPERCASE ls1.5 w700,
-                      // 1px glass bottom rule, padding-bottom 14, margin-bottom 24.
                       Container(
                         margin: const EdgeInsets.fromLTRB(32, 32, 32, 24),
                         padding: const EdgeInsets.only(bottom: 14),
@@ -341,7 +296,6 @@ class _AppDialogState extends State<_AppDialog> {
                           ),
                         ),
                       ),
-                      // `.modal-body { margin-bottom: 20px }`.
                       Flexible(
                         child: SingleChildScrollView(
                           padding: const EdgeInsets.fromLTRB(32, 0, 32, 20),
@@ -349,7 +303,6 @@ class _AppDialogState extends State<_AppDialog> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // `.app-dialog-message` — 14px / 1.45, pre-line.
                               Text(
                                 widget.message,
                                 style: TextStyle(
@@ -365,9 +318,6 @@ class _AppDialogState extends State<_AppDialog> {
                           ),
                         ),
                       ),
-                      // `.modal-actions` — display:flex; gap:10px;
-                      // justify:center; `.app-dialog-content .modal-actions
-                      // { margin-top: 8px }` on top of the body's 20px.
                       Padding(
                         padding: const EdgeInsets.fromLTRB(32, 8, 32, 32),
                         child: Row(
@@ -393,8 +343,6 @@ class _AppDialogState extends State<_AppDialog> {
     );
   }
 
-  /// `.app-dialog-copy` — the value the dialog is about, selectable, with
-  /// one-tap copy beside it.
   Widget _copyRow(NymColors c) {
     final value = widget.copyValue ?? '';
     final row = Padding(
@@ -460,7 +408,6 @@ class _AppDialogState extends State<_AppDialog> {
   }
 
   Widget _checkboxRow(NymColors c) {
-    // `.app-dialog-checkbox` — 12px top margin, 13px dim text, 8px gap.
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: InkWell(
@@ -493,8 +440,6 @@ class _AppDialogState extends State<_AppDialog> {
     final max = widget.maxLength;
     final focused = _inputFocus.hasFocus;
     final len = _input.text.length;
-    // `.input-char-count` colors: limit (#ff4444) at 100%, warning (#f59e0b)
-    // at 80%, else text-dim @0.6 base opacity.
     final Color counterColor;
     if (max != null && len >= max) {
       counterColor = c.danger;
@@ -503,18 +448,11 @@ class _AppDialogState extends State<_AppDialog> {
     } else {
       counterColor = c.textDim.withValues(alpha: 0.6);
     }
-    // Light mode forces `input { background: rgba(0,0,0,0.04); border-color:
-    // rgba(0,0,0,0.1); color: #000000 } !important` (no focus fill lift),
-    // while dark's global `input { color: #ffffff !important }` beats
-    // `.form-input`'s `--text-bright`
-    // (styles-themes-responsive.css:561-592, styles-components.css:229-255).
+    // Light mode forces the input fill with `!important`, so there is no focus fill lift.
     final baseBorder = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // `.app-dialog-input` / `.app-dialog-textarea` — 12px top margin, with
-        // the `.form-input:focus` glow ring (`0 0 0 3px primary/0.06`; light
-        // mode `primary/0.1` — styles-themes-responsive.css:1087-1092).
         Padding(
           padding: const EdgeInsets.only(top: 12),
           child: DecoratedBox(
@@ -563,8 +501,6 @@ class _AppDialogState extends State<_AppDialog> {
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                   filled: true,
-                  // Dark: focus lifts the fill white/0.05 → white/0.07; light:
-                  // black/0.04 `!important`, so the focus bump never applies.
                   fillColor: c.isLight
                       ? const Color(0x0A000000)
                       : Colors.white.withValues(alpha: focused ? 0.07 : 0.05),
@@ -586,7 +522,6 @@ class _AppDialogState extends State<_AppDialog> {
           ),
         ),
         if (max != null)
-          // `.input-char-count` — warning at 80%, limit at 100%.
           Align(
             alignment: Alignment.centerRight,
             child: Padding(
@@ -601,13 +536,7 @@ class _AppDialogState extends State<_AppDialog> {
     );
   }
 
-  /// `.icon-btn` Cancel — dark: bg white/0.05, glass border, `--text` label;
-  /// light mode overrides to bg black/0.03, border black/0.1, `--primary`
-  /// label (styles-themes-responsive.css:595-599). Radius 8 (`rxs`),
-  /// UPPERCASE 12px w500 ls0.8, padding 7/14. `.modal-actions` has no
-  /// `align-items`, so flex's default stretch sizes it to the 42px `.send-btn`
-  /// beside it, label centered (`.icon-btn` is `inline-flex; align-items:
-  /// center`).
+  /// Cancel `.icon-btn`; flex's default stretch sizes it to the 42px OK button beside it.
   Widget _cancelButton(NymColors c) {
     return InkWell(
       onTap: _cancel,
@@ -619,7 +548,7 @@ class _AppDialogState extends State<_AppDialog> {
           color: c.subtleFill,
           border: Border.all(
             color: c.isLight
-                ? const Color(0x1A000000) // black @ 0.1
+                ? const Color(0x1A000000)
                 : c.glassBorder,
           ),
           borderRadius: NymRadius.rxs,
@@ -640,10 +569,6 @@ class _AppDialogState extends State<_AppDialog> {
     );
   }
 
-  /// `.send-btn` (translucent outline pill) — non-danger: bg primary/0.1,
-  /// border primary/0.3, text `--primary`; danger: danger/0.1 + danger/0.35 +
-  /// `--danger`. radius 12 (`rsm`), height 42, padding 22/10, UPPERCASE 12px
-  /// w600 ls1.5.
   Widget _okButton(NymColors c) {
     final accent = widget.danger ? c.danger : c.primary;
     return InkWell(

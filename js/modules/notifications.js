@@ -2,26 +2,7 @@
 
 const NYM_NOTIFICATION_ICON = 'https://nymchat.app/images/NYM-icon.png';
 
-// A notification's time is when the thing HAPPENED, and nothing happens in the
-// future. An event carrying a created_at ahead of us (sender clock skew, or a
-// relay/proxy re-stamping cached history on replay) would otherwise sort above
-// every real notification and stay there until its own future time aged out of
-// the 24h window.
-//
-// The ceiling is `observedAt` — when THIS device first saw the notification —
-// and never a fresh `Date.now()`. That distinction is the whole fix. Clamping
-// to "now" is only correct once: it is recomputed on every boot, so a
-// future-dated entry is re-stamped to each new "now", stays permanently the
-// newest thing in the list, and pins itself to the top looking brand new. That
-// is the same trap `EventMapper`/`correctedCreatedAt` document for channel
-// messages ("an archived event gets re-stamped to the new now on every reload
-// ... so it never settles and always sorts as newest"), where the fix was to
-// anchor to a value that does not move. `receivedAt` is that value here: it is
-// stamped once when the entry is created, persisted with it, and carried
-// across the cross-device sync, so this function is idempotent — re-running it
-// on a stored entry returns what it returned last time.
-//
-// A missing/non-positive timestamp still falls back to the observation time.
+// Clamp to the stable first-seen time (observedAt), never Date.now(), so re-runs are idempotent.
 function _clampNotifTs(timestamp, observedAt) {
     const ceiling = (typeof observedAt === 'number' && observedAt > 0)
         ? observedAt : Date.now();
@@ -48,22 +29,12 @@ Object.assign(NYM.prototype, {
             titleToShow = `${baseTitle}#${suffix}`;
         }
 
-        // viewed compares against when WE received the notification, not the
-        // event's created_at — otherwise a delayed event with an older
-        // created_at would be auto-marked viewed after the modal was opened.
-        // It is also the STABLE ceiling the timestamp is clamped to; see
-        // _clampNotifTs for why a fresh Date.now() is the wrong one.
+        // Received time is both the viewed-cutoff and the stable clamp ceiling (see _clampNotifTs).
         const receivedAt = Date.now();
-        // A sender with a fast clock — or a pool/proxy that re-stamps an
-        // ephemeral event's created_at forward when it replays cached history —
-        // hands us a FUTURE timestamp, and the modal sorts newest-first. The
-        // message list already clamps the same way (nostr-core.js
-        // `correctedCreatedAt`); the bell never did.
         const ts = _clampNotifTs(timestamp, receivedAt);
         const eventId = channelInfo?.eventId || '';
 
-        // Dedup against existing history before adding (live + replay paths
-        // can both call this for the same underlying event).
+        // Live and replay paths can both call this for the same event.
         const isDupe = this.notificationHistory.some(n => {
             if (eventId && n.eventId && n.eventId === eventId) return true;
             if (n.title === titleToShow && n.body === body
@@ -101,14 +72,12 @@ Object.assign(NYM.prototype, {
             this._debouncedNostrSettingsSave(8000);
         }
 
-        // Already seen on this or another device; record it silently.
         if (previouslySeen) return;
 
         if (this.settings.sound !== 'none') {
             this.playSound(this.settings.sound);
         }
 
-        // Browser notification
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             try {
                 const notification = new Notification(titleToShow, {
@@ -149,7 +118,6 @@ Object.assign(NYM.prototype, {
 
     },
 
-    // Silently add a notification to history without triggering sound/popup/browser notification.
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
         if (!this.notificationsEnabled) return;
 
@@ -212,8 +180,6 @@ Object.assign(NYM.prototype, {
         }, 150);
     },
 
-    // Called when a message lands in storage. If an open zap notification was
-    // waiting for that messageId's text, re-render the modal so it shows.
     _maybeRefreshZapNotif(messageId) {
         if (!messageId || !this.notificationHistory) return;
         const matches = this.notificationHistory.some(n =>
@@ -224,8 +190,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Look up the zapped message text fresh from storage and build the
-    // enriched body. Returns null if the message still isn't available.
     _enrichZapBody(messageId, sats) {
         if (!messageId || !sats) return null;
         let content = '';
@@ -256,13 +220,7 @@ Object.assign(NYM.prototype, {
             if (!raw) return [];
             const parsed = JSON.parse(raw);
             const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-            // Repair entries written before the clamp, against each entry's OWN
-            // recorded observation time. Clamping to a fresh Date.now() here is
-            // what made the stuck entry look brand new: every boot re-stamped
-            // it later, so it was always the newest row in the list. An entry
-            // with no `receivedAt` (written before that field existed) is left
-            // alone rather than given a moving one — it ages out of the 24h
-            // window on its own.
+            // Clamp against each entry's own receivedAt; entries lacking it are left to age out.
             for (const n of parsed) {
                 if (!n || typeof n.timestamp !== 'number') continue;
                 if (typeof n.receivedAt !== 'number' || n.receivedAt <= 0) continue;
@@ -280,9 +238,7 @@ Object.assign(NYM.prototype, {
         } catch { }
     },
 
-    // Durable record of which notifications the user has already seen, keyed by
-    // a stable identity so replayed/resynced events can't re-trigger the badge.
-    // Synced via the nymchat-notifications wrap for cross-device read state.
+    // Keyed by a stable identity so replayed/resynced events can't re-trigger the badge.
     _notificationSeenKey(n) {
         if (!n) return null;
         const evId = n.eventId || n.channelInfo?.eventId || '';
@@ -290,8 +246,7 @@ Object.assign(NYM.prototype, {
         const pk = n.senderPubkey || n.channelInfo?.pubkey || '';
         const ts = n.timestamp || 0;
         if (!pk && !ts) return null;
-        // body prefix kept short of the 240-char sync truncation so the key
-        // matches across local (full body) and synced (truncated) copies
+        // Body prefix stays short of the 240-char sync truncation so local and synced keys match.
         return `f:${pk}:${Math.floor(ts / 60000)}:${(n.body || '').slice(0, 40)}`;
     },
 
@@ -348,7 +303,6 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Canonical conversation key for a notification, matching channelLastRead keys
     _notificationConvKey(channelInfo) {
         if (!channelInfo) return null;
         if (channelInfo.type === 'geohash') {
@@ -364,8 +318,6 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // True when the user has already read the conversation up to this message,
-    // so it shouldn't count as an unread notification.
     _notificationAlreadySeen(channelInfo, tsMs) {
         const key = this._notificationConvKey(channelInfo);
         if (!key || !this.channelLastRead) return false;
@@ -374,7 +326,6 @@ Object.assign(NYM.prototype, {
         return Math.floor((tsMs || 0) / 1000) <= seen;
     },
 
-    // Remove a missed-call notification, e.g. once the call was answered elsewhere.
     _retractMissedCallNotification(callId) {
         if (!callId || !Array.isArray(this.notificationHistory)) return;
         const tag = `missed-call-${callId}`;
@@ -388,8 +339,6 @@ Object.assign(NYM.prototype, {
         if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(2000);
     },
 
-    // When a conversation is read up to tsSec, retroactively mark its pending
-    // notifications viewed so the badge clears without opening the modal.
     _markConversationNotificationsSeen(convKey, tsSec) {
         if (!convKey || !Array.isArray(this.notificationHistory) || !this.notificationHistory.length) return;
         let changed = false;
@@ -438,8 +387,7 @@ Object.assign(NYM.prototype, {
     },
 
     _updateNotificationBadge() {
-        // Coalesce burst calls (every incoming PM/mention triggers one) into a
-        // single DOM update per animation frame.
+        // Coalesce burst calls into a single DOM update per animation frame.
         if (this._notifBadgeRafPending) return;
         this._notifBadgeRafPending = true;
         const raf = window.requestAnimationFrame || (cb => setTimeout(cb, 16));
@@ -489,7 +437,6 @@ Object.assign(NYM.prototype, {
         const body = document.getElementById('notificationsModalBody');
         if (!modal || !body) return;
 
-        // Sync checkbox state
         const checkbox = document.getElementById('enableNotificationsCheckbox');
         if (checkbox) checkbox.checked = this.notificationsEnabled;
         const mentionsCheckbox = document.getElementById('groupMentionsOnlyCheckbox');
@@ -499,10 +446,7 @@ Object.assign(NYM.prototype, {
         const friendsOnlyCheckbox = document.getElementById('notifyFriendsOnlyCheckbox');
         if (friendsOnlyCheckbox) friendsOnlyCheckbox.checked = this.notifyFriendsOnly;
 
-        // Filter to last 24 hours and exclude blocked users, then sort by
-        // timestamp ascending so the descending-iteration below renders
-        // newest first regardless of insertion order (historical replay,
-        // remote sync merges, etc. can leave the array out of order).
+        // Sort ascending since replay and sync merges can leave the array out of order.
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const recent = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
@@ -517,9 +461,7 @@ Object.assign(NYM.prototype, {
         if (recent.length === 0) {
             body.innerHTML = '<div class="notifications-empty">No notifications in the last 24 hours</div>';
         } else {
-            // Pull fresh kind 0 profiles for any sender we don't already have
-            // cached, so default nyms/avatars get replaced once the events
-            // land (the kind 0 handler refreshes the open modal in place).
+            // Fetch missing kind 0 profiles; the kind 0 handler refreshes the open modal in place.
             if (typeof this.queueProfileFetch === 'function') {
                 const seenPubkeys = new Set();
                 for (const n of recent) {
@@ -531,7 +473,6 @@ Object.assign(NYM.prototype, {
                 }
             }
             body.innerHTML = '';
-            // Show newest first
             for (let i = recent.length - 1; i >= 0; i--) {
                 const n = recent[i];
                 const item = document.createElement('div');
@@ -545,7 +486,6 @@ Object.assign(NYM.prototype, {
                     hour12: this.settings.timeFormat === '12hr'
                 });
 
-                // Build avatar + nym + flair like channel messages
                 const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
                 let avatarHtml = '';
                 let authorHtml = '';
@@ -553,7 +493,6 @@ Object.assign(NYM.prototype, {
                     const avatarSrc = this.getAvatarUrl(pubkey);
                     const safePk = this._safePubkey(pubkey);
                     avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
-                    // Use live profile lookup, fall back to stored senderNym
                     const baseNym = this.resolveDisplayNym(pubkey, n.senderNym || '');
                     const suffix = this.getPubkeySuffix(pubkey);
                     const flairHtml = this.getFlairForUser(pubkey);
@@ -565,12 +504,8 @@ Object.assign(NYM.prototype, {
                     authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}</span>`;
                 }
 
-                // Channel/context label
                 let contextHtml = '';
                 if (n.channelInfo) {
-                    // A thread reply says so: the flat conversation label alone
-                    // sends the user hunting for a message that is collapsed
-                    // behind one of its "N replies" rows.
                     const inThread = !!n.channelInfo.inThread;
                     if (n.channelInfo.type === 'geohash') {
                         const where = `#${this.escapeHtml(n.channelInfo.geohash)}`;
@@ -595,11 +530,8 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                // Strip quoted lines (> prefixed) to show only the new message
                 let rawBody = n.body || '';
 
-                // If this is a zap notification and the original message is
-                // now in storage, re-render the body with the actual text.
                 if (n.channelInfo && n.channelInfo.zapMessageId) {
                     const enriched = this._enrichZapBody(n.channelInfo.zapMessageId, n.channelInfo.zapSats);
                     if (enriched) rawBody = enriched;
@@ -642,8 +574,6 @@ Object.assign(NYM.prototype, {
                                 this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
                             }
                         }
-                        // The conversation is open; if the notification came
-                        // from a thread, finish the trip and open that thread.
                         if (info.threadRoot && typeof this.openThreadFromNotification === 'function') {
                             this.openThreadFromNotification(info);
                         }
@@ -658,8 +588,7 @@ Object.assign(NYM.prototype, {
         this._setupNotificationSeenObserver(body);
     },
 
-    // Mark notifications viewed only as they actually scroll into view, so the
-    // unread badge deducts per-item rather than zeroing on open.
+    // Mark viewed as items scroll into view so the badge deducts per item.
     _setupNotificationSeenObserver(body) {
         if (this._notifSeenObserver) {
             this._notifSeenObserver.disconnect();
@@ -708,7 +637,6 @@ Object.assign(NYM.prototype, {
         this._notifSeenObserver = obs;
     },
 
-    // Refresh author name/avatar in the notifications modal when a kind 0 profile arrives
     updateNotificationModalProfile(pubkey, profileName) {
         const modal = document.getElementById('notificationsModal');
         if (!modal || !modal.classList.contains('active')) return;
@@ -737,11 +665,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Each sound is a sequence of notes (f = frequency in Hz, d = duration in seconds,
-    // optional f2 = glide target, gap = silence after the note, chord = simultaneous
-    // frequencies, g = gain override, a = attack ramp time, noise = bandpass-filtered
-    // white noise at f with resonance q). The game jingles use square waves to match
-    // the original sound chips.
+    // Notes: f Hz, d seconds, f2 glide target, gap silence after, chord simultaneous, g gain, a attack, noise+q.
     NOTIFICATION_SOUNDS: {
         beep: { wave: 'sine', gain: 0.1, notes: [{ f: 800, d: 0.15 }] },
         low: { wave: 'sine', gain: 0.15, notes: [{ f: 600, d: 0.15 }] },
@@ -812,8 +736,7 @@ Object.assign(NYM.prototype, {
             wave: 'square', gain: 0.06,
             notes: [{ f: 987.77, d: 0.08 }, { f: 1318.51, d: 0.65 }]
         },
-        // Exact APU frequencies decoded from the SMB sound engine data
-        // (PowerUpGrabFreqData): rising C, Ab, Bb major arpeggios, one tone per 2 frames.
+        // Exact APU frequencies from the SMB sound engine data (PowerUpGrabFreqData).
         powerup: {
             wave: 'square', gain: 0.06,
             notes: [
@@ -828,8 +751,7 @@ Object.assign(NYM.prototype, {
                 { f: 1381.0, d: 0.033 }, { f: 1864.3, d: 0.033 }, { f: 1381.0, d: 0.15 }
             ]
         },
-        // Lead channel of the Gen 1 "Pokemon healed" fanfare, exact Game Boy
-        // frequencies decoded from the pokered disassembly (Music_PkmnHealed_Ch2).
+        // Exact Game Boy frequencies from the pokered disassembly (Music_PkmnHealed_Ch2).
         pokeheal: {
             wave: 'square', gain: 0.06,
             notes: [
@@ -837,8 +759,6 @@ Object.assign(NYM.prototype, {
                 { f: 829.6, d: 0.23 }, { f: 1310.7, d: 0.9 }
             ]
         },
-        // Measured from a recording of the broadcast bumper: a 1044Hz crescendo
-        // swell, then 781/1174/985Hz beeps (no static, despite how it's heard).
         f1: {
             wave: 'sine', gain: 0.14,
             notes: [
@@ -870,12 +790,11 @@ Object.assign(NYM.prototype, {
     },
 
     playSound(type) {
-        // Deduplicate: don't replay within 2 seconds
         const now = Date.now();
         if (this._lastSoundPlayedAt && now - this._lastSoundPlayedAt < 2000) return;
         this._lastSoundPlayedAt = now;
 
-        // Legacy values from before the sounds were relabeled
+        // Legacy values from before the sounds were relabeled.
         const legacy = { icq: 'uhoh', msn: 'msnding' };
         const sound = this.NOTIFICATION_SOUNDS[legacy[type] || type];
         if (!sound) return;
@@ -894,7 +813,7 @@ Object.assign(NYM.prototype, {
                 gainNode.gain.setValueAtTime(gain, t + note.h);
                 gainNode.gain.exponentialRampToValueAtTime(0.001, t + note.d);
             } else if (note.d < 0.06) {
-                // Too short for a decay envelope; hold and release to avoid clicks
+                // Too short for a decay envelope; hold and release to avoid clicks.
                 gainNode.gain.setValueAtTime(gain, t);
                 gainNode.gain.setValueAtTime(gain, t + note.d - 0.01);
                 gainNode.gain.linearRampToValueAtTime(0.0001, t + note.d);

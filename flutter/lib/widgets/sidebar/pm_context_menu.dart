@@ -14,8 +14,6 @@ import '../common/app_dialog.dart';
 import '../nym_icons.dart';
 import '../anchored_popup.dart';
 
-/// One entry in a sidebar row's `.quick-context-menu` (sidebar-sections.js
-/// `_buildSidebarMenuItems`).
 class SidebarQuickMenuItem {
   const SidebarQuickMenuItem({
     required this.label,
@@ -25,27 +23,19 @@ class SidebarQuickMenuItem {
   });
   final String label;
 
-  /// The leading glyph as a [NymIcons] SVG string.
   final String svg;
   final VoidCallback onSelected;
   final bool danger;
 }
 
-/// Shows the PWA `.quick-context-menu` at [globalPosition] with [items], styled
-/// exactly per `styles-features.css:2778-2846`: bg `rgba(20,20,35,0.92)`, radius
-/// 14, padding 4, min-width 200, shadow `0 8 32 rgba(0,0,0,.4)`; items padding
-/// 8/12, gap 10, radius 8, font 14, icon `--text-dim` (danger → `--danger`),
-/// with a 150ms `scale(0.9→1) + translateY(-6→0) + opacity` entrance. Fires a
-/// haptic tap when opened (PWA `window.nymHapticTap`). Returns the chosen item's
-/// callback result after dismissal.
+/// Shows the sidebar `.quick-context-menu` at [globalPosition] with a haptic tap on open.
 Future<void> showSidebarQuickMenu(
   BuildContext context,
   Offset globalPosition,
   List<SidebarQuickMenuItem> items,
 ) async {
   if (items.isEmpty) return;
-  // `nymHapticTap` = a 30ms vibrate (sidebar-sections.js:258) — a solid motor
-  // pulse, so mediumImpact rather than the faint lightImpact.
+  // The PWA's 30ms vibrate is a solid pulse, so mediumImpact rather than lightImpact.
   HapticFeedback.mediumImpact();
 
   final selected = await Navigator.of(context, rootNavigator: true)
@@ -55,14 +45,7 @@ Future<void> showSidebarQuickMenu(
   selected?.onSelected();
 }
 
-/// A transparent route that positions the animated `.quick-context-menu`
-/// near the press point and clamps it on-screen. Outside presses dismiss it
-/// instantly (no exit animation) after a 400ms opening grace period,
-/// mirroring the PWA's `_showSidebarActionMenu` close handling
-/// (sidebar-sections.js:137-146) — and, like the PWA's `onOutside` (which
-/// never preventDefaults/stopPropagates), they ALSO reach whatever sits under
-/// them, so tapping another sidebar row while the menu is open closes the menu
-/// AND opens that conversation in one tap.
+/// Barrier-less popup route: outside presses dismiss after a 400ms grace and also reach what lies beneath.
 class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
   _QuickMenuRoute({
     required this.anchor,
@@ -72,26 +55,17 @@ class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
   final Offset anchor;
   final List<SidebarQuickMenuItem> items;
 
-  /// Wall-clock open time: outside presses within 400ms of opening are
-  /// ignored (`if (Date.now() - openedAt < 400) return`,
-  /// sidebar-sections.js:142-146), so the tap that follows the long-press
-  /// can't immediately dismiss the menu.
+  /// Outside presses within 400ms are ignored so the tap after the long-press can't dismiss the menu.
   final DateTime _openedAt = DateTime.now();
 
   @override
   Color? get barrierColor => null;
 
-  // Outside-press dismissal is handled by the Listener in [buildPage] (with
-  // the PWA's 400ms grace period), not the stock barrier.
+  // Outside-press dismissal is handled by the Listener in [buildPage], not the stock barrier.
   @override
   bool get barrierDismissible => false;
 
-  // The PWA has NO barrier: its outside-close handler is a document-level
-  // `mousedown`/`touchstart` listener that only removes the menu, so the
-  // press also activates the element under it (sidebar-sections.js:142-159).
-  // The stock (even colorless) [ModalBarrier] eats every pointer; replace it
-  // with a non-hit-testable filler so presses fall through to the routes
-  // below.
+  // The stock [ModalBarrier] eats every pointer; a non-hit-testable filler lets presses fall through.
   @override
   Widget buildModalBarrier() => const IgnorePointer(child: SizedBox.expand());
 
@@ -101,8 +75,7 @@ class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
   @override
   Duration get transitionDuration => const Duration(milliseconds: 150);
 
-  // The PWA's `close()` is a plain `menu.remove()` (sidebar-sections.js:138)
-  // — the menu vanishes instantly, no exit transition.
+  // The PWA menu vanishes instantly, with no exit transition.
   @override
   Duration get reverseTransitionDuration => Duration.zero;
 
@@ -114,12 +87,7 @@ class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
   ) {
     return Stack(
       children: [
-        // Outside presses dismiss on pointer-DOWN (the PWA listens on
-        // `mousedown`/`touchstart`), but presses within 400ms of opening are
-        // ignored (sidebar-sections.js:142-146). TRANSLUCENT: the press is
-        // observed, never consumed — like the PWA's `onOutside`, it also hits
-        // whatever lies under it (a row tap opens that conversation, a new
-        // 500ms hold starts immediately).
+        // Dismiss on pointer-down; translucent so the press also hits whatever lies under it.
         Positioned.fill(
           child: Listener(
             behavior: HitTestBehavior.translucent,
@@ -133,9 +101,7 @@ class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
             child: const SizedBox.expand(),
           ),
         ),
-        // The PWA measures the REAL rendered menu (appended hidden, then
-        // `offsetWidth`/`offsetHeight`, sidebar-sections.js:121-126) before
-        // clamping; a layout delegate gets the same measured size.
+        // Layout delegate measures the rendered menu before clamping it on-screen.
         Positioned.fill(
           child: CustomSingleChildLayout(
             delegate: PointPopupLayout(
@@ -154,7 +120,7 @@ class _QuickMenuRoute extends PopupRoute<SidebarQuickMenuItem> {
     Animation<double> secondaryAnimation,
     Widget child,
   ) =>
-      child; // entrance handled inside _QuickMenu via the animation.
+      child;
 }
 
 class _QuickMenu extends ConsumerWidget {
@@ -168,8 +134,6 @@ class _QuickMenu extends ConsumerWidget {
     final c = context.nym;
     final transparency =
         ref.watch(settingsProvider.select((s) => s.transparencyEnabled));
-    // `transition: opacity 0.15s ease, transform 0.15s ease` — CSS `ease`
-    // is cubic-bezier(0.25, 0.1, 0.25, 1) == [Curves.ease].
     final curve = CurvedAnimation(parent: animation, curve: Curves.ease);
     return AnimatedBuilder(
       animation: curve,
@@ -178,11 +142,8 @@ class _QuickMenu extends ConsumerWidget {
         return Opacity(
           opacity: t,
           child: Transform.translate(
-            // translateY(-6 → 0)
             offset: Offset(0, -6 * (1 - t)),
             child: Transform.scale(
-              // scale(0.9 → 1); no `transform-origin` is set on
-              // `.quick-context-menu`, so the CSS default (50% 50%) applies.
               scale: 0.9 + 0.1 * t,
               alignment: Alignment.center,
               child: child,
@@ -192,34 +153,21 @@ class _QuickMenu extends ConsumerWidget {
       },
       child: Material(
         type: MaterialType.transparency,
-        // The CSS menu is a fixed-position flex column with `min-width: 200px`
-        // and NO max-width — shrink-to-fit, so its width is
-        // max(200, widest item), never the viewport. IntrinsicWidth gives the
-        // same sizing (the Column's stretch alignment would otherwise inflate
-        // to the loose screen-wide constraint from the layout delegate).
+        // Shrink-to-fit width of max(200, widest item); IntrinsicWidth stops the stretch Column filling the screen.
         child: IntrinsicWidth(
           child: Container(
             constraints: const BoxConstraints(minWidth: 200),
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              // `.quick-context-menu` bg: with Transparency ON (no `solid-ui`
-              // body class) the PWA paints translucent rgba(20,20,35,0.92)
-              // dark (styles-features.css:2783) / rgba(255,255,255,0.96)
-              // light (styles-themes-responsive.css:1340); with Transparency
-              // OFF (`solid-ui`, the default) it's the opaque
-              // `var(--glass-bg)` (styles-themes-responsive.css:1590-1600).
               color: transparency
                   ? (c.isLight
-                      ? const Color(0xF5FFFFFF) // rgba(255,255,255,0.96)
-                      : const Color(0xEB141423)) // rgba(20,20,35,0.92)
+                      ? const Color(0xF5FFFFFF)
+                      : const Color(0xEB141423))
                   : c.glassBg,
               borderRadius: BorderRadius.circular(14),
-              // Border: `var(--glass-border)` dark; light mode overrides to
-              // rgba(0,0,0,0.1) (styles-themes-responsive.css:1341).
               border: Border.all(
                 color: c.isLight ? const Color(0x1A000000) : c.glassBorder,
               ),
-              // Shadow: 0 8 32 rgba(0,0,0,0.4) dark / rgba(0,0,0,0.15) light.
               boxShadow: [
                 BoxShadow(
                   color: c.isLight
@@ -262,14 +210,7 @@ class _QuickMenuRowState extends State<_QuickMenuRow> {
     final a = widget.item;
     final fg = a.danger ? c.danger : c.text;
     final iconColor = a.danger ? c.danger : c.textDim;
-    // Background per the CSS cascade (styles-features.css:2819-2846 + light
-    // overrides styles-themes-responsive.css:1346-1352):
-    //  - dark: `.quick-context-item.danger:hover` (0,3,0) red@0.12 outranks
-    //    the equal-specificity `:hover` white@0.08 and `:active` white@0.12
-    //    (0,2,0 each, `:active` declared last so it wins over `:hover`);
-    //  - light: `body.light-mode .quick-context-item:hover/:active` (0,3,1)
-    //    black@0.06 / black@0.1 outrank `.danger:hover`, so danger rows get
-    //    the SAME neutral fills as regular rows.
+    // In light mode, danger rows get the same neutral hover/active fills as regular rows (CSS specificity).
     final Color bg;
     if (c.isLight) {
       bg = _pressed
@@ -278,7 +219,7 @@ class _QuickMenuRowState extends State<_QuickMenuRow> {
               ? Colors.black.withValues(alpha: 0.06)
               : Colors.transparent;
     } else if (a.danger && _hover) {
-      bg = c.dangerHoverOverlay; // rgba(255,68,68,0.12)
+      bg = c.dangerHoverOverlay;
     } else if (_pressed) {
       bg = Colors.white.withValues(alpha: 0.12);
     } else if (_hover) {
@@ -292,15 +233,12 @@ class _QuickMenuRowState extends State<_QuickMenuRow> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () => Navigator.of(context).pop(a),
-        // `:active` pressed feedback while the pointer is down.
         onTapDown: (_) => setState(() => _pressed = true),
         onTapUp: (_) => setState(() => _pressed = false),
         onTapCancel: () => setState(() => _pressed = false),
         child: AnimatedContainer(
-          // `transition: background 0.12s ease` (styles-features.css:2811).
           duration: const Duration(milliseconds: 120),
           curve: Curves.ease,
-          // `.quick-context-item`: padding 8/12, gap 10, radius 8, font 14.
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: bg,
@@ -322,12 +260,7 @@ class _QuickMenuRowState extends State<_QuickMenuRow> {
   }
 }
 
-/// Shows the PM `.quick-context-menu` at [globalPosition] with Block/Unblock
-/// user + Leave conversation, mirroring the PWA's `_buildSidebarMenuItems`
-/// pm-item branch (sidebar-sections.js:216-235). Block toggles via
-/// [NostrController.toggleBlockUser]; Leave runs the PWA's `deletePM` flow
-/// (pms.js:2849-2879): confirm → stamp read + drop unread → close (records
-/// `closedPMs`) → switch away if viewing → "PM conversation deleted".
+/// PM quick menu with Block/Unblock and Leave conversation (the PWA `deletePM` flow).
 Future<void> showPmContextMenu(
   BuildContext context,
   WidgetRef ref,
@@ -341,19 +274,16 @@ Future<void> showPmContextMenu(
   final items = <SidebarQuickMenuItem>[
     SidebarQuickMenuItem(
       label: isBlocked ? tr('Unblock user') : tr('Block user'),
-      // PWA uses the same `blockSvg` for both block + unblock states.
       svg: NymIcons.sidebarBlock,
       danger: !isBlocked,
       onSelected: () => controller.toggleBlockUser(pubkey),
     ),
     SidebarQuickMenuItem(
       label: tr('Leave conversation'),
-      // PWA `leaveSvg` is the feather log-out (== NymIcons.logout).
       svg: NymIcons.logout,
       danger: true,
       onSelected: () async {
         if (!context.mounted) return;
-        // `deletePM` (pms.js:2849): danger confirm before anything happens.
         final ok = await showAppConfirm(
           context,
           tr('Delete this PM conversation?'),
@@ -362,8 +292,7 @@ Future<void> showPmContextMenu(
         );
         if (!ok || !context.mounted) return;
         final notifier = ref.read(appStateProvider.notifier);
-        // `channelLastRead.set(conversationKey, now)` + delete the
-        // conversation's `unreadCounts` entry so no stale badge survives.
+        // Mark read and drop the unread count so no stale badge survives.
         final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
         notifier.markChannelRead(pubkey, nowSec);
         notifier.markChannelRead(PmLogic.pmStorageKey(pubkey), nowSec);
@@ -373,8 +302,6 @@ Future<void> showPmContextMenu(
         final view = ref.read(appStateProvider).view;
         final wasViewing = view.kind == ViewKind.pm && view.id == pubkey;
         notifier.closePM(pubkey);
-        // "If currently viewing this PM, switch to bar":
-        // `switchChannel('nymchat','nymchat')`.
         if (wasViewing) controller.switchChannel(kDefaultChannel);
         notifier.addSystemMessage(tr('PM conversation deleted'));
       },

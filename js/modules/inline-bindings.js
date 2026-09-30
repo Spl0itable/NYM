@@ -1,7 +1,4 @@
-// inline-bindings.js - Single delegated dispatcher that replaces inline event handlers
-
-// On-demand script loader, cached per URL so heavy libs load only when a
-// feature first needs them.
+// Cached per URL so heavy libs load only when first needed.
 window.loadScriptOnce = function (url) {
     window._loadedScripts = window._loadedScripts || new Map();
     if (window._loadedScripts.has(url)) return window._loadedScripts.get(url);
@@ -17,14 +14,12 @@ window.loadScriptOnce = function (url) {
     return p;
 };
 
-// Vendored libs, served same-origin and covered by the build manifest
+// Vendored libs, served same-origin and covered by the build manifest.
 window.NYM_CDN = {
     qrcode: '/js/vendor/qrcode.min.js',
     webtorrent: '/js/vendor/webtorrent.min.js'
 };
 
-// Collapsed/expanded state of the Settings modal category sections, persisted
-// per section key so the user's layout sticks across opens and reloads.
 window.persistSettingsSectionState = function (key, collapsed) {
     if (!key) return;
     try {
@@ -45,11 +40,7 @@ window.restoreSettingsSectionState = function () {
     });
 };
 
-// Filter the Settings modal options live as the user types. Matches each
-// option's visible text (labels, hints, dropdown options) plus input
-// placeholders against the query; sections with no match are hidden, and
-// sections with matches are force-expanded so the result is visible. An empty
-// query restores the saved collapsed/expanded layout.
+// Matching sections are force-expanded; an empty query restores the saved layout.
 window.filterSettings = function (query) {
     var q = (query || '').trim().toLowerCase();
     var modal = document.getElementById('settingsModal');
@@ -90,7 +81,6 @@ window.filterSettings = function (query) {
     if (!q) window.restoreSettingsSectionState();
 };
 
-// Chat images keep a reserved placeholder box
 (function () {
     function markImgLoaded(e) {
         var t = e.target;
@@ -102,7 +92,6 @@ window.filterSettings = function (query) {
     document.addEventListener('error', markImgLoaded, true);
 })();
 
-// Short haptic pulse used to confirm a long-press fired on mobile
 window.nymHapticTap = function (ms) {
     try {
         if (window.Haptics && typeof window.Haptics.postMessage === 'function') {
@@ -112,7 +101,7 @@ window.nymHapticTap = function (ms) {
         if (navigator && typeof navigator.vibrate === 'function') {
             navigator.vibrate(ms || 30);
         }
-    } catch (_) { /* ignore */ }
+    } catch (_) { }
 };
 
 (function () {
@@ -120,7 +109,6 @@ window.nymHapticTap = function (ms) {
 
     var ACTIONS = (window.NYM_ACTIONS = window.NYM_ACTIONS || {});
 
-    // Walk up from el looking for an ancestor with the given attribute.
     function closestWithAttr(el, attr) {
         while (el && el.nodeType === 1) {
             if (el.hasAttribute && el.hasAttribute(attr)) return el;
@@ -148,7 +136,7 @@ window.nymHapticTap = function (ms) {
     document.addEventListener('keyup',    function (e) { dispatch('keyup',    'data-on-keyup',   e); }, false);
     document.addEventListener('keydown',  function (e) { dispatch('keydown',  'data-on-keydown', e); }, false);
 
-    // Avatar / image fallback. `error` events do not bubble
+    // `error` events do not bubble, so this listens in the capture phase.
     document.addEventListener('error', function (e) {
         var t = e.target;
         if (!t || t.tagName !== 'IMG') return;
@@ -157,18 +145,15 @@ window.nymHapticTap = function (ms) {
             if (host && typeof host._noteProxiedMediaFailure === 'function') host._noteProxiedMediaFailure();
         }
         if (t.dataset && t.dataset.avatarPubkey && window.nym && typeof window.nym.generateAvatarSvg === 'function') {
-            // If the image actually decoded (e.g. error fired on a canceled
-            // load while the new src is already painting), don't replace it.
+            // If the image actually decoded (error from a canceled load), don't replace it.
             if (t.complete && t.naturalHeight > 0) return;
             var fallback = window.nym.generateAvatarSvg(t.dataset.avatarPubkey);
-            // Avoid loops if the fallback itself somehow errors.
             if (t.src === fallback) return;
             t.onerror = null;
             t.src = fallback;
             return;
         }
-        // Custom emoji failed to load — retry a couple of times so a transient
-        // miss gets a chance to re-fetch and populate the long-lived edge cache.
+        // Retry custom emoji a couple of times so a transient miss can populate the edge cache.
         if (t.classList && t.classList.contains('custom-emoji')) {
             if (t.complete && t.naturalHeight > 0) return;
             var tries = parseInt(t.dataset.emojiRetry || '0', 10);
@@ -196,17 +181,14 @@ window.nymHapticTap = function (ms) {
         }
     }, true);
 
-    // Action registry
     function nym() { return window.nym; }
     function byId(id) { return document.getElementById(id); }
 
     Object.assign(ACTIONS, {
-        // Generic
         'closeModal':                 function (_e, t) { window.closeModal(t.dataset.modalId); },
         'noop':                       function () {},
         'stopPropagation':            function (e) { e.stopPropagation(); },
 
-        // Sidebar / global
         'closeSidebar':               function () { nym().closeSidebar(); },
         'openNotificationsModal':     function () { nym().openNotificationsModal(); },
         'closeNotificationsModal':    function () { nym().closeNotificationsModal(); },
@@ -253,7 +235,6 @@ window.nymHapticTap = function (ms) {
         'setActiveWindowFromSelect':  function (_e, t) { nym().setGeohashActiveWindow(t.value); },
         'closeGeohashInfo':           function () { nym().closeGeohashInfo(); },
 
-        // Image / context-menu avatar/banner
         'expandImageFromSrcStop':     function (e, t) {
             e.stopPropagation();
             nym().expandImage(t.src);
@@ -278,12 +259,10 @@ window.nymHapticTap = function (ms) {
         'imageModalNext':             function (e) { e.stopPropagation(); if (window.navigateImageModalGallery) window.navigateImageModalGallery(1); },
         'videoModalStop':             function (e) { e.stopPropagation(); },
 
-        // Threads
         'openMessageThread':          function (_e, t) { nym().openMessageThread(t); },
         'closeThreadView':            function () { nym().closeThreadView(); },
         'onThreadsEnabledChange':     function (_e, t) { window.onThreadsEnabledChange(t.value); },
 
-        // Channel nav / search
         'navigateBack':               function () { nym().navigateBack(); },
         'navigateForward':            function () { nym().navigateForward(); },
         'shareChannel':               function () { nym().shareChannel(); },
@@ -323,7 +302,6 @@ window.nymHapticTap = function (ms) {
         'filterPMs':                  function (_e, t) { nym().filterPMs(t.value); },
         'filterUsers':                function (_e, t) { nym().filterUsers(t.value); },
 
-        // Input area buttons
         'selectImage':                function () { window.selectImage(); },
         'selectP2PFile':              function () { window.selectP2PFile(); },
         'toggleEmojiPicker':          function () { nym().toggleEmojiPicker(); },
@@ -334,7 +312,6 @@ window.nymHapticTap = function (ms) {
         'closeGifPicker':             function () { nym().closeGifPicker(); },
         'scrollToBottom':             function () { window.scrollToBottom(); },
 
-        // PM / report modals
         'focusPmRecipient':           function () { var i = byId('pmRecipientInput'); if (i) i.focus(); },
         'onNewPMRecipientInput':      function (_e, t) { nym().onNewPMRecipientInput(t.value); },
         'onNewPMRecipientKeydown':    function (e)    { nym().onNewPMRecipientKeydown(e); },
@@ -343,15 +320,12 @@ window.nymHapticTap = function (ms) {
         'closeReportModal':           function () { nym().closeReportModal(); },
         'submitReport':               function () { nym().submitReport(); },
 
-        // Poll
         'addPollOption':              function () { window.addPollOption(); },
         'submitPoll':                 function () { window.submitPoll(); },
 
-        // Dev nsec
         'cancelDevNsec':              function () { window.cancelDevNsec(); },
         'verifyDevNsec':              function () { window.verifyDevNsec(); },
 
-        // Nostr login
         'nostrLoginWithExtension':    function () { window.nostrLoginWithExtension(); },
         'nostrLoginStartRemoteSigner':function () { window.nostrLoginStartRemoteSigner(); },
         'nostrLoginConnectBunker':    function () { window.nostrLoginConnectBunker(); },
@@ -359,7 +333,6 @@ window.nymHapticTap = function (ms) {
         'nostrLoginCancelRemoteSigner': function () { window.nostrLoginCancelRemoteSigner(); },
         'nostrLoginWithNsec':         function () { window.nostrLoginWithNsec(); },
 
-        // Nick edit
         'handleNickEditAvatarSelect': function (e) { window.handleNickEditAvatarSelect(e); },
         'triggerNickEditAvatarUpload':function () { window.triggerNickEditAvatarUpload(); },
         'removeNickEditAvatar':       function () { window.removeNickEditAvatar(); },
@@ -378,7 +351,6 @@ window.nymHapticTap = function (ms) {
         'randomizeNick':              function () { window.randomizeNick(); },
         'changeNick':                 function () { window.changeNick(); },
 
-        // Setup modal
         'handleSetupAvatarSelect':    function (e) { window.handleSetupAvatarSelect(e); },
         'triggerSetupAvatarUpload':   function () { window.triggerSetupAvatarUpload(); },
         'removeSetupAvatar':          function () { window.removeSetupAvatar(); },
@@ -389,7 +361,6 @@ window.nymHapticTap = function (ms) {
         'initializeNym':              function () { window.initializeNym(); },
         'switchSetupTab':             function (_e, t) { window.switchSetupTab(t.dataset.setupTab); },
 
-        // Settings
         'selectWallpaper':            function (_e, t) { window.selectWallpaper(t.dataset.wallpaper); },
         'triggerWallpaperUpload':     function () { window.triggerWallpaperUpload(); },
         'handleWallpaperUpload':      function (e) { window.handleWallpaperUpload(e); },
@@ -413,20 +384,17 @@ window.nymHapticTap = function (ms) {
             if (w) w.style.display = t.value === 'hardcore' ? 'block' : 'none';
         },
 
-        // Shop
         'restorePurchasesFromInput':  function () {
             var i = byId('recoveryCodeInput');
             nym().restorePurchases(i ? i.value : '');
         },
         'switchShopTab':              function (e, t) { nym().switchShopTab(t.dataset.shopTab, e); },
 
-        // Zap modal
         'closeZapModal':              function () { nym().closeZapModal(); },
         'copyZapInvoice':             function () { nym().copyZapInvoice(); },
         'openInWallet':               function () { nym().openInWallet(); },
         'manualCheckPayment':         function () { nym().manualCheckPayment(); },
 
-        // Premium Nymbot control bar + model/git modals
         'botSetTier':                 function (_e, t) { nym().botSetTier(t.dataset.tier); },
         'openBotModelModal':          function () { nym().openBotModelModal(); },
         'botSelectModel':             function (_e, t) { nym()._botSelectModel(t.dataset.model || ''); },
@@ -438,16 +406,13 @@ window.nymHapticTap = function (ms) {
         'botAnonMove':                function () { nym().botAnonMoveFromModal(); },
         'botAnonRotate':              function () { nym().botAnonRotateFromModal(); },
 
-        // Share modal
         'copyShareUrl':               function () { nym().copyShareUrl(); },
 
-        // Notifications modal toggles
         'toggleNotificationsEnabled': function (_e, t) { nym().toggleNotificationsEnabled(t.checked); },
         'toggleGroupMentionsOnly':    function (_e, t) { nym().toggleGroupMentionsOnly(t.checked); },
         'toggleThreadMentionsOnly':   function (_e, t) { nym().toggleThreadMentionsOnly(t.checked); },
         'toggleNotifyFriendsOnly':    function (_e, t) { nym().toggleNotifyFriendsOnly(t.checked); },
 
-        // Dynamically-rendered (innerHTML) handlers from JS modules
         'reactionShowPicker':         function (_e, t) { nym().showReactionPicker(t.dataset.messageId, t); },
         'translateHoverMessage':      function (_e, t) { nym().translateHoverMessage(t); },
         'stopSeeding':                function (_e, t) { nym().stopSeeding(t.dataset.offerId); },
@@ -543,8 +508,7 @@ window.nymHapticTap = function (ms) {
         'dismissShopSuccess':         function () { nym().dismissShopSuccess(); },
         'cancelUpload':               function () { nym().cancelUpload(); },
 
-        // Group moderation context-menu actions. Target pubkey lives on
-        // nym().contextMenuData, set when the menu was opened.
+        // Target pubkey lives on nym().contextMenuData, set when the menu was opened.
         'kickMemberFromContext':      function () {
             var d = nym().contextMenuData;
             if (d && d.pubkey) nym().kickFromGroup(d.pubkey);
@@ -605,7 +569,6 @@ window.nymHapticTap = function (ms) {
             }
         },
 
-        // Group context menu (group header click)
         'closeGroupContextMenu':      function () { nym().closeGroupContextMenu(); },
         'groupCtxEditName':           function () { nym().groupCtxEditName(); },
         'groupCtxEditDescription':    function () { nym().groupCtxEditDescription(); },
@@ -629,14 +592,11 @@ window.nymHapticTap = function (ms) {
         'groupCtxMemberClick':        function (_e, t) {
             nym()._openMemberFromGroupCtx(t.dataset.pubkey, t.dataset.nym);
         },
-        // Back from a member's profile to the group context menu it was opened from
         'ctxBack':                    function () { nym().ctxBackToGroup(); },
 
-        // New Group modal: optional avatar/banner pickers
         'newGroupPickAvatar':         function () { nym().newGroupPickAvatar(); },
         'newGroupPickBanner':         function () { nym().newGroupPickBanner(); },
 
-        // A custom group avatar image failed to load — fall back to the glyph.
         'groupImgError':              function (_e, t) {
             if (t.complete && t.naturalHeight > 0) return;
             var wrap = t.parentElement;
@@ -646,17 +606,14 @@ window.nymHapticTap = function (ms) {
             wrap.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>';
         },
 
-        // Error-event actions (referenced via data-error-action)
         'errorHideElement':           function (_e, t) { t.style.display = 'none'; },
 
-        // Generic
         'removeParent':               function (_e, t) { if (t.parentElement) t.parentElement.remove(); },
         'removeElementById':          function (_e, t) {
             var el = byId(t.dataset.removeId);
             if (el) el.remove();
         },
 
-        // Shop dynamic
         'purchaseItem':               function (_e, t) { nym().purchaseItem(t.dataset.itemId); },
         'activateMessageStyle':       function (_e, t) { nym().activateMessageStyle(t.dataset.itemId); },
         'activateFlair':              function (_e, t) { nym().activateFlair(t.dataset.itemId); },
@@ -678,7 +635,6 @@ window.nymHapticTap = function (ms) {
         'acceptSettingsTransfer':     function (_e, t) { nym().acceptSettingsTransfer(t.dataset.eventId); },
         'rejectSettingsTransfer':     function (_e, t) { nym().rejectSettingsTransfer(t.dataset.eventId); },
 
-        // Autocomplete
         'selectSpecificAutocomplete': function (_e, t) {
             nym().selectSpecificAutocomplete(t.dataset.acNym, t.dataset.acPubkey);
         },
@@ -692,17 +648,12 @@ window.nymHapticTap = function (ms) {
             nym().selectKaomoji(t.dataset.kaomoji);
         },
 
-        // Channels (settings list buttons)
         'unblockChannelFromSettings': function (_e, t) { nym().unblockChannelFromSettings(t.dataset.channelKey); },
         'unhideChannelFromSettings':  function (_e, t) { nym().unhideChannelFromSettings(t.dataset.channelKey); },
 
-        // PM / group sidebar list items
         'openPMItem':                 function (_e, t) { nym().openPM(t.dataset.nym, t.dataset.pubkey); },
         'openGroupItem':              function (_e, t) { nym().openGroup(t.dataset.groupId); },
-        // The long-press menu, reachable by tap. The dispatcher resolves to the
-        // NEAREST data-action, so this fires instead of the row's open action —
-        // no stopPropagation needed for that, but the row's own click listener
-        // (sidebar-sections.js) is separate and does need suppressing.
+        // This fires instead of the row's open action, but the row's own click listener in sidebar-sections.js needs suppressing.
         'sidebarRowMenu':             function (e, t) {
             e.preventDefault();
             e.stopPropagation();
@@ -712,12 +663,9 @@ window.nymHapticTap = function (ms) {
             var items = n._buildSidebarMenuItems(row);
             if (!items || !items.length) return;
             var r = t.getBoundingClientRect();
-            // Anchor to the button so the menu opens where the user tapped,
-            // matching the long-press behavior.
             n._showSidebarActionMenu(items, r.left + r.width / 2, r.bottom);
         },
 
-        // PMs dynamic
         'removeNewPMRecipient':       function (_e, t) { nym().removeNewPMRecipient(t.dataset.pubkey); }
     });
 })();

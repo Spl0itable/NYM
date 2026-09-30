@@ -1,13 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-/// A tiny in-app ring buffer of mesh receive-pipeline events, surfaced on the
-/// Mesh screen so a device with no adb/log access can still show exactly what
-/// happens when a message arrives — did the bridge handler run, what
-/// conversation key was resolved, what view was open, and did the message
-/// actually land in the store the chat reads.
-///
-/// Purely a debugging aid; carries no protocol weight and can be deleted once
-/// the receive path is confirmed working end to end on a real device.
+/// In-app ring buffer of mesh receive-pipeline events, shown on the Mesh screen for devices without adb.
 class MeshDiagnostics {
   MeshDiagnostics._();
   static final MeshDiagnostics instance = MeshDiagnostics._();

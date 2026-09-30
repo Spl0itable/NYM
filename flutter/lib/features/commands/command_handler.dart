@@ -1,13 +1,4 @@
-// Slash-command dispatcher — the effectful half of the command system. Ports
-// `handleCommand` + every `cmd*` handler (commands.js) into engine calls on the
-// [NostrController], with context gating, the shared action rate limit, and a
-// system-message sink that mirrors `displaySystemMessage`.
-//
-// Commands that open modals owned by OTHER agents (poll editor, nick/zap
-// dialogs, group/invite pickers) are wired through optional callback hooks
-// rather than hard dependencies — when a hook is unset the handler reports the
-// usage/system message exactly as the PWA would, but does not crash. See the
-// CommandHooks fields + their TODO(verify) notes.
+// Slash-command dispatcher; modal-opening commands go through optional hooks and degrade to the PWA's system text when unset.
 
 import '../../core/utils/nym_utils.dart';
 import '../../models/user.dart';
@@ -17,33 +8,23 @@ import 'command_i18n.dart';
 import 'command_registry.dart';
 import 'help_output.dart';
 
-/// The effects a command can request. The controller supplies these; the
-/// handler never reaches into app_state directly (it is not an owner of it).
+/// Effects a command can request; the handler never touches app_state directly.
 abstract class CommandEngine {
-  /// Current view context.
   bool get inPM;
   bool get inGroup;
 
-  /// Self identity (for self-target checks).
   String get selfPubkey;
 
-  /// All known users (for `@nym` / `nym#xxxx` / hex resolution).
+  /// All known users, for `@nym`, `nym#xxxx` and hex resolution.
   Map<String, User> get users;
 
-  /// Sends [content] to the current conversation surface
-  /// (`_sendToCurrentTarget`).
   void sendToCurrentTarget(String content);
 
-  /// Surfaces a system message in the active conversation
-  /// (`displaySystemMessage`).
   void systemMessage(String text);
 
-  // Direct engine actions (each maps to an existing controller method).
   void join(String channel);
 
-  /// `/clear` — `cmdClear` (commands.js:689-692): empties the rendered
-  /// conversation (`messagesContainer.innerHTML = ''`), THEN shows the
-  /// 'Chat cleared' system line.
+  /// Empties the rendered conversation, then shows 'Chat cleared'.
   void clear();
   void leave();
   void quit();
@@ -56,9 +37,7 @@ abstract class CommandEngine {
   void unblock(String arg);
 }
 
-/// Optional UI/modal hooks for commands whose effect is owned by another agent.
-/// Unset hooks degrade gracefully (the handler shows the same system text the
-/// PWA shows when the surface isn't available).
+/// Optional UI hooks for commands whose surface lives elsewhere; unset hooks degrade gracefully.
 class CommandHooks {
   const CommandHooks({
     this.openPoll,
@@ -80,36 +59,27 @@ class CommandHooks {
     this.openDevNsecChallenge,
   });
 
-  /// `/poll` → open the poll editor modal (polls agent). TODO(verify): modal
-  /// owned by another agent; wire when available.
   final void Function()? openPoll;
 
-  /// `/pm <resolved pubkey>` → open/create the PM thread.
   final void Function(String pubkey, String nym)? openPm;
 
-  /// `/zap <resolved pubkey>` → open the zap modal (zaps agent). TODO(verify).
   final void Function(String pubkey, String nym)? openZap;
 
-  /// `/invite <arg>` → channel-invite / startGroupFromPM / addMemberToGroup.
-  /// TODO(verify): group/PM invite flow spans pms/groups agents.
+  /// `/invite <arg>`: channel invite, startGroupFromPM, or addMemberToGroup.
   final void Function(String arg)? invite;
 
-  /// `/share` → `shareChannel()` (channels.js:411-427): opens the Share
-  /// Channel modal (`#shareModal`) with `origin+pathname#<channel||'nymchat'>`
-  /// in the readonly input, auto-selected. The modal is [ShareChannelModal]
-  /// (features/channels/channel_share.dart), owned by the channels UI.
+  /// `/share` opens [ShareChannelModal].
   final void Function()? openShare;
 
-  /// `/group <@u1 @u2 [name]>` → resolve members + createGroup.
+  /// `/group <@u1 @u2 [name]>`: resolve members, then create the group.
   final void Function(List<String> memberPubkeys, String name)? createGroup;
 
-  /// `/addmember <arg>` → add to current group / startGroupFromPM.
+  /// `/addmember <arg>`: add to the current group or startGroupFromPM.
   final void Function(String arg)? addMember;
 
-  /// `/groupinfo` → list members by role.
   final void Function()? groupInfo;
 
-  // Group moderation (groups agent). Each resolves the target then acts.
+  // Group moderation; each resolves the target, then acts.
   final void Function(String pubkey)? kick;
   final void Function(String pubkey)? ban;
   final void Function(String pubkey)? unban;
@@ -119,20 +89,11 @@ class CommandHooks {
   final void Function(String pubkey)? removeAdmin;
   final void Function(String pubkey)? transferOwner;
 
-  /// `/nick <reserved>` → the developer-nsec challenge modal
-  /// (`showDevNsecModal('nick')` → `applyDeveloperIdentity` on success,
-  /// commands.js:614-626). The hook owns the whole outcome: verify → switch
-  /// the running session to the developer identity + the "Identity verified…"
-  /// line, cancel → the PWA's 'Nickname change canceled.' line. Unset
-  /// (headless/tests) → the engine's reserved gate aborts with the same
-  /// cancellation message.
+  /// `/nick <reserved>`: the hook owns verification and the outcome; unset, the reserved gate aborts as canceled.
   final void Function()? openDevNsecChallenge;
 }
 
-/// Resolves a `@nym` / `nym#xxxx` / 64-hex target to a pubkey + display nym, or
-/// null. Mirrors the matching logic shared by cmdSlap/cmdHug/cmdInvite: strip a
-/// leading `@`, accept a raw hex pubkey, else match base nym (case-insensitive)
-/// optionally constrained by a `#suffix`.
+/// Resolves `@nym`, `nym#xxxx` or 64-hex to a pubkey and display nym, or null.
 class ResolvedTarget {
   const ResolvedTarget(this.pubkey, this.nym);
   final String pubkey;
@@ -173,7 +134,6 @@ ResolvedTarget? resolveTarget(String raw, Map<String, User> users) {
   return matches.first;
 }
 
-/// Dispatches parsed slash commands to engine effects.
 class CommandDispatcher {
   CommandDispatcher({
     required this.engine,
@@ -183,19 +143,15 @@ class CommandDispatcher {
 
   final CommandEngine engine;
 
-  /// Modal/UI hooks. Mutable so the controller can register them after the UI
-  /// mounts (via [hooksOverride]).
+  /// Mutable so the controller can register hooks after the UI mounts.
   CommandHooks hooks;
   final ActionCommandRateLimiter rateLimiter;
 
-  /// Swaps in a new hook set (used by the controller's setCommandHooks).
   set hooksOverride(CommandHooks value) => hooks = value;
 
-  /// Routes [line] (a `/cmd args` string). Returns true if it was a command
-  /// (known or not) and therefore should NOT be published as a message.
+  /// Routes a `/cmd args` line; true if it was a command (known or not) and must not be published.
   bool handle(String line) {
-    // A command typed in the user's language resolves to its canonical token
-    // before dispatch; English names keep working unchanged.
+    // Localized command tokens resolve to canonical ones before dispatch.
     final parsed = parseCommand(canonicalizeCommandInput(line));
     final spec = parsed.spec;
     if (spec == null) {
@@ -203,7 +159,7 @@ class CommandDispatcher {
       return true;
     }
 
-    // Context gate (the PWA enforces this inside each handler).
+    // Context gate.
     if (!isAllowedIn(spec, inPM: engine.inPM, inGroup: engine.inGroup)) {
       engine.systemMessage(_gateMessage(spec));
       return true;
@@ -238,11 +194,6 @@ class CommandDispatcher {
   void _dispatch(CommandSpec spec, String args) {
     switch (spec.id) {
       case 'help':
-        // `showHelp()` (commands.js:522-546): the full categorized listing —
-        // title, per-category headers, "/name, /alias — desc" rows, and the
-        // five footer lines — posted as a system message. The styled
-        // `.help-output` rendering is [HelpOutputBlock] (help_output.dart);
-        // this emits the identical content through the plain-text sink.
         engine.systemMessage(buildHelpMessageText());
       case 'join':
         if (args.isEmpty) {
@@ -310,14 +261,10 @@ class CommandDispatcher {
       case 'zap':
         _zap(args);
       case 'poll':
-        // `/poll` → the poll editor modal (polls agent). When no hook is wired
-        // (headless/tests) this degrades to nothing, matching the prior no-op.
+        // No-op when no hook is wired.
         hooks.openPoll?.call();
       case 'share':
-        // `cmdShare` → `shareChannel()` (channels.js:411-427) opens the Share
-        // Channel modal — works even in PM mode (URL falls back to the current
-        // channel or 'nymchat'). Prefer the modal hook; engine.share() is the
-        // headless fallback.
+        // Works even in PM mode; engine.share() is the headless fallback.
         if (hooks.openShare != null) {
           hooks.openShare!();
         } else {
@@ -369,8 +316,6 @@ class CommandDispatcher {
     }
   }
 
-  // --- helpers --------------------------------------------------------------
-
   void _pm(String args) {
     if (args.isEmpty) {
       engine
@@ -403,8 +348,7 @@ class CommandDispatcher {
       return;
     }
     if (t.pubkey == engine.selfPubkey) {
-      // PWA cmdZap blocks self-zapping via the command (zaps.js:1947/2007).
-      // Self-zapping your own MESSAGE via the badge is still allowed elsewhere.
+      // Self-zap is blocked only via the command; zapping your own message badge is allowed.
       engine.systemMessage(tr("You can't zap yourself"));
       return;
     }
@@ -412,8 +356,7 @@ class CommandDispatcher {
   }
 
   void _group(String args) {
-    // Resolve every @token (excluding self) then hand to createGroup. A
-    // trailing non-@ token list tail is treated as the optional name.
+    // Resolve every @token except self; a trailing non-@ tail is the optional name.
     final tokens = args.trim().split(RegExp(r'\s+')).where((t) => t.isNotEmpty);
     final members = <String>[];
     final nameParts = <String>[];
@@ -454,8 +397,7 @@ class CommandDispatcher {
       return;
     }
     final t = resolveTarget(args, engine.users);
-    // Use a full @nym#suffix mention when resolved (avatar/flair render);
-    // otherwise the bare typed nym (cmdSlap/cmdHug fallback).
+    // Full @nym#suffix mention when resolved, else the bare typed nym.
     final mention = t != null
         ? '@${stripPubkeySuffix(t.nym)}#${getPubkeySuffix(t.pubkey)}'
         : '@${args.trim().replaceFirst(RegExp(r'^@'), '')}';

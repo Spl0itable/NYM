@@ -15,18 +15,7 @@ String creditFigure(num? value) {
   return two;
 }
 
-/// The one call every widget uses to localize static UI text.
-///
-/// Returns [source] localized into the active UI language, or [source] itself
-/// (English) when no language is selected or the translation hasn't cached yet.
-/// [args] fills `{name}` placeholders **after** translation, so a template like
-/// `tr('Step {n} of {total}', {'n': i + 1, 'total': count})` caches once per
-/// language regardless of the numbers.
-///
-/// It is a bare top-level function (delegating to [LocalizationService]) so it
-/// can be dropped into `StatelessWidget`/`State` build methods without
-/// threading `ref`/`context`; reactivity comes from the root widget rebuilding
-/// on [i18nVersionProvider] when new translations land.
+/// Localizes static UI text, falling back to English; [args] fills `{name}` placeholders after translation.
 String tr(String source, [Map<String, Object?>? args]) =>
     LocalizationService.instance.translate(source, args);
 
@@ -36,8 +25,5 @@ extension TrString on String {
       LocalizationService.instance.translate(this, args);
 }
 
-/// A monotonically-increasing counter bumped whenever a batch of UI-string
-/// translations is cached (or the language changes). The root app widget
-/// watches it so the entire widget tree rebuilds and re-reads [tr], swapping
-/// English fallbacks for freshly cached translations.
+/// Bumped when UI translations are cached or the language changes, so the root rebuilds and re-reads [tr].
 final i18nVersionProvider = StateProvider<int>((ref) => 0);

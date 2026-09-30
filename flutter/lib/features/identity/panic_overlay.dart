@@ -10,10 +10,7 @@ import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import 'panic_wipe.dart';
 
-/// Runs the emergency wipe, whichever gesture or button asked for it.
-///
-/// The server purge is signed while the key is still here and bounded, because
-/// a wipe that waits on the network is a wipe that did not happen.
+/// Runs the emergency wipe; the server purge is signed while the key exists and time-bounded so it can't stall the wipe.
 void startPanicWipe(BuildContext context, WidgetRef ref) {
   final ctrl = ref.read(nostrControllerProvider);
   unawaited(ctrl
@@ -26,23 +23,13 @@ void startPanicWipe(BuildContext context, WidgetRef ref) {
   );
 }
 
-/// Full-screen "Encrypting" scramble overlay shown during a panic wipe
-/// (`_panicShowOverlay`, docs/specs/04 §10.2 step 1):
-///
-/// * "ENCRYPTING" title (uppercase, letter-spacing, primary color)
-/// * a 40×8 hex/symbol grid re-randomized every ~60 ms (mono, primary, dim)
-/// * a status line that updates through the wipe stages
-/// * an indeterminate progress bar (`nm-panic-fill`)
-///
-/// Opaque background so nothing sensitive shows while the data is destroyed.
+/// Opaque full-screen "Encrypting" overlay shown during a panic wipe, so nothing sensitive shows.
 class PanicOverlay extends StatefulWidget {
   const PanicOverlay({super.key, required this.wipe, this.onComplete});
 
-  /// The wipe to run while the animation plays.
   final PanicWipe wipe;
 
-  /// Called once the wipe + minimum hold completes (caller restarts to
-  /// first-run). Tests may omit this.
+  /// Called once the wipe and minimum hold complete; the caller restarts to first run.
   final VoidCallback? onComplete;
 
   /// Pushes the overlay as an opaque, non-dismissible route and runs the wipe.
@@ -81,9 +68,6 @@ class _PanicOverlayState extends State<PanicOverlay>
   @override
   void initState() {
     super.initState();
-    // The 2s panic hold fires the same `nymHapticTap` (a single 30ms vibrate,
-    // panic.js:23) as every other haptic site — the codebase-wide mapping for
-    // that pulse is mediumImpact, not a heavier destructive buzz.
     HapticFeedback.mediumImpact();
     _grid = _randomGrid();
     _scrambleTimer = Timer.periodic(
@@ -99,14 +83,12 @@ class _PanicOverlayState extends State<PanicOverlay>
 
   Future<void> _runWipe() async {
     final startedAt = DateTime.now();
-    // Stage strings ported verbatim from panic.js (84/96/109/137): the wipe
-    // reports each destruction stage as it starts so the status line tracks
-    // real progress, then we land on the final "Keys destroyed." line.
+    // Stage strings track real wipe progress, ending on "Keys destroyed.".
     await widget.wipe.wipe(onStatus: (status) {
       if (mounted) setState(() => _status = status);
     });
     if (mounted) setState(() => _status = tr('Keys destroyed.'));
-    // Hold the animation a minimum so the effect reads as deliberate (PWA: 1.5s).
+    // Hold the animation at least 1.5s so the effect reads as deliberate.
     final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
     final wait = max(250, 1500 - elapsed);
     await Future<void>.delayed(Duration(milliseconds: wait));
@@ -137,13 +119,11 @@ class _PanicOverlayState extends State<PanicOverlay>
     return PopScope(
       canPop: false,
       child: Material(
-        // `.nm-panic-overlay` background: a radial-gradient primary glow
-        // (ellipse at 50% 35%, primary/0.08 → transparent at 60%) over `--bg`.
         color: c.bg,
         child: DecoratedBox(
           decoration: BoxDecoration(
             gradient: RadialGradient(
-              center: const Alignment(0, -0.3), // 50% 35%
+              center: const Alignment(0, -0.3),
               radius: 0.9,
               colors: [c.primary.withValues(alpha: 0.08), Colors.transparent],
               stops: const [0, 0.6],
@@ -158,7 +138,6 @@ class _PanicOverlayState extends State<PanicOverlay>
                   Text(
                     tr('ENCRYPTING'),
                     style: TextStyle(
-                      // `.nm-panic-title`: primary, opacity 0.9, mono, no weight.
                       color: c.primary.withValues(alpha: 0.9),
                       fontFamily: 'monospace',
                       fontSize: 13,
@@ -178,7 +157,6 @@ class _PanicOverlayState extends State<PanicOverlay>
                         fontSize: 14,
                         height: 1.35,
                         color: c.primary.withValues(alpha: 0.55),
-                        // `filter: drop-shadow(0 0 6px primary/0.4)` on the glyphs.
                         shadows: [
                           Shadow(
                             color: c.primary.withValues(alpha: 0.4),
@@ -194,7 +172,6 @@ class _PanicOverlayState extends State<PanicOverlay>
                     child: Text(
                       _status,
                       style: TextStyle(
-                        // `.nm-panic-status`: text-bright, opacity 0.95.
                         color: c.textBright.withValues(alpha: 0.95),
                         fontFamily: 'monospace',
                         fontSize: 13,
@@ -214,7 +191,6 @@ class _PanicOverlayState extends State<PanicOverlay>
   }
 }
 
-/// The indeterminate sliding fill bar (`nm-panic-bar` / `nm-panic-fill`).
 class _ProgressBar extends StatelessWidget {
   const _ProgressBar({required this.controller, required this.color});
   final AnimationController controller;
@@ -236,10 +212,9 @@ class _ProgressBar extends StatelessWidget {
           child: AnimatedBuilder(
             animation: controller,
             builder: (context, _) {
-              // Slide a 30%-wide fill from -100% to 333% (PWA keyframes).
               final t = controller.value;
               final fillW = width * 0.30;
-              final travel = width - (-fillW); // from off-left to off-right
+              final travel = width - (-fillW);
               final x = -fillW + travel * t;
               return Stack(
                 children: [

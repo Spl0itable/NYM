@@ -13,67 +13,37 @@ import '../../models/nostr_event.dart';
 import '../../services/relay/relay_message.dart';
 import '../../services/relay/relay_pool.dart';
 
-/// NIP-46 remote-signer (bunker / nostrconnect) transport.
-///
-/// 1:1 port of the PWA NIP-46 section (`js/app.js` ~5077-5481). The client
-/// generates an ephemeral keypair, connects a WebSocket to the signer relay,
-/// subscribes to kind-24133 events `#p=<clientPubkey>`, and exchanges
-/// NIP-44-encrypted `{id, method, params}` RPC frames with the remote signer.
-///
-/// Supported RPC methods (PWA parity): `connect`, `get_public_key`,
-/// `sign_event`, `nip44_encrypt`, `nip44_decrypt`. Responses are matched to
-/// outstanding requests by `id` via [_pendingRequests] (with a timeout).
-///
-/// On a successful connect the session is persisted so it survives a restart:
-///   - `nym_nostr_login_method` = `'nip46'`               (KV)
-///   - `nym_nip46_remote_pubkey`                           (KV)
-///   - `nym_nip46_relay`                                   (KV)
-///   - `nym_nip46_client_secret` (hex client secret key)   (SecureStore)
-/// [restoreSession] reads them back and reconnects on boot.
-///
-/// The signing path in the controller/service is owned by another agent. This
-/// service exposes a [Nip46Signer] the publish path can later delegate to —
-/// see the README/return notes for the integration point.
+/// NIP-46 remote signer transport: NIP-44 `{id, method, params}` RPC over kind 24133, with the session persisted for restore.
 
-/// The kind used for NIP-46 transport events.
 const int kNip46Kind = 24133;
 
-/// Default RPC timeout. Matches the PWA's 60s (remote signer may prompt user).
+/// RPC timeout; the remote signer may be prompting the user.
 const Duration kNip46RequestTimeout = Duration(seconds: 60);
 
-/// Minimal subset of [SecureStore] this service needs, declared as an interface
-/// so tests can inject an in-memory fake (mirrors `SecureStoreLike` elsewhere).
+/// [SecureStore] subset, so tests can inject an in-memory fake.
 abstract class Nip46SecureStore {
   Future<String?> get(String key);
   Future<void> set(String key, String value);
   Future<void> remove(String key);
 }
 
-/// Minimal subset of [KeyValueStore] this service needs. [KeyValueStore]
-/// satisfies this shape structurally, so it can be passed directly in
-/// production while tests inject an in-memory fake.
+/// [KeyValueStore] subset, so tests can inject an in-memory fake.
 abstract class Nip46KeyValueStore {
   String? getString(String key);
   Future<void> setString(String key, String value);
 }
 
-/// A bidirectional text transport to the signer relay. Abstracted so tests can
-/// supply an in-memory fake instead of a live WebSocket.
+/// Text transport to the signer relay, fakeable in tests.
 abstract class Nip46Socket {
-  /// Inbound text frames from the relay.
   Stream<String> get messages;
 
-  /// Sends a text frame to the relay.
   void send(String data);
 
-  /// Closes the transport.
   Future<void> close();
 }
 
-/// Factory that opens a [Nip46Socket] for a relay URL.
 typedef Nip46SocketFactory = Nip46Socket Function(String relayUrl);
 
-/// Default [Nip46Socket] backed by a real [WebSocketChannel].
 class _WebSocketNip46Socket implements Nip46Socket {
   _WebSocketNip46Socket(String relayUrl)
       : _channel = WebSocketChannel.connect(Uri.parse(relayUrl));
@@ -91,8 +61,7 @@ class _WebSocketNip46Socket implements Nip46Socket {
   Future<void> close() => _channel.sink.close();
 }
 
-/// A socket that failed to open. It keeps the service alive (no crash) while
-/// surfacing failure through logs.
+/// A socket that failed to open; keeps the service alive and logs the failure.
 class _FailingNip46Socket implements Nip46Socket {
   _FailingNip46Socket(this.error);
 
@@ -117,14 +86,7 @@ Nip46Socket _defaultSocketFactory(String relayUrl) {
   }
 }
 
-/// Builds the production socket factory: for a relay the shared pool already
-/// covers (the default [RelayConfig.nip46Relay], which is in
-/// [RelayConfig.defaultRelays]) it routes NIP-46 through the pool
-/// ([_PoolNip46Socket]) so the transport inherits proxy-mode IP privacy, the
-/// direct fallback, and the pool's reconnect + active-sub replay — the relays
-/// are already connected in the background, so we just listen there. An
-/// arbitrary `bunker://` relay not in the pool (and the no-pool case) falls back
-/// to a dedicated raw WebSocket.
+/// Routes relays the pool already covers through it (proxy privacy, reconnect); other `bunker://` relays get a raw socket.
 Nip46SocketFactory _makeDefaultFactory(
     PoolTransport? Function()? poolProvider) {
   return (relayUrl) {
@@ -137,23 +99,13 @@ Nip46SocketFactory _makeDefaultFactory(
   };
 }
 
-/// Canonicalizes a relay URL for pool matching: trims whitespace and drops a
-/// single trailing `/`. Amber emits `bunker://…?relay=wss://relay.primal.net/`
-/// (trailing slash); without this that wouldn't match the pool's
-/// `wss://relay.primal.net` and would fall to a proxy-bypassing raw socket that
-/// fails in proxy mode.
+/// Trims and drops one trailing `/`, so Amber's `wss://relay.primal.net/` matches the pool instead of bypassing the proxy.
 String _canonicalRelayUrl(String url) {
   final t = url.trim();
   return t.endsWith('/') ? t.substring(0, t.length - 1) : t;
 }
 
-/// A [Nip46Socket] backed by the app's shared relay [PoolTransport] instead of a
-/// dedicated raw WebSocket. Translates the service's raw `REQ`/`EVENT`/`CLOSE`
-/// text frames into pool `subscribe`/`publish`/`close` calls, and synthesizes
-/// `["EVENT", subId, event]` frames back so [Nip46Service._onSocketMessage]
-/// matches them against `_subId` unchanged. Reconnect + resubscribe are handled
-/// by the pool, so this stream stays open across relay drops (it only closes on
-/// [close]).
+/// Pool-backed socket translating REQ/EVENT/CLOSE frames to pool calls; the pool reconnects, so this closes only on [close].
 class _PoolNip46Socket implements Nip46Socket {
   _PoolNip46Socket(this._pool);
 
@@ -182,8 +134,7 @@ class _PoolNip46Socket implements Nip46Socket {
           for (var i = 2; i < frame.length; i++)
             NostrFilter.fromJson(Map<String, dynamic>.from(frame[i] as Map)),
         ];
-        // Reuse the caller's subId so the synthesized EVENT frames match the
-        // service's `_subId` filter in `_onSocketMessage`.
+        // Reuse the caller's subId so synthesized EVENT frames match `_subId`.
         final sub = _pool.subscribe(filters, subId: subId);
         _subs[subId] = sub;
         _streams[subId] = sub.events.listen((ev) {
@@ -200,8 +151,7 @@ class _PoolNip46Socket implements Nip46Socket {
       case 'EVENT':
         final ev =
             NostrEvent.fromJson(Map<String, dynamic>.from(frame[1] as Map));
-        // Plain ["EVENT",e] to all relays; the signer only reads its own relay
-        // (which is in the pool), so a broadcast is harmless for ephemeral 24133.
+        // Broadcasting ephemeral 24133 to all relays is harmless; the signer reads its own, which is in the pool.
         unawaited(_pool.publish(ev));
         break;
     }
@@ -221,7 +171,6 @@ class _PoolNip46Socket implements Nip46Socket {
   }
 }
 
-/// Parsed `nostrconnect://` or `bunker://` connection string.
 class Nip46ConnectionUri {
   Nip46ConnectionUri({
     required this.scheme,
@@ -231,12 +180,10 @@ class Nip46ConnectionUri {
     this.metadataName,
   });
 
-  /// `'nostrconnect'` (pubkey is the client's) or `'bunker'` (pubkey is the
-  /// remote signer's).
+  /// `'nostrconnect'` (client pubkey) or `'bunker'` (remote signer pubkey).
   final String scheme;
 
-  /// For `nostrconnect://` this is the *client* pubkey; for `bunker://` it is
-  /// the *remote signer* pubkey. 64-char hex.
+  /// 64-hex client pubkey for `nostrconnect://`, remote signer pubkey for `bunker://`.
   final String pubkey;
   final String relay;
   final String? secret;
@@ -246,23 +193,16 @@ class Nip46ConnectionUri {
   bool get isNostrConnect => scheme == 'nostrconnect';
 }
 
-/// A handle to a connected remote signer that can sign events.
-///
-/// The publish path delegates to this: when the active login method is
-/// `'nip46'`, instead of signing locally with a secret key it calls
-/// [signEvent] (which round-trips a `sign_event` RPC to the remote signer) and
-/// uses [pubkey] as the event author.
+/// Connected remote signer; for `'nip46'` logins the publish path signs through [signEvent].
 abstract class Nip46Signer {
-  /// The remote signer's *user* pubkey (from `get_public_key`). 64-char hex.
+  /// The user's pubkey from `get_public_key`, 64-char hex.
   String get pubkey;
 
-  /// Asks the remote signer to sign [unsigned] and returns the signed event.
+  /// Asks the remote signer to sign [unsigned].
   Future<NostrEvent> signEvent(UnsignedEvent unsigned);
 
-  /// NIP-44 encrypt [plaintext] to [thirdPartyPubkey] via the remote signer.
   Future<String> nip44Encrypt(String thirdPartyPubkey, String plaintext);
 
-  /// NIP-44 decrypt [ciphertext] from [thirdPartyPubkey] via the remote signer.
   Future<String> nip44Decrypt(String thirdPartyPubkey, String ciphertext);
 }
 
@@ -272,7 +212,7 @@ class _Pending {
   final Timer timer;
 }
 
-/// Result of a successful connect: the user pubkey plus the live signer.
+/// A successful connect: user pubkey plus the live signer.
 class Nip46ConnectResult {
   Nip46ConnectResult(this.userPubkey, this.signer);
   final String userPubkey;
@@ -288,8 +228,7 @@ class Nip46Service implements Nip46Signer {
     Duration requestTimeout = kNip46RequestTimeout,
   })  : _kv = kv,
         _secure = secure,
-        // Explicit factory (tests inject a fake) wins; otherwise route through
-        // the shared pool when it covers the relay, else a dedicated socket.
+        // An injected factory wins; otherwise pool-backed when it covers the relay.
         _socketFactory = socketFactory ?? _makeDefaultFactory(poolProvider),
         _requestTimeout = requestTimeout;
 
@@ -310,16 +249,13 @@ class Nip46Service implements Nip46Signer {
   StreamSubscription<String>? _socketSub;
   String _subId = '';
 
-  /// Outstanding RPC requests keyed by request id. Mirrors the PWA
-  /// `pendingRequests` Map.
+  /// Outstanding RPC requests by id.
   final Map<String, _Pending> _pendingRequests = {};
 
-  /// Completes once the signer acknowledges `connect` (used by the login flow).
+  /// Completes once the signer acknowledges `connect`.
   Completer<String>? _connectCompleter;
 
   final ValueNotifier<bool> bareAck = ValueNotifier<bool>(false);
-
-  // --- public getters -------------------------------------------------------
 
   @override
   String get pubkey => _userPubkey ?? '';
@@ -328,19 +264,14 @@ class Nip46Service implements Nip46Signer {
   String? get remotePubkey => _remotePubkey;
   bool get isConnected => _connected;
 
-  // --- URI building / parsing ----------------------------------------------
-
-  /// Builds a `nostrconnect://<clientPubkey>?relay=..&metadata=..&secret=..`
-  /// URI for QR display. Matches the PWA param ordering: relay, metadata,
-  /// secret (URLSearchParams form-encoded).
+  /// `nostrconnect://` URI for QR display, params in relay, metadata, secret order and form-encoded.
   static String buildNostrConnectUri({
     required String clientPubkey,
     required String relay,
     required String secret,
     String appName = 'Nymchat',
   }) {
-    // Mirror URLSearchParams: '+'-encode spaces, set in relay/metadata/secret
-    // order. metadata is a JSON object `{"name":"<appName>"}`.
+    // '+'-encode spaces like URLSearchParams; metadata is `{"name":"<appName>"}`.
     final metadata = jsonEncode({'name': appName});
     final params = <String>[
       'relay=${_formEncode(relay)}',
@@ -350,11 +281,7 @@ class Nip46Service implements Nip46Signer {
     return 'nostrconnect://$clientPubkey?$params';
   }
 
-  /// Parses a `nostrconnect://` or `bunker://` connection string.
-  ///
-  /// `bunker://<remotePubkey>?relay=wss://..&secret=..` (NIP-46) — the host is
-  /// the remote signer pubkey. `nostrconnect://<clientPubkey>?relay=..` — the
-  /// host is the client pubkey.
+  /// Parses a connection string; the host is the remote signer pubkey for `bunker://`, the client's for `nostrconnect://`.
   static Nip46ConnectionUri parseConnectionUri(String input) {
     final trimmed = input.trim();
     final schemeIdx = trimmed.indexOf('://');
@@ -371,7 +298,7 @@ class Nip46Service implements Nip46Signer {
     final query = qIdx < 0 ? '' : rest.substring(qIdx + 1);
 
     if (host.length != 64) {
-      // Pubkey must be 64-char hex; bail clearly rather than later.
+      // Pubkey must be 64-char hex; fail clearly now.
       throw FormatException('Invalid pubkey in NIP-46 URI: "$host"');
     }
 
@@ -386,7 +313,7 @@ class Nip46Service implements Nip46Signer {
       final value = _formDecode(rawVal);
       switch (key) {
         case 'relay':
-          // First relay wins (PWA uses a single relay).
+          // First relay wins.
           relay ??= value;
           break;
         case 'secret':
@@ -406,27 +333,19 @@ class Nip46Service implements Nip46Signer {
     return Nip46ConnectionUri(
       scheme: scheme,
       pubkey: host.toLowerCase(),
-      // Canonicalize so a trailing-slash relay (Amber's bunker URIs) matches the
-      // pool and persists/restores consistently.
+      // Canonicalize so trailing-slash relays match the pool and persist consistently.
       relay: relay != null ? _canonicalRelayUrl(relay) : RelayConfig.nip46Relay,
       secret: secret,
       metadataName: metadataName,
     );
   }
 
-  // --- connect flows --------------------------------------------------------
-
-  /// Starts a `nostrconnect://` login: generates a client keypair + 16-hex
-  /// secret, opens the relay, subscribes for the signer's connect response, and
-  /// returns the `nostrconnect://` URI for QR display.
-  ///
-  /// Await [awaitConnect] (or pass [onConnected]) to learn when the signer
-  /// acknowledges and the session is established.
+  /// Generates a client keypair and secret, subscribes for the connect ack, and returns the URI; await [awaitConnect].
   String startNostrConnect({String relay = RelayConfig.nip46Relay}) {
     _clientSecretKey = generatePrivateKey();
     _clientPubkey = getPublicKeyHex(_clientSecretKey!);
     _relayUrl = relay;
-    // 16 hex chars == 8 random bytes. Matches the PWA (.slice(0, 16)).
+    // 16 hex chars from 8 random bytes.
     _secret = bytesToHex(randomBytes(8));
     bareAck.value = false;
     _remotePubkey = null;
@@ -443,12 +362,7 @@ class Nip46Service implements Nip46Signer {
     );
   }
 
-  /// Connects via a pasted `bunker://` (or `nostrconnect://`) URI.
-  ///
-  /// For `bunker://` the remote pubkey + relay (+ optional secret) come from the
-  /// URI; the client keypair is generated locally. We send an explicit
-  /// `connect` RPC to the remote signer and resolve once it responds. Returns
-  /// the connect result (user pubkey + signer).
+  /// `bunker://` sends an explicit `connect` RPC and resolves on the signer's reply.
   Future<Nip46ConnectResult> connectViaUri(String bunkerOrNostrconnect) async {
     final parsed = parseConnectionUri(bunkerOrNostrconnect);
 
@@ -461,19 +375,17 @@ class Nip46Service implements Nip46Signer {
     _userPubkey = null;
 
     if (parsed.isBunker) {
-      // bunker:// gives us the remote signer pubkey up front.
       _remotePubkey = parsed.pubkey;
       _connectCompleter = Completer<String>();
       _openRelay();
-      // Per NIP-46: client → signer `connect` with [remote_pubkey, secret].
+      // NIP-46: client sends `connect` with [remote_pubkey, secret].
       final params = <String>[parsed.pubkey];
       if (parsed.secret != null) params.add(parsed.secret!);
-      // The connect response itself is matched by id in _handleEvent.
+      // The connect response is matched by id in _handleEvent.
       await sendRequest('connect', params);
       _connected = true;
     } else {
-      // nostrconnect:// from a paste: behave like startNostrConnect, but the
-      // signer initiates. Wait for the signer's connect ack.
+      // Pasted `nostrconnect://`: the signer initiates, so wait for its ack.
       _remotePubkey = null;
       _connectCompleter = Completer<String>();
       _openRelay();
@@ -484,8 +396,7 @@ class Nip46Service implements Nip46Signer {
     return Nip46ConnectResult(userPubkey, this);
   }
 
-  /// Completes once the signer acknowledges connect (nostrconnect flow). Yields
-  /// the remote signer pubkey.
+  /// Completes with the remote signer pubkey once it acknowledges connect.
   Future<String> awaitConnect() {
     final c = _connectCompleter;
     if (c == null) {
@@ -494,17 +405,13 @@ class Nip46Service implements Nip46Signer {
     return c.future;
   }
 
-  /// For the [startNostrConnect] flow: after the signer acknowledges connect
-  /// (await [awaitConnect]), fetch the user pubkey, persist the session, and
-  /// return the [Nip46ConnectResult]. The relay is already open and
-  /// `_remotePubkey` is set by the connect ack — do NOT re-open.
+  /// After [awaitConnect], fetch the user pubkey and persist; the relay is already open, so don't re-open.
   Future<Nip46ConnectResult> finishNostrConnect() async {
     final userPubkey = await _completeLogin();
     return Nip46ConnectResult(userPubkey, this);
   }
 
-  /// After connect: fetch the user pubkey, persist the session, and switch the
-  /// subscription to a persistent one. Returns the 64-hex user pubkey.
+  /// Fetches the user pubkey, persists the session, and switches to a persistent subscription.
   Future<String> _completeLogin() async {
     final result = await sendRequest('get_public_key', const []);
     final userPubkey = result is String ? result : '';
@@ -516,7 +423,7 @@ class Nip46Service implements Nip46Signer {
 
     await _persistSession(userPubkey);
 
-    // Close the auth sub; re-subscribe persistently for ongoing signing.
+    // Replace the auth sub with a persistent one for ongoing signing.
     _resubscribePersistent();
     return userPubkey;
   }
@@ -532,10 +439,7 @@ class Nip46Service implements Nip46Signer {
     );
   }
 
-  // --- session restore ------------------------------------------------------
-
-  /// Restores a persisted NIP-46 session on boot and reconnects the relay.
-  /// Returns true if a session was found and reconnected.
+  /// Restores and reconnects a persisted session; true if one was found.
   Future<bool> restoreSession() async {
     final clientSecretHex = await _secure.get(SecretKeys.nip46ClientSecret);
     final remotePubkey = _kv.getString(StorageKeys.nip46RemotePubkey);
@@ -564,11 +468,9 @@ class Nip46Service implements Nip46Signer {
     }
   }
 
-  // --- relay transport ------------------------------------------------------
-
   void _openRelay({bool persistent = false}) {
     final relay = _relayUrl!;
-    // Tear down any prior socket (reconnect path) before opening a new one.
+    // Tear down any prior socket before opening a new one.
     _socketSub?.cancel();
     _socketSub = null;
     final socket = _socketFactory(relay);
@@ -586,11 +488,7 @@ class Nip46Service implements Nip46Signer {
       _onSocketMessage,
       onError: (_) {},
       cancelOnError: false,
-      // If the relay drops the socket while we're still waiting for the signer,
-      // reconnect after 3s — parity with the PWA `ws.onclose` retry
-      // (app.js:5209-5218). The pool-backed socket handles its own reconnect,
-      // so its stream only ends on our own [close] (where `_socket` is nulled,
-      // making `identical` false and suppressing this retry).
+      // Reconnect after 3s if a raw socket drops mid-wait; pool sockets only end on our own [close].
       onDone: () {
         if (!_connected && identical(_socket, socket)) {
           Timer(const Duration(seconds: 3), () {
@@ -602,7 +500,7 @@ class Nip46Service implements Nip46Signer {
       },
     );
 
-    // Subscribe to kind-24133 addressed to our client pubkey.
+    // Kind-24133 addressed to our client pubkey.
     final since = (DateTime.now().millisecondsSinceEpoch ~/ 1000) - 10;
     socket.send(jsonEncode([
       'REQ',
@@ -648,7 +546,7 @@ class Nip46Service implements Nip46Signer {
     }
   }
 
-  /// Handles a decrypted kind-24133 event from the signer. Exposed for tests.
+  /// Handles a decrypted kind-24133 event; exposed for tests.
   void handleEvent(NostrEvent event) {
     try {
       final ck = nip44.getConversationKey(_clientSecretKey!, event.pubkey);
@@ -660,7 +558,7 @@ class Nip46Service implements Nip46Signer {
       final error = response['error'];
       final id = response['id'];
 
-      // Auth-url challenge: surface to UI, don't resolve the request.
+      // Auth-url challenge: surface to the UI without resolving the request.
       if (result == 'auth_url') {
         if (_remotePubkey == null || event.pubkey != _remotePubkey) return;
         _authUrl = (error is String) ? error : null;
@@ -699,24 +597,20 @@ class Nip46Service implements Nip46Signer {
         }
       }
     } catch (_) {
-      // Ignore frames we can't decrypt/parse (PWA logs and continues).
+      // Ignore frames we can't decrypt or parse.
     }
   }
 
   String? _authUrl;
   StreamController<String>? _authUrlController;
 
-  /// Emits the signer's auth-url when authorization is required.
+  /// Emits the signer's auth URL when authorization is required.
   Stream<String> get authUrls {
     _authUrlController ??= StreamController<String>.broadcast();
     return _authUrlController!.stream;
   }
 
-  // --- RPC ------------------------------------------------------------------
-
-  /// Sends an `{id, method, params}` RPC: NIP-44-encrypts it to the remote
-  /// signer, wraps it in a signed kind-24133 event, and returns a future that
-  /// resolves with the response `result` (matched by id), or times out.
+  /// NIP-44-encrypts the RPC into a signed kind-24133 event; resolves with the id-matched result or times out.
   Future<dynamic> sendRequest(String method, List<dynamic> params) {
     final socket = _socket;
     final clientKey = _clientSecretKey;
@@ -760,18 +654,14 @@ class Nip46Service implements Nip46Signer {
 
   int _reqCounter = 0;
   String _newRequestId() {
-    // PWA: Math.random().toString(36) + Date.now().toString(36). Uniqueness is
-    // all that matters; use random bytes + a counter for determinism in tests.
+    // Only uniqueness matters; random bytes plus a counter keep tests deterministic.
     _reqCounter++;
     return '${bytesToHex(randomBytes(8))}$_reqCounter';
   }
 
-  // --- Nip46Signer ----------------------------------------------------------
-
   @override
   Future<NostrEvent> signEvent(UnsignedEvent unsigned) async {
-    // PWA sends sign_event with the unsigned event JSON as a single param. The
-    // pubkey defaults to the logged-in user pubkey.
+    // The unsigned event JSON is the single param; author defaults to the logged-in pubkey.
     final author = unsigned.pubkey.isNotEmpty ? unsigned.pubkey : pubkey;
     final payload = {
       'kind': unsigned.kind,
@@ -799,8 +689,6 @@ class Nip46Service implements Nip46Signer {
     return r as String;
   }
 
-  // --- teardown -------------------------------------------------------------
-
   Future<void> dispose() async {
     for (final p in _pendingRequests.values) {
       p.timer.cancel();
@@ -816,11 +704,7 @@ class Nip46Service implements Nip46Signer {
     _authUrlController = null;
   }
 
-  /// Aborts an in-progress / idle connection but leaves the object REUSABLE
-  /// (unlike [dispose], which also tears down the auth-url stream). The login
-  /// modal calls this when it closes before a session is established, so the
-  /// shared [nip46ServiceProvider] instance can be re-used — and a SUCCESSFUL
-  /// session's live socket is never killed just because the modal disposed.
+  /// Aborts a pending connection but stays reusable, so a live session is never killed by the modal closing.
   Future<void> cancelConnect() async {
     for (final p in _pendingRequests.values) {
       p.timer.cancel();
@@ -836,11 +720,9 @@ class Nip46Service implements Nip46Signer {
     _connected = false;
   }
 
-  // --- form-encoding helpers (URLSearchParams parity) -----------------------
-
   static String _formEncode(String s) =>
-      Uri.encodeQueryComponent(s); // encodes space as '+', like URLSearchParams
+      Uri.encodeQueryComponent(s); // Space as '+', like URLSearchParams.
 
   static String _formDecode(String s) =>
-      Uri.decodeQueryComponent(s); // decodes '+' to space
+      Uri.decodeQueryComponent(s);
 }

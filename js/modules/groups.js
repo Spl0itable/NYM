@@ -1,5 +1,3 @@
-// groups.js - NIP-17 group chats: create, send, ephemeral keys, members, readers, history
-
 const GROUP_ROLE_EVENTS = {
     'group-promote-admin': {
         tag: 'admin', list: 'admins', grant: true, ownerOnly: true,
@@ -25,12 +23,10 @@ const GROUP_ROLE_EVENTS = {
 
 Object.assign(NYM.prototype, {
 
-    // Convert Uint8Array to hex string
     _skToHex(sk) {
         return Array.from(sk).map(b => b.toString(16).padStart(2, '0')).join('');
     },
 
-    // Convert hex string to Uint8Array
     _hexToSk(hex) {
         const bytes = new Uint8Array(hex.length / 2);
         for (let i = 0; i < hex.length; i += 2) {
@@ -39,7 +35,6 @@ Object.assign(NYM.prototype, {
         return bytes;
     },
 
-    // Get or create the ephemeral key entry for a group.
     _getGroupEphemeralKeys(groupId) {
         if (!this.groupEphemeralKeys.has(groupId)) {
             this.groupEphemeralKeys.set(groupId, { self: null, members: {} });
@@ -47,7 +42,6 @@ Object.assign(NYM.prototype, {
         return this.groupEphemeralKeys.get(groupId);
     },
 
-    // Ensure we have a current ephemeral keypair for ourselves in this group.
     _ensureSelfEphemeralKey(groupId) {
         const NT = window.NostrTools;
         const ek = this._getGroupEphemeralKeys(groupId);
@@ -78,8 +72,7 @@ Object.assign(NYM.prototype, {
         return ek.self.current;
     },
 
-    // Update a member's ephemeral pubkey (called when we receive a message with ephemeral_pk tag).
-    // Uses timestamp ordering so out-of-order relay delivery doesn't overwrite a newer key.
+    // Timestamp-ordered so out-of-order relay delivery doesn't overwrite a newer key.
     _updateMemberEphemeralKey(groupId, realPubkey, ephemeralPk, messageTs) {
         const ek = this._getGroupEphemeralKeys(groupId);
         if (!ek._memberKeyTs) ek._memberKeyTs = {};
@@ -90,14 +83,12 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Get the pubkey to encrypt TO for a given group member.
-    // Returns their ephemeral pk if known, otherwise their real pk.
+    // Returns the member's ephemeral pk if known, otherwise their real pk.
     _getEncryptionPubkey(groupId, realPubkey) {
         const ek = this.groupEphemeralKeys.get(groupId);
         if (!ek) return realPubkey;
 
-        // Self-copy: use our own current ephemeral key so even the
-        // self-addressed gift wrap doesn't reveal our real pubkey.
+        // Self-copy uses our own ephemeral key so the self-addressed wrap doesn't reveal our real pubkey.
         if (realPubkey === this.pubkey && ek.self && ek.self.current) {
             return ek.self.current.pk;
         }
@@ -105,11 +96,10 @@ Object.assign(NYM.prototype, {
         if (ek.members[realPubkey]) {
             return ek.members[realPubkey];
         }
-        return realPubkey; // fallback to real pubkey
+        return realPubkey;
     },
 
-    // Collect ALL ephemeral pubkeys we own (for isForMe checks and decryption).
-    // Includes current + all prev keys across all groups.
+    // Includes current and previous keys across all groups.
     _getAllKnownEphemeralPubkeys() {
         const pks = new Set();
         for (const [, ek] of this.groupEphemeralKeys) {
@@ -126,16 +116,13 @@ Object.assign(NYM.prototype, {
         return [...pks];
     },
 
-    // Collect ephemeral pubkeys to subscribe to on relays
     _getAllSelfEphemeralPubkeys() {
         return this._getAllKnownEphemeralPubkeys();
     },
 
-    // Try to decrypt a gift wrap using ephemeral keys. Returns {seal, rumor} or null.
     _tryDecryptWithEphemeralKeys(event) {
         const NT = window.NostrTools;
 
-        // Fast path: look up the ephemeral sk directly from the p tag.
         const pTag = (event.tags || []).find(t => Array.isArray(t) && t[0] === 'p' && t[1]);
         if (pTag) {
             const sk = this._lookupEphemeralSk(pTag[1]);
@@ -152,7 +139,6 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Slow fallback: try all stored keys (current + prev window) across all groups.
         for (const [, ek] of this.groupEphemeralKeys) {
             if (!ek.self) continue;
             const keysToTry = [ek.self.current, ...ek.self.prev];
@@ -187,14 +173,12 @@ Object.assign(NYM.prototype, {
         return out;
     },
 
-    // O(1) lookup: find the ephemeral secret key for a given ephemeral pubkey.
     _lookupEphemeralSk(ephemeralPk) {
         if (!this._ephPkCache) this._rebuildEphPkCache();
         const key = this._ephPkCache.get(ephemeralPk);
         return key || null;
     },
 
-    // Build reverse map: ephemeralPk -> sk for fast lookup.
     _rebuildEphPkCache() {
         this._ephPkCache = new Map();
         for (const [, ek] of this.groupEphemeralKeys) {
@@ -206,14 +190,11 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Invalidate the cache (called after key rotation).
     _invalidateEphPkCache() {
         this._ephPkCache = null;
     },
 
-    // Save ephemeral keys to localStorage.
-    // Only stores counters + member pubkeys — secret keys are derived on demand.
-    // Serialize an ephemeral key entry for JSON storage.
+    // Only counters and member pubkeys are stored; secret keys are derived on demand.
     _serializeEphemeralKeys(ek) {
         const entry = { members: ek.members };
         if (ek._memberKeyTs) entry.memberKeyTs = ek._memberKeyTs;
@@ -226,7 +207,6 @@ Object.assign(NYM.prototype, {
         return entry;
     },
 
-    // Deserialize an ephemeral key entry from JSON storage.
     _deserializeEphemeralEntry(entry) {
         const ek = { members: entry.members || {} };
         if (entry.memberKeyTs) ek._memberKeyTs = entry.memberKeyTs;
@@ -241,22 +221,18 @@ Object.assign(NYM.prototype, {
         return ek;
     },
 
-    // Merge synced ephemeral keys into the local set for a group.
-    // Handles multi-device: both devices accumulate all keys so either
-    // can decrypt messages addressed to any device's ephemeral key.
+    // Both devices accumulate all keys so either can decrypt messages sent to any device's ephemeral key.
     _mergeEphemeralKeys(groupId, syncedEntry) {
         const synced = this._deserializeEphemeralEntry(syncedEntry);
         const local = this.groupEphemeralKeys.get(groupId);
 
         if (!local) {
-            // No local keys — just use synced
             this.groupEphemeralKeys.set(groupId, synced);
             this._invalidateEphPkCache();
             return;
         }
 
-        // Merge member keys using timestamps: keep whichever device saw
-        // the more recent message from each member.
+        // Keep whichever device saw the more recent message from each member.
         if (!local._memberKeyTs) local._memberKeyTs = {};
         const syncedTs = synced._memberKeyTs || {};
         if (synced.members) {
@@ -270,18 +246,14 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Merge self keys: collect all secret keys from both devices so
-        // we can decrypt messages sent to any of our ephemeral pubkeys.
         if (synced.self) {
             if (!local.self) {
                 local.self = synced.self;
             } else {
-                // Collect all known pks to deduplicate
                 const knownPks = new Set();
                 knownPks.add(local.self.current.pk);
                 for (const k of local.self.prev) knownPks.add(k.pk);
 
-                // Add synced current if we don't have it
                 if (!knownPks.has(synced.self.current.pk)) {
                     local.self.prev.push(synced.self.current);
                     knownPks.add(synced.self.current.pk);
@@ -302,11 +274,7 @@ Object.assign(NYM.prototype, {
         this._invalidateEphPkCache();
     },
 
-    // Save ephemeral keys to localStorage. When Identity Encryption (the key
-    // vault) is enabled, the blob is stored AES-GCM-encrypted under the vault
-    // key — the ephemeral secret keys decrypt received group messages, so
-    // leaving them plaintext would undermine the encrypted identity. While the
-    // vault is locked, nothing is written (never plaintext over ciphertext).
+    // AES-GCM-encrypted under the vault key when enabled; nothing is written while locked, never plaintext over ciphertext.
     _saveEphemeralKeys() {
         if (!this.pubkey) return;
         try {
@@ -330,7 +298,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Load ephemeral keys from localStorage (decrypting when the vault is on).
     async _loadEphemeralKeys() {
         if (!this.pubkey) return;
         try {
@@ -338,20 +305,17 @@ Object.assign(NYM.prototype, {
             if (!raw) return;
             let migrateToEncrypted = false;
             if (String(raw).startsWith('enc:v1:')) {
-                // Encrypted blob: needs the unlocked vault key to read.
                 if (!(typeof this.vaultEnabled === 'function' && this.vaultEnabled() && this._vaultKey)) return;
                 try { raw = await this._vaultDecrypt(raw); } catch (_) { return; }
             } else if (typeof this.vaultEnabled === 'function' && this.vaultEnabled() && this._vaultKey) {
-                // Plaintext blob while the vault is on (e.g. written before
-                // enabling): re-save encrypted after loading.
+                // A plaintext blob while the vault is on is re-saved encrypted after loading.
                 migrateToEncrypted = true;
             }
             const data = JSON.parse(raw);
             const cap = this.EPHEMERAL_PREV_KEYS_MAX || 30;
             let trimmed = false;
             for (const [groupId, entry] of Object.entries(data)) {
-                // Load is async now (vault decrypt): if settings sync populated
-                // this group first, merge rather than clobber the newer keys.
+                // Load is async, so merge if settings sync already populated this group.
                 if (this.groupEphemeralKeys.has(groupId)) {
                     this._mergeEphemeralKeys(groupId, entry);
                     continue;
@@ -372,14 +336,12 @@ Object.assign(NYM.prototype, {
         return `group-${groupId}`;
     },
 
-    // Persist all known groups to localStorage so Nostr users see them after refresh
     _saveGroupConversations() {
         if (!this.pubkey) return;
         try {
             const data = {};
             for (const [groupId, group] of this.groupConversations) {
-                // Snapshot kind 0 profile data for each member so nicknames and
-                // avatars can be restored immediately without waiting for relays.
+                // Snapshot member profiles so nicknames and avatars restore without waiting for relays.
                 const memberProfiles = {};
                 if (group.members) {
                     for (const pk of group.members) {
@@ -425,7 +387,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Role helpers
     _isGroupOwner(groupId, pubkey) {
         const g = this.groupConversations.get(groupId);
         return !!(g && g.createdBy && g.createdBy === pubkey);
@@ -556,9 +517,7 @@ Object.assign(NYM.prototype, {
             this.showNotification(title, body, info, tsSec * 1000);
         }
     },
-    // Whether a user may add new members. The owner always can; everyone else
-    // only when the group's "allow member invites" setting is enabled (the
-    // default for groups created before this setting existed).
+    // Groups created before this setting existed default to allowing member invites.
     _canAddMembers(groupId, pubkey) {
         const g = this.groupConversations.get(groupId);
         if (!g) return false;
@@ -581,7 +540,6 @@ Object.assign(NYM.prototype, {
         return new TextDecoder().decode(bytes);
     },
 
-    // Self-contained invite link
     buildGroupInviteLink(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return null;
@@ -631,7 +589,6 @@ Object.assign(NYM.prototype, {
         try { localStorage.removeItem('nym_pending_group_invite'); } catch (e) { }
     },
 
-    // Joiner side: confirm, then gift-wrap a single join-request to the sharer.
     async requestJoinGroupViaInvite(payload) {
         if (!payload) return;
         const groupId = payload.g;
@@ -647,8 +604,6 @@ Object.assign(NYM.prototype, {
             return;
         }
         const name = this.sanitizeGroupName(payload.n || '') || 'this group';
-        // Brand-new user with no identity yet: keep the invite pending, prompt
-        // them to set up, and resume the join after they enter chat.
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage(`Pick a nym or log in to join "${name}", then you'll be added.`);
             const setupModal = document.getElementById('setupModal');
@@ -687,8 +642,7 @@ Object.assign(NYM.prototype, {
         await this.requestJoinGroupViaInvite(payload);
     },
 
-    // Approver side: auto-admit only when invite links are enabled, the request's
-    // epoch matches the current one, and the joiner is eligible.
+    // Auto-admit only when invite links are enabled, the epoch matches, and the joiner is eligible.
     _joinAdmitRank(groupId, joinerPubkey) {
         const group = this.groupConversations.get(groupId);
         if (!group) return -1;
@@ -813,8 +767,7 @@ Object.assign(NYM.prototype, {
         if (group.modLog.length > 50) group.modLog = group.modLog.slice(-50);
     },
 
-    // Persist left-group IDs so they survive reload. Uses a per-pubkey key when
-    // pubkey is available, plus a global fallback for early init.
+    // Uses a per-pubkey key when available, plus a global fallback for early init.
     _saveLeftGroups() {
         const json = JSON.stringify([...this.leftGroups]);
         try { localStorage.setItem('nym_left_groups', json); } catch { }
@@ -842,7 +795,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Restore groups saved by _saveGroupConversations (called after pubkey is known)
     _loadGroupConversations() {
         if (!this.pubkey) return;
         try {
@@ -850,9 +802,6 @@ Object.assign(NYM.prototype, {
             if (!raw) return;
             const data = JSON.parse(raw);
             for (const [groupId, group] of Object.entries(data)) {
-                // Pre-populate users Map and avatar cache from saved kind 0 profile
-                // snapshots so nicknames/avatars display immediately on restore
-                // instead of showing "nym" while waiting for relay profile fetches.
                 if (group.memberProfiles) {
                     for (const [pk, profile] of Object.entries(group.memberProfiles)) {
                         if (profile.name && !this.users.has(pk)) {
@@ -871,7 +820,7 @@ Object.assign(NYM.prototype, {
                 }
                 if (!this.groupConversations.has(groupId)) {
                     this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy });
-                    // Restore role data which addGroupConversation doesn't merge
+                    // Restore role data, which addGroupConversation doesn't merge.
                     const g = this.groupConversations.get(groupId);
                     if (g) {
                         if (group.createdBy) g.createdBy = group.createdBy;
@@ -898,7 +847,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Handle a group reaction (kind 7 gift-wrapped to the group)
     handleGroupReaction(rumor, senderPubkey) {
         const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
         if (!eTag) return;
@@ -922,7 +870,6 @@ Object.assign(NYM.prototype, {
     _applyGroupReaction(rumor, senderPubkey, messageId, emoji, isRemoval) {
         if (!this.isValidReactionEmoji(emoji)) return;
 
-        // Timestamp-based dedup for out-of-order delivery
         const actionKey = `${messageId}:${emoji}:${senderPubkey}`;
         const lastAction = this.reactionLastAction.get(actionKey);
         const eventTs = rumor.created_at || 0;
@@ -977,7 +924,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Handle incoming group message (rumor with 'g' tag)
     async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap = false) {
         const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
         if (!groupTag) return;
@@ -991,8 +937,7 @@ Object.assign(NYM.prototype, {
             this.ingestImetaTags(rumor.tags);
         }
 
-        // Extract sender's next ephemeral pubkey from the rumor (timing-attack mitigation).
-        // When present, future messages to this sender will be encrypted to this key.
+        // Sender's next ephemeral pubkey (timing-attack mitigation); future messages to them use it.
         if (!isOwn) {
             const ephTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ephemeral_pk' && t[1]);
             if (ephTag) {
@@ -1002,30 +947,24 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        // Filter group invites based on acceptPMs setting. A group the user is
-        // actively joining via an invite link bypasses the filter so the
-        // resulting add-member wrap is accepted.
+        // A group the user is actively joining via invite link bypasses the acceptPMs filter.
         if (!isOwn && this.settings.acceptPMs !== 'enabled' && !this.groupConversations.has(groupId)
             && !(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId))) {
             if (this.settings.acceptPMs === 'disabled') return;
             if (this.settings.acceptPMs === 'friends' && !this.isFriend(senderPubkey)) return;
         }
 
-        // Drop all messages from blocked senders, including group invites.
         if (!isOwn && this.blockedUsers.has(senderPubkey)) {
             return;
         }
 
-        // Determine message type early so we can decide whether to drop it
         const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
         const msgType = typeTag ? typeTag[1] : null;
 
-        // Extract group name from 'subject' tag
         const subjectTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'subject' && t[1]);
         const groupName = subjectTag ? subjectTag[1] : 'Group';
 
-        // Drop messages for groups the user has left, unless it's a reinvite or unban
-        // newer than when we left. Stale backlog never resurrects a deleted group.
+        // Drop messages for left groups unless it's a newer reinvite or unban.
         if (this.leftGroups.has(groupId)) {
             const leftAt = this.leftGroupTimes?.get(groupId) || 0;
             const msgTs = Math.floor(rumor.created_at || 0);
@@ -1077,30 +1016,24 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Route group reactions (kind 7) before regular message processing
         if (rumor.kind === 7) {
             this.handleGroupReaction(rumor, senderPubkey);
             return;
         }
 
-        // Route group zaps (kind 9735) before regular message processing
         if (rumor.kind === 9735) {
             this.handleGroupZap(rumor, senderPubkey);
             return;
         }
 
-        // key-resync: the sender's ephemeral_pk was already extracted above.
-        // A resync REQUEST (from a member returning after a long offline gap)
-        // additionally gets a rate-limited reply carrying our current key.
-        // Never displayed as a message.
+        // A resync request gets a rate-limited reply carrying our current key; never displayed.
         if (typeTag && typeTag[1] === 'key-resync') {
             const reqTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'resync_req' && t[1] === '1');
             if (reqTag && !isOwn) this._maybeReplyKeyResync(groupId, senderPubkey);
             return;
         }
 
-        // group-history: a member shared recent chat history with us after we
-        // were added (owner-controlled setting). Never displayed as a bubble.
+        // Owner-controlled history share; never displayed as a bubble.
         if (typeTag && typeTag[1] === 'group-roster-req') {
             if (!isOwn) await this._replyGroupRoster(groupId, senderPubkey);
             return;
@@ -1116,7 +1049,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Handle group-leave: remove the member from local state and show system message
         if (typeTag && typeTag[1] === 'group-leave' && !isOwn) {
             const group = this.groupConversations.get(groupId);
             if (group) {
@@ -1128,8 +1060,7 @@ Object.assign(NYM.prototype, {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
                 if (this.inPMMode && this.currentGroup === groupId) {
-                    this.openGroup(groupId); // refresh header member count
-                    // Fetch profile so nickname displays correctly
+                    this.openGroup(groupId);
                     if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
                     this.displaySystemMessage(`${this.getNymHtmlFromPubkey(senderPubkey)} left the group.`, 'system', { html: true });
                 }
@@ -1137,24 +1068,19 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // group-metadata: owner changed the group name, banner, and/or avatar.
         if (typeTag && typeTag[1] === 'group-metadata') {
             this._applyGroupMetadataTags(rumor, groupId, senderPubkey, rumor.created_at || 0);
             return;
         }
 
-        // group-join-request: someone used an invite link; admit them if eligible.
         if (typeTag && typeTag[1] === 'group-join-request') {
             if (!isOwn) await this._handleGroupJoinRequest(rumor, groupId, senderPubkey);
             return;
         }
 
-        // group-invite: the rumor author is always the group creator — persist this so
-        // non-creating members know who owns the group without relying on local state.
+        // The group-invite rumor author is always the group creator.
         if (typeTag && typeTag[1] === 'group-invite') {
-            // Pre-create the group entry with createdBy set BEFORE _addGroupMessage
-            // runs later in this handler. Otherwise the merge-branch in
-            // addGroupConversation creates the entry with createdBy: null first.
+            // Pre-create with createdBy before _addGroupMessage, or addGroupConversation sets it to null.
             const inviteMembers = (rumor.tags || [])
                 .filter(t => Array.isArray(t) && t[0] === 'p' && t[1])
                 .map(t => t[1]);
@@ -1234,9 +1160,7 @@ Object.assign(NYM.prototype, {
                 this._announceGroupEphemeralKey(groupId).catch(() => { });
             }
 
-            // Send notification for group invites
             if (!isOwn && !this.blockedUsers.has(senderPubkey)) {
-                // Fetch profile so the inviter's nickname displays correctly
                 if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
                 const inviterName = this.getNymFromPubkey(senderPubkey);
                 const inviteBody = rumor.content || `You've been added to group "${groupName}"`;
@@ -1257,11 +1181,8 @@ Object.assign(NYM.prototype, {
                     this._addNotificationToHistory(`Group invite: ${groupName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
                 }
             }
-
-            // Fall through to display the invite message inline
         }
 
-        // group-add-member: show as system message, not a chat bubble.
         if (typeTag && typeTag[1] === 'group-add-member') {
             if (this.leftGroups.has(groupId)) {
                 this.leftGroups.delete(groupId);
@@ -1296,8 +1217,7 @@ Object.assign(NYM.prototype, {
                 && addGOwner !== existingGroup.genesisOwner) return;
             const senderIsClaimedOwner = !!claimedOwner && claimedOwner === senderPubkey
                 && (addGenesis !== true || claimedOwner === addGOwner);
-            // Refuse to bootstrap a brand-new group entry from a non-owner, unless
-            // the user is actively joining via an invite link they chose to accept.
+            // Refuse to bootstrap a new group entry from a non-owner, unless joining via an accepted invite link.
             const joiningViaInvite = !!(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId));
             if (!existingGroup && !senderIsClaimedOwner && !joiningViaInvite) return;
             if (existingGroup && existingGroup.createdBy) {
@@ -1316,8 +1236,7 @@ Object.assign(NYM.prototype, {
                 ? memberPubkeys.filter(pk => !bannedSet.has(pk)) : memberPubkeys;
             const existingMembers = existingGroup ? new Set(existingGroup.members) : new Set();
             const newMembers = addMemberPubkeys.filter(pk => !existingMembers.has(pk));
-            // Advance each (re-)added member's moderation clock so a replayed
-            // pre-re-add kick arriving later can't remove them again.
+            // Advance re-added members' moderation clocks so a replayed earlier kick can't remove them again.
             if (existingGroup && newMembers.length > 0) {
                 const addTs = Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000) + 300);
                 for (const pk of newMembers) this._bumpModTargetTs(existingGroup, pk, addTs);
@@ -1364,8 +1283,7 @@ Object.assign(NYM.prototype, {
             this._processPendingGroupHistory(groupId);
             if (!isOwn && this.inPMMode && this.currentGroup === groupId) {
                 this.openGroup(groupId);
-                // Reconstruct the system message locally with fresh nicknames
-                // instead of using rumor.content which may have stale names
+                // Rebuild the system message locally, since rumor.content may have stale names.
                 const fetchPromises = [];
                 for (const pk of newMembers) {
                     if (!this.users.has(pk)) fetchPromises.push(this.fetchProfileDirect(pk));
@@ -1383,7 +1301,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // group-remove-member: update membership, notify if we were kicked.
         if (typeTag && typeTag[1] === 'group-remove-member') {
             const kickTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'kick' && t[1]);
             if (!kickTag) return;
@@ -1397,7 +1314,6 @@ Object.assign(NYM.prototype, {
                     && !this._outranks(groupId, senderPubkey, removedPubkey)) return;
                 this._recordModEvent(grpForCheck, rumor, removedPubkey);
             }
-            // Fetch profiles so nicknames display correctly instead of nym#xxxx
             const profileFetches = [];
             if (!this.users.has(removedPubkey)) profileFetches.push(this.fetchProfileDirect(removedPubkey));
             if (!this.users.has(senderPubkey)) profileFetches.push(this.fetchProfileDirect(senderPubkey));
@@ -1405,7 +1321,6 @@ Object.assign(NYM.prototype, {
             const removedName = this.getNymFromPubkey(removedPubkey);
             const removerName = this.getNymFromPubkey(senderPubkey);
             if (removedPubkey === this.pubkey) {
-                // We were removed — track as left so it doesn't reappear
                 this.leftGroups.add(groupId);
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
@@ -1423,7 +1338,6 @@ Object.assign(NYM.prototype, {
                     this.switchChannel(this.currentChannel || 'nymchat', this.currentChannel || 'nymchat');
                     this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`);
                 }
-                // Notify — the user might not have the group open.
                 const titleSelf = banTag ? `Banned from ${groupName}` : `Removed from ${groupName}`;
                 const bodySelf = banTag
                     ? `${removerName} banned you. You can be re-invited only by the group owner or a moderator.`
@@ -1437,7 +1351,6 @@ Object.assign(NYM.prototype, {
                     this._addNotificationToHistory(titleSelf, bodySelf, removeSelfChannelInfo, removeSelfTsSec * 1000);
                 }
             } else {
-                // Another member was kicked — update local state and show system notice
                 const grp = this.groupConversations.get(groupId);
                 if (grp) {
                     grp.members = grp.members.filter(pk => pk !== removedPubkey);
@@ -1468,7 +1381,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // group-transfer-owner: change owner (current-owner-issued only).
+        // Current-owner-issued only.
         if (typeTag && typeTag[1] === 'group-transfer-owner') {
             const ownerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'owner' && t[1]);
             if (!ownerTag) return;
@@ -1515,7 +1428,6 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // group-delete-message: owner or moderator deletes another member's message.
         if (typeTag && typeTag[1] === 'group-delete-message') {
             const eTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'e' && t[1]);
             if (!eTag) return;
@@ -1553,7 +1465,6 @@ Object.assign(NYM.prototype, {
         if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
         let list = this.pmMessages.get(groupConvKey);
 
-        // Deduplicate by event ID
         if (list.some(m => m.id === event.id)) return;
 
         const messageContent = rumor.content;
@@ -1561,10 +1472,9 @@ Object.assign(NYM.prototype, {
         const originalGroupTsSec = Math.floor(rumor.created_at) || nowSec;
         let tsSec = originalGroupTsSec;
 
-        // Guard against clock skew: cap at current time (no future messages)
+        // Guard against clock skew: cap at current time.
         tsSec = Math.min(tsSec, nowSec);
 
-        // Check if this is an edit of a previous group message (has 'edit' tag in rumor)
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
         if (groupEditTag) {
             const originalId = groupEditTag[1];
@@ -1575,7 +1485,7 @@ Object.assign(NYM.prototype, {
         const nymMsgId = this.getNymMessageId(rumor);
         if (this._isGroupModDeleted(groupId, event.id, nymMsgId, nymMsgId && `${senderPubkey}:${nymMsgId}`)) return;
 
-        // Content dedup for dual-wrap scenarios
+        // Content dedup for dual-wrap scenarios.
         let dupGroupMsg = null;
         if (nymMsgId) {
             dupGroupMsg = list.find(m => m.pubkey === senderPubkey && m.nymMessageId === nymMsgId);
@@ -1584,10 +1494,7 @@ Object.assign(NYM.prototype, {
             dupGroupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
         }
         if (dupGroupMsg) {
-            // Never for our OWN message. We are a member of our own group, so
-            // the fan-out addresses a copy to us; receiving it back says only
-            // that WE hold a key, never that the other members do. The send
-            // path already recorded the real per-member coverage.
+            // Never for our own message: its fan-out copy to us says nothing about other members' keys.
             if (isPqWrap && !dupGroupMsg.pqEncrypted && !dupGroupMsg.isOwn) {
                 dupGroupMsg.pqEncrypted = true;
                 dupGroupMsg.pqRoot = this.pqSealIsRootSeeded(senderPubkey);
@@ -1609,7 +1516,6 @@ Object.assign(NYM.prototype, {
 
         const senderName = this.getNymFromPubkey(senderPubkey);
 
-        // Fetch profile for unknown senders
         if (!isOwn && !this.users.has(senderPubkey)) {
             await this.fetchProfileDirect(senderPubkey);
         }
@@ -1635,7 +1541,7 @@ Object.assign(NYM.prototype, {
             eventKind: 1059,
             isHistorical: this._isGiftWrapBacklog(),
             senderVerified,
-            // Confidentiality, not authentication — see the Message model.
+            // Confidentiality, not authentication; see the Message model.
             pqEncrypted: isPqWrap,
             pqRoot: isPqWrap && this.pqSealRootVerdict(senderPubkey) === true,
             nymMessageId: nymMsgId,
@@ -1660,7 +1566,6 @@ Object.assign(NYM.prototype, {
         this.persistPMMessages(groupConvKey);
         if (isOwn) this._applyEarlyReceipt(msg, groupConvKey);
 
-        // Update or create group conversation entry
         const rosterFromSender = isOwn || !grpForRoster
             || (!grpForRoster.createdBy && grpForRoster.members.filter(pk => pk !== this.pubkey).length === 0)
             || grpForRoster.members.includes(senderPubkey);
@@ -1676,10 +1581,9 @@ Object.assign(NYM.prototype, {
             this._applyGroupMetadataTags(rumor, groupId, senderPubkey, parseInt(metaTsTag[1], 10) || 0);
         }
         this._saveGroupConversations();
-        this._debouncedNostrSettingsSave(15000); // longer delay for routine messages
+        this._debouncedNostrSettingsSave(15000);
         this.moveGroupToTop(groupId, tsSec * 1000);
 
-        // Clear typing indicator for sender (they sent a message, so they stopped typing)
         if (!isOwn) {
             const convTypers = this.typingUsers.get(groupConvKey);
             if (convTypers && convTypers.has(senderPubkey)) {
@@ -1691,21 +1595,13 @@ Object.assign(NYM.prototype, {
         }
 
         const senderBlocked = this.blockedUsers.has(senderPubkey) || this.hasBlockedKeyword(msg.content, msg.author, senderPubkey);
-        // A reply collapsed inside a thread is off screen even while the group is
-        // open, so it must not advance the read watermark, and an @mention /
-        // quote-reply inside it still has to reach the bell.
+        // A collapsed thread reply is off screen, so it must not advance the read watermark.
         const groupThreadHidden = typeof this._threadReplyHidden === 'function' &&
             this._threadReplyHidden(msg);
         const notifyForGroup = () => {
             if (senderBlocked) return;
             if (msgType === 'group-invite') return;
-            // A thread reply is judged by the THREAD's rules, not the flat
-            // group's: it reaches the user when it addresses them (@mention or
-            // quote reply) or landed in a thread they started, and
-            // `threadNotifyMentionsOnly` narrows that to the first half. The
-            // flat "every group message notifies" rule is the wrong one here —
-            // a group thread is a side conversation, and running every reply in
-            // one through it turns each into a buzz.
+            // Thread replies follow thread notification rules, not the flat group's notify-on-every-message rule.
             if (msg.threadRoot && this.threadsEnabled()) {
                 if (this._threadReplySuppressed(msg)) return;
                 if (!this.isMentioned(messageContent) &&
@@ -1737,10 +1633,7 @@ Object.assign(NYM.prototype, {
             if (typeof this._markChannelRead === 'function' && !groupThreadHidden) {
                 this._markChannelRead(groupConvKey, msg.created_at);
             }
-            // A reply the open group keeps collapsed was never on screen, so it
-            // notifies exactly as it would had the group not been open —
-            // `groupNotifyMentionsOnly` inside `notifyForGroup` is still the
-            // knob that decides how much of that reaches the user.
+            // A reply kept collapsed in the open group notifies as if the group were not open.
             if (!isOwn && groupThreadHidden) notifyForGroup();
             if (!isOwn && !msg.isHistorical && !document.hidden && !this.userScrolledUp &&
                 this._canSendGiftWraps() && nymMsgId) {
@@ -1749,8 +1642,7 @@ Object.assign(NYM.prototype, {
                 this.recordOwnActivity();
             }
         } else {
-            // Column view: render into the group's open column even when it
-            // isn't the focused one.
+            // Column view: render into the group's open column even when it isn't focused.
             const cvShown = this._cvActive && this._cvListForKey(groupConvKey);
             if (cvShown) this.displayMessage(msg);
             if (!isOwn && !senderBlocked) {
@@ -1760,7 +1652,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Create a new private group and send invites to all members via NIP-17 gift wraps.
     async createGroup(name, memberPubkeys, opts = {}) {
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Creating groups requires a logged-in account (not pseudonymous mode)');
@@ -1768,7 +1659,6 @@ Object.assign(NYM.prototype, {
         }
         name = this.sanitizeGroupName(name);
 
-        // Always include self as a member
         const allMembers = [...new Set([...memberPubkeys, this.pubkey])];
         if (allMembers.length > this.MAX_GROUP_MEMBERS) {
             this.displaySystemMessage(`Groups are limited to ${this.MAX_GROUP_MEMBERS} members (every message is encrypted separately for each member).`);
@@ -1803,8 +1693,7 @@ Object.assign(NYM.prototype, {
         tags.push(['share_history', opts.shareHistory === true ? '1' : '0']);
         tags.push(['x', nymMessageId]);
 
-        // Bootstrap ephemeral keys: include our first ephemeral pk so members
-        // can start encrypting to it instead of our real pubkey.
+        // Include our first ephemeral pk so members can encrypt to it instead of our real pubkey.
         const initialEph = this._ensureSelfEphemeralKey(groupId);
         tags.push(['ephemeral_pk', initialEph.pk]);
 
@@ -1812,13 +1701,12 @@ Object.assign(NYM.prototype, {
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
-        // First invite always uses real pubkeys (no ephemeral keys established yet)
+        // First invite always uses real pubkeys (no ephemeral keys established yet).
         await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs);
         this._saveEphemeralKeys();
 
-        // addGroupConversation creates the sidebar item with us marked as owner
         this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner, description: groupDescription, allowMemberInvites, inviteEnabled, inviteEpoch });
-        // Defensive: ensure createdBy is set even if a relay echo created the entry first
+        // Ensure createdBy is set even if a relay echo created the entry first.
         const grp = this.groupConversations.get(groupId);
         if (grp && grp.createdBy !== this.pubkey) grp.createdBy = this.pubkey;
         this._saveGroupConversations();
@@ -1827,7 +1715,6 @@ Object.assign(NYM.prototype, {
         return groupId;
     },
 
-    // Add a new member to an existing group via NIP-17
     async addMemberToGroup(groupId, newMemberPubkey) {
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Adding members requires a logged-in account');
@@ -1850,20 +1737,18 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage(`This group is full (${this.MAX_GROUP_MEMBERS} members max).`);
             return false;
         }
-        // Banlist: only the owner or a moderator can re-admit a banned user; regular members cannot.
+        // Banlist: only the owner or a moderator can re-admit a banned user.
         if (Array.isArray(group.banned) && group.banned.includes(newMemberPubkey)) {
             if (!this._canModerate(groupId, this.pubkey)) {
                 this.displaySystemMessage('That user was removed from this group and can only be re-invited by the group owner or a moderator.');
                 return false;
             }
-            // Owner/mod is re-admitting: clear the ban
             group.banned = group.banned.filter(pk => pk !== newMemberPubkey);
         }
 
         group.members = [...group.members, newMemberPubkey];
         this.groupConversations.set(groupId, group);
 
-        // Fetch profile for the new member if we don't have it yet so nicknames display correctly
         if (!this.users.has(newMemberPubkey)) {
             await this.fetchProfileDirect(newMemberPubkey);
         }
@@ -1896,7 +1781,6 @@ Object.assign(NYM.prototype, {
         tags.push(['share_history', group.shareHistory === true ? '1' : '0']);
         tags.push(['x', nymMessageId]);
 
-        // Include our ephemeral pk so the new member (and existing members) learn it
         const eph = this._ensureSelfEphemeralKey(groupId);
         tags.push(['ephemeral_pk', eph.pk]);
 
@@ -1904,12 +1788,10 @@ Object.assign(NYM.prototype, {
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
-        // New member doesn't have an ephemeral key yet, so their wrap uses real pubkey.
-        // Existing members with ephemeral keys will get theirs used automatically.
+        // The new member has no ephemeral key yet, so their wrap uses the real pubkey.
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
         this._saveEphemeralKeys();
 
-        // Owner opted in to sharing recent history: send it to the new member.
         if (group.shareHistory === true) {
             try { await this._sendGroupHistoryTo(groupId, newMemberPubkey); } catch (_) { }
         }
@@ -1917,7 +1799,6 @@ Object.assign(NYM.prototype, {
         this.updateGroupConversationUI(groupId);
         this._saveGroupConversations();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        // Refresh header if currently viewing this group
         if (this.inPMMode && this.currentGroup === groupId) {
             this.openGroup(groupId);
             this.displaySystemMessage(addContent);
@@ -1926,11 +1807,7 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    // Share recent chat history with a newly added member (owner-controlled,
-    // via the group's shareHistory setting). The forwarder re-sends recent
-    // plain chat messages as a single 'group-history' rumor wrapped only to
-    // the new member. Forwarded entries can't carry the original authors'
-    // signatures (the seal is ours), so the receiver marks them unverified.
+    // Forwarded entries can't carry the original authors' signatures, so the receiver marks them unverified.
     async _sendGroupHistoryTo(groupId, memberPubkey) {
         const group = this.groupConversations.get(groupId);
         if (!group || group.shareHistory !== true) return;
@@ -1941,7 +1818,6 @@ Object.assign(NYM.prototype, {
         const picked = [];
         for (let i = list.length - 1; i >= 0 && picked.length < MAX_MSGS; i--) {
             const m = list[i];
-            // Plain chat messages only — no file offers or control events.
             if (!m || !m.content || m.isFileOffer) continue;
             if (!m.pubkey || !m.nymMessageId) continue;
             picked.push({
@@ -1952,7 +1828,7 @@ Object.assign(NYM.prototype, {
             });
         }
         if (!picked.length) return;
-        picked.reverse(); // oldest first
+        picked.reverse();
         let payload = picked;
         while (payload.length > 1 && JSON.stringify(payload).length > MAX_JSON) {
             payload = payload.slice(Math.ceil(payload.length / 4));
@@ -1969,15 +1845,11 @@ Object.assign(NYM.prototype, {
         await this._sendGiftWrapsAsync([memberPubkey], rumor, null, groupId);
     },
 
-    // Receiver side: fold a shared history blob into the group's message list.
-    // Guards: the group must have history sharing enabled, the sender must be
-    // a member (or the owner), we only accept one blob per group, and only
-    // while our copy of the room is still essentially empty (fresh joiner).
+    // Accepts one blob per group, only from members, and only while our copy of the room is essentially empty.
     _handleGroupHistoryShare(rumor, groupId, senderPubkey) {
         const group = this.groupConversations.get(groupId);
         if (!group) {
-            // History can outrun the add-member wrap that creates the group
-            // entry. Stash it briefly; processed after the group bootstraps.
+            // History can outrun the add-member wrap that creates the group entry, so stash it briefly.
             if (!this._pendingGroupHistory) this._pendingGroupHistory = new Map();
             const nowMs = Date.now();
             for (const [gid, entry] of this._pendingGroupHistory) {
@@ -1997,7 +1869,6 @@ Object.assign(NYM.prototype, {
         const groupConvKey = this.getGroupConversationKey(groupId);
         if (!this.pmMessages.has(groupConvKey)) this.pmMessages.set(groupConvKey, []);
         const list = this.pmMessages.get(groupConvKey);
-        // Only fresh joiners: if we already hold history, this blob isn't for us.
         if (list.length > 3) return;
 
         let entries;
@@ -2038,7 +1909,6 @@ Object.assign(NYM.prototype, {
                 conversationPubkey: null,
                 eventKind: 1059,
                 isHistorical: true,
-                // Forwarded by another member; original author signature not verifiable.
                 senderVerified: false,
                 nymMessageId: e.x
             });
@@ -2052,7 +1922,6 @@ Object.assign(NYM.prototype, {
         this.persistPMMessages(groupConvKey);
         this._saveGroupConversations();
         this._debouncedNostrSettingsSave();
-        // Resolve author names lazily; re-render if the room is open.
         for (const pk of [...unknownPks].slice(0, 20)) {
             try { this.fetchProfileDirect(pk); } catch (_) { }
         }
@@ -2063,19 +1932,9 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // --- Key-resync heartbeat -------------------------------------------------
-    // Members advertise a fresh ephemeral receiving key with every message and
-    // keep only a bounded window of previous keys. A client that was offline
-    // long enough for relays to expire the missed messages comes back holding
-    // stale copies of other members' keys (and past 30 rotations, messages
-    // encrypted to a stale key are undecryptable). After a long offline gap we
-    // therefore send a key-resync REQUEST to each group — wrapped to members'
-    // REAL pubkeys, since our stored ephemeral keys are exactly what we suspect
-    // is stale — carrying our current key; members reply (rate-limited) with
-    // theirs, so both directions recover.
+    // After a long offline gap, send key-resync requests to members' real pubkeys since our ephemeral keys may be stale.
 
-    // Track when this client was last online so the gap is measurable at boot.
-    // Returns the gap in seconds computed from the previous session's marker.
+    // Returns the offline gap in seconds since the previous session's marker.
     _initLastOnlineTracking() {
         if (this._lastOnlineTrackingStarted) return this._offlineGapSec || 0;
         this._lastOnlineTrackingStarted = true;
@@ -2091,8 +1950,7 @@ Object.assign(NYM.prototype, {
         return this._offlineGapSec;
     },
 
-    // Called after DM catch-up on (re)connect. Sends resync requests only when
-    // the offline gap warrants it, at most once per group per cooldown window.
+    // Called after DM catch-up; at most once per group per cooldown window.
     async _announceGroupEphemeralKey(groupId) {
         if (!this._canSendGiftWraps()) return;
         const group = this.groupConversations.get(groupId);
@@ -2157,9 +2015,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Reply to a member's resync request with our current ephemeral key,
-    // wrapped to the key they just advertised (already folded in by the
-    // generic ephemeral_pk extraction). Rate-limited per group+requester.
+    // Wrapped to the key they just advertised; rate-limited per group+requester.
     async _maybeReplyKeyResync(groupId, senderPubkey) {
         try {
             const group = this.groupConversations.get(groupId);
@@ -2190,7 +2046,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Apply a history blob that arrived before the group entry existed.
     _processPendingGroupHistory(groupId) {
         const pending = this._pendingGroupHistory && this._pendingGroupHistory.get(groupId);
         if (!pending) return;
@@ -2198,10 +2053,7 @@ Object.assign(NYM.prototype, {
         try { this._handleGroupHistoryShare(pending.rumor, groupId, pending.senderPubkey); } catch (_) { }
     },
 
-    // Wrap and send one NIP-59 gift wrap per group member.
-    // Check whether the user can send gift-wrapped messages.
-    // True when a local privkey is available OR a NIP-07 extension exposes
-    // the required nip44 encrypt + signEvent methods.
+    // True when a local privkey, NIP-07 nip44 + signEvent, or a connected NIP-46 signer is available.
     _canSendGiftWraps() {
         return !!this.privkey
             || !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent)
@@ -2223,34 +2075,23 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Uses the local privkey when available, otherwise falls back to the
-    // NIP-07 extension for sealing (nip44.encrypt + signEvent) while still
-    // wrapping with a local ephemeral keypair.
-    // Archive every group rumor — messages, edits, reactions, deletions AND
-    // control events (membership, mods, bans, ownership, key rotation) — so a
-    // new device can fully reconstruct group state. Replaying them in order
-    // mirrors the existing relay reconnect catch-up.
+    // Archive every group rumor, including control events, so a new device can reconstruct group state.
     _isArchivableGroupRumor(rumor) {
         if (!rumor || (rumor.kind !== 14 && rumor.kind !== 7)) return false;
-        // group-metadata is an empty-content control event; never archive it as
-        // a message so it can't reappear as a blank bubble on restore.
+        // group-metadata is empty-content; never archive it or it restores as a blank bubble.
         const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type');
         if (typeTag && typeTag[1] === 'group-metadata') return false;
         return true;
     },
 
-    // Mirror a group rumor to D1 as a self-addressed gift wrap (to our real
-    // pubkey) so group chats restore on other devices like 1:1 PMs. Local-key
-    // path only, matching how 1:1 PM archival works.
+    // Self-addressed D1 copy so group chats restore on other devices; local-key path only.
     async _archiveGroupRumorSelf(rumor, expirationTs) {
         try {
             if (!this._isArchivableGroupRumor(rumor)) return;
             if (typeof this._pmArchiveAllowed !== 'function' || !this._pmArchiveAllowed()) return;
             let wrap = null;
             if (this.privkey) {
-                // Post-quantum whenever we are: otherwise the archive is the
-                // weakest link, readable by anyone who breaks secp256k1
-                // regardless of how the outbound copies were sealed.
+                // Post-quantum whenever we are, or the archive becomes the weakest link.
                 const selfKemPk = this.pqSelfKeyFor();
                 wrap = selfKemPk
                     ? (this.pqSelfUsesPq2()
@@ -2287,9 +2128,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // opts.forceRealPk: wrap to members' real pubkeys even for group sends —
-    // used by key-resync requests, where our stored ephemeral keys are exactly
-    // what we suspect is stale.
+    // opts.forceRealPk wraps to real pubkeys, for key-resync requests where ephemeral keys are suspect.
     _pqWrapKeyFor(pubkey) {
         if (pubkey === this.pubkey) return typeof this.pqSelfKeyFor === 'function' ? this.pqSelfKeyFor() : null;
         return this.pqGroupKeyFor(pubkey);
@@ -2304,33 +2143,19 @@ Object.assign(NYM.prototype, {
         // Archive-only self copy so group messages also hydrate from D1.
         if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
 
-        // Deposit each member's gift wrap into their D1 inbox
         const depositToD1 = !!groupId && this._isArchivableGroupRumor(rumor);
 
-        // Fast path — local key available. Offload each wrap to the crypto
-        // worker pool so large groups don't block the UI thread.
+        // Offload each wrap to the crypto worker pool so large groups don't block the UI thread.
         if (this.privkey) {
             const sharedId = this.getNymMessageId(rumor);
-            // Per-member post-quantum coverage. Because each member already
-            // gets an independent wrap, a group can mix post-quantum and
-            // classical recipients with no protocol change and no negotiation
-            // — which is what keeps mixed Nymchat/Bitchat groups working.
+            // Each member gets an independent wrap, so mixed PQ/classical groups need no negotiation.
             let pqCount = 0;
             let rootCount = 0;
             const wrapLocal = async (pubkey) => {
-                // One member must not cost the others their copy: a throwing
-                // wrap rejected the Promise.all below and stranded every member
-                // still queued behind it.
+                // One member's failed wrap must not reject the Promise.all for everyone else.
                 try {
                     const encryptTo = (groupId && !opts.forceRealPk) ? this._getEncryptionPubkey(groupId, pubkey) : pubkey;
-                    // The two legs use different keys on purpose: the classical
-                    // ECDH goes to the member's rotating ephemeral pubkey, keeping
-                    // the metadata protection that rotation buys, while the KEM leg
-                    // encapsulates to their long-lived identity ML-KEM key (which
-                    // is what the announcement carries). Security is
-                    // max(classical, PQ), so the rotation still delivers its
-                    // forward secrecy against classical attackers while the KEM leg
-                    // delivers harvest-now-decrypt-later protection.
+                    // Classical ECDH to the rotating ephemeral pubkey, KEM leg to the long-lived ML-KEM identity key.
                     const memberKemPk = this._pqWrapKeyFor(pubkey);
                     const wrapped = memberKemPk
                         ? await this.pqWrapForPeerAsync(this._pqWrapUsesPq2(pubkey), rumor,
@@ -2356,21 +2181,18 @@ Object.assign(NYM.prototype, {
                 while (queue.length) await wrapLocal(queue.shift());
             });
             await Promise.all(workers);
-            // Coverage for this message, so the badge can say "quantum-resistant
-            // to 8 of 10 members" rather than implying all-or-nothing.
+            // Per-message coverage so the badge can say "quantum-resistant to 8 of 10 members".
             if (groupId && sharedId) {
                 this._recordGroupPqCoverage(sharedId, pqCount, members.length, rootCount);
             }
             return;
         }
 
-        // Extension or NIP-46 remote signer path
         const useExtension = !!(window.nostr?.nip44?.encrypt && window.nostr?.signEvent);
         const useNip46 = this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected;
         if (!useExtension && !useNip46) return;
 
         const NT = window.NostrTools;
-        // Compute rumor id once
         const rumorWithId = { ...rumor };
         rumorWithId.id = NT.getEventHash(rumorWithId);
         const rumorJson = JSON.stringify(rumorWithId);
@@ -2390,16 +2212,10 @@ Object.assign(NYM.prototype, {
                     ? await window.nostr.signEvent(sealUnsigned)
                     : await _nip46SignEvent(sealUnsigned);
 
-                // The seal is out of reach through a signer, but the wrap's
-                // ephemeral key is ours, so it can still be hybridized. The KEM
-                // leg encapsulates to the member's long-lived identity key,
-                // exactly as it does on the local-key path — the rotating
-                // ephemeral pubkey the classical leg uses has no announcement.
+                // Through a signer only the wrap can be hybridized; the KEM leg uses the member's identity key.
                 const memberKemPk = this._pqWrapKeyFor(pubkey);
                 const ephSk = NT.generateSecretKey();
-                // The format the MEMBER announced, never a fixed one — a peer
-                // that published only `pk2` cannot open a combined wrap, so
-                // sending one dropped them out of the conversation silently.
+                // Use the format the member announced; a `pk2`-only peer cannot open a combined wrap.
                 const wrapContent = memberKemPk
                     ? (this._pqWrapUsesPq2(pubkey)
                         ? window.NymCrypto.pq2Encrypt(JSON.stringify(seal), ephSk, encryptTo, memberKemPk)
@@ -2426,7 +2242,6 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        // Controlled-concurrency pool
         const limit = useNip46 ? 4 : 8;
         const queue = members.slice();
         const workers = new Array(Math.min(limit, queue.length)).fill(0).map(async () => {
@@ -2438,7 +2253,6 @@ Object.assign(NYM.prototype, {
         await Promise.all(workers);
     },
 
-    // Send a message to a group via NIP-17 gift wraps (one per member).
     async sendGroupMessage(content, groupId, options = {}) {
         if (!content || !content.trim()) return false;
         if (!this._canSendGiftWraps()) {
@@ -2446,8 +2260,7 @@ Object.assign(NYM.prototype, {
             return false;
         }
 
-        // Wait for reconnect catch-up to finish so we have the latest
-        // ephemeral keys from missed messages before encrypting.
+        // Wait for reconnect catch-up so we have the latest ephemeral keys before encrypting.
         await this._dmCatchupReady;
 
         const group = this.groupConversations.get(groupId);
@@ -2463,16 +2276,15 @@ Object.assign(NYM.prototype, {
         tags.push(['x', nymMessageId]);
         this._attachGroupMetaTags(tags, group, groupId);
 
-        // Ephemeral key rotation: generate next key and advertise it inside the rumor.
-        // Recipients will encrypt future messages to this key instead of our real pubkey.
+        // Advertise the next ephemeral key in the rumor so recipients encrypt future messages to it.
         const nextEph = this._rotateSelfEphemeralKey(groupId);
         tags.push(['ephemeral_pk', nextEph.pk]);
         tags.push(['ms', String(nowMs)]);
 
-        // NIP-30: declare any custom emoji shortcodes used in the message
+        // NIP-30: declare any custom emoji shortcodes used in the message.
         tags.push(...this.customEmojiTagsForContent(content));
 
-        // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message
+        // NIP-92: imeta tags listing Blossom mirror URLs for any media in the message.
         if (typeof this.imetaTagsForContent === 'function') {
             tags.push(...this.imetaTagsForContent(content));
         }
@@ -2480,8 +2292,7 @@ Object.assign(NYM.prototype, {
         const fileOffer = options.fileOffer || null;
         if (fileOffer) tags.push(['offer', JSON.stringify(fileOffer)]);
 
-        // Thread reply marker (root's shared nymMessageId) inside the
-        // encrypted rumor — see threads.js.
+        // Thread reply marker (root's shared nymMessageId) inside the encrypted rumor; see threads.js.
         const threadRoot = options.threadRoot || null;
         if (threadRoot) tags.push(['nymthread', threadRoot]);
 
@@ -2531,12 +2342,8 @@ Object.assign(NYM.prototype, {
             this.displayMessage(msg);
         }
 
-        // Send gift wraps using ephemeral recipient keys when available
         await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
-        // A group is post-quantum only if EVERY member got a post-quantum wrap:
-        // one classical copy of the same plaintext is enough for an attacker,
-        // so partial coverage must not read as protected. The exact counts drive
-        // the "8 of 10 members" detail in the badge popup.
+        // Post-quantum only if every member got a PQ wrap; one classical copy exposes the plaintext.
         const coverage = this.pqGroupCoverageFor(nymMessageId);
         if (coverage) {
             msg.pqEncrypted = coverage.total > 0 && coverage.pq === coverage.total;
@@ -2549,11 +2356,9 @@ Object.assign(NYM.prototype, {
         this._saveEphemeralKeys();
         this._debouncedNostrSettingsSave(2000);
 
-        // Refresh relay subscriptions so we receive messages to our new ephemeral
-        // key (coalesced so rapid sends don't churn or drop refreshes).
+        // Coalesced so rapid sends don't churn or drop refreshes.
         this._scheduleEphemeralSubRefresh();
 
-        // Bump our own presence so status stays "online".
         this.recordOwnActivity();
 
         return true;
@@ -2585,11 +2390,9 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    // Send a leave notification to remaining group members, then clean up locally
     async leaveGroup(groupId) {
         const group = this.groupConversations.get(groupId);
 
-        // NIP-17 leave notification
         if (group && this._canSendGiftWraps()) {
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length > 0) {
@@ -2602,11 +2405,9 @@ Object.assign(NYM.prototype, {
                 tags.push(['type', 'group-leave']);
                 tags.push(['x', this._generateSharedEventId()]);
                 const rumor = { kind: 14, created_at: now, tags, content: leaveContent, pubkey: this.pubkey };
-                // Send to remaining members only (not self), using ephemeral keys
                 await this._sendGiftWrapsAsync(otherMembers, rumor, null, groupId);
             }
         }
-        // Track the left group so it doesn't reappear from stale relay data
         this.leftGroups.add(groupId);
         if (!this.leftGroupTimes) this.leftGroupTimes = new Map();
         this.leftGroupTimes.set(groupId, Math.floor(Date.now() / 1000));
@@ -2617,12 +2418,10 @@ Object.assign(NYM.prototype, {
         if (this.unreadCounts) this.unreadCounts.delete(groupConvKeyForRead);
         if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
 
-        // Clean up ephemeral keys for this group
         this.groupEphemeralKeys.delete(groupId);
         this._saveEphemeralKeys();
         if (typeof this._clearGroupSyncData === 'function') this._clearGroupSyncData(groupId);
 
-        // Remove persisted entry
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) { }
         this.groupConversations.delete(groupId);
         this._saveGroupConversations();
@@ -2644,19 +2443,17 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
-    // Delete a group conversation locally
     async deleteGroup(groupId) {
         if (!(await window.showAppConfirm('Leave and delete this group conversation?', { danger: true, okLabel: 'Leave' }))) return;
         this.leaveGroup(groupId);
     },
 
-    // Remove a member from the current group (owner or moderator) via NIP-17 gift-wrapped rumor.
-    // /kick: removes membership; the user can be re-invited by anyone.
+    // /kick removes membership; the user can be re-invited by anyone.
     async kickFromGroup(pubkey) {
         return this._removeFromGroup(pubkey, { ban: false });
     },
 
-    // Remove and banlist a member. Only the owner can re-admit them.
+    // Only the owner can re-admit a banned member.
     async banFromGroup(pubkey) {
         return this._removeFromGroup(pubkey, { ban: true });
     },
@@ -2718,7 +2515,7 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(content);
     },
 
-    // Owner-only: lift a ban (does not re-invite the user).
+    // Owner-only; does not re-invite the user.
     async unbanFromGroup(pubkey) {
         const groupId = this.currentGroup;
         if (!groupId) return;
@@ -2844,7 +2641,6 @@ Object.assign(NYM.prototype, {
     },
 
 
-    // Owner-only: transfer ownership of the group to another member
     async transferOwner(pubkey) {
         this.closeContextMenu();
         const groupId = this.currentGroup;
@@ -2892,7 +2688,6 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(content);
     },
 
-    // Owner-only: broadcast a name/banner/avatar/description change to members.
     async _broadcastGroupMetadata(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group || !this._canSendGiftWraps()) return;
@@ -2900,9 +2695,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Only the group owner or an admin can change group settings.');
             return;
         }
-        // Send only to other members. We already applied the change locally and
-        // it syncs to our own devices via nymchat-groups, so echoing it back to
-        // ourselves would surface an empty control event as a blank message.
+        // Send only to other members; echoing to ourselves would surface a blank message.
         const others = group.members.filter(pk => pk !== this.pubkey);
         if (!others.length) return;
         const now = group.metaUpdatedAt || Math.floor(Date.now() / 1000);
@@ -2938,20 +2731,13 @@ Object.assign(NYM.prototype, {
         tags.push(['share_history', group.shareHistory === true ? '1' : '0']);
     },
 
-    // Stable identifier for a moderation rumor, used for exact-replay dedup.
-    // Prefer the shared 'x' tag id (identical across every member's wrap),
-    // falling back to the rumor id.
+    // Prefer the shared 'x' tag id (identical across members' wraps), falling back to the rumor id.
     _modEventKey(rumor) {
         const xTag = (rumor?.tags || []).find(t => Array.isArray(t) && t[0] === 'x' && t[1]);
         return (xTag && xTag[1]) || (rumor && rumor.id) || null;
     },
 
-    // Moderation events are ordered per target pubkey, not globally: relays can
-    // deliver distinct mod events out of order (promote A @100 after kick B @105)
-    // and a single global timestamp gate would silently drop the older one even
-    // though it was never seen. Exact replays are caught by the seen-id set.
-    // Events without a target (ownership transfers) keep the global gate, since
-    // authority for later events was already derived from the current owner.
+    // Ordered per target pubkey, since relays deliver distinct mod events out of order; targetless events keep the global gate.
     _isStaleModEvent(grp, rumor, targetPubkey) {
         if (!grp) return false;
         const key = this._modEventKey(rumor);
@@ -2990,8 +2776,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Advance a target's moderation clock (also used when a member is re-added,
-    // so a replayed pre-re-add kick can't remove them again).
+    // Also used when a member is re-added, so a replayed earlier kick can't remove them again.
     _bumpModTargetTs(grp, targetPubkey, ts) {
         if (!grp || !targetPubkey) return;
         if (!grp.modTsByTarget) grp.modTsByTarget = {};
@@ -3077,7 +2862,6 @@ Object.assign(NYM.prototype, {
         return (description || '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 150);
     },
 
-    // Owner-only: rename the group and propagate to members.
     async setGroupName(groupId, name) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3099,7 +2883,6 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage(`Group renamed to "${trimmed}".`);
     },
 
-    // Owner-only: set the group description and propagate to members.
     async setGroupDescription(groupId, description) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3119,8 +2902,6 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage('Group description updated.');
     },
 
-    // Owner-only: toggle whether regular members may add new members, then
-    // propagate to the rest of the group.
     async setGroupAllowMemberInvites(groupId, allow) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3142,9 +2923,7 @@ Object.assign(NYM.prototype, {
             : 'Only the group owner, admins and moderators can add new users now.');
     },
 
-    // Owner-only: toggle sharing recent chat history with newly added members,
-    // then propagate to the rest of the group (any member who adds someone
-    // needs to know the setting).
+    // Any member who adds someone needs to know this setting, so it propagates.
     async setGroupShareHistory(groupId, enabled) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3166,7 +2945,6 @@ Object.assign(NYM.prototype, {
             : 'New members will no longer receive chat history.');
     },
 
-    // Owner-only: turn joining via invite link on or off, then propagate.
     async setGroupInviteEnabled(groupId, enabled) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3206,8 +2984,6 @@ Object.assign(NYM.prototype, {
         this.displaySystemMessage('Previous invite links revoked. A new link is now active.');
     },
 
-    // Owner-only: persist a group image (kind = 'avatar' | 'banner') and
-    // propagate to members. Re-renders the sidebar item too for avatar changes.
     async _applyGroupImage(groupId, kind, url) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3222,7 +2998,6 @@ Object.assign(NYM.prototype, {
         await this._broadcastGroupMetadata(groupId);
     },
 
-    // Owner-only: upload and set a group avatar/banner, then propagate.
     async _setGroupImage(groupId, kind, file) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3239,7 +3014,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Owner-only: clear a group avatar/banner.
     async _clearGroupImage(groupId, kind) {
         const group = this.groupConversations.get(groupId);
         if (!group || !this._canAdminister(groupId, this.pubkey)) return;
@@ -3252,7 +3026,6 @@ Object.assign(NYM.prototype, {
     uploadGroupAvatar(groupId, file) { return this._setGroupImage(groupId, 'avatar', file); },
     removeGroupAvatar(groupId) { return this._clearGroupImage(groupId, 'avatar'); },
 
-    // Owner or moderator: delete a message in the current group for everyone.
     async modDeleteGroupMessage(messageId, authorPubkey) {
         this.closeContextMenu();
         const groupId = this.currentGroup;
@@ -3272,8 +3045,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Resolve to the nymMessageId — that's the only id that's stable across
-        // recipients, since each one has a different gift-wrap event id.
+        // nymMessageId is the only id stable across recipients; each has a different gift-wrap id.
         const sharedId = msg.nymMessageId || msg.id;
 
         const actorName = this.getNymFromPubkey(this.pubkey);
@@ -3292,7 +3064,6 @@ Object.assign(NYM.prototype, {
 
         await this._sendGiftWrapsAsync(group.members, rumor, null, groupId);
 
-        // Apply locally
         this._applyGroupMessageDeletion(groupId, sharedId, authorPubkey);
         this._appendModLog(group, { type: 'delete-message', actor: this.pubkey, target: authorPubkey || null, messageId: sharedId });
         this._saveGroupConversations();
@@ -3361,13 +3132,11 @@ Object.assign(NYM.prototype, {
         return msg;
     },
 
-    // Add or update a group entry in the PM sidebar list
     addGroupConversation(groupId, name, members, timestamp = Date.now(), opts = {}) {
         const existing = this.groupConversations.get(groupId);
         const allMembers = [...new Set(members)];
 
         if (!existing) {
-            // Don't re-show groups the user previously left
             if (this.leftGroups.has(groupId)) return;
             this.groupConversations.set(groupId, {
                 name,
@@ -3398,12 +3167,10 @@ Object.assign(NYM.prototype, {
             item.dataset.action = 'openGroupItem';
             this.insertPMInOrder(item, pmList);
 
-            // Show any unread count persisted from a previous session
             const convKey = this.getGroupConversationKey(groupId);
             const unread = this.unreadCounts.get(convKey) || 0;
             if (unread > 0) this._renderUnreadBadge(convKey, unread);
 
-            // Apply active search filter
             const searchInput = document.getElementById('pmSearch');
             if (searchInput?.value.trim().length > 0) {
                 const term = searchInput.value.toLowerCase();
@@ -3414,7 +3181,6 @@ Object.assign(NYM.prototype, {
             }
             this.updateViewMoreButton('pmList');
         } else {
-            // Merge members (new invitees may arrive with updated member list)
             const merged = [...new Set([...existing.members, ...allMembers])];
             const next = {
                 ...existing,
@@ -3428,7 +3194,6 @@ Object.assign(NYM.prototype, {
                 banned: Array.isArray(existing.banned) ? existing.banned : [],
                 modLog: Array.isArray(existing.modLog) ? existing.modLog : []
             };
-            // Adopt createdBy if missing and provided
             if (!next.createdBy && opts.createdBy) next.createdBy = opts.createdBy;
             if (!next.genesisOwner && opts.genesisOwner) next.genesisOwner = opts.genesisOwner;
             if (!next.genesisNonce && opts.genesisNonce) next.genesisNonce = opts.genesisNonce;
@@ -3451,7 +3216,6 @@ Object.assign(NYM.prototype, {
         return this.getProxiedMediaUrl(g.avatar);
     },
 
-    // Rebuild the inner HTML of a group PM list item
     _buildGroupItemHTML(groupId, name, members) {
         const otherMembers = members.filter(pk => pk !== this.pubkey);
         const displayMembers = otherMembers.slice(0, 3);
@@ -3472,12 +3236,9 @@ Object.assign(NYM.prototype, {
         return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span><button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button></div>`;
     },
 
-    // Update the stacked reader avatars for group messages using waterfall logic:
-    // Each reader's avatar only appears on the LATEST message they've read, since
-    // reading message N implies having read all prior messages.
+    // Waterfall: each reader's avatar appears only on the latest message they've read.
     updateGroupReaderAvatars(nymMessageId, convKey) {
-        // Resolve the conversation from the caller (so background/columns-view
-        // groups update correctly) and fall back to the focused group.
+        // Resolve from the caller so background/column-view groups update correctly.
         if (!convKey && this.inPMMode && this.currentGroup) {
             convKey = this.getGroupConversationKey(this.currentGroup);
         }
@@ -3527,7 +3288,6 @@ Object.assign(NYM.prototype, {
         return displayReaders;
     },
 
-    // Fallback: update a single message's reader avatars without waterfall
     _updateSingleGroupReaders(nymMessageId) {
         const el = document.querySelector(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
         if (!el) return;
@@ -3540,7 +3300,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Build reader avatars HTML from a provided Map (used by waterfall)
     _buildGroupReadersHtmlFromMap(readersMap) {
         const MAX_VISIBLE = 3;
         if (!readersMap || readersMap.size === 0) return '';
@@ -3560,7 +3319,6 @@ Object.assign(NYM.prototype, {
         return avatarHtml + overflowHtml;
     },
 
-    // Reconcile a .group-readers / .channel-readers element in place
     _syncReaderAvatars(el, readersMap) {
         const MAX_VISIBLE = 3;
         const entries = readersMap ? Array.from(readersMap.entries()) : [];
@@ -3614,10 +3372,8 @@ Object.assign(NYM.prototype, {
         return visible.length > 0;
     },
 
-    // Channel-message reader avatars (kind 20000 message IDs keyed in channelMessageReaders)
     updateChannelReaderAvatars(messageId, geohash) {
-        // Resolve the channel from the caller (so background/columns-view channels
-        // update correctly) and fall back to the focused channel.
+        // Resolve from the caller so background/column-view channels update correctly.
         if (!geohash && !this.inPMMode && this.currentGeohash) {
             geohash = this.currentGeohash;
         }
@@ -3662,12 +3418,7 @@ Object.assign(NYM.prototype, {
         return this._buildGroupReadersHtmlFromMap(readers);
     },
 
-    // Resolve the waterfalled reader set for a single channel message so the
-    // initial render only shows avatars on each reader's latest seen message.
-    // Accepts the message object (preferred) so the waterfall is computed against
-    // the message's OWN channel rather than whichever channel is focused —
-    // otherwise a background/columns-view channel falls back to the raw reader
-    // store and shows the avatar on every seen message.
+    // Takes the message so the waterfall uses its own channel, not whichever is focused.
     _waterfallReadersForChannel(message) {
         const messageId = (message && typeof message === 'object') ? message.id : message;
         if (!messageId) return null;
@@ -3712,19 +3463,14 @@ Object.assign(NYM.prototype, {
         this._showReadersModalFromMap(readers, anchorEl);
     },
 
-    // Returns the inner HTML for a .group-readers span: up to 3 avatars + overflow badge
+    // Up to 3 avatars plus an overflow badge.
     _buildGroupReadersHtml(message) {
         const readers = this._waterfallReadersForGroup(message);
         if (!readers || readers.size === 0) return '';
         return this._buildGroupReadersHtmlFromMap(readers);
     },
 
-    // Resolve the waterfalled reader set for a single group message so the
-    // initial render only shows avatars on each reader's latest seen message.
-    // Accepts the message object (preferred) so the waterfall is computed against
-    // the message's OWN conversation rather than whichever group is focused —
-    // otherwise a background/columns-view group falls back to the raw reader
-    // store and shows the avatar on every seen message.
+    // Takes the message so the waterfall uses its own conversation, not whichever is focused.
     _waterfallReadersForGroup(message) {
         const nymMessageId = (message && typeof message === 'object') ? message.nymMessageId : message;
         if (!nymMessageId) return null;
@@ -3742,7 +3488,6 @@ Object.assign(NYM.prototype, {
         return displayReaders.get(nymMessageId) || null;
     },
 
-    // Attach a 500ms long-press to a .group-readers element to open the readers modal
     _bindReaderLongPress(el, nymMessageId) {
         let timer = null;
         const start = (e) => {
@@ -3802,7 +3547,6 @@ Object.assign(NYM.prototype, {
             this.ensureListProfiles(modal, Array.from(readers.keys()));
         }
 
-        // Click user row to open their context menu
         modal.querySelectorAll('.readers-modal-user').forEach((el, i) => {
             el.addEventListener('click', (e) => {
                 const [pubkey, nym] = entries[i];
@@ -3813,7 +3557,6 @@ Object.assign(NYM.prototype, {
             });
         });
 
-        // Position above/below the anchor — batch style writes
         const rect = anchorEl.getBoundingClientRect();
         const right = Math.max(4, window.innerWidth - rect.right);
         const approxHeight = Math.min(readers.size * 44 + 50, 300);
@@ -3846,8 +3589,6 @@ Object.assign(NYM.prototype, {
         return `${displayPks.join(',')}|${group.members.length}|${group.name || ''}|${group.avatar || ''}`;
     },
 
-    // Build the in-chat group header: custom avatar when set, else the stacked
-    // member avatars + group glyph.
     _buildGroupHeaderHtml(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return '';
@@ -3873,7 +3614,6 @@ Object.assign(NYM.prototype, {
         return `<span class="group-header-row">${iconPart}<span class="group-name-text ${nameCls}">${this.escapeHtml(group.name)}</span></span>${memberLabel}`;
     },
 
-    // Re-render a group item's inner HTML (e.g., after member list changes)
     updateGroupConversationUI(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3884,7 +3624,7 @@ Object.assign(NYM.prototype, {
             if (item.dataset.groupSig !== sig) {
                 item.innerHTML = this._buildGroupItemHTML(groupId, group.name, group.members);
                 item.dataset.groupSig = sig;
-                // Rebuilding innerHTML resets the unread badge — restore it
+                // Rebuilding innerHTML resets the unread badge, so restore it.
                 const convKey = this.getGroupConversationKey(groupId);
                 this._renderUnreadBadge(convKey, this.unreadCounts.get(convKey) || 0);
             }
@@ -3892,20 +3632,12 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Refresh group sidebar avatar tooltips and in-chat header when a member's
-    // profile (nickname) changes. The group sidebar item's name reflects the
-    // group's subject, not member nicknames, but the avatar stack and the
-    // current group's header reference per-member nyms via the users map.
     updateGroupMembershipDisplay(memberPubkey) {
         if (!memberPubkey || !this.groupConversations) return;
         for (const [groupId, group] of this.groupConversations.entries()) {
             if (!group || !Array.isArray(group.members)) continue;
             if (!group.members.includes(memberPubkey)) continue;
-            // Re-render the sidebar item so any per-member metadata (e.g. avatar
-            // alt/title attributes) reflects the latest profile data.
             this.updateGroupConversationUI(groupId);
-            // If we're currently viewing this group, refresh its header so the
-            // (re)rendered nickname appears in the title bar.
             if (this.inPMMode && this.currentGroup === groupId) {
                 const channelEl = document.getElementById('currentChannel');
                 if (channelEl) {
@@ -3920,7 +3652,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Make the group chat header open the group context menu on click.
     _wireGroupHeaderClick(channelEl, groupId) {
         const row = channelEl.querySelector('.group-header-row');
         if (!row) return;
@@ -3928,7 +3659,6 @@ Object.assign(NYM.prototype, {
         row.onclick = (e) => { e.preventDefault(); e.stopPropagation(); this.showGroupContextMenu(groupId); };
     },
 
-    // Build and open the group info / management context menu.
     showGroupContextMenu(groupId) {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
@@ -3942,7 +3672,6 @@ Object.assign(NYM.prototype, {
         const overlay = document.getElementById('groupContextMenuOverlay');
         if (!menu || !overlay) return;
 
-        // Banner: custom image when set, otherwise a default gradient background.
         const bannerImg = document.getElementById('grpCtxBannerImg');
         const defaultBanner = document.getElementById('grpCtxDefaultBanner');
         menu.classList.add('has-banner');
@@ -3959,7 +3688,6 @@ Object.assign(NYM.prototype, {
             if (defaultBanner) defaultBanner.classList.remove('nm-hidden');
         }
 
-        // Icon: custom group avatar, else stacked member avatars over a glyph.
         const groupSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
         const grpCtxIcon = document.getElementById('grpCtxIcon');
         const customAvatar = this.getGroupAvatarUrl(groupId);
@@ -3975,7 +3703,6 @@ Object.assign(NYM.prototype, {
         document.getElementById('grpCtxMemberCount').textContent = `${group.members.length} member${group.members.length === 1 ? '' : 's'}`;
         document.getElementById('grpCtxBio').textContent = group.description || '';
 
-        // Invite link row, shown in the header like the pubkey row of a user menu.
         const inviteLink = this._canAddMembers(groupId, this.pubkey) ? this.buildGroupInviteLink(groupId) : null;
         const grpCtxInviteLink = document.getElementById('grpCtxInviteLink');
         const grpCtxCopyInvite = document.getElementById('grpCtxCopyInvite');
@@ -3987,7 +3714,6 @@ Object.assign(NYM.prototype, {
             if (grpCtxCopyInvite) grpCtxCopyInvite.classList.add('nm-hidden');
         }
 
-        // Role-based action buttons
         const icon = (p) => `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-ico8">${p}</svg>`;
         const actions = [];
         if (iCanAdminister) {
@@ -4020,7 +3746,6 @@ Object.assign(NYM.prototype, {
         actions.push(`<div class="context-menu-item danger" data-action="groupCtxLeave">${icon('<path d="M 6 2 L 3 2 C 2.5 2 2 2.5 2 3 L 2 13 C 2 13.5 2.5 14 3 14 L 6 14" stroke-linecap="round" stroke-linejoin="round"/><path d="M 10 11 L 13 8 L 10 5" stroke-linecap="round" stroke-linejoin="round"/><line x1="13" y1="8" x2="6" y2="8" stroke-linecap="round"/>')}Leave Group</div>`);
         document.getElementById('grpCtxActions').innerHTML = actions.join('');
 
-        // Members list (owner first, then mods, then members)
         document.getElementById('grpCtxMembersTitle').textContent = `Members · ${group.members.length}`;
         const sorted = [...group.members].sort((a, b) => this._roleRank(groupId, a) - this._roleRank(groupId, b));
         document.getElementById('grpCtxMembers').innerHTML = sorted.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
@@ -4099,7 +3824,6 @@ Object.assign(NYM.prototype, {
         this._groupCtxTransferMode = false;
     },
 
-    // Owner action: pick a new owner by selecting a member from the list.
     groupCtxTransferOwner() {
         const groupId = this._groupCtxGroupId;
         const group = this.groupConversations.get(groupId);
@@ -4111,9 +3835,7 @@ Object.assign(NYM.prototype, {
         document.getElementById('grpCtxMembers').innerHTML = others.map(pk => this._groupCtxMemberRowHtml(groupId, pk)).join('');
     },
 
-    // A member row was clicked. In transfer mode this picks the new owner;
-    // otherwise it opens the user's profile/moderation context menu
-    // (profileOnly=false so the group kick/ban/mod actions remain visible).
+    // profileOnly=false keeps the group kick/ban/mod actions visible.
     _openMemberFromGroupCtx(pubkey, nym) {
         if (this._groupCtxTransferMode) {
             this._groupCtxTransferMode = false;
@@ -4126,18 +3848,15 @@ Object.assign(NYM.prototype, {
         this.closeGroupContextMenu();
         const suffix = this.getPubkeySuffix(pubkey);
         const fakeEvent = { preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} };
-        // Pass the originating group so the user menu shows a "back" button.
         this.showContextMenu(fakeEvent, `${nym}#${suffix}`, pubkey, null, null, false, null, backGroupId);
     },
 
-    // Back button in the user context menu returns to the group context menu.
     ctxBackToGroup() {
         const groupId = this._ctxBackToGroup;
         this.closeContextMenu();
         if (groupId) this.showGroupContextMenu(groupId);
     },
 
-    // Owner action: prompt for a new group name.
     async groupCtxEditName() {
         const groupId = this._groupCtxGroupId;
         const group = this.groupConversations.get(groupId);
@@ -4150,7 +3869,6 @@ Object.assign(NYM.prototype, {
         await this.setGroupName(groupId, name);
     },
 
-    // Owner action: prompt for a group description.
     async groupCtxEditDescription() {
         const groupId = this._groupCtxGroupId;
         const group = this.groupConversations.get(groupId);
@@ -4163,9 +3881,7 @@ Object.assign(NYM.prototype, {
         await this.setGroupDescription(groupId, desc);
     },
 
-    // Owner action: pick an image file for the banner or avatar. The group
-    // context menu is closed once a file is chosen so the upload progress bar
-    // (anchored to the message input) is visible.
+    // Close the group menu once a file is chosen so the upload progress bar is visible.
     _pickGroupImage(groupId, kind) {
         const input = document.getElementById('grpBannerFileInput');
         if (!input) return;
@@ -4201,7 +3917,6 @@ Object.assign(NYM.prototype, {
         this.openAddMembersModal(groupId);
     },
 
-    // Owner action: flip the "members can add others" permission.
     groupCtxToggleInvites() {
         const groupId = this._groupCtxGroupId;
         const group = this.groupConversations.get(groupId);
@@ -4244,9 +3959,7 @@ Object.assign(NYM.prototype, {
         if (ok) this.leaveGroup(groupId);
     },
 
-    // Open a group conversation in the main chat area
-    // Render the group conversation header into the shared chat header. Split
-    // out of openGroup so column-view focus can show the same header.
+    // Split out of openGroup so column-view focus can show the same header.
     _renderGroupHeader(groupId) {
         const channelEl = document.getElementById('currentChannel');
         if (typeof this._hideBotControlBar === 'function') this._hideBotControlBar();
@@ -4267,17 +3980,12 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
 
-        // Warm every member's post-quantum announcement. A group joined since
-        // we connected is not in the standing subscription's author list, so
-        // without this the fan-out holds no keys and the whole group falls back
-        // to classical — reported as "partial" coverage at best, and no shield
-        // at all in the usual case where none of them resolve.
+        // Groups joined since connecting aren't in the standing subscription, so fetch members' PQ announcements.
         if (typeof this.prefetchPqAnnouncements === 'function') {
             this.prefetchPqAnnouncements(group.members || []);
         }
 
         if (this._cvActive) { this._cvOpenConversation({ type: 'group', groupId }); return; }
-        // In single view a thread belongs to the conversation on screen.
         if (typeof this._closeThreadViewOnSwitch === 'function') this._closeThreadViewOnSwitch();
         this._saveCurrentDraft();
         const prevChannelKey = this.currentGeohash || this.currentChannel;
@@ -4292,21 +4000,16 @@ Object.assign(NYM.prototype, {
         this.userScrolledUp = false;
         if (this.pendingEdit) this.cancelEditMessage();
 
-        // Close the mobile sidebar as soon as the switch is committed.
         if (window.innerWidth <= 1024) {
             this.closeSidebar();
         }
 
-        // Track navigation history
         this._pushNavigation({ type: 'group', groupId });
 
-        // Re-render typing indicator for the new conversation
         this.renderTypingIndicator();
 
-        // Build the group header (custom avatar or stacked member avatars).
         this._renderGroupHeader(groupId);
 
-        // Mark only the matching group item as active
         document.querySelectorAll('.channel-item').forEach(i => i.classList.remove('active'));
         document.querySelectorAll('.pm-item').forEach(i => {
             i.classList.toggle('active', i.dataset.groupId === groupId);
@@ -4318,7 +4021,6 @@ Object.assign(NYM.prototype, {
 
         this._markVisibleGroupMessagesRead();
 
-        // Restore any unsent input previously typed for this conversation
         this._restoreDraftForContext();
 
         this.hideAutocomplete();
@@ -4348,7 +4050,6 @@ Object.assign(NYM.prototype, {
         this.recordOwnActivity();
     },
 
-    // Bubble a group item to the top of the PM list
     moveGroupToTop(groupId, messageTimestamp) {
         const pmList = document.getElementById('pmList');
         const groupItem = pmList?.querySelector(`[data-group-id="${groupId}"]`);
@@ -4392,7 +4093,7 @@ Object.assign(NYM.prototype, {
             tags.push(['g', groupId]);
             tags.push(['subject', group.name]);
             tags.push(['x', nymMessageId]);
-            tags.push(['edit', originalNymMessageId || originalMessageId]); // Reference the original message
+            tags.push(['edit', originalNymMessageId || originalMessageId]);
 
             const rumor = { kind: 14, created_at: now, tags, content: newContent, pubkey: this.pubkey };
             const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
@@ -4406,7 +4107,6 @@ Object.assign(NYM.prototype, {
                 timestamp: new Date(now * 1000)
             });
 
-            // Update stored messages
             const groupConvKey = this.getGroupConversationKey(groupId);
             const msgs = this.pmMessages.get(groupConvKey);
             if (msgs) {
@@ -4417,10 +4117,8 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            // Update DOM in-place
             this.updateMessageInDOM(lookupId, newContent);
 
-            // Send gift wraps to all group members
             await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
             return true;
         } catch (error) {
@@ -4429,7 +4127,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // /group @alice @bob [GroupName] — create a new private group
     async cmdGroup(args) {
         if (!this._canSendGiftWraps()) {
             this.displaySystemMessage('Creating groups requires a logged-in account (not pseudonymous mode)');
@@ -4451,7 +4148,7 @@ Object.assign(NYM.prototype, {
                 // raw public key, hex or npub
                 memberNyms.push(this.normalizePubkeyInput(part));
             } else if (part.includes('#') && !part.startsWith('#')) {
-                // nym#suffix disambiguation without @ (e.g. anon_pulse#35b5)
+                // nym#suffix without @ (e.g. anon_pulse#35b5)
                 memberNyms.push(part);
             } else {
                 nameWords.push(part);
@@ -4493,7 +4190,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // /groupinfo — list members of the current group, including owner and moderators
     cmdGroupInfo() {
         if (!this.inPMMode || !this.currentGroup) {
             this.displaySystemMessage('You must be in a group conversation to use /groupinfo');
@@ -4503,8 +4199,7 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         const mods = Array.isArray(group.mods) ? group.mods : [];
         const admins = Array.isArray(group.admins) ? group.admins : [];
-        // Sort: owner first, then admins, then mods, then everyone else
-        // (each group alphabetized by nym)
+        // Owner first, then admins, then mods, then everyone else, each alphabetized.
         const ownerPk = group.createdBy;
         const sorted = [...group.members].sort((a, b) => {
             const rank = (pk) => this._roleRank(this.currentGroup, pk);
@@ -4545,10 +4240,7 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
-    // The thread-scoped twin of `toggleGroupMentionsOnly`: with it on, a reply
-    // in ANY thread — channel, PM or group — only notifies when it @mentions or
-    // quote-replies the user, rather than also on every reply to a thread they
-    // started.
+    // Thread-scoped twin of toggleGroupMentionsOnly, applying to replies in any thread.
     toggleThreadMentionsOnly(enabled) {
         this.threadNotifyMentionsOnly = enabled;
         localStorage.setItem('nym_thread_notify_mentions_only', String(enabled));

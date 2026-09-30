@@ -18,23 +18,11 @@ import 'ghost_mode_button.dart';
 import 'mesh_controller.dart';
 import 'mesh_diagnostics.dart';
 
-/// Bluetooth-mesh status + discovery surface. Conversations themselves live in
-/// the normal Channels / Private Messages lists and open in the canonical
-/// ChatPane — this screen only shows radio status and the peers in range, and
-/// lets you start (or jump into) a mesh DM with a nearby peer or the public
-/// `#mesh` channel.
-///
-/// NOT a pushed route: this renders as an overlay INSIDE the home shell (toggled
-/// by [meshScreenOpenProvider]), beneath the shell's off-canvas drawer. So the
-/// sidebar opens OVER it like on any other screen, the shell's left-edge swipe
-/// works unchanged, and any conversation switch — a sidebar tap, a peer tap, a
-/// notification tap — closes the overlay and reveals the chat, exactly like the
-/// rest of the app.
+/// Mesh status and peer discovery, rendered as an overlay inside the home shell (not a route) so the drawer opens over it.
 class MeshScreen extends ConsumerStatefulWidget {
   const MeshScreen({super.key, this.onOpenSidebar});
 
-  /// Opens the shell's off-canvas drawer (compact layouts). Null on wide
-  /// layouts, where the sidebar is permanently visible.
+  /// Opens the shell drawer on compact layouts; null on wide layouts.
   final VoidCallback? onOpenSidebar;
 
   @override
@@ -42,15 +30,11 @@ class MeshScreen extends ConsumerStatefulWidget {
 }
 
 class _MeshScreenState extends ConsumerState<MeshScreen> {
-  /// Closes the mesh overlay, revealing whatever conversation is active in the
-  /// shell beneath.
   void _close() {
     ref.read(meshScreenOpenProvider.notifier).state = false;
   }
 
-  /// Sanitizes a mesh-group name the way channel names are sanitized elsewhere
-  /// (lowercase; letters and digits only) so the same name resolves to the
-  /// same room on every device. Returns '' when nothing usable remains.
+  /// Lowercase letters and digits only, so a name resolves to the same room on every device; '' if nothing remains.
   String _sanitizeGroupName(String raw) {
     final lower = raw.trim().toLowerCase().replaceAll(RegExp(r'^#+'), '');
     final cleaned =
@@ -58,9 +42,7 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
     return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
   }
 
-  /// Prompts for a mesh-group name + optional password, joins/creates it via
-  /// the mesh controller (which registers the channel and derives the AES key
-  /// when a password is given), then opens it in the normal chat view.
+  /// Prompts for a group name and optional password, joins via the mesh controller, then opens it.
   Future<void> _promptJoinMeshGroup() async {
     final nameCtrl = TextEditingController();
     final passCtrl = TextEditingController();
@@ -124,10 +106,7 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Deliberately do NOT watch meshControllerProvider at this level. It ticks
-    // constantly while the radio scans (every discovered/dropped peer, link and
-    // availability change); only the status bar and peers list need the live
-    // state, so they watch it in local Consumers.
+    // Don't watch meshControllerProvider here; it ticks constantly while scanning.
     return Scaffold(
       backgroundColor: c.bg,
       appBar: AppBar(
@@ -137,23 +116,18 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
         scrolledUnderElevation: 0,
         shape: Border(bottom: BorderSide(color: c.glassBorder)),
         titleSpacing: 8,
-        // No back arrow — the hamburger in the actions opens the sidebar,
-        // matching the rest of the app's headers. Back/forward chevrons sit to
-        // the left of the title (like the channel header's nav buttons).
         automaticallyImplyLeading: false,
         title: Row(
           children: [
             _MeshNavBtn(
               svg: NymIcons.chevronLeft,
               tooltip: tr('Go back'),
-              // Back = close the overlay, revealing the active conversation.
               onTap: _close,
             ),
             _MeshNavBtn(
               svg: NymIcons.chevronRight,
               tooltip: tr('Go forward'),
-              // Nothing ahead of the mesh overlay — rests disabled, exactly as
-              // the chat header's does until you've navigated back.
+              // Nothing ahead of the overlay, so forward rests disabled.
               onTap: null,
             ),
             const SizedBox(width: 4),
@@ -179,8 +153,7 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
             _MeshHeaderToggle(
               svg: NymIcons.menu,
               tooltip: tr('Menu'),
-              // Instance fields don't promote; the surrounding null check
-              // guarantees this.
+              // Instance fields don't promote; the surrounding null check guarantees this.
               onTap: widget.onOpenSidebar!,
             ),
           ],
@@ -193,8 +166,7 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
             return _StatusBar(
                 mesh: ref.watch(meshControllerProvider), colors: c);
           }),
-          // The public #mesh channel — opens in the normal chat view, where it
-          // weaves together Nostr (kind-20000) and Bluetooth-mesh messages.
+          // Public #mesh channel, mixing Nostr kind-20000 and Bluetooth-mesh messages.
           ListTile(
             leading: Container(
               width: 38,
@@ -219,18 +191,11 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
               ref
                   .read(appStateProvider.notifier)
                   .switchChannel(kMeshNearbyChannel);
-              // Explicit close: the shell's view-change listener also closes
-              // the overlay, but not when #mesh was ALREADY the active view.
+              // Explicit close: the shell's view listener won't fire if #mesh was already active.
               _close();
             },
           ),
-          // Join or create a NAMED mesh group. Unlike #mesh (one public room in
-          // range), a named group is a topic room only its members see; a
-          // password makes it end-to-end encrypted over the air (PBKDF2 →
-          // AES-GCM, MeshChannelEncryption). Everyone in range who joins the
-          // same name (and knows the password) is in the group — membership is
-          // by shared name, mirroring how mesh chat rooms work rather than a
-          // per-member roster.
+          // Named mesh group: membership is by shared name, and a password makes it end-to-end encrypted over the air.
           ListTile(
             leading: Container(
               width: 38,
@@ -265,12 +230,7 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
   }
 }
 
-/// Live mesh log — the radio lifecycle (power state, scanning, advertising,
-/// links) plus, per inbound packet/message, whether the bridge ran, the
-/// resolved conversation key, the open view, and whether it LANDED in the store
-/// the chat reads. A collapsible bar: collapsed by default so it stays out of
-/// the way, tapped open to read and copy the logs on a device with no adb /
-/// Console access.
+/// Collapsible live mesh log for devices without adb or Console access.
 class _MeshDiagnostics extends StatefulWidget {
   const _MeshDiagnostics({required this.colors});
   final NymColors colors;
@@ -289,8 +249,6 @@ class _MeshDiagnosticsState extends State<_MeshDiagnostics> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Collapsible header bar: chevron + title, with Copy/Clear revealed
-        // only while expanded.
         InkWell(
           onTap: () => setState(() => _expanded = !_expanded),
           child: Padding(
@@ -367,9 +325,7 @@ class _MeshDiagnosticsState extends State<_MeshDiagnostics> {
   }
 }
 
-/// A small boxed back/forward chevron matching the channel header's
-/// `.channel-nav-btn` (28×28, radius 4, dimmed; disabled rests faint and
-/// ignores taps).
+/// Small boxed back/forward chevron; disabled rests faint and ignores taps.
 class _MeshNavBtn extends StatelessWidget {
   const _MeshNavBtn({required this.svg, this.onTap, this.tooltip});
   final String svg;
@@ -398,9 +354,7 @@ class _MeshNavBtn extends StatelessWidget {
   }
 }
 
-/// A boxed header icon button matching the main chat header's mobile toggles
-/// (`.icon-btn`, 40×40, glass fill) with an optional unread-count badge. Used
-/// for the notification bell and the sidebar hamburger in the mesh header.
+/// Boxed header icon button with an optional unread badge.
 class _MeshHeaderToggle extends StatelessWidget {
   const _MeshHeaderToggle({
     required this.svg,
@@ -514,10 +468,7 @@ class _StatusBar extends ConsumerWidget {
           GhostModeButton(colors: colors),
           Switch(
             value: enabled,
-            // `activeColor` is deprecated on current SDKs and its
-            // `activeThumbColor` replacement does not exist on the oldest one
-            // pubspec allows. A `thumbColor` resolver is neither, and is what
-            // theme_gallery_screen already uses.
+            // `activeColor` is deprecated and `activeThumbColor` missing on the oldest SDK, so use a resolver.
             thumbColor: WidgetStateProperty.resolveWith(
               (states) => states.contains(WidgetState.selected)
                   ? colors.primary
@@ -557,10 +508,7 @@ class _PeersList extends ConsumerWidget {
   static final RegExp _hex64Re =
       RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
 
-  /// The peer's display name with its trailing `#xxxx` suffix dimmed, matching
-  /// how nyms render everywhere else in the app. When the peer has a verified
-  /// Nostr pubkey we derive the canonical suffix from it; otherwise we split any
-  /// suffix already present on the announced nickname.
+  /// Peer name with its `#xxxx` suffix dimmed, derived from the verified pubkey when there is one.
   Widget _peerName(MeshPeer peer, NymColors c) {
     final pk = peer.nostrPubkey;
     final display = (pk != null && _hex64Re.hasMatch(pk))
@@ -588,7 +536,6 @@ class _PeersList extends ConsumerWidget {
     );
   }
 
-  /// The probe's outcome, appended to the peer's monospace subtitle.
   String _pingLabel(MeshPingState? ping) {
     if (ping == null) return '';
     if (ping.isWaiting) return '  • pinging…';
@@ -603,8 +550,7 @@ class _PeersList extends ConsumerWidget {
         ref.read(meshControllerProvider.notifier).bridge?.openPeerDm(peer);
     if (pubkey == null) return;
     ref.read(appStateProvider.notifier).switchView(ChatView.pm(pubkey));
-    // Explicit close in case this DM was already the active view (the shell's
-    // view-change listener wouldn't fire then).
+    // Explicit close in case this DM was already active.
     ref.read(meshScreenOpenProvider.notifier).state = false;
   }
 
@@ -649,14 +595,12 @@ class _PeersList extends ConsumerWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // A peer list says who is out there; it cannot say whether they
-              // are in the same room or three relays away. The echo can.
+              // The echo shows whether a peer is actually in range, which the list can't.
               IconButton(
                 icon: NymSvgIcon(NymIcons.radar,
                     size: 16, color: colors.textDim),
                 tooltip: tr('Ping'),
-                // An IconButton defaults to a 48px tap target, which is wider
-                // than a trailing slot has to spare next to the lock.
+                // The default 48px tap target is too wide beside the lock.
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
                 constraints:

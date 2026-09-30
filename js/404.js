@@ -1,16 +1,11 @@
-// 404.html's only script.
-
 (function () {
-    // Mirror the app's color-mode choice (js/theme-init.js). Left alone on
-    // 'auto', where the stylesheet's prefers-color-scheme query already picked.
+    // Mirror js/theme-init.js; 'auto' is left to the stylesheet's prefers-color-scheme.
     try {
         var mode = localStorage.getItem('nym_color_mode');
         if (mode === 'light') document.body.classList.add('nf-light');
         else if (mode === 'dark') document.body.classList.add('nf-dark');
     } catch (_) { }
 
-    // One of these replaces the default line on each load, so a mistyped link
-    // is at least a different joke the second time.
     var QUIPS = [
         'Nothing here is stored, logged, or found. Two of those are on purpose.',
         'That page was ephemeral. Aggressively ephemeral.',
@@ -27,8 +22,7 @@
     var quip = document.getElementById('nfQuip');
     if (quip) quip.textContent = QUIPS[Math.floor(Math.random() * QUIPS.length)];
 
-    // Show what was actually asked for. textContent, never innerHTML: the path
-    // is attacker-controlled by definition — anyone can link to anything here.
+    // textContent, never innerHTML: the path is attacker-controlled.
     var path = document.getElementById('nfPath');
     if (path) {
         var asked = location.pathname + location.search;
@@ -36,7 +30,6 @@
         path.textContent = asked;
     }
 
-    // Only worth offering when there is somewhere to go back to.
     var back = document.getElementById('nfBack');
     if (back && history.length > 1) {
         back.hidden = false;

@@ -1,10 +1,6 @@
-// Action-command rate limiter — a 1:1 port of
-// `_checkActionCommandRateLimit` (commands.js:1090). Shared by `/me`, `/slap`,
-// and `/hug`: at most 3 actions per rolling 30s window; on breach a 60s
-// cooldown is imposed during which all three are blocked.
+// Action-command rate limiter shared by /me, /slap and /hug: 3 per rolling 30s, then a 60s cooldown.
 
-/// Outcome of a rate-limit check, carrying the user-facing message the PWA
-/// shows via `displaySystemMessage` so the caller can surface it identically.
+/// Outcome of a rate-limit check, with the user-facing message to show.
 class RateLimitResult {
   const RateLimitResult.allowed()
       : allowed = true,
@@ -15,27 +11,21 @@ class RateLimitResult {
   final String? message;
 }
 
-/// Stateful tracker mirroring `this.actionCommandTracker`. One instance is held
-/// by the controller and shared across the three action commands.
 class ActionCommandRateLimiter {
   ActionCommandRateLimiter({this.now});
 
-  /// Injectable clock (ms-since-epoch) for tests; defaults to wall clock.
+  /// Injectable clock in ms since epoch, for tests.
   final int Function()? now;
 
-  static const int _windowMs = 30000; // 30s window
-  static const int _maxActions = 3; // up to 3 per window
-  static const int _cooldownMs = 60000; // 1 minute cooldown on breach
+  static const int _windowMs = 30000;
+  static const int _maxActions = 3;
+  static const int _cooldownMs = 60000;
 
   final List<int> _timestamps = [];
   int _cooldownUntil = 0;
 
   int _nowMs() => now?.call() ?? DateTime.now().millisecondsSinceEpoch;
 
-  /// Returns [RateLimitResult.allowed] and records the action, or a blocked
-  /// result carrying the exact PWA message. Pure-port semantics:
-  /// - during cooldown: "Slow down! You can use /me, /slap, or /hug again in Ns"
-  /// - on the 4th within 30s: "Too many action commands. Try again in 60s"
   RateLimitResult check() {
     final now = _nowMs();
     if (now < _cooldownUntil) {

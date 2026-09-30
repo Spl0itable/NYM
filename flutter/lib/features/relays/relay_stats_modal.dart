@@ -1,27 +1,4 @@
-// relay_stats_modal.dart - `#relayStatsModal` port: the "Network Stats" modal
-// (`openRelayStats` / `renderRelayStats`, app.js:7242-7680).
-//
-// Markup (index.html:1090-1146):
-//   .modal > .modal-content.relay-stats-content
-//     .modal-close (32px glass chip) · .modal-header "Network Stats"
-//     .modal-body
-//       .relay-stats-cards  → 5 cards: Connected / Avg Latency / Events /
-//                              Data In / Data Out
-//       .relay-stats-section "Throughput (events/sec)" → canvas graph
-//       .relay-stats-section "Data transferred" → per-relay list
-//       .relay-stats-low-data → Low-Data-Mode panel + nym-switch toggle
-//
-// Live data: the connected-relay COUNT (`appState.connectedRelays`, fed by
-// `NostrService.onConnectionChanged`), the per-relay connection status
-// (`NostrController.relayConnectionStatus`), and the real relay-traffic
-// counters (`NostrController.relayStats` → `RelayStats`: avg latency, total
-// events, bytes in/out, the throughput-history graph, and per-relay
-// events/latency rows). A 1s `Timer.periodic` re-reads a `RelayStats.snapshot`
-// each tick so every metric refreshes live (mirrors the PWA `_rsRenderInterval`
-// 1s poll). When `relayStats` is null (pre-boot) OR a specific metric is absent,
-// the PWA's real placeholder renders (`--` / `0` / `0 B` / flat graph) — NEVER a
-// fabricated number. The Low-Data-Mode toggle is wired live to
-// `settingsProvider.setLowDataMode` (mirrors `toggleLowDataModeFromStats`).
+// Network Stats modal: live relay counters re-read every second; missing metrics show placeholders.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -40,27 +17,20 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../i18n/i18n.dart';
 
-/// Width breakpoint at or below which the modal applies its phone layout:
-/// 3-column stat cards, hidden per-relay latency column, and 18/14 content
-/// padding (styles-themes-responsive.css:1496-1507 `@media max-width: 480px`).
+/// At or below this width: 3-column cards, no latency column, tighter padding.
 const double _kMobileMaxWidth = 480;
 
 class RelayStatsModal extends ConsumerStatefulWidget {
   const RelayStatsModal({super.key});
 
-  /// Opens the Network Stats modal as a centered dialog (the PWA renders it as a
-  /// `.modal` overlay, not a sheet). Wire this to the sidebar status-indicator
-  /// (see CROSS_FILE_NEEDS).
+  /// Opens the modal as a centered dialog.
   static Future<void> open(BuildContext context) {
-    // `.modal` barrier: solid-ui (default) dark `rgba(0,0,0,0.75)` →
-    // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-    // (styles-themes-responsive.css:1630-1635).
     final isLight = context.nym.isLight;
     return showDialog<void>(
       context: context,
       barrierColor: isLight
-          ? const Color(0x73000000) // black @ 0.45
-          : const Color(0xBF000000), // black @ 0.75
+          ? const Color(0x73000000)
+          : const Color(0xBF000000),
       builder: (_) => const RelayStatsModal(),
     );
   }
@@ -70,14 +40,10 @@ class RelayStatsModal extends ConsumerStatefulWidget {
 }
 
 class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
-  // Mirrors the PWA `_rsRenderInterval` 1s poll (app.js:7339): re-read the live
-  // counters every second so the cards/graph/rows refresh while the modal is up.
+  // Re-read live counters every second while open.
   Timer? _ticker;
 
-  /// The url/key of the currently-expanded relay row (or `__api__` for the App
-  /// data row), or null when none is expanded. Mirrors the PWA's
-  /// `_rsExpandedRelay` (app.js:7506) — clicking a row toggles its kind/action
-  /// breakdown.
+  /// Expanded row key (`__api__` for App data), or null.
   String? _expandedRow;
 
   void _toggleRow(String key) {
@@ -101,22 +67,16 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Real connected-relay count (NostrService.onConnectionChanged → appState).
     final connected =
         ref.watch(appStateProvider.select((s) => s.connectedRelays));
     final lowData = ref.watch(settingsProvider.select((s) => s.lowDataMode));
     final backgroundConnectivity =
         ref.watch(settingsProvider.select((s) => s.backgroundConnectivity));
 
-    // Live relay traffic counters — typed getter on the controller, null before
-    // boot. Already a fresh snapshot (the controller getter merges the pool's
-    // live relay stats with the persistent /api "App data" counters), so a
-    // per-second source mutation can't tear a frame (mirrors the PWA reading
-    // `nym.relayStats` each tick).
+    // Fresh merged snapshot each tick, null before boot, so a mid-second mutation can't tear a frame.
     final stats = ref.read(nostrControllerProvider).relayStats;
 
-    // Per-relay connection status (url → connected), typed getter; empty before
-    // boot → the relay list shows the real "No relays connected" empty state.
+    // url -> connected; empty before boot, showing the "No relays connected" state.
     final relayStatus = ref.read(nostrControllerProvider).relayConnectionStatus;
     final proxyMode = ref.watch(appStateProvider.select((s) => s.proxyMode));
     final fallbackActive =
@@ -126,38 +86,33 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
       child: Material(
         color: Colors.transparent,
         child: Container(
-          // .modal-content (radius 24, glass border, shadow + glow + 1px ring) +
-          // .relay-stats-content (max-width 560, width 94%, padding 24).
           width: MediaQuery.of(context).size.width * 0.94,
           constraints: const BoxConstraints(maxWidth: 560, maxHeight: 720),
           decoration: BoxDecoration(
             color: c.bgSecondary,
             borderRadius: NymRadius.rxl,
             border: Border.all(color: c.glassBorder),
-            // `body.light-mode .modal-content { box-shadow: 0 8px 40px
-            // rgba(0,0,0,0.12) }` — a single soft shadow, no glow/white ring
-            // (styles-themes-responsive.css:1050-1052).
             boxShadow: c.isLight
                 ? const [
                     BoxShadow(
-                      color: Color(0x1F000000), // black @ 0.12
+                      color: Color(0x1F000000),
                       blurRadius: 40,
                       offset: Offset(0, 8),
                     ),
                   ]
                 : [
                     const BoxShadow(
-                      color: Color(0x80000000), // shadow-lg 0 8 32 black/0.5
+                      color: Color(0x80000000),
                       blurRadius: 32,
                       offset: Offset(0, 8),
                     ),
                     BoxShadow(
-                      color: c.primary.withValues(alpha: 0.1), // shadow-glow
+                      color: c.primary.withValues(alpha: 0.1),
                       blurRadius: 20,
                     ),
                     BoxShadow(
                       color: Colors.white
-                          .withValues(alpha: 0.05), // 1px white ring
+                          .withValues(alpha: 0.05),
                       spreadRadius: 1,
                     ),
                   ],
@@ -165,8 +120,6 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
           child: Stack(
             children: [
               Padding(
-                // .relay-stats-content padding 24 → 18px 14px at ≤480px
-                // (styles-themes-responsive.css:1501-1503).
                 padding: MediaQuery.sizeOf(context).width <= _kMobileMaxWidth
                     ? const EdgeInsets.symmetric(vertical: 18, horizontal: 14)
                     : const EdgeInsets.all(24),
@@ -174,7 +127,6 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // .modal-header: 22px UPPERCASE primary + ls1.5 + bottom rule.
                     Container(
                       margin: const EdgeInsets.only(bottom: 24),
                       padding: const EdgeInsets.only(bottom: 14),
@@ -215,19 +167,12 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                               expandedRow: _expandedRow,
                               onToggleRow: _toggleRow,
                             ),
-                            // Connectivity switches live where their effect is
-                            // visible: this modal is where a user comes when
-                            // messages are not arriving, so the background
-                            // keep-alive belongs here as much as in Settings.
+                            // Background keep-alive lives here too, since this is where users come when messages aren't arriving.
                             if (BackgroundConnectivityService.isSupported) ...[
                               const SizedBox(height: 14),
                               _TogglePanel(
                                 title: tr('Stay connected in background'),
-                                // The iOS caveat belongs here in particular:
-                                // this modal is where someone lands when
-                                // messages aren't arriving, and "it only
-                                // catches up in windows the system grants" is
-                                // usually the answer on that platform.
+                                // The iOS caveat (catch-up only in system-granted windows) is usually the answer here.
                                 hint: tr('Keep relay connections and the '
                                     'Bluetooth mesh running while Nymchat is in '
                                     'the background, so messages and '
@@ -262,7 +207,6 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                   ],
                 ),
               ),
-              // .modal-close — 32px circular glass chip, top-right (14,14).
               Positioned(
                 top: 14,
                 right: 14,
@@ -277,10 +221,6 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     );
   }
 }
-
-// =============================================================================
-// Summary cards (.relay-stats-cards / .relay-stat-card)
-// =============================================================================
 
 class _ConnectionModeLine extends StatelessWidget {
   const _ConnectionModeLine({
@@ -365,25 +305,20 @@ class _Cards extends StatelessWidget {
   const _Cards({required this.connected, required this.stats});
   final int connected;
 
-  /// Live relay counters, or null before boot. When null every untracked metric
-  /// renders the PWA's literal placeholder (NEVER a fabricated value): latency
-  /// `--`, events `0`, data in/out `0 B`.
+  /// Null before boot; untracked metrics then show `--`, `0` or `0 B`.
   final RelayStats? stats;
 
   @override
   Widget build(BuildContext context) {
-    // Real values when [stats] is available; PWA placeholders otherwise.
-    // Avg Latency: `avgLat !== null ? avgLat + 'ms' : '--'` (app.js:7391).
+    // `<avg>ms`, or `--` without data.
     final latency =
         stats?.averageLatencyMs != null ? '${stats!.averageLatencyMs}ms' : '--';
-    // Events: k-abbreviated total (app.js:7392).
+    // k-abbreviated total.
     final events = stats != null ? _abbreviateCount(stats!.totalEvents) : '0';
-    // Data In / Out: formatBytes (app.js:7393-7394).
     final dataIn = stats != null ? formatBytes(stats!.bytesReceived) : '0 B';
     final dataOut = stats != null ? formatBytes(stats!.bytesSent) : '0 B';
 
-    // 5-up grid (.relay-stats-cards: grid 5, gap 6); 3 columns at ≤480px
-    // (styles-themes-responsive.css:1497-1499).
+    // 5 columns, 3 at ≤480px.
     final columns =
         MediaQuery.sizeOf(context).width <= _kMobileMaxWidth ? 3 : 5;
     return LayoutBuilder(builder: (context, cons) {
@@ -404,14 +339,11 @@ class _Cards extends StatelessWidget {
   }
 }
 
-/// k-abbreviated event count, mirroring the PWA Events card
-/// (`s.totalEvents > 9999 ? (s.totalEvents / 1000).toFixed(1) + 'k' :
-/// s.totalEvents`, app.js:7392): only past 9999 does it switch to `X.Xk`.
+/// Switches to `X.Xk` only past 9999.
 String _abbreviateCount(int n) =>
     n > 9999 ? '${(n / 1000).toStringAsFixed(1)}k' : '$n';
 
-/// Human-readable byte size, a 1:1 port of the PWA `formatBytes` (app.js:7347):
-/// `< 1024` → `N B`; `< 1MiB` → `X.X KB`; `< 1GiB` → `X.X MB`; else `X.XX GB`.
+/// `N B`, `X.X KB`, `X.X MB`, else `X.XX GB` (binary units).
 String formatBytes(int b) {
   if (b < 1024) return '$b B';
   if (b < 1048576) return '${(b / 1024).toStringAsFixed(1)} KB';
@@ -436,18 +368,14 @@ class _StatCard extends StatelessWidget {
       width: width,
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 3),
       decoration: BoxDecoration(
-        // .relay-stat-card: white/0.03 fill, glass border, radius 12.
-        // `body.light-mode .relay-stat-card { rgba(0,0,0,0.03) }`
-        // (styles-themes-responsive.css:1479-1481).
         color: c.isLight
-            ? const Color(0x08000000) // black @ 0.03
+            ? const Color(0x08000000)
             : Colors.white.withValues(alpha: 0.03),
         borderRadius: NymRadius.rsm,
         border: Border.all(color: c.glassBorder),
       ),
       child: Column(
         children: [
-          // .relay-stat-value: mono 14, w700, primary.
           Text(
             value,
             maxLines: 1,
@@ -462,7 +390,6 @@ class _StatCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          // .relay-stat-label: 9px UPPERCASE textDim, ls0.4.
           Text(
             label.toUpperCase(),
             textAlign: TextAlign.center,
@@ -477,10 +404,6 @@ class _StatCard extends StatelessWidget {
     );
   }
 }
-
-// =============================================================================
-// Section title (.relay-stats-section-title)
-// =============================================================================
 
 class _SectionTitle extends StatelessWidget {
   const _SectionTitle(this.text);
@@ -504,15 +427,10 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// Throughput graph (.relay-stats-graph-wrap > canvas)
-// =============================================================================
-
 class _ThroughputSection extends StatelessWidget {
   const _ThroughputSection({required this.history});
 
-  /// Last ≤60 per-second event counts (oldest→newest). Empty before any sample
-  /// → the flat-baseline placeholder.
+  /// Last ≤60 per-second counts, oldest first; empty shows a flat baseline.
   final List<int> history;
 
   @override
@@ -523,14 +441,10 @@ class _ThroughputSection extends StatelessWidget {
       children: [
         _SectionTitle(tr('Throughput (events/sec)')),
         Container(
-          // .relay-stats-graph-wrap: white/0.02 fill, glass border, radius 12,
-          // padding 10. Canvas is 100px tall.
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            // `body.light-mode .relay-stats-graph-wrap { rgba(0,0,0,0.02) }`
-            // (styles-themes-responsive.css:1483-1486).
             color: c.isLight
-                ? const Color(0x05000000) // black @ 0.02
+                ? const Color(0x05000000)
                 : Colors.white.withValues(alpha: 0.02),
             borderRadius: NymRadius.rsm,
             border: Border.all(color: c.glassBorder),
@@ -538,8 +452,7 @@ class _ThroughputSection extends StatelessWidget {
           child: SizedBox(
             height: 100,
             width: double.infinity,
-            // Real polyline once samples exist; the empty list renders the flat
-            // baseline + `0/s`/`0` labels the PWA draws for `data=[0]`, max=1.
+            // Empty data renders the flat baseline with `0/s` and `0` labels.
             child: CustomPaint(
               painter: _ThroughputPainter(
                 history: history,
@@ -554,11 +467,7 @@ class _ThroughputSection extends StatelessWidget {
   }
 }
 
-/// Port of the PWA `drawThroughputGraph` (app.js:7424): plots the last ≤60
-/// per-second event counts as a fill + 1.5px polyline (newest at the right),
-/// scaled to `max(1, …history)`, with `<max>/s` (top-right) and `0`
-/// (bottom-right) mono-9px labels. An empty list collapses to `data=[0]`,
-/// max=1 → the flat baseline the PWA draws before any sample exists.
+/// Last ≤60 per-second counts as a filled polyline, newest at right, scaled to max(1, …history).
 class _ThroughputPainter extends CustomPainter {
   _ThroughputPainter({
     required this.history,
@@ -575,18 +484,17 @@ class _ThroughputPainter extends CustomPainter {
     final w = size.width;
     final h = size.height;
 
-    // data = history.length > 0 ? history : [0] (app.js:7442).
     final data = history.isNotEmpty ? history : const [0];
     final maxVal = math.max(1, data.reduce(math.max));
     const points = 60;
     final stepX = w / (points - 1);
-    // Right-align: the freshest sample sits at index `points - 1` (app.js:7456).
+    // Right-align so the freshest sample sits at the last index.
     final startIdx = math.max(0, points - data.length);
 
     double xAt(int i) => (startIdx + i) * stepX;
     double yAt(int i) => h - (data[i] / maxVal) * (h - 4) - 2;
 
-    // Fill gradient under the line (primary 0.25 → 0.02 top→bottom).
+    // Fill gradient under the line (primary 0.25 to 0.02).
     final fillPath = Path()..moveTo(xAt(0), h);
     for (var i = 0; i < data.length; i++) {
       fillPath.lineTo(xAt(i), yAt(i));
@@ -605,7 +513,6 @@ class _ThroughputPainter extends CustomPainter {
       ).createShader(Rect.fromLTWH(0, 0, w, h));
     canvas.drawPath(fillPath, fillPaint);
 
-    // Polyline (primary stroke 1.5, round join).
     final linePath = Path()..moveTo(xAt(0), yAt(0));
     for (var i = 1; i < data.length; i++) {
       linePath.lineTo(xAt(i), yAt(i));
@@ -617,7 +524,7 @@ class _ThroughputPainter extends CustomPainter {
       ..strokeJoin = StrokeJoin.round;
     canvas.drawPath(linePath, strokePaint);
 
-    // Scale labels (mono 9px, right-aligned), matching the canvas text.
+    // Right-aligned mono 9px scale labels.
     void drawLabel(String text, double anchorRight, double baselineY) {
       final tp = TextPainter(
         text: TextSpan(
@@ -652,15 +559,7 @@ class _ThroughputPainter extends CustomPainter {
   }
 }
 
-// =============================================================================
-// Relay list (.relay-stats-relay-list / .relay-stats-row)
-//
-// Mirrors the PWA `renderRelayList` (app.js 7554-7680): up to two
-// sub-sections inside the list — "App data" (the /api backend, clickable for a
-// per-action breakdown) and "Relay data" (clickable per relay for a per-kind
-// breakdown). The PWA's shard fan-in line above the list (`rsShardLine`,
-// app.js 7399-7420) is intentionally omitted in the native app.
-// =============================================================================
+// "App data" (per-action breakdown) and "Relay data" (per-kind breakdown) sub-sections; the shard line is omitted.
 
 class _RelayListSection extends StatelessWidget {
   const _RelayListSection({
@@ -670,26 +569,22 @@ class _RelayListSection extends StatelessWidget {
     required this.onToggleRow,
   });
 
-  /// Per-relay url → open (empty before boot → real empty state).
+  /// url -> open; empty before boot.
   final Map<String, bool> relayStatus;
 
-  /// Live counters for the per-relay events/latency columns; null before boot.
+  /// Live counters for per-relay events and latency; null before boot.
   final RelayStats? stats;
 
-  /// Currently-expanded row key (`__api__` or a relay url), or null.
+  /// Expanded row key (`__api__` or a relay url), or null.
   final String? expandedRow;
 
-  /// Toggle a row's expansion by key.
   final ValueChanged<String> onToggleRow;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
 
-    // Build the relay rows from REAL per-relay status; the empty status map
-    // leaves the list showing the PWA's real empty state ("No relays
-    // connected"). Each row carries its real `eventsPerRelay`/`latencyPerRelay`
-    // value (absent → 0 events / `--` latency — never a fabricated number).
+    // Rows from real per-relay status; absent counters show 0 events and `--` latency.
     final entries = <_RelayRowData>[];
     for (final e in relayStatus.entries) {
       if (RelayConfig.writeOnlyRelays.contains(e.key)) continue;
@@ -700,7 +595,7 @@ class _RelayListSection extends StatelessWidget {
         latency: stats?.latencyPerRelay[e.key],
       ));
     }
-    // PWA sort: connected first, then by events DESC (app.js:7592-7595).
+    // Connected first, then events descending.
     entries.sort((a, b) {
       if (a.open != b.open) return a.open ? -1 : 1;
       return b.events - a.events;
@@ -708,13 +603,10 @@ class _RelayListSection extends StatelessWidget {
 
     final hasApiData = stats?.hasApiData ?? false;
 
-    // Compose the list rows: "App data" + its api row, then "Relay data" + its
-    // relay rows (`renderRelayList`'s `ordered` assembly, app.js:7606).
     final rows = <Widget>[];
     final contentEmpty = entries.isEmpty && !hasApiData;
     if (contentEmpty) {
-      // .nm-app-5 empty state ("No relays connected", app.js:7601) — shown
-      // inside the list box, below the shard line if one exists.
+      // Empty state inside the list box.
       rows.add(Padding(
         padding: const EdgeInsets.all(12),
         child: Text(
@@ -751,11 +643,8 @@ class _RelayListSection extends StatelessWidget {
         Container(
           constraints: const BoxConstraints(maxHeight: 240),
           decoration: BoxDecoration(
-            // .relay-stats-relay-list: white/0.02 fill, glass border, radius 12.
-            // `body.light-mode .relay-stats-relay-list { rgba(0,0,0,0.02) }`
-            // (styles-themes-responsive.css:1483-1486).
             color: c.isLight
-                ? const Color(0x05000000) // black @ 0.02
+                ? const Color(0x05000000)
                 : Colors.white.withValues(alpha: 0.02),
             borderRadius: NymRadius.rsm,
             border: Border.all(color: c.glassBorder),
@@ -773,12 +662,10 @@ class _RelayListSection extends StatelessWidget {
   }
 }
 
-/// Key for the App-data row's expansion state (the PWA uses the literal
-/// `'__api__'` url, app.js:7611).
+/// Expansion key for the App-data row.
 const String _kApiRowKey = '__api__';
 
-/// A `.relay-stats-section-title` rendered INSIDE the list (the "App data" /
-/// "Relay data" sub-headers, app.js:7609/7617).
+/// Section title rendered inside the list.
 class _ListSubHeader extends StatelessWidget {
   const _ListSubHeader(this.label);
   final String label;
@@ -811,15 +698,14 @@ class _RelayRowData {
   final String url;
   final bool open;
 
-  /// Unique inbound events from this relay (`eventsPerRelay[url] ?? 0`).
+  /// Unique inbound events from this relay.
   final int events;
 
-  /// Last measured latency in ms, or null → render `--` (`latencyPerRelay[url]`).
+  /// Last latency in ms, or null for `--`.
   final int? latency;
 }
 
-/// Shared row chrome: a dot + url + latency + a right-aligned metric, optionally
-/// expanded to a kind/action breakdown. Mirrors `.relay-stats-row`.
+/// Shared row chrome: dot, url, latency and a right-aligned metric, optionally expanded.
 class _StatsRow extends StatelessWidget {
   const _StatsRow({
     required this.open,
@@ -849,15 +735,12 @@ class _StatsRow extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Container(
-        // .relay-stats-row: padding 8/12, gap 10, bottom border white/0.04.
-        // `body.light-mode .relay-stats-row { border-bottom-color: rgba(0,0,0,0.06) }`
-        // (styles-themes-responsive.css:1492-1494).
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         decoration: BoxDecoration(
           border: Border(
             bottom: BorderSide(
               color: c.isLight
-                  ? const Color(0x0F000000) // black @ 0.06
+                  ? const Color(0x0F000000)
                   : Colors.white.withValues(alpha: 0.04),
             ),
           ),
@@ -867,7 +750,6 @@ class _StatsRow extends StatelessWidget {
           children: [
             Row(
               children: [
-                // .relay-stats-dot: 6px, open=primary (glow) / closed=danger.
                 Container(
                   width: 6,
                   height: 6,
@@ -884,7 +766,6 @@ class _StatsRow extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                // .relay-stats-url: mono 11, textDim, ellipsized.
                 Expanded(
                   child: Tooltip(
                     message: tooltip,
@@ -900,10 +781,7 @@ class _StatsRow extends StatelessWidget {
                     ),
                   ),
                 ),
-                // .relay-stats-latency: mono 11, textDim, right. `<ms>ms`/`--`.
-                // Hidden at ≤480px (`display: none`,
-                // styles-themes-responsive.css:1505-1507) — the gap before it
-                // collapses too (CSS flex gap).
+                // Latency column hidden at ≤480px, along with its gap.
                 if (MediaQuery.sizeOf(context).width > _kMobileMaxWidth) ...[
                   const SizedBox(width: 10),
                   SizedBox(
@@ -920,7 +798,6 @@ class _StatsRow extends StatelessWidget {
                   ),
                 ],
                 const SizedBox(width: 10),
-                // .relay-stats-events: mono 11, right. `<n> evt` or `<bytes> ↓`.
                 SizedBox(
                   width: 60,
                   child: Text(
@@ -937,7 +814,6 @@ class _StatsRow extends StatelessWidget {
             ),
             if (expanded && detail != null)
               Padding(
-                // .relay-stats-detail: margin-top 6, padding-left 16.
                 padding: const EdgeInsets.only(top: 6, left: 16),
                 child: detail!,
               ),
@@ -948,8 +824,7 @@ class _StatsRow extends StatelessWidget {
   }
 }
 
-/// A single relay row, expandable to its per-kind breakdown
-/// (`rsRenderRelayDetail`'s kind branch, app.js:7541).
+/// Relay row, expandable to its per-kind breakdown.
 class _RelayRow extends StatelessWidget {
   const _RelayRow({
     required this.data,
@@ -971,7 +846,6 @@ class _RelayRow extends StatelessWidget {
       label: shortUrl,
       tooltip: data.url,
       latency: data.latency,
-      // `<n> evt` per-relay event count (app.js:7652).
       metric: tr('{n} evt', {'n': data.events}),
       metricColor: context.nym.textBright,
       expanded: expanded,
@@ -983,8 +857,7 @@ class _RelayRow extends StatelessWidget {
   }
 }
 
-/// The App-data ("app backend") row, expandable to its per-action breakdown
-/// (`rsRenderRelayDetail`'s `__api__` branch, app.js:7516).
+/// App-data row, expandable to its per-action breakdown.
 class _ApiRow extends StatelessWidget {
   const _ApiRow({
     required this.stats,
@@ -998,9 +871,7 @@ class _ApiRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // The PWA row shows `${formatBytes(bytesReceived)} ↓` as the metric and the
-    // `app backend` label; the dot is open when the api socket is open. Native
-    // has no persistent api socket, so treat any recorded api data as "open".
+    // Native has no persistent api socket, so any recorded api data reads as open.
     return _StatsRow(
       open: stats.hasApiData,
       label: tr('app backend'),
@@ -1015,8 +886,7 @@ class _ApiRow extends StatelessWidget {
   }
 }
 
-/// Per-kind breakdown rows (`kind <k>` · `<n> evt` · `<bytes>`), sorted by bytes
-/// DESC. Mirrors `rsRenderRelayDetail` (app.js:7546-7551).
+/// Per-kind rows sorted by bytes descending.
 class _KindDetail extends StatelessWidget {
   const _KindDetail({required this.perKind});
   final Map<int, KindStat>? perKind;
@@ -1047,13 +917,11 @@ class _KindDetail extends StatelessWidget {
   }
 }
 
-/// Per-action /api breakdown rows (`<label>` · `<n>×` · `<bytes>`), sorted by
-/// bytes DESC, with the PWA's friendly action labels (app.js:7522).
+/// Per-action rows sorted by bytes descending, with friendly labels.
 class _ApiActionDetail extends StatelessWidget {
   const _ApiActionDetail({required this.actions});
   final Map<String, ApiActionStat> actions;
 
-  /// PWA action → friendly label (app.js:7522-7530).
   static const Map<String, String> _labels = {
     'channel-get': 'Channel history',
     'channel-activity': 'Channel activity',
@@ -1072,7 +940,7 @@ class _ApiActionDetail extends StatelessWidget {
     'other': 'Other',
   };
 
-  /// Title-case fallback so no raw hyphenated action ever shows (app.js:7532).
+  /// Title-case fallback so no raw hyphenated action shows.
   static String _labelFor(String action) {
     final known = _labels[action];
     if (known != null) return known;
@@ -1105,8 +973,7 @@ class _ApiActionDetail extends StatelessWidget {
   }
 }
 
-/// One `.rs-kind-row`: a 3-column mono-10 grid (label · count · bytes), the
-/// last two right-aligned (app.js CSS .rs-kind-row).
+/// 3-column mono row (label, count, bytes), the last two right-aligned.
 class _KindRow extends StatelessWidget {
   const _KindRow({required this.left, required this.mid, required this.right});
   final String left;
@@ -1140,12 +1007,7 @@ class _KindRow extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// Low-Data-Mode panel (.relay-stats-low-data) + nym-switch toggle
-// =============================================================================
-
-/// One titled toggle row in the modal's footer (`.relay-stats-low-data`), used
-/// for the connectivity switches that belong next to the traffic they affect.
+/// Titled toggle row in the footer, for connectivity switches beside the traffic they affect.
 class _TogglePanel extends StatelessWidget {
   const _TogglePanel({
     required this.title,
@@ -1162,14 +1024,10 @@ class _TogglePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     return Container(
-      // .relay-stats-low-data: flex, gap 12, padding 12/14, white/0.03 fill,
-      // glass border, radius 12.
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
       decoration: BoxDecoration(
-        // `body.light-mode .relay-stats-low-data { rgba(0,0,0,0.03) }`
-        // (styles-themes-responsive.css:1467-1469 / :596-598).
         color: c.isLight
-            ? const Color(0x08000000) // black @ 0.03
+            ? const Color(0x08000000)
             : Colors.white.withValues(alpha: 0.03),
         borderRadius: NymRadius.rsm,
         border: Border.all(color: c.glassBorder),
@@ -1181,7 +1039,6 @@ class _TogglePanel extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // .relay-stats-low-data-title: 13, w600, textBright.
                 Text(
                   title,
                   style: TextStyle(
@@ -1191,7 +1048,6 @@ class _TogglePanel extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 2),
-                // .relay-stats-low-data-hint: 11, textDim, line-height 1.4.
                 Text(
                   hint,
                   style: TextStyle(
@@ -1211,11 +1067,7 @@ class _TogglePanel extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// Close chip (.modal-close)
-// =============================================================================
-
-/// 32×32 circular glass close chip with a danger hover (`.modal-close`).
+/// 32x32 circular glass close chip with a danger hover.
 class _CloseChip extends StatefulWidget {
   const _CloseChip({required this.onTap});
   final VoidCallback onTap;

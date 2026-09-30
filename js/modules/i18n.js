@@ -1,56 +1,34 @@
-// i18n.js - App-wide runtime UI localization.
-
-// Subtrees whose text is user-generated or otherwise must never be machine
-// translated. Any element matching this (or having such an ancestor) is skipped
-// for both text-node and attribute translation.
+// User-generated subtrees that must never be machine translated, for text nodes and attributes alike.
 const NYM_I18N_SKIP_SELECTOR = [
     '#messagesScroller', '#autocompleteDropdown', '#messageInput',
-    // Channel / conversation identifiers (user-defined, never translate)
     '.channel-name', '.pm-name', '.group-name', '.channel-title', '.channel-title-line',
     '#currentChannel',
-    // Nicknames / nyms — matched broadly since they surface in many places
-    // (messages, active-users list, headers, context menus, member lists,
-    // reactor/reader tooltips, mentions, calls, columns, commands).
     '[class*="author"]', '[class*="nym-base"]', '[class*="-nym"]', '.nym-suffix',
     '.nym-bracket', '.nym-name', '.nym-display', '.nym-value', '.nym-identity',
     '.nym-sk-name', '.readers-modal-user',
     '.lp-nick', '.lp-bubble-nick', '.nm-mention', '.mention',
     '[class*="member-name"]', '.group-ctx-member', '.group-info-member',
     '[class*="reader"]', '[class*="reactor"]',
-    // Transient status strings that interpolate nicknames inline (e.g.
-    // "Alice is typing") — skipped wholesale so a name is never translated.
+    // Transient status strings that interpolate nicknames inline.
     '#typingIndicator', '.typing-indicator', '.typing-indicator-text', '.cv-typing',
-    // Other user-generated / literal content
     '.notification-item-author', '.file-offer-name', '.shop-item-name',
     '.command-name', '.help-cmd-name', '.translate-dropdown-name',
     '.translate-lang-option', '.emoji-name', '.hashtag',
-    // Language names are endonyms — "shqip", "አማርኛ", "Cebuano". Translating one
-    // is wrong on its face, and the two pickers between them hold 130-odd of
-    // them: repopulating a list used to enqueue every name at high priority,
-    // ahead of the UI the user is actually looking at.
+    // Language names are endonyms and must never be translated.
     '#translateLanguageSelect', '#uiLanguageSelect', '.translate-lang-grid',
-    // Same for the rows of the translate dropdown: the star's aria-label
-    // ("Favorite Cebuano") interpolates one of those names, so the list used to
-    // send its own 130 labels off to be translated every time it rendered.
+    // The translate dropdown's star aria-labels interpolate language names.
     '.translate-dropdown-item',
     '.custom-emoji', 'code', 'pre', 'kbd', 'samp',
     '[data-no-i18n]', '.notranslate', '[translate="no"]', '[contenteditable="true"]',
 ].join(',');
 
-// Attributes carrying visible UI text worth translating.
 const NYM_I18N_ATTRS = ['placeholder', 'data-placeholder', 'title', 'aria-label'];
 
-// Volatile parts of a string — {placeholders} and embedded numbers — replaced
-// with sentinels to form a cache key. ONE regex, applied in a single pass:
-// tokenizing braces and numbers in two passes re-tokenized the sentinel just
-// written ("+{n} more" -> "+PLHPLH1PLHPLH more"), which no fill could put the
-// number back into, so the sentinel reached the screen. i18n/strings.mjs keeps
-// the same expression so the pre-translated pack is keyed identically.
+// One regex in a single pass so sentinels aren't re-tokenized; i18n/strings.mjs must match it.
 const NYM_I18N_TOKEN_RE = /\{[^}]+\}|\d[\d.,:/%+-]*/g;
 
 Object.assign(NYM.prototype, {
 
-    // language + cache state 
     getUiLanguage() {
         if (this.settings && typeof this.settings.uiLanguage === 'string') return this.settings.uiLanguage;
         try { return localStorage.getItem('nym_ui_language') || ''; } catch (_) { return ''; }
@@ -72,10 +50,7 @@ Object.assign(NYM.prototype, {
         return obj;
     },
 
-    // Seed the cache from the pre-translated pack shipped with the build.
-    // Concurrent callers share one fetch, and a failed fetch is NOT remembered:
-    // a language primed while the device was offline would otherwise translate
-    // its whole UI one string at a time for the rest of the session.
+    // Concurrent callers share one fetch; a failed fetch is not memoized so a later switch retries.
     _i18nPrimeFromPack(lang) {
         if (!lang || lang === 'en') return Promise.resolve();
         const inflight = this._i18nPackFetches || (this._i18nPackFetches = {});
@@ -83,9 +58,7 @@ Object.assign(NYM.prototype, {
         const done = (async () => {
             try {
                 const res = await fetch(`/i18n/${encodeURIComponent(lang)}.json`, { cache: 'force-cache' });
-                // A build published without a cache simply has no pack. That is
-                // not an error — it is the old behavior. It is also not worth
-                // asking for again this session.
+                // A build without a pack is not an error, and not worth asking for again this session.
                 if (!res.ok) return;
                 const pack = await res.json();
                 if (!pack || typeof pack !== 'object') return;
@@ -99,8 +72,6 @@ Object.assign(NYM.prototype, {
                 }
                 if (added) this._i18nSaveCache(lang);
             } catch (_) {
-                // Offline or blocked — drop the memo so the next language switch
-                // (or the next boot) tries again.
                 delete inflight[lang];
             }
         })();
@@ -118,7 +89,6 @@ Object.assign(NYM.prototype, {
         }, 800);
     },
 
-    // skip / collection 
     _i18nElSkipped(el) {
         if (!el || el.nodeType !== 1) return true;
         try { if (el.closest(NYM_I18N_SKIP_SELECTOR)) return true; } catch (_) { }
@@ -128,27 +98,19 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    // A text node is translatable if it holds real words and lives outside any
-    // skipped subtree.
     _i18nTextTranslatable(node) {
         const t = node.nodeValue;
         if (!t || t.trim().length < 2) return false;
-        if (!/\p{L}/u.test(t)) return false; // pure numbers / emoji / symbols
+        if (!/\p{L}/u.test(t)) return false;
         const parent = node.parentElement;
         if (this._i18nElSkipped(parent)) return false;
-        // Generic nym guard: a base nickname is rendered as a bare text node
-        // immediately alongside a `.nym-suffix` span (e.g. Alice<span
-        // class="nym-suffix">#1a2b</span>). Never translate such text, wherever
-        // it appears (context menus, headers, member lists, etc.).
+        // A bare text node beside a `.nym-suffix` span is a nickname and must never be translated.
         if (parent && parent.querySelector && parent.querySelector(':scope > .nym-suffix')) return false;
         return true;
     },
 
-    // Walk a root, pushing {node} text targets and {el, attr} attribute targets
-    // into the supplied arrays.
     _i18nCollect(root, textNodes, attrTargets) {
         if (!root) return;
-        // Text nodes
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
             acceptNode: (node) => this._i18nTextTranslatable(node)
                 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT,
@@ -156,7 +118,6 @@ Object.assign(NYM.prototype, {
         let n;
         while ((n = walker.nextNode())) textNodes.push(n);
 
-        // Attributes on the root and its descendants
         const scan = (el) => {
             if (this._i18nElSkipped(el)) return;
             for (const attr of NYM_I18N_ATTRS) {
@@ -174,17 +135,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Normalize a string into a stable cache KEY by replacing volatile tokens
-    // ({placeholders} and embedded numbers) with sentinels, returning the token
-    // values so they can be substituted back after translation. This makes
-    // frequently-updated strings like "42 active nyms" / "43 active nyms" share
-    // a single cached translation, so re-renders don't flip between the English
-    // and translated forms while a new count is fetched.
-    //
-    // Whitespace collapses first: the served markup is minified, so a paragraph
-    // written across three source lines reaches the DOM as one space-separated
-    // run, and a key that kept the newlines matched neither the pre-translated
-    // pack nor the same string rendered from JS.
+    // Cache key with {placeholders} and numbers replaced by sentinels so counts share one translation.
     _i18nMakeKey(core) {
         const tokens = [];
         const key = String(core).replace(/\s+/g, ' ').trim().replace(NYM_I18N_TOKEN_RE, (m) => {
@@ -194,10 +145,7 @@ Object.assign(NYM.prototype, {
         return { key, tokens };
     },
 
-    // A raw English string as this cache keys it. Callers holding source strings
-    // (the tutorial script, i18nPrioritize) go through here so they look the
-    // same up as the DOM sweep does — otherwise a string the pack already
-    // carries is queued and translated all over again.
+    // Callers holding source strings key through here so they match the DOM sweep's lookups.
     _i18nKeyOf(text) { return this._i18nMakeKey(text).key; },
 
     _i18nFill(template, tokens) {
@@ -205,18 +153,14 @@ Object.assign(NYM.prototype, {
         return template.replace(/PLH(\d+)PLH/g, (_, i) => tokens[+i] != null ? tokens[+i] : '');
     },
 
-    // Translate a templated key string; the returned value keeps the PLH
-    // sentinels so token values can be filled back in per instance.
+    // The returned value keeps PLH sentinels so token values can be filled back per instance.
     async _i18nTranslateOne(key, lang) {
         const { translatedText } = await this._doTranslate(key, lang);
         if (!translatedText || !translatedText.trim()) return key;
         return translatedText;
     },
 
-    // Translation runs as a non-blocking background process so the app is
-    // usable immediately after a language is chosen. On-screen and dynamically
-    // rendered strings (e.g. the tutorial) are enqueued at high priority and
-    // translated first; the rest of the UI fills in progressively behind them.
+    // Background translation: on-screen strings go first at high priority, the rest fills in behind.
 
     _i18nQueueState() {
         if (!this._i18nQueue) {
@@ -235,11 +179,8 @@ Object.assign(NYM.prototype, {
         this._i18nFailed = new Set();
         this._i18nRetryRounds = 0;
         if (this._i18nRetryTimer) { clearTimeout(this._i18nRetryTimer); this._i18nRetryTimer = null; }
-        // in-flight jobs will simply finish and populate the cache
     },
 
-    // Add uncached source strings to the translation queue. priority 'hi' jumps
-    // ahead of the bulk backlog.
     _i18nEnqueue(sources, priority, lang) {
         lang = lang || this.getUiLanguage();
         if (!lang || lang === 'en' || !sources) return;
@@ -249,11 +190,10 @@ Object.assign(NYM.prototype, {
         for (const src of sources) {
             if (!src || cache[src] != null) continue;
             if (priority === 'hi') {
-                // Promote: ensure it runs ASAP even if already queued at low prio.
                 if (seen.has(src)) {
                     const i = q.lo.indexOf(src);
                     if (i !== -1) q.lo.splice(i, 1);
-                    else continue; // already hi / in-flight
+                    else continue;
                 }
                 seen.add(src);
                 q.hi.push(src);
@@ -267,15 +207,13 @@ Object.assign(NYM.prototype, {
         this._i18nUpdateIndicator();
     },
 
-    // Translate one string, retrying transient failures with backoff. Returns
-    // null on final failure so the caller can retry later rather than poisoning
-    // the cache with the untranslated English text.
+    // Returns null on final failure so the cache isn't poisoned with untranslated English.
     async _i18nTranslateWithRetry(source, lang, attempts = 3) {
         for (let i = 0; i < attempts; i++) {
             try {
                 return await this._i18nTranslateOne(source, lang);
             } catch (_) {
-                if (this.getUiLanguage() !== lang) return null; // user switched away
+                if (this.getUiLanguage() !== lang) return null;
                 if (i < attempts - 1) {
                     await new Promise(r => setTimeout(r, 500 * (i + 1)));
                 }
@@ -286,13 +224,10 @@ Object.assign(NYM.prototype, {
 
     _i18nNoteFailed(src) {
         (this._i18nFailed || (this._i18nFailed = new Set())).add(src);
-        // Allow it to be re-enqueued on the next retry round / re-apply.
         if (this._i18nQueued) this._i18nQueued.delete(src);
     },
 
-    // Once the queue drains, retry any strings that failed all attempts, up to a
-    // bounded number of rounds (a relay/network hiccup shouldn't leave the UI
-    // half-translated forever).
+    // After the queue drains, retry failed strings for a bounded number of rounds.
     _i18nMaybeScheduleRetry(lang) {
         if (this._i18nRemaining() > 0) return;
         const failed = this._i18nFailed;
@@ -338,8 +273,6 @@ Object.assign(NYM.prototype, {
         return (q ? q.hi.length + q.lo.length : 0) + (this._i18nActive || 0);
     },
 
-    // Throttled re-apply so translated strings swap in progressively as batches
-    // land, rather than all at once at the end.
     _i18nScheduleApply(lang) {
         if (this._i18nApplyTimer) return;
         this._i18nApplyTimer = setTimeout(() => {
@@ -348,13 +281,9 @@ Object.assign(NYM.prototype, {
         }, 250);
     },
 
-    // Apply whatever is currently cached to the live DOM (no network).
     _i18nApplyVisible(lang) {
         if (!lang || lang === 'en') return;
-        // A job started before a language switch still lands afterwards, and
-        // re-applying its language here painted the previous one back over the
-        // new one — pick Spanish, then French, and the French page filled back
-        // in with Spanish as the old queue drained.
+        // Skip jobs from a previous language, or they paint it back over the new one.
         if (lang !== this.getUiLanguage()) return;
         const textNodes = [];
         const attrTargets = [];
@@ -363,8 +292,7 @@ Object.assign(NYM.prototype, {
         for (const t of attrTargets) this._i18nApplyAttr(t, lang);
     },
 
-    // Public: apply cached translations to a subtree right now and enqueue any
-    // misses at high priority. Used by the tutorial for instant per-step text.
+    // Apply cached translations to a subtree now and enqueue misses at high priority.
     i18nApplyNow(root) {
         const lang = this.getUiLanguage();
         if (!lang || lang === 'en') return;
@@ -386,8 +314,7 @@ Object.assign(NYM.prototype, {
         if (missing.size) this._i18nEnqueue([...missing], 'hi', lang);
     },
 
-    // Public: pre-translate a set of source strings at high priority (e.g. the
-    // full tutorial script) so they're ready before/as they appear on screen.
+    // Pre-translate source strings at high priority so they're ready as they appear.
     i18nPrioritize(sources) {
         const lang = this.getUiLanguage();
         if (!lang || lang === 'en' || !Array.isArray(sources)) return;
@@ -406,8 +333,7 @@ Object.assign(NYM.prototype, {
         if (node.__i18nOrig == null) node.__i18nOrig = raw;
         const next = m[1] + translated + m[3];
         if (node.nodeValue !== next) {
-            // Mark this as our own write so the characterData observer doesn't
-            // treat it as new external content and re-translate in a loop.
+            // Mark our own write so the characterData observer doesn't re-translate in a loop.
             if (this._i18nSelfWrites) this._i18nSelfWrites.add(node);
             node.nodeValue = next;
         }
@@ -428,11 +354,7 @@ Object.assign(NYM.prototype, {
         if (el.getAttribute(attr) !== translated) el.setAttribute(attr, translated);
     },
 
-    // The English a node or attribute started as. Once translated, its own text
-    // is NO LONGER a source string: reading it back is how a string the pack had
-    // just supplied got sent to the translation proxy a second time — the whole
-    // on-screen modal, in the language it had already been rendered in. Every
-    // read for keying or applying goes through here.
+    // Every read for keying or applying must use the original English, never the translated text.
     _i18nSourceText(node) {
         return node.__i18nOrig != null ? node.__i18nOrig : node.nodeValue;
     },
@@ -441,14 +363,10 @@ Object.assign(NYM.prototype, {
         return kept != null ? kept : el.getAttribute(attr);
     },
 
-    // Key of a text node's trimmed core (for missing-detection).
     _i18nNodeKey(node) { return this._i18nMakeKey(this._i18nSourceText(node).trim()).key; },
     _i18nAttrKey(el, attr) { return this._i18nMakeKey((this._i18nSourceAttr(el, attr) || '').trim()).key; },
 
-    // Switch the UI language. lang '' or 'en' restores English. This is
-    // non-blocking: cached strings swap in instantly and any misses are
-    // translated in the background (with a small unobtrusive indicator), so the
-    // app is usable immediately. On-screen/dynamic strings translate first.
+    // lang '' or 'en' restores English; misses translate in the background.
     async applyUiLanguage(lang, opts = {}) {
         lang = (lang || '').trim();
         const isEnglish = !lang || lang === 'en';
@@ -465,19 +383,15 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Switching between two non-English languages: drop the old backlog.
         if (this._i18nLang && this._i18nLang !== lang) this._i18nResetQueue();
         this._i18nLang = lang;
 
         document.documentElement.setAttribute('lang', lang);
         this._i18nLoadCache(lang);
-        // Before anything is collected: a pack that lands first turns the whole
-        // sweep into a cache hit, and one that is late would leave the queue
-        // already full of strings it was carrying.
+        // Prime the pack before collecting so the sweep hits the cache.
         await this._i18nPrimeFromPack(lang);
         this.cmdI18nEnsure();
-        // Start the observer first so any UI rendered while we translate (e.g.
-        // the tutorial) is captured and prioritized.
+        // Start the observer first so UI rendered meanwhile is captured and prioritized.
         this._i18nStartObserver();
 
         const textNodes = [];
@@ -487,10 +401,9 @@ Object.assign(NYM.prototype, {
         const cache = this._i18nCacheStore()[lang];
         const missing = new Set();
         for (const node of textNodes) {
-            // Compute the key BEFORE applying — applying mutates the node's text,
-            // and reading the key afterwards would enqueue the translated string.
+            // Compute the key before applying, since applying mutates the node's text.
             const key = this._i18nNodeKey(node);
-            this._i18nApplyTextNode(node, lang); // instant for already-cached
+            this._i18nApplyTextNode(node, lang);
             if (cache[key] == null) missing.add(key);
         }
         for (const t of attrTargets) {
@@ -499,16 +412,11 @@ Object.assign(NYM.prototype, {
             if (key && cache[key] == null) missing.add(key);
         }
 
-        // Prioritize on-screen modals (e.g. the welcome/setup modal shown when
-        // the language is first picked) so they translate FIRST, ahead of the
-        // rest of the app. i18nApplyNow enqueues their misses at high priority.
+        // On-screen modals first, then the tutorial, then the rest of the app.
         document.querySelectorAll('.modal.active').forEach((m) => {
             if (!this._i18nElSkipped(m)) this.i18nApplyNow(m);
         });
 
-        // Then the tutorial: pre-translate the whole tour at high priority now,
-        // even though it's lazy-rendered later — so it's ready before the rest
-        // of the app fills in. Ordering: welcome modal -> tutorial -> the rest.
         try {
             let seen = false;
             try { seen = localStorage.getItem('nym_tutorial_seen') === 'true'; } catch (_) { }
@@ -520,12 +428,9 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        // Everything else is background/low priority (dedup keeps the modal +
-        // tutorial strings above at high priority).
         if (missing.size) this._i18nEnqueue([...missing], 'lo', lang);
     },
 
-    // Restore every translated node/attribute back to its captured English text.
     _i18nRestoreAll() {
         try {
             const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
@@ -544,7 +449,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // dynamic UI (MutationObserver) 
     _i18nStartObserver() {
         if (this._i18nObserver) return;
         this._i18nSelfWrites = new WeakSet();
@@ -561,7 +465,6 @@ Object.assign(NYM.prototype, {
                     }
                     const parent = node.parentElement;
                     if (parent && !this._i18nElSkipped(parent)) {
-                        // External content replaced this node's text — re-capture.
                         node.__i18nOrig = null;
                         roots.add(parent);
                     }
@@ -577,10 +480,7 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (!roots.size) return;
-            // Apply cached translations SYNCHRONOUSLY here (before the browser
-            // paints) so a re-rendered string that's already translated never
-            // flashes back to English. Only genuinely new strings are enqueued
-            // for background translation.
+            // Apply cached translations synchronously before paint so re-rendered strings never flash English.
             const list = [...roots].filter(r => r.isConnected);
             for (const r of list) {
                 if (list.some(o => o !== r && o.contains(r))) continue;
@@ -592,8 +492,6 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Synchronously apply any cached translations within a subtree, and enqueue
-    // uncached strings at high priority.
     _i18nApplyCachedAndEnqueue(root, lang) {
         const textNodes = [];
         const attrTargets = [];
@@ -619,7 +517,7 @@ Object.assign(NYM.prototype, {
         if (this._i18nApplyTimer) { clearTimeout(this._i18nApplyTimer); this._i18nApplyTimer = null; }
     },
 
-    /// The indicator's own label, in the language being translated INTO.
+    // The indicator's own label, in the target language.
     _i18nIndicatorLabel() {
         const en = 'Translating…';
         try {
@@ -633,8 +531,6 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // Progress row shown in the sidebar, under the relay status, while
-    // background translation is in flight.
     _i18nUpdateIndicator() {
         const remaining = this._i18nRemaining();
         let row = this._i18nIndicator;
@@ -660,20 +556,15 @@ Object.assign(NYM.prototype, {
         row.classList.add('visible');
     },
 
-    // Called during app init: if a non-English UI language is stored, apply it
-    // from cache immediately and translate any misses in the background.
     setupUiLanguage() {
         const lang = this.getUiLanguage();
         if (this.settings) this.settings.uiLanguage = lang || '';
         if (lang && lang !== 'en') {
-            // Non-blocking: cached strings swap instantly, misses fill in.
             this.applyUiLanguage(lang).catch(() => { });
         }
     },
 
-    // On true first run the welcome/setup modal is showing before login. Offer
-    // the language picker on top of it (once per device) so the welcome modal
-    // itself — and everything after — is translated from the start.
+    // On first run, offer the language picker over the welcome modal once per device.
     _maybeFirstRunLanguagePicker() {
         try {
             if (this._uiLanguageChosen()) return;
@@ -688,8 +579,6 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
     },
 
-    // Whether the first-run UI-language picker has already been shown on this
-    // device (device-local, matching the native app).
     _uiLanguageChosen() {
         try { return localStorage.getItem('nym_ui_language_chosen') === 'true'; } catch (_) { return false; }
     },
@@ -698,8 +587,7 @@ Object.assign(NYM.prototype, {
         try { localStorage.setItem('nym_ui_language_chosen', 'true'); } catch (_) { }
     },
 
-    // First-run / settings language chooser. Returns the chosen code ('' for
-    // English) or null if dismissed without choosing.
+    // Returns the chosen code ('' for English) or null if dismissed.
     showUiLanguagePicker(opts = {}) {
         return new Promise((resolve) => {
             const languages = NYM_TRANSLATE_LANGUAGES
@@ -739,15 +627,8 @@ Object.assign(NYM.prototype, {
                 btn.addEventListener('click', () => {
                     const code = btn.dataset.lang || '';
                     const changed = code !== current;
-                    // Close immediately and translate in the background — the app
-                    // (and the tutorial) stay usable while strings fill in.
                     finish(code);
-                    // The translation target is adopted even when the pick did
-                    // NOT change the UI language. Confirming the pre-selected
-                    // language is the common case, and gating this on `changed`
-                    // left nym_translate_language empty for exactly those users
-                    // — who were then asked to pick a language all over again on
-                    // their first translation.
+                    // Adopt the translation target even when the UI language didn't change.
                     this._syncTranslateLanguageToUi(code);
                     if (changed) {
                         this.applyUiLanguage(code).catch(() => { });
@@ -767,9 +648,7 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // When the user picks an app (UI) language, adopt it as the message
-    // "Translation Language" too, so message translation is ready to go in
-    // the same language. English UI ('') maps to 'en'.
+    // Adopt the UI language as the message translation language; English UI maps to 'en'.
     _syncTranslateLanguageToUi(code) {
         const target = (!code || code === 'en') ? 'en' : code;
         if (this.settings) this.settings.translateLanguage = target;
@@ -780,7 +659,6 @@ Object.assign(NYM.prototype, {
         if (typeof this.retranslateVisibleMessages === 'function') this.retranslateVisibleMessages();
     },
 
-    // Populate the Settings-modal UI-language <select>.
     populateUiLanguageSelect() {
         const select = document.getElementById('uiLanguageSelect');
         if (!select) return;

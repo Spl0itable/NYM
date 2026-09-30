@@ -1,34 +1,16 @@
-/// Nymbot public `?` command catalog + parser.
-///
-/// 1:1 port of the client-visible command set enumerated in `README.md`
-/// ("### Bot Commands", lines 176-219) and the client surface in
-/// `docs/specs/04-features.md` §11.1. The authoritative worker that backs every
-/// command is `functions/api/bot.js` (POST `/api/bot`).
-///
-/// IMPORTANT — local vs server (verified against `functions/api/bot.js`):
-/// every public command, including `?flip`/`?8ball`/`?pick`, is computed
-/// **server-side**. The worker owns the randomness:
-///   * `handleFlip()`      — `Math.random() < 0.5 ? "Heads!" : "Tails!"`
-///   * `handleEightBall()` — `Math.floor(Math.random() * responses.length)`
-///   * `handlePick()`      — `Math.floor(Math.random() * options.length)`
-/// So there is no client-local command path: each `?cmd` is dispatched to the
-/// worker. (Note: `?roll` is in the README but has no worker handler — it would
-/// return "Unknown command" — so it is intentionally omitted here.) The worker
-/// also answers `?help` server-side, so [BotCommand.isFree] is metadata only.
+/// Nymbot public `?` command catalog and parser; every command, randomness included, is computed by the worker.
 library;
 
-/// Top-level grouping used by the README's "### Bot Commands" headings, so the
-/// help/command UI can mirror the same sections.
+/// Top-level sections matching the README's bot command headings.
 enum BotCommandGroup {
-  aiKnowledge, // "AI & Knowledge"
-  gamesFun, // "Games & Fun"
-  utility, // "Utility"
-  channelActivity, // "Channel Activity"
-  credits, // "Credits (private Nymbot chat)"
-  info, // "Info"
+  aiKnowledge,
+  gamesFun,
+  utility,
+  channelActivity,
+  credits,
+  info,
 }
 
-/// A single public `?` command as advertised in the README.
 class BotCommand {
   const BotCommand({
     required this.name,
@@ -40,37 +22,31 @@ class BotCommand {
     this.isFree = false,
   });
 
-  /// The canonical command keyword, e.g. `ask` (no leading `?`).
+  /// Canonical keyword without the leading `?`, e.g. `ask`.
   final String name;
 
-  /// README section this command lives under.
   final BotCommandGroup group;
 
-  /// Usage signature exactly as written in the README, e.g. `?ask <question>`.
+  /// Usage signature as written in the README, e.g. `?ask <question>`.
   final String usage;
 
-  /// Human description (README text after the dash).
   final String description;
 
-  /// Extra keywords the worker also accepts (verified in `bot.js` dispatch:
-  /// `?btc`→`bitcoin`/`price`, `?changelog`→`release(s)`/`version(s)`).
+  /// Extra keywords the worker also accepts.
   final List<String> aliases;
 
-  /// True for the "Credits (private Nymbot chat)" group — these operate on the
-  /// paid 1:1 chat (balance/buy/model/gift/transfer) rather than a channel.
+  /// True for commands that operate on the paid 1:1 Nymbot chat.
   final bool creditCommand;
 
-  /// True when the command produces a free, local guide and never bills credits
-  /// (`?help`). All other commands round-trip to the worker.
+  /// Metadata only: the worker also answers `?help`, and nothing else is free.
   final bool isFree;
 
-  /// True when [other] (a lower-cased token without `?`) names this command.
+  /// True when [token] (lowercased, no `?`) names this command.
   bool matches(String token) => token == name || aliases.contains(token);
 }
 
-/// The full, ordered catalog. Order + wording mirror README lines 178-219.
+/// The full ordered catalog.
 const List<BotCommand> kBotCommands = [
-  // --- AI & Knowledge ---------------------------------------------------------
   BotCommand(
     name: 'ask',
     group: BotCommandGroup.aiKnowledge,
@@ -98,7 +74,6 @@ const List<BotCommand> kBotCommands = [
     description: 'Latest breaking news headlines',
   ),
 
-  // --- Games & Fun ------------------------------------------------------------
   BotCommand(
     name: 'trivia',
     group: BotCommandGroup.gamesFun,
@@ -144,7 +119,6 @@ const List<BotCommand> kBotCommands = [
     description: 'Randomly pick from a list of options',
   ),
 
-  // --- Utility ----------------------------------------------------------------
   BotCommand(
     name: 'math',
     group: BotCommandGroup.utility,
@@ -171,7 +145,6 @@ const List<BotCommand> kBotCommands = [
     aliases: ['bitcoin', 'price'],
   ),
 
-  // --- Channel Activity -------------------------------------------------------
   BotCommand(
     name: 'who',
     group: BotCommandGroup.channelActivity,
@@ -203,7 +176,6 @@ const List<BotCommand> kBotCommands = [
     description: 'Where and when a nym was last seen',
   ),
 
-  // --- Credits (private Nymbot chat) -----------------------------------------
   BotCommand(
     name: 'balance',
     group: BotCommandGroup.credits,
@@ -250,9 +222,7 @@ const List<BotCommand> kBotCommands = [
     isFree: true,
   ),
 
-  // --- Info -------------------------------------------------------------------
-  // `?help` appears twice in the README (Credits group + Info group). It is a
-  // single command; we list it once under Info and mark it free/local.
+  // `?help` appears in two README groups; listed once here.
   BotCommand(
     name: 'help',
     group: BotCommandGroup.info,
@@ -282,7 +252,6 @@ const List<BotCommand> kBotCommands = [
   ),
 ];
 
-/// Fast lookup map (name + aliases → command).
 final Map<String, BotCommand> _kByToken = {
   for (final c in kBotCommands) ...{
     c.name: c,
@@ -290,7 +259,6 @@ final Map<String, BotCommand> _kByToken = {
   },
 };
 
-/// A parsed `?command args` invocation.
 class ParsedBotCommand {
   const ParsedBotCommand({
     required this.name,
@@ -298,34 +266,24 @@ class ParsedBotCommand {
     this.command,
   });
 
-  /// The command keyword (lower-cased, no `?`), e.g. `ask`.
   final String name;
 
-  /// Everything after the command token, trimmed. Empty string when none.
+  /// Everything after the command token, trimmed; empty when none.
   final String args;
 
-  /// The matched [BotCommand] from the catalog, or null when the keyword is
-  /// not a recognized Nymbot command (the worker may still answer, but the
-  /// client treats unknown `?foo` conservatively).
+  /// The catalog match, or null for an unrecognized keyword.
   final BotCommand? command;
 
-  /// True when the keyword is a recognized README command.
   bool get isKnown => command != null;
 }
 
-/// Parses a raw message such as `?ask hello world` into `(ask, "hello world")`.
-///
-/// Returns null when [text] is not a `?` command (does not start with `?`, or is
-/// just `?`). Splits on the **first** run of whitespace, matching the worker's
-/// `command`/`args` split. The keyword is lower-cased (worker dispatch uses
-/// `command.toLowerCase()`); args preserve original case and inner spacing.
+/// Parses `?ask hello world` into `(ask, "hello world")`, or null; keyword lowercased, args kept verbatim.
 ParsedBotCommand? parseBotCommand(String text) {
   final trimmed = text.trimLeft();
   if (!trimmed.startsWith('?')) return null;
   final body = trimmed.substring(1);
   if (body.isEmpty) return null;
 
-  // Split keyword from args on the first whitespace run.
   final match = RegExp(r'^(\S+)\s*([\s\S]*)$').firstMatch(body);
   if (match == null) return null;
   final name = match.group(1)!.toLowerCase();
@@ -338,9 +296,9 @@ ParsedBotCommand? parseBotCommand(String text) {
   );
 }
 
-/// Looks up a command by keyword (or alias). Null when unknown.
+/// Looks up a command by keyword or alias; null when unknown.
 BotCommand? lookupBotCommand(String keyword) =>
     _kByToken[keyword.toLowerCase().replaceFirst('?', '')];
 
-/// Whether [keyword] (with or without `?`) is a recognized README command.
+/// Whether [keyword], with or without `?`, is a recognized command.
 bool isKnownBotCommand(String keyword) => lookupBotCommand(keyword) != null;

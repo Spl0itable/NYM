@@ -7,8 +7,7 @@ Object.assign(NYM.prototype, {
         return host ? `wss://${host}/api` : null;
     },
 
-    // One persistent, authenticated WebSocket carries every D1 storage op so the
-    // client doesn't open an HTTP request (and sign an auth event) per fetch/put.
+    // One persistent authenticated WebSocket for D1 storage ops avoids an HTTP request and auth event per call.
     _ensureApiSocket() {
         const needAuth = !!this.pubkey;
         const forPubkey = needAuth ? this.pubkey : null;
@@ -17,8 +16,7 @@ Object.assign(NYM.prototype, {
         if (s && s.ws && s.ws.readyState === WebSocket.OPEN && bound) return Promise.resolve(s);
         if (this._apiSockPromise && this._apiSockPromiseFor === forPubkey) return this._apiSockPromise;
 
-        // After a failure, skip the socket (straight to HTTP) for a cooldown so a
-        // broken endpoint doesn't add a connect-timeout delay to every call.
+        // After a failure, skip the socket for a cooldown so a broken endpoint doesn't delay every call.
         if (this._apiSockFailedUntil && Date.now() < this._apiSockFailedUntil) {
             return Promise.reject(new Error('api socket cooling down'));
         }
@@ -28,8 +26,7 @@ Object.assign(NYM.prototype, {
 
         this._apiSockPromiseFor = forPubkey;
         this._apiSockPromise = (async () => {
-            // Logged-in: authenticate the socket. Logged-out: open an
-            // unauthenticated socket usable for public reads (channel/profile).
+            // Logged-out sockets are unauthenticated and usable for public reads.
             const auth = needAuth ? await this._signBotAuth('api-ws', 'WS') : null;
             try { if (this._apiSock && this._apiSock.ws) this._apiSock.ws.close(); } catch (_) { }
             this._apiSock = null;
@@ -43,7 +40,6 @@ Object.assign(NYM.prototype, {
                     sock.pending.clear();
                     if (this._apiSock === sock) this._apiSock = null;
                     // Cool down only on connect/auth failures, not a clean post-ready drop.
-                    // Keep it short so transient worker churn doesn't pin reads to HTTP.
                     if (!sock.ready) this._apiSockFailedUntil = Date.now() + 5000;
                     if (!settled) {
                         settled = true;
@@ -124,7 +120,6 @@ Object.assign(NYM.prototype, {
         return this._apiSockPromise;
     },
 
-    // Tally /api websocket traffic per action for the network stats.
     _trackApiData(action, sent, recv) {
         if (!this.relayStats) return;
         if (!this.relayStats.apiActionStats) this.relayStats.apiActionStats = new Map();
@@ -139,8 +134,7 @@ Object.assign(NYM.prototype, {
         s.bytesReceived += recv || 0;
     },
 
-    // opts.stream collects ndjson items; opts.raw resolves { status, data }
-    // instead of rejecting on an error status (callers that branch on status).
+    // opts.stream collects ndjson items; opts.raw resolves { status, data } instead of rejecting.
     _apiSocketSend(action, extra, opts) {
         opts = opts || {};
         const sock = this._apiSock;
@@ -165,8 +159,7 @@ Object.assign(NYM.prototype, {
         });
     },
 
-    // Bot/Ledger money op over the socket (WS-first), falling back to a signed
-    // HTTP POST to /api/bot. Returns { status, data } so callers can branch.
+    // WS-first, falling back to a signed HTTP POST to /api/bot; returns { status, data }.
     async _botMoneyRequest(action, extra, opts) {
         const apiHost = this._getApiHost();
         if (!apiHost) return { status: 0, data: {} };
@@ -196,8 +189,6 @@ Object.assign(NYM.prototype, {
         return { status: resp.status, data: data || {} };
     },
 
-    // Run a storage action over the socket when logged in, falling back to a
-    // one-off HTTP POST (signed per request) if the socket is unavailable.
     async _storageApiRequest(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
@@ -230,8 +221,7 @@ Object.assign(NYM.prototype, {
         return this._storageApiRequest(action, extra, withAuth);
     },
 
-    // Returns either a fetch Response (HTTP fallback) or a { _wsItems } object;
-    // both are consumed by _readNdjsonStream.
+    // Returns a fetch Response (HTTP fallback) or { _wsItems }; both are consumed by _readNdjsonStream.
     async _storageApiStream(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
@@ -262,7 +252,6 @@ Object.assign(NYM.prototype, {
         return resp;
     },
 
-    /// Reads an NDJSON stream, calling [onItem] per parsed line.
     async _readNdjsonStream(resp, onItem) {
         if (resp && resp._wsItems) {
             for (const it of resp._wsItems) {
@@ -294,7 +283,6 @@ Object.assign(NYM.prototype, {
         if (buf) handle(buf);
     },
 
-    // Cache of other users' active items, persisted across sessions
     loadShopActiveCache() {
         try {
             const raw = localStorage.getItem('nym_shop_active_cache');
@@ -313,7 +301,7 @@ Object.assign(NYM.prototype, {
                     });
                 }
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
     },
 
     cacheShopActiveItems(pubkey, items, updatedAt = 0) {
@@ -323,11 +311,9 @@ Object.assign(NYM.prototype, {
             cache[pubkey] = { items, ts: Date.now(), updatedAt };
             localStorage.setItem('nym_shop_active_cache', JSON.stringify(cache));
             this.shopItemsCache.set(pubkey, { items, timestamp: Date.now(), updatedAt });
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
     },
 
-    // Drop the cached active-items record for a user and re-fetch, so a flair
-    // or style change shows up before the 10-minute cache would expire.
     invalidateShopCache(pubkey) {
         if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
         if (this.shopItemsCache) this.shopItemsCache.delete(pubkey);
@@ -343,11 +329,10 @@ Object.assign(NYM.prototype, {
                     localStorage.setItem('nym_shop_active_cache', JSON.stringify(cache));
                 }
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
         this._queueShopStatusFetch(pubkey);
     },
 
-    // Persist the current user's own record so the shop renders instantly
     _cacheShopRecord() {
         try {
             const owned = {};
@@ -371,7 +356,7 @@ Object.assign(NYM.prototype, {
                 },
                 ts: Date.now()
             }));
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
     },
 
     _restoreShopRecordFromCache() {
@@ -380,22 +365,20 @@ Object.assign(NYM.prototype, {
             if (!raw) return;
             const cache = JSON.parse(raw);
             if (cache && typeof cache === 'object') this._applyOwnShopRecord(cache);
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
     },
 
-    // Pull the authoritative record from D1 for the current pubkey
     async loadShopFromServer() {
         if (!this.pubkey) return;
         try {
             const data = await this._shopApiRequest('shop-get', {});
             this._applyOwnShopRecord(data);
-        } catch (e) { /* keep cached state */ }
+        } catch (e) {}
     },
 
     applyCachedShopItemsToNewIdentity() {
         if (!this.pubkey) return;
-        // Purchases are bound to a pubkey server-side; a new identity owns
-        // nothing until its own record loads.
+        // Purchases are bound to a pubkey server-side.
         this.userPurchases.clear();
         this.activeMessageStyle = null;
         this.localActiveStyle = null;
@@ -405,7 +388,6 @@ Object.assign(NYM.prototype, {
         this.loadShopFromServer();
     },
 
-    // Apply a {owned, active} record (from D1 or cache) to local state
     _applyOwnShopRecord(data) {
         if (!data || typeof data !== 'object') return;
         if (data.owned && typeof data.owned === 'object') {
@@ -448,18 +430,16 @@ Object.assign(NYM.prototype, {
         };
     },
 
-    // Push the current user's active items to D1 so other clients can read them
     async publishActiveShopItems() {
         this._cacheShopRecord();
         if (!this.pubkey) return;
         try {
             await this._shopApiRequest('shop-set-active', { active: this._buildActiveItemsPayload() });
             this.publishShopUpdate();
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
     },
 
-    // Queue a pubkey for an active-items lookup. Skips anyone with a fresh
-    // cache entry so we don't repeatedly hit the worker.
+    // Skips anyone with a fresh cache entry so we don't repeatedly hit the worker.
     _queueShopStatusFetch(pubkey) {
         if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
         const cached = this.shopItemsCache.get(pubkey);
@@ -496,7 +476,6 @@ Object.assign(NYM.prototype, {
                 };
                 const prev = this.shopItemsCache.get(pk);
                 const updatedAt = (st && st.updatedAt) || 0;
-                // Only re-render when the user actually changed their items
                 if (prev && prev.updatedAt === updatedAt) {
                     this.shopItemsCache.set(pk, { items: prev.items, timestamp: Date.now(), updatedAt });
                     return;
@@ -505,7 +484,7 @@ Object.assign(NYM.prototype, {
                 this.cacheShopActiveItems(pk, items, updatedAt);
                 this.applyShopStylesToUserMessages(pk, items);
             });
-        } catch (e) { /* ignore */ }
+        } catch (e) {}
         finally {
             pubkeys.forEach(pk => this._shopStatusInFlight.delete(pk));
         }
@@ -531,8 +510,6 @@ Object.assign(NYM.prototype, {
                     }, 10000);
                 }
             } else if (c) {
-                // Purely visual cosmetics map directly to a message CSS class
-                // (cosmetic-aura-gold, cosmetic-aura-neon, cosmetic-aura-rainbow, cosmetic-frost)
                 msg.classList.add(c);
             }
         });
@@ -561,8 +538,6 @@ Object.assign(NYM.prototype, {
             const badge = document.createElement('span');
             badge.className = 'supporter-badge';
             badge.innerHTML = `<span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span>`;
-            // Keep the badge inside .author-clickable (before the friend badge)
-            // so author rewrites and renders all agree on its placement.
             const clickable = authorEl.querySelector('.author-clickable');
             if (clickable) {
                 const friendBadge = clickable.querySelector('.friend-badge');
@@ -572,12 +547,10 @@ Object.assign(NYM.prototype, {
                 authorEl.insertBefore(badge, authorEl.lastChild);
             }
         }
-        // Safeguard: never leave more than one verified/supporter badge behind
-        // (a re-render race could otherwise stack two checkmarks).
+        // A re-render race could otherwise stack two checkmarks.
         this._dedupeAuthorBadges(authorEl);
     },
 
-    // Keep at most one of each singleton badge inside an author element.
     _dedupeAuthorBadges(authorEl) {
         if (!authorEl) return;
         ['.verified-badge', '.supporter-badge', '.friend-badge'].forEach(sel => {
@@ -697,7 +670,6 @@ Object.assign(NYM.prototype, {
 </div>
 `;
 
-        // Refresh the authoritative record so transferred/gifted items appear
         this.loadShopFromServer();
         this.switchShopTab('styles');
     },
@@ -738,8 +710,7 @@ Object.assign(NYM.prototype, {
         </div>`;
     },
 
-    // Owned-item footer; keeps GIFT available when allowGift so an owned
-    // item can still be purchased as a gift for another user.
+    // Keeps GIFT available so an owned item can still be bought as a gift.
     _shopItemOwnedHtml(item, allowGift) {
         return `
         <div class="shop-item-price">
@@ -748,7 +719,6 @@ Object.assign(NYM.prototype, {
         </div>`;
     },
 
-    // A live sample bubble for a message style
     _shopStyleDemo(item) {
         return `<div class="shop-msg-demo"><div class="message ${item.id}"><div class="message-content"><span>Preview message</span></div></div></div>`;
     },
@@ -795,13 +765,11 @@ Object.assign(NYM.prototype, {
         container.innerHTML = html;
     },
 
-    // Small "LEGENDARY" ribbon for tier:'legendary' items.
     _legendaryRibbon(item) {
         return item && item.tier === 'legendary' ? '<div class="shop-legendary-ribbon">LEGENDARY</div>' : '';
     },
 
-    // A live sample message bubble showing how a special item looks. It reuses
-    // the real cosmetic classes, so it reflects the user's current bubble mode.
+    // Reuses the real cosmetic classes, so it reflects the user's current bubble mode.
     _shopCosmeticDemo(item) {
         const text = 'Preview message';
         if (item.id === 'cosmetic-redacted') {
@@ -836,9 +804,7 @@ Object.assign(NYM.prototype, {
         container.innerHTML = html;
     },
 
-    // Availability for a limited/dropped item given cached supply.
-    // Returns { state, label } where state is one of:
-    // available | soon | ended | soldout.
+    // state is one of: available | soon | ended | soldout.
     _shopItemAvailability(item, supply) {
         const now = Date.now();
         if (typeof item.startsAt === 'number' && now < item.startsAt) {
@@ -858,12 +824,11 @@ Object.assign(NYM.prototype, {
         return { state: 'available', label: '' };
     },
 
-    // Fetch remaining supply for limited items (public, no auth).
     async fetchShopSupply(itemIds) {
         try {
             const data = await this._shopApiRequest('shop-supply', { itemIds }, false);
             this._shopSupply = Object.assign(this._shopSupply || {}, data.supply || {});
-        } catch (e) { /* keep last known */ }
+        } catch (e) {}
         return this._shopSupply || {};
     },
 
@@ -1110,16 +1075,13 @@ TRANSFER TO PUBKEY
         return allItems.find(item => item.id === itemId);
     },
 
-    // Inline SVG trophy used for the supporter badge so the rendered flair
-    // matches the SVG icon shown in the shop preview (instead of an emoji).
     getSupporterTrophyIcon() {
         const item = this.getShopItemById('supporter-badge');
         if (item && item.icon) return item.icon;
         return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" role="img" aria-label="Trophy"><title>Trophy</title><path d="M7 4h10v6a5 5 0 0 1-10 0V4z"/><path d="M7 6H4.5a2.5 2.5 0 0 0 2.5 2.5"/><path d="M17 6h2.5a2.5 2.5 0 0 1-2.5 2.5"/><path d="M12 15v3"/><path d="M9 21h6"/><path d="M10 18h4l.5 3h-5z"/></svg>';
     },
 
-    // Canonical supporter-badge markup used by every render/rewrite path so
-    // the badge never changes shape (or vanishes) when an author is re-rendered.
+    // Canonical supporter-badge markup so the badge never changes shape when an author re-renders.
     _supporterBadgeMarkup() {
         return `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`;
     },
@@ -1129,8 +1091,6 @@ TRANSFER TO PUBKEY
         return items && items.supporter ? this._supporterBadgeMarkup() : '';
     },
 
-    // Edition numbers for the current user's owned items (id -> number),
-    // used to stamp numbered editions (e.g. Genesis) onto their flair.
     _ownEditions() {
         const out = {};
         this.userPurchases.forEach((p, id) => { if (p && p.edition) out[id] = p.edition; });
@@ -1159,8 +1119,6 @@ TRANSFER TO PUBKEY
         };
     },
 
-    // Flair SVG for a badge, stamping the edition number inside numbered
-    // editions (Genesis shows the owner's number at the base of the pyramid).
     _flairIconHtml(id, edition) {
         const item = this.getShopItemById(id);
         if (!item) return '';
@@ -1259,8 +1217,7 @@ TRANSFER TO PUBKEY
             this.currentZapInvoice = { pr: data.pr };
             this._addPendingPurchase({ kind: 'shop', invoiceId: data.invoiceId, itemId: ctx.itemId, isGift: !!extra.recipientPubkey });
             this.displayZapInvoice({ pr: data.pr });
-            // LUD-21: poll the verify URL. Else let the worker confirm via the
-            // bot wallet (NWC). Else wait for the NIP-57 receipt.
+            // LUD-21 verify URL, else worker confirmation via the bot wallet (NWC), else the NIP-57 receipt.
             if (data.verify) {
                 this.checkShopPayment(data.verify);
             } else if (data.serverVerify) {
@@ -1306,12 +1263,10 @@ TRANSFER TO PUBKEY
                         el.innerHTML = '⏱️ Payment timeout - please check your wallet';
                     }
                 }
-            } catch (e) { /* keep polling */ }
+            } catch (e) {}
         }, 1000);
     },
 
-    // Poll the worker, which confirms the shop payment via the bot wallet (NWC)
-    // even when no LUD-21 verify URL or NIP-57 receipt is available.
     checkShopPaymentViaServer() {
         if (this.shopPaymentCheckInterval) {
             clearInterval(this.shopPaymentCheckInterval);
@@ -1390,8 +1345,7 @@ TRANSFER TO PUBKEY
         }
     },
 
-    // Persisted pending purchases survive a backgrounded/killed PWA so a payment
-    // settled while the app was closed is reconciled and finalized on return.
+    // Persisted so a payment settled while the PWA was closed is finalized on return.
     _loadPendingPurchases() {
         try {
             const raw = localStorage.getItem('nym_pending_purchases');
@@ -1439,7 +1393,7 @@ TRANSFER TO PUBKEY
                     if (entry.kind === 'shop') await this._reconcileShopEntry(entry);
                     else if (entry.kind === 'credit') await this._reconcileCreditEntry(entry);
                     else if (entry.kind === 'zap') await this._reconcileZapEntry(entry);
-                } catch (e) { /* leave for next foreground */ }
+                } catch (e) {}
             }
         } finally {
             this._reconcilingPurchases = false;
@@ -1475,7 +1429,6 @@ TRANSFER TO PUBKEY
         }
     },
 
-    // Human-readable description of a shop purchase, used as the invoice/zap comment
     _shopPurchaseComment(ctx) {
         if (!ctx || !ctx.item) return 'Nymchat shop purchase';
         const item = ctx.item;
@@ -1508,8 +1461,7 @@ TRANSFER TO PUBKEY
         }
     },
 
-    // Fallback payment detection when the bot wallet has no LUD-21 verify URL:
-    // wait for the NIP-57 zap receipt and match it by bolt11 (handleZapReceipt).
+    // Fallback without a LUD-21 verify URL: match the NIP-57 zap receipt by bolt11 (handleZapReceipt).
     _listenForShopReceipt() {
         const inv = this.currentShopInvoice;
         if (!inv) return;
@@ -1575,7 +1527,6 @@ TRANSFER TO PUBKEY
             const data = await this._claimShopPurchase(inv.invoiceId, inv.receipt);
             this._applyShopClaim(data, item);
             this._removePendingPurchase(inv.invoiceId);
-            // A limited purchase changes remaining supply; force a refresh.
             this._shopSupplyTs = 0;
             this._renderShopSuccess(item, data.gift, data.gift ? null : data.code, data);
         } catch (e) {
@@ -1591,7 +1542,6 @@ TRANSFER TO PUBKEY
         data = data || {};
         const edition = data.edition && data.edition.n
             ? `<div class="nm-shop-11">Edition #${data.edition.n} of ${data.edition.max}</div>` : '';
-        // Bundle component recovery codes (only for the buyer, not when gifting).
         const bundleCodes = (!isGift && Array.isArray(data.bundle) && data.bundle.length)
             ? `<div class="nm-shop-12">
     <div class="nm-shop-13">⚠️ SAVE YOUR RECOVERY CODES</div>
@@ -1670,8 +1620,6 @@ ${bundleCodes || (code ? `
         const errorEl = document.getElementById('giftError');
         if (!input || !errorEl) return;
 
-        // A public key in either accepted form — npub or hex
-        // (`normalizePubkeyInput`, users.js).
         const recipientPubkey = this.normalizePubkeyInput(input.value);
         if (!recipientPubkey) {
             errorEl.textContent = 'Invalid public key. Paste an npub or a 64-character hex pubkey.';
@@ -1689,8 +1637,7 @@ ${bundleCodes || (code ? `
         await this.purchaseItem(itemId, recipientPubkey);
     },
 
-    // Redeem a recovery code: claims the item for this pubkey and revokes it
-    // from whoever held it before.
+    // Claims the item for this pubkey and revokes it from the previous holder.
     async restorePurchases(recoveryCode) {
         const code = (recoveryCode || '').trim();
         if (!code) {
@@ -1753,8 +1700,6 @@ ${bundleCodes || (code ? `
         const errorEl = document.getElementById('transferError');
         if (!input || !errorEl) return;
 
-        // A public key in either accepted form — npub or hex
-        // (`normalizePubkeyInput`, users.js).
         const recipientPubkey = this.normalizePubkeyInput(input.value);
         if (!recipientPubkey) {
             errorEl.textContent = 'Invalid public key. Paste an npub or a 64-character hex pubkey.';
@@ -1803,8 +1748,6 @@ ${bundleCodes || (code ? `
         const errorEl = document.getElementById('settingsTransferError');
         if (!input || !errorEl) return;
 
-        // A public key in either accepted form — npub or hex
-        // (`normalizePubkeyInput`, users.js).
         const recipientPubkey = this.normalizePubkeyInput(input.value);
         errorEl.style.display = 'none';
 
@@ -1899,7 +1842,6 @@ ${bundleCodes || (code ? `
 
             this.renderPendingSettingsTransfers();
         } catch (e) {
-            // Silently ignore malformed transfer events
         }
     },
 

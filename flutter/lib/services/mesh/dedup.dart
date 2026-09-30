@@ -5,10 +5,7 @@ import 'package:crypto/crypto.dart' show sha256;
 
 import 'mesh_constants.dart';
 
-/// A bounded, time-expiring "seen" set used to drop duplicate packets during
-/// the controlled flood. Mirrors bitchat's LRU seen-set (1000 entries, 5-minute
-/// expiry): a packet already seen within the window is not processed or relayed
-/// again, which is what keeps a flood mesh from looping forever.
+/// Bounded, expiring seen-set (bitchat: 1000 entries, 5 minutes) that stops the flood mesh from looping.
 class SeenPackets {
   SeenPackets({
     int capacity = MeshConstants.seenPacketCapacity,
@@ -19,12 +16,10 @@ class SeenPackets {
   final int _capacity;
   final Duration _ttl;
 
-  // Insertion-ordered map = LRU by age; value is the insertion time.
+  // Insertion-ordered, so iteration runs oldest first; value is the insertion time.
   final LinkedHashMap<String, DateTime> _seen = LinkedHashMap();
 
-  /// A stable content key for a packet: hash of the identity-bearing fields
-  /// (everything except the mutable TTL), so relays with a decremented TTL still
-  /// dedupe against the original.
+  /// Content key over every field except the mutable TTL, so relayed copies dedupe against the original.
   static String keyFor({
     required int type,
     required Uint8List senderID,
@@ -43,8 +38,7 @@ class SeenPackets {
     return digest.toString();
   }
 
-  /// Records [key] as seen. Returns true if it was NEW (i.e. should be
-  /// processed), false if it is a duplicate still within the window.
+  /// Records [key]; returns true when it is new, false for a duplicate within the window.
   bool checkAndAdd(String key) {
     _evictExpired();
     final existing = _seen[key];
@@ -66,7 +60,7 @@ class SeenPackets {
       if (now.difference(entry.value) >= _ttl) {
         expired.add(entry.key);
       } else {
-        break; // insertion-ordered: the rest are newer
+        break; // Insertion-ordered: the rest are newer.
       }
     }
     for (final k in expired) {

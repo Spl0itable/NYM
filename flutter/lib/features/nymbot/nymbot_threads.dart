@@ -1,15 +1,4 @@
-/// Nymbot inside CHANNEL message threads — the thread half of the `?`/@Nymbot
-/// interception (`_threadBotQuoteContext` / `_threadBotConversation`,
-/// threads.js).
-///
-/// A thread IS the conversation: a plain reply under one of Nymbot's messages
-/// continues it the same way a quote-reply does, the whole thread is the
-/// context the worker gets, and the reply is tagged back into the thread
-/// (`threadRoot` → `['e', root, '', 'root']`, bot.js). Without this a game
-/// answered inside a thread loses its state — the bot never hears the guess,
-/// and its answer lands in the flat channel.
-///
-/// Pure functions over [AppState] so they unit-test without a controller.
+/// Nymbot in channel threads: a plain reply under its message continues the conversation with the thread as context.
 library;
 
 import '../../core/utils/nym_utils.dart';
@@ -19,19 +8,16 @@ import '../../state/app_state.dart';
 /// The `[gc:BASE64]` token Nymbot carries while a wordplay game is unfinished.
 final RegExp _gameTokenRe = RegExp(r'\[gc:[A-Za-z0-9+/=]+\]');
 
-/// Per-entry cap on the transcript text sent to the worker.
+/// Per-entry cap on transcript text sent to the worker.
 const int _maxEntryChars = 1000;
 
-/// Default number of transcript entries sent (`MAX_CONVERSATION_HISTORY` is 20
-/// worker-side; sending more just gets trimmed).
+/// Matches the worker's `MAX_CONVERSATION_HISTORY`; more just gets trimmed.
 const int _maxEntries = 20;
 
-/// True when [m] was posted by the verified Nymbot key.
 bool _isBotMessage(Message m, String botPubkey) =>
     m.pubkey == botPubkey || m.pubkey.toLowerCase() == botPubkey.toLowerCase();
 
-/// The thread's messages for [rootId] in [storageKey]: root first, then its
-/// replies, chronological.
+/// Thread messages for [rootId]: root first, then replies chronologically.
 List<Message> threadChainFor(AppState s, String storageKey, String rootId) {
   if (!appThreadsEnabled || rootId.isEmpty) return const <Message>[];
   final root = threadRootMessage(s, storageKey, rootId);
@@ -39,18 +25,7 @@ List<Message> threadChainFor(AppState s, String storageKey, String rootId) {
   return <Message>[root, ...threadRepliesFor(s, storageKey, rootId)];
 }
 
-/// The Nymbot message a plain thread reply is answering, or null when the
-/// thread should not auto-route to the bot.
-///
-/// Nymbot has to be the thread's ROOT or its LAST speaker — a thread nobody
-/// asked it into still needs an explicit `?command` or `@Nymbot` mention, so
-/// two people talking under a message the bot once touched don't ping it on
-/// every line. Resolve this BEFORE publishing the outgoing message, while the
-/// bot is still the thread's last speaker.
-///
-/// When a game is in flight the newest `[gc:]`-carrying bot message wins:
-/// quoting one without the token would route the guess to `?ask` and drop the
-/// game.
+/// Bot message a plain reply answers, only if the bot is the root or last speaker.
 Message? threadBotReplyTarget(
   AppState s,
   String storageKey,
@@ -73,16 +48,12 @@ Message? threadBotReplyTarget(
   return bots.last;
 }
 
-/// The @mention a bot reply opens with and the zap prompt it can close with.
-/// The `[gc:]` token stays — ?guess reads the live game out of it.
+/// The leading @mention to strip; the `[gc:]` token stays because ?guess reads the live game from it.
 final RegExp _rxBotMention = RegExp(r'^@\S+[ \t]+');
 final RegExp _rxZapLine = RegExp(r'^[ \t]*\u26a1.*$', multiLine: true);
 final RegExp _rxBlankRun = RegExp(r'\n{3,}');
 
-/// One entry's text, with the wire envelope off: quote block, and for the bot
-/// its @mention and zap prompt. Left in, the model mimics the format instead
-/// of answering. The quote is redundant here anyway — in a thread the message
-/// it quotes is its own entry.
+/// Entry text without the quote block (and for the bot, its @mention and zap prompt) so the model doesn't mimic the format.
 String threadEntryText(String content, {bool isBot = false}) {
   var text = content
       .split('\n')
@@ -94,19 +65,14 @@ String threadEntryText(String content, {bool isBot = false}) {
   return text.replaceAll(_rxBlankRun, '\n\n').trim();
 }
 
-/// `nym#abcd` — the shape quote-replies use, so the worker can tell the bot's
-/// own turns apart from the humans' in a transcript.
+/// `nym#abcd`, so the worker can tell the bot's turns from humans'.
 String threadEntryAuthor(Message m) {
   final base = stripPubkeySuffix(m.author).trim();
   final nym = base.isEmpty ? 'nym' : base;
   return m.pubkey.isEmpty ? nym : '$nym#${getPubkeySuffix(m.pubkey)}';
 }
 
-/// The thread transcript as `/api/bot` `conversation` entries, in the same
-/// `{author, text}` shape the quote chain produces.
-///
-/// [exclude] drops the message just published (it travels separately as the
-/// question), compared against the same truncation the entries carry.
+/// Thread transcript as `/api/bot` `{author, text}` entries; [exclude] drops the just-published question.
 List<Map<String, String>> threadBotConversation(
   AppState s,
   String storageKey,
@@ -122,7 +88,7 @@ List<Map<String, String>> threadBotConversation(
     if (text.length > _maxEntryChars) text = text.substring(0, _maxEntryChars);
     entries.add({'author': threadEntryAuthor(m), 'text': text});
   }
-  // Normalized like the entries: the caller hands it over as published.
+  // Normalized like the entries.
   final tail = exclude == null ? '' : threadEntryText(exclude);
   if (tail.isNotEmpty && entries.isNotEmpty && entries.last['text'] == tail) {
     entries.removeLast();

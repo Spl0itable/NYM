@@ -1,5 +1,4 @@
-// Durable Object: NymLedger
-// Serializes the money-critical mutations
+// Durable Object NymLedger: serializes the money-critical mutations.
 
 import {
   creditsGet,
@@ -27,21 +26,15 @@ function shopNewCode() {
   return "NYM-" + Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
-// An in-flight turn holds its claim on a lease the running attempt heartbeats
-// ("turn-touch"), so the claim outlives the slowest model yet lapses seconds
-// after the attempt's worker dies.
+// Heartbeated lease: outlives the slowest model yet lapses seconds after the attempt's worker dies.
 const BOT_TURN_LEASE_S = 45;
 // A finished turn stays replayable well past the retry window.
 const BOT_TURN_RESULT_TTL_S = 900;
-// Comfortably above a gift-wrapped reply, comfortably below the row limit.
+// Above a gift-wrapped reply, below the row limit.
 const BOT_TURN_MAX_RESULT_BYTES = 512 * 1024;
-// A truncated agent run parks its conversation here so the next turn picks it
-// up rather than starting over. Long enough for a person to read the partial
-// answer and decide, short enough that abandoned runs cost nothing for long.
+// How long a truncated agent run stays parked for the next turn to continue.
 const BOT_RESUME_TTL_S = 1800;
 const BOT_RESUME_MAX_BYTES = 512 * 1024;
-// Progress is advisory and read while the turn is still generating, so it dies
-// with the turn rather than outliving it.
 const BOT_PROGRESS_TTL_S = 900;
 const BOT_PROGRESS_MAX_STEPS = 120;
 const BOT_PROGRESS_MAX_BYTES = 128 * 1024;
@@ -51,11 +44,7 @@ const BOT_NOTIFY_PER_OWNER = 8;
 const BOT_NOTIFY_TOKEN_RE = /^[0-9a-f]{64,200}$/;
 const BOT_NOTIFY_CHAT_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const BOT_NOTIFY_WEB_MAX = 1024;
-// Cloudflare documents 300 requests a minute for Workers AI text generation,
-// but only 50 a minute — 20 without prepaid gateway credits — for the frontier
-// models (kimi-k2.6, kimi-k2.7-code, glm-5.2). 900ms was 67 a minute, over that
-// ceiling, so the gate itself was issuing more than the tightest limit allows.
-// 1300ms is 46 a minute, under it with room for clock skew between isolates.
+// Frontier models are limited to 50 req/min (20 without prepaid gateway credits); 1300ms is ~46/min.
 const GATE_PACE_MS = 1300;
 const GATE_PACE_LIMITED_MS = 4500;
 const GATE_LIMIT_MEMORY_MS = 90000;
@@ -74,36 +63,29 @@ export class NymLedger {
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS claims (id TEXT PRIMARY KEY, kind TEXT NOT NULL, at INTEGER NOT NULL);"
     );
-    // Limited-edition supply: minted count per item, plus TTL'd reservations
-    // (one per pending invoice) that hold a slot until paid or expired.
+    // Limited-edition supply: minted count per item plus TTL'd per-invoice reservations holding a slot.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS edition_minted (item TEXT PRIMARY KEY, n INTEGER NOT NULL);"
     );
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS edition_resv (invoice TEXT PRIMARY KEY, item TEXT NOT NULL, user TEXT, exp INTEGER NOT NULL);"
     );
-    // The free tier's daily allowance, one row per key
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS free_usage (pubkey TEXT PRIMARY KEY, day TEXT NOT NULL, used INTEGER NOT NULL);"
     );
-    // And one row per address, so a new key does not reset it.
+    // One row per address too, so a new key does not reset the allowance.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS free_net (id TEXT PRIMARY KEY, day TEXT NOT NULL, used INTEGER NOT NULL);"
     );
-    // One Nymbot PM turn, keyed by the gift wrap it answers. result NULL means
-    // an attempt is in flight; a non-null result is the finished response body,
-    // replayed verbatim to any retry of the same message.
+    // Keyed by the gift wrap it answers; NULL result means in flight, otherwise replayed verbatim to retries.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS bot_turns (id TEXT PRIMARY KEY, result TEXT, exp INTEGER NOT NULL);"
     );
-    // A run that hit its turn cap with work left, parked so the next message
-    // continues it. `owner` is the pubkey that paid for it — a token is only
-    // ever redeemable by the key that made it, so a leaked token buys nothing.
+    // Parked truncated run; a token is only redeemable by `owner`, the key that paid for it.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS bot_resume (id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL, exp INTEGER NOT NULL);"
     );
-    // What the running attempt is doing, for the client watching it. Advisory:
-    // losing it costs a progress line, never an answer.
+    // Advisory progress for the watching client; losing it costs a progress line, never an answer.
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS bot_progress (id TEXT PRIMARY KEY, steps TEXT NOT NULL, exp INTEGER NOT NULL);"
     );
@@ -131,8 +113,7 @@ export class NymLedger {
     );
   }
 
-  // Serialize op handlers so a D1 read-modify-write can't interleave with
-  // another op on the same instance.
+  // Serialize op handlers so a D1 read-modify-write can't interleave with another op.
   _exclusive(fn) {
     const run = this._chain.then(fn, fn);
     this._chain = run.then(() => {}, () => {});
@@ -202,8 +183,7 @@ export class NymLedger {
     });
   }
 
-  // Single-use auth replay store. Returns { fresh: true } the first time an
-  // id is seen within its TTL, { fresh: false } on any reuse.
+  // Single-use auth replay store: { fresh: true } only the first time an id is seen within its TTL.
   _replay(id, ttl) {
     if (typeof id !== "string" || !/^[0-9a-f]{64}$/i.test(id)) return { fresh: false };
     const now = Math.floor(Date.now() / 1000);
@@ -214,8 +194,7 @@ export class NymLedger {
     return { fresh: true };
   }
 
-  // Atomically record a claim id. Returns true if newly inserted, false if it
-  // already existed (i.e. this invoice was already claimed).
+  // Returns false if the claim id already existed (the invoice was already claimed).
   _claimOnce(id, kind) {
     const existing = this.sql.exec("SELECT id FROM claims WHERE id = ? LIMIT 1;", id).toArray();
     if (existing.length) return false;
@@ -223,7 +202,6 @@ export class NymLedger {
     return true;
   }
 
-  // Nymbot turn de-duplication.
   _turnSweep(now) {
     this.sql.exec("DELETE FROM bot_turns WHERE exp < ?;", now);
     this._notifySweep(now);
@@ -240,15 +218,13 @@ export class NymLedger {
     try {
       return { now, result: JSON.parse(raw) };
     } catch {
-      // Unreadable row: treat the turn as never having happened rather than
-      // stranding the message.
+      // Unreadable row: treat the turn as never having happened rather than stranding the message.
       this.sql.exec("DELETE FROM bot_turns WHERE id = ?;", key);
       return { now, missing: true };
     }
   }
 
-  // Claim a turn. "done" carries the stored response, "running" means another
-  // attempt owns it, "claimed" means this caller owns it and should run.
+  // "done" carries the stored response, "running" means another attempt owns it, "claimed" means run it.
   _turnBegin(key) {
     const row = this._turnRow(key);
     if (row.bad) return { state: "error" };
@@ -262,8 +238,7 @@ export class NymLedger {
     return { state: "claimed" };
   }
 
-  // Push the lease out, so a waiting retry keeps seeing "running" while this
-  // attempt really is still generating. "lost": the claim is no longer ours.
+  // Extend the lease so a waiting retry keeps seeing "running"; "lost" means the claim is no longer ours.
   _turnTouch(key) {
     const row = this._turnRow(key);
     if (row.bad) return { ok: false };
@@ -277,8 +252,7 @@ export class NymLedger {
     return { ok: true };
   }
 
-  // Release an unfinished claim (the attempt failed before it charged for an
-  // answer). A finished turn is left alone so its result stays replayable.
+  // Release an unfinished claim; a finished turn is left alone so its result stays replayable.
   _turnAbort(key) {
     if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
     this.sql.exec("DELETE FROM bot_turns WHERE id = ? AND result IS NULL;", key);
@@ -286,8 +260,7 @@ export class NymLedger {
     return this._withNotify({ ok: true }, key);
   }
 
-  // Read-only probe used while waiting on an in-flight attempt. "gone" means
-  // the claim lapsed (the other attempt died), so the caller may run it.
+  // Read-only probe; "gone" means the other attempt's claim lapsed, so the caller may run it.
   _turnPoll(key) {
     const row = this._turnRow(key);
     if (row.bad) return { state: "error" };
@@ -304,8 +277,7 @@ export class NymLedger {
     } catch {
       return { ok: false };
     }
-    // Never risk the row limit: an unstored result only costs the retry path,
-    // it does not break the turn that just succeeded.
+    // Never risk the row limit; an unstored result only costs the retry path.
     this._draftDrop(key);
     if (!encoded || encoded.length > BOT_TURN_MAX_RESULT_BYTES) {
       this.sql.exec("DELETE FROM bot_turns WHERE id = ?;", key);
@@ -376,8 +348,6 @@ export class NymLedger {
     return out;
   }
 
-  // --- resuming a truncated run -------------------------------------------
-
   _resumePut(id, owner, state) {
     if (typeof id !== "string" || !/^[0-9a-f]{32,64}$/i.test(id)) return { ok: false };
     if (typeof owner !== "string" || !/^[0-9a-f]{64}$/i.test(owner)) return { ok: false };
@@ -387,8 +357,7 @@ export class NymLedger {
     } catch {
       return { ok: false };
     }
-    // Too big to park is not an error: the run simply cannot be continued, and
-    // the user keeps the partial answer they already paid for.
+    // Too big to park is not an error: the run just can't be continued.
     if (!encoded || encoded.length > BOT_RESUME_MAX_BYTES) return { ok: false, tooLarge: true };
     const now = Math.floor(Date.now() / 1000);
     this.sql.exec("DELETE FROM bot_resume WHERE exp < ?;", now);
@@ -403,8 +372,7 @@ export class NymLedger {
     return { ok: true, expiresIn: BOT_RESUME_TTL_S };
   }
 
-  // Single use: taking a token consumes it, so a resend of the continuing
-  // message replays the finished turn rather than continuing the run twice.
+  // Single use, so a resend replays the finished turn rather than continuing the run twice.
   _resumeTake(id, owner) {
     if (typeof id !== "string" || !/^[0-9a-f]{32,64}$/i.test(id)) return { ok: false };
     if (typeof owner !== "string" || !/^[0-9a-f]{64}$/i.test(owner)) return { ok: false };
@@ -423,8 +391,6 @@ export class NymLedger {
     }
   }
 
-  // --- what the running attempt is doing ----------------------------------
-
   _progressPush(key, step) {
     if (typeof key !== "string" || !key || key.length > 256) return { ok: false };
     if (!step || typeof step !== "object") return { ok: false };
@@ -442,12 +408,10 @@ export class NymLedger {
         steps = [];
       }
     }
-    // Numbered from the highest already handed out, not from the array's length:
-    // once trimming starts, length stops growing and a length-derived number is
+    // Numbered from the highest handed out, since trimming stops the length from growing.
     const lastN = steps.length ? Number(steps[steps.length - 1].n) || 0 : 0;
     steps.push({ n: lastN + 1, at: Date.now(), ...step });
-    // Oldest first out: a watcher that joined late wants the recent picture,
-    // and the numbering keeps its "after" cursor meaningful either way.
+    // Oldest out first; numbering keeps the watcher's "after" cursor meaningful.
     if (steps.length > BOT_PROGRESS_MAX_STEPS) {
       steps = steps.slice(steps.length - BOT_PROGRESS_MAX_STEPS);
     }
@@ -636,7 +600,6 @@ export class NymLedger {
     return { ok: true, waitMs: next - now };
   }
 
-  // Limited-edition supply (numbered drops)
   _editionMinted(item) {
     const r = this.sql.exec("SELECT n FROM edition_minted WHERE item = ? LIMIT 1;", item).toArray();
     return r.length ? (r[0].n || 0) : 0;
@@ -647,8 +610,7 @@ export class NymLedger {
     return r.length ? (r[0].c || 0) : 0;
   }
 
-  // Hold a supply slot for a pending invoice. Counts existing mints + live
-  // reservations against maxSupply so a drop can never oversell.
+  // Counts mints plus live reservations against maxSupply so a drop can never oversell.
   _shopReserve(a) {
     const item = String(a.itemId || a.item || "");
     const max = Math.floor(Number(a.max) || 0);
@@ -658,12 +620,10 @@ export class NymLedger {
     if (!item || max <= 0 || !/^[0-9a-f]{64}$/i.test(invoice)) return { error: "Invalid reservation." };
     const now = Date.now();
     this.sql.exec("DELETE FROM edition_resv WHERE exp <= ?;", now);
-    // Re-reserving the same invoice is idempotent (it already holds a slot).
+    // Re-reserving the same invoice is idempotent.
     const existing = this.sql.exec("SELECT item FROM edition_resv WHERE invoice = ? LIMIT 1;", invoice).toArray();
     if (existing.length) return { ok: true, reused: true };
-    // Cap each user to one live reservation per item so nobody can lock up a
-    // drop by repeatedly opening the buy dialog. Freeing the old slot first
-    // keeps the count honest before we re-check supply.
+    // One live reservation per user per item, so nobody can lock up a drop by reopening the buy dialog.
     if (/^[0-9a-f]{64}$/.test(user)) {
       this.sql.exec("DELETE FROM edition_resv WHERE item = ? AND user = ?;", item, user);
     }
@@ -674,7 +634,6 @@ export class NymLedger {
     return { ok: true, remaining: Math.max(0, max - minted - live - 1) };
   }
 
-  // Read minted + live reservation counts for display ("X left").
   _shopSupply(a) {
     const ids = Array.isArray(a.itemIds) ? a.itemIds.slice(0, 50) : [];
     const now = Date.now();
@@ -687,9 +646,7 @@ export class NymLedger {
     return { counts };
   }
 
-  // Consume a paid invoice's reservation and assign the next edition number.
-  // Returns the number, or null if no slot remains (degrades to unnumbered so a
-  // paid claim never fails — only possible if the reservation expired first).
+  // Returns null if no slot remains (reservation expired), degrading to unnumbered so a paid claim never fails.
   _allocateEdition(item, invoice, max) {
     this.sql.exec("DELETE FROM edition_resv WHERE invoice = ?;", invoice);
     const minted = this._editionMinted(item);
@@ -702,8 +659,7 @@ export class NymLedger {
     return n;
   }
 
-  // D1 credit/shop helpers. Pro credits share the credits table under a
-  // "#pro"-suffixed row key ("#" is not hex, so no pubkey collision).
+  // Pro credits share the credits table under a "#pro"-suffixed key ("#" is not hex, so no collision).
   _creditKey(pk, tier) {
     return tier === "pro" ? pk + "#pro" : pk;
   }
@@ -768,8 +724,7 @@ export class NymLedger {
     rec.active = a;
   }
 
-  // Money operations. Transfers move the user's ENTIRE balance — both the
-  // standard and Pro pools — to the target pubkey.
+  // Transfers move the user's ENTIRE balance (standard and Pro pools) to the target pubkey.
   async _transferCredits(from, to) {
     if (!/^[0-9a-f]{64}$/.test(from || "") || !/^[0-9a-f]{64}$/.test(to || "")) {
       return { error: "Invalid pubkey." };
@@ -962,8 +917,7 @@ export class NymLedger {
     return { ok: true, gift: view };
   }
 
-  // Atomic spend for the paid-PM flow: re-checks balance under the lock so two
-  // concurrent messages can't overspend.
+  // Re-checks balance under the lock so two concurrent messages can't overspend.
   _dustOf(pubkey, tier) {
     const rows = this.sql
       .exec("SELECT milli FROM credit_dust WHERE pubkey = ? AND tier = ? LIMIT 1;", pubkey, tier)
@@ -1085,7 +1039,6 @@ export class NymLedger {
     return { ok: true, balance: rec.balance, charged: cost, dust: nextDust };
   }
 
-  // free tier's daily allowance
   _freeDay(at) {
     return new Date(typeof at === "number" ? at : Date.now()).toISOString().slice(0, 10);
   }
@@ -1101,9 +1054,7 @@ export class NymLedger {
       "SELECT day, used FROM free_usage WHERE pubkey = ? LIMIT 1;", pubkey
     ).toArray();
     const row = rows && rows[0];
-    // A row from a day that has passed is not a used-up allowance, it is
-    // yesterday's — read as zero rather than migrated, so nothing has to sweep
-    // the table at midnight.
+    // A row from a past day reads as zero, so nothing has to sweep the table at midnight.
     return { day, used: (row && row.day === day) ? (row.used || 0) : 0 };
   }
 
@@ -1125,7 +1076,6 @@ export class NymLedger {
     return { day, used: (row && row.day === day) ? (row.used || 0) : 0 };
   }
 
-  /// What is left today, without spending any of it.
   _freePeek(pubkey, limit, net, netLimit) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     const cap = this._freeLimit(limit);
@@ -1142,16 +1092,13 @@ export class NymLedger {
     }
     return {
       ok: true, used: at.used, limit: cap, left: left,
-      // Set only when the address is the binding one, so the reader is told which
-      // wall they are against rather than a number that will not move.
+      // Set only when the address is the binding limit, so the reader knows which wall they hit.
       netSpent: netLeft === 0,
       resetsAt: this._freeResetsAt()
     };
   }
 
-  /// Takes one off today's allowance, or says there is none left. The read and
-  /// the write are one op precisely so two messages sent at once cannot both
-  /// see the last one as available.
+  // Read and write are one op so two concurrent messages can't both take the last one.
   _freeClaim(pubkey, limit, net, netLimit) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     const cap = this._freeLimit(limit);
@@ -1189,8 +1136,7 @@ export class NymLedger {
         "ON CONFLICT(id) DO UPDATE SET day = excluded.day, used = excluded.used;",
         nid, netDay, netUsed
       );
-      // Yesterday's buckets are no longer reachable — the salt folds the day in,
-      // so they can never be hit again.
+      // The salt folds the day in, so yesterday's buckets can never be hit again.
       this.sql.exec("DELETE FROM free_net WHERE day <> ?;", netDay);
     }
     return { ok: true, used: used, limit: cap, left: cap - used, resetsAt: resetsAt };
@@ -1210,8 +1156,7 @@ export class NymLedger {
     return { ok: true };
   }
 
-  // Atomic claim of a paid credit invoice. The caller has already verified
-  // payment; this gates the grant on a single-use claim id.
+  // The caller has verified payment; this gates the grant on a single-use claim id.
   async _claimCredits(a) {
     const invoiceId = String(a.invoiceId || "");
     const creditTo = String(a.creditTo || "").toLowerCase();
@@ -1245,14 +1190,13 @@ export class NymLedger {
       return { error: "Invalid claim." };
     }
     if (!this._claimOnce("shop/" + invoiceId, "shop")) {
-      // Already granted — return the prior marker so the client can recover.
+      // Already granted: return the prior marker so the client can recover.
       let prev = null;
       try { prev = await invoiceGet(this.env.DB_INVOICES, "shop", "claimed", invoiceId); } catch {}
       return { alreadyClaimed: true, prev };
     }
     const crec = await this._getShop(recipient);
 
-    // Bundle: grant each component item, each with its own recovery code.
     if (Array.isArray(a.bundle) && a.bundle.length) {
       const granted = [];
       for (const comp of a.bundle) {
@@ -1274,7 +1218,6 @@ export class NymLedger {
       return { itemId, code, recipient, bundle: granted, owned: crec.owned, active: crec.active };
     }
 
-    // Limited edition: consume the reservation and assign a numbered slot.
     let edition = null;
     let editionMax = 0;
     if (a.edition && Number(a.edition.max) > 0) {
@@ -1374,9 +1317,7 @@ export class NymLedger {
   }
 }
 
-// Small helper used by the Pages Functions to call the single global ledger
-// instance. All money mutations funnel through one instance so cross-pubkey
-// operations (transfers) are globally serialized.
+// All money mutations funnel through one global instance so cross-pubkey transfers are serialized.
 export async function ledgerCall(env, payload) {
   if (!env || !env.NYM_LEDGER) {
     return { error: "Ledger not configured (missing NYM_LEDGER binding)." , _noLedger: true };

@@ -3,13 +3,7 @@ import 'dart:typed_data';
 import 'noise_identity.dart';
 import 'noise_session.dart';
 
-/// Manages one Noise `XX` session per peer and drives the handshake state
-/// machine. It never touches the radio — the owner ([MeshService]) broadcasts
-/// the handshake bytes this manager produces and feeds it the bytes that arrive.
-///
-/// Simultaneous-initiation collisions (both peers send message 1 at once) are
-/// resolved deterministically by peerID comparison, so exactly one side ends up
-/// the initiator — matching bitchat's tie-break.
+/// One Noise XX session per peer; simultaneous initiation is tie-broken by peerID as in bitchat.
 class NoiseSessionManager {
   NoiseSessionManager(this.identity);
 
@@ -26,8 +20,7 @@ class NoiseSessionManager {
 
   void remove(String peerID) => _sessions.remove(peerID);
 
-  /// Begins a handshake with [peerID] as initiator and returns message 1 to
-  /// broadcast. If a session already exists it is replaced.
+  /// Starts a handshake as initiator, replacing any session, and returns message 1.
   Future<Uint8List> initiateHandshake(String peerID) async {
     final s = NoiseSession(
       peerID: peerID,
@@ -39,20 +32,18 @@ class NoiseSessionManager {
     return s.startHandshake();
   }
 
-  /// Feeds an incoming [MeshMessageType.noiseHandshake] payload from [peerID].
-  /// Returns the response to broadcast, or null when nothing must be sent.
+  /// Handles a handshake payload; returns the response to broadcast, or null.
   Future<Uint8List?> handleHandshake(String peerID, Uint8List data) async {
     final existing = _sessions[peerID];
 
-    // Collision: we already opened as initiator (awaiting message 2) but the
-    // peer sent their own message 1 (32 bytes). Deterministically pick a winner.
+    // Collision: both sides sent message 1; pick a deterministic winner.
     if (existing != null &&
         existing.isInitiator &&
         existing.state == NoiseSessionState.handshaking &&
         data.length == 32) {
       final weWin = identity.peerID.compareTo(peerID) > 0;
       if (weWin) {
-        // Ignore their message 1; they will accept our in-flight message 1.
+        // Ignore their message 1; they will accept ours.
         return null;
       }
       // Yield: drop our initiator attempt and answer as responder.
@@ -70,8 +61,7 @@ class NoiseSessionManager {
 
     final response = await s.processHandshakeMessage(data);
 
-    // Bind the established session to the claimed peerID: the remote static key
-    // must hash to the peerID we've been talking to, or we drop the session.
+    // The remote static key must hash to the claimed peerID, or the session is dropped.
     if (s.isEstablished) {
       final remoteKey = s.remoteStaticPublicKey;
       if (remoteKey == null ||
@@ -83,8 +73,6 @@ class NoiseSessionManager {
     return response;
   }
 
-  /// True once [handleHandshake]/[initiateHandshake] produced an established
-  /// session bound to [peerID].
   Uint8List? remoteStaticKey(String peerID) =>
       _sessions[peerID]?.remoteStaticPublicKey;
 

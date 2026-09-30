@@ -16,8 +16,7 @@ import 'relay_message.dart';
 import 'relay_pool.dart';
 import 'relay_stats.dart';
 
-/// One role-keyed shard: a stable id, its relay set, and (for critical) the DM
-/// relays. Mirrors the objects produced by `_shardRelaysByRole` (relays.js).
+/// One role-keyed shard: stable id, relay set and (for critical) DM relays, as `_shardRelaysByRole`.
 class RelayShard {
   RelayShard({
     required this.id,
@@ -32,26 +31,21 @@ class RelayShard {
   final List<String> dmRelays;
 }
 
-/// Relays the PWA hard-blocks from any shard (relays.js:1704).
+/// Relays the PWA hard-blocks from any shard.
 const Set<String> _blockedRelays = {
   'wss://relay.nosflare.com',
   'wss://relay.nostraddress.com',
   'wss://nostr-server-production.up.railway.app',
 };
 
-/// Canonicalize a relay url for discovered-dedup: lowercase host, drop a
-/// trailing slash. Mirrors `_canonicalRelayUrl` closely enough for sharding
-/// (only used to dedup the discovered bucket).
+/// Canonical url for discovered-bucket dedup: lowercase host, no trailing slash.
 String canonicalRelayUrl(String url) {
   var u = url.trim();
   if (u.endsWith('/')) u = u.substring(0, u.length - 1);
   return u.toLowerCase();
 }
 
-/// Pure port of `_shardRelaysByRole` (relays.js:1699). Buckets relays into
-/// `app-0` (the app relay), `critical-N` (defaults + dmRelays minus app relay),
-/// `geo-N`, `discovered-N`, chunking each role at [chunkSize] (50). Stable
-/// role-keyed ids.
+/// Port of `_shardRelaysByRole`: `app-0`, `critical-N`, `geo-N`, `discovered-N`, chunked at [chunkSize].
 List<RelayShard> shardRelaysByRole(
   Iterable<String> allRelays,
   Iterable<String> geoRelayUrls,
@@ -72,7 +66,7 @@ List<RelayShard> shardRelaysByRole(
   };
   final appValid = isValid(appRelay);
 
-  // Critical = default relays (+ DM relays), excluding the app relay.
+  // Critical = default relays plus DM relays, excluding the app relay.
   final critical = <String>[
     for (final u in {...defaultRelays, ...dmRelays})
       if (isValid(u) && u != appRelay) u
@@ -87,7 +81,7 @@ List<RelayShard> shardRelaysByRole(
       if (!reservedSet.contains(u)) u
   ];
 
-  // Discovered = anything in allRelays not already reserved or geo (canon-dedup).
+  // Discovered = remaining relays, canonically deduped.
   final geoForDiscovered = <String>{...geo};
   final claimedCanon = <String>{
     for (final u in reservedSet) canonicalRelayUrl(u),
@@ -119,7 +113,6 @@ List<RelayShard> shardRelaysByRole(
 
   final shards = <RelayShard>[];
 
-  // Dedicated app relay shard.
   if (appValid) {
     shards.add(RelayShard(
         id: 'app-0',
@@ -167,8 +160,7 @@ List<RelayShard> shardRelaysByRole(
   return shards;
 }
 
-/// Builds the WRAPPED outbound frames for the `/api/relay-pool` socket
-/// (spec §4.6). Pure + testable.
+/// Wrapped outbound frames for the `/api/relay-pool` socket.
 class PoolFrame {
   PoolFrame._();
 
@@ -198,10 +190,7 @@ class PoolFrame {
   /// `["CLOSE",subId]`
   static String close(String subId) => jsonEncode(<dynamic>['CLOSE', subId]);
 
-  /// `["KIND_BLACKLIST",{"wss://relay":[kind,…],…}]` — tells the pool worker
-  /// to skip a relay for REQs whose kinds it has rejected
-  /// (`_sendKindBlacklistToWorkers`, relays.js:2413-2421; server side at
-  /// relay-pool.js:1541-1550).
+  /// `["KIND_BLACKLIST",{url:[kinds]}]` so the worker skips a relay for kinds it rejected.
   static String kindBlacklist(Map<String, Set<int>> config) =>
       jsonEncode(<dynamic>[
         'KIND_BLACKLIST',
@@ -209,10 +198,7 @@ class PoolFrame {
       ]);
 }
 
-/// Sealed parse result for an INBOUND wrapped pool frame. Note the wrapped
-/// protocol differs from raw nostr: EVENT carries the subId at index 1
-/// (`["EVENT",subId,e,(sourceRelay)]`) and OK/EOSE behave as in nostr but may
-/// carry a trailing attribution `wss://` url.
+/// Inbound wrapped pool frame; EVENT carries subId first, and OK/EOSE may carry a trailing relay url.
 sealed class PoolMessage {
   const PoolMessage();
 
@@ -244,8 +230,7 @@ sealed class PoolMessage {
           sourceRelay,
         );
       case 'OK':
-        // ["OK", id, accepted, reason, relayUrl?] — the trailing url is the
-        // proxy's per-relay attribution (relays.js:3771).
+        // ["OK", id, accepted, reason, relayUrl?], the url being the proxy's attribution.
         if (arr.length < 3) return null;
         return PoolOk(
           arr[1]?.toString() ?? '',
@@ -258,8 +243,7 @@ sealed class PoolMessage {
         if (arr.length < 2) return null;
         return PoolEose(arr[1]?.toString() ?? '');
       case 'CLOSED':
-        // ["CLOSED", subId, reason, relayUrl?] — proxy-attributed like OK
-        // (relays.js:3862-3866).
+        // ["CLOSED", subId, reason, relayUrl?]
         if (arr.length < 2) return null;
         return PoolClosed(
           arr[1]?.toString() ?? '',
@@ -272,7 +256,7 @@ sealed class PoolMessage {
           arr.length > 2 ? arr[2]?.toString() : null,
         );
       case 'POOL:PING':
-        // ["POOL:PING", ts] — keepalive; ts ignored, just bumps liveness.
+        // ["POOL:PING", ts]: keepalive; ts is ignored.
         return const PoolPing();
       case 'POOL:STATUS':
         // ["POOL:STATUS", {connected:[urls], latency:{url:ms}}]
@@ -282,8 +266,7 @@ sealed class PoolMessage {
         final connected = (status['connected'] is List)
             ? (status['connected'] as List).map((e) => e.toString()).toList()
             : const <String>[];
-        // Per-relay latency reported by this worker (relays.js:2137-2141), used
-        // for the Network Stats per-relay rows + Avg Latency in proxy mode.
+        // Per-relay latency from this worker, for the Network Stats rows in proxy mode.
         final latency = <String, int>{};
         final rawLat = status['latency'];
         if (rawLat is Map) {
@@ -298,15 +281,14 @@ sealed class PoolMessage {
         if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(retractId)) return null;
         return PoolRetract(retractId, arr.length > 2 ? arr[2]?.toString() : null);
       case 'POOL:RELAY_BAN':
-        // ["POOL:RELAY_BAN", relayUrl, reason?] — the proxy permanently dropped
-        // this relay (relays.js:2117 `_permanentlyBlacklistRelay`).
+        // ["POOL:RELAY_BAN", relayUrl, reason?]: the proxy permanently dropped this relay.
         final url = arr.length > 1 ? arr[1]?.toString() ?? '' : '';
         if (!url.startsWith('wss://')) return null;
         final reason =
             arr.length > 2 ? arr[2]?.toString() ?? 'banned' : 'banned';
         return PoolRelayBan(url, reason);
       default:
-        // POOL:SHARDS / NOTICE / AUTH — unhandled by transport.
+        // POOL:SHARDS / NOTICE / AUTH are unhandled here.
         return null;
     }
   }
@@ -357,7 +339,7 @@ class PoolStatus extends PoolMessage {
   const PoolStatus(this.connected, [this.latency = const {}]);
   final List<String> connected;
 
-  /// Per-relay latency in ms reported by the worker (relays.js POOL:STATUS).
+  /// Per-relay latency in ms from POOL:STATUS.
   final Map<String, int> latency;
 }
 
@@ -373,8 +355,7 @@ class PoolRetract extends PoolMessage {
   final String? reason;
 }
 
-/// A single shard's WebSocket to `/api/relay-pool`, with per-shard reconnect
-/// backoff (`_reconnectPoolShard`: min(3000*1.7^n,60000), jitter 0.7–1.0).
+/// One shard's `/api/relay-pool` socket; reconnect backoff min(3000*1.7^n, 60000) with 0.7–1.0 jitter.
 class _ShardSocket {
   _ShardSocket({
     required this.shard,
@@ -396,8 +377,7 @@ class _ShardSocket {
   final Random rng;
   final Duration confirmTimeout;
 
-  /// Shared, pool-owned counters. This shard adds its inbound/outbound frame
-  /// byte lengths here (mirrors the PWA's per-socket writes to `relayStats`).
+  /// Shared pool counters this shard adds its frame byte lengths to.
   final RelayStats stats;
   final void Function(_ShardSocket sock, PoolMessage msg) onMessage;
   final void Function(_ShardSocket sock) onConnected;
@@ -418,14 +398,10 @@ class _ShardSocket {
 
   bool get hasFrameSinceConnect => _frameSinceConnect;
 
-  /// Consecutive times this shard's socket closed BEFORE the pool ever confirmed
-  /// it was up (no POOL:STATUS / inbound traffic). Drives the proxy's
-  /// host-unreachable fallback (mirrors the PWA's 2-consecutive-pool-failure
-  /// trigger, relays.js:1824-1832). Reset the moment the socket confirms.
+  /// Closes before the pool ever confirmed; drives the host-unreachable fallback. Reset on confirm.
   int failuresBeforeConfirm = 0;
 
-  /// True once this socket has produced a confirming inbound frame (POOL:STATUS
-  /// or any parseable pool message), i.e. the proxy endpoint is reachable.
+  /// True once a confirming inbound frame arrived, i.e. the proxy is reachable.
   bool confirmed = false;
 
   /// Relays this shard's proxy reports as connected (from POOL:STATUS).
@@ -448,13 +424,7 @@ class _ShardSocket {
         onDone: _onDone,
         cancelOnError: false,
       );
-      // web_socket_channel has no discrete open event; treat listen as open and
-      // immediately push the shard's RELAYS config (mirrors ws.onopen).
-      //
-      // The reconnect backoff is intentionally reset in `_onData` on a real
-      // inbound frame, NOT here: `listen()` returns even for an unreachable
-      // proxy, so resetting at listen time pinned reconnects to the ~3s floor
-      // forever instead of escalating toward the 60s cap.
+      // Treat listen as open and push RELAYS; backoff resets only on a real inbound frame.
       _open = true;
       _armConfirmTimer();
       send(PoolFrame.relays(shard.relays, shard.dmRelays));
@@ -480,8 +450,7 @@ class _ShardSocket {
   }
 
   void _onData(dynamic data) {
-    // Count every inbound frame's UTF-8 byte length (relays.js pool
-    // ws.onmessage: `relayStats.bytesReceived += dataLen`).
+    // Count inbound UTF-8 byte length, as the PWA's relayStats does.
     if (data is String) {
       stats.bytesReceived += utf8.encode(data).length;
     } else if (data is List<int>) {
@@ -490,19 +459,14 @@ class _ShardSocket {
     if (data is! String) return;
     final msg = PoolMessage.parse(data);
     if (msg == null) return;
-    // A real inbound frame proves the socket connected — clear the reconnect
-    // backoff so a later drop starts from the floor, while a never-connecting
-    // socket keeps escalating (see `connect`).
+    // A real inbound frame proves the connection, so reset the backoff.
     _reconnectAttempt = 0;
     _frameSinceConnect = true;
     failuresSinceFrame = 0;
     failureStreakStartedAt = null;
     _confirmTimer?.cancel();
     _confirmTimer = null;
-    // Any parseable inbound pool frame confirms the proxy endpoint is reachable
-    // and speaking the protocol; clear the pre-connect failure streak so a later
-    // mid-session blip is treated as a normal reconnect (not a host-unreachable
-    // fallback).
+    // A parseable frame confirms the proxy, so later blips are normal reconnects, not a fallback.
     if (!confirmed) {
       confirmed = true;
       failuresBeforeConfirm = 0;
@@ -515,9 +479,7 @@ class _ShardSocket {
     if (_settled) return;
     _settled = true;
     _open = false;
-    // A close before this socket ever confirmed means the connect attempt failed
-    // outright (host lookup / refused / dropped pre-handshake). Count the streak
-    // so the proxy can fall back after the PWA's threshold.
+    // A close before confirming is an outright connect failure; count the streak.
     if (!confirmed) failuresBeforeConfirm++;
     if (!_frameSinceConnect) {
       if (failuresSinceFrame == 0) failureStreakStartedAt = _now();
@@ -541,7 +503,7 @@ class _ShardSocket {
   void _scheduleReconnect() {
     if (_closedByUser) return;
     _reconnectTimer?.cancel();
-    // _reconnectPoolShard: base = min(3000*1.7^n, 60000); jitter 0.7–1.0.
+    // base = min(3000*1.7^n, 60000); jitter 0.7–1.0.
     final base = min(3000 * pow(1.7, _reconnectAttempt), 60000).toDouble();
     final delayMs = (base * (0.7 + rng.nextDouble() * 0.3)).floor();
     _reconnectAttempt++;
@@ -556,8 +518,6 @@ class _ShardSocket {
     if (ch == null || !_open) return false;
     try {
       ch.sink.add(frame);
-      // Count the outbound frame's UTF-8 byte length (relays.js `_safeWsSend`:
-      // `relayStats.bytesSent += msg.length`).
       stats.bytesSent += utf8.encode(frame).length;
       return true;
     } catch (_) {
@@ -582,14 +542,7 @@ class _ShardSocket {
   }
 }
 
-/// Multiplexed relay-pool PROXY transport. Drop-in alternative to [RelayPool]:
-/// the same public surface (connectAll / subscribe -> [Subscription] /
-/// publish / connectedCount / disconnectAll), but over a single
-/// `wss://<host>/api/relay-pool` endpoint with one socket per role-shard
-/// (spec §4.6).
-///
-/// Implements the [PoolTransport] surface so [Subscription] can route
-/// CLOSE/unsubscribe through it identically to [RelayPool].
+/// Relay-pool proxy transport: [RelayPool]'s surface over `wss://<host>/api/relay-pool`, one socket per shard.
 class RelayPoolProxy implements PoolTransport {
   RelayPoolProxy({
     required List<String> relays,
@@ -630,26 +583,15 @@ class RelayPoolProxy implements PoolTransport {
   final double eoseQuorum;
   final Duration eoseTimeout;
 
-  /// Fired ONCE when the proxy can't establish a connection — a shard socket
-  /// closes for the [maxPreConnectFailures]-th consecutive time before the pool
-  /// has EVER confirmed (no POOL:STATUS / inbound frame). Mirrors the PWA's
-  /// fall-back-to-direct trigger after 2 consecutive pool failures
-  /// (relays.js:1824-1832). Settable so [NostrService] can wire the swap-to-direct
-  /// without touching the [PoolTransport] interface. Not invoked for a normal
-  /// mid-session disconnect after a successful connect (that keeps the per-shard
-  /// reconnect backoff).
+  /// Fires once after [maxPreConnectFailures] pre-confirm shard failures, so [NostrService] can swap to direct.
   void Function()? onProxyUnreachable;
 
-  /// Fired ONCE the first time any shard confirms the proxy endpoint is
-  /// reachable (a POOL:STATUS / inbound frame arrives). Used by [NostrService]'s
-  /// background restore to promote a probe proxy that has come up. Like
-  /// [onProxyUnreachable], settable so it stays off the [PoolTransport] interface.
+  /// Fires once when a shard first confirms the proxy, for background-restore promotion.
   void Function()? onProxyConnected;
 
   void Function(String eventId)? onEventRetracted;
 
-  /// Consecutive pre-confirm shard-connect failures that trip
-  /// [onProxyUnreachable] (PWA threshold: 2).
+  /// Pre-confirm failures that trip [onProxyUnreachable] (PWA threshold: 2).
   final int maxPreConnectFailures;
 
   final Duration confirmTimeout;
@@ -658,68 +600,45 @@ class RelayPoolProxy implements PoolTransport {
 
   final DateTime Function() _now;
 
-  /// True once any shard has confirmed the proxy endpoint is reachable. Latches:
-  /// after this, pre-connect failure counting is disabled forever.
+  /// Latches once any shard confirms; pre-connect failure counting then stops.
   bool _proxyEverConnected = false;
 
-  /// True once [onProxyUnreachable] has fired, so it fires at most once.
   bool _unreachableFired = false;
 
-  /// True after [disconnectAll] so a late shard callback can't fire the trigger.
+  /// True after [disconnectAll], so a late shard callback can't fire the trigger.
   bool _disposed = false;
 
   final List<_ShardSocket> _sockets = [];
 
-  /// Active subscriptions keyed by subId, and their filters (re-REQ'd on a
-  /// reconnected shard).
+  /// Active subscriptions and filters by subId, re-REQ'd on a reconnected shard.
   final Map<String, Subscription> _subscriptions = {};
   final Map<String, List<NostrFilter>> _activeFilters = {};
 
-  /// Global cross-shard event dedup (relays.js: `eventDeduplication`, cap 10k).
+  /// Global cross-shard event dedup (PWA cap 10k).
   final EventDeduper _deduper = EventDeduper(maxIds: 10000);
 
-  /// Pool-owned live traffic counters. Shard sockets write byte counts here;
-  /// [_onShardMessage] writes event counts + REQ→EOSE latency. The 1-second
-  /// [_sampler] feeds its throughput history (mirrors the PWA's single
-  /// `nym.relayStats`).
+  /// Pool-owned traffic counters: bytes from shard sockets, events and latency from [_onShardMessage].
   final RelayStats _stats = RelayStats();
 
-  /// 1-second throughput sampler (`startRelayStatsSampling`): pushes the last
-  /// second's event count onto the throughput history (cap 60) and resets the
-  /// per-second counter.
+  /// 1s throughput sampler (history cap 60).
   Timer? _sampler;
 
-  /// subId → epoch-ms the REQ was broadcast, so an inbound EOSE can stamp
-  /// REQ→EOSE latency. In proxy mode the per-relay unit is the shard, so
-  /// latency is keyed by the delivering shard's id (the same attribution the
-  /// proxy uses for events). Cleared once every open shard has EOSE'd.
+  /// subId to REQ send time; latency is keyed by shard id and cleared once every open shard EOSEs.
   final Map<String, int> _reqSentAt = {};
 
-  /// subId → shard ids that have already EOSE'd, so we stamp each shard's
-  /// REQ→EOSE latency exactly once and can drop [_reqSentAt] when all are in.
+  /// subId to shards that already EOSE'd, so each shard is stamped once.
   final Map<String, Set<String>> _eosedShards = {};
 
-  // --- Per-relay unsupported-kind blacklist (KIND_BLACKLIST frame) -----------
-
-  /// relayUrl → kinds that relay has rejected (`_relayUnsupportedKinds`).
-  /// Pushed to every pool worker as a `KIND_BLACKLIST` frame so it skips the
-  /// relay for REQs whose kinds are all in its set (relay-pool.js:15) — a pure
-  /// bandwidth/CPU optimization.
+  /// Relay url to kinds it rejected, pushed to workers as `KIND_BLACKLIST`.
   final Map<String, Set<int>> _relayUnsupportedKinds = {};
 
-  /// Recently-published event id → kind (`_sentEventKinds`, cap 1000), so an
-  /// attributed OK rejection can be mapped back to the event's kind
-  /// (relays.js:2383-2394).
+  /// Recent event id to kind (cap 1000), mapping OK rejections back to a kind.
   final Map<String, int> _sentEventKinds = {};
 
-  /// subId → kinds its filters requested (`_subKinds`, cap 2000), so a CLOSED
-  /// rejection without an explicit kind blacklists the whole REQ's kinds
-  /// (relays.js:2333-2349).
+  /// subId to requested kinds (cap 2000), for CLOSED rejections without an explicit kind.
   final Map<String, Set<int>> _subKinds = {};
 
-  // --- Public surface (matches RelayPool) -----------------------------------
-
-  /// Total relays the proxy reports as connected across all shards (deduped).
+  /// Relays reported connected across all shards, deduped.
   @override
   int get connectedCount {
     final s = <String>{};
@@ -729,8 +648,7 @@ class RelayPoolProxy implements PoolTransport {
     return s.length;
   }
 
-  /// The deduped set of relay URLs reported connected across all shards (for the
-  /// Network Stats per-relay list). Same aggregation as [connectedCount].
+  /// Deduped relay URLs reported connected across all shards.
   @override
   Set<String> get connectedRelayUrls {
     final s = <String>{};
@@ -740,15 +658,9 @@ class RelayPoolProxy implements PoolTransport {
     return s;
   }
 
-  /// Number of shard sockets currently open (transport-level).
   int get openShardCount => _sockets.where((s) => s.isOpen).length;
 
-  /// Live aggregate traffic counters (a fresh snapshot each read). Bytes are
-  /// summed by the shard sockets; events + latency by [_onShardMessage]. Mirrors
-  /// the PWA's single `nym.relayStats`. The shard fan-in summary
-  /// ([RelayStats.shardInfo]) is rebuilt from the live shard sockets here (the
-  /// backend never emits a `POOL:SHARDS` frame; the PWA's shard line, app.js:7409,
-  /// is a client-side aggregate of the per-worker connected sets).
+  /// Fresh aggregate counters; shard info is rebuilt from live sockets since the backend sends no `POOL:SHARDS`.
   @override
   RelayStats get stats {
     _stats.shardInfo
@@ -765,8 +677,7 @@ class RelayPoolProxy implements PoolTransport {
     return _stats.snapshot();
   }
 
-  /// Start the 1-second throughput sampler (idempotent). Mirrors
-  /// `startRelayStatsSampling`.
+  /// Starts the 1s throughput sampler (idempotent).
   void _startSampler() {
     if (_sampler != null) return;
     _sampler = Timer.periodic(
@@ -780,10 +691,8 @@ class RelayPoolProxy implements PoolTransport {
     _sampler = null;
   }
 
-  /// The current shard layout (for inspection / tests).
   List<RelayShard> get shards => _sockets.map((s) => s.shard).toList();
 
-  /// Build shards and open one socket per shard.
   @override
   void connectAll() {
     _startSampler();
@@ -817,8 +726,7 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Subscribe across the pool. Sends one `["REQ",subId,...filters]` to every
-  /// open shard socket. Returns a [Subscription] that dedupes + verifies.
+  /// Sends one REQ to every open shard socket.
   @override
   Subscription subscribe(List<NostrFilter> filters, {String? subId}) {
     final id = subId ?? generateSubId(_rng);
@@ -833,8 +741,7 @@ class RelayPoolProxy implements PoolTransport {
     );
     _subscriptions[id] = sub;
     _activeFilters[id] = filters;
-    // Record the REQ broadcast time so each shard's EOSE can stamp REQ→EOSE
-    // latency (keyed by shard id — the proxy's per-relay unit).
+    // Stamp REQ send time for per-shard REQ→EOSE latency.
     _reqSentAt[id] = DateTime.now().millisecondsSinceEpoch;
     _eosedShards[id] = <String>{};
     _trackSubKinds(id, filters);
@@ -858,28 +765,21 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Publish [event] over the pool. Broadcasts `["EVENT",e]` to every shard
-  /// socket (mirrors `_poolSend(['EVENT', e])`). Returns the number of shard
-  /// sockets the frame was written to (best-effort; the proxy ACKs async via
-  /// inbound OK).
+  /// Broadcasts `["EVENT",e]` to every shard; returns sockets written, since OKs arrive async.
   @override
   Future<int> publish(NostrEvent event) async {
-    // Remember the kind so an attributed OK rejection can blacklist it
-    // (`_trackSentEventKind` on every plain EVENT send, relays.js:3271/3381).
+    // Remember the kind so an attributed OK rejection can blacklist it.
     _trackSentEventKind(event);
     return _broadcast(PoolFrame.event(event));
   }
 
-  /// Publish a DM gift-wrap via `["DM_EVENT",e]` (relays.js:3274).
+  /// Publishes a DM gift wrap via `["DM_EVENT",e]`.
   @override
   Future<int> publishDm(NostrEvent event) async {
     return _broadcast(PoolFrame.dmEvent(event));
   }
 
-  /// Publish a geohash channel event via `["GEO_EVENT",e,[urls]]`
-  /// (relays.js:3394) so the proxy prioritizes the closest geo relays. When no
-  /// closest relays are known the PWA falls back to a plain `["EVENT",e]`
-  /// (relays.js:3390-3401), so we mirror that here.
+  /// `["GEO_EVENT",e,[urls]]` prioritizing the closest geo relays; plain EVENT when none are known.
   @override
   Future<int> publishGeo(
       NostrEvent event, List<String> closestRelayUrls) async {
@@ -897,7 +797,6 @@ class RelayPoolProxy implements PoolTransport {
     return n;
   }
 
-  /// Close every shard socket and all subscriptions.
   @override
   Future<void> disconnectAll() async {
     _disposed = true;
@@ -913,12 +812,7 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Tear down every shard socket WITHOUT closing the active [Subscription]
-  /// objects, so they can be re-driven on another pool (the proxy↔direct swap).
-  /// Used by [NostrService] when falling back / restoring: the caller keeps the
-  /// same `Subscription` instances (and their live `events` streams) and
-  /// re-issues them on the replacement pool via [RelayPool.replaySubscription] /
-  /// [replaySubscription].
+  /// Closes shard sockets but keeps [Subscription]s alive for the proxy/direct swap.
   Future<void> disconnectSocketsOnly() async {
     _disposed = true;
     _stopSampler();
@@ -933,8 +827,7 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Snapshot of the live subscriptions (subId → its `Subscription` + filters),
-  /// so [NostrService] can replay them onto a replacement pool after a swap.
+  /// Live subscriptions and filters, for replay onto a replacement pool.
   Map<String, ({Subscription sub, List<NostrFilter> filters})>
       activeSubscriptions() => {
             for (final e in _subscriptions.entries)
@@ -944,11 +837,7 @@ class RelayPoolProxy implements PoolTransport {
               ),
           };
 
-  /// Adopt an EXISTING [sub] (created on a previous pool) onto this proxy and
-  /// (re-)broadcast its REQ to every shard, so its live `events` stream keeps
-  /// flowing after a swap. The sub's internal dedup suppresses any events it
-  /// already delivered, so replay is seamless (no duplicates). The REQ is also
-  /// re-issued automatically on every shard that (re)connects (`_onShardConnected`).
+  /// Adopts [sub] from a previous pool and re-broadcasts its REQ; its dedup suppresses repeats.
   void replaySubscription(Subscription sub, List<NostrFilter> filters) {
     final id = sub.subId;
     _subscriptions[id] = sub;
@@ -962,24 +851,10 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Apply the latest geo-relay set and reconcile the live shard sockets to the
-  /// new layout. Faithful port of `_poolSendRelayConfigNow` +
-  /// `_ensureAllShardsConnected` (relays.js:2839/1919):
-  ///   1. Rebuild the shard layout from `allRelays` + the new [geoRelayUrls].
-  ///   2. For each open socket whose shard still exists but whose relay set
-  ///      changed, update it in place and re-send its `RELAYS` frame.
-  ///   3. Close + drop any socket whose shard no longer exists (the geo set
-  ///      shrank).
-  ///   4. Open a fresh socket for any newly-expected shard that has none yet
-  ///      (the geo shards). New sockets push their `RELAYS` config + re-issue
-  ///      every active REQ on connect.
-  ///
-  /// No-op before [connectAll] (no sockets yet — `connectAll` will pick up the
-  /// stored geo urls) and when [geoRelayUrls] is unchanged.
+  /// Re-shards for new [geoRelayUrls]: update, close or open sockets; no-op before [connectAll] or when unchanged.
   @override
   void updateGeoRelays(List<String> geoRelayUrls) {
     final next = [...geoRelayUrls];
-    // Cheap unchanged-check: same set ⇒ nothing to reconcile.
     if (_geoRelayUrls.length == next.length &&
         next.toSet().containsAll(_geoRelayUrls)) {
       return;
@@ -1010,7 +885,6 @@ class RelayPoolProxy implements PoolTransport {
       return true;
     }
 
-    // Update existing sockets / close vanished shards.
     final survivors = <_ShardSocket>[];
     for (final sock in _sockets) {
       final shard = byId[sock.shard.id];
@@ -1031,7 +905,6 @@ class RelayPoolProxy implements PoolTransport {
       ..clear()
       ..addAll(survivors);
 
-    // Open sockets for newly-expected shards (the geo shards).
     final haveIds = {for (final s in _sockets) s.shard.id};
     for (final shard in layout) {
       if (haveIds.contains(shard.id)) continue;
@@ -1050,13 +923,9 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// The geo relay urls currently sharded onto the pool (for inspection/tests).
   List<String> get geoRelayUrls => List.unmodifiable(_geoRelayUrls);
 
-  // --- Per-relay unsupported-kind blacklist helpers ---------------------------
-
-  /// Remembers the kinds a REQ's filters ask for so a later CLOSED rejection
-  /// can blacklist them (`_trackSubKinds`, relays.js:2334-2349).
+  /// Remembers a REQ's kinds so a later CLOSED rejection can blacklist them.
   void _trackSubKinds(String subId, List<NostrFilter> filters) {
     final kinds = <int>{};
     for (final f in filters) {
@@ -1071,8 +940,7 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Remembers a published event's kind so an attributed OK rejection can be
-  /// mapped back to it (`_trackSentEventKind`, relays.js:2383-2394).
+  /// Remembers a published event's kind for mapping OK rejections.
   void _trackSentEventKind(NostrEvent event) {
     if (event.id.isEmpty) return;
     _sentEventKinds.remove(event.id);
@@ -1082,8 +950,7 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// True when a rejection [reason] indicates the relay doesn't support the
-  /// event/filter kind (`_isUnsupportedKind`, relays.js:4012-4017).
+  /// True when [reason] says the relay doesn't support the kind.
   static bool _isUnsupportedKind(String reason) =>
       isUnsupportedKindRejection(reason);
 
@@ -1098,8 +965,7 @@ class RelayPoolProxy implements PoolTransport {
     _reconcileShards();
   }
 
-  /// Pulls the explicit kind number out of a rejection [reason] when present
-  /// (`_extractUnsupportedKind`, relays.js:2351-2358).
+  /// The explicit kind number in [reason], if any.
   static int? _extractUnsupportedKind(String reason) {
     var m = RegExp(r'\bNIP[\s\-_:]*(\d+)\b', caseSensitive: false)
         .firstMatch(reason);
@@ -1110,9 +976,7 @@ class RelayPoolProxy implements PoolTransport {
     return null;
   }
 
-  /// Records a CLOSED-subscription kind rejection for [relayUrl]: the explicit
-  /// kind from the reason when present, else every kind the REQ asked for
-  /// (`_recordUnsupportedKindRejection`, relays.js:2360-2381).
+  /// Blacklists the reason's kind for [relayUrl], else every kind the REQ asked for.
   void _recordUnsupportedKindRejection(
       String? relayUrl, String subId, String reason) {
     if (relayUrl == null || !relayUrl.startsWith('wss://')) return;
@@ -1127,9 +991,7 @@ class RelayPoolProxy implements PoolTransport {
     if (added) _sendKindBlacklistToWorkers();
   }
 
-  /// Records an OK event-publish kind rejection for [relayUrl] using the
-  /// published event's remembered kind (`_recordEventKindRejection`,
-  /// relays.js:2396-2411).
+  /// Blacklists the published event's remembered kind for [relayUrl].
   void _recordEventKindRejection(String? relayUrl, String eventId) {
     if (relayUrl == null || !relayUrl.startsWith('wss://')) return;
     if (eventId.isEmpty) return;
@@ -1139,8 +1001,7 @@ class RelayPoolProxy implements PoolTransport {
     if (set.add(kind)) _sendKindBlacklistToWorkers();
   }
 
-  /// Pushes the current blacklist to every open shard socket
-  /// (`_sendKindBlacklistToWorkers`, relays.js:2413-2421).
+  /// Pushes the current blacklist to every open shard socket.
   void _sendKindBlacklistToWorkers() {
     if (_relayUnsupportedKinds.isEmpty) return;
     final frame = PoolFrame.kindBlacklist(_relayUnsupportedKinds);
@@ -1149,11 +1010,8 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  // --- Shard socket callbacks -----------------------------------------------
-
   void _onShardConnected(_ShardSocket sock) {
-    // Push the accumulated per-relay unsupported-kind blacklist right after
-    // the RELAYS config, before any REQ (relays.js:2086-2092 on pool open).
+    // Push the kind blacklist after RELAYS and before any REQ.
     if (_relayUnsupportedKinds.isNotEmpty) {
       sock.send(PoolFrame.kindBlacklist(_relayUnsupportedKinds));
     }
@@ -1164,10 +1022,7 @@ class RelayPoolProxy implements PoolTransport {
   }
 
   void _onShardClosed(_ShardSocket sock) {
-    // Per-shard reconnect is handled inside _ShardSocket. At the transport level
-    // we only watch for the host-unreachable case: a shard that has closed
-    // [maxPreConnectFailures] times in a row before the pool EVER confirmed.
-    // Mirrors the PWA's 2-consecutive-pool-failure fallback (relays.js:1824).
+    // Only detect host-unreachable here: repeated closes before the pool ever confirmed.
     if (_unreachableFired || _disposed) return;
     final streak = _proxyEverConnected
         ? sock.failuresSinceFrame
@@ -1188,15 +1043,12 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Stamp REQ→EOSE latency for [shardId] on subscription [subId]: compute
-  /// `now - reqSentAt` once per shard and record it under the shard id. When
-  /// every open shard has EOSE'd, drop the timing entry so a later re-REQ on
-  /// the same subId re-measures.
+  /// Records REQ→EOSE latency once per shard, dropping the timing once every open shard has EOSE'd.
   void _stampShardLatency(String subId, String shardId) {
     final sentAt = _reqSentAt[subId];
     if (sentAt == null) return;
     final eosed = _eosedShards[subId] ??= <String>{};
-    if (!eosed.add(shardId)) return; // already stamped this shard
+    if (!eosed.add(shardId)) return; // Already stamped this shard.
     final ms = DateTime.now().millisecondsSinceEpoch - sentAt;
     if (ms >= 0) _stats.latencyPerRelay[shardId] = ms;
     if (eosed.length >= openShardCount) {
@@ -1205,38 +1057,19 @@ class RelayPoolProxy implements PoolTransport {
     }
   }
 
-  /// Normalizes a worker split-child subscription id back to its parent.
-  ///
-  /// The relay-pool worker SPLITS any REQ carrying more than
-  /// `MAX_FILTERS_PER_REQ` (= 10) filters into child subscriptions whose ids are
-  /// `<parent>~c<n>`, and subscribes the upstream relays with those child ids
-  /// (relay-pool.js:326-339). It remaps EOSE/CLOSED back to the parent, but live
-  /// EVENT frames are forwarded verbatim carrying the CHILD id
-  /// (relay-pool.js:1195). The PWA never notices because it routes events purely
-  /// by kind and ignores the sub id (`_dispatchRelayMessage` destructures
-  /// `subscriptionId` but never uses it). This transport, by contrast, matches
-  /// each event to its registered [Subscription] BY id — so without this
-  /// normalization every event on the ~18-filter main critical REQ (channel
-  /// messages 20000/23333, gift wraps 1059 = PMs/groups/receipts/typing,
-  /// reactions, zaps, presence, polls, deletions, profiles) is silently dropped,
-  /// leaving only the un-split auxiliary subs (channel typing, ephemeral group)
-  /// working. Idempotent for un-split ids (base36 sub ids never contain `~c`).
+  /// Maps worker split-child ids (`<parent>~c<n>`, for REQs over 10 filters) to the parent, or events are dropped.
   static String _parentSubId(String subId) {
     final i = subId.indexOf('~c');
     return i > 0 ? subId.substring(0, i) : subId;
   }
 
-  /// See [PoolTransport.geoOriginAllows].
   bool Function(NostrEvent event, String? relayUrl)? _geoOriginAllows;
   @override
   set geoOriginAllows(bool Function(NostrEvent event, String? relayUrl)? fn) =>
       _geoOriginAllows = fn;
 
   void _onShardMessage(_ShardSocket sock, PoolMessage msg) {
-    // Reaching here means a parseable pool frame arrived, so the proxy endpoint
-    // is reachable. Latch it so a later mid-session disconnect is NOT treated as
-    // "host unreachable" (it keeps the per-shard reconnect backoff instead), and
-    // fire the one-shot connected signal (background-restore promotion).
+    // A parseable frame means the proxy is reachable: latch it and fire the one-shot connected signal.
     if (!_proxyEverConnected) {
       _proxyEverConnected = true;
       final cb = onProxyConnected;
@@ -1244,36 +1077,25 @@ class RelayPoolProxy implements PoolTransport {
     }
     switch (msg) {
       case PoolEvent(:final subId, :final event, :final sourceRelay):
-        // Dropped before verification: the glub.chat client tags
-        // every event it sends, so this costs one tag scan and
-        // saves a signature check on every one of them.
+        // Dropped before verification: glub.chat tags every event it sends.
         if (SpamFilter.isGlubClient(event.tags)) return;
         if (RelayConfig.isAppRelayOnly(
                 event.kind, event.tagValue('g'), event.tagValue('d')) &&
             sourceRelay != RelayConfig.appRelay) {
           return;
         }
-        // Ahead of the cross-shard dedup below, for the same reason.
+        // Gate before the cross-shard dedup, for the same reason.
         final geoGate = _geoOriginAllows;
         if (geoGate != null && !geoGate(event, sourceRelay)) return;
-        // Before the dedup below, because the copies it discards are the
-        // relay list.
+        // Record before dedup, since the discarded copies are the relay list.
         eventProvenance.record(event, sourceRelay);
         // Cross-shard dedup: the first shard to deliver an id wins.
         if (!_deduper.add(copyKey(event))) return;
-        // Normalize a split-child sub id back to its parent (see [_parentSubId]).
         final eventSubId = _parentSubId(subId);
-        // Post-dedup event accounting (relays.js handleRelayMessage:3738-3746):
-        // bump the unique total + per-second counter, and the per-relay tally
-        // attributed to the proxy-tagged sourceRelay when present.
+        // Post-dedup event accounting.
         _stats.totalEvents++;
         _stats.eventsThisSecond++;
-        // Attribute the event to its proxy-tagged source relay when present.
-        // The per-relay count AND the per-kind breakdown use the same
-        // attribution, so the expanded kind counts sum to the collapsed `evt`
-        // total (relays.js:3744-3751). An un-attributed proxy event (no
-        // `wss://` sourceRelay) is left out of the per-relay rows, exactly as
-        // the PWA's `attributedRelay` skips it.
+        // Per-relay and per-kind counts share the sourceRelay attribution; unattributed events are left out.
         if (sourceRelay != null && sourceRelay.startsWith('wss://')) {
           _stats.eventsPerRelay[sourceRelay] =
               (_stats.eventsPerRelay[sourceRelay] ?? 0) + 1;
@@ -1290,8 +1112,7 @@ class RelayPoolProxy implements PoolTransport {
         }
       case PoolClosed(:final subId, :final reason, :final relayUrl):
         {
-          // A kind-flavored CLOSED reason feeds the per-relay kind blacklist
-          // (relays.js:3877-3878).
+          // A kind-flavored CLOSED reason feeds the per-relay kind blacklist.
           final id = _parentSubId(subId);
           if (_isUnsupportedKind(reason)) {
             _recordUnsupportedKindRejection(relayUrl, id, reason);
@@ -1302,10 +1123,7 @@ class RelayPoolProxy implements PoolTransport {
           _subscriptions[id]?.onEose(sock.shard.id, closed: true);
         }
       case PoolOk(:final id, :final message, :final relayUrl):
-        // Publish ACK; publish() does not await per-relay OK in proxy mode.
-        // A kind-flavored reason feeds the per-relay kind blacklist
-        // (relays.js:3775-3776 — the PWA checks the reason regardless of the
-        // accepted flag) so the worker skips that relay for the kind.
+        // Proxy publish() doesn't await OKs; a kind-flavored reason feeds the blacklist regardless of accepted.
         if (_isUnsupportedKind(message)) {
           _recordEventKindRejection(relayUrl, id);
         } else if (isRelayWideRejection(message)) {
@@ -1318,30 +1136,24 @@ class RelayPoolProxy implements PoolTransport {
         }
         break;
       case PoolStatus(:final latency):
-        // connectedRelays already updated on the socket. Fold this worker's
-        // per-relay latency into the aggregate (relays.js:2137-2141) so the
-        // Network Stats rows + Avg Latency show real per-URL numbers in proxy
-        // mode (complements the per-shard REQ→EOSE timing).
+        // Fold this worker's per-relay latency into the aggregate.
         latency.forEach((url, ms) {
           _stats.latencyPerRelay[url] = ms;
         });
         break;
       case PoolRelayBan(:final url):
-        // The proxy permanently dropped this relay (relays.js:2117). Mirror the
-        // PWA's `_permanentlyBlacklistRelay` effect on the shard layout so any
-        // future rebuild excludes it.
+        // Mirror the proxy's permanent ban so future shard layouts exclude the relay.
         _permanentBlacklist.add(url);
         break;
       case PoolRetract(:final eventId):
         onEventRetracted?.call(eventId);
         break;
       case PoolPing():
-        // Keepalive — no PONG; liveness is implicit (relays.js:2112).
+        // Keepalive; no PONG is needed.
         break;
     }
   }
 
-  /// Relays the proxy has banned this session (`POOL:RELAY_BAN`) plus any seed
-  /// blacklist. Exposed for inspection / tests.
+  /// Relays banned this session plus any seed blacklist.
   Set<String> get permanentBlacklist => Set.unmodifiable(_permanentBlacklist);
 }

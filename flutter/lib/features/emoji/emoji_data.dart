@@ -1,24 +1,16 @@
-// Built-in unicode emoji dataset + shortcode map + recents helpers.
-//
-// PRECISE 1:1 port of the PWA's data. Category list, ordering, and the full
-// emoji arrays come from `js/app.js` `this.allEmojis` (lines 780-794). The
-// shortcode→emoji map (`emojiMap`, lines 795-1033) drives the picker's name
-// search. Recents behavior mirrors `js/modules/reactions.js`
-// (`loadRecentEmojis`/`addToRecentEmojis`/`_recentEmojisForPicker`, lines
-// 128-159) keyed on localStorage `nym_recent_emojis` (≤24).
+// Built-in unicode emoji dataset, shortcode map and recents helpers, matching the PWA's data.
 
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// localStorage key the PWA persists recents under (reactions.js:136).
+/// Persisted recents key.
 const String kRecentEmojisKey = 'nym_recent_emojis';
 
-/// Hard cap the PWA stores (reactions.js:145).
+/// Recents cap.
 const int kRecentEmojisCap = 24;
 
-/// Ordered category list, identical order to `allEmojis` in app.js:780.
-/// Section titles in the picker are these keys, capitalized (emoji.js:551).
+/// Picker category order; section titles are these keys capitalized.
 const List<String> kEmojiCategoryOrder = <String>[
   'smileys',
   'people',
@@ -35,14 +27,8 @@ const List<String> kEmojiCategoryOrder = <String>[
   'flags',
 ];
 
-// FORMATTING: the tables below are dense on purpose, mirroring the web
-// client's source. `dart format` explodes them to one entry per line, and
-// the `// dart format off` directive cannot protect them because it needs
-// language version >= 3.7 while this package is on ^3.6.0 (legacy
-// formatter, which ignores the directive). Keep this file OUT of
-// repo-wide format passes.
-/// Built-in unicode emoji grouped by category, in the PWA's exact order.
-/// Verbatim from `js/app.js` `this.allEmojis` (lines 781-793).
+// Tables are dense on purpose; keep this file out of format passes (`dart format off` needs language 3.7).
+/// Built-in unicode emoji by category, in the PWA's exact order.
 const Map<String, List<String>> kEmojisByCategory = <String, List<String>>{
   'smileys': <String>[
     '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗', '☺️', '😚', '😙', '🥲', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🫢', '🫣', '🤫', '🤔', '🫡', '🤐', '🤨', '😐', '😑', '😶', '🫥', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '😵‍💫', '🤯', '🤠', '🥳', '🥸', '😎', '🤓', '🧐', '😕', '🫤', '😟', '☹️', '🙁', '😮', '😯', '😲', '😳', '🥺', '🥹', '😦', '😧', '😨', '😰', '😥', '😢', '😭', '😱', '😖', '😣', '😞', '😓', '😩', '😫', '🥱', '😤', '😡', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾',
@@ -85,9 +71,7 @@ const Map<String, List<String>> kEmojisByCategory = <String, List<String>>{
   ],
 };
 
-/// Shortcode → emoji map, powering name search in the picker. Verbatim subset
-/// from `js/app.js` `this.emojiMap` (lines 795-1033). Used to derive
-/// emoji→names for the search index (emoji.js `_getEmojiToNames`).
+/// Shortcode to emoji, powering picker name search.
 const Map<String, String> kEmojiShortcodeMap = <String, String>{
   // Smileys & faces
   'grinning': '😀', 'smiley': '😃', 'grin': '😄', 'beaming': '😁', 'laughing': '😆',
@@ -137,9 +121,7 @@ const Map<String, String> kEmojiShortcodeMap = <String, String>{
   'thumbsup': '👍', 'thumbsdown': '👎', 'ok_hand': '👌', 'pinched': '🤌', 'pinch': '🤏',
   'peace': '✌️', 'crossed': '🤞', 'hand_with_fingers': '🫰', 'rock_on': '🤟', 'metal': '🤘',
   'call': '🤙', 'left': '👈', 'right': '👉', 'up': '👆', 'middle_finger': '🖕',
-  // NOTE: `'wave'` resolves to 🌊 (weather) in the PWA because JS object
-  // literals keep the last duplicate key; the gestures 👋 here is keyed
-  // `wave_hand` so the const map stays valid while preserving 👋's name.
+  // `'wave'` is 🌊 in the PWA (last duplicate key wins), so 👋 is keyed `wave_hand`.
   'down': '👇', 'point': '☝️', 'point_at_you': '🫵', 'wave_hand': '👋', 'backhand': '🤚',
   'fingers_splayed': '🖐️', 'hand': '✋', 'vulcan': '🖖', 'rightward_hand': '🫱', 'leftward_hand': '🫲',
   'palm_down': '🫳', 'palm_up': '🫴', 'clap': '👏', 'raised': '🙌', 'heart_hands': '🫶',
@@ -326,14 +308,13 @@ const Map<String, String> kEmojiShortcodeMap = <String, String>{
   'ar': '🇦🇷', 'th': '🇹🇭', 'vn': '🇻🇳', 'id': '🇮🇩', 'ph': '🇵🇭',
   'sg': '🇸🇬', 'nz': '🇳🇿', 'sa': '🇸🇦', 'ae': '🇦🇪', 'il': '🇮🇱',
   'tw': '🇹🇼', 'hk': '🇭🇰', 'pr': '🇵🇷', 'cu': '🇨🇺', 'jm': '🇯🇲',
-  // Aliases (emoji.js app.js:1030+)
+  // Aliases
   'ok': '👌', 'money': '🤑', 'hearts': '💕', 'celebrate': '🙌',
   'sunglasses': '😎', 'nauseous': '🤢', 'cold_sweat': '😰',
   'scream_cat': '🙀', 'exploding': '🤯', 'sunset': '🌆',
 };
 
-/// Reverse map emoji → list of shortcodes (names), used for search.
-/// Mirrors emoji.js `_getEmojiToNames` (lines 521-530).
+/// Reverse map of emoji to shortcodes, for search.
 Map<String, List<String>> buildEmojiToNames() {
   final map = <String, List<String>>{};
   kEmojiShortcodeMap.forEach((name, emoji) {
@@ -342,9 +323,7 @@ Map<String, List<String>> buildEmojiToNames() {
   return map;
 }
 
-/// Pure recents helper, mirroring `addToRecentEmojis` (reactions.js:142-148):
-/// remove any existing occurrence, prepend, cap to [kRecentEmojisCap].
-/// Most-recent-first.
+/// Removes any existing occurrence, prepends, and caps; most recent first.
 List<String> addRecentEmoji(List<String> current, String emoji) {
   final next = <String>[emoji, ...current.where((e) => e != emoji)];
   if (next.length > kRecentEmojisCap) {
@@ -353,14 +332,13 @@ List<String> addRecentEmoji(List<String> current, String emoji) {
   return next;
 }
 
-/// Storage-backed recents, persisted under [kRecentEmojisKey] as a JSON array,
-/// matching the PWA's localStorage contract (reactions.js:128-140).
+/// Recents persisted under [kRecentEmojisKey] as a JSON array.
 class EmojiRecentsStore {
   EmojiRecentsStore(this._prefs);
 
   final SharedPreferences _prefs;
 
-  /// Load recents (reactions.js `loadRecentEmojis`). Tolerates corrupt JSON.
+  /// Tolerates corrupt JSON.
   List<String> load() {
     final raw = _prefs.getString(kRecentEmojisKey);
     if (raw == null || raw.isEmpty) return <String>[];
@@ -373,8 +351,6 @@ class EmojiRecentsStore {
     return <String>[];
   }
 
-  /// Add an emoji to recents and persist (reactions.js `addToRecentEmojis` +
-  /// `saveRecentEmojis`). Returns the new list.
   Future<List<String>> add(String emoji) async {
     final next = addRecentEmoji(load(), emoji);
     await _prefs.setString(kRecentEmojisKey, jsonEncode(next));
@@ -382,24 +358,18 @@ class EmojiRecentsStore {
   }
 }
 
-/// localStorage keys for the emoji-picker favorite stars (emoji.js lines 402,
-/// 464): `nym_emoji_category_favorites` (default-category keys) and
-/// `nym_emoji_pack_favorites` (custom-pack keys `${pubkey}:${identifier}`).
+/// Picker favorite keys: default-category keys and custom-pack `pubkey:identifier` keys.
 const String kEmojiCategoryFavoritesKey = 'nym_emoji_category_favorites';
 const String kEmojiPackFavoritesKey = 'nym_emoji_pack_favorites';
 
-/// A simple JSON-string-array favorites store backed by SharedPreferences. Used
-/// for both the category-favorite and pack-favorite lists, which the PWA toggles
-/// + persists identically (`toggleEmojiCategoryFavorite` /
-/// `toggleEmojiPackFavorite`, emoji.js:395-478).
+/// JSON string-array favorites in SharedPreferences, for categories and packs.
 class EmojiFavoritesStore {
   EmojiFavoritesStore(this._prefs, this._key);
 
   final SharedPreferences _prefs;
   final String _key;
 
-  /// Current favorite keys in fav-list order (insertion order, like the PWA's
-  /// `push`/`splice` array). Tolerates corrupt JSON.
+  /// Favorites in insertion order; tolerates corrupt JSON.
   List<String> load() {
     final raw = _prefs.getString(_key);
     if (raw == null || raw.isEmpty) return <String>[];
@@ -412,8 +382,7 @@ class EmojiFavoritesStore {
 
   bool contains(String key) => load().contains(key);
 
-  /// Toggles [key] in the favorites list (append when absent, remove when
-  /// present), persists, and returns the new list. Mirrors the PWA toggles.
+  /// Toggles [key], persists, and returns the new list.
   Future<List<String>> toggle(String key) async {
     final list = load();
     if (!list.remove(key)) list.add(key);
@@ -422,9 +391,7 @@ class EmojiFavoritesStore {
   }
 }
 
-/// Orders the default emoji categories favorites-first (in fav-list order),
-/// then the remainder in their declared [kEmojiCategoryOrder]. Mirrors
-/// `_getOrderedDefaultEmojiEntries` (emoji.js:435-444).
+/// Default categories with favorites first in fav-list order, then declared order.
 List<String> orderedEmojiCategories(List<String> favorites) {
   final favSet = favorites.toSet();
   final favored = favorites.where(kEmojiCategoryOrder.contains).toList();

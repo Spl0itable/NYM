@@ -8,25 +8,13 @@ import '../i18n/i18n.dart';
 import 'p2p_models.dart';
 import 'p2p_service.dart';
 
-/// `#p2pTransfersModal` — lists seeding files + active/queued transfers with
-/// progress (`openP2PTransfersModal`, p2p.js:732). Driven live by [P2PService]
-/// (a [ChangeNotifier]); rebuilds as transfers progress.
-///
-/// Rendered as a centered `.modal` (showDialog), matching the PWA. Shared modal
-/// chrome applies: 22px UPPERCASE primary header + bottom rule, 32px circular
-/// glass close chip, translucent `.icon-btn` Close action.
+/// Lists seeding files and active transfers, rebuilding live from [P2PService].
 class P2PTransfersModal extends ConsumerWidget {
   const P2PTransfersModal({super.key, required this.service});
 
   final P2PService service;
 
-  /// The geohash of the channel the user is *currently viewing*, or null when
-  /// the active view is a named channel / PM / group. The PWA's `stopSeeding`
-  /// reads `this.currentGeohash` at stop-time and, when set, appends the channel
-  /// wire tag so other channel viewers learn the file is gone (p2p.js:828). We
-  /// resolve it the same way the share / typing paths do: a channel is a geohash
-  /// when its key matches a `channels` entry flagged `isGeohash`
-  /// (nostr_controller.dart:5552-5554).
+  /// Geohash of the channel being viewed, or null; stopSeeding tags it so other viewers learn the file is gone.
   static String? _currentGeohash(WidgetRef ref) {
     final state = ref.read(appStateProvider);
     final view = state.view;
@@ -36,13 +24,7 @@ class P2PTransfersModal extends ConsumerWidget {
     return isGeo ? view.id : null;
   }
 
-  /// The NAMED (non-geohash) channel key of the current view, or null when the
-  /// active view is a geohash channel / PM / group. Companion to
-  /// [_currentGeohash]: the PWA's `stopSeeding` emits the channel wire tag for
-  /// whatever channel is open, which for a named channel is a `d` tag
-  /// (`channelWire`, channels.js:454; `currentGeohash` holds the channel name).
-  /// `stopSeeding` lets [_currentGeohash] win, so this only fires for a genuinely
-  /// named channel. F06-B3.
+  /// Named channel key of the current view, or null; [_currentGeohash] wins in stopSeeding.
   static String? _currentNamedChannel(WidgetRef ref) {
     final state = ref.read(appStateProvider);
     final view = state.view;
@@ -52,22 +34,18 @@ class P2PTransfersModal extends ConsumerWidget {
     return isGeo ? null : view.id;
   }
 
-  /// Opens the transfers modal as a centered dialog (PWA `.modal`).
   static Future<void> open(BuildContext context, P2PService service) {
-    // `.modal` barrier: solid-ui (default) dark `rgba(0,0,0,0.75)` →
-    // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-    // (styles-themes-responsive.css:1630-1635).
     final isLight = context.nym.isLight;
     return showDialog<void>(
       context: context,
       barrierColor: isLight
-          ? const Color(0x73000000) // black @ 0.45
-          : const Color(0xBF000000), // black @ 0.75
+          ? const Color(0x73000000)
+          : const Color(0xBF000000),
       builder: (_) => P2PTransfersModal(service: service),
     );
   }
 
-  /// Back-compat alias for [open] (older call sites).
+  /// Alias for [open].
   static Future<void> show(BuildContext context, P2PService service) =>
       open(context, service);
 
@@ -84,9 +62,6 @@ class P2PTransfersModal extends ConsumerWidget {
             final transfers = service.transfers;
             final empty = seeding.isEmpty && transfers.isEmpty;
             return Container(
-              // .modal-content + .p2p-modal-content (max-width 500, width 90%,
-              // max-height 90vh, radius 24, glass border, shadow-lg + glow +
-              // 1px white ring) (styles-components.css:17-27).
               width: MediaQuery.of(context).size.width * 0.9,
               constraints: BoxConstraints(
                 maxWidth: 500,
@@ -96,13 +71,10 @@ class P2PTransfersModal extends ConsumerWidget {
                 color: c.bgSecondary,
                 borderRadius: NymRadius.rxl,
                 border: Border.all(color: c.glassBorder),
-                // `body.light-mode .modal-content { box-shadow: 0 8px 40px
-                // rgba(0,0,0,0.12) }` — one soft shadow, no glow, no white ring
-                // in light (styles-themes-responsive.css:1050-1052).
                 boxShadow: c.isLight
                     ? const [
                         BoxShadow(
-                          color: Color(0x1F000000), // black @ 0.12
+                          color: Color(0x1F000000),
                           blurRadius: 40,
                           offset: Offset(0, 8),
                         ),
@@ -129,7 +101,6 @@ class P2PTransfersModal extends ConsumerWidget {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // .modal-header.
                         Container(
                           margin: const EdgeInsets.only(bottom: 24),
                           padding: const EdgeInsets.only(bottom: 14),
@@ -147,17 +118,12 @@ class P2PTransfersModal extends ConsumerWidget {
                             ),
                           ),
                         ),
-                        // .modal-body > .p2p-transfers-list { max-height:
-                        // 400px; overflow-y: auto } (styles-features.css:
-                        // 1925-1928) — the scrolling list itself caps at 400,
-                        // independent of the modal's own 90vh limit.
+                        // The list itself caps at 400, independent of the modal's 90% limit.
                         Flexible(
                           child: ConstrainedBox(
                             constraints: const BoxConstraints(maxHeight: 400),
                             child: empty
                                 ? Padding(
-                                    // .p2p-empty-state: centered italic
-                                    // textDim, padding 30.
                                     padding: const EdgeInsets.all(30),
                                     child: Text(
                                       tr('No active transfers'),
@@ -185,11 +151,7 @@ class P2PTransfersModal extends ConsumerWidget {
                                           ),
                                         for (final t in transfers)
                                           _TransferRow(
-                                            // PWA keys each row's DOM node by
-                                            // `transfer-${id}` (p2p.js), so
-                                            // the fill's width transition
-                                            // stays with its transfer as rows
-                                            // come and go.
+                                            // Keyed by transfer id so the fill's width animation stays with its transfer.
                                             key: ValueKey(t.transferId),
                                             transfer: t,
                                             onCancel: () => service
@@ -201,7 +163,6 @@ class P2PTransfersModal extends ConsumerWidget {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        // .modal-actions: centered Close .icon-btn.
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
@@ -214,7 +175,6 @@ class P2PTransfersModal extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  // .modal-close chip.
                   Positioned(
                     top: 14,
                     right: 14,
@@ -232,8 +192,6 @@ class P2PTransfersModal extends ConsumerWidget {
   }
 }
 
-/// `.p2p-transfer-item` shell (white/0.03 fill, glass border, radius 12,
-/// padding 14, margin-bottom 10).
 class _TransferItem extends StatelessWidget {
   const _TransferItem({required this.children});
   final List<Widget> children;
@@ -257,8 +215,6 @@ class _TransferItem extends StatelessWidget {
   }
 }
 
-/// `.p2p-transfer-header`: filename (primary, bold, left) + size (textDim,
-/// right), space-between, margin-bottom 8.
 class _TransferHeader extends StatelessWidget {
   const _TransferHeader({required this.name, required this.size});
   final String name;
@@ -304,7 +260,6 @@ class _SeedingRow extends StatelessWidget {
     return _TransferItem(
       children: [
         _TransferHeader(name: offer.name, size: offer.size),
-        // .p2p-transfer-status: status text (complete=primary) + Stop button.
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -329,8 +284,7 @@ class _TransferRow extends StatelessWidget {
   final P2PTransfer transfer;
   final VoidCallback onCancel;
 
-  /// Status-text color (`.p2p-transfer-status-text.<state>`): connecting →
-  /// warning, transferring → secondary, complete → primary, error → danger.
+  /// Connecting is warning, transferring secondary, complete primary, error danger.
   Color _statusColor(NymColors c) => switch (transfer.status) {
         P2PStatus.connecting => c.warning,
         P2PStatus.transferring => c.secondary,
@@ -345,9 +299,6 @@ class _TransferRow extends StatelessWidget {
     return _TransferItem(
       children: [
         _TransferHeader(name: transfer.offer.name, size: transfer.offer.size),
-        // .p2p-transfer-progress: 6px track white/0.05 radius 10; fill gradient
-        // primary→secondary radius 10, `transition: width 0.3s ease`
-        // (styles-features.css:1981-1987). margin-bottom 8.
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: ClipRRect(
@@ -376,7 +327,6 @@ class _TransferRow extends StatelessWidget {
             ),
           ),
         ),
-        // .p2p-transfer-status: raw status word (colored per state) + Cancel.
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -395,8 +345,6 @@ class _TransferRow extends StatelessWidget {
   }
 }
 
-/// `.p2p-transfer-btn.cancel`: danger border + danger text, radius 8, padding
-/// 5/10, font 11; hover fills danger / bg text.
 class _CancelBtn extends StatelessWidget {
   const _CancelBtn({required this.label, required this.onTap});
   final String label;
@@ -423,8 +371,6 @@ class _CancelBtn extends StatelessWidget {
   }
 }
 
-/// `.icon-btn` (shared modal chrome): white/0.05 fill, glass border, radius 8,
-/// `--text` color, padding 7/14, UPPERCASE 12px ls0.8 w500.
 class _IconBtn extends StatefulWidget {
   const _IconBtn({required this.label, required this.onTap});
   final String label;
@@ -449,13 +395,9 @@ class _IconBtnState extends State<_IconBtn> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
           decoration: BoxDecoration(
-            // `body.light-mode .icon-btn { background: rgba(0,0,0,0.03);
-            // color: var(--primary) }`; hover `rgba(0,0,0,0.06)`
-            // (styles-themes-responsive.css:595-605). `subtleFill` is exactly
-            // black@.03 light / white@.05 dark (nym_colors.dart:112).
             color: _hover
                 ? (c.isLight
-                    ? const Color(0x0F000000) // black @ 0.06
+                    ? const Color(0x0F000000)
                     : c.primary.withValues(alpha: 0.12))
                 : c.subtleFill,
             borderRadius: NymRadius.rxs,
@@ -478,7 +420,6 @@ class _IconBtnState extends State<_IconBtn> {
   }
 }
 
-/// 32×32 circular glass close chip with a danger hover (`.modal-close`).
 class _CloseChip extends StatefulWidget {
   const _CloseChip({required this.onTap});
   final VoidCallback onTap;

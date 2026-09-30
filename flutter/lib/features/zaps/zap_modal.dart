@@ -18,13 +18,7 @@ import '../shop/shop_controller.dart';
 import 'lnurl.dart';
 import 'zap_logic.dart';
 
-/// `#zapModal` (`.zap-modal`, index.html lines 2021-2098; zaps.js
-/// `showZapModal` / `generateZapInvoice` / `displayZapInvoice`). Preset amounts
-/// + custom + comment, then resolves the recipient's lightning address via
-/// LNURL-pay, shows the bolt11 QR + copy + Open Wallet, and polls the LUD-21
-/// verify URL for a "paid" affordance.
-///
-/// Lazy network: nothing is fetched until the user picks an amount (Generate).
+/// Zap modal: amount and comment, LNURL-pay invoice with QR, then LUD-21 payment polling.
 class ZapModal extends ConsumerStatefulWidget {
   const ZapModal({
     super.key,
@@ -35,22 +29,19 @@ class ZapModal extends ConsumerStatefulWidget {
     this.originalKind,
   });
 
-  /// Recipient pubkey (zap `['p', …]`).
   final String recipientPubkey;
 
-  /// Recipient display nym (shown in the header).
   final String recipientNym;
 
-  /// Recipient's resolved lightning address (lud16/lud06).
+  /// Resolved lightning address (lud16/lud06).
   final String lightningAddress;
 
-  /// The zapped message id (null for a profile zap).
+  /// Zapped message id; null for a profile zap.
   final String? messageId;
 
-  /// `['k', …]` original kind tag for a message zap.
+  /// `['k', …]` original kind for a message zap.
   final String? originalKind;
 
-  /// Preset sats amounts (index.html `data-amount`).
   static const presets = [21, 100, 500, 1000, 5000, 10000];
 
   static Future<void> show(
@@ -61,15 +52,12 @@ class ZapModal extends ConsumerStatefulWidget {
     String? messageId,
     String? originalKind,
   }) {
-    // `.modal` barrier: solid-ui (default) dark `rgba(0,0,0,0.75)` →
-    // `body.solid-ui.light-mode .modal { rgba(0,0,0,0.45) }`
-    // (styles-themes-responsive.css:1630-1635).
     final isLight = context.nym.isLight;
     return showDialog<void>(
       context: context,
       barrierColor: isLight
-          ? const Color(0x73000000) // black @ 0.45
-          : const Color(0xBF000000), // black @ 0.75
+          ? const Color(0x73000000)
+          : const Color(0xBF000000),
       builder: (_) => ZapModal(
         recipientPubkey: recipientPubkey,
         recipientNym: recipientNym,
@@ -97,13 +85,10 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   LnInvoice? _invoice;
   Timer? _verifyTimer;
 
-  /// True while the manual "I've paid" re-check is in flight (zaps.js
-  /// `manualCheckPayment` shows a "Checking payment..." spinner state).
+  /// True while the manual "I've paid" re-check is in flight.
   bool _checkingManual = false;
 
-  /// Lowercased bolt11s we've already counted as paid (zaps.js
-  /// `_selfCountedZapInvoices`) — guards against the verify poll and a kind-9735
-  /// receipt echo both firing success for the same invoice.
+  /// Lowercased bolt11s already counted, so the poll and a receipt echo can't both fire success.
   final Set<String> _settledInvoices = {};
 
   @override
@@ -116,9 +101,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     super.dispose();
   }
 
-  /// The Custom field's "Generate" (and Enter) path (zaps.js `triggerCustom`):
-  /// a blank/≤0 custom amount focuses the field and returns (no fallback to a
-  /// selected preset); a valid one clears any preset highlight and generates.
+  /// A blank or non-positive custom amount focuses the field; a valid one clears the preset and generates.
   void _triggerCustom() {
     final val = int.tryParse(_customController.text.trim());
     if (val == null || val <= 0) {
@@ -138,8 +121,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   Future<void> _generate() async {
     final amount = _amount;
     if (amount == null || amount <= 0) return;
-    // No-lightning-address guard (zaps.js `fetchLightningInvoice` throws
-    // 'No lightning address available'; modal callers normally pre-check).
     if (widget.lightningAddress.trim().isEmpty) {
       setState(() {
         _phase = _Phase.error;
@@ -161,8 +142,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         comment =
             widget.messageId != null ? 'Zap for your message' : 'Profile zap';
       }
-      // Build (and sign) the NIP-57 zap request only when the provider supports
-      // it; buildZapRequest returns null when there is no live signer.
+      // Sign a NIP-57 zap request only when the provider supports it; null without a live signer.
       final zapReq = (params.allowsNostr && params.nostrPubkey != null)
           ? await controller.buildZapRequest(
               recipientPubkey: widget.recipientPubkey,
@@ -184,10 +164,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         _phase = _Phase.invoice;
       });
       _persistPendingZap(invoice);
-      // LUD-21: poll the backend `zap-verify` proxy for up to 3 minutes
-      // (zaps.js checkZapPayment → _serverVerifyZapPaid, 180 × 1s). The proxy
-      // server-side fetches the LUD-21 verify URL (or validates a NIP-57
-      // receipt), so the client only reads `data.paid`.
+      // Poll the `zap-verify` proxy for up to 3 minutes; it checks LUD-21 or the NIP-57 receipt server-side.
       _startVerifyPolling(invoice);
     } catch (e) {
       if (!mounted) return;
@@ -225,10 +202,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     });
   }
 
-  /// The invoice outlives this modal: the user leaves for their wallet and the
-  /// OS can evict the process before the payment settles, taking the modal and
-  /// its in-memory invoice with it. Persist it in the same store shop and
-  /// credit purchases use, so the next foreground re-verifies and records it.
+  /// Persist the invoice so the next foreground re-verifies it if the OS evicts the app while the wallet is open.
   static String pendingZapId(String pr) => 'zap:${pr.toLowerCase()}';
 
   void _persistPendingZap(LnInvoice invoice) {
@@ -259,19 +233,12 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     } catch (_) {}
   }
 
-  /// Marks the invoice paid + plays the success affordance, deduped by lowercased
-  /// bolt11 (zaps.js `handleZapPaymentSuccess`; dedup via `_selfCountedZapInvoices`).
+  /// Marks paid and plays the success affordance, deduped by lowercased bolt11.
   void _markPaid(LnInvoice invoice) {
     if (!_settledInvoices.add(invoice.dedupKey)) return; // already counted
     _clearPendingZap(invoice);
-    // PWA `window.nymHapticTap` — the same shared 30ms vibrate every other
-    // haptic site fires (inline-bindings.js:112-114), mapped app-wide to
-    // mediumImpact.
     HapticFeedback.mediumImpact();
-    // Record our own zap on the target message's badge instantly (zaps.js
-    // `_recordOwnMessageZap`), deduped by the invoice's bolt11 so a later
-    // kind-9735 echo for the same payment can't double-count (same dedupKey
-    // scheme as the receipt path, _onPrivateZap).
+    // Record our zap on the message badge now, deduped by bolt11 so a later receipt echo can't double-count.
     final messageId = widget.messageId;
     if (messageId != null && messageId.isNotEmpty) {
       ref.read(appStateProvider.notifier).recordMessageZap(
@@ -279,15 +246,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
             zapperPubkey: ref.read(appStateProvider).selfPubkey,
             amountSats: invoice.amountSats,
             dedupKey: ZapLogic.dedupKey(bolt11: invoice.pr, eventId: ''),
-            // The self-zap is verify-URL/server confirmed → verified (zaps.js
-            // `_recordOwnMessageZap(..., true)`, line 1102/1606).
+            // Server-confirmed, so verified.
           );
-      // Announce the zap so OTHER clients update the badge (zaps.js
-      // `_publishOwnMessageZapEvent` / `_publishOwnPrivateZapEvent`). The
-      // controller reads the current view and picks public (channel) vs
-      // gift-wrapped (PM/group) delivery. Deduped end-to-end by bolt11 so this
-      // announce, the self-record above, and any public-receipt echo of the
-      // same payment count once.
+      // Announce the zap so other clients update; bolt11 dedup makes every copy count once.
       unawaited(ref.read(nostrControllerProvider).announceMessageZap(
             messageId: messageId,
             recipientPubkey: widget.recipientPubkey,
@@ -301,9 +262,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     });
   }
 
-  /// "I've paid" manual re-check (zaps.js `manualCheckPayment`). Re-checks the
-  /// current invoice once and finalizes if paid; otherwise shows the PWA's
-  /// "not paid yet — tap again" status line without leaving the invoice screen.
+  /// Re-checks once, finalizing if paid or showing "not paid yet" otherwise.
   Future<void> _manualCheck() async {
     final invoice = _invoice;
     if (invoice == null || _checkingManual) return;
@@ -369,29 +328,20 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           color: c.bgSecondary,
           border: Border.all(color: c.glassBorder),
           borderRadius: NymRadius.rxl,
-          // `body.light-mode .modal-content { box-shadow: 0 8px 40px
-          // rgba(0,0,0,0.12) }` — softer single shadow in light mode
-          // (styles-themes-responsive.css:1050-1052).
           boxShadow: [
             BoxShadow(
               color: c.isLight
-                  ? const Color(0x1F000000) // black @ 0.12
-                  : const Color(0x80000000), // black @ 0.5
+                  ? const Color(0x1F000000)
+                  : const Color(0x80000000),
               blurRadius: c.isLight ? 40 : 32,
               offset: const Offset(0, 8),
             ),
           ],
         ),
-        // `showDialog` does not insert a Material, so the InkWell-based buttons
-        // (amount grid, close, generate, copy/wallet, "I've paid") would fail
-        // `debugCheckHasMaterial`. A transparent Material supplies the ink
-        // ancestor without painting over the Container's own decoration.
+        // `showDialog` inserts no Material; the InkWell buttons need an ink ancestor.
         child: Material(
           type: MaterialType.transparency,
-          // `.modal-close` is a separate absolutely-positioned chip over the
-          // card, not an inline Row child — so the body and the chip are
-          // siblings in a Stack. The `.modal-content` 32px padding lives on the
-          // scroll content so the chip can sit at the card corner (14,14).
+          // The close chip is a Stack sibling so it can sit at the card corner.
           child: Stack(
             children: [
               SingleChildScrollView(
@@ -401,8 +351,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _header(c),
-                    const SizedBox(height: 24), // `.modal-header` margin-bottom
-                    // `#zapRecipientInfo` (`.nm-h-75`) — centered, body-size, mb20.
+                    const SizedBox(height: 24),
                     Text(
                       widget.messageId != null
                           ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
@@ -426,7 +375,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
                   ],
                 ),
               ),
-              // `.modal-close`: 32×32 glass ✕ chip, absolute top-right (14,14).
               ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
             ],
           ),
@@ -436,9 +384,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   Widget _header(NymColors c) {
-    // `.modal-header`: 22px, uppercase, --primary, ls1.5, with a hairline
-    // bottom border + 14px padding-bottom under the title. The close ✕ is the
-    // separate absolute chip (build) — not an inline Row child here.
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.only(bottom: 14),
@@ -458,8 +403,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   List<Widget> _amountSection(NymColors c) {
-    // `.zap-amounts` is a 3-col grid, collapsing to 2 cols under 768px
-    // (styles-themes-responsive.css @media).
+    // 3 columns, 2 under 768px.
     final cols = MediaQuery.of(context).size.width < 768 ? 2 : 3;
     return [
       _formLabel(c, tr('Select Amount')),
@@ -489,16 +433,13 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         ],
       ),
       const SizedBox(height: 20),
-      // `Comment <span class="nm-h-2">(optional)</span>` — "(optional)" is
-      // lowercase w400 ls0 (not uppercased with the rest of the label).
+      // "(optional)" stays lowercase w400, unlike the rest of the label.
       _formLabel(c, tr('Comment'), optional: true),
       const SizedBox(height: 8),
       _input(c, _commentController, tr('Add a comment to your zap')),
     ];
   }
 
-  /// `.form-label` — 11px UPPERCASE ls1.2 w600 text-dim, with an optional
-  /// trailing `.nm-h-2` "(optional)" span (lowercase, w400, ls0).
   Widget _formLabel(NymColors c, String text, {bool optional = false}) {
     return Text.rich(
       TextSpan(
@@ -541,14 +482,11 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           color: selected
               ? c.lightning.withValues(alpha: 0.12)
               : Colors.white.withValues(alpha: 0.04),
-          // `.zap-amount-btn` resting border = `--glass-border`; selected →
-          // lightning/0.5.
           border: Border.all(
             color:
                 selected ? c.lightning.withValues(alpha: 0.5) : c.glassBorder,
           ),
           borderRadius: NymRadius.rsm,
-          // `.zap-amount-btn.selected` → soft lightning glow.
           boxShadow: selected
               ? [
                   BoxShadow(
@@ -561,7 +499,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // `.zap-amount-btn .sats` — 18px bold lightning.
             Text(
               label,
               style: TextStyle(
@@ -570,7 +507,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            // bare "sats" text node inherits `.zap-amount-btn` (14px, --text).
             Text(tr('sats'), style: TextStyle(color: c.text, fontSize: 14)),
           ],
         ),
@@ -608,13 +544,11 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     return [
       Container(
         alignment: Alignment.center,
-        // `.zap-invoice-qr` — margin 20px 0.
         margin: const EdgeInsets.symmetric(vertical: 20),
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: Colors.white,
-            // `.zap-invoice-qr` — 2px lightning/0.3 border.
             border:
                 Border.all(color: c.lightning.withValues(alpha: 0.3), width: 2),
             borderRadius: NymRadius.rsm,
@@ -628,7 +562,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       ),
       Container(
         padding: const EdgeInsets.all(15),
-        // `.zap-invoice` — margin 20px 0.
         margin: const EdgeInsets.symmetric(vertical: 20),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.03),
@@ -637,12 +570,9 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         ),
         child: Text(
           pr,
-          // `.zap-invoice` inherits --font-sans (no mono rule); 12px text-dim.
           style: TextStyle(color: c.textDim, fontSize: 12),
         ),
       ),
-      // `.zap-invoice-actions` — Copy / Open Wallet `.icon-btn`s, intrinsic
-      // width, centered, gap 10 (not stretched).
       Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -651,8 +581,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
           _iconBtn(c, tr('Open Wallet'), _openWallet),
         ],
       ),
-      // WebLN is not applicable on native — mirrors the PWA hiding the WebLN
-      // path when `window.webln` is absent.
+      // WebLN doesn't apply on native.
     ];
   }
 
@@ -676,12 +605,11 @@ class _ZapModalState extends ConsumerState<ZapModal> {
         ],
       ),
     );
-    // `@keyframes zapSuccess`: scale 1 → 1.05 → 1 over 0.5s.
+    // Scale 1 -> 1.05 -> 1 over 0.5s.
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 500),
       builder: (_, t, child) {
-        // Triangle 0→1→0 in t, peaking at 0.05 extra scale halfway through.
         final pop = 1 + 0.05 * (1 - (2 * t - 1).abs());
         return Transform.scale(scale: pop, child: child);
       },
@@ -724,9 +652,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   Widget _actions(NymColors c) {
-    // On the invoice screen the PWA reveals a primary "I've paid" button beside
-    // Cancel (index.html `#zapPaidBtn`, zaps.js `displayZapInvoice`). Both keep
-    // intrinsic widths centered with a 10px gap (`.modal-actions`).
     if (_phase == _Phase.invoice) {
       return Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -745,9 +670,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     );
   }
 
-  /// `.icon-btn` — bordered uppercase ghost pill (bg white/0.05, glass border,
-  /// radius 8, color `--text`, 12px w500 ls0.8, padding 7/14). Used for
-  /// Cancel / Copy Invoice / Open Wallet.
   Widget _iconBtn(NymColors c, String label, VoidCallback? onTap) {
     return InkWell(
       onTap: onTap,
@@ -755,10 +677,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          // `body.light-mode .icon-btn { background: rgba(0,0,0,0.03);
-          // color: var(--primary) }` (styles-themes-responsive.css:595-599);
-          // dark base white@0.05 + `--text`. `subtleFill` is exactly
-          // black@.03 light / white@.05 dark (nym_colors.dart:112).
           color: c.subtleFill,
           border: Border.all(color: c.glassBorder),
           borderRadius: NymRadius.rxs,
@@ -776,9 +694,6 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     );
   }
 
-  /// `.send-btn` — translucent primary outline pill (bg primary/0.1, border
-  /// primary/0.3, text `--primary`, radius 12, h42, padding 22/10, 12px w600
-  /// ls1.5; disabled opacity 0.35). The PWA's "I've paid" call-to-action.
   Widget _sendBtn(NymColors c, String label, VoidCallback? onTap) {
     return Opacity(
       opacity: onTap == null ? 0.35 : 1,

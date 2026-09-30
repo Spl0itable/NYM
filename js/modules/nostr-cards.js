@@ -1,6 +1,4 @@
-// nostr-cards.js - NIP-19 reference chips: decode a pasted nevent/note/naddr/
-// npub/nprofile (or a bare 64-hex event id) and unfurl it into a display card
-// under the message, the way a pasted URL unfurls into a link preview.
+// nostr-cards.js - NIP-19 reference chips unfurled into display cards, like link previews.
 
 (function () {
 
@@ -10,8 +8,7 @@
         NOSTR_REF_MISS_TTL_MS: 10 * 60 * 1000,
         NOSTR_REF_CACHE_MAX: 200,
 
-        // Decodes a reference token, or null when it is not a NIP-19 entity
-        // this app renders a card for.
+        // Decodes a reference token, or null when it is not a NIP-19 entity this app renders a card for.
         _decodeNostrRef(token) {
             const raw = String(token || '').trim().replace(/^nostr:/i, '');
             if (!raw) return null;
@@ -53,8 +50,7 @@
             }
         },
 
-        // The clipboard form for a message: an nevent, falling back to the raw
-        // id when nostr-tools isn't loaded or the encode fails.
+        // nevent for the clipboard, falling back to the raw id when nostr-tools is missing or encoding fails.
         neventForMessage(id, pubkey, relays) {
             if (!id || !/^[0-9a-f]{64}$/i.test(id)) return '';
             const NT = window.NostrTools;
@@ -71,7 +67,6 @@
             return id.toLowerCase();
         },
 
-        // Relay hints good enough for someone else to fetch a channel message.
         _nostrRefRelayHints() {
             const out = [];
             const list = Array.isArray(this.relayList) ? this.relayList : [];
@@ -133,9 +128,7 @@
             return data || null;
         },
 
-        // Resolves a reference to its card payload: local stores first, then a
-        // one-shot relay REQ. Hits and misses are cached; concurrent callers
-        // for the same reference share one lookup.
+        // Local stores first, then a one-shot relay REQ; results are cached and concurrent lookups shared.
         resolveNostrRef(token) {
             const ref = this._decodeNostrRef(token);
             if (!ref) return Promise.resolve(null);
@@ -165,7 +158,6 @@
             return p;
         },
 
-        // A card built from what this client already holds — no network.
         _localNostrRefCard(ref) {
             if (!ref) return null;
             if (ref.type === 'profile') {
@@ -192,9 +184,7 @@
             };
         },
 
-        // The storage key of the conversation holding `id`, or '' when this
-        // client has no copy. Channels key `#<name>`, PMs `pm-<pubkey>`,
-        // groups `group-<id>`.
+        // Channels key `#<name>`, PMs `pm-<pubkey>`, groups `group-<id>`; '' when this client has no copy.
         _conversationHolding(id) {
             if (!id) return '';
             for (const store of [this.messages, this.pmMessages]) {
@@ -291,9 +281,7 @@
             };
         },
 
-        // One REQ across a few relays for a single event, resolving with the
-        // newest match or null on timeout. EOSE only ends the wait once
-        // something has arrived: the first relay to answer often lacks it.
+        // EOSE only ends the wait once something has arrived: the first relay to answer often lacks it.
         _fetchNostrEventOnce(filter, timeoutMs) {
             return new Promise(resolve => {
                 if (!this.connected || typeof this.sendRequestToFewRelays !== 'function') {
@@ -383,9 +371,7 @@
             const esc = (s) => this.escapeHtml(s || '');
             const avatarSrc = (data.pubkey && typeof this.getAvatarUrl === 'function')
                 ? this.getAvatarUrl(data.pubkey) : '';
-            // Carries `data-avatar-pubkey` so a picture that lands after the
-            // card was painted rides the global _flushAvatarUpdates sweep, the
-            // way every other avatar in the app does.
+            // `data-avatar-pubkey` lets a late-arriving picture ride the global _flushAvatarUpdates sweep.
             const avatarHtml = avatarSrc
                 ? `<img src="${esc(avatarSrc)}" class="nostr-card-avatar" alt="" decoding="async" loading="lazy" data-avatar-pubkey="${esc(this._safePubkey(data.pubkey))}" data-error-action="errorHideElement">`
                 : '';
@@ -396,11 +382,7 @@
                     ? `<span class="nostr-card-nip05">${esc(data.nip05)}</span>` : '';
                 const aboutHtml = data.about
                     ? `<div class="nostr-card-body">${this.formatMessage(data.about)}</div>` : '';
-                // A shared npub is a person, so the card offers what tapping
-                // that person anywhere else in the app offers: their menu. The
-                // HEAD carries it, not the whole card: the body below is real
-                // content, and a tap target around all of it would compete
-                // with every link in it.
+                // Only the head opens the profile menu; the body holds real content and links.
                 const profileAttr = data.pubkey
                     ? ' data-action="openNostrProfileCard" role="button" tabindex="0"' : '';
                 return `<div class="nostr-card nostr-card-profile" data-nostr-pubkey="${esc(data.pubkey)}">
@@ -415,18 +397,12 @@
                 : '';
             const channelHtml = data.channel
                 ? `<span class="nostr-card-channel">${esc(data.channel)}</span>` : '';
-            // The referenced event's body renders as a message body — media,
-            // code, mentions, emoji — not an escaped excerpt. A referenced
-            // event is very often exactly the media it carries, which a
-            // character-count truncation could never show. `_attachCardBody`
-            // then adds the same height-based Read more clamp and the link
-            // previews once this is in the DOM.
+            // Render the body as a message body, not an escaped excerpt; the event is often just media.
             const body = (data.content || '').trim();
             const bodyHtml = body
                 ? `<div class="nostr-card-body">${this.formatMessage(body)}</div>`
                 : '<div class="nostr-card-body nostr-card-empty">No text content</div>';
-            // The HEAD is the jump affordance, not the whole card — see the
-            // profile branch above.
+            // The head is the jump affordance, not the whole card.
             const jumpAttr = this._findStoredMessage(data.id)
                 ? ' data-action="jumpToNostrRef" role="button" tabindex="0"' : '';
             return `<div class="nostr-card" data-nostr-event-id="${esc(data.id)}">
@@ -435,7 +411,6 @@
             </div>`;
         },
 
-        // Unfurls every distinct reference chip in a rendered message.
         // Idempotent, and paints straight from the cache when warm.
         _attachNostrCards(messageEl) {
             if (!messageEl || messageEl.dataset.nostrCardsAttached === '1') return;
@@ -474,8 +449,7 @@
                 }
             };
 
-            // Same deferral as link previews: a 50-message window must not fire
-            // a REQ per reference for rows the user may never scroll to.
+            // Deferred like link previews so a 50-message window doesn't fire a REQ per offscreen reference.
             if (typeof IntersectionObserver !== 'function') { run(); return; }
             if (!this._nostrCardObserver) {
                 this._nostrCardObserver = new IntersectionObserver((entries) => {
@@ -491,8 +465,6 @@
             this._nostrCardObserver.observe(messageEl);
         },
 
-        // Chip click: a profile reference opens that user's card, an event
-        // reference scrolls to the message when this client holds it.
         openNostrRef(token, e) {
             const ref = this._decodeNostrRef(token);
             if (!ref) return;
@@ -508,18 +480,11 @@
             this.jumpToNostrRef(ref.id);
         },
 
-        // The referenced event is very often in ANOTHER conversation — that is
-        // rather the point of pasting a reference — so a miss in the open view
-        // is not the answer. Switch to whichever conversation holds it, then
-        // scroll, the way a tapped blockquote jumps to its quoted source.
-        // Opens the context menu for the person a profile card points at — the
-        // same menu a tapped nym or avatar opens.
+        // Referenced events often live in another conversation, so switch to it before scrolling.
         openNostrProfileCard(pubkey, e) {
             if (!pubkey || typeof this.showContextMenu !== 'function') return;
             const raw = this.resolveDisplayNym(pubkey, '');
-            // Both sources can already carry `#xxxx` (getNymFromPubkey always
-            // does), so strip before re-adding or the menu title reads
-            // `name#abcd#abcd`.
+            // Both sources may already carry `#xxxx`, so strip before re-adding.
             const nym = typeof this.stripPubkeySuffix === 'function'
                 ? this.stripPubkeySuffix(raw) : raw;
             const suffix = typeof this.getPubkeySuffix === 'function'
@@ -539,8 +504,7 @@
                 return;
             }
             if (!this._switchToConversation(key)) return;
-            // Switching re-renders the conversation; the row exists only once
-            // that paint lands, so retry across a few frames.
+            // The row exists only once the switched conversation repaints, so retry across a few frames.
             this._scrollWhenRendered(id);
         },
 
@@ -556,8 +520,7 @@
             return true;
         },
 
-        // Opens the conversation a storage key names. Returns false when the
-        // key's shape isn't one we can route to.
+        // Returns false when the key's shape isn't one we can route to.
         _switchToConversation(key) {
             if (key.startsWith('pm-')) {
                 const pubkey = key.slice(3);
@@ -588,11 +551,7 @@
             });
         },
 
-        // The passes a card body needs once it is in the DOM, the same ones a
-        // message body gets: the height-based Read more clamp, link previews,
-        // media fallbacks, and the others'-images blur. Reference chips inside
-        // it are deliberately NOT unfurled — a card inside a card, and again
-        // inside that one, is not a thread of context.
+        // Reference chips inside a card are deliberately not unfurled.
         _attachCardBody(cardEl, data) {
             const bodyEl = cardEl.querySelector('.nostr-card-body');
             if (!bodyEl || bodyEl.classList.contains('nostr-card-empty')) return;
@@ -624,7 +583,6 @@
             }
         },
 
-        // Copies an event reference, confirming in place on the button.
         copyNostrEventRef(text, btnEl) {
             if (!text) return;
             const done = (ok) => {

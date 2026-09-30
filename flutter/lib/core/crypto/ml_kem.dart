@@ -1,20 +1,4 @@
-// ML-KEM-768 (FIPS 203), pure Dart.
-//
-// Hand-ported to match @noble/post-quantum's ml_kem768 byte-for-byte — that
-// implementation is the reference the PWA ships, and the two must interoperate
-// or Nymchat clients cannot read each other's messages. test/pq_vectors_test.dart
-// gates every step of this file against test/pq-vectors.json, the fixture the
-// PWA emits.
-//
-// Only the lattice math lives here. Keccak comes from pointycastle (already a
-// dependency): its SHA-3/SHAKE are backed by 32-bit register pairs rather than
-// native 64-bit ints, so they behave identically on the VM and on the web,
-// where Dart's `int` is a 53-bit double and bitwise ops truncate to 32 bits.
-// Every intermediate below is likewise kept under 2^31 for that reason.
-//
-// Parameters (FIPS 203 Table 2, ML-KEM-768):
-//   n=256  q=3329  k=3  eta1=eta2=2  du=10  dv=4
-//   ek 1184B   dk 2400B   ct 1088B   shared secret 32B
+// ML-KEM-768 (FIPS 203) matching @noble/post-quantum byte for byte; intermediates stay under 2^31 for web.
 import 'dart:typed_data';
 
 import 'package:pointycastle/digests/sha3.dart';
@@ -28,12 +12,10 @@ const int _eta2 = 2;
 const int _du = 10;
 const int _dv = 4;
 
-/// 128^-1 mod q — the inverse-NTT normalization factor (FIPS 203 Alg. 10 line 14).
-/// Kyber uses 128, not 256, because its transform stops one layer early.
+/// 128^-1 mod q, the inverse-NTT scale (FIPS 203 Alg. 10).
 const int _f = 3303;
 const int _rootOfUnity = 17;
 
-/// Public byte lengths.
 const int mlKemPublicKeyLength = 1184;
 const int mlKemSecretKeyLength = 2400;
 const int mlKemCipherTextLength = 1088;
@@ -54,7 +36,6 @@ final Uint16List _zetas = _computeZetas();
 Uint16List _computeZetas() {
   final out = Uint16List(_n);
   for (var i = 0; i < _n; i++) {
-    // BitRev7 of the low 7 bits.
     var b = 0;
     for (var bit = 0; bit < 7; bit++) {
       if ((i >> bit) & 1 == 1) b |= 1 << (6 - bit);
@@ -68,13 +49,11 @@ Uint16List _computeZetas() {
   return out;
 }
 
-// --- Keccak bindings (FIPS 203 §4.1) ----------------------------------------
-
 Uint8List _sha3_256(Uint8List data) => SHA3Digest(256).process(data);
 
 Uint8List _sha3_512(Uint8List data) => SHA3Digest(512).process(data);
 
-/// SHAKE256(data, outLen) — the spec's J, and the basis of PRF_eta.
+/// SHAKE256(data, outLen): the spec's J, and the basis of PRF_eta.
 Uint8List _shake256(Uint8List data, int outLen) {
   final d = SHAKEDigest(256);
   d.update(data, 0, data.length);
@@ -91,10 +70,7 @@ Uint8List _prf(int outLen, Uint8List key, int nonce) {
   return _shake256(buf, outLen);
 }
 
-/// A continuous SHAKE128 reader over `seed || x || y`, squeezed in 168-byte
-/// blocks. `doOutput` (unlike `doFinalRange`) does not reset the sponge, so
-/// successive calls continue the same stream, which is what SampleNTT's
-/// rejection loop needs.
+/// Continuous SHAKE128 stream over `seed || x || y`; `doOutput` does not reset the sponge.
 class _Xof128 {
   _Xof128(Uint8List seed, int x, int y) {
     final buf = Uint8List(seed.length + 2)
@@ -106,8 +82,7 @@ class _Xof128 {
 
   final SHAKEDigest _d = SHAKEDigest(128);
 
-  /// SHAKE128 rate in bytes; divisible by 3, as SampleNTT's 12-bit unpacking
-  /// requires.
+  /// SHAKE128 rate in bytes; divisible by 3 as SampleNTT's 12-bit unpacking requires.
   static const int blockLength = 168;
 
   Uint8List nextBlock() {
@@ -116,8 +91,6 @@ class _Xof128 {
     return out;
   }
 }
-
-// --- Polynomial arithmetic --------------------------------------------------
 
 Uint16List _newPoly() => Uint16List(_n);
 
@@ -135,14 +108,14 @@ void _polySub(Uint16List a, Uint16List b) {
   }
 }
 
-/// Forward NTT, in place (FIPS 203 Algorithm 9).
+/// Forward NTT in place (FIPS 203 Alg. 9).
 Uint16List _nttEncode(Uint16List r) {
   var i = 1;
   for (var len = 128; len >= 2; len >>= 1) {
     for (var start = 0; start < _n; start += 2 * len) {
       final zeta = _zetas[i++];
       for (var j = start; j < start + len; j++) {
-        // zeta * r[..] < 3329^2 ≈ 1.1e7 — safe on web.
+        // zeta * r[..] < 3329^2, safe on web.
         final t = (zeta * r[j + len]) % _q;
         final u = r[j];
         var lo = u - t;
@@ -157,7 +130,7 @@ Uint16List _nttEncode(Uint16List r) {
   return r;
 }
 
-/// Inverse NTT, in place (FIPS 203 Algorithm 10), including the 128^-1 scaling.
+/// Inverse NTT in place (FIPS 203 Alg. 10), including the 128^-1 scaling.
 Uint16List _nttDecode(Uint16List r) {
   var i = 127;
   for (var len = 2; len <= 128; len <<= 1) {
@@ -180,8 +153,7 @@ Uint16List _nttDecode(Uint16List r) {
   return r;
 }
 
-/// One degree-one product modulo (X^2 - zeta) (FIPS 203 Algorithm 12).
-/// a1*b1 is reduced before multiplying by zeta so no intermediate exceeds 2^31.
+/// Degree-one product mod (X^2 - zeta) (Alg. 12); a1*b1 is reduced first to stay under 2^31.
 void _baseCaseMultiply(Uint16List out, int idx, int a0, int a1, int b0, int b1, int zeta) {
   final c0 = _mod(_mod(a1 * b1) * zeta + a0 * b0);
   final c1 = _mod(a0 * b1 + a1 * b0);
@@ -189,7 +161,7 @@ void _baseCaseMultiply(Uint16List out, int idx, int a0, int a1, int b0, int b1, 
   out[idx + 1] = c1;
 }
 
-/// Multiplies two NTT representations into a fresh polynomial (Algorithm 11).
+/// Multiplies two NTT representations (Alg. 11).
 Uint16List _multiplyNtts(Uint16List f, Uint16List g) {
   final out = _newPoly();
   for (var i = 0; i < _n ~/ 2; i++) {
@@ -200,18 +172,13 @@ Uint16List _multiplyNtts(Uint16List f, Uint16List g) {
   return out;
 }
 
-// --- Packing / compression (FIPS 203 §4.2.1) --------------------------------
-
-/// Compress_d: round(2^d * x / q). Written as exact integer division of the
-/// doubled expression so it matches the reference's `((x<<d) + q/2) / q`
-/// float form bit-for-bit (the numerator is always odd, so no tie can occur).
+/// Compress_d as exact integer division, matching the reference's rounding bit for bit.
 int _compress(int x, int d) => (2 * (x << d) + _q) ~/ (2 * _q);
 
 /// Decompress_d: round(q * y / 2^d).
 int _decompress(int y, int d) => (y * _q + (1 << (d - 1))) >> d;
 
-/// Packs one d-bit little-endian word per coefficient.
-/// d == 12 is ByteEncode12 (lossless); d < 12 also applies Compress_d.
+/// Packs d-bit LE words; d == 12 is lossless ByteEncode12, d < 12 also compresses.
 Uint8List _polyEncode(Uint16List poly, int d) {
   final mask = (1 << d) - 1;
   final out = Uint8List(d * (_n ~/ 8));
@@ -229,9 +196,7 @@ Uint8List _polyEncode(Uint16List poly, int d) {
   return out;
 }
 
-/// Inverse of [_polyEncode]. For d == 12 this is ByteDecode12, whose single
-/// conditional subtraction (not a full reduction) is what makes the
-/// encapsulation-time modulus check meaningful.
+/// Inverse of [_polyEncode]; ByteDecode12's single conditional subtraction makes the modulus check meaningful.
 Uint16List _polyDecode(Uint8List bytes, int d) {
   final mask = (1 << d) - 1;
   final out = _newPoly();
@@ -264,9 +229,7 @@ Uint8List _vecEncode(List<Uint16List> v, int d) {
   return out;
 }
 
-// --- Sampling ---------------------------------------------------------------
-
-/// SampleNTT (Algorithm 7): rejection-sample uniform coefficients from SHAKE128.
+/// SampleNTT (Alg. 7): rejection-sample uniform coefficients from SHAKE128.
 Uint16List _sampleNtt(_Xof128 xof) {
   final r = _newPoly();
   var j = 0;
@@ -282,9 +245,7 @@ Uint16List _sampleNtt(_Xof128 xof) {
   return r;
 }
 
-/// SamplePolyCBD_eta (Algorithm 8). The reference consumes the PRF stream
-/// LSB-first within each byte, in byte order; doing that directly here is
-/// equivalent to its 32-bit-word view and avoids any endianness dependence.
+/// SamplePolyCBD_eta (Alg. 8), consuming the PRF stream LSB-first within each byte.
 Uint16List _sampleCbd(Uint8List buf, int eta) {
   final r = _newPoly();
   var p = 0, bb = 0, len = 0, t0 = 0;
@@ -311,8 +272,6 @@ Uint16List _sampleCbd(Uint8List buf, int eta) {
 Uint16List _sampleCbdPrf(Uint8List seed, int nonce, int eta) =>
     _sampleCbd(_prf((eta * _n) ~/ 4, seed, nonce), eta);
 
-// --- K-PKE ------------------------------------------------------------------
-
 class _KPkeKeys {
   _KPkeKeys(this.publicKey, this.secretKey);
   final Uint8List publicKey;
@@ -320,8 +279,7 @@ class _KPkeKeys {
 }
 
 _KPkeKeys _kpkeKeygen(Uint8List seed32) {
-  // FIPS 203 Algorithm 13 appends the parameter-set byte k before G(d || k),
-  // so the same seed yields unrelated keys under a different parameter set.
+  // Alg. 13 appends k before G(d || k), binding keys to the parameter set.
   final seedDst = Uint8List(33)
     ..setRange(0, 32, seed32)
     ..[32] = _k;
@@ -337,9 +295,7 @@ _KPkeKeys _kpkeKeygen(Uint8List seed32) {
   for (var i = 0; i < _k; i++) {
     final e = _nttEncode(_sampleCbdPrf(sigma, _k + i, _eta1));
     for (var j = 0; j < _k; j++) {
-      // A[i][j] is read as the (j, i) XOF coordinate — the in-place transpose
-      // the reference uses in keygen. Encryption uses (i, j); the asymmetry is
-      // load-bearing.
+      // Keygen reads A[i][j] as XOF (j, i) while encryption uses (i, j); the transpose is required.
       _polyAdd(e, _multiplyNtts(_sampleNtt(_Xof128(rho, j, i)), sHat[j]));
     }
     tHat.add(e);
@@ -399,16 +355,12 @@ Uint8List _kpkeDecrypt(Uint8List cipherText, Uint8List secretKey) {
   return _polyEncode(v, 1);
 }
 
-// --- ML-KEM -----------------------------------------------------------------
-
-/// An ML-KEM-768 keypair.
 class MlKemKeyPair {
   const MlKemKeyPair(this.publicKey, this.secretKey);
   final Uint8List publicKey;
   final Uint8List secretKey;
 }
 
-/// The output of [MlKem768.encapsulate].
 class MlKemEncapsulation {
   const MlKemEncapsulation(this.cipherText, this.sharedSecret);
   final Uint8List cipherText;
@@ -424,13 +376,10 @@ bool _constantTimeEquals(Uint8List a, Uint8List b) {
   return diff == 0;
 }
 
-/// ML-KEM-768 (FIPS 203).
 class MlKem768 {
   const MlKem768();
 
-  /// Derives a keypair from a 64-byte seed (d || z). Deterministic: the same
-  /// seed always yields the same keypair, which is what lets every device
-  /// sharing an nsec derive one identity key.
+  /// Derives a keypair from a 64-byte seed (d || z); deterministic, so devices sharing an nsec agree.
   MlKemKeyPair keygen(Uint8List seed) {
     if (seed.length != mlKemSeedLength) {
       throw ArgumentError('seed must be $mlKemSeedLength bytes, got ${seed.length}');
@@ -446,8 +395,7 @@ class MlKem768 {
     return MlKemKeyPair(kpke.publicKey, secretKey);
   }
 
-  /// FIPS 203 §7.2 modulus check: ek must survive ByteEncode12(ByteDecode12(ek))
-  /// unchanged, which rejects coefficients that are not canonical mod q.
+  /// FIPS 203 §7.2 modulus check: ek must round-trip ByteEncode12(ByteDecode12(ek)).
   void _validateModulus(Uint8List publicKey) {
     final eke = Uint8List.sublistView(publicKey, 0, _kPkeSecretKeyLength);
     if (!_constantTimeEquals(_vecEncode(_vecDecode(eke, 12), 12), eke)) {
@@ -455,9 +403,7 @@ class MlKem768 {
     }
   }
 
-  /// Encapsulates to [publicKey]. [msg] is the 32-byte message; pass it only to
-  /// reproduce a known vector — production callers must let it default to fresh
-  /// CSPRNG bytes, since ML-KEM's security depends on that randomness.
+  /// [msg] is supplied only for known vectors; production must use fresh CSPRNG bytes.
   MlKemEncapsulation encapsulate(Uint8List publicKey, Uint8List msg) {
     if (publicKey.length != mlKemPublicKeyLength) {
       throw ArgumentError('publicKey must be $mlKemPublicKeyLength bytes');
@@ -476,12 +422,7 @@ class MlKem768 {
         cipherText, Uint8List.fromList(Uint8List.sublistView(kr, 0, 32)));
   }
 
-  /// Decapsulates [cipherText] with [secretKey].
-  ///
-  /// By design this never fails on a bad ciphertext: the Fujisaki-Okamoto
-  /// transform's implicit rejection returns a pseudorandom secret derived from
-  /// the secret key's z instead, so a wrong key surfaces downstream as an
-  /// authentication failure rather than a distinguishable error here.
+  /// Never fails on a bad ciphertext: implicit rejection returns a pseudorandom secret instead.
   Uint8List decapsulate(Uint8List cipherText, Uint8List secretKey) {
     if (secretKey.length != mlKemSecretKeyLength) {
       throw ArgumentError('secretKey must be $mlKemSecretKeyLength bytes');
@@ -514,5 +455,4 @@ class MlKem768 {
   }
 }
 
-/// The ML-KEM-768 instance used throughout the app.
 const MlKem768 mlKem768 = MlKem768();

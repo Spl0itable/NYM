@@ -1,10 +1,8 @@
-// The relay neighbourhood of a geohash, server-side.
-
 const GEO_RELAYS_URL = 'https://raw.githubusercontent.com/permissionlesstech/georelays/refs/heads/main/nostr_relays.csv';
 const GEO_RELAYS_VETTED_URL = 'https://raw.githubusercontent.com/permissionlesstech/bitchat/refs/heads/main/relays/online_relays_gps.csv';
 const GEO_DIRECTORY_TTL_MS = 6 * 3600 * 1000;
 const GEOHASH_ALPHABET = '0123456789bcdefghjkmnpqrstuvwxyz';
-// bitchat's count, per ranking, before the union.
+// bitchat's per-ranking count, before the union.
 const CLOSEST_COUNT = 5;
 
 let directoryCache = null;
@@ -29,7 +27,7 @@ function parseGeoRelaysCsv(csv) {
   return out;
 }
 
-// Centre of the geohash cell, same as the client's decodeGeohash.
+// Cell center, matching the client's decodeGeohash.
 function decodeGeohash(geohash) {
   if (typeof geohash !== 'string' || !geohash) return null;
   const gh = geohash.toLowerCase();
@@ -63,9 +61,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// The URLs a geohash message may legitimately arrive on. Empty means "cannot
-// tell" — an undecodable geohash or a directory we do not have — and every
-// caller treats that as admit-everything rather than reject-everything.
+// Empty means "cannot tell", which callers treat as admit-everything.
 function closestRelayUrls(geohash, directory, count = CLOSEST_COUNT) {
   const coords = decodeGeohash(geohash);
   if (!coords || !directory) return [];
@@ -76,8 +72,7 @@ function closestRelayUrls(geohash, directory, count = CLOSEST_COUNT) {
     distance: haversineKm(coords.lat, coords.lng, relay.lat, relay.lng),
   }));
 
-  // Android: distance only. Array.prototype.sort is stable, so ties keep
-  // directory order — what Kotlin's stable sortedBy over the same CSV gives.
+  // Android: distance only; stable sort keeps directory order for ties, matching Kotlin's sortedBy.
   const upstream = rank(directory.relays);
   upstream.sort((a, b) => (a.distance - b.distance) || (a.index - b.index));
 
@@ -93,17 +88,12 @@ function closestRelayUrls(geohash, directory, count = CLOSEST_COUNT) {
     seen.add(r.url);
     out.push(r);
   }
-  // Closest-first across the union, the same last step the client takes. Order
-  // does not change a membership test, but keeping the two byte-identical is
-  // what lets one test pin them together.
+  // Closest-first across the union, byte-identical to the client so one test pins both.
   out.sort((a, b) => a.distance - b.distance);
   return out.map((r) => r.url);
 }
 
-// Fetched once per worker isolate and held for six hours. A failure leaves the
-// previous directory in place rather than clearing it: an empty directory means
-// "admit everything", so dropping it on a transient fetch error would quietly
-// turn the gate off.
+// Cached per isolate for six hours; a failed fetch keeps the old directory, since empty means admit-everything.
 async function loadGeoDirectory() {
   const now = Date.now();
   if (directoryCache && now - directoryCache.at < GEO_DIRECTORY_TTL_MS) {
@@ -123,7 +113,7 @@ async function loadGeoDirectory() {
       if (!relays.length) return directoryCache ? directoryCache.dir : null;
       let vetted = [];
       if (vet && vet.ok) {
-        try { vetted = parseGeoRelaysCsv(await vet.text()); } catch (_) { /* additive only */ }
+        try { vetted = parseGeoRelaysCsv(await vet.text()); } catch (_) {}
       }
       directoryCache = { at: now, dir: { relays, vetted } };
       return directoryCache.dir;

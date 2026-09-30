@@ -35,13 +35,7 @@ import 'protocol/mesh_profile.dart';
 import 'protocol/noise_payload.dart';
 import 'transport/mesh_transport.dart';
 
-/// The heart of the Bluetooth mesh: it owns the radio [MeshTransport], the Noise
-/// sessions, peer tracking, deduplication, TTL relay and fragmentation, and
-/// turns raw frames into the high-level [MeshPublicMessage] / [MeshPrivateMessage]
-/// / [MeshReceipt] events the app consumes — and the reverse for sending.
-///
-/// Everything on the wire is byte-compatible with bitchat, so a Nymchat device
-/// running this service participates in the same mesh as real bitchat devices.
+/// Bluetooth mesh core: radio, Noise sessions, peers, dedup, relay and fragmentation, byte-compatible with bitchat.
 class MeshService {
   MeshService({
     required this.identity,
@@ -58,12 +52,10 @@ class MeshService {
   final MeshTransport _transport;
   final String Function() _nicknameProvider;
 
-  /// Supplies our Nostr-identity link ([NostrLink]) to advertise, or null when
-  /// we have no local Nostr key to sign it with.
+  /// Supplies our [NostrLink] to advertise, or null without a local Nostr key.
   final Uint8List? Function()? _nostrLinkProvider;
 
-  /// Builds our own [MeshProfile] (avatar/banner bytes) to answer an inbound
-  /// profile request. Null when we have no shareable profile.
+  /// Builds our [MeshProfile] for an inbound request; null when there is none to share.
   final Future<MeshProfile?> Function(MeshProfileRequest request)?
       _profileProvider;
 
@@ -76,12 +68,10 @@ class MeshService {
 
   final Map<String, MeshPeer> _peers = {};
 
-  /// Plaintext we owe a peer, queued until the Noise session establishes.
+  /// Plaintext owed to a peer, queued until the Noise session establishes.
   final Map<String, List<Uint8List>> _pendingPlaintext = {};
 
-  /// Encrypted transport payloads that arrived before our session with the peer
-  /// finished establishing (the initiator sends data the instant it completes
-  /// the handshake, which can outrace our own completion). Drained on establish.
+  /// Encrypted frames that beat our own handshake completion; drained on establish.
   final Map<String, List<Uint8List>> _pendingEncrypted = {};
 
   final _publicMessages = StreamController<MeshPublicMessage>.broadcast();
@@ -93,8 +83,7 @@ class MeshService {
   final _reactions = StreamController<MeshReactionEvent>.broadcast();
   final _peersChanged = StreamController<List<MeshPeer>>.broadcast();
 
-  /// Peers we've already asked for a profile (avoids re-requesting on every
-  /// announce beacon).
+  /// Peers already asked for a profile, so announce beacons don't re-request.
   final Set<String> _profileRequested = {};
 
   StreamSubscription<MeshInboundFrame>? _inboundSub;
@@ -104,81 +93,52 @@ class MeshService {
   Timer? _syncTimer;
   bool _running = false;
 
-  /// Recent public history, reconciled with neighbors so a peer that was out
-  /// of range — or in another mesh partition — still receives it. See
-  /// [GossipSync]; the radio work lives here, the policy lives there.
+  /// Recent public history reconciled with neighbors; policy lives in [GossipSync].
   final GossipSync gossip = GossipSync();
 
-  /// Mail this device is carrying for other people — sealed messages bound for
-  /// peers who were not in range when they were sent. See [CourierStore]; the
-  /// radio work lives here, the policy (who may deposit, who may carry, how far
-  /// a copy spreads) lives there.
+  /// Mail carried for other peers; policy lives in [CourierStore].
   final CourierStore couriers = CourierStore();
 
-  /// Whether Ghost Mode is on. Wired by the bridge. A ghosted device never
-  /// deposits mail with a courier: the deposit would outlive the epoch and
-  /// associate a throwaway identity with a message someone else still holds.
+  /// Ghost Mode state; a ghosted device never deposits courier mail.
   bool Function()? isGhostMode;
 
-  /// Whether a conversation with this peer is pinned to the mesh because it
-  /// began under a ghost identity. Wired by the bridge; such a conversation
-  /// never leaves the radio, courier included.
+  /// Whether a conversation is mesh-pinned from a ghost identity; such mail never leaves the radio.
   bool Function(String recipientStaticKeyHex)? isGhostPinned;
 
-  /// This device's one-time prekeys. Publishing them lets a sender seal courier
-  /// mail to a key we DELETE after use, so an envelope captured in transit
-  /// cannot be opened later even if our identity key is compromised.
+  /// One-time prekeys, deleted after use so captured courier mail stays unreadable.
   final LocalPrekeys prekeys = LocalPrekeys();
 
-  /// Peers' published bundles, newest per device. Fed by gossip, so a bundle
-  /// reaches us while its owner is away — which is exactly when their mail is
-  /// being couriered.
+  /// Peers' newest published bundles, fed by gossip.
   final Map<String, PrekeyBundle> _peerPrekeys = <String, PrekeyBundle>{};
 
-  /// Called when our prekey batch changes and should be re-published. Wired by
-  /// the bridge so the private halves are persisted; null in tests.
+  /// Called when the prekey batch changes, so the bridge persists it; null in tests.
   void Function(String encoded)? onPrekeysChanged;
 
   bool Function()? prekeysReady;
 
-  /// Completed [ping] probes, for the mesh diagnostics panel.
   Stream<MeshPingResult> get onPingResult => _pingResults.stream;
   final _pingResults = StreamController<MeshPingResult>.broadcast();
 
-  /// Outstanding probes: nonce hex → (peerID, sent-at, origin TTL).
+  /// Outstanding probes: nonce hex to (peerID, sent-at, origin TTL).
   final Map<String, (String, int, int)> _pendingPings = {};
 
-  /// Signed Nostr events a mesh-only peer has asked us to publish, and events
-  /// a gateway has rebroadcast to us. Wired by the bridge, which owns the relay
-  /// connection; null when this device is not acting as a gateway.
+  /// Carried Nostr events to publish or display, wired by the bridge; null when not a gateway.
   void Function(NostrCarrierPacket carrier, String fromPeerID)? onNostrCarrier;
 
-  /// Called whenever the gossip store changes enough to be worth persisting, so
-  /// the carried history survives a restart. Wired by the bridge; null in
-  /// tests.
+  /// Called when the gossip store is worth persisting; null in tests.
   void Function(String archive)? onGossipArchiveChanged;
 
-  /// Set when the store has changed since the last archive write. Encoding the
-  /// whole store per packet would be absurd in a busy room, so the tick does
-  /// it.
+  /// Dirty flag so the tick, not every packet, encodes the archive.
   bool _gossipDirty = false;
 
-  // ---- Public API -----------------------------------------------------------
+  // Public API
 
   String get myPeerID => identity.peerID;
 
-  /// The live peer record for [peerID] (announced nickname + keys), or null if
-  /// not currently known. Lets the bridge resolve inbound identity from the same
-  /// object the peers list uses, independent of stream ordering.
+  /// Live peer record for [peerID], or null if unknown.
   MeshPeer? peerById(String peerID) => _peers[peerID];
 
-  /// The peer's 32-byte Noise static public key as 64-hex, or null if unknown.
-  /// Resolved from the announced peer record first, then the established Noise
-  /// session's remote static key — so an ENCRYPTED private message (which can
-  /// only arrive over a completed handshake) can ALWAYS resolve the sender's
-  /// stable, real identity, even if that peer's announce hasn't been processed
-  /// yet. This is the canonical mesh identity (bitchat keys peers by it, and the
-  /// 16-hex peerID is just its SHA-256 fingerprint prefix).
+  /// Peer's Noise static key hex from its announce or established session; the canonical mesh identity.
   String? noiseKeyHexForPeer(String peerID) {
     final fromPeer = _peers[peerID]?.noisePublicKey;
     if (fromPeer != null && fromPeer.length == 32) return _hex(fromPeer);
@@ -193,7 +153,6 @@ class MeshService {
   int get connectedLinkCount => _transport.connectedLinkCount;
   MeshTransportAvailability get availability => _transport.availability;
 
-  /// Opens the OS settings page so the user can grant Bluetooth permission.
   Future<void> openSystemSettings() => _transport.openSystemSettings();
 
   List<MeshPeer> get peers => _peers.values.toList(growable: false);
@@ -206,7 +165,6 @@ class MeshService {
   Stream<MeshTypingEvent> get onTyping => _typing.stream;
   Stream<MeshReactionEvent> get onReaction => _reactions.stream;
 
-  /// Broadcasts an emoji reaction to a public/channel message [targetId].
   Future<void> sendChannelReaction(
       String targetId, String emoji, bool remove) async {
     await _sendPacket(await _buildPacket(
@@ -215,8 +173,7 @@ class MeshService {
     ));
   }
 
-  /// Sends an encrypted emoji reaction to a 1:1 message [targetId] over the
-  /// Noise session with [peerID] (handshaking first if needed).
+  /// Sends an encrypted reaction to 1:1 message [targetId], handshaking first if needed.
   Future<void> sendPrivateReaction(
       String peerID, String targetId, String emoji, bool remove) async {
     final plaintext = NoisePayload(
@@ -267,9 +224,7 @@ class MeshService {
     return _ReactionData(targetId, emoji, remove, nick);
   }
 
-  /// Broadcasts (or directs) an ephemeral typing indicator. [channel] tags a
-  /// channel indicator (null = nearby); [toPeerID] directs it to a single peer
-  /// for a 1:1 DM. Nymchat-only — bitchat ignores the unknown packet type.
+  /// Sends an ephemeral typing indicator: [channel] for a channel (null = nearby), [toPeerID] for a DM.
   Future<void> sendTyping({
     String? channel,
     String? toPeerID,
@@ -324,11 +279,10 @@ class MeshService {
     ));
   }
 
-  /// Powers up the radio and joins the mesh. Returns radio availability.
+  /// Powers up the radio and joins the mesh; returns availability.
   Future<MeshTransportAvailability> start() async {
     if (_running) return _transport.availability;
-    // Subscribe before powering up the radio so no early frame or link event
-    // (e.g. a peer that links during startup) is missed.
+    // Subscribe before powering up so no early frame or link event is missed.
     _running = true;
     debugLog?.call('service.start(): peerID=$myPeerID');
     _inboundSub = _transport.inbound.listen(_onFrame);
@@ -338,14 +292,11 @@ class MeshService {
     _scheduleAnnounce();
     _cleanupTimer = Timer.periodic(
         const Duration(seconds: 30), (_) => _cleanupStalePeers());
-    // Reconcile public history with whoever is in range. The per-peer schedule
-    // lives in [GossipSync]; this tick just gives it a heartbeat.
+    // Gossip heartbeat; the per-peer schedule lives in [GossipSync].
     _syncTimer = Timer.periodic(
         const Duration(seconds: 5), (_) => unawaited(_gossipTick()));
     await _broadcastAnnounce();
-    // Publish our one-time prekeys so senders can seal courier mail to a key we
-    // delete after use rather than to our long-lived identity key. Broadcast
-    // and gossiped, because it has to reach people while we are AWAY.
+    // Publish our prekeys; broadcast and gossiped so they reach senders while we're away.
     unawaited(publishPrekeyBundle());
     debugLog?.call('sent initial identity announce — awaiting peers');
     return availability;
@@ -374,22 +325,14 @@ class MeshService {
     _profileRequested.clear();
   }
 
-  /// Broadcasts a public [content] message (optionally to a [channel]).
-  /// Returns the generated message id.
+  /// Broadcasts a public [content] message, optionally to a [channel]; returns its id.
   Future<String> sendPublicMessage(
     String content, {
     String? channel,
     List<String>? mentions,
   }) async {
     final timestampMs = DateTime.now().millisecondsSinceEpoch;
-    // A NAMED channel (anything other than the default #mesh public chat) is
-    // Nymchat-only: bitchat has no named channels over the BLE mesh (its
-    // hashtag / geohash channels ride Nostr, not Bluetooth). Carry the channel
-    // name in a BitchatMessage TLV under the Nymchat-only nymChannelMessage
-    // type so it routes to the RIGHT channel on other Nymchat devices instead
-    // of collapsing into #mesh — and so bitchat (which ignores 0x54) never
-    // mis-renders it. The body is AES-sealed when we hold a password key for
-    // the channel, otherwise sent as plaintext in the TLV.
+    // Named channels are Nymchat-only (0x54 TLV), AES-sealed when we hold the channel key.
     if (channel != null) {
       final encrypted = _channelCrypto.hasKey(channel);
       final msg = BitchatMessage(
@@ -415,21 +358,12 @@ class MeshService {
       return msg.id;
     }
 
-    // Public mesh chat (bitchat's "Mesh", channel == null): the wire payload is
-    // the RAW UTF-8
-    // content — NOT a TLV. bitchat-iOS/android both read a broadcast MESSAGE's
-    // payload straight back as a UTF-8 string (`String(data: payload)`), derive
-    // the message id from the signed fields, and take the sender nickname from
-    // the peer's announce. Sending a BitchatMessage TLV here makes bitchat show
-    // (and dedup) binary garbage — the reason #mesh never interoperated. The id
-    // is content-derived so a relayed copy dedups against the original.
+    // #mesh payload is raw UTF-8 as bitchat expects, not a TLV; the id is content-derived.
     final payload = Uint8List.fromList(utf8.encode(content));
     final packet = await _buildPacket(
       type: MeshMessageType.message,
       payload: payload,
-      // Broadcast recipient (0xFF×8) matches bitchat-android; bitchat-iOS sends
-      // a null recipient but accepts either, since each packet's signature is
-      // verified against the recipientID it actually carries.
+      // 0xFF×8 recipient as bitchat-android; iOS sends null but accepts either.
       recipientID: kBroadcastRecipient,
       sign: true,
     );
@@ -442,20 +376,15 @@ class MeshService {
     );
   }
 
-  /// Joins/creates an encrypted mesh group [channel] with a shared [password]
-  /// (bitchat password channels). Members who set the same password can read it.
+  /// Joins an encrypted group [channel] with a shared [password] (bitchat password channels).
   Future<void> setChannelPassword(String channel, String password) =>
       _channelCrypto.setChannelPassword(channel, password);
 
-  /// True when we hold the key for an encrypted [channel].
   bool hasChannelKey(String channel) => _channelCrypto.hasKey(channel);
 
   void leaveChannel(String channel) => _channelCrypto.removeChannel(channel);
 
-  /// Sends a private [content] message to [peerID], performing a Noise handshake
-  /// first if needed (the message is queued and flushed on establishment).
-  /// Long content is chunked into 255-byte private-message packets. Returns the
-  /// message id of the first chunk.
+  /// Sends a private message, handshaking first if needed; chunks at 255 bytes and returns the first id.
   Future<String> sendPrivateMessage(String peerID, String content) async {
     final chunks = _chunkContent(content);
     String? firstId;
@@ -472,8 +401,7 @@ class MeshService {
     return firstId ?? '';
   }
 
-  /// Sends a file/media [bytes] to [peerID] as an encrypted DM attachment
-  /// (Noise-sealed, fragmented). Reuses the same session as text DMs.
+  /// Sends [bytes] to [peerID] as a Noise-sealed, fragmented DM attachment.
   Future<void> sendFileToPeer(
     String peerID,
     String fileName,
@@ -489,8 +417,7 @@ class MeshService {
     await _sendOrQueueEncrypted(peerID, plaintext);
   }
 
-  /// Broadcasts a file/media [bytes] to the mesh (Nearby or a public group),
-  /// as a fragmented FILE_TRANSFER packet.
+  /// Broadcasts [bytes] as a fragmented FILE_TRANSFER packet.
   Future<void> sendFileBroadcast(
     String fileName,
     String mimeType,
@@ -503,15 +430,12 @@ class MeshService {
     await _sendPacket(await _buildPacket(
       type: MeshMessageType.fileTransfer,
       payload: encoded,
-      // bitchat drops a raw (non-Noise) file transfer without a valid sender
-      // signature (BLEFileTransferHandler), so a broadcast image must be signed
-      // exactly like a public message or it never appears on the far side.
+      // bitchat drops unsigned raw file transfers, so broadcasts must be signed.
       recipientID: kBroadcastRecipient,
       sign: true,
     ));
   }
 
-  /// Sends a read receipt for [messageId] to [peerID].
   Future<void> sendReadReceipt(String peerID, String messageId) async {
     await _sendOrQueueEncrypted(
         peerID, NoisePayload.readReceipt(messageId).encode());
@@ -529,10 +453,9 @@ class MeshService {
     _peersChanged.close();
   }
 
-  // ---- Inbound handling -----------------------------------------------------
+  // Inbound handling
 
-  /// Debug sink for the receive pipeline (wired to the in-app mesh diagnostics
-  /// panel by the bridge). Null in production/tests unless set.
+  /// Receive-pipeline debug sink for the mesh diagnostics panel; null unless set.
   static void Function(String line)? debugLog;
 
   Future<void> _onFrame(MeshInboundFrame frame) async {
@@ -547,7 +470,6 @@ class MeshService {
   Future<void> _processPacket(
       BitchatPacket packet, String linkId, int rssi) async {
     final senderPeerID = _hex(packet.senderID);
-    // Ignore our own echoes.
     if (senderPeerID == identity.peerID) return;
 
     debugLog?.call('pkt type=0x${packet.type.toRadixString(16)} '
@@ -555,7 +477,6 @@ class MeshService {
         'rcpt=${packet.recipientID == null ? 'null' : (packet.isBroadcast ? 'bcast' : 'direct')} '
         '${packet.payload.length}B');
 
-    // Deduplicate the controlled flood.
     final key = SeenPackets.keyFor(
       type: packet.type,
       senderID: packet.senderID,
@@ -572,13 +493,10 @@ class MeshService {
         packet.isBroadcast ||
         _hex(packet.recipientID!) == identity.peerID;
 
-    // Remember public traffic so this device can serve it to a peer who was
-    // out of range when it went by. Directed packets are refused inside — the
-    // store is public history, never anybody's private mail.
+    // Store syncable public traffic for peers who missed it; directed packets are refused inside.
     if (packet.isBroadcast && GossipSync.isSyncable(packet.type)) {
       gossip.onPublicPacketSeen(packet);
-      // Persisting on the tick rather than here: encoding the whole store is
-      // far too expensive to do per packet in a busy room.
+      // Persist on the tick; encoding per packet is too expensive.
       _gossipDirty = true;
     }
 
@@ -605,9 +523,7 @@ class MeshService {
         await _handleFragment(packet, linkId, rssi);
         break;
       case MeshMessageType.fileTransfer:
-        // bitchat sends a PM image as a DIRECTED (rcpt=our peerID) plaintext
-        // fileTransfer, and a #mesh image as a broadcast one. Route by the
-        // recipient so a directed file lands in the sender's DM, not #mesh.
+        // bitchat sends PM images directed and #mesh images broadcast; route by recipient.
         _handleFile(
           packet,
           senderPeerID,
@@ -629,8 +545,7 @@ class MeshService {
         _handleReactionBroadcast(packet, senderPeerID);
         break;
       case MeshMessageType.courierEnvelope:
-        // Directed mail. Try to open it: if it is ours, deliver it; if not,
-        // carry it for whoever it belongs to.
+        // Directed mail: deliver it if ours, else carry it.
         if (forUs) await _handleCourierEnvelope(packet, senderPeerID);
         break;
       case MeshMessageType.ping:
@@ -643,14 +558,11 @@ class MeshService {
         _handlePrekeyBundle(packet, senderPeerID);
         break;
       case MeshMessageType.nostrCarrier:
-        // Directed = "publish this for me"; broadcast = a gateway relaying what
-        // it heard. Either way the carried event is verified by the handler,
-        // never trusted because a gateway passed it on.
+        // The handler verifies carried events; a gateway never vouches.
         _handleNostrCarrier(packet, senderPeerID);
         break;
       case MeshMessageType.requestSync:
-        // Local-only by design: a sync request is answered by the peer that
-        // heard it and never relayed, which is why it carries TTL 0 below.
+        // Sync requests are answered locally and never relayed (TTL 0).
         if (forUs || packet.isBroadcast) {
           await _handleRequestSync(packet, senderPeerID);
         }
@@ -659,8 +571,7 @@ class MeshService {
         break;
     }
 
-    // Relay the controlled flood (never relay packets addressed solely to us,
-    // and never relay a directed packet we just consumed as recipient).
+    // Never relay packets addressed solely to us or directed packets we consumed.
     final directedToUs = packet.recipientID != null &&
         !packet.isBroadcast &&
         _hex(packet.recipientID!) == identity.peerID;
@@ -680,7 +591,7 @@ class MeshService {
     // The peerID must be the fingerprint of the announced Noise key…
     if (NoiseIdentity.matchesClaimedPeerID(
         senderPeerID, announcement.noisePublicKey)) {
-      // …and, when the announcement is signed, the signature must check out.
+      // …and a signed announcement's signature must verify.
       if (packet.signature != null) {
         final signable = packet.toBytesForSigning();
         verified = signable != null &&
@@ -700,8 +611,7 @@ class MeshService {
     peer.isVerified = verified;
     peer.rssi = rssi;
 
-    // Resolve a Nostr-identity link, if the peer advertised one and the schnorr
-    // signature binds it to the Noise key they just announced.
+    // Adopt a Nostr link only when its schnorr signature binds it to the announced Noise key.
     final link = announcement.nostrLink;
     if (link != null) {
       final linkedPubkey = NostrLink.verify(link, announcement.noisePublicKey);
@@ -713,16 +623,11 @@ class MeshService {
 
     peer.touch();
     _emitPeers();
-    // Meeting a peer is the moment mail can move: hand them anything we carry
-    // for them, and a share of anything still spreading. Best-effort and
-    // unawaited so a slow radio never stalls the announce path.
+    // Meeting a peer is when mail can move; unawaited so the announce path never stalls.
     unawaited(_courierEncounter(peer));
   }
 
-  /// bitchat public mesh message ([MeshMessageType.message]): the payload is the
-  /// raw UTF-8 content — no TLV. The sender nickname comes from the peer's
-  /// announce (the wire carries none), the timestamp from the packet header, and
-  /// the id is content-derived so it matches across our own send/relay copies.
+  /// bitchat public message: raw UTF-8, nickname from the announce, content-derived id.
   void _handlePublicMessage(BitchatPacket packet, String senderPeerID) {
     final content = utf8.decode(packet.payload, allowMalformed: true);
     if (content.isEmpty) return;
@@ -743,10 +648,7 @@ class MeshService {
     ));
   }
 
-  /// Nymchat NAMED-channel broadcast ([MeshMessageType.nymChannelMessage]): a
-  /// [BitchatMessage] TLV carrying the channel name and either plaintext content
-  /// or, for a password channel, AES-sealed content we can read only if we hold
-  /// the key (non-members drop it). Routes to the named channel — NOT #mesh.
+  /// Nymchat named-channel broadcast, possibly AES-sealed; routes to that channel, not #mesh.
   Future<void> _handleChannelMessage(
       BitchatPacket packet, String senderPeerID) async {
     final tlv = BitchatMessage.fromBinaryPayload(packet.payload);
@@ -778,8 +680,7 @@ class MeshService {
 
   Future<void> _handleHandshake(String senderPeerID, Uint8List payload) async {
     try {
-      // A fresh/in-progress handshake supersedes any prior session, so the
-      // once-per-session peer-state proof must be re-sent on the new session.
+      // A new handshake supersedes the session, so the peer-state proof must be re-sent.
       if (!_noise.isEstablished(senderPeerID)) {
         _peerStateSentTo.remove(senderPeerID);
       }
@@ -792,9 +693,7 @@ class MeshService {
         );
       }
       if (_noise.isEstablished(senderPeerID)) {
-        // Announce our capabilities inside the session BEFORE flushing queued
-        // media, so bitchat has authenticated us as private-media-capable by
-        // the time our encrypted attachments arrive.
+        // Send peer state before queued media so bitchat accepts our encrypted attachments.
         await _sendAuthenticatedPeerState(senderPeerID);
         await _flushPending(senderPeerID);
         await _drainPendingEncrypted(senderPeerID);
@@ -804,14 +703,10 @@ class MeshService {
     }
   }
 
-  /// Peers we've already sent the current session's [AuthenticatedPeerStatePacket]
-  /// to. Cleared per peer when a new handshake begins so each session re-proves.
+  /// Peers sent this session's peer-state proof; cleared when a new handshake begins.
   final Set<String> _peerStateSentTo = {};
 
-  /// Sends the session-authenticated capability proof (Noise `0x21`) so the far
-  /// side treats us as private-media-capable — bitchat then stops warning that
-  /// our client can't receive encrypted private media and accepts our
-  /// Noise-sealed attachments. Sent at most once per established session.
+  /// Sends the Noise 0x21 capability proof once per session so bitchat accepts our private media.
   Future<void> _sendAuthenticatedPeerState(String peerID) async {
     if (!_peerStateSentTo.add(peerID)) return;
     final encoded = AuthenticatedPeerStatePacket(
@@ -827,8 +722,7 @@ class MeshService {
 
   Future<void> _handleEncrypted(String senderPeerID, Uint8List payload) async {
     if (!_noise.isEstablished(senderPeerID)) {
-      // Session still handshaking — hold the frame and process it on establish
-      // rather than dropping it (fixes the initiator-sends-immediately race).
+      // Session still handshaking: queue the frame for establish.
       _pendingEncrypted.putIfAbsent(senderPeerID, () => []).add(payload);
       return;
     }
@@ -841,12 +735,7 @@ class MeshService {
     await _dispatchNoisePayload(senderPeerID, plaintext);
   }
 
-  /// Handles a decrypted transport payload from [senderPeerID].
-  ///
-  /// Shared by the live Noise session path and the courier path: an envelope
-  /// opened out of a courier's hands yields the SAME plaintext a session would
-  /// have, so a message that arrived by mail behaves exactly like one that
-  /// arrived over the air.
+  /// Handles a decrypted payload, shared by live sessions and opened courier envelopes.
   Future<void> _dispatchNoisePayload(
       String senderPeerID, Uint8List plaintext) async {
     final noisePayload = NoisePayload.decode(plaintext);
@@ -900,10 +789,7 @@ class MeshService {
           if (peer != null) {
             peer.supportsPrivateMedia = state.supportsPrivateMedia;
           }
-          // Echo our own proof back once (bitchat echoes at most once when the
-          // remote state arrives), so the session is authenticated in both
-          // directions even if the peer's state beat our handshake-completion
-          // send.
+          // Echo our proof once so the session is authenticated both ways.
           await _sendAuthenticatedPeerState(senderPeerID);
         }
         break;
@@ -968,7 +854,7 @@ class MeshService {
     }
   }
 
-  /// Asks [peerID] for their rich profile (avatar/banner) over the mesh, once.
+  /// Asks [peerID] once for their rich profile over the mesh.
   Future<void> requestProfile(String peerID,
       {bool avatar = true, bool banner = false}) async {
     if (!_running || _profileRequested.contains(peerID)) return;
@@ -1001,10 +887,7 @@ class MeshService {
     final peer = _peers[senderPeerID];
     if (peer != null) {
       if (profile.nickname.isNotEmpty) peer.nickname = profile.nickname;
-      // NOTE: a profile response is NOT a signed identity link, so its claimed
-      // nostrPubkey is deliberately NOT adopted here — only a verified NostrLink
-      // (from the announcement) may set peer.nostrPubkey. This prevents a peer
-      // from claiming (and skinning messages as) another Nostr identity.
+      // A profile response is not a signed link, so its nostrPubkey is never adopted.
       peer.touch();
       _emitPeers();
     }
@@ -1012,14 +895,13 @@ class MeshService {
   }
 
   void _onLink(MeshLinkEvent event) {
-    // A new direct link is a good moment to (re)announce so the peer learns us
-    // immediately rather than waiting for the periodic beacon.
+    // Announce on a new link so the peer learns us immediately.
     if (event.change == MeshLinkChange.connected) {
       unawaited(_broadcastAnnounce());
     }
   }
 
-  // ---- Outbound helpers -----------------------------------------------------
+  // Outbound helpers
 
   Future<void> _sendOrQueueEncrypted(String peerID, Uint8List plaintext) async {
     if (_noise.isEstablished(peerID)) {
@@ -1033,7 +915,7 @@ class MeshService {
     }
     _pendingPlaintext.putIfAbsent(peerID, () => []).add(plaintext);
     if (!_noise.isHandshaking(peerID)) {
-      // New session ⇒ the peer-state proof must be re-sent once it establishes.
+      // New session: the peer-state proof must be re-sent once it establishes.
       _peerStateSentTo.remove(peerID);
       final msg1 = await _noise.initiateHandshake(peerID);
       await _sendDirected(
@@ -1044,7 +926,6 @@ class MeshService {
     }
   }
 
-  /// Re-processes encrypted frames that arrived before the session existed.
   Future<void> _drainPendingEncrypted(String peerID) async {
     final queued = _pendingEncrypted.remove(peerID);
     if (queued == null) return;
@@ -1068,26 +949,10 @@ class MeshService {
     }
   }
 
-  /// Capability bitfield advertised in the announce (bitchat `PeerCapabilities`,
-  /// little-endian, trailing zero bytes dropped). We set bit 8 = `privateMedia`
-  /// (encrypted direct-message media as Noise payload 0x20) — which we DO
-  /// support ([_handleEncrypted]'s fileTransfer case) — so bitchat stops
-  /// warning that our client can't receive encrypted private media and sends it
-  /// Noise-sealed instead of as a signed-but-plaintext directed file. 0x100
-  /// little-endian is [0x00, 0x01].
+  /// Announce capabilities: bit 8 `privateMedia`, little-endian [0x00, 0x01], as bitchat `PeerCapabilities`.
   static final Uint8List _capabilities = Uint8List.fromList([0x00, 0x01]);
 
-  /// Schedules the next identity announce on a JITTERED, load-adaptive gap
-  /// instead of a fixed period.
-  ///
-  /// Two reasons. A metronome is a fingerprint in its own right — a listener
-  /// can follow a device between places by beacon rhythm without decoding any
-  /// field — and while no peer is known the beacons buy nothing, so the gap
-  /// stretches to [MeshConstants.announceIntervalIdle].
-  ///
-  /// Both bounds stay far below bitchat's [MeshConstants.stalePeerTimeout], so
-  /// a peer never drops us for going quiet, and the announce contents are
-  /// unchanged — this is invisible to bitchat peers.
+  /// Jittered, load-adaptive announce gap against rhythm fingerprinting; stays under the stale timeout.
   void _scheduleAnnounce() {
     _announceTimer?.cancel();
     if (!_running) return;
@@ -1104,26 +969,7 @@ class MeshService {
     });
   }
 
-  /// Broadcasts our identity announcement.
-  ///
-  /// NOTE ON MESH ANONYMITY, before anyone reaches for peerID rotation:
-  /// everything below goes out UNENCRYPTED, on every cycle — the nickname, the
-  /// Noise static key (from which the peerID derives), the signing key, and
-  /// `nostrLink`, which is `nostrPubkey(32) ‖ signature(64)`, i.e. the user's
-  /// actual Nostr identity.
-  ///
-  /// So rotating the peerID on an epoch — bitchat's WHITEPAPER §9 design, and
-  /// the obvious response to a stable BLE identifier being physically
-  /// trackable — buys NOTHING on its own: a tracker follows the nostrLink or
-  /// the nickname instead. A cloaking mode has to suppress all three together
-  /// or none of them.
-  ///
-  /// That is exactly what Ghost Mode does (features/mesh/ghost_mode.dart): it
-  /// rotates the Noise static key, the signing key, the nickname and the
-  /// nostrLink TOGETHER, on an epoch. The nostrLink it advertises is real but
-  /// ephemeral, so peers can still reach the device while nothing resolves to
-  /// the user's npub. It stays opt-in because losing that link is a real cost,
-  /// not a free win.
+  /// Broadcasts our announce; nickname, keys and nostrLink go out in clear, so only Ghost Mode cloaks them together.
   Future<void> _broadcastAnnounce() async {
     if (!_running) return;
     final announcement = IdentityAnnouncement(
@@ -1143,16 +989,9 @@ class MeshService {
     await _sendPacket(packet);
   }
 
-  /// Builds a packet from us with the standard TTL, optionally Ed25519-signed.
-  // ---- Diagnostics: ping / pong ---------------------------------------------
+  // Diagnostics: ping / pong
 
-  /// Probes [peerID]: are you there, and how many links away?
-  ///
-  /// A peer list cannot tell you the difference between someone in the same
-  /// room and someone three relays away. The reply carries the TTL this packet
-  /// was LAUNCHED with, so the hop count falls out of comparing it against the
-  /// TTL that arrives ([MeshPingPayload.hopCount]). The nonce is unguessable,
-  /// so only a genuine answer to this probe can complete it.
+  /// Probes [peerID] for presence and hop count; the unguessable nonce binds the reply.
   Future<bool> ping(String peerID, {int ttl = MeshConstants.messageTtl}) async {
     final recipient = _peerIdBytes(peerID);
     if (recipient == null) return false;
@@ -1176,8 +1015,7 @@ class MeshService {
     }
   }
 
-  /// Answers a probe by echoing its nonce, with our own launch TTL so the far
-  /// end can measure the return path too.
+  /// Echoes the nonce with our launch TTL so the far end can measure the return path.
   Future<void> _handlePing(BitchatPacket packet, String senderPeerID) async {
     final probe = MeshPingPayload.decode(packet.payload);
     if (probe == null) return;
@@ -1196,8 +1034,7 @@ class MeshService {
     } catch (_) {}
   }
 
-  /// Completes a probe. An unknown nonce is silently dropped: it answers a
-  /// probe we never sent, which is either a stale reply or somebody guessing.
+  /// Completes a probe; unknown nonces are dropped.
   void _handlePong(BitchatPacket packet, String senderPeerID) {
     final reply = MeshPingPayload.decode(packet.payload);
     if (reply == null) return;
@@ -1217,15 +1054,9 @@ class MeshService {
     }
   }
 
-  // ---- Gateway mode: carrying Nostr events ---------------------------------
+  // Gateway mode
 
-  /// Asks [gatewayPeerID] to publish a signed Nostr event for us.
-  ///
-  /// The sender outbox waits for OUR internet to come back. This does not wait
-  /// for ours: one peer with a signal is enough for the whole room. The event
-  /// is signed by us before it leaves, so the gateway is a postbox — it cannot
-  /// alter or forge what it publishes, and the relays would reject it if it
-  /// tried.
+  /// Asks [gatewayPeerID] to publish our signed event; the gateway cannot alter it.
   Future<bool> carryToGateway({
     required String gatewayPeerID,
     required String geohash,
@@ -1252,8 +1083,7 @@ class MeshService {
     }
   }
 
-  /// Rebroadcasts a relay event to mesh-only peers, so they can READ a geohash
-  /// channel and not only write to it.
+  /// Rebroadcasts a relay event so mesh-only peers can read a geohash channel.
   Future<bool> broadcastFromGateway({
     required String geohash,
     required Map<String, dynamic> event,
@@ -1282,23 +1112,15 @@ class MeshService {
     if (carrier == null) return;
     debugLog?.call('nostr carrier ${carrier.direction.name} '
         'geo=${carrier.geohash} from $senderPeerID');
-    // The bridge verifies the signature before publishing or displaying. A
-    // gateway relays; it does not vouch.
+    // The bridge verifies the signature before publishing or displaying.
     onNostrCarrier?.call(carrier, senderPeerID);
   }
 
-  // ---- Prekey bundles -------------------------------------------------------
+  // Prekey bundles
 
-  /// Signs and broadcasts our current batch of one-time prekeys.
-  ///
-  /// Broadcast rather than directed, and gossip-synced, because the whole point
-  /// is that a bundle reaches senders while we are AWAY. Anyone holding our
-  /// announce-verified signing key can check it offline, so it can spread
-  /// through devices that have never spoken to us.
+  /// Signs and broadcasts our prekey batch, gossiped so it reaches senders while we're away.
   Future<bool> publishPrekeyBundle() async {
-    // Never while ghosted. Courier mail to or from a ghost is refused at both
-    // ends ([CourierStore.mayDeposit]), so the bundle could not deliver
-    // anything — it would only be one more thing the epoch broadcasts.
+    // Never while ghosted: courier mail to or from a ghost is refused anyway.
     if (isGhostMode?.call() ?? false) return false;
     if (!(prekeysReady?.call() ?? true)) return false;
     if (await prekeys.replenish()) {
@@ -1335,17 +1157,12 @@ class MeshService {
     }
   }
 
-  /// Files a peer's bundle after verifying it against the signing key their
-  /// announce bound to that Noise key.
-  ///
-  /// Verification is what makes gossip safe: without it, anyone could publish
-  /// prekeys "for" someone else and harvest mail sealed to keys they hold.
+  /// Files a peer's bundle only after verifying it against their announce-bound signing key.
   void _handlePrekeyBundle(BitchatPacket packet, String senderPeerID) {
     final bundle = PrekeyBundle.decode(packet.payload);
     if (bundle == null) return;
     final ownerHex = _hex(bundle.noiseStaticPublicKey);
-    // The signing key comes from the owner's own verified announce, NOT from
-    // the packet — a relayed bundle's carrier is not its author.
+    // The signing key comes from the owner's verified announce, never the packet.
     final ownerPeerID = _peerIdForNoiseKey(bundle.noiseStaticPublicKey);
     final owner = _peers[ownerPeerID];
     final signingKey = owner?.signingPublicKey;
@@ -1354,8 +1171,7 @@ class MeshService {
       return;
     }
     final existing = _peerPrekeys[ownerHex];
-    // A newer bundle replaces an older one; an older one is refused so a
-    // replayed bundle cannot resurrect keys its owner has already deleted.
+    // Refuse older bundles so replays can't resurrect deleted keys.
     if (existing != null && existing.generatedAtMs >= bundle.generatedAtMs) {
       return;
     }
@@ -1375,15 +1191,9 @@ class MeshService {
     }());
   }
 
-  // ---- Couriers -------------------------------------------------------------
+  // Couriers
 
-  /// The Noise transport payload a private message rides in, built without a
-  /// session — so a courier envelope can carry exactly what a live session
-  /// would have, and the receiver's dispatch cannot tell the difference.
-  ///
-  /// Null when the content does not fit one packet (the TLV length is a single
-  /// byte). Couriered mail is not chunked: a stranger carries one envelope, not
-  /// a reassembly job.
+  /// Session-less Noise payload for a private message; null when it exceeds one packet.
   static Uint8List? privateMessagePayload({
     required String messageId,
     required String content,
@@ -1394,18 +1204,7 @@ class MeshService {
     return NoisePayload(NoisePayloadType.privateMessage, body).encode();
   }
 
-  /// Seals [payload] to [recipientStaticKeyHex] and hands sealed copies to
-  /// nearby peers, who carry it and deliver it if they meet the recipient.
-  ///
-  /// The last-resort delivery path: the recipient is not in range and, with no
-  /// internet, the sender outbox cannot help either. Returns how many couriers
-  /// took a copy — zero when the deposit was refused, which the caller should
-  /// treat as "no worse off", never as an error.
-  ///
-  /// Refusal is the important half. [CourierStore.mayDeposit] blocks a
-  /// ghost-pinned conversation and a ghosted sender outright: handing an
-  /// envelope to a courier tells that courier a message exists and that we sent
-  /// it, and a ghost identity exists precisely so that no such link is made.
+  /// Seals and hands copies to nearby couriers; returns how many took it, 0 when refused (not an error).
   Future<int> depositWithCouriers({
     required String recipientStaticKeyHex,
     required Uint8List payload,
@@ -1424,12 +1223,7 @@ class MeshService {
     }
     final recipientPeerID = _peerIdForNoiseKey(key!);
     final now = DateTime.now().millisecondsSinceEpoch;
-    // Prefer a one-time PREKEY over the long-lived static key when the
-    // recipient has published one. Both seal the same way; the difference is
-    // that they DELETE a prekey after use, so an envelope captured in transit
-    // cannot be opened later even if their identity key is compromised. Falling
-    // back to the static key keeps mail flowing to a peer whose bundle we have
-    // never seen — worse secrecy, but delivered.
+    // Prefer a one-time prekey over the static key when the recipient published one.
     final bundle = _peerPrekeys[recipientStaticKeyHex.toLowerCase()];
     final prekey = bundle == null ? null : prekeys.chooseFrom(bundle.prekeys);
     Uint8List sealed;
@@ -1447,9 +1241,7 @@ class MeshService {
       return 0;
     }
     final envelope = CourierEnvelope(
-      // The TAG is always derived from the identity key, prekey or not: it is
-      // how the recipient recognizes their own mail, and they cannot look up an
-      // envelope by a prekey they may already have retired.
+      // The tag always derives from the identity key so the recipient recognizes their mail.
       recipientTag: await CourierEnvelope.recipientTagFor(
         noiseStaticKey: key,
         epochDay: CourierEnvelope.epochDayFor(now),
@@ -1483,15 +1275,14 @@ class MeshService {
         ));
         handed++;
       } catch (_) {
-        // A courier that will not take it is not a failure; try the next.
+        // A courier that refuses is not a failure; try the next.
       }
     }
     debugLog?.call('courier deposit: $handed carrier(s)');
     return handed;
   }
 
-  /// An envelope arrived. Either it is ours — open and deliver it — or it is
-  /// somebody else's mail we have been asked to carry.
+  /// Opens and delivers an envelope if ours, else carries it.
   Future<void> _handleCourierEnvelope(
       BitchatPacket packet, String senderPeerID) async {
     final envelope = CourierEnvelope.decode(packet.payload);
@@ -1499,10 +1290,7 @@ class MeshService {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (envelope.isExpiredAt(now)) return;
 
-    // Is it for us? Only the recipient can open it, so this is also the test.
-    // A v2 envelope names the prekey it was sealed to; if that key was never
-    // ours (or its grace window has lapsed) the open fails and we simply carry
-    // it, exactly as for any other stranger's mail.
+    // Only the recipient can open it, so opening is the test.
     final pkId = envelope.prekeyId;
     final pkPriv = pkId == null ? null : prekeys.privateKeyFor(pkId);
     final pkPub = pkId == null ? null : prekeys.publicKeyFor(pkId);
@@ -1517,22 +1305,18 @@ class MeshService {
         prologue: pkId == null ? null : courierPrekeyPrologue(pkId),
       );
       if (pkId != null && prekeys.markConsumed(pkId)) {
-        // First open of this key: republish the shrunken batch. Redeliveries
-        // of the same envelope arrive later (spray-and-wait), so the private
-        // half survives a grace window before it is really deleted.
+        // First open: republish the shrunken batch; the private half survives a grace window.
         onPrekeysChanged?.call(prekeys.encode());
         unawaited(publishPrekeyBundle());
       }
-      // The sender's static key is AUTHENTICATED by the seal's `ss` DH, so the
-      // peerID derived from it is who really wrote this — not whoever handed
-      // it over.
+      // The `ss` DH authenticates the sender's static key, so this is the real author.
       final originPeerID = _peerIdForNoiseKey(senderStatic);
       debugLog?.call('courier envelope OPENED from $originPeerID '
           '(carried by $senderPeerID)');
       await _dispatchNoisePayload(originPeerID, plaintext);
       return;
     } catch (_) {
-      // Not ours. That is the ordinary case — carry it.
+      // Not ours: carry it.
     }
 
     final key = _courierKey(envelope.ciphertext);
@@ -1543,8 +1327,7 @@ class MeshService {
     }
   }
 
-  /// A peer just became known: hand them any mail we carry for them, and give
-  /// them a share of anything that still has budget to spread.
+  /// Delivers mail carried for [peer] and sprays a share of anything still spreading.
   Future<void> _courierEncounter(MeshPeer peer) async {
     if (couriers.length == 0) return;
     final staticKey = peer.noisePublicKey;
@@ -1568,18 +1351,14 @@ class MeshService {
             recipientID: recipient,
             ttl: 0,
           ));
-          // Delivered: stop carrying it. If the peer could not open it after
-          // all, the sender's own retries still cover the message.
+          // Delivered: stop carrying it; the sender's retries cover a failed open.
           couriers.drop(entry.key);
           debugLog?.call('courier delivered to ${peer.peerID}');
         } catch (_) {}
       }
     }
 
-    // Spray: hand a share of the remaining budget on, so the message keeps
-    // spreading toward a recipient neither of us has met. Only to a verified
-    // peer — an unverified one is a radio claiming a name, and telling it we
-    // carry mail is telling a stranger.
+    // Spray only to verified peers.
     if (!CourierStore.mayCourier(
       isVerified: peer.isVerified,
       isSelf: peer.peerID == identity.peerID,
@@ -1606,14 +1385,11 @@ class MeshService {
     }
   }
 
-  /// The peerID a Noise static key derives to — the first 16 hex chars of its
-  /// SHA-256 fingerprint, the same rule [NoiseIdentity] uses. Lets a key that
-  /// arrived inside a payload be matched against the peer table.
+  /// PeerID of a Noise static key: first 16 hex chars of its SHA-256.
   static String _peerIdForNoiseKey(Uint8List staticPublicKey) =>
       _hex(NoiseCrypto.sha256(staticPublicKey)).substring(0, 16);
 
-  /// A stable key for an envelope, so the same mail arriving from two couriers
-  /// is carried once.
+  /// Stable key so the same mail from two couriers is carried once.
   String _courierKey(Uint8List ciphertext) =>
       _hex(NoiseCrypto.sha256(ciphertext)).substring(0, 32);
 
@@ -1628,35 +1404,22 @@ class MeshService {
     return out;
   }
 
-  // ---- Gossip sync ----------------------------------------------------------
+  // Gossip sync
 
-  /// Files one of OUR public sends into the gossip store.
-  ///
-  /// The inbound path never sees our own packets (it drops self-echoes), so
-  /// without this a device would carry everyone's history except its own — and
-  /// the message a user actually sent in a dead spot would be the one thing it
-  /// could not serve to the peer who arrived a minute later.
+  /// Files our own public sends, which the inbound path drops as self-echoes.
   void _rememberOwnPublic(BitchatPacket packet) {
     if (!packet.isBroadcast || !GossipSync.isSyncable(packet.type)) return;
     gossip.onPublicPacketSeen(packet);
     _gossipDirty = true;
   }
 
-  /// Asks each connected peer, on its own schedule, to reconcile public
-  /// history: "here is a compact set of what I hold — send me the rest".
-  ///
-  /// Directed rather than broadcast, and TTL 0 so it is never relayed: a sync
-  /// request is a question for the peer that can hear it, and flooding it would
-  /// ask the whole mesh a question only its neighbors can answer.
+  /// Asks each peer on its own schedule to reconcile; directed with TTL 0, never relayed.
   Future<void> _gossipTick() async {
     if (!_running) return;
     if (gossip.prune()) _gossipDirty = true;
-    // Mail we are carrying expires too — someone else's message is not worth
-    // holding forever.
+    // Carried mail expires too.
     couriers.prune();
-    // Delete consumed prekeys whose grace window has lapsed. This is where
-    // forward secrecy actually happens: until the private half is really gone,
-    // [LocalPrekeys.privateKeyFor] only declines to use it.
+    // Delete consumed prekeys past their grace window; this is where forward secrecy happens.
     if (prekeys.prune()) onPrekeysChanged?.call(prekeys.encode());
     if (_gossipDirty) {
       _gossipDirty = false;
@@ -1682,12 +1445,7 @@ class MeshService {
     }
   }
 
-  /// Answers a peer's reconciliation request with whatever their filter says
-  /// they are missing.
-  ///
-  /// Responses go out DIRECTED and with TTL 0 — the requester asked, nobody
-  /// else did, and a replayed public message re-entering the flood would go
-  /// round the mesh a second time.
+  /// Answers a sync request directed with TTL 0 so replies never re-flood.
   Future<void> _handleRequestSync(
       BitchatPacket packet, String senderPeerID) async {
     if (!gossip.shouldAnswer(senderPeerID)) {
@@ -1706,8 +1464,7 @@ class MeshService {
     final recipient = _peerIdBytes(senderPeerID);
     for (final pkt in missing) {
       try {
-        // Re-addressed to the requester: the original was a broadcast, and
-        // re-broadcasting it would hand it to peers who already have it.
+        // Re-addressed to the requester instead of re-broadcast.
         await _sendPacket(BitchatPacket(
           version: pkt.version,
           type: pkt.type,
@@ -1719,19 +1476,13 @@ class MeshService {
           ttl: 0,
         ));
       } catch (_) {
-        // One packet failing must not abandon the rest of the round.
+        // One packet failing must not abandon the round.
       }
       await Future<void>.delayed(MeshConstants.interFragmentDelay);
     }
   }
 
-  /// Sends a packet addressed to [peerID], or sends nothing at all when that
-  /// is not a real peerID.
-  ///
-  /// Deliberately never falls back to an unaddressed packet. Everything routed
-  /// through here is meant for ONE peer — a handshake, Noise ciphertext, a
-  /// profile — and [BitchatPacket] treats a null recipient as "not directed",
-  /// so a malformed id would quietly hand that traffic to the whole mesh.
+  /// Sends to [peerID], or nothing when it is invalid; never falls back to an unaddressed packet.
   Future<void> _sendDirected({
     required String peerID,
     required int type,
@@ -1751,7 +1502,7 @@ class MeshService {
     ));
   }
 
-  /// The 8 raw bytes of a 16-hex peerID, or null when it is not one.
+  /// The 8 raw bytes of a 16-hex peerID, or null.
   static Uint8List? _peerIdBytes(String peerID) {
     if (peerID.length != 16) return null;
     final out = Uint8List(8);
@@ -1795,15 +1546,7 @@ class MeshService {
     return packet;
   }
 
-  /// Serializes, fragments if needed, and broadcasts a packet.
-  ///
-  /// Multi-fragment payloads (images/files) are PACED. iOS Core Bluetooth
-  /// accepts `writeValue(.withoutResponse)` / `updateValue` (notify) into a
-  /// bounded queue and SILENTLY DROPS once it's full — firing a hundred
-  /// fragments back-to-back in a tight loop overruns it, so a file left with
-  /// holes never reassembles on the far side (the "images don't send over mesh"
-  /// symptom). A short gap between fragments keeps the queue drained. Single
-  /// fragments (text, reactions, typing, receipts) are unaffected.
+  /// Serializes, fragments and broadcasts; paces fragments so iOS's bounded send queue doesn't drop them.
   Future<void> _sendPacket(BitchatPacket packet) async {
     final fragments = PacketFragmenter.fragment(packet);
     final paced = fragments.length > 1;
@@ -1831,7 +1574,7 @@ class MeshService {
     });
   }
 
-  // ---- Peer bookkeeping -----------------------------------------------------
+  // Peer bookkeeping
 
   void _touchPeer(String peerID, {String? nickname}) {
     final peer = _peers.putIfAbsent(peerID, () => MeshPeer(peerID: peerID));
@@ -1866,11 +1609,10 @@ class MeshService {
     if (!_peersChanged.isClosed) _peersChanged.add(peers);
   }
 
-  // ---- Utilities ------------------------------------------------------------
+  // Utilities
 
   List<String> _chunkContent(String content) {
-    // Chunk on UTF-8 byte boundaries to respect the 255-byte PM content cap
-    // while never splitting a multi-byte rune.
+    // Chunk on UTF-8 boundaries for the 255-byte cap without splitting a rune.
     final chunks = <String>[];
     final buffer = StringBuffer();
     var byteCount = 0;
@@ -1890,13 +1632,11 @@ class MeshService {
     return chunks;
   }
 
-  // Static so the static derivations above ([_peerIdForNoiseKey]) can use it;
-  // unqualified calls from instance methods resolve to it unchanged.
+  // Static so static derivations like [_peerIdForNoiseKey] can use it.
   static String _hex(Uint8List bytes) =>
       bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
-/// Decoded mesh reaction payload (target message id + emoji + add/remove).
 class _ReactionData {
   _ReactionData(this.targetId, this.emoji, this.isRemove, this.reactorNick);
   final String targetId;
