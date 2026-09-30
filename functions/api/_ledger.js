@@ -1,6 +1,7 @@
 // Durable Object NymLedger: serializes the money-critical mutations.
 
 import {
+  hasD1,
   creditsGet,
   creditsPut,
   creditsPutStatement,
@@ -50,6 +51,9 @@ const GATE_PACE_LIMITED_MS = 4500;
 const GATE_LIMIT_MEMORY_MS = 90000;
 const GATE_MAX_WAIT_MS = 12000;
 const GATE_TOKEN_MAX_WAIT_MS = 30000;
+const KEY_USAGE_IDLE_MS = 24 * 3600 * 1000;
+const KEY_USAGE_PRUNE_EVERY_MS = 10 * 60 * 1000;
+const KEY_USAGE_PRUNE_BATCH = 500;
 
 export class NymLedger {
   constructor(state, env) {
@@ -111,6 +115,13 @@ export class NymLedger {
       "CREATE TABLE IF NOT EXISTS credit_gifts (id TEXT PRIMARY KEY, owner TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, " +
       "created INTEGER NOT NULL, exp INTEGER NOT NULL, state TEXT NOT NULL, redeemer TEXT, done_at INTEGER);"
     );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS api_key_usage (id TEXT PRIMARY KEY, period TEXT, period_start INTEGER NOT NULL, " +
+      "period_msat INTEGER NOT NULL, total_msat INTEGER NOT NULL, rl TEXT NOT NULL);"
+    );
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS api_key_resv (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, msat INTEGER NOT NULL, exp INTEGER NOT NULL);"
+    );
   }
 
   // Serialize op handlers so a D1 read-modify-write can't interleave with another op.
@@ -143,6 +154,7 @@ export class NymLedger {
       case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier, a.milli, a.hold);
       case "credit-hold": return this._creditHold(a);
       case "credit-release": return this._creditRelease(a.id);
+      case "credit-refund": return this._creditRefund(a);
       case "dust-peek": return this._dustPeek(a.pubkey);
       case "free-claim": return this._freeClaim(a.pubkey, a.limit, a.net, a.netLimit);
       case "free-peek": return this._freePeek(a.pubkey, a.limit, a.net, a.netLimit);
@@ -172,6 +184,10 @@ export class NymLedger {
       case "gift-cancel": return this._giftCancel(a);
       case "gift-list": return this._giftList(a);
       case "gift-peek": return this._giftPeek(a);
+      case "key-reserve": return this._keyReserve(a);
+      case "key-settle": return this._keySettle(a);
+      case "key-usage": return this._keyUsage(a);
+      case "key-reset": return this._keyReset(a);
       default: return { error: "unknown op" };
     }
   }
@@ -993,17 +1009,229 @@ export class NymLedger {
       "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp) VALUES (?, ?, ?, ?, ?);",
       id, pubkey, tierKey, amount, now + ttl * 1000
     );
-    if (!Array.isArray(rec.rl)) rec.rl = [];
-    rec.rl = rec.rl.filter((t) => t > now - 600000);
-    rec.rl.push(now);
-    await this._putCredits(pubkey, rec, tierKey);
+    if (a.stamp !== false) {
+      if (!Array.isArray(rec.rl)) rec.rl = [];
+      rec.rl = rec.rl.filter((t) => t > now - 600000);
+      rec.rl.push(now);
+      await this._putCredits(pubkey, rec, tierKey);
+    }
     return { ok: true, balance: rec.balance || 0, held: held + amount };
+  }
+
+  _keyPeriod(p) {
+    return p === "daily" || p === "weekly" || p === "monthly" ? p : null;
+  }
+
+  _keyPeriodStart(period, now) {
+    const d = new Date(now);
+    if (period === "daily") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    if (period === "weekly") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    if (period === "monthly") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+    return 0;
+  }
+
+  _keyResetAt(period, start) {
+    const d = new Date(start);
+    if (period === "daily") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+    if (period === "weekly") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 7);
+    if (period === "monthly") return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+    return null;
+  }
+
+  _keyId(v) {
+    const id = String(v || "");
+    return /^[0-9a-f]{16}$/.test(id) ? id : null;
+  }
+
+  _keyNow(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : Date.now();
+  }
+
+  _keyMsat(sats) {
+    const n = Number(sats);
+    return Number.isFinite(n) && n > 0 ? Math.ceil(Math.round(n * 1e6) / 1e3) : 0;
+  }
+
+  _keyRow(keyId, period, now) {
+    const rows = this.sql.exec(
+      "SELECT id, period, period_start, period_msat, total_msat, rl FROM api_key_usage WHERE id = ? LIMIT 1;", keyId
+    ).toArray();
+    const row = rows && rows[0]
+      ? { id: keyId, period: rows[0].period || null, start: Number(rows[0].period_start) || 0,
+        used: Number(rows[0].period_msat) || 0, total: Number(rows[0].total_msat) || 0, rl: rows[0].rl }
+      : { id: keyId, period: null, start: 0, used: 0, total: 0, rl: "[]" };
+    const p = period === undefined ? row.period : this._keyPeriod(period);
+    const start = this._keyPeriodStart(p, now);
+    if (p !== row.period || start !== row.start) {
+      if (p !== row.period || start > row.start) row.used = 0;
+      row.period = p;
+      row.start = start;
+    }
+    try { row.rl = JSON.parse(row.rl || "[]"); } catch { row.rl = []; }
+    if (!Array.isArray(row.rl)) row.rl = [];
+    return row;
+  }
+
+  _keyPut(row) {
+    this.sql.exec(
+      "INSERT OR REPLACE INTO api_key_usage (id, period, period_start, period_msat, total_msat, rl) VALUES (?, ?, ?, ?, ?, ?);",
+      row.id, row.period, row.start, Math.max(0, Math.floor(row.used)), Math.max(0, Math.floor(row.total)), JSON.stringify(row.rl)
+    );
+  }
+
+  _keyPending(keyId, now, except) {
+    this.sql.exec("DELETE FROM api_key_resv WHERE exp <= ?;", now);
+    const rows = this.sql.exec("SELECT id, msat FROM api_key_resv WHERE key_id = ?;", keyId).toArray();
+    let n = 0;
+    for (const r of rows || []) {
+      if (except && r.id === except) continue;
+      n += Math.max(0, Number(r.msat) || 0);
+    }
+    return n;
+  }
+
+  _keyView(row, now) {
+    return {
+      periodUsedSats: row.used / 1000,
+      totalSats: row.total / 1000,
+      reservedSats: this._keyPending(row.id, now, null) / 1000,
+      periodStart: row.start,
+      resetAt: this._keyResetAt(row.period, row.start)
+    };
+  }
+
+  _keyPrune(now) {
+    if (this._keyPruneAt && now < this._keyPruneAt) return;
+    this._keyPruneAt = now + KEY_USAGE_PRUNE_EVERY_MS;
+    const rows = this.sql.exec(
+      "SELECT id, rl FROM api_key_usage WHERE period IS NULL AND period_msat = 0 AND total_msat = 0 AND id > ? ORDER BY id LIMIT ?;",
+      this._keyPruneFrom || "", KEY_USAGE_PRUNE_BATCH
+    ).toArray() || [];
+    this._keyPruneFrom = rows.length === KEY_USAGE_PRUNE_BATCH ? rows[rows.length - 1].id : "";
+    for (const r of rows) {
+      let rl = [];
+      try { rl = JSON.parse(r.rl || "[]"); } catch { rl = []; }
+      const last = Array.isArray(rl) && rl.length ? Math.max(...rl.map((t) => Number(t) || 0)) : 0;
+      if (last > now - KEY_USAGE_IDLE_MS) continue;
+      this.sql.exec(
+        "DELETE FROM api_key_usage WHERE id = ? AND period IS NULL AND period_msat = 0 AND total_msat = 0;", r.id
+      );
+    }
+  }
+
+  _keyReserve(a) {
+    const keyId = this._keyId(a.keyId);
+    if (!keyId) return { error: "Invalid key." };
+    const now = this._keyNow(a.now);
+    this._keyPrune(now);
+    const row = this._keyRow(keyId, a.period === undefined ? undefined : a.period, now);
+    const rateLimit = Math.floor(Number(a.rateLimit) || 0);
+    const windowMs = Math.max(1000, Math.floor(Number(a.rateWindowMs) || 60000));
+    row.rl = row.rl.filter((t) => t > now - windowMs);
+    if (rateLimit > 0 && row.rl.length >= rateLimit) {
+      return { ok: false, rateLimited: true, retryAfterMs: Math.max(1, row.rl[0] + windowMs - now) };
+    }
+    const msat = this._keyMsat(a.sats);
+    const pending = this._keyPending(keyId, now, null);
+    const resetAt = this._keyResetAt(row.period, row.start);
+    const limit = Number(a.limit);
+    if (a.limit != null && Number.isFinite(limit)) {
+      const cap = Math.round(limit * 1000);
+      if (row.used >= cap || row.used + pending + msat > cap) {
+        return { ok: false, capped: true, reached: row.used >= cap, used: row.used / 1000, reserved: pending / 1000,
+          limit, periodStart: row.start, resetAt };
+      }
+    }
+    const id = typeof a.id === "string" && /^[0-9a-f]{32}$/.test(a.id) ? a.id : null;
+    if (id && msat > 0) {
+      const ttl = Math.min(3600, Math.max(30, Math.floor(Number(a.ttl) || 900)));
+      this.sql.exec(
+        "INSERT OR REPLACE INTO api_key_resv (id, key_id, msat, exp) VALUES (?, ?, ?, ?);", id, keyId, msat, now + ttl * 1000
+      );
+    }
+    if (rateLimit > 0) row.rl.push(now);
+    this._keyPut(row);
+    return { ok: true, used: row.used / 1000, reserved: (pending + (id ? msat : 0)) / 1000, periodStart: row.start, resetAt };
+  }
+
+  _keySettle(a) {
+    const keyId = this._keyId(a.keyId);
+    if (!keyId) return { error: "Invalid key." };
+    const now = this._keyNow(a.now);
+    if (typeof a.id === "string" && /^[0-9a-f]{32}$/.test(a.id)) {
+      this.sql.exec("DELETE FROM api_key_resv WHERE id = ? AND key_id = ?;", a.id, keyId);
+    }
+    const row = this._keyRow(keyId, undefined, now);
+    const msat = this._keyMsat(a.sats);
+    row.used += msat;
+    row.total += msat;
+    this._keyPut(row);
+    return { ok: true, used: row.used / 1000, total: row.total / 1000 };
+  }
+
+  _keyUsage(a) {
+    const now = this._keyNow(a.now);
+    const list = Array.isArray(a.keys) ? a.keys
+      : (Array.isArray(a.keyIds) ? a.keyIds.map((id) => ({ id })) : []);
+    const usage = {};
+    for (const k of list.slice(0, 100)) {
+      const keyId = this._keyId(k && k.id);
+      if (!keyId) continue;
+      usage[keyId] = this._keyView(this._keyRow(keyId, k.period === undefined ? undefined : k.period, now), now);
+    }
+    return { ok: true, usage };
+  }
+
+  _keyReset(a) {
+    const keyId = this._keyId(a.keyId);
+    if (!keyId) return { error: "Invalid key." };
+    const now = this._keyNow(a.now);
+    const row = this._keyRow(keyId, a.period === undefined ? undefined : a.period, now);
+    row.used = 0;
+    row.start = this._keyPeriodStart(row.period, now);
+    this._keyPut(row);
+    return { ok: true, periodStart: row.start, resetAt: this._keyResetAt(row.period, row.start) };
   }
 
   _creditRelease(id) {
     if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) return { ok: false };
     this.sql.exec("DELETE FROM credit_holds WHERE id = ?;", id);
     return { ok: true };
+  }
+
+  async _creditRefund(a) {
+    const id = typeof a.id === "string" ? a.id : "";
+    const pubkey = typeof a.pubkey === "string" ? a.pubkey : "";
+    const milli = a.milli;
+    if (!/^[0-9a-f]{64}$/.test(id)) return { error: "Invalid refund id." };
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return { error: "Invalid pubkey." };
+    if (a.tier !== "standard" && a.tier !== "pro") return { error: "Invalid tier." };
+    if (typeof milli !== "number" || !Number.isSafeInteger(milli) || milli <= 0) return { error: "Invalid amount." };
+    const tierKey = a.tier;
+    const claim = "refund/" + id;
+    if (this.sql.exec("SELECT id FROM claims WHERE id = ? LIMIT 1;", claim).toArray().length) {
+      return { ok: true, duplicate: true };
+    }
+    const db = this.env.DB_CREDITS;
+    const found = hasD1(db)
+      ? await db.prepare("SELECT balance FROM credits WHERE pubkey = ?").bind(this._creditKey(pubkey, tierKey)).first()
+      : null;
+    if (!found || typeof found.balance !== "number") return { ok: false, unknown: true, error: "Unknown account." };
+    const rec = await this._getCredits(pubkey, tierKey);
+    const dust = this._dustOf(pubkey, tierKey);
+    let credits = 0;
+    let nextDust = dust - milli;
+    if (nextDust < 0) {
+      credits = Math.ceil(-nextDust / 1000);
+      nextDust += credits * 1000;
+    }
+    rec.balance = (rec.balance || 0) + credits;
+    rec.totalUsed = Math.max(0, (rec.totalUsed || 0) - credits);
+    await this._putCredits(pubkey, rec, tierKey);
+    this._setDust(pubkey, tierKey, nextDust);
+    this.sql.exec("INSERT INTO claims (id, kind, at) VALUES (?, ?, ?);", claim, "refund", Date.now());
+    return { ok: true, refunded: milli, credited: credits, balance: rec.balance, dust: nextDust };
   }
 
   async _consumeCredits(pubkey, cost, ts, tier, milli, hold) {

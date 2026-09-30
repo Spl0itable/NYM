@@ -170,7 +170,7 @@
     }
 
     // The seal's inner NIP-44 is the only part a signer must perform; the wrap uses an ephemeral key.
-    function pq2Nip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs) {
+    function pq2Nip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs, extraTags) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
         rumor.id = T.getEventHash(rumor);
@@ -188,6 +188,7 @@
             tags: [['p', recipientPub]],
             pubkey: T.getPublicKey(ephSk)
         };
+        if (Array.isArray(extraTags)) for (const t of extraTags) wrap.tags.push(t);
         if (expirationTs) wrap.tags.push(['expiration', String(expirationTs)]);
         return T.finalizeEvent(wrap, ephSk);
     }
@@ -415,7 +416,7 @@
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    function nip59Wrap(event, sk, recipientPub, expirationTs) {
+    function nip59Wrap(event, sk, recipientPub, expirationTs, extraTags) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
         rumor.id = T.getEventHash(rumor);
@@ -424,11 +425,12 @@
         const ephSk = T.generateSecretKey();
         const ckWrap = T.nip44.getConversationKey(ephSk, recipientPub);
         const wrap = { kind: 1059, content: T.nip44.encrypt(JSON.stringify(seal), ckWrap), created_at: randomNow(), tags: [['p', recipientPub]], pubkey: T.getPublicKey(ephSk) };
+        if (Array.isArray(extraTags)) for (const t of extraTags) wrap.tags.push(t);
         if (expirationTs) wrap.tags.push(['expiration', String(expirationTs)]);
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    function pqNip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs) {
+    function pqNip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs, extraTags) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
         rumor.id = T.getEventHash(rumor);
@@ -446,6 +448,7 @@
             tags: [['p', recipientPub]],
             pubkey: T.getPublicKey(ephSk)
         };
+        if (Array.isArray(extraTags)) for (const t of extraTags) wrap.tags.push(t);
         if (expirationTs) wrap.tags.push(['expiration', String(expirationTs)]);
         return T.finalizeEvent(wrap, ephSk);
     }

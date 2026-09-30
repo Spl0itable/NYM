@@ -1569,6 +1569,7 @@ class NostrService {
     int? expiration,
     Uint8List? recipientKemPublicKey,
     bool layered = false,
+    List<List<String>> extraTags = const [],
   }) async {
     final sig = signer;
     if (sig == null) return null;
@@ -1580,6 +1581,7 @@ class NostrService {
         expiration: expiration,
         recipientKemPk: recipientKemPublicKey,
         layered: layered,
+        extraTags: extraTags,
       );
     }
     // NIP-46: remote seal; the local ephemeral wrap layer can still be hybrid.
@@ -1590,6 +1592,7 @@ class NostrService {
       expiration: expiration,
       recipientKemPublicKey: recipientKemPublicKey,
       layered: layered,
+      extraTags: extraTags,
     );
   }
 
@@ -1616,11 +1619,13 @@ class NostrService {
     int? expiration,
     Uint8List? recipientKemPublicKey,
     bool layered = false,
+    List<List<String>> extraTags = const [],
   }) async {
     final wrap = await _buildWrap(rumor, recipientPubkey,
         expiration: expiration,
         recipientKemPublicKey: recipientKemPublicKey,
-        layered: layered);
+        layered: layered,
+        extraTags: extraTags);
     if (wrap == null) return null;
     // Gift wraps publish via DM_EVENT so the proxy prioritizes default relays.
     await pool.publishDm(wrap);
@@ -1639,6 +1644,7 @@ class NostrService {
     Uint8List? selfKemPublicKey,
     bool recipientLayered = false,
     bool selfLayered = false,
+    List<List<String>> wrapTags = const [],
   }) async {
     if (signer == null) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -1657,7 +1663,8 @@ class NostrService {
       final recipientWrap = await _wrapAndPublish(rumor, recipientPubkey,
           expiration: expiration,
           recipientKemPublicKey: recipientKemPublicKey,
-          layered: recipientLayered);
+          layered: recipientLayered,
+          extraTags: wrapTags);
       if (recipientWrap != null) onWrap?.call(recipientWrap);
     }
     if (recipientPubkey != identity.pubkey) {
@@ -1665,7 +1672,8 @@ class NostrService {
       final selfWrap = await _wrapAndPublish(rumor, identity.pubkey,
           expiration: expiration,
           recipientKemPublicKey: selfKemPublicKey,
-          layered: selfLayered);
+          layered: selfLayered,
+          extraTags: wrapTags);
       if (selfWrap != null) onWrap?.call(selfWrap);
     }
     return true;

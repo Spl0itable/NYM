@@ -6,6 +6,7 @@ import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../services/nostr/event_mapper.dart';
 import '../p2p/p2p_models.dart';
+import 'pm_support_tokens.dart';
 
 /// Socket-free NIP-17 PM logic: rumor construction, rumor-to-[Message] mapping, receipt and typing parsing.
 class PmLogic {
@@ -47,6 +48,37 @@ class PmLogic {
       content: content,
     );
   }
+
+  static const String supportTagName = 'nymbot-support';
+
+  static String? supportTokenOf(Map<String, dynamic> rumor) {
+    if (rumor['kind'] != EventKind.dmRumor) return null;
+    final tag = _tagValue(_tags(rumor), supportTagName);
+    return PmSupportTokens.normalize(tag);
+  }
+
+  static UnsignedEvent withSupportToken(UnsignedEvent rumor, String? token) {
+    if (token == null) return rumor;
+    if (rumor.tags.any((t) => t.isNotEmpty && t[0] == supportTagName)) {
+      return rumor;
+    }
+    return UnsignedEvent(
+      pubkey: rumor.pubkey,
+      createdAt: rumor.createdAt,
+      kind: rumor.kind,
+      tags: [
+        ...rumor.tags,
+        [supportTagName, token],
+      ],
+      content: rumor.content,
+    );
+  }
+
+  static List<List<String>> supportWrapTags(String? token) => token == null
+      ? const []
+      : [
+          ['t', token],
+        ];
 
   /// Storage key matching `ChatView.pm(pubkey)`, so messages land where the sidebar opens.
   static String pmStorageKey(String peerPubkey) => 'pm-$peerPubkey';

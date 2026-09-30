@@ -672,6 +672,7 @@ const List<String> kAppStringsCatalog = <String>[
   'Notifications only arrive while Nymchat is running. Turn on "Stay Connected in Background" in Settings → Data & Backup to get them when it is closed.',
   'Nymbot can only be messaged 1:1, not added to a group chat.',
   'Nymbot is unavailable right now.',
+  'Nymbot support',
   'Nymchat',
   'Nymchat Bot',
   'Nymchat Developer',

@@ -1803,30 +1803,31 @@ Object.assign(NYM.prototype, {
             () => window.NymCrypto.bitchatWrap(event, senderPrivateKey, recipientPublicKey));
     },
 
-    async nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, expirationTs = null) {
-        return this._cryptoCall('nip59Wrap', [event, senderPrivateKey, recipientPublicKey, expirationTs ?? null],
-            () => window.NymCrypto.nip59Wrap(event, senderPrivateKey, recipientPublicKey, expirationTs ?? null));
+    async nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, expirationTs = null, extraTags = null) {
+        const args = [event, senderPrivateKey, recipientPublicKey, expirationTs ?? null];
+        if (Array.isArray(extraTags) && extraTags.length) args.push(extraTags);
+        return this._cryptoCall('nip59Wrap', args, () => window.NymCrypto.nip59Wrap(...args));
     },
 
     // Offloaded because group fan-out does one ML-KEM encapsulation per member.
-    async pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
-        return this._cryptoCall('pqNip59Wrap',
-            [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null],
-            () => window.NymCrypto.pqNip59Wrap(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null));
+    async pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null, extraTags = null) {
+        const args = [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null];
+        if (Array.isArray(extraTags) && extraTags.length) args.push(extraTags);
+        return this._cryptoCall('pqNip59Wrap', args, () => window.NymCrypto.pqNip59Wrap(...args));
     },
 
     // The layered wrap; only the framing differs.
-    async pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
-        return this._cryptoCall('pq2Nip59Wrap',
-            [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null],
-            () => window.NymCrypto.pq2Nip59Wrap(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null));
+    async pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null, extraTags = null) {
+        const args = [event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs ?? null];
+        if (Array.isArray(extraTags) && extraTags.length) args.push(extraTags);
+        return this._cryptoCall('pq2Nip59Wrap', args, () => window.NymCrypto.pq2Nip59Wrap(...args));
     },
 
     // `usePq2` comes from the recipient's announcement, never from a guess.
-    async pqWrapForPeerAsync(usePq2, event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null) {
+    async pqWrapForPeerAsync(usePq2, event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs = null, extraTags = null) {
         return usePq2
-            ? this.pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs)
-            : this.pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs);
+            ? this.pq2Nip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs, extraTags)
+            : this.pqNip59WrapEventAsync(event, senderPrivateKey, recipientPublicKey, recipientKemPublicKey, expirationTs, extraTags);
     },
 
     requestUserProfile(pubkey) {

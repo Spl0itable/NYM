@@ -52,6 +52,7 @@ import '../features/nymbot/nymbot_threads.dart';
 import '../features/p2p/p2p_models.dart';
 import '../features/p2p/p2p_service.dart';
 import '../features/pms/pm_logic.dart';
+import '../features/pms/pm_support_tokens.dart';
 import '../features/polls/poll_logic.dart';
 import '../features/zaps/lnurl.dart';
 import '../features/zaps/zap_archive.dart';
@@ -405,6 +406,7 @@ class NostrController {
       _hydrateClosedPMs(appState);
       // Restore left groups so they stay suppressed on relaunch.
       _hydrateLeftGroups(appState);
+      _pmSupportStore();
       // Restore read watermarks so the relaunch backfill isn't counted as unread.
       _hydrateChannelLastRead(appState);
       // Instantiate eagerly so recents hydrate at boot rather than on the first long-press.
@@ -2545,6 +2547,13 @@ class NostrController {
     }
 
     final anonAuthor = _isAnonBotPubkey(rumor['pubkey']);
+    if (u.senderVerified &&
+        !anonAuthor &&
+        senderPubkey.isNotEmpty &&
+        senderPubkey != self &&
+        !_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
+      _notePmSupportToken(senderPubkey, rumor);
+    }
     final m = PmLogic.mapPmRumor(
       rumor: rumor,
       wrapId: u.wrapId,
@@ -4917,8 +4926,9 @@ class NostrController {
       }
     }
 
+    final supportToken = pmSupportTokenFor(recipientPubkey);
     await service.publishPM(
-      rumor: rumor,
+      rumor: PmLogic.withSupportToken(rumor, supportToken),
       recipientPubkey: recipientPubkey,
       settings: _msgSettings,
       onWrap: onWrap,
@@ -4929,7 +4939,48 @@ class NostrController {
       recipientLayered: plan.layered,
       // Our own copy: layered unless a live device on this account only opens the combined format.
       selfLayered: pqSelfUsesLayered(),
+      wrapTags: PmLogic.supportWrapTags(supportToken),
     );
+  }
+
+  PmSupportTokens? _pmSupportTokens;
+  String? _pmSupportOwner;
+
+  PmSupportTokens _pmSupportStore() {
+    final owner = _service?.selfPubkey ??
+        _identity?.pubkey ??
+        _ref.read(appStateProvider).selfPubkey;
+    final cached = _pmSupportTokens;
+    if (cached != null && _pmSupportOwner == owner) return cached;
+    final loaded = PmSupportTokens.decode(_ref
+        .read(keyValueStoreProvider)
+        .getString(StorageKeys.pmSupportTokensFor(owner)));
+    _pmSupportTokens = loaded;
+    _pmSupportOwner = owner;
+    _publishPmSupportPeers(loaded);
+    return loaded;
+  }
+
+  void _publishPmSupportPeers(PmSupportTokens store) {
+    final notifier = _ref.read(pmSupportPeersProvider.notifier);
+    final peers = store.peers;
+    if (!setEquals(notifier.state, peers)) notifier.state = peers;
+  }
+
+  String? pmSupportTokenFor(String pubkey) =>
+      _pmSupportStore().newestFor(pubkey);
+
+  void _notePmSupportToken(String peer, Map<String, dynamic> rumor) {
+    final token = PmLogic.supportTokenOf(rumor);
+    if (token == null) return;
+    final store = _pmSupportStore();
+    if (peer == _pmSupportOwner) return;
+    final ts = (rumor['created_at'] as num?)?.toInt() ?? 0;
+    if (!store.record(peer, token, ts)) return;
+    unawaited(_ref.read(keyValueStoreProvider).setString(
+        StorageKeys.pmSupportTokensFor(_pmSupportOwner ?? ''),
+        store.encode()));
+    _publishPmSupportPeers(store);
   }
 
   /// Queues a sent PM for receipt-driven auto-retry and starts the checker if idle.
@@ -10611,8 +10662,9 @@ class NostrController {
       );
       try {
         final peerKem = _pqLayeredPeerKey(view.id);
+        final supportToken = pmSupportTokenFor(view.id);
         await service.publishPM(
-          rumor: rumor,
+          rumor: PmLogic.withSupportToken(rumor, supportToken),
           recipientPubkey: view.id,
           settings: _msgSettings,
           onWrap: _archiveSentWrap,
@@ -10620,6 +10672,7 @@ class NostrController {
           recipientLayered: peerKem != null,
           selfKemPublicKey: pqSelfKey(),
           selfLayered: pqSelfUsesLayered(),
+          wrapTags: PmLogic.supportWrapTags(supportToken),
         );
       } catch (_) {
         // The echo id isn't exposed here; leave the bubble as sent.

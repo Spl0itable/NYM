@@ -45,6 +45,7 @@ NostrEvent nip59Wrap({
   required Uint8List senderPrivkey,
   required String recipientPubkey,
   int? expiration,
+  List<List<String>> extraTags = const [],
 }) {
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -67,6 +68,7 @@ NostrEvent nip59Wrap({
   final ckWrap = nip44.getConversationKey(ephSk, recipientPubkey);
   final tags = <List<String>>[
     ['p', recipientPubkey],
+    ...extraTags,
     if (expiration != null && expiration != 0) ['expiration', '$expiration'],
   ];
   return finalizeEvent(
@@ -88,6 +90,7 @@ NostrEvent pqNip59Wrap({
   required String recipientPubkey,
   required Uint8List recipientKemPublicKey,
   int? expiration,
+  List<List<String>> extraTags = const [],
 }) {
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -107,6 +110,7 @@ NostrEvent pqNip59Wrap({
   final ephSk = generatePrivateKey();
   final tags = <List<String>>[
     ['p', recipientPubkey],
+    ...extraTags,
     if (expiration != null && expiration != 0) ['expiration', '$expiration'],
   ];
   return finalizeEvent(
@@ -129,6 +133,7 @@ Future<NostrEvent> pq2Nip59Wrap({
   required String recipientPubkey,
   required Uint8List recipientKemPublicKey,
   int? expiration,
+  List<List<String>> extraTags = const [],
 }) async {
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -148,6 +153,7 @@ Future<NostrEvent> pq2Nip59Wrap({
   final ephSk = generatePrivateKey();
   final tags = <List<String>>[
     ['p', recipientPubkey],
+    ...extraTags,
     if (expiration != null && expiration != 0) ['expiration', '$expiration'],
   ];
   return finalizeEvent(
@@ -171,6 +177,7 @@ Future<NostrEvent> nip59WrapAsync({
   int? expiration,
   Uint8List? recipientKemPublicKey,
   bool layered = false,
+  List<List<String>> extraTags = const [],
 }) async {
   final senderPub = senderSigner.pubkey;
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -192,6 +199,7 @@ Future<NostrEvent> nip59WrapAsync({
   final ephSk = generatePrivateKey();
   final tags = <List<String>>[
     ['p', recipientPubkey],
+    ...extraTags,
     if (expiration != null && expiration != 0) ['expiration', '$expiration'],
   ];
   final sealJson = jsonEncode(seal.toJson());

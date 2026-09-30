@@ -54,6 +54,7 @@ Map<String, dynamic> _encodeWrapJob({
   int? expiration,
   Uint8List? recipientKemPk,
   bool layered = false,
+  List<List<String>> extraTags = const [],
 }) =>
     {
       'rumor': rumor.toJson(),
@@ -64,6 +65,7 @@ Map<String, dynamic> _encodeWrapJob({
       if (layered) 'l2': 1,
       // Present only when the recipient announced an ML-KEM key; selects the hybrid wrap per job.
       if (recipientKemPk != null) 'rkem': keys.bytesToHex(recipientKemPk),
+      if (extraTags.isNotEmpty) 'xt': extraTags,
     };
 
 /// `compute` entry for unwrap jobs: one positional `{seal, rumor, isBitchat, isPq}` or null per job.
@@ -120,6 +122,9 @@ Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
       final recipientPubkey = job['rcpt'] as String;
       final expiration = job['exp'] as int?;
       final rkem = job['rkem'] as String?;
+      final extraTags = ((job['xt'] as List?) ?? const [])
+          .map((t) => (t as List).map((e) => e.toString()).toList())
+          .toList();
       final NostrEvent wrap;
       if (rkem == null) {
         wrap = giftwrap.nip59Wrap(
@@ -127,6 +132,7 @@ Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
           senderPrivkey: senderPrivkey,
           recipientPubkey: recipientPubkey,
           expiration: expiration,
+          extraTags: extraTags,
         );
       } else if (job['l2'] == 1) {
         wrap = await giftwrap.pq2Nip59Wrap(
@@ -135,6 +141,7 @@ Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
           recipientPubkey: recipientPubkey,
           recipientKemPublicKey: keys.hexToBytes(rkem),
           expiration: expiration,
+          extraTags: extraTags,
         );
       } else {
         wrap = giftwrap.pqNip59Wrap(
@@ -143,6 +150,7 @@ Future<List<Map<String, dynamic>?>> wrapBatchIsolate(
           recipientPubkey: recipientPubkey,
           recipientKemPublicKey: keys.hexToBytes(rkem),
           expiration: expiration,
+          extraTags: extraTags,
         );
       }
       out[i] = wrap.toJson();
@@ -259,6 +267,7 @@ class CryptoWorker {
     int? expiration,
     Map<String, Uint8List>? recipientKemPks,
     Set<String>? layeredPubkeys,
+    List<List<String>> extraTags = const [],
   }) async {
     if (recipientPubkeys.isEmpty) return const <NostrEvent?>[];
     final jobs = <Map<String, dynamic>>[
@@ -270,6 +279,7 @@ class CryptoWorker {
           expiration: expiration,
           recipientKemPk: recipientKemPks?[pk],
           layered: layeredPubkeys?.contains(pk) ?? false,
+          extraTags: extraTags,
         ),
     ];
 
@@ -297,6 +307,7 @@ class CryptoWorker {
     int? expiration,
     Uint8List? recipientKemPk,
     bool layered = false,
+    List<List<String>> extraTags = const [],
   }) async {
     final out = await wrapMany(
       rumor: rumor,
@@ -306,6 +317,7 @@ class CryptoWorker {
       recipientKemPks:
           recipientKemPk == null ? null : {recipientPubkey: recipientKemPk},
       layeredPubkeys: layered ? {recipientPubkey} : null,
+      extraTags: extraTags,
     );
     return out.isEmpty ? null : out.first;
   }

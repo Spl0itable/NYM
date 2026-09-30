@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/i18n/i18n.dart';
+import '../../features/pms/pm_support_tokens.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -45,6 +47,7 @@ class PMListItem extends ConsumerWidget {
     final isDev = controller.isVerifiedDeveloper(pubkey);
     final isBot = controller.isVerifiedBot(pubkey);
     final isFriend = appState.isFriend(pubkey);
+    final isSupport = ref.watch(pmSupportPeersProvider).contains(pubkey);
     final base = pickDisplayNym(appState.users[pubkey]?.nym, nym);
     final suffix = getPubkeySuffix(pubkey);
 
@@ -126,6 +129,14 @@ class PMListItem extends ConsumerWidget {
                                 child: FriendBadge(size: 14),
                               ),
                             ),
+                          if (isSupport)
+                            const WidgetSpan(
+                              alignment: PlaceholderAlignment.middle,
+                              child: Padding(
+                                padding: EdgeInsets.only(left: 4),
+                                child: _SupportLabel(),
+                              ),
+                            ),
                           if (mesh)
                             WidgetSpan(
                               alignment: PlaceholderAlignment.middle,
@@ -186,6 +197,32 @@ class PMListItem extends ConsumerWidget {
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SupportLabel extends StatelessWidget {
+  const _SupportLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: c.primaryA(0.10),
+        border: Border.all(color: c.primaryA(0.25)),
+        borderRadius: const BorderRadius.all(Radius.circular(20)),
+      ),
+      child: Text(
+        tr('Nymbot support'),
+        style: TextStyle(
+          color: c.primary,
+          fontSize: 9,
+          fontWeight: FontWeight.w500,
+          height: 1.2,
         ),
       ),
     );

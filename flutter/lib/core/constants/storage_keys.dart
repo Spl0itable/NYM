@@ -157,6 +157,8 @@ class StorageKeys {
   static const leftGroups = 'nym_left_groups';
   static const leftGroupTimes = 'nym_left_group_times';
   static String lastPmSyncFor(String pubkey) => 'nym_last_pm_sync_$pubkey';
+  static String pmSupportTokensFor(String pubkey) =>
+      'nym_pm_support_tokens_$pubkey';
   static const pendingGroupInvite = 'nym_pending_group_invite';
   static const groupStorePrefix = 'nym_groups_';
   static String groupStoreFor(String pubkey) => '$groupStorePrefix$pubkey';

@@ -307,6 +307,10 @@ Object.assign(NYM.prototype, {
             pubkey: this.pubkey
         };
 
+        const supportToken = this.pmSupportTokenFor(recipientPubkey);
+        if (supportToken) rumor.tags.push(['nymbot-support', supportToken]);
+        const supportWrapTags = supportToken ? [['t', supportToken]] : null;
+
         // Optional NIP-40 expiration on the gift wrap.
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? Math.floor(Date.now() / 1000) + this.settings.dmTTLSeconds
@@ -362,8 +366,8 @@ Object.assign(NYM.prototype, {
 
             if (plan.nym) {
                 const nymWrapped = recipientKemPk
-                    ? await this.pqWrapForPeerAsync(plan.pq2, rumor, this.privkey, recipientPubkey, recipientKemPk, expirationTs)
-                    : await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs);
+                    ? await this.pqWrapForPeerAsync(plan.pq2, rumor, this.privkey, recipientPubkey, recipientKemPk, expirationTs, supportWrapTags)
+                    : await this.nip59WrapEventAsync(rumor, this.privkey, recipientPubkey, expirationTs, supportWrapTags);
                 this.sendDMToRelays(['EVENT', nymWrapped]);
                 sentWrappedEvents.push(['EVENT', nymWrapped]);
                 wrapped = nymWrapped;
@@ -381,8 +385,8 @@ Object.assign(NYM.prototype, {
                 // Post-quantum when possible so the archive isn't the weakest link.
                 const selfKemPk = this.pqSelfKeyFor();
                 const selfWrapped = selfKemPk
-                    ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, this.privkey, this.pubkey, selfKemPk, expirationTs)
-                    : await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs);
+                    ? await this.pqWrapForPeerAsync(this.pqSelfUsesPq2(), rumor, this.privkey, this.pubkey, selfKemPk, expirationTs, supportWrapTags)
+                    : await this.nip59WrapEventAsync(rumor, this.privkey, this.pubkey, expirationTs, supportWrapTags);
                 this.sendDMToRelays(['EVENT', selfWrapped]);
                 this._recordGiftWrapId(nymMessageId, selfWrapped.id);
                 // Archive our self-addressed copy so sent messages restore across devices without the relay echo.
@@ -470,7 +474,7 @@ Object.assign(NYM.prototype, {
                 kind: 1059,
                 content: wrapContent,
                 created_at: this.randomNow(),
-                tags: [['p', recipientPubkey]]
+                tags: [['p', recipientPubkey], ...(supportWrapTags || [])]
             };
 
             if (expirationTs) {
@@ -512,7 +516,7 @@ Object.assign(NYM.prototype, {
                         kind: 1059,
                         content: selfWrapContent,
                         created_at: this.randomNow(),
-                        tags: [['p', this.pubkey]]
+                        tags: [['p', this.pubkey], ...(supportWrapTags || [])]
                     };
                     if (expirationTs) selfWrapUnsigned.tags.push(['expiration', String(expirationTs)]);
                     const selfWrapped = NT.finalizeEvent(selfWrapUnsigned, selfEphSk);
@@ -1118,6 +1122,11 @@ Object.assign(NYM.prototype, {
             }
 
             if (!isOwn && this.blockedUsers && this.blockedUsers.has(senderPubkey)) return;
+
+            if (!isOwn && senderVerified === true && rumor.kind === 14
+                && !(rumor.tags || []).some(t => Array.isArray(t) && t[0] === 'g')) {
+                this._notePmSupportToken(senderPubkey, rumor);
+            }
 
             // Archive only durable content; settings/signaling/typing/receipts already returned.
             if (!fromD1) this._archivePMEvent(event);
@@ -3113,6 +3122,69 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _pmSupportTokenStore() {
+        const owner = this.pubkey || '';
+        if (this._pmSupportTokenCache && this._pmSupportTokenCache.owner === owner) return this._pmSupportTokenCache.map;
+        const map = new Map();
+        try {
+            const raw = JSON.parse(localStorage.getItem(`nym_pm_support_tokens_${owner}`) || '{}');
+            for (const [pk, list] of Object.entries(raw && typeof raw === 'object' ? raw : {})) {
+                if (!/^[0-9a-f]{64}$/.test(pk) || !Array.isArray(list)) continue;
+                const clean = list.filter(e => e && typeof e.t === 'string' && /^[0-9a-f]{64}$/.test(e.t) && Number.isFinite(e.ts))
+                    .slice(0, this.PM_SUPPORT_TOKENS_PER_PEER);
+                if (clean.length) map.set(pk, clean);
+            }
+        } catch (_) { }
+        this._pmSupportTokenCache = { owner, map };
+        return map;
+    },
+
+    PM_SUPPORT_TOKENS_PER_PEER: 4,
+    PM_SUPPORT_TOKEN_PEERS: 256,
+
+    pmSupportTokensFor(pubkey) {
+        const list = pubkey ? this._pmSupportTokenStore().get(pubkey) : null;
+        return list ? list.map(e => e.t) : [];
+    },
+
+    pmSupportTokenFor(pubkey) {
+        return this.pmSupportTokensFor(pubkey)[0] || null;
+    },
+
+    _notePmSupportToken(peerPubkey, rumor) {
+        if (!rumor || rumor.kind !== 14 || !Array.isArray(rumor.tags)) return false;
+        if (typeof peerPubkey !== 'string' || !/^[0-9a-f]{64}$/.test(peerPubkey)) return false;
+        const tag = rumor.tags.find(t => Array.isArray(t) && t[0] === 'nymbot-support' && typeof t[1] === 'string');
+        const token = tag ? tag[1].toLowerCase() : '';
+        if (!/^[0-9a-f]{64}$/.test(token)) return false;
+        const ts = Number.isFinite(rumor.created_at) ? rumor.created_at : 0;
+        const map = this._pmSupportTokenStore();
+        const prior = map.get(peerPubkey) || [];
+        const existing = prior.find(e => e.t === token);
+        const next = [{ t: token, ts: Math.max(ts, existing ? existing.ts : 0) }, ...prior.filter(e => e.t !== token)];
+        next.sort((a, b) => b.ts - a.ts);
+        map.delete(peerPubkey);
+        map.set(peerPubkey, next.slice(0, this.PM_SUPPORT_TOKENS_PER_PEER));
+        while (map.size > this.PM_SUPPORT_TOKEN_PEERS) map.delete(map.keys().next().value);
+        try {
+            localStorage.setItem(`nym_pm_support_tokens_${this.pubkey || ''}`, JSON.stringify(Object.fromEntries(map)));
+        } catch (_) { }
+        if (prior.length === 0) this._refreshPmSupportBadge(peerPubkey);
+        return true;
+    },
+
+    _pmSupportBadgeHtml(pubkey) {
+        return this.pmSupportTokenFor(pubkey) ? '<span class="std-badge pm-support-badge">Nymbot support</span>' : '';
+    },
+
+    _refreshPmSupportBadge(pubkey) {
+        if (typeof document === 'undefined' || !document.querySelector) return;
+        const safePk = this._safePubkey ? this._safePubkey(pubkey) : pubkey;
+        const badges = document.querySelector(`.pm-item[data-pubkey="${safePk}"] .channel-badges`);
+        if (!badges || badges.querySelector('.pm-support-badge')) return;
+        badges.insertAdjacentHTML('afterbegin', this._pmSupportBadgeHtml(pubkey));
+    },
+
     addPMConversation(nym, pubkey, timestamp = Date.now()) {
         let baseNym = this.resolveDisplayNym(pubkey, nym);
 
@@ -3155,7 +3227,7 @@ Object.assign(NYM.prototype, {
 <img src="${this.escapeHtml(pmAvatarSrc)}" class="avatar-pm" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">
 <span class="pm-name">${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
-<span class="unread-badge nm-hidden">0</span>
+${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 <button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
 </div>
 `;
