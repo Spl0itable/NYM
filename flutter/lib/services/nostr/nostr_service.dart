@@ -768,6 +768,7 @@ class NostrService {
       _pool = direct;
       direct.geoOriginAllows = geoOriginAllowsEvent;
       direct.connectAll();
+      _handOverHeld(old, direct);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
         direct.replaySubscription(entry.sub, entry.filters);
@@ -793,6 +794,11 @@ class NostrService {
     if (p is RelayPoolProxy) return p.activeSubscriptions();
     if (p is RelayPool) return p.activeSubscriptions();
     return const {};
+  }
+
+  void _handOverHeld(PoolTransport from, PoolTransport to) {
+    if (from is RelayPoolProxy) from.handOverHeld(to);
+    if (from is RelayPool) from.handOverHeld(to);
   }
 
   Future<void> _detachSockets(PoolTransport p) async {
@@ -878,6 +884,7 @@ class NostrService {
       restored.geoOriginAllows = geoOriginAllowsEvent;
       restored.onProxyUnreachable = _onProxyUnreachable; // Future blips.
       _wireRetract(restored);
+      _handOverHeld(old, restored);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
         restored.replaySubscription(entry.sub, entry.filters);

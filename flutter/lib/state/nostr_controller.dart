@@ -121,7 +121,9 @@ class _PendingDm {
 
 /// Ties identity, relays and crypto to the [AppState] store; composer sends flow through here.
 class NostrController {
-  NostrController(this._ref);
+  NostrController(this._ref) {
+    _rememberSyncedBaseline();
+  }
 
   final Ref _ref;
   Identity? _identity;
@@ -8604,6 +8606,7 @@ class NostrController {
     shop.onSystemMessage = _emitSystemMessage;
 
     // Debounced encrypted-settings publish on every synced change.
+    _rememberSyncedBaseline();
     _ref.read(settingsProvider.notifier).onSyncedChange = syncSettings;
 
     // Backfill D1 history on open; best-effort, idempotent.
@@ -9476,7 +9479,10 @@ class NostrController {
   }
 
   /// The idempotent, additive half of the settings apply, shared by boot, live wraps and offer accepts.
-  void _applySyncedSettingsAdditive(Map<String, dynamic> s) {
+  void _applySyncedSettingsAdditive(Map<String, dynamic> s) =>
+      _quietSyncedApply(() => _applySyncedSettingsAdditiveNow(s));
+
+  void _applySyncedSettingsAdditiveNow(Map<String, dynamic> s) {
     // Cross-device notification read state and bell history.
     _applyNotificationsSync(s);
     // Closed PMs: set union plus an independent per-key max time merge.
@@ -9585,13 +9591,76 @@ class NostrController {
     }
   }
 
-  /// Sections with unpublished local edits; a slow boot apply must not undo them, so they're skipped until published.
-  final Set<String> _locallyDirtySections = {};
+  Set<String>? _dirtySyncedKeysCache;
 
-  /// Records an outstanding local edit; called from the same hook that schedules the publish.
+  Map<String, String>? _syncedBaseline;
+
+  bool _applyingSynced = false;
+
+  Set<String> get _dirtySyncedKeys {
+    final held = _dirtySyncedKeysCache;
+    if (held != null) return held;
+    final out = <String>{};
+    try {
+      final raw = _ref
+          .read(keyValueStoreProvider)
+          .getString(StorageKeys.settingsDirtyKeys);
+      final list = raw == null ? null : jsonDecode(raw);
+      if (list is List) out.addAll(list.whereType<String>());
+    } catch (_) {}
+    return _dirtySyncedKeysCache = out;
+  }
+
+  void _saveDirtySyncedKeys() {
+    try {
+      final kv = _ref.read(keyValueStoreProvider);
+      final keys = _dirtySyncedKeys;
+      if (keys.isEmpty) {
+        kv.remove(StorageKeys.settingsDirtyKeys);
+      } else {
+        kv.setString(
+            StorageKeys.settingsDirtyKeys, jsonEncode(keys.toList()..sort()));
+      }
+    } catch (_) {}
+  }
+
+  Map<String, String>? _syncedFlat() {
+    try {
+      final out = <String, String>{};
+      StorageSync.buildSectionPayloads(
+        _ref.read(settingsProvider),
+        kv: _ref.read(keyValueStoreProvider),
+        selfPubkey: _identity?.pubkey,
+      ).forEach((_, fields) {
+        fields.forEach((k, v) {
+          if (k != 'v') out[k] = jsonEncode(v);
+        });
+      });
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _rememberSyncedBaseline() {
+    _syncedBaseline = _syncedFlat() ?? _syncedBaseline;
+  }
+
   void _markSettingsDirty() {
-    // Section-level, since publishes are per section.
-    _locallyDirtySections.addAll(StorageSync.syncedSectionKeys.keys);
+    if (_applyingSynced) return;
+    final dirty = _dirtySyncedKeys;
+    final base = _syncedBaseline;
+    final now = _syncedFlat();
+    if (base == null || now == null) {
+      for (final keys in StorageSync.syncedSectionKeys.values) {
+        dirty.addAll(keys);
+      }
+    } else {
+      for (final key in {...base.keys, ...now.keys}) {
+        if (base[key] != now[key]) dirty.add(key);
+      }
+    }
+    _saveDirtySyncedKeys();
   }
 
   @visibleForTesting
@@ -9607,13 +9676,8 @@ class NostrController {
     _applySyncedSettings(p);
   }
 
-  /// Strips keys of sections with unpublished local edits; additive categories are untouched.
   Map<String, dynamic> _withoutLocallyDirtyKeys(Map<String, dynamic> p) {
-    if (_locallyDirtySections.isEmpty) return p;
-    final drop = <String>{
-      for (final section in _locallyDirtySections)
-        ...?StorageSync.syncedSectionKeys[section],
-    };
+    final drop = _dirtySyncedKeys;
     if (drop.isEmpty) return p;
     return {
       for (final e in p.entries)
@@ -9621,7 +9685,29 @@ class NostrController {
     };
   }
 
+  void _quietSyncedApply(void Function() body) {
+    final was = _applyingSynced;
+    _applyingSynced = true;
+    try {
+      body();
+    } finally {
+      _applyingSynced = was;
+      if (!was) _rememberSyncedBaseline();
+    }
+  }
+
   void _applySyncedSettings(
+    Map<String, dynamic> pRaw, {
+    bool userAcceptedTransfer = false,
+  }) {
+    if (userAcceptedTransfer) {
+      _applySyncedSettingsNow(pRaw, userAcceptedTransfer: true);
+    } else {
+      _quietSyncedApply(() => _applySyncedSettingsNow(pRaw));
+    }
+  }
+
+  void _applySyncedSettingsNow(
     Map<String, dynamic> pRaw, {
     bool userAcceptedTransfer = false,
   }) {
@@ -10246,7 +10332,9 @@ class NostrController {
       // The landing channel is KV-only, so thread it into the `channels` section explicitly.
       final appState = _ref.read(appStateProvider.notifier);
       // Cleared before the write so an edit made in flight re-marks and survives.
-      _locallyDirtySections.clear();
+      _dirtySyncedKeys.clear();
+      _saveDirtySyncedKeys();
+      _rememberSyncedBaseline();
       await sync.settingsSet(
         _ref.read(settingsProvider),
         pinnedLandingChannelJson:

@@ -80,7 +80,7 @@ import {
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runTurnsRecent, runTurnAdd, runResultPut,
   runResultGet, runGet, runCountLive, runStart, runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent,
-  runSteerAdd, runSteerList, runSteerMark, runSweep, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
+  runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runSweep, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
   RUN_STEER_CHARS } from "./_runs.js";
 
 
@@ -1320,7 +1320,7 @@ async function botMediaBytes(result, field) {
   if (result instanceof ArrayBuffer) return new Uint8Array(result);
   if (result instanceof Uint8Array) return result;
   var b64 = result[field] || result.image || result.audio;
-  if (typeof b64 === "string" && b64) return botBase64Decode(b64);
+  if (typeof b64 === "string" && b64 && /^[A-Za-z0-9+/=\s]+$/.test(b64)) return botBase64Decode(b64);
   return null;
 }
 
@@ -2476,7 +2476,7 @@ async function runProEffortSteps(env, proModel, messages, effort, opts, answer, 
     }
   }
 
-  var core = await answer(convo, calls, of);
+  var core = await answer(convo, calls, of, effort < 3);
   calls += core.modelCalls || 1;
   tally.calls += core.modelCalls || 1;
   outputTokens += core.outputTokens || 0;
@@ -2487,6 +2487,7 @@ async function runProEffortSteps(env, proModel, messages, effort, opts, answer, 
     calls++;
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
     progress({ kind: "effort", stage: "checking" });
+    if (opts && typeof opts.final === "function") await opts.final();
     var revised = await chat(env, proModel,
       convo.concat([
         { role: "assistant", content: reply },
@@ -2529,6 +2530,7 @@ async function runProRecallSteps(env, proModel, messages, dropped, opts, usage, 
     var lastTurn = calls >= budget;
     progress({ kind: "model", call: priorCalls + calls, of: of,
       model: proModel.label || proModel.model || "" });
+    if (lastTurn && opts && typeof opts.final === "function") await opts.final();
     var r = await chat(env, proModel, convo, proModel.maxTokens,
       lastTurn ? null : recallToolDefs());
     tally.calls++;
@@ -2927,14 +2929,15 @@ var BOT_RUN_THREAD_PREFIX = "nymchat:";
 var BOT_RUN_FLUSH_MS = 1500;
 var BOT_RUN_BEAT_MS = 15000;
 var BOT_RUN_CHECK_MS = 1500;
-var BOT_RUN_STEER_MS = 2000;
 var BOT_RUN_LOCAL_MAX = 2000;
 var BOT_RUN_CTL_RATE = 60;
 var BOT_STOPPED_TEXT = "Stopped.";
 var BOT_STEER_PASSED = "I passed that on to the running request.";
+var BOT_STEER_MISSED = "I could not pass that on: the request it was meant for is no longer taking instructions. Send it as a new message if it still applies.";
+var BOT_STEER_FINAL = "That request is already writing its answer, so it can't take instructions now. Send this as a new message instead.";
 var BOT_STEER_PREFIX = "Update from the user while you were working. Apply it from here on, and keep replying in the format asked for above:\n";
 var BOT_PENDING_TEXT = "Nymbot is still working on that message — ask again in a moment and the reply will be waiting.";
-var BOT_STEER_TAG_RE = /<steer_run\s+id\s*=\s*"?(R\d{1,2})"?\s*>([\s\S]*?)<\/steer_run\s*>/gi;
+var BOT_STEER_TAG_RE = /<steer_run\s+id\s*=\s*["']?(R\d{1,2})["']?\s*>([\s\S]*?)<\/steer_run\s*>/gi;
 var botRunLocal = new Map();
 
 function botRunThreadKey(threadRoot) {
@@ -2952,7 +2955,7 @@ function botRunLocalEntry(pk, asked) {
   var k = String(pk).toLowerCase() + ":" + String(asked).toLowerCase();
   var e = botRunLocal.get(k);
   if (!e) {
-    e = { cancel: false, steer: false };
+    e = { cancel: false };
     botRunLocal.set(k, e);
     if (botRunLocal.size > BOT_RUN_LOCAL_MAX) botRunLocal.delete(botRunLocal.keys().next().value);
   }
@@ -3027,11 +3030,11 @@ function botRunChat(ctl) {
 
 function botRunUnpack(cipher, raw) {
   var text = cipher.open(raw);
-  if (!text) return { p: "" };
+  if (!text) return { p: "", final: false };
   try {
     var o = JSON.parse(text);
-    return { p: typeof o.p === "string" ? o.p : "" };
-  } catch (e) { return { p: "" }; }
+    return { p: typeof o.p === "string" ? o.p : "", final: o.f === 1 };
+  } catch (e) { return { p: "", final: false }; }
 }
 
 function botRunControl(env, context, pk, cipher) {
@@ -3039,11 +3042,15 @@ function botRunControl(env, context, pk, cipher) {
   var timer = null;
   var ctl = {
     asked: null, registered: false, line: "", st: {}, dirty: false,
-    lastWrite: 0, lastBeat: 0, cancel: false, lastCheck: 0, steerAt: 0,
+    lastWrite: 0, lastBeat: 0, cancel: false, lastCheck: 0, final: false,
     notes: [], applied: {}
   };
   var local = function () { return ctl.asked ? botRunLocalEntry(pk, ctl.asked) : null; };
-  ctl.payload = function () { return cipher.seal(JSON.stringify({ p: ctl.line || "" })); };
+  ctl.payload = function () {
+    var o = { p: ctl.line || "" };
+    if (ctl.final) o.f = 1;
+    return cipher.seal(JSON.stringify(o));
+  };
   ctl.flush = function () {
     if (!ctl.registered) return null;
     ctl.dirty = false;
@@ -3079,28 +3086,36 @@ function botRunControl(env, context, pk, cipher) {
   };
   ctl.inject = async function (messages) {
     if (!ctl.asked || !Array.isArray(messages)) return messages;
-    var loc = local();
-    if ((loc && loc.steer) || Date.now() - ctl.steerAt >= BOT_RUN_STEER_MS) {
-      if (loc) loc.steer = false;
-      ctl.steerAt = Date.now();
-      var rows = await runSteerList(db, pk, ctl.asked);
-      var fresh = [];
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i];
-        if (ctl.applied[r.id]) continue;
-        ctl.applied[r.id] = true;
-        var text = cipher.open(r.text);
-        if (!text) continue;
-        ctl.notes.push(text);
-        if (!Number(r.applied_at)) fresh.push(r.id);
-      }
-      if (fresh.length) {
-        await runSteerMark(db, pk, ctl.asked, fresh, Date.now());
-        ctl.note({ kind: "steer" });
-      }
+    var rows = await runSteerList(db, pk, ctl.asked);
+    var fresh = [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (ctl.applied[r.id]) continue;
+      ctl.applied[r.id] = true;
+      var text = cipher.open(r.text);
+      if (!text) continue;
+      ctl.notes.push(text);
+      if (!Number(r.applied_at)) fresh.push(r.id);
+    }
+    if (fresh.length) {
+      await runSteerMark(db, pk, ctl.asked, fresh, Date.now());
+      ctl.note({ kind: "steer" });
     }
     if (!ctl.notes.length) return messages;
     return messages.concat([{ role: "user", content: BOT_STEER_PREFIX + ctl.notes.map(function (n) { return "- " + n; }).join("\n") }]);
+  };
+  ctl.markFinal = async function () {
+    if (ctl.final) return;
+    ctl.final = true;
+    ctl.dirty = true;
+    if (ctl.registered) await ctl.flush();
+  };
+  ctl.missed = async function () {
+    if (!ctl.asked) return [];
+    var rows = await runSteerList(db, pk, ctl.asked);
+    var ids = rows.filter(function (r) { return !ctl.applied[r.id] && !Number(r.applied_at); }).map(function (r) { return r.id; });
+    if (ids.length) await runSteerMiss(db, pk, ctl.asked, ids, Date.now());
+    return ids;
   };
   ctl.start = function () {
     if (timer) return;
@@ -3159,15 +3174,39 @@ function botRunOthersBlock(others) {
 
 function botSteerTags(text) {
   var out = [];
-  var re = new RegExp(BOT_STEER_TAG_RE.source, "gi");
-  var m;
-  while ((m = re.exec(String(text || ""))) && out.length < 3) {
-    var said = String(m[2] || "").trim();
-    if (said) out.push({ handle: m[1].toUpperCase(), text: said.slice(0, RUN_STEER_CHARS) });
+  var parts = String(text || "").split(/(```[\s\S]*?(?:```|$))/);
+  for (var i = 0; i < parts.length; i += 2) {
+    var re = new RegExp(BOT_STEER_TAG_RE.source, "gi");
+    var m;
+    while ((m = re.exec(parts[i])) && out.length < 3) {
+      var said = String(m[2] || "").trim();
+      if (said) out.push({ handle: m[1].toUpperCase(), text: said.slice(0, RUN_STEER_CHARS) });
+    }
+    parts[i] = parts[i].replace(new RegExp(BOT_STEER_TAG_RE.source, "gi"), "").replace(/<\/?steer_run\b[^>]*>/gi, "");
   }
-  var rest = String(text || "").replace(new RegExp(BOT_STEER_TAG_RE.source, "gi"), "").replace(/<\/?steer_run\b[^>]*>/gi, "")
-    .replace(/\n{3,}/g, "\n\n").trim();
+  var rest = parts.join("").replace(/\n{3,}/g, "\n\n").trim();
   return { steers: out, text: rest };
+}
+
+function botSteerRefusal(row, cipher, now) {
+  if (!row || row.state === "pending") {
+    return { status: 404, body: { error: "Nymbot has no request running for that message.", unknown: true } };
+  }
+  var beat = Number(row.beat_at) || 0;
+  var live = !row.cancel && (
+    (row.state === "running" && beat > now - RUN_LIVE_MS) ||
+    (row.state === "parked" && beat > now - RUN_PARKED_MS) ||
+    (row.state === "waiting" && beat > now - RUN_WAITING_MS));
+  if (!live) {
+    return { status: 409, body: {
+      error: "That request has already finished. Send this as a new message instead.", finished: true,
+      state: row.cancel ? "stopped" : (row.state === "running" ? "failed" : row.state)
+    } };
+  }
+  if (row.state === "running" && botRunUnpack(cipher, row.progress).final) {
+    return { status: 409, body: { error: BOT_STEER_FINAL, final: true, state: "running" } };
+  }
+  return null;
 }
 
 async function botEarlyClaim(env, pk, eventId, json) {
@@ -3517,19 +3556,22 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
     // The effort wrapper composes with looking back past the window rather than competing for the same call.
     var effort = botEffortLevel(runOpts.effort);
     var runChat = botRunChat(runOpts.run || null);
+    var runFinal = runOpts.run ? runOpts.run.markFinal : null;
     var wrapped = await runProEffort(context.env, proModel, messages, effort, {
       progress: runOpts.progress,
       extraCalls: canRecall ? BOT_RECALL_ROUNDS : 0,
-      chat: runChat
-    }, async function (convo, done, of) {
+      chat: runChat,
+      final: runFinal
+    }, async function (convo, done, of, last) {
       if (canRecall) {
         return await runProRecallChat(context.env, proModel, convo, dropped, {
-          progress: runOpts.progress, priorCalls: done, of: of, chat: runChat
+          progress: runOpts.progress, priorCalls: done, of: of, chat: runChat, final: last ? runFinal : null
         });
       }
       if (runOpts.progress) {
         runOpts.progress({ kind: "model", call: done + 1, of: of, model: proModel.label || proModel.model || "" });
       }
+      if (last && runFinal) await runFinal();
       convo = await botRunGate(runOpts.run || null, convo);
       var one = await runProGatewayModel(context.env, proModel, convo, proModel.maxTokens,
         runOpts.progress);
@@ -3559,7 +3601,9 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var reply = "";
   var usage = botUsageZero();
   var billedModel = pmModel;
+  if (runOpts.run) await runOpts.run.markFinal();
   messages = await botRunGate(runOpts.run || null, messages);
+  if (canSee && (visionUrls.length || historyImages || frameCount)) messages = await botInlineVisionImages(messages);
   try {
     var primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
     botUsageAdd(usage, proCallUsage(primary));
@@ -4110,10 +4154,17 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     return json({ unknown: true, error: "Nothing is stored or running for that message." }, 404);
   }
 
-  if (body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs") {
+  if (body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "pm-steer-status") {
     var ctlPk = String(userPubkey).toLowerCase();
     if (!(await cacheRateTake("runctl", ctlPk, 1, BOT_RUN_CTL_RATE, 60000))) {
       return json({ error: "Slow down \u2014 too many requests. Try again in a minute." }, 429);
+    }
+    if (body.action === "pm-steer-status") {
+      var statusIds = Array.isArray(body.ids) ? body.ids.filter(function (id) {
+        return typeof id === "string" && /^[0-9a-f]{24}$/.test(id);
+      }) : [];
+      if (!statusIds.length) return json({ error: "Missing the ids of the updates to check." }, 400);
+      return json({ states: await runSteerStatus(env.DB_BOT, ctlPk, statusIds) });
     }
     if (body.action === "pm-runs") {
       var listed = await runListRecent(env.DB_BOT, ctlPk, Date.now(), 20);
@@ -4146,25 +4197,12 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     if (!steerText) return json({ error: "There is nothing to pass on." }, 400);
     if (steerText.length > RUN_STEER_CHARS) return json({ error: "That update is too long; keep it under " + RUN_STEER_CHARS + " characters." }, 413);
     var steerRow = await runGet(env.DB_BOT, ctlPk, ctlAsked);
-    if (!steerRow || steerRow.state === "pending") {
-      return json({ error: "Nymbot has no request running for that message.", unknown: true }, 404);
-    }
     var steerNow = Date.now();
-    var steerBeat = Number(steerRow.beat_at) || 0;
-    var steerLive = !steerRow.cancel && (
-      (steerRow.state === "running" && steerBeat > steerNow - RUN_LIVE_MS) ||
-      (steerRow.state === "parked" && steerBeat > steerNow - RUN_PARKED_MS) ||
-      (steerRow.state === "waiting" && steerBeat > steerNow - RUN_WAITING_MS));
-    if (!steerLive) {
-      return json({
-        error: "That request has already finished. Send this as a new message instead.", finished: true,
-        state: steerRow.cancel ? "stopped" : (steerRow.state === "running" ? "failed" : steerRow.state)
-      }, 409);
-    }
+    var steerNo = botSteerRefusal(steerRow, runCipher, steerNow);
+    if (steerNo) return json(steerNo.body, steerNo.status);
     var steerId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
     var steered = await runSteerAdd(env.DB_BOT, ctlPk, ctlAsked, steerId, runCipher.seal(steerText), steerNow);
     if (!steered) return json({ error: "Updates can't be passed on right now." }, 503);
-    botRunLocalEntry(ctlPk, ctlAsked).steer = true;
     return json({ ok: true, state: steerRow.state, id: steerId });
   }
 
@@ -4331,6 +4369,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       turnStopHeartbeat();
       runLinked(obj);
       if (runCtl) await runCtl.finish(obj && obj.stopped ? "stopped" : "done");
+      if (runCtl && !(obj && obj.stopped) && obj && typeof obj === "object") {
+        var steerMissed = await runCtl.missed();
+        if (steerMissed.length) obj.steerMissed = steerMissed;
+      }
       await holdDrop();
       var storeKeys = ["e:" + String(currentId).toLowerCase()];
       if (isHex64(msgId)) storeKeys.push("x:" + String(msgId).toLowerCase());
@@ -4893,15 +4935,16 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       }
     } else if (chatResult && typeof chatResult.reply === "string" && /steer_run/i.test(chatResult.reply)) {
       var steerSaid = botSteerTags(chatResult.reply);
+      var steerPassed = 0;
       for (var sti = 0; sti < steerSaid.steers.length; sti++) {
         var steerTo = runOthers.filter(function (o) { return o.handle === steerSaid.steers[sti].handle; })[0];
         if (!steerTo) continue;
+        if (botSteerRefusal(await runGet(env.DB_BOT, runPk, steerTo.asked), runCipher, Date.now())) continue;
         var steerRowId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
-        if (await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now())) {
-          botRunLocalEntry(runPk, steerTo.asked).steer = true;
-        }
+        if (await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now())) steerPassed++;
       }
-      chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
+      if (steerPassed || !steerSaid.steers.length) chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
+      else chatResult.reply = (steerSaid.text ? steerSaid.text + "\n\n" : "") + BOT_STEER_MISSED;
     }
     var reply = chatResult && chatResult.reply;
     if (!reply) return await turnFail({ error: "Nymbot returned an empty response" }, 500);
@@ -5112,7 +5155,7 @@ async function onRequest(context) {
     });
   }
 
-  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-claim" || body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
+  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-claim" || body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-steer-status" || body.action === "pm-runs" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {
@@ -7039,10 +7082,16 @@ var LINK_SKIP_EXT = /\.(?:png|jpe?g|gif|webp|avif|bmp|svg|ico|mp4|webm|mov|mkv|a
 // The links in a message, in the order they were written.
 function botExtractPageUrls(text) {
   var out = [];
-  var m = String(text || "").match(/https?:\/\/[^\s<>"'`\]\)]+/g);
+  var body = String(text || "");
+  var attached = {};
+  var labeled = /---\s*attached (?:video|image):[^\n]*---\s*\n\s*(https?:\/\/[^\s<>"']+)/gi;
+  var a;
+  while ((a = labeled.exec(body)) !== null) attached[a[1].replace(/[.,;:!?]+$/, "")] = true;
+  var m = body.match(/https?:\/\/[^\s<>"'`\]\)]+/g);
   if (!m) return out;
   for (var i = 0; i < m.length && out.length < LINK_READ_COUNT; i++) {
     var url = m[i].replace(/[.,;:!?]+$/, "");
+    if (attached[url]) continue;
     if (LINK_SKIP_EXT.test(url)) continue;
     if (isPrivateHostUrl(url)) continue;
     if (out.indexOf(url) === -1) out.push(url);
@@ -8567,6 +8616,7 @@ async function handleWho(geohash, channelMessages, activeUsers, context) {
 export {
   onRequest,
   handleBotPMAction,
+  botMediaBytes,
   botReleaseStrandedTurn,
   botTurnKey,
   botTurnMsgKey,

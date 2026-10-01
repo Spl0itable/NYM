@@ -282,6 +282,8 @@ export async function onRequest(context) {
   const MAX_KIND_BLACKLIST_RELAYS = 256;
   const MAX_KIND_BLACKLIST_KINDS = 64;
   const PENDING_GEO_PER_RELAY = 50;
+  const HELD_EARLY_MAX = 16;
+  const HELD_EARLY_MS = 20000;
   const MAX_PERMANENTLY_SKIPPED = 1000;
   const FORGED_FRAME_LIMIT = 10;
   const eventBucket = new TokenBucket(200, 120);
@@ -379,6 +381,7 @@ export async function onRequest(context) {
 
   // Map<relayUrl, Array<geoMsg string>> of GEO_EVENTs waiting for geo relays to connect.
   const pendingGeoEvents = new Map();
+  const heldEarly = [];
 
   // Cloudflare allows only 6 connections establishing at once, so queue the rest to avoid connect timeouts.
   let connectionTimer = null;
@@ -1759,6 +1762,7 @@ export async function onRequest(context) {
           }
           pendingGeoEvents.delete(relayUrl);
         }
+        sendHeldEarly(relayUrl, ws);
         schedulePoolStatus();
       });
 
@@ -2052,6 +2056,28 @@ export async function onRequest(context) {
     }
   }
 
+  function anyUpstreamOpen() {
+    for (const info of upstreams.values()) {
+      if (info.status === 'connected' && info.ws && info.ws.readyState === WebSocket.OPEN) return true;
+    }
+    return false;
+  }
+
+  function holdEarly(msg, kind) {
+    if (heldEarly.length >= HELD_EARLY_MAX) heldEarly.shift();
+    heldEarly.push({ msg, kind, at: Date.now() });
+  }
+
+  function sendHeldEarly(relayUrl, ws) {
+    const now = Date.now();
+    while (heldEarly.length && now - heldEarly[0].at > HELD_EARLY_MS) heldEarly.shift();
+    const blocked = kindBlacklist.get(relayUrl);
+    for (const h of heldEarly) {
+      if (h.kind >= 0 && blocked && blocked.has(h.kind)) continue;
+      try { ws.send(h.msg); } catch {}
+    }
+  }
+
   function sendToUpstreams(data, filter) {
     const msg = typeof data === 'string' ? data : JSON.stringify(data);
     WRITE_ONLY_RELAYS.forEach((url) => {
@@ -2228,6 +2254,7 @@ export async function onRequest(context) {
             const evtKind = msg[1] && typeof msg[1].kind === 'number' ? msg[1].kind : -1;
             if (archiveEnabled) { archiveOutgoingEvent(msg[1]); archiveOutgoingEmoji(msg[1]); }
             if (isAppRelayOnlyEvent(msg[1])) { sendAppRelayOnly(rawMsg); return; }
+            if (!anyUpstreamOpen()) { holdEarly(rawMsg, evtKind); return; }
             sendToUpstreams(rawMsg, (url) => {
               if (evtKind < 0) return true;
               const blocked = kindBlacklist.get(url);
@@ -2290,6 +2317,7 @@ export async function onRequest(context) {
               return !!(blocked && blocked.has(evtKind));
             };
             const dmMsg = JSON.stringify(['EVENT', dmEvt]);
+            if (!anyUpstreamOpen()) { holdEarly(dmMsg, evtKind); return; }
             const dmSet = new Set(dmRelays);
             WRITE_ONLY_RELAYS.forEach((url) => {
               const info = upstreams.get(url);
@@ -2378,6 +2406,7 @@ export async function onRequest(context) {
     if (relaysTimer) { clearTimeout(relaysTimer); relaysTimer = null; }
     pendingRelaysConfig = null;
     pendingGeoEvents.clear();
+    heldEarly.length = 0;
     pendingAppArchive.clear();
     activeSubscriptions.clear();
     subActivity.clear();

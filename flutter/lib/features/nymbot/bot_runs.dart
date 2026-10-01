@@ -9,6 +9,7 @@ typedef BotRunTransport = Future<BotRunResponse> Function(
   String action,
   Map<String, dynamic> body, {
   Duration? timeout,
+  bool? asAnon,
 });
 
 const int kBotRunDefaultLimit = 3;
@@ -17,10 +18,12 @@ const int kBotRunSteerChars = 2000;
 const Duration kBotRunMaxAge = Duration(hours: 1);
 const Duration kBotRunPmTimeout = Duration(seconds: 180);
 const Duration kBotRunPollEvery = Duration(seconds: 5);
+const Duration kBotRunSteerKeep = Duration(hours: 2);
 const int _claimFirstMs = 3000;
 const int _claimCapMs = 60000;
 
 final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
+final RegExp _steerId = RegExp(r'^[0-9a-f]{24}$');
 
 int clampBotMaxRuns(int n) =>
     n < 1 ? 0 : (n > kBotRunCeiling ? kBotRunCeiling : n);
@@ -57,7 +60,7 @@ enum BotRunState { running, claiming, waiting, capped }
 
 enum BotRunNoteKind { stopped, error, capFree, failed, steerLate }
 
-enum BotSteerOutcome { ok, finished, tooLong, retry, empty }
+enum BotSteerOutcome { ok, finished, answering, tooLong, retry, empty }
 
 enum BotRunCapOption { start, always, wait }
 
@@ -131,7 +134,8 @@ class BotRun {
   final int startedAt;
   BotRunState state = BotRunState.running;
   BotRunCap? cap;
-  String? steer;
+  final Map<String, String> steers = <String, String>{};
+  bool anon = false;
   String progress = '';
   bool stopped = false;
   int gen = 0;
@@ -143,12 +147,25 @@ class BotRun {
 }
 
 class BotRunNote {
-  const BotRunNote(this.kind, {this.text = '', this.steerText, this.spec});
+  const BotRunNote(this.kind,
+      {this.text = '', this.steerText, this.spec, this.thread});
 
   final BotRunNoteKind kind;
   final String text;
   final String? steerText;
   final BotRunSpec? spec;
+  final String? thread;
+}
+
+class _FarSteer {
+  _FarSteer(this.runId, this.text, this.thread, this.anon, this.at);
+
+  final String runId;
+  final String text;
+  final String thread;
+  final bool anon;
+  final int at;
+  int tries = 0;
 }
 
 class BotRunRow {
@@ -182,6 +199,7 @@ class BotRunsEngine {
     this.onTyping,
     this.onResponse,
     this.onPersist,
+    this.anonNow,
     int Function()? maxRuns,
     void Function(int n)? setMaxRuns,
     Future<void> Function(Duration d)? sleep,
@@ -203,6 +221,7 @@ class BotRunsEngine {
   final void Function(bool live)? onTyping;
   final void Function()? onResponse;
   final void Function(List<Map<String, dynamic>> inflight)? onPersist;
+  final bool Function()? anonNow;
   final int Function() _maxRuns;
   final void Function(int n) _setMaxRuns;
   final Future<void> Function(Duration d) _sleep;
@@ -217,6 +236,8 @@ class BotRunsEngine {
   final Map<String, BotRunNote> notes = <String, BotRunNote>{};
   List<Map<String, dynamic>> remote = const <Map<String, dynamic>>[];
   final Set<String> _guard = <String>{};
+  final Map<String, _FarSteer> _far = <String, _FarSteer>{};
+  bool _farChecking = false;
   bool _typingOn = false;
   bool disposed = false;
 
@@ -234,7 +255,8 @@ class BotRunsEngine {
     if (id.isEmpty || spec.eventId.isEmpty) return null;
     final existing = runs[id];
     if (existing != null) return existing;
-    final run = BotRun(spec, spec.startedAt ?? _now());
+    final run = BotRun(spec, spec.startedAt ?? _now())
+      ..anon = anonNow?.call() ?? false;
     runs[id] = run;
     notes.remove(id);
     _persist();
@@ -322,10 +344,15 @@ class BotRunsEngine {
       _end(run);
       return;
     }
-    final steer = run.steer;
+    final missedIds = data['steerMissed'];
+    final missed = [
+      for (final id in missedIds is List ? missedIds : const [])
+        if (id is String && run.steers.containsKey(id)) run.steers[id]!,
+    ];
     _end(run);
-    if (steer != null && data['stopped'] != true) {
-      _note(run, BotRunNote(BotRunNoteKind.steerLate, steerText: steer));
+    if (missed.isNotEmpty && data['stopped'] != true) {
+      _note(run,
+          BotRunNote(BotRunNoteKind.steerLate, steerText: missed.join('\n\n')));
     }
     await onDelivered(run, data);
   }
@@ -457,20 +484,91 @@ class BotRunsEngine {
     if (t.isEmpty) return BotSteerOutcome.empty;
     if (t.length > kBotRunSteerChars) return BotSteerOutcome.tooLong;
     final key = id.toLowerCase();
+    final run = runs[key];
     BotRunResponse res;
     try {
-      res = await transport('pm-steer', {'replyTo': key, 'text': t});
+      res = await transport('pm-steer', {'replyTo': key, 'text': t},
+          asAnon: run?.anon);
     } catch (_) {
       return BotSteerOutcome.retry;
     }
     if (res.status == 200 && res.data['ok'] == true) {
-      final run = runs[key];
-      if (run != null) run.steer = t;
+      final sid = res.data['id'];
+      if (run != null && sid is String && sid.isNotEmpty) {
+        run.steers[sid] = t;
+      } else if (run == null && sid is String && _steerId.hasMatch(sid)) {
+        _far[sid] = _FarSteer(
+            key, t, threadFor(key), anonNow?.call() ?? false, _now());
+        if (_far.length > 50) _far.remove(_far.keys.first);
+      }
       return BotSteerOutcome.ok;
     }
     if (res.status == 413) return BotSteerOutcome.tooLong;
-    if (res.status == 429 || res.status == 0) return BotSteerOutcome.retry;
+    if (res.status == 429 || res.status == 0 || res.status >= 500) {
+      return BotSteerOutcome.retry;
+    }
+    if (res.status == 409 && res.data['final'] == true) {
+      return BotSteerOutcome.answering;
+    }
     return BotSteerOutcome.finished;
+  }
+
+  bool get watchingSteers {
+    final now = _now();
+    _far.removeWhere((_, s) => now - s.at > kBotRunSteerKeep.inMilliseconds);
+    return _far.isNotEmpty;
+  }
+
+  Future<void> _checkSteers() async {
+    if (_farChecking || !watchingSteers) return;
+    _farChecking = true;
+    try {
+      final live = <String>{
+        ...runs.keys,
+        for (final r in remote) '${r['replyTo']}'.toLowerCase(),
+      };
+      final groups = <bool, List<String>>{};
+      _far.forEach((id, s) {
+        if (live.contains(s.runId)) return;
+        if (s.anon != (anonNow?.call() ?? false)) return;
+        groups.putIfAbsent(s.anon, () => <String>[]).add(id);
+      });
+      for (final entry in groups.entries) {
+        final ids = entry.value.take(20).toList();
+        BotRunResponse res;
+        try {
+          res = await transport('pm-steer-status', {'ids': ids},
+              asAnon: entry.key);
+        } catch (_) {
+          continue;
+        }
+        final states = res.data['states'];
+        if (disposed || res.status != 200 || states is! Map) continue;
+        final missed = <String, List<String>>{};
+        final threads = <String, String>{};
+        for (final id in ids) {
+          final s = _far[id];
+          if (s == null) continue;
+          final state = states[id];
+          if (state == 'pending' || state == null) {
+            s.tries++;
+            if (s.tries >= 6) _far.remove(id);
+            continue;
+          }
+          _far.remove(id);
+          if (state != 'missed') continue;
+          missed.putIfAbsent(s.runId, () => <String>[]).add(s.text);
+          threads[s.runId] = s.thread;
+        }
+        missed.forEach((runId, texts) {
+          notes[runId] = BotRunNote(BotRunNoteKind.steerLate,
+              steerText: texts.join('\n\n'), thread: threads[runId]);
+        });
+        if (missed.isNotEmpty) _changed();
+      }
+    } finally {
+      _farChecking = false;
+    }
   }
 
   List<BotRunCapOption> capOptions(String id) {
@@ -573,10 +671,8 @@ class BotRunsEngine {
       final run = runs['${r['replyTo']}'.toLowerCase()];
       if (run == null) continue;
       run.progress = r['progress'] is String ? r['progress'] as String : '';
-      if (run.progress.toLowerCase().contains('applied your update')) {
-        run.steer = null;
-      }
     }
+    if (watchingSteers) unawaited(_checkSteers());
     for (final r in runs.values) {
       final cap = r.cap;
       if (r.state == BotRunState.waiting &&

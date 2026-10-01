@@ -54,6 +54,10 @@ const GATE_TOKEN_MAX_WAIT_MS = 30000;
 const KEY_USAGE_IDLE_MS = 24 * 3600 * 1000;
 const KEY_USAGE_PRUNE_EVERY_MS = 10 * 60 * 1000;
 const KEY_USAGE_PRUNE_BATCH = 500;
+const HOLD_SPENT_KEEP_MS = 2 * 24 * 3600 * 1000;
+const HOLD_EXPIRE_BATCH = 25;
+const HOLD_EXPIRE_ALARM_BATCH = 500;
+const HOLD_SPENT_MAX_IDS = 50;
 
 export class NymLedger {
   constructor(state, env) {
@@ -61,6 +65,8 @@ export class NymLedger {
     this.env = env;
     this.sql = state.storage.sql;
     this._chain = Promise.resolve();
+    this._chargeAt = 0;
+    this._alarmAt = undefined;
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS replay (id TEXT PRIMARY KEY, exp INTEGER NOT NULL);"
     );
@@ -109,8 +115,17 @@ export class NymLedger {
       "CREATE TABLE IF NOT EXISTS credit_dust (pubkey TEXT NOT NULL, tier TEXT NOT NULL, milli INTEGER NOT NULL, PRIMARY KEY (pubkey, tier));"
     );
     this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS credit_holds (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, exp INTEGER NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS credit_holds (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, exp INTEGER NOT NULL, charge INTEGER NOT NULL DEFAULT 0);"
     );
+    try {
+      this.sql.exec("ALTER TABLE credit_holds ADD COLUMN charge INTEGER NOT NULL DEFAULT 0;");
+    } catch (e) { }
+    this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS credit_hold_spent (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, tier TEXT NOT NULL, milli INTEGER NOT NULL, at INTEGER NOT NULL, charged INTEGER);"
+    );
+    try {
+      this.sql.exec("ALTER TABLE credit_hold_spent ADD COLUMN charged INTEGER;");
+    } catch (e) { }
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS credit_debt (pubkey TEXT NOT NULL, tier TEXT NOT NULL, milli INTEGER NOT NULL, PRIMARY KEY (pubkey, tier));"
     );
@@ -143,11 +158,111 @@ export class NymLedger {
     }
     const op = body && body.op;
     try {
-      const result = await this._exclusive(() => this._dispatch(op, body));
+      const result = await this._exclusive(async () => {
+        try { await this._expireHolds(false); } catch (e) { }
+        return this._dispatch(op, body);
+      });
       return this._json(result);
     } catch (e) {
       return this._json({ error: "ledger error" }, 500);
     }
+  }
+
+  async alarm() {
+    this._alarmAt = null;
+    await this._exclusive(() => this._expireHolds(true));
+  }
+
+  async _armExpiry(at) {
+    const st = this.state && this.state.storage;
+    if (!st || typeof st.setAlarm !== "function") return;
+    if (this._alarmAt === undefined) this._alarmAt = typeof st.getAlarm === "function" ? await st.getAlarm() : null;
+    if (this._alarmAt != null && this._alarmAt <= at) return;
+    await st.setAlarm(at);
+    this._alarmAt = at;
+  }
+
+  async _expireHolds(all) {
+    const now = Date.now();
+    if (!all && now < this._chargeAt) return;
+    const rows = this.sql.exec(
+      "SELECT id, pubkey, tier, charge FROM credit_holds WHERE exp <= ? AND charge > 0 ORDER BY exp LIMIT ?;",
+      now, all ? HOLD_EXPIRE_ALARM_BATCH : HOLD_EXPIRE_BATCH
+    ).toArray();
+    for (const r of rows) {
+      const milli = Math.max(0, Math.floor(Number(r.charge) || 0));
+      const tierKey = r.tier === "pro" ? "pro" : "standard";
+      await this._consumeCredits(r.pubkey, 0, undefined, tierKey, milli, null, true);
+      this.sql.exec("DELETE FROM credit_holds WHERE id = ?;", r.id);
+      this.sql.exec(
+        "INSERT OR REPLACE INTO credit_hold_spent (id, pubkey, tier, milli, at, charged) VALUES (?, ?, ?, ?, ?, ?);",
+        r.id, r.pubkey, tierKey, milli, now, milli
+      );
+    }
+    if (rows.length) this.sql.exec("DELETE FROM credit_hold_spent WHERE at < ?;", now - HOLD_SPENT_KEEP_MS);
+    const next = this.sql.exec("SELECT MIN(exp) AS at FROM credit_holds WHERE charge > 0;").toArray();
+    const at = next.length && next[0].at != null ? Number(next[0].at) : null;
+    this._chargeAt = at == null ? Infinity : at;
+    if (at != null) await this._armExpiry(at);
+  }
+
+  async _noteCharge(exp) {
+    if (exp < this._chargeAt) this._chargeAt = exp;
+    await this._armExpiry(exp);
+  }
+
+  _expireMilli(v) {
+    const n = Math.floor(Number(v) || 0);
+    return Number.isSafeInteger(n) && n > 0 ? n : 0;
+  }
+
+  _spentHold(id, pubkey, tierKey, cost, milli) {
+    if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) return null;
+    const rows = this.sql.exec(
+      "SELECT milli, charged FROM credit_hold_spent WHERE id = ? AND pubkey = ? AND tier = ? LIMIT 1;", id, pubkey, tierKey
+    ).toArray();
+    if (!rows.length) return null;
+    const prior = Math.max(0, Number(rows[0].milli) || 0);
+    const total = Math.max(0, Math.floor(Number(cost) || 0)) * 1000 + Math.max(0, Math.floor(Number(milli) || 0));
+    if (total > prior) this.sql.exec("UPDATE credit_hold_spent SET milli = ? WHERE id = ?;", total, id);
+    return { extra: Math.max(0, total - prior), expired: this._expiredCharge(rows[0]) };
+  }
+
+  _expiredCharge(row) {
+    const n = row.charged == null ? Number(row.milli) : Number(row.charged);
+    return Math.max(0, Math.floor(n) || 0);
+  }
+
+  _holdSpent(a) {
+    const pubkey = String(a.pubkey || "");
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return { error: "Invalid pubkey." };
+    const ids = [...new Set((Array.isArray(a.ids) ? a.ids : []).filter((id) => typeof id === "string" && /^[0-9a-f]{32}$/.test(id)))].slice(0, HOLD_SPENT_MAX_IDS);
+    const spent = {};
+    const live = [];
+    if (!ids.length) return { ok: true, spent, live };
+    const marks = ids.map(() => "?").join(", ");
+    const now = Date.now();
+    const charged = this.sql.exec(
+      "SELECT id, tier, milli, charged FROM credit_hold_spent WHERE pubkey = ? AND id IN (" + marks + ");", pubkey, ...ids
+    ).toArray();
+    for (const r of charged) spent[r.id] = { milli: this._expiredCharge(r), tier: r.tier };
+    const held = this.sql.exec(
+      "SELECT id FROM credit_holds WHERE pubkey = ? AND (exp > ? OR charge > 0) AND id IN (" + marks + ");", pubkey, now, ...ids
+    ).toArray();
+    for (const r of held) if (!spent[r.id]) live.push(r.id);
+    return { ok: true, spent, live };
+  }
+
+  async _holdAge(a) {
+    if (!this.env || this.env.LEDGER_TEST_OPS !== "1") return { error: "unknown op" };
+    const pubkey = String(a.pubkey || "");
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return { error: "Invalid pubkey." };
+    const now = Date.now();
+    const rows = this.sql.exec("SELECT COUNT(*) AS n FROM credit_holds WHERE pubkey = ?;", pubkey).toArray();
+    this.sql.exec("UPDATE credit_holds SET exp = ? WHERE pubkey = ?;", now, pubkey);
+    this._chargeAt = 0;
+    await this._armExpiry(now);
+    return { ok: true, aged: rows.length ? Number(rows[0].n) || 0 : 0 };
   }
 
   async _dispatch(op, a) {
@@ -193,6 +308,8 @@ export class NymLedger {
       case "key-settle": return this._keySettle(a);
       case "key-usage": return this._keyUsage(a);
       case "key-reset": return this._keyReset(a);
+      case "hold-age": return this._holdAge(a);
+      case "hold-spent": return this._holdSpent(a);
       default: return { error: "unknown op" };
     }
   }
@@ -1026,7 +1143,7 @@ export class NymLedger {
 
   _holdsOf(pubkey, tierKey, except) {
     const now = Date.now();
-    this.sql.exec("DELETE FROM credit_holds WHERE exp <= ?;", now);
+    this.sql.exec("DELETE FROM credit_holds WHERE exp <= ? AND charge = 0;", now);
     const rows = this.sql.exec(
       "SELECT id, amount FROM credit_holds WHERE pubkey = ? AND tier = ? AND exp > ?;", pubkey, tierKey, now
     ).toArray();
@@ -1073,10 +1190,12 @@ export class NymLedger {
     const free = (rec.balance || 0) - held;
     if (unpaid > 0) return { ok: false, balance: rec.balance || 0, held: held, required: amount, debt: unpaid };
     if (free < amount) return { ok: false, balance: rec.balance || 0, held: held, required: amount };
+    const charge = this._expireMilli(a.expireMilli);
     this.sql.exec(
-      "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp) VALUES (?, ?, ?, ?, ?);",
-      id, pubkey, tierKey, amount, now + ttl * 1000
+      "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp, charge) VALUES (?, ?, ?, ?, ?, ?);",
+      id, pubkey, tierKey, amount, now + ttl * 1000, charge
     );
+    if (charge > 0) await this._noteCharge(now + ttl * 1000);
     if (a.stamp !== false) {
       if (!Array.isArray(rec.rl)) rec.rl = [];
       rec.rl = rec.rl.filter((t) => t > now - 600000);
@@ -1095,12 +1214,17 @@ export class NymLedger {
     const amount = Math.max(0, Math.floor(Number(a.amount) || 0));
     const ttl = Math.min(3600, Math.max(30, Math.floor(Number(a.ttl) || 900)));
     const now = Date.now();
+    const charge = this._expireMilli(a.expireMilli);
     const live = this.sql.exec(
       "SELECT id FROM credit_holds WHERE id = ? AND pubkey = ? AND tier = ? AND exp > ? LIMIT 1;", id, pubkey, tierKey, now
     ).toArray();
     if (live.length) {
-      this.sql.exec("UPDATE credit_holds SET exp = ? WHERE id = ?;", now + ttl * 1000, id);
+      this.sql.exec("UPDATE credit_holds SET exp = ?, charge = MAX(charge, ?) WHERE id = ?;", now + ttl * 1000, charge, id);
+      if (charge > 0) await this._noteCharge(now + ttl * 1000);
       return { ok: true, extended: true };
+    }
+    if (this.sql.exec("SELECT id FROM credit_hold_spent WHERE id = ? LIMIT 1;", id).toArray().length) {
+      return { ok: false, lost: true, expired: true };
     }
     const rec = await this._getCredits(pubkey, tierKey);
     const held = this._holdsOf(pubkey, tierKey, id);
@@ -1109,9 +1233,10 @@ export class NymLedger {
       return { ok: false, lost: true, balance: rec.balance || 0, held, required: amount };
     }
     this.sql.exec(
-      "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp) VALUES (?, ?, ?, ?, ?);",
-      id, pubkey, tierKey, amount, now + ttl * 1000
+      "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp, charge) VALUES (?, ?, ?, ?, ?, ?);",
+      id, pubkey, tierKey, amount, now + ttl * 1000, charge
     );
+    if (charge > 0) await this._noteCharge(now + ttl * 1000);
     return { ok: true, renewed: true, balance: rec.balance || 0, held: held + amount };
   }
 
@@ -1294,6 +1419,8 @@ export class NymLedger {
   _creditRelease(id) {
     if (typeof id !== "string" || !/^[0-9a-f]{32}$/.test(id)) return { ok: false };
     this.sql.exec("DELETE FROM credit_holds WHERE id = ?;", id);
+    const spent = this.sql.exec("SELECT milli, charged FROM credit_hold_spent WHERE id = ? LIMIT 1;", id).toArray();
+    if (spent.length) return { ok: true, spentMilli: this._expiredCharge(spent[0]) };
     return { ok: true };
   }
 
@@ -1339,7 +1466,16 @@ export class NymLedger {
     cost = Math.max(0, Math.floor(Number(cost) || 0));
     const tierKey = tier === "pro" ? "pro" : "standard";
     const unpaid = await this._payDebt(pubkey, tierKey);
-    const counted = hold ? this._takeHold(hold, pubkey, tierKey) : false;
+    const spent = hold ? this._spentHold(hold, pubkey, tierKey, cost, milli) : null;
+    if (spent) {
+      cost = 0;
+      milli = spent.extra;
+      if (milli <= 0) {
+        const kept = await this._getCredits(pubkey, tier);
+        return { ok: true, balance: kept.balance || 0, charged: 0, dust: this._dustOf(pubkey, tierKey), spentMilli: spent.expired };
+      }
+    }
+    const counted = spent ? true : (hold ? this._takeHold(hold, pubkey, tierKey) : false);
     const heldByOthers = this._holdsOf(pubkey, tierKey, null);
     const owed = Math.max(0, Math.floor(Number(milli) || 0));
     let dust = 0;
@@ -1353,7 +1489,11 @@ export class NymLedger {
     const rec = await this._getCredits(pubkey, tier);
     const blocked = unpaid > 0 && !counted && (cost > 0 || owed > 0);
     if (blocked || (rec.balance || 0) - heldByOthers < cost) {
-      if (owe && (cost > 0 || owed > 0)) return this._consumeOwing(pubkey, tierKey, rec, blocked ? 0 : heldByOthers, blocked, cost * 1000 + nextDust, dust, unpaid);
+      if (owe && (cost > 0 || owed > 0)) {
+        const owing = await this._consumeOwing(pubkey, tierKey, rec, blocked ? 0 : heldByOthers, blocked, cost * 1000 + nextDust, dust, unpaid);
+        if (spent) owing.spentMilli = spent.expired;
+        return owing;
+      }
       const short = { ok: false, balance: rec.balance || 0, required: cost };
       if (unpaid > 0) short.debt = unpaid;
       return short;
@@ -1369,7 +1509,9 @@ export class NymLedger {
       rec.rl.push(Number(ts));
     }
     await this._putCredits(pubkey, rec, tier);
-    return { ok: true, balance: rec.balance, charged: cost, dust: nextDust };
+    const done = { ok: true, balance: rec.balance, charged: cost, dust: nextDust };
+    if (spent) done.spentMilli = spent.expired;
+    return done;
   }
 
   async _consumeOwing(pubkey, tierKey, rec, heldByOthers, blocked, total, priorDust, unpaid) {

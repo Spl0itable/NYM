@@ -186,6 +186,7 @@ class StorageKeys {
   static const notifyFriendsOnly = 'nym_notify_friends_only';
   static const notificationLastRead = 'nym_notification_last_read';
   static const lastSettingsSyncTs = 'nym_last_settings_sync_ts';
+  static const settingsDirtyKeys = 'nym_settings_dirty_keys';
 
   // Emoji / gifs
   static const emojiPackFavorites = 'nym_emoji_pack_favorites';

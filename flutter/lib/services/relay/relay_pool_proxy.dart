@@ -9,6 +9,7 @@ import '../../core/constants/relays.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import '../api/api_config.dart';
+import 'held_publishes.dart';
 import 'relay_connection.dart'
     show WebSocketChannelFactory, defaultRelayChannelFactory;
 import 'relay_message.dart';
@@ -560,7 +561,9 @@ class RelayPoolProxy implements PoolTransport {
     DateTime Function()? now,
     this.eoseQuorum = 0.6,
     this.eoseTimeout = const Duration(seconds: 4),
+    Duration heldWait = const Duration(seconds: 15),
   })  : _verify = verify ?? ((_) async => true),
+        _held = HeldPublishes(max: heldMax, wait: heldWait),
         _now = now ?? DateTime.now,
         _allRelays = {...relays},
         _geoRelayUrls = [...?geoRelayUrls],
@@ -570,7 +573,10 @@ class RelayPoolProxy implements PoolTransport {
         _channelFactory = channelFactory ?? defaultRelayChannelFactory,
         _rng = random ?? Random();
 
+  static const int heldMax = 16;
+
   final EventVerifier _verify;
+  final HeldPublishes<PoolTransport> _held;
   final Set<String> _allRelays;
   final List<String> _geoRelayUrls;
   final List<String> _dmRelays;
@@ -767,6 +773,7 @@ class RelayPoolProxy implements PoolTransport {
   /// Broadcasts `["EVENT",e]` to every shard; returns sockets written, since OKs arrive async.
   @override
   Future<int> publish(NostrEvent event) async {
+    if (_mustHold) return _held.hold((via) => via.publish(event));
     // Remember the kind so an attributed OK rejection can blacklist it.
     _trackSentEventKind(event);
     return _broadcast(PoolFrame.event(event));
@@ -775,6 +782,7 @@ class RelayPoolProxy implements PoolTransport {
   /// Publishes a DM gift wrap via `["DM_EVENT",e]`.
   @override
   Future<int> publishDm(NostrEvent event) async {
+    if (_mustHold) return _held.hold((via) => via.publishDm(event));
     return _broadcast(PoolFrame.dmEvent(event));
   }
 
@@ -782,11 +790,16 @@ class RelayPoolProxy implements PoolTransport {
   @override
   Future<int> publishGeo(
       NostrEvent event, List<String> closestRelayUrls) async {
+    if (_mustHold) {
+      return _held.hold((via) => via.publishGeo(event, closestRelayUrls));
+    }
     if (closestRelayUrls.isEmpty) {
       return _broadcast(PoolFrame.event(event));
     }
     return _broadcast(PoolFrame.geoEvent(event, closestRelayUrls));
   }
+
+  bool get _mustHold => !_disposed && !_sockets.any((s) => s.isOpen);
 
   int _broadcast(String frame) {
     var n = 0;
@@ -799,6 +812,7 @@ class RelayPoolProxy implements PoolTransport {
   @override
   Future<void> disconnectAll() async {
     _disposed = true;
+    _held.dropAll();
     _stopSampler();
     final subs = _subscriptions.values.toList();
     for (final s in subs) {
@@ -810,6 +824,8 @@ class RelayPoolProxy implements PoolTransport {
       await s.close();
     }
   }
+
+  void handOverHeld(PoolTransport next) => _held.flush(next);
 
   /// Closes shard sockets but keeps [Subscription]s alive for the proxy/direct swap.
   Future<void> disconnectSocketsOnly() async {
@@ -1018,6 +1034,7 @@ class RelayPoolProxy implements PoolTransport {
     for (final entry in _activeFilters.entries) {
       sock.send(PoolFrame.req(entry.key, entry.value));
     }
+    _held.flush(this);
   }
 
   void _onShardClosed(_ShardSocket sock) {

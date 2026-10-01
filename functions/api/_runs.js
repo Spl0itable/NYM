@@ -13,6 +13,7 @@ export var RUN_LOCK_LEASE_MS = 60000;
 export var RUN_LABEL_CHARS = 80;
 export var RUN_PROGRESS_CHARS = 200;
 export var RUN_STEER_CHARS = 2000;
+export var RUN_STEER_STATUS_MAX = 20;
 export var RUN_RESULT_MAX_BYTES = 512 * 1024;
 
 var RUN_DDL = [
@@ -539,6 +540,39 @@ export async function runSteerMark(db, pk, asked, ids, now) {
   }, false);
 }
 
+export async function runSteerMiss(db, pk, asked, ids, now) {
+  if (!ids || !ids.length) return false;
+  return withTables(db, async function () {
+    await db.batch(ids.map(function (id) {
+      return db.prepare("UPDATE botpm_steer SET applied_at = ? WHERE pubkey = ? AND asked = ? AND id = ? AND applied_at = 0")
+        .bind(-(now || Date.now()), pk, asked, id);
+    }));
+    return true;
+  }, false);
+}
+
+export async function runSteerStatus(db, pk, ids) {
+  var want = (ids || []).slice(0, RUN_STEER_STATUS_MAX);
+  var out = {};
+  want.forEach(function (id) { out[id] = "unknown"; });
+  if (!want.length) return out;
+  return withTables(db, async function () {
+    var st = db.prepare(
+      "SELECT s.id AS id, s.applied_at AS applied_at, r.state AS state, r.cancel AS cancel FROM botpm_steer s " +
+      "LEFT JOIN botpm_runs r ON r.pubkey = s.pubkey AND r.asked = s.asked WHERE s.pubkey = ? AND s.id IN (" +
+      want.map(function () { return "?"; }).join(", ") + ")"
+    );
+    var rs = await st.bind.apply(st, [pk].concat(want)).all();
+    ((rs && rs.results) || []).forEach(function (r) {
+      var applied = Number(r.applied_at) || 0;
+      if (applied > 0) out[r.id] = "applied";
+      else if (applied < 0 || (r.state === "done" && !Number(r.cancel))) out[r.id] = "missed";
+      else out[r.id] = "pending";
+    });
+    return out;
+  }, out);
+}
+
 export async function runSummaryGet(db, pk, thread) {
   return withTables(db, async function () {
     return await db.prepare("SELECT text, upto_at FROM botpm_summary WHERE pubkey = ? AND thread = ?").bind(pk, thread || "").first();
@@ -577,7 +611,8 @@ export async function runSweep(db, now, limit) {
       db.prepare("DELETE FROM botpm_turns WHERE rowid IN (SELECT rowid FROM botpm_turns WHERE at < ? LIMIT ?)").bind(at - RUN_TURN_KEEP_MS, n),
       db.prepare("DELETE FROM botpm_results WHERE rowid IN (SELECT rowid FROM botpm_results WHERE at < ? LIMIT ?)").bind(at - RUN_RESULT_KEEP_MS, n),
       db.prepare("DELETE FROM botpm_runs WHERE rowid IN (SELECT rowid FROM botpm_runs WHERE beat_at < ? LIMIT ?)").bind(at - RUN_ROW_KEEP_MS, n),
-      db.prepare("DELETE FROM botpm_steer WHERE rowid IN (SELECT rowid FROM botpm_steer WHERE at < ? LIMIT ?)").bind(at - RUN_ROW_KEEP_MS, n),
+      db.prepare("DELETE FROM botpm_steer WHERE rowid IN (SELECT rowid FROM botpm_steer WHERE (applied_at < 0 AND applied_at > ?) OR (applied_at >= 0 AND at < ?) LIMIT ?)")
+        .bind(-(at - RUN_RESULT_KEEP_MS), at - RUN_ROW_KEEP_MS, n),
       db.prepare("DELETE FROM botpm_locks WHERE beat_at < ?").bind(at - RUN_ROW_KEEP_MS),
       db.prepare("DELETE FROM botpm_summary WHERE rowid IN (SELECT rowid FROM botpm_summary WHERE at < ? LIMIT ?)").bind(at - RUN_TURN_KEEP_MS, n)
     ]);

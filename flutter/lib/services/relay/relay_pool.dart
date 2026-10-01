@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../../core/constants/relays.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
+import 'held_publishes.dart';
 import 'relay_connection.dart';
 import 'relay_message.dart';
 import 'relay_stats.dart';
@@ -211,7 +212,9 @@ class RelayPool implements PoolTransport {
     Random? random,
     this.eoseQuorum = 0.6,
     this.eoseTimeout = const Duration(seconds: 4),
+    Duration heldWait = const Duration(seconds: 15),
   })  : _verify = verify ?? _acceptAll,
+        _held = HeldPublishes(max: heldMax, wait: heldWait),
         _writeOnly = writeOnlyRelays ?? RelayConfig.writeOnlyRelays,
         _connectionFactory =
             connectionFactory ?? ((url) => RelayConnection(url)),
@@ -221,7 +224,11 @@ class RelayPool implements PoolTransport {
     }
   }
 
+  static const int heldMax = 16;
+
   final EventVerifier _verify;
+  final HeldPublishes<PoolTransport> _held;
+  bool _disposed = false;
   final Set<String> _writeOnly;
   final RelayConnection Function(String url) _connectionFactory;
   final Random _rng;
@@ -314,6 +321,9 @@ class RelayPool implements PoolTransport {
     final conn = _connectionFactory(url);
     _connections[url] = conn;
     _msgSubs[url] = conn.messages.listen((msg) => _onRelayMessage(url, msg));
+    _statusSubs[url] = conn.statusStream.listen((status) {
+      if (status == RelayStatus.connected) _held.flush(this);
+    });
   }
 
   final Set<String> _bannedRelays = {};
@@ -343,10 +353,12 @@ class RelayPool implements PoolTransport {
 
   @override
   void connectAll() {
+    _disposed = false;
     _startSampler();
     for (final conn in _connections.values) {
       conn.connect();
     }
+    if (connectedCount > 0) _held.flush(this);
   }
 
   /// Direct mode: opens and back-fills a socket per new geo relay url; skips present or blocked urls.
@@ -361,6 +373,8 @@ class RelayPool implements PoolTransport {
 
   @override
   Future<void> disconnectAll() async {
+    _disposed = true;
+    _held.dropAll();
     _stopSampler();
     final subs = _subscriptions.values.toList();
     for (final s in subs) {
@@ -441,6 +455,8 @@ class RelayPool implements PoolTransport {
     }
   }
 
+  void handOverHeld(PoolTransport next) => _held.flush(next);
+
   /// Closes sockets but keeps [Subscription]s alive for the direct/proxy swap.
   Future<void> disconnectSocketsOnly() async {
     _stopSampler();
@@ -464,6 +480,9 @@ class RelayPool implements PoolTransport {
   /// Broadcasts [event]; returns how many relays accepted it.
   @override
   Future<int> publish(NostrEvent event) async {
+    if (!_disposed && connectedCount == 0) {
+      return _held.hold((via) => via.publish(event));
+    }
     final futures = <Future<OkMessage>>[];
     for (final entry in _connections.entries) {
       // Write-only relays still receive EVENTs.

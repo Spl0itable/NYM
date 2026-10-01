@@ -295,18 +295,19 @@ class BotChatController extends StateNotifier<BotChatState> {
     onTyping: _setBotTyping,
     onResponse: () => _markBotPMReceipts('read'),
     onPersist: _persistInflight,
+    anonNow: () => anon.ready,
     maxRuns: () => _maxRuns,
     setMaxRuns: (n) => setMaxRuns(n),
   );
 
   Future<BotRunResponse> _runsTransport(String action, Map<String, dynamic> body,
-      {Duration? timeout}) {
+      {Duration? timeout, bool? asAnon}) {
     final pk = _pubkey;
     if (pk == null) {
       return Future.value(
           (status: 0, data: const <String, dynamic>{}));
     }
-    final anonId = anon.ready ? anon.identity : null;
+    final anonId = (asAnon ?? anon.ready) && anon.ready ? anon.identity : null;
     return _service.botAction(
       action,
       body,
@@ -372,7 +373,8 @@ class BotChatController extends StateNotifier<BotChatState> {
   bool get runsPollWanted =>
       runsSheetOpen ||
       runsEngine.runs.isNotEmpty ||
-      runsEngine.remote.isNotEmpty;
+      runsEngine.remote.isNotEmpty ||
+      runsEngine.watchingSteers;
 
   void botNotice(String text) => _system(text);
 
@@ -413,7 +415,8 @@ class BotChatController extends StateNotifier<BotChatState> {
       return;
     }
     runsEngine.dismissNote(id);
-    await sendAsMessage(text, _ownMessageFor(id)?.threadRoot ?? '');
+    await sendAsMessage(
+        text, _ownMessageFor(id)?.threadRoot ?? note.thread ?? '');
   }
 
   void _onRunNoCredits(Map<String, dynamic> data) {

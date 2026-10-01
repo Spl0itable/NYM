@@ -7,7 +7,7 @@ import { ledgerCall } from './api/_ledger.js';
 import { isNymchatClient, servedHostAllowed } from './api/_client.js';
 
 const BOT_ACTIONS = {
-  'pm': 1, 'pm-claim': 1, 'pm-cancel': 1, 'pm-steer': 1, 'pm-runs': 1, 'clear-history': 1, 'balance': 1,
+  'pm': 1, 'pm-claim': 1, 'pm-cancel': 1, 'pm-steer': 1, 'pm-steer-status': 1, 'pm-runs': 1, 'clear-history': 1, 'balance': 1,
   'create-invoice': 1, 'check-invoice': 1, 'claim-credits': 1, 'transfer-credits': 1,
   'voucher-keys': 1, 'voucher-issue': 1
 };

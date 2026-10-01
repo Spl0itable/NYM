@@ -6,6 +6,7 @@ const BOT_RUN_STEER_CHARS = 2000;
 const BOT_RUN_DEFAULT_LIMIT = 3;
 const BOT_RUN_CEILING = 10;
 const BOT_RUN_HEX64 = /^[0-9a-f]{64}$/i;
+const BOT_RUN_STEER_KEEP_MS = 2 * 3600 * 1000;
 
 Object.assign(NYM.prototype, {
 
@@ -126,7 +127,8 @@ Object.assign(NYM.prototype, {
             extra: Object.assign({}, spec.extra || {}, { eventId: spec.eventId }),
             state: 'running',
             cap: null,
-            steer: null,
+            steers: {},
+            anon: !!(typeof this.botAnonReady === 'function' && this.botAnonReady()),
             progress: '',
             stopped: false,
             gen: 0,
@@ -214,9 +216,11 @@ Object.assign(NYM.prototype, {
             this._botRunEnd(run);
             return;
         }
-        const steer = run.steer;
+        const missed = (Array.isArray(data.steerMissed) ? data.steerMissed : [])
+            .map((id) => (typeof id === 'string' && Object.prototype.hasOwnProperty.call(run.steers, id) ? run.steers[id] : ''))
+            .filter(Boolean);
         this._botRunEnd(run);
-        if (steer && !data.stopped) this._botRunNote(run, { kind: 'steerLate', steerText: steer });
+        if (missed.length && !data.stopped) this._botRunNote(run, { kind: 'steerLate', steerText: missed.join('\n\n') });
         await this._botRunDeliver(run, data);
     },
 
@@ -376,17 +380,23 @@ Object.assign(NYM.prototype, {
         if (!t) return 'empty';
         if (t.length > BOT_RUN_STEER_CHARS) return 'tooLong';
         const key = String(id || '').toLowerCase();
+        const run = this.botRuns().get(key);
+        const anon = run ? !!run.anon : !!(typeof this._botAnonAutoRoute === 'function' && this._botAnonAutoRoute('pm-steer'));
         let status, data;
         try {
-            ({ status, data } = await this._botMoneyRequest('pm-steer', { replyTo: key, text: t }));
+            ({ status, data } = await this._botMoneyRequest('pm-steer', { replyTo: key, text: t }, run ? { anon: !!run.anon } : undefined));
         } catch (_) { return 'retry'; }
         if (status === 200 && data && data.ok) {
-            const run = this.botRuns().get(key);
-            if (run) run.steer = t;
+            if (run && typeof data.id === 'string' && data.id) run.steers[data.id] = t;
+            else if (typeof data.id === 'string' && /^[0-9a-f]{24}$/.test(data.id)) {
+                const remote = (this._botRemoteRuns || []).find((r) => r.replyTo.toLowerCase() === key);
+                this._botRemoteSteers().set(data.id, { text: t, runId: key, thread: remote ? (remote.thread || '') : '', anon, at: this._botRunNow(), tries: 0 });
+            }
             return 'ok';
         }
         if (status === 413) return 'tooLong';
-        if (status === 429 || !status) return 'retry';
+        if (status === 429 || !status || status >= 500) return 'retry';
+        if (status === 409 && data && data.final === true) return 'final';
         return 'finished';
     },
 
@@ -406,17 +416,70 @@ Object.assign(NYM.prototype, {
         if (out === 'ok') this.displaySystemMessage(this._botRunText('Passed on. It applies at the next step.'));
         else if (out === 'tooLong') this.displaySystemMessage(this._botRunText('That is too long. Instructions can be up to 2,000 characters.'));
         else if (out === 'retry') this.displaySystemMessage(this._botRunText('Could not pass that on. Try again in a moment.'));
-        else if (out === 'finished') {
+        else if (out === 'finished' || out === 'final') {
             const run = this.botRuns().get(key);
             const remote = (this._botRemoteRuns || []).find((r) => r.replyTo === key);
-            await this._botRunOfferAsMessage(String(text).trim(), run ? run.thread : (remote ? remote.thread : ''));
+            await this._botRunOfferAsMessage(String(text).trim(), run ? run.thread : (remote ? remote.thread : ''),
+                out === 'final' ? 'That request is already writing its answer' : 'That request has finished');
         }
     },
 
-    async _botRunOfferAsMessage(text, thread) {
+    _botRemoteSteers() {
+        if (!(this._botRemoteSteerMap instanceof Map)) this._botRemoteSteerMap = new Map();
+        const map = this._botRemoteSteerMap;
+        const now = this._botRunNow();
+        for (const [id, s] of [...map]) if (now - s.at > BOT_RUN_STEER_KEEP_MS) map.delete(id);
+        while (map.size > 50) map.delete(map.keys().next().value);
+        return map;
+    },
+
+    async _botRunsCheckSteers() {
+        if (this._botSteerChecking) return this._botSteerChecking;
+        this._botSteerChecking = (async () => {
+            const live = new Set((this._botRemoteRuns || []).map((r) => r.replyTo.toLowerCase()));
+            for (const id of this.botRuns().keys()) live.add(id);
+            const map = this._botRemoteSteers();
+            const listedAnon = !!(typeof this._botAnonAutoRoute === 'function' && this._botAnonAutoRoute('pm-runs'));
+            const groups = new Map();
+            for (const [id, s] of map) {
+                if (live.has(s.runId) || s.anon !== listedAnon) continue;
+                if (!groups.has(s.anon)) groups.set(s.anon, []);
+                groups.get(s.anon).push(id);
+            }
+            const offers = new Map();
+            for (const [anon, all] of groups) {
+                const ids = all.slice(0, 20);
+                let status, data;
+                try {
+                    ({ status, data } = await this._botMoneyRequest('pm-steer-status', { ids }, { anon }));
+                } catch (_) { continue; }
+                const states = status === 200 && data && data.states && typeof data.states === 'object' ? data.states : null;
+                if (!states) continue;
+                for (const id of ids) {
+                    const s = map.get(id);
+                    if (!s) continue;
+                    if (states[id] === 'pending' || states[id] == null) {
+                        s.tries++;
+                        if (s.tries >= 6) map.delete(id);
+                        continue;
+                    }
+                    map.delete(id);
+                    if (states[id] !== 'missed') continue;
+                    if (!offers.has(s.thread)) offers.set(s.thread, []);
+                    offers.get(s.thread).push(s.text);
+                }
+            }
+            for (const [thread, texts] of offers) {
+                await this._botRunOfferAsMessage(texts.join('\n\n'), thread, 'That request has finished');
+            }
+        })();
+        try { await this._botSteerChecking; } finally { this._botSteerChecking = null; }
+    },
+
+    async _botRunOfferAsMessage(text, thread, title) {
         if (typeof window.showAppConfirm !== 'function') return;
         const ok = await window.showAppConfirm('Send your instructions as a new message instead?', {
-            title: 'That request has finished',
+            title: title || 'That request has finished',
             okLabel: 'Send as a message',
             cancelLabel: 'Cancel'
         });
@@ -515,9 +578,9 @@ Object.assign(NYM.prototype, {
             const run = runs.get(r.replyTo.toLowerCase());
             if (!run) continue;
             run.progress = typeof r.progress === 'string' ? r.progress : '';
-            if (/applied your update/i.test(run.progress)) run.steer = null;
             this._botRunRender(run.id);
         }
+        if (this._botRemoteSteers().size) this._botRunsCheckSteers().catch(() => { });
         const waiting = [...runs.values()].find((r) => r.state === 'waiting');
         if (waiting && waiting.cap && rows.length < waiting.cap.limit) this._botRunSend(waiting);
         this._botRunsRenderIndicator();
@@ -547,7 +610,7 @@ Object.assign(NYM.prototype, {
         if (!this.pubkey) return false;
         if (this._botRunsSheetOpen) return true;
         if (!this._botChatOpen()) return false;
-        return this.botRuns().size > 0 || (this._botRemoteRuns || []).length > 0;
+        return this.botRuns().size > 0 || (this._botRemoteRuns || []).length > 0 || this._botRemoteSteers().size > 0;
     },
 
     _botRunsSchedulePoll(immediate) {

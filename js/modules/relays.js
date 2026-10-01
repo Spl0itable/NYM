@@ -5,6 +5,8 @@ const EDGE_CHALLENGE_RELOAD_WINDOW_MS = 15 * 60 * 1000;
 const EDGE_CHALLENGE_RELOAD_MAX = 3;
 const EDGE_CHALLENGE_CONFIRM_MS = 1500;
 const EDGE_CHALLENGE_NOTE_MIN_MS = 30000;
+const HELD_EVENTS_MAX = 16;
+const HELD_EVENTS_MS = 20000;
 
 Object.assign(NYM.prototype, {
 
@@ -2197,6 +2199,7 @@ Object.assign(NYM.prototype, {
                 poolEntry.lastMessage = Date.now();
                 poolEntry._healthyAt = Date.now();
                 this._syncLegacyPoolSocket();
+                this._flushHeldEvents();
 
                 resolve();
             };
@@ -3115,6 +3118,7 @@ Object.assign(NYM.prototype, {
                     });
 
                     this.clearRelayFailure(relayUrl);
+                    this._flushHeldEvents();
                     resolve();
                 };
 
@@ -3390,7 +3394,36 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _anyRelayOpen() {
+        if (this._isAnyPoolOpen()) return true;
+        for (const relay of this.relayPool.values()) {
+            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) return true;
+        }
+        return false;
+    },
+
+    _holdEvent(kind, message) {
+        if (!this._heldEvents) this._heldEvents = [];
+        if (this._heldEvents.length >= HELD_EVENTS_MAX) this._heldEvents.shift();
+        this._heldEvents.push({ kind, message, at: Date.now() });
+    },
+
+    _flushHeldEvents() {
+        const list = this._heldEvents || [];
+        this._heldEvents = [];
+        const now = Date.now();
+        for (const h of list) {
+            if (now - h.at > HELD_EVENTS_MS) continue;
+            if (h.kind === 'dm') this.sendDMToRelays(h.message);
+            else this.broadcastEvent(h.message);
+        }
+    },
+
     sendDMToRelays(message) {
+        if (!this._anyRelayOpen()) {
+            this._holdEvent('dm', message);
+            return 0;
+        }
         this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             const eventObj = Array.isArray(message) && message[0] === 'EVENT' ? message[1] : message;
@@ -3500,6 +3533,10 @@ Object.assign(NYM.prototype, {
 
     broadcastEvent(message) {
         if (Array.isArray(message) && message[0] === 'EVENT' && this._quietHit(message[1])) return;
+        if (!this._anyRelayOpen()) {
+            this._holdEvent('event', message);
+            return;
+        }
         this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             let evt = null;

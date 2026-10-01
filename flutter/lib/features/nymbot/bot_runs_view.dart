@@ -74,11 +74,14 @@ Future<void> openBotSteer(
     case BotSteerOutcome.retry:
       controller.botNotice('Could not pass that on. Try again in a moment.');
     case BotSteerOutcome.finished:
+    case BotSteerOutcome.answering:
       if (!context.mounted) return;
       final ok = await showAppConfirm(
         context,
         tr('Send your instructions as a new message instead?'),
-        title: tr('That request has finished'),
+        title: out == BotSteerOutcome.answering
+            ? tr('That request is already writing its answer')
+            : tr('That request has finished'),
         okLabel: tr('Send as a message'),
         cancelLabel: tr('Cancel'),
       );
