@@ -1253,7 +1253,7 @@ Object.assign(NYM.prototype, {
         }
 
         this._updateBubbleGrouping(messageEl);
-        if (message.isPM && message.isOwn && typeof this._botRunDecorate === 'function') this._botRunDecorate(messageEl, message);
+        if (message.isPM && typeof this._botRunDecorate === 'function') this._botRunDecorate(messageEl, message);
 
         // Restore a manual translation, since a re-render drops it and nothing re-issues it.
         if (typeof this._reapplyManualTranslation === 'function') this._reapplyManualTranslation(messageEl);

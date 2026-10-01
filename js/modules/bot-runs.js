@@ -219,8 +219,10 @@ Object.assign(NYM.prototype, {
         const missed = (Array.isArray(data.steerMissed) ? data.steerMissed : [])
             .map((id) => (typeof id === 'string' && Object.prototype.hasOwnProperty.call(run.steers, id) ? run.steers[id] : ''))
             .filter(Boolean);
+        const offer = data.steerOffer && typeof data.steerOffer.text === 'string' ? data.steerOffer.text.trim() : '';
         this._botRunEnd(run);
         if (missed.length && !data.stopped) this._botRunNote(run, { kind: 'steerLate', steerText: missed.join('\n\n') });
+        else if (offer && !data.stopped) this._botRunNote(run, { kind: 'steerOffer', steerText: offer });
         await this._botRunDeliver(run, data);
     },
 
@@ -494,10 +496,13 @@ Object.assign(NYM.prototype, {
     botRunSendSteerNote(id) {
         const key = String(id || '').toLowerCase();
         const note = this.botRunNotes().get(key);
-        if (!note || note.kind !== 'steerLate') return;
+        if (!note || (note.kind !== 'steerLate' && note.kind !== 'steerOffer')) return;
         const own = this._botOwnMessageById(key);
         this.botRunNotes().delete(key);
         this._botRunRender(key);
+        if (note.kind === 'steerOffer' && typeof document !== 'undefined' && document.querySelectorAll) {
+            document.querySelectorAll(`.bot-run-offer[data-run-id="${key}"]`).forEach((el) => el.remove());
+        }
         this._botRunSendAsMessage(note.steerText, own && own.threadRoot ? own.threadRoot : '');
     },
 
@@ -681,15 +686,52 @@ Object.assign(NYM.prototype, {
         } else if (note) {
             if (note.kind === 'stopped') parts.push(`<div class="bot-run-note">${T('Stopped.')}</div>`);
             else if (note.kind === 'failed') parts.push(`<div class="bot-run-note error">${T('Nymbot could not finish that one. Try again; it will not be charged twice.')}</div><div class="bot-run-actions">${btn('botRunRetry', T('Try again'))}</div>`);
+            else if (note.kind === 'steerOffer') return '';
             else if (note.kind === 'steerLate') parts.push(`<div class="bot-run-note"><strong>${T('That request has finished')}</strong> ${T('Send your instructions as a new message instead?')}</div><div class="bot-run-actions">${btn('botRunSendSteer', T('Send as a message'))}</div>`);
             else parts.push(`<div class="bot-run-note${note.kind === 'error' ? ' error' : ''}">${this._botRunEsc(note.text || '')}</div>`);
         }
         return parts.join('');
     },
 
+    _botRunOfferHtml(id) {
+        const note = this.botRunNotes().get(id);
+        if (!note || note.kind !== 'steerOffer') return '';
+        const label = this._botRunEsc(this._botRunText('Send as a message'));
+        return `<div class="bot-run-actions"><button type="button" class="bot-run-btn" data-action="botRunSendSteer" data-run-id="${id}">${label}</button></div>`;
+    },
+
+    _botRunDecorateReply(el, message) {
+        const id = message.replyTo ? String(message.replyTo).toLowerCase() : '';
+        if (!BOT_RUN_HEX64.test(id)) return;
+        const html = this._botRunOfferHtml(id);
+        let box = el.querySelector(':scope > .bot-run-offer');
+        if (!html) { if (box) box.remove(); return; }
+        if (!box) {
+            box = document.createElement('div');
+            box.className = 'bot-run-status bot-run-offer';
+            box.dataset.runId = id;
+            el.appendChild(box);
+        }
+        if (box.innerHTML !== html) box.innerHTML = html;
+    },
+
+    _botRunPaintReplies(id) {
+        const bot = this.verifiedBot;
+        if (!bot || !(this.pmMessages instanceof Map) || typeof this.getPMConversationKey !== 'function') return;
+        const list = this.pmMessages.get(this.getPMConversationKey(bot.pubkey)) || [];
+        for (const m of list) {
+            if (!m || m.isOwn || !m.nymMessageId || String(m.replyTo || '').toLowerCase() !== id) continue;
+            document.querySelectorAll(`.message[data-message-id="${m.nymMessageId}"]`).forEach((el) => this._botRunDecorateReply(el, m));
+        }
+    },
+
     _botRunDecorate(el, message) {
-        if (!el || !message || !message.isOwn || !this.verifiedBot) return;
+        if (!el || !message || !this.verifiedBot) return;
         if (message.conversationPubkey && message.conversationPubkey !== this.verifiedBot.pubkey) return;
+        if (!message.isOwn) {
+            this._botRunDecorateReply(el, message);
+            return;
+        }
         const id = message.nymMessageId ? String(message.nymMessageId).toLowerCase() : '';
         if (!id || (!this.botRuns().has(id) && !this.botRunNotes().has(id))) return;
         this._botRunPaint(el, id);
@@ -714,6 +756,7 @@ Object.assign(NYM.prototype, {
             if (el.dataset.pubkey && this.pubkey && el.dataset.pubkey !== this.pubkey) return;
             this._botRunPaint(el, id);
         });
+        this._botRunPaintReplies(id);
         if (this._botRunsSheetOpen) this._botRunsRenderSheet();
     },
 

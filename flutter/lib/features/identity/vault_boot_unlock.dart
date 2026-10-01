@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/theme/nym_theme.dart' show kMonoFont;
 import '../../services/storage/at_rest_wipe.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
@@ -12,6 +13,18 @@ import 'biometric_secret_store.dart';
 import 'identity_vault.dart' show SecureStoreLike;
 import 'modal_chrome.dart';
 import 'vault_settings_modal.dart' show identityVaultProvider;
+
+const String nymchatWordmark = r'''                                            ##\                  ##\
+                                            ## |                 ## |
+#######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\
+##  __##\ ## |  ## |##  _##  _##\ ##  _____|##  __##\  \____##\\_##  _|
+## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |
+## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\
+## |  ## |\####### |## | ## | ## |\#######\ ## |  ## |\####### | \####  |
+\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/
+          ##\   ## |
+          \######  |
+           \______/''';
 
 /// Blocks launch until the identity vault unlocks, so secrets are decrypted before identity restore reads them.
 class VaultBootUnlock extends ConsumerStatefulWidget {
@@ -170,6 +183,40 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     );
   }
 
+  Widget _wordmark(NymColors c) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Center(
+        child: Semantics(
+          label: 'Nymchat',
+          excludeSemantics: true,
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              nymchatWordmark,
+              style: TextStyle(
+                fontFamily: kMonoFont,
+                fontFamilyFallback: const [
+                  'Menlo',
+                  'SF Mono',
+                  'Roboto Mono',
+                  'Droid Sans Mono',
+                  'DejaVu Sans Mono',
+                  'Liberation Mono',
+                  'Courier New',
+                ],
+                fontSize: 10,
+                height: 1.08,
+                letterSpacing: 0,
+                color: c.primary,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _header(NymColors c, String text) {
     return Container(
       padding: const EdgeInsets.only(bottom: 14),
@@ -191,6 +238,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
 
   List<Widget> _promptChildren(NymColors c, bool isBio) {
     return [
+      _wordmark(c),
       _header(c, tr('Unlock your identity')),
       Text(
         isBio
@@ -247,6 +295,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
 
   List<Widget> _errorChildren(NymColors c) {
     return [
+      _wordmark(c),
       _header(c, tr('Unlock failed')),
       Text(
         _failMessage!,
