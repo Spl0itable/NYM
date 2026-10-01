@@ -5,6 +5,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../models/nostr_event.dart';
 import '../../services/nostr/event_mapper.dart';
+import '../nymbot/bot_runs.dart' show botReplyToFromTags;
 import '../p2p/p2p_models.dart';
 import 'pm_support_tokens.dart';
 
@@ -142,6 +143,7 @@ class PmLogic {
       eventKind: EventKind.giftWrap,
       nymMessageId: nymMessageId,
       threadRoot: threadRoot,
+      replyTo: senderPubkey == selfPubkey ? null : botReplyToFromTags(tags),
       senderVerified: senderVerified,
       pqEncrypted: pqEncrypted,
       pqRoot: pqEncrypted && (pqRootFor?.call(peer) ?? false),

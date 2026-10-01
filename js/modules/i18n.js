@@ -314,6 +314,18 @@ Object.assign(NYM.prototype, {
         if (missing.size) this._i18nEnqueue([...missing], 'hi', lang);
     },
 
+    uiText(text) {
+        const lang = this.getUiLanguage();
+        if (!lang || lang === 'en' || typeof text !== 'string') return text;
+        const { key, tokens } = this._i18nMakeKey(text);
+        const tpl = this._i18nLoadCache(lang)[key];
+        if (tpl == null) {
+            this._i18nEnqueue([key], 'hi', lang);
+            return text;
+        }
+        return this._i18nFill(tpl, tokens);
+    },
+
     // Pre-translate source strings at high priority so they're ready as they appear.
     i18nPrioritize(sources) {
         const lang = this.getUiLanguage();

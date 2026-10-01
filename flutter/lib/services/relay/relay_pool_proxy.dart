@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/constants/relays.dart';
-import '../../features/messages/spam_filter.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import '../api/api_config.dart';
@@ -1077,8 +1076,6 @@ class RelayPoolProxy implements PoolTransport {
     }
     switch (msg) {
       case PoolEvent(:final subId, :final event, :final sourceRelay):
-        // Dropped before verification: glub.chat tags every event it sends.
-        if (SpamFilter.isGlubClient(event.tags)) return;
         if (RelayConfig.isAppRelayOnly(
                 event.kind, event.tagValue('g'), event.tagValue('d')) &&
             sourceRelay != RelayConfig.appRelay) {

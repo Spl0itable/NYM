@@ -10090,6 +10090,14 @@ class NostrController {
             clearedAtSec: botCleared is num ? botCleared.toInt() : 0,
           );
     } catch (_) {}
+    final botMaxRuns = p['botMaxRuns'];
+    if (botMaxRuns is num) {
+      try {
+        _ref
+            .read(botChatControllerProvider.notifier)
+            .setMaxRuns(botMaxRuns.toInt(), fromSync: true);
+      } catch (_) {}
+    }
     // Monotonic, persisted on every inbound apply path.
     if (p['encryptAtRestPreferred'] == true) {
       try {

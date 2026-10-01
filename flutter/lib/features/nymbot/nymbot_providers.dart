@@ -28,6 +28,7 @@ import '../pms/pm_logic.dart';
 import '../shop/shop_controller.dart' show shopControllerProvider;
 import '../commands/command_i18n.dart';
 import 'bot_commands.dart';
+import 'bot_runs.dart';
 import 'nymbot_models.dart';
 import '../../services/storage/secure_store.dart';
 import 'anon_bot.dart';
@@ -128,9 +129,12 @@ class BotChatState {
     this.anonEnabled = false,
     this.anonPubkey,
     this.priceRetry,
+    this.runsVersion = 0,
   });
 
   final BotPriceRetry? priceRetry;
+
+  final int runsVersion;
 
   /// Pinned Pro model, or null for standard routing.
   final ProModel? proModel;
@@ -168,6 +172,7 @@ class BotChatState {
     bool? anonEnabled,
     Object? anonPubkey = _sentinel,
     Object? priceRetry = _sentinel,
+    int? runsVersion,
   }) =>
       BotChatState(
         proModel: identical(proModel, _sentinel)
@@ -186,6 +191,7 @@ class BotChatState {
         priceRetry: identical(priceRetry, _sentinel)
             ? this.priceRetry
             : priceRetry as BotPriceRetry?,
+        runsVersion: runsVersion ?? this.runsVersion,
       );
 
   static const _sentinel = Object();
@@ -255,6 +261,230 @@ class BotChatController extends StateNotifier<BotChatState> {
   static const _kClearedAtPref = 'nym_botpm_cleared_at';
   static const _kWelcomedPref = 'nym_botpm_welcomed';
   static const _kAnonPref = 'nym_botanon_enabled';
+  static const _kMaxRunsPref = 'nym_botpm_max_runs';
+  static const _kInflightPref = 'nym_botpm_inflight_';
+
+  int _maxRuns = 0;
+
+  int get maxRuns => _maxRuns;
+
+  late final BotRunsEngine runsEngine = BotRunsEngine(
+    transport: _runsTransport,
+    onDelivered: _deliverRun,
+    onNoCredits: _onRunNoCredits,
+    onPriceUnavailable: (run) {
+      if (!mounted) return;
+      state = state.copyWith(
+          priceRetry: BotPriceRetry(
+              message: _ownMessageFor(run.id) ?? _specMessage(run.spec),
+              wrapId: run.eventId));
+      _system(kBotPriceUnavailableText);
+    },
+    onOpenBuy: (pro) {
+      if (anon.ready) {
+        _ref.read(botAnonRequestProvider.notifier).request();
+      } else {
+        _ref
+            .read(botBuyRequestProvider.notifier)
+            .request(pro ? CreditTier.pro : CreditTier.standard);
+      }
+    },
+    onChanged: () {
+      if (mounted) state = state.copyWith(runsVersion: state.runsVersion + 1);
+    },
+    onTyping: _setBotTyping,
+    onResponse: () => _markBotPMReceipts('read'),
+    onPersist: _persistInflight,
+    maxRuns: () => _maxRuns,
+    setMaxRuns: (n) => setMaxRuns(n),
+  );
+
+  Future<BotRunResponse> _runsTransport(String action, Map<String, dynamic> body,
+      {Duration? timeout}) {
+    final pk = _pubkey;
+    if (pk == null) {
+      return Future.value(
+          (status: 0, data: const <String, dynamic>{}));
+    }
+    final anonId = anon.ready ? anon.identity : null;
+    return _service.botAction(
+      action,
+      body,
+      pubkey: anonId?.pk ?? pk,
+      anon: anonId != null,
+      timeout: timeout,
+      signedFor: (payload) async {
+        if (action == 'pm') {
+          return anonId != null
+              ? await anon.authFor('pm', payload)
+              : (await _authFor('pm', payload) ?? _auth);
+        }
+        return anonId != null
+            ? await anon.authFor(action, payload)
+            : await _authFor(action, payload);
+      },
+    );
+  }
+
+  void setMaxRuns(int n, {bool fromSync = false}) {
+    final clean = clampBotMaxRuns(n);
+    if (clean == _maxRuns) return;
+    _maxRuns = clean;
+    if (mounted) state = state.copyWith(runsVersion: state.runsVersion + 1);
+    unawaited(_prefs.then((p) => clean > 0
+        ? p.setString(_kMaxRunsPref, '$clean')
+        : p.remove(_kMaxRunsPref)));
+    if (!fromSync) settingsSyncRequester?.call();
+  }
+
+  void _persistInflight(List<Map<String, dynamic>> list) {
+    final pk = _pubkey;
+    if (pk == null) return;
+    unawaited(_prefs.then((p) => list.isEmpty
+        ? p.remove('$_kInflightPref$pk')
+        : p.setString('$_kInflightPref$pk', jsonEncode(list))));
+  }
+
+  bool _runsResumed = false;
+
+  Future<void> onChatOpen() async {
+    final pk = _pubkey;
+    if (pk == null) return;
+    if (!_runsResumed) {
+      _runsResumed = true;
+      try {
+        final p = await _prefs;
+        final raw = p.getString('$_kInflightPref$pk');
+        final list = raw == null ? const <Object?>[] : jsonDecode(raw);
+        if (list is List && mounted) runsEngine.resume(list);
+      } catch (_) {}
+    }
+    await pollRuns();
+  }
+
+  Future<void> pollRuns() async {
+    if (_pubkey == null || !mounted) return;
+    await runsEngine.poll();
+  }
+
+  bool runsSheetOpen = false;
+
+  bool get runsPollWanted =>
+      runsSheetOpen ||
+      runsEngine.runs.isNotEmpty ||
+      runsEngine.remote.isNotEmpty;
+
+  void botNotice(String text) => _system(text);
+
+  Message? _ownMessageFor(String nymMessageId) {
+    for (final m in _thread) {
+      if (m.isOwn && m.nymMessageId == nymMessageId) return m;
+    }
+    return null;
+  }
+
+  Message _specMessage(BotRunSpec spec) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    return Message(
+      id: spec.eventId,
+      author: _appState.selfNym,
+      pubkey: _pubkey ?? '',
+      content: spec.content,
+      createdAt: nowMs ~/ 1000,
+      isOwn: true,
+      isPM: true,
+      nymMessageId: spec.id,
+      threadRoot: spec.thread.isEmpty ? null : spec.thread,
+    );
+  }
+
+  Future<void> stopRun(String id) => runsEngine.stop(id);
+
+  Future<BotSteerOutcome> steerRun(String id, String text) =>
+      runsEngine.steer(id, text);
+
+  Future<void> sendAsMessage(String text, String thread) =>
+      sendUserBotPM(text, threadRoot: thread);
+
+  Future<void> sendSteerNote(String id) async {
+    final note = runsEngine.notes[id.toLowerCase()];
+    final text = note?.steerText;
+    if (note == null || note.kind != BotRunNoteKind.steerLate || text == null) {
+      return;
+    }
+    runsEngine.dismissNote(id);
+    await sendAsMessage(text, _ownMessageFor(id)?.threadRoot ?? '');
+  }
+
+  void _onRunNoCredits(Map<String, dynamic> data) {
+    final pro = data['pro'] == true;
+    final balance = (data['balanceCredits'] as num?)?.toDouble() ??
+        (data['balance'] as num?)?.toDouble() ??
+        0;
+    final err = data['error'];
+    final custom =
+        err is String && err.isNotEmpty && err != 'Insufficient credits';
+    _system(custom
+        ? err
+        : (pro
+            ? "You're out of Nymbot Pro credits (${creditFigure(balance)} left). "
+                'Type ?buy and switch to Pro, or ?model off for standard '
+                'replies.'
+            : "You're out of Nymbot credits (${creditFigure(balance)} left). "
+                'Zap Nymbot or type ?buy to purchase more.'));
+    _applyLedgerBalance(balance, pro: pro);
+    _ref
+        .read(botBuyRequestProvider.notifier)
+        .request(pro ? CreditTier.pro : CreditTier.standard);
+  }
+
+  Future<void> _deliverRun(BotRun run, Map<String, dynamic> data) async {
+    if (!mounted) return;
+    final linked = data['replyTo'];
+    final replyTo = linked is String &&
+            RegExp(r'^[0-9a-f]{64}$', caseSensitive: false).hasMatch(linked)
+        ? linked.toLowerCase()
+        : run.id;
+    final event = data['event'];
+    if (event is Map) {
+      final wrapJson = event.cast<String, dynamic>();
+      _publishDmEvent(wrapJson);
+      await _displayBotReplyWrap(wrapJson, replyTo: replyTo);
+    }
+    final selfEvent = data['selfEvent'];
+    if (selfEvent is Map &&
+        RegExp(r'^[0-9a-f]{64}$', caseSensitive: false)
+            .hasMatch((selfEvent['id'] ?? '').toString())) {
+      _publishDmEvent(selfEvent.cast<String, dynamic>());
+    }
+    final balance = (data['balanceCredits'] as num?)?.toDouble() ??
+        (data['balance'] as num?)?.toDouble();
+    if (balance != null) {
+      final isPro = data['pro'] == true;
+      _applyLedgerBalance(balance, pro: isPro);
+      final cost = (data['costCredits'] as num?)?.toDouble() ??
+          (data['cost'] as num?)?.toDouble() ??
+          0;
+      if (isPro && cost > 0) {
+        final sel = state.proModel;
+        if (sel != null && cost > sel.baseCredits) {
+          _system('Long reply used ${creditFigure(cost)} Pro credits. '
+              'Pro balance: ${creditFigure(balance)}.');
+        }
+      } else if (!isPro && cost > 1) {
+        _system('${data['taskType'] ?? 'Heavy'} reply used ${creditFigure(cost)} credits. '
+            'Balance: ${creditFigure(balance)}.');
+      }
+      if (data['lowBalance'] == true) {
+        _system(isPro
+            ? 'Nymbot Pro credits running low: ${creditFigure(balance)} left. '
+                'Type ?buy and switch to Pro to top up.'
+            : 'Nymbot credits running low: ${creditFigure(balance)} '
+                'credit${balance == 1 ? '' : 's'} left. '
+                'Type ?buy to top up.');
+      }
+    }
+  }
 
   Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
@@ -269,6 +499,8 @@ class BotChatController extends StateNotifier<BotChatState> {
       // Unknown for now: hold the key until the live catalog loads.
       _pendingModelKey = (model == null && modelKey.isNotEmpty) ? modelKey : '';
       final clearedAt = int.tryParse(p.getString(_kClearedAtPref) ?? '') ?? 0;
+      _maxRuns = clampBotMaxRuns(
+          int.tryParse(p.getString(_kMaxRunsPref) ?? '') ?? 0);
       if (p.getString(_kAnonPref) == 'true') anon.setEnabled(true);
       // Monotonic: never regress below a synced marker that landed first.
       state = state.copyWith(
@@ -670,26 +902,34 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Control commands run on-device; everything else goes out as a real NIP-17 PM and to the worker by wrap id.
-  Future<void> sendUserBotPM(String content) async {
+  Future<void> sendUserBotPM(String content, {String? threadRoot}) async {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
     if (botPMCommandRe.hasMatch(trimmed)) {
       await handleBotPMCommand(trimmed);
       return;
     }
+    String? thread = threadRoot == null || threadRoot.isEmpty ? null : threadRoot;
+    if (threadRoot == null && appThreadsEnabled) {
+      final at = _ref.read(activeThreadProvider);
+      if (at != null && at.view == const ChatView.pm(kNymbotPubkey)) {
+        thread = at.rootId;
+      }
+    }
+    final guardKey = '${thread ?? ''}|$content';
+    if (!runsEngine.guardTake(guardKey)) return;
+    try {
+      await _sendUserBotPMOnce(content, thread);
+    } finally {
+      runsEngine.guardRelease(guardKey);
+    }
+  }
+
+  Future<void> _sendUserBotPMOnce(String content, String? threadRoot) async {
     final app = _appState;
     final selfPubkey = _pubkey ?? app.selfPubkey;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nymMessageId = PmLogic.generateSharedEventId();
-
-    // Sends while the bot thread is open reply into it via the encrypted `nymthread` root.
-    String? threadRoot;
-    if (appThreadsEnabled) {
-      final at = _ref.read(activeThreadProvider);
-      if (at != null && at.view == const ChatView.pm(kNymbotPubkey)) {
-        threadRoot = at.rootId;
-      }
-    }
 
     // Wrap the kind-14 rumor to the bot and to self and publish both; the worker fetches its wrap by id.
     NostrEvent? botWrap;
@@ -752,7 +992,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     );
     _handledIds.add(msg.id);
     _app.ingestPMMessage(msg);
-    await _runBotExchange(msg, wrapId: botWrap?.id);
+    unawaited(_runBotExchange(msg, wrapId: botWrap?.id));
   }
 
   /// Publishes a pre-signed kind-1059 wrap to the DM relays; false before a publisher is wired.
@@ -886,7 +1126,8 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   /// Unwraps the worker's reply into the thread, splitting any leading `<think>`; undecryptable wraps arrive via relay echo.
-  Future<void> _displayBotReplyWrap(Map<String, dynamic> wrapJson) async {
+  Future<void> _displayBotReplyWrap(Map<String, dynamic> wrapJson,
+      {String? replyTo}) async {
     final sk = _privkey;
     try {
       final wrap = NostrEvent.fromJson(wrapJson);
@@ -924,6 +1165,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       }
       msg.author = _botNym;
       msg.isBot = true;
+      msg.replyTo ??= replyTo;
       _handledIds.add(msg.id);
       _app.ingestPMMessage(msg);
     } catch (_) {
@@ -931,7 +1173,6 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  /// Paid round trip for [m]: receipts, thinking strip, worker call by wrap id (no plaintext), then publish and unwrap the reply.
   Future<void> _runBotExchange(Message m, {String? wrapId}) async {
     final anonId = anon.ready ? anon.identity : null;
     if (_pubkey == null) {
@@ -946,7 +1187,6 @@ class BotChatController extends StateNotifier<BotChatState> {
         recipientPubkey: kNymbotPubkey,
         content: m.content,
         nymMessageId: m.nymMessageId ?? PmLogic.generateSharedEventId(),
-        // A rebuilt wrap keeps the original's thread.
         extraTags: [
           if ((m.threadRoot ?? '').isNotEmpty) ['nymthread', m.threadRoot!],
         ],
@@ -956,131 +1196,45 @@ class BotChatController extends StateNotifier<BotChatState> {
         wrapId = wrap.id;
       }
     }
-    // No round trip without a published wrap id.
     if (wrapId == null) {
       _system(
           'Nymbot: could not publish your encrypted message. Please try again.');
       return;
     }
-    _setBotTyping(true);
-    state = state.copyWith(sending: true, priceRetry: null);
-    try {
-      // Leading `!` marks a one-off message that ignores history.
-      final fresh = RegExp(r'^\s*!\s*\S').hasMatch(m.content);
-      final pro = state.proModel;
-      Map<String, dynamic>? pqAnnouncement;
-      if (anonId != null) {
-        pqAnnouncement = anon.announcement();
-      } else {
-        try {
-          pqAnnouncement =
-              _ref.read(nostrControllerProvider).pqSelfAnnouncementJson;
-        } catch (_) {
-          pqAnnouncement = null;
-        }
+    if (mounted) state = state.copyWith(priceRetry: null);
+    final fresh = RegExp(r'^\s*!\s*\S').hasMatch(m.content);
+    final pro = state.proModel;
+    Map<String, dynamic>? pqAnnouncement;
+    if (anonId != null) {
+      pqAnnouncement = anon.announcement();
+    } else {
+      try {
+        pqAnnouncement =
+            _ref.read(nostrControllerProvider).pqSelfAnnouncementJson;
+      } catch (_) {
+        pqAnnouncement = null;
       }
-      final data = await _service.sendBotMessage(
-        pubkey: anonId?.pk ?? _pubkey!,
-        anon: anonId != null,
-        eventId: wrapId,
-        // Signed only on the HTTP fallback; the authed socket skips per-action auth.
-        signedFor: (payload) async => anonId != null
-            ? await anon.authFor('pm', payload)
-            : (await _authFor('pm', payload) ?? _auth),
-        proModel: pro?.key,
-        fresh: fresh,
-        cmdAlias: commandAliasHint(m.content),
-        pqAnnouncement: pqAnnouncement,
-      );
-      if (!mounted) return;
-      _setBotTyping(false);
-      _markBotPMReceipts('read');
-
-      // The reply is a kind-1059 wrap: publish it and unwrap for display.
-      final event = data['event'];
-      if (event is Map) {
-        final wrapJson = event.cast<String, dynamic>();
-        _publishDmEvent(wrapJson);
-        await _displayBotReplyWrap(wrapJson);
-      }
-      // Publish the bot's self-copy so the worker can use it as context later.
-      final selfEvent = data['selfEvent'];
-      if (selfEvent is Map &&
-          RegExp(r'^[0-9a-f]{64}$', caseSensitive: false)
-              .hasMatch((selfEvent['id'] ?? '').toString())) {
-        _publishDmEvent(selfEvent.cast<String, dynamic>());
-      }
-
-      final balance = (data['balanceCredits'] as num?)?.toDouble()
-          ?? (data['balance'] as num?)?.toDouble();
-      if (balance != null) {
-        final isPro = data['pro'] == true;
-        _applyLedgerBalance(balance, pro: isPro);
-        // Cost notices for heavy replies.
-        final cost = (data['costCredits'] as num?)?.toDouble()
-            ?? (data['cost'] as num?)?.toDouble() ?? 0;
-        if (isPro && cost > 0) {
-          final sel = state.proModel;
-          if (sel != null && cost > sel.baseCredits) {
-            _system('Long reply used ${creditFigure(cost)} Pro credits. '
-                'Pro balance: ${creditFigure(balance)}.');
-          }
-        } else if (!isPro && cost > 1) {
-          _system('${data['taskType'] ?? 'Heavy'} reply used ${creditFigure(cost)} credits. '
-              'Balance: ${creditFigure(balance)}.');
-        }
-        if (data['lowBalance'] == true) {
-          _system(isPro
-              ? 'Nymbot Pro credits running low: ${creditFigure(balance)} left. '
-                  'Type ?buy and switch to Pro to top up.'
-              : 'Nymbot credits running low: ${creditFigure(balance)} '
-                  'credit${balance == 1 ? '' : 's'} left. '
-                  'Type ?buy to top up.');
-        }
-      }
-    } on NymbotInsufficientCredits catch (e) {
-      _setBotTyping(false);
-      _markBotPMReceipts('read');
-      // Out of credits: a neutral line plus the buy modal, never a red bubble.
-      final custom =
-          e.message.isNotEmpty && e.message != 'Insufficient credits';
-      _system(custom
-          ? e.message
-          : (e.pro
-              ? "You're out of Nymbot Pro credits (${creditFigure(e.balance)} left). "
-                  'Type ?buy and switch to Pro, or ?model off for standard '
-                  'replies.'
-              : "You're out of Nymbot credits (${creditFigure(e.balance)} left). "
-                  'Zap Nymbot or type ?buy to purchase more.'));
-      _applyLedgerBalance(e.balance, pro: e.pro);
-      _ref
-          .read(botBuyRequestProvider.notifier)
-          .request(e.pro ? CreditTier.pro : CreditTier.standard);
-    } on NymbotStillGenerating catch (e) {
-      _setBotTyping(false);
-      _markBotPMReceipts('read');
-      // The worker refused a duplicate answer; a neutral line, not an error.
-      _system(e.message);
-    } on NymbotException catch (e) {
-      _setBotTyping(false);
-      // A response came back, so advance read receipts before the error check.
-      _markBotPMReceipts('read');
-      if (e.priceUnavailable && mounted) {
-        state = state.copyWith(
-            priceRetry: BotPriceRetry(message: m, wrapId: wrapId));
-      }
-      _system(botSendErrorText(e));
-    } catch (_) {
-      _setBotTyping(false);
-      _system('Nymbot is unavailable right now. Please try again.');
-    } finally {
-      if (mounted) state = state.copyWith(sending: false);
     }
+    final cmdAlias = commandAliasHint(m.content);
+    final run = runsEngine.start(BotRunSpec(
+      id: m.nymMessageId ?? wrapId,
+      eventId: wrapId,
+      thread: m.threadRoot ?? '',
+      content: m.content,
+      extra: <String, dynamic>{
+        'eventId': wrapId,
+        'fresh': fresh,
+        if (pro != null) 'proModel': pro.key,
+        if (cmdAlias != null) 'cmdAlias': cmdAlias,
+        if (pqAnnouncement != null) 'pqAnnouncement': pqAnnouncement,
+      },
+    ));
+    await run?.done;
   }
 
   Future<void> retryPriceUnavailable() async {
     final retry = state.priceRetry;
-    if (retry == null || state.sending) return;
+    if (retry == null) return;
     state = state.copyWith(priceRetry: null);
     await _runBotExchange(retry.message, wrapId: retry.wrapId);
   }
@@ -1300,6 +1454,7 @@ class BotChatController extends StateNotifier<BotChatState> {
   @override
   void dispose() {
     _typingHeartbeat?.cancel();
+    runsEngine.dispose();
     super.dispose();
   }
 
@@ -1576,17 +1731,24 @@ final botChatControllerProvider =
 /// Store thread merged with transient info bubbles by timestamp (store first on ties), for the screen and the columns deck.
 List<Message> mergeBotThreadWithInfo(List<Message> store, List<Message> info) {
   if (info.isEmpty) return store;
-  final merged = <({Message m, bool isInfo, int idx})>[
-    for (var i = 0; i < store.length; i++) (m: store[i], isInfo: false, idx: i),
-    for (var i = 0; i < info.length; i++) (m: info[i], isInfo: true, idx: i),
-  ];
-  merged.sort((a, b) {
-    final dt = a.m.timestamp - b.m.timestamp;
-    if (dt != 0) return dt;
-    if (a.isInfo != b.isInfo) return a.isInfo ? 1 : -1;
-    return a.idx - b.idx;
-  });
-  return [for (final e in merged) e.m];
+  final extras = [
+    for (var i = 0; i < info.length; i++) (m: info[i], idx: i),
+  ]..sort((a, b) {
+      final dt = a.m.timestamp - b.m.timestamp;
+      return dt != 0 ? dt : a.idx - b.idx;
+    });
+  final out = <Message>[];
+  var j = 0;
+  for (final m in store) {
+    while (j < extras.length && extras[j].m.timestamp < m.timestamp) {
+      out.add(extras[j++].m);
+    }
+    out.add(m);
+  }
+  while (j < extras.length) {
+    out.add(extras[j++].m);
+  }
+  return out;
 }
 
 final botCommandsProvider = Provider<List<BotCommand>>((_) => kBotCommands);

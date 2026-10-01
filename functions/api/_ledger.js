@@ -112,6 +112,9 @@ export class NymLedger {
       "CREATE TABLE IF NOT EXISTS credit_holds (id TEXT PRIMARY KEY, pubkey TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, exp INTEGER NOT NULL);"
     );
     this.sql.exec(
+      "CREATE TABLE IF NOT EXISTS credit_debt (pubkey TEXT NOT NULL, tier TEXT NOT NULL, milli INTEGER NOT NULL, PRIMARY KEY (pubkey, tier));"
+    );
+    this.sql.exec(
       "CREATE TABLE IF NOT EXISTS credit_gifts (id TEXT PRIMARY KEY, owner TEXT NOT NULL, tier TEXT NOT NULL, amount INTEGER NOT NULL, " +
       "created INTEGER NOT NULL, exp INTEGER NOT NULL, state TEXT NOT NULL, redeemer TEXT, done_at INTEGER);"
     );
@@ -151,8 +154,10 @@ export class NymLedger {
     switch (op) {
       case "replay": return this._replay(a.id, a.ttl);
       case "transfer-credits": return this._transferCredits(a.from, a.to);
-      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier, a.milli, a.hold);
+      case "consume-credits": return this._consumeCredits(a.pubkey, a.cost, a.ts, a.tier, a.milli, a.hold, a.owe === true);
       case "credit-hold": return this._creditHold(a);
+      case "credit-extend": return this._creditExtend(a);
+      case "debt-add": return this._debtAdd(a);
       case "credit-release": return this._creditRelease(a.id);
       case "credit-refund": return this._creditRefund(a);
       case "dust-peek": return this._dustPeek(a.pubkey);
@@ -746,6 +751,7 @@ export class NymLedger {
       return { error: "Invalid pubkey." };
     }
     if (from === to) return { error: "You can't transfer credits to your own pubkey." };
+    const unpaid = (await this._payDebt(from, "standard")) + (await this._payDebt(from, "pro"));
     const source = await this._getCredits(from);
     const proSource = await this._getCredits(from, "pro");
     const held = this._holdsOf(from, "standard", null);
@@ -754,6 +760,7 @@ export class NymLedger {
     const proMoved = Math.max(0, (proSource.balance || 0) - proHeld);
     if (moved <= 0 && proMoved <= 0) {
       if (held > 0 || proHeld > 0) return { error: "Your credits are paying for a reply that is still running. Try again when it finishes." };
+      if (unpaid > 0) return { error: "Your credits are paying for earlier API requests that are still owed. Top up to clear what is owed first.", debt: unpaid };
       return { error: "No credits to transfer." };
     }
     let targetBalance = 0;
@@ -838,11 +845,14 @@ export class NymLedger {
     if (open.length && Number(open[0].n) >= GIFT_MAX_OPEN) {
       return { error: "You have " + GIFT_MAX_OPEN + " gifts nobody has claimed yet. Cancel one, or wait for one to be claimed, before making another.", tooMany: true };
     }
+    const unpaid = await this._payDebt(owner, tier);
     const rec = await this._getCredits(owner, tier);
     const held = this._holdsOf(owner, tier, null);
-    const free = (rec.balance || 0) - held;
+    const free = unpaid > 0 ? 0 : (rec.balance || 0) - held;
     if (free < amount) {
-      return { ok: false, insufficient: true, balance: rec.balance || 0, held, available: Math.max(0, free), required: amount, tier };
+      const short = { ok: false, insufficient: true, balance: rec.balance || 0, held, available: Math.max(0, free), required: amount, tier };
+      if (unpaid > 0) short.debt = unpaid;
+      return short;
     }
     rec.balance -= amount;
     await this._putCredits(owner, rec, tier);
@@ -946,8 +956,64 @@ export class NymLedger {
     return {
       ok: true,
       standard: this._dustOf(pubkey, "standard"),
-      pro: this._dustOf(pubkey, "pro")
+      pro: this._dustOf(pubkey, "pro"),
+      debt: { standard: this._debtOf(pubkey, "standard"), pro: this._debtOf(pubkey, "pro") }
     };
+  }
+
+  _debtOf(pubkey, tier) {
+    const rows = this.sql
+      .exec("SELECT milli FROM credit_debt WHERE pubkey = ? AND tier = ? LIMIT 1;", pubkey, tier)
+      .toArray();
+    return rows.length ? Math.max(0, Number(rows[0].milli) || 0) : 0;
+  }
+
+  _setDebt(pubkey, tier, milli) {
+    const m = Math.max(0, Math.ceil(Number(milli) || 0));
+    if (m > 0) {
+      this.sql.exec(
+        "INSERT INTO credit_debt (pubkey, tier, milli) VALUES (?, ?, ?) " +
+        "ON CONFLICT(pubkey, tier) DO UPDATE SET milli = excluded.milli;",
+        pubkey, tier, m
+      );
+    } else {
+      this.sql.exec("DELETE FROM credit_debt WHERE pubkey = ? AND tier = ?;", pubkey, tier);
+    }
+  }
+
+  async _payDebt(pubkey, tierKey) {
+    const debt = this._debtOf(pubkey, tierKey);
+    if (debt <= 0) return 0;
+    const rec = await this._getCredits(pubkey, tierKey);
+    const free = Math.max(0, Math.floor((rec.balance || 0) - this._holdsOf(pubkey, tierKey, null)));
+    const total = this._dustOf(pubkey, tierKey) + debt;
+    const due = Math.floor(total / 1000);
+    const pay = Math.min(free, due);
+    let left = 0;
+    if (pay >= due) {
+      this._setDust(pubkey, tierKey, total - due * 1000);
+      this._setDebt(pubkey, tierKey, 0);
+    } else {
+      left = debt - pay * 1000;
+      this._setDebt(pubkey, tierKey, left);
+    }
+    if (pay > 0) {
+      rec.balance = (rec.balance || 0) - pay;
+      rec.totalUsed = (rec.totalUsed || 0) + pay;
+      await this._putCredits(pubkey, rec, tierKey);
+    }
+    return left;
+  }
+
+  async _debtAdd(a) {
+    const pubkey = String(a.pubkey || "");
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return { error: "Invalid pubkey." };
+    const tierKey = a.tier === "pro" ? "pro" : "standard";
+    const milli = Math.ceil(Number(a.milli) || 0);
+    if (!Number.isSafeInteger(milli) || milli <= 0) return { error: "Invalid amount." };
+    this._setDebt(pubkey, tierKey, this._debtOf(pubkey, tierKey) + milli);
+    const left = await this._payDebt(pubkey, tierKey);
+    return { ok: true, debt: left };
   }
 
   _setDust(pubkey, tier, milli) {
@@ -1001,9 +1067,11 @@ export class NymLedger {
       }
       if (recent >= limit) return { ok: false, rateLimited: true };
     }
+    const unpaid = await this._payDebt(pubkey, tierKey);
     const rec = await this._getCredits(pubkey, tierKey);
     const held = this._holdsOf(pubkey, tierKey, null);
     const free = (rec.balance || 0) - held;
+    if (unpaid > 0) return { ok: false, balance: rec.balance || 0, held: held, required: amount, debt: unpaid };
     if (free < amount) return { ok: false, balance: rec.balance || 0, held: held, required: amount };
     this.sql.exec(
       "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp) VALUES (?, ?, ?, ?, ?);",
@@ -1016,6 +1084,35 @@ export class NymLedger {
       await this._putCredits(pubkey, rec, tierKey);
     }
     return { ok: true, balance: rec.balance || 0, held: held + amount };
+  }
+
+  async _creditExtend(a) {
+    const pubkey = String(a.pubkey || "");
+    const id = String(a.id || "");
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return { error: "Invalid pubkey." };
+    if (!/^[0-9a-f]{32}$/.test(id)) return { error: "Invalid hold." };
+    const tierKey = a.tier === "pro" ? "pro" : "standard";
+    const amount = Math.max(0, Math.floor(Number(a.amount) || 0));
+    const ttl = Math.min(3600, Math.max(30, Math.floor(Number(a.ttl) || 900)));
+    const now = Date.now();
+    const live = this.sql.exec(
+      "SELECT id FROM credit_holds WHERE id = ? AND pubkey = ? AND tier = ? AND exp > ? LIMIT 1;", id, pubkey, tierKey, now
+    ).toArray();
+    if (live.length) {
+      this.sql.exec("UPDATE credit_holds SET exp = ? WHERE id = ?;", now + ttl * 1000, id);
+      return { ok: true, extended: true };
+    }
+    const rec = await this._getCredits(pubkey, tierKey);
+    const held = this._holdsOf(pubkey, tierKey, id);
+    const unpaid = this._debtOf(pubkey, tierKey);
+    if (unpaid > 0 || (rec.balance || 0) - held < amount) {
+      return { ok: false, lost: true, balance: rec.balance || 0, held, required: amount };
+    }
+    this.sql.exec(
+      "INSERT OR REPLACE INTO credit_holds (id, pubkey, tier, amount, exp) VALUES (?, ?, ?, ?, ?);",
+      id, pubkey, tierKey, amount, now + ttl * 1000
+    );
+    return { ok: true, renewed: true, balance: rec.balance || 0, held: held + amount };
   }
 
   _keyPeriod(p) {
@@ -1218,10 +1315,13 @@ export class NymLedger {
       ? await db.prepare("SELECT balance FROM credits WHERE pubkey = ?").bind(this._creditKey(pubkey, tierKey)).first()
       : null;
     if (!found || typeof found.balance !== "number") return { ok: false, unknown: true, error: "Unknown account." };
+    const debt = this._debtOf(pubkey, tierKey);
+    const forgiven = Math.min(debt, milli);
+    if (forgiven > 0) this._setDebt(pubkey, tierKey, debt - forgiven);
     const rec = await this._getCredits(pubkey, tierKey);
     const dust = this._dustOf(pubkey, tierKey);
     let credits = 0;
-    let nextDust = dust - milli;
+    let nextDust = dust - (milli - forgiven);
     if (nextDust < 0) {
       credits = Math.ceil(-nextDust / 1000);
       nextDust += credits * 1000;
@@ -1231,13 +1331,14 @@ export class NymLedger {
     await this._putCredits(pubkey, rec, tierKey);
     this._setDust(pubkey, tierKey, nextDust);
     this.sql.exec("INSERT INTO claims (id, kind, at) VALUES (?, ?, ?);", claim, "refund", Date.now());
-    return { ok: true, refunded: milli, credited: credits, balance: rec.balance, dust: nextDust };
+    return { ok: true, refunded: milli, credited: credits, balance: rec.balance, dust: nextDust, forgiven };
   }
 
-  async _consumeCredits(pubkey, cost, ts, tier, milli, hold) {
+  async _consumeCredits(pubkey, cost, ts, tier, milli, hold, owe) {
     if (!/^[0-9a-f]{64}$/.test(pubkey || "")) return { error: "Invalid pubkey." };
     cost = Math.max(0, Math.floor(Number(cost) || 0));
     const tierKey = tier === "pro" ? "pro" : "standard";
+    const unpaid = await this._payDebt(pubkey, tierKey);
     const counted = hold ? this._takeHold(hold, pubkey, tierKey) : false;
     const heldByOthers = this._holdsOf(pubkey, tierKey, null);
     const owed = Math.max(0, Math.floor(Number(milli) || 0));
@@ -1250,8 +1351,12 @@ export class NymLedger {
       nextDust = total % 1000;
     }
     const rec = await this._getCredits(pubkey, tier);
-    if ((rec.balance || 0) - heldByOthers < cost) {
-      return { ok: false, balance: rec.balance || 0, required: cost };
+    const blocked = unpaid > 0 && !counted && (cost > 0 || owed > 0);
+    if (blocked || (rec.balance || 0) - heldByOthers < cost) {
+      if (owe && (cost > 0 || owed > 0)) return this._consumeOwing(pubkey, tierKey, rec, blocked ? 0 : heldByOthers, blocked, cost * 1000 + nextDust, dust, unpaid);
+      const short = { ok: false, balance: rec.balance || 0, required: cost };
+      if (unpaid > 0) short.debt = unpaid;
+      return short;
     }
     if (owed > 0) this._setDust(pubkey, tierKey, nextDust);
     rec.balance -= cost;
@@ -1265,6 +1370,18 @@ export class NymLedger {
     }
     await this._putCredits(pubkey, rec, tier);
     return { ok: true, balance: rec.balance, charged: cost, dust: nextDust };
+  }
+
+  async _consumeOwing(pubkey, tierKey, rec, heldByOthers, blocked, total, priorDust, unpaid) {
+    const free = blocked ? 0 : Math.max(0, Math.floor((rec.balance || 0) - heldByOthers));
+    const take = Math.min(free, Math.floor(total / 1000));
+    const left = total - take * 1000;
+    rec.balance = (rec.balance || 0) - take;
+    rec.totalUsed = (rec.totalUsed || 0) + take;
+    if (priorDust > 0) this._setDust(pubkey, tierKey, 0);
+    this._setDebt(pubkey, tierKey, unpaid + left);
+    await this._putCredits(pubkey, rec, tierKey);
+    return { ok: true, balance: rec.balance, charged: take, dust: this._dustOf(pubkey, tierKey), owedMilli: Math.min(left, total - priorDust), debt: unpaid + left };
   }
 
   _freeDay(at) {

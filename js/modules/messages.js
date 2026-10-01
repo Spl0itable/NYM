@@ -77,14 +77,31 @@ Object.assign(NYM.prototype, {
 
     // Seconds first so one peer's missing 'ms' tag can't flip order; ms only when both carry it, else arrival seq.
     _compareMessages(a, b) {
-        const sa = a.created_at || 0;
-        const sb = b.created_at || 0;
+        const sa = this._orderAt(a);
+        const sb = this._orderAt(b);
         if (sa !== sb) return sa - sb;
-        if (this._hasRealMsTag(a) && this._hasRealMsTag(b)) {
-            const dm = a._ms - b._ms;
+        const ma = this._orderMs(a);
+        const mb = this._orderMs(b);
+        if (Number.isFinite(ma) && ma > sa * 1000 && Number.isFinite(mb) && mb > sb * 1000) {
+            const dm = ma - mb;
             if (dm !== 0) return dm;
         }
         return (a._seq || 0) - (b._seq || 0);
+    },
+
+    _orderAt(m) {
+        if (m && Number.isFinite(m._anchorAt)) return m._anchorAt;
+        return (m && m.created_at) || 0;
+    },
+
+    _orderMs(m) {
+        if (m && Number.isFinite(m._anchorMs)) return m._anchorMs;
+        return m ? m._ms : undefined;
+    },
+
+    _orderMsForDom(m) {
+        if (m && Number.isFinite(m._anchorMs)) return m._anchorMs;
+        return this._messageMs(m);
     },
 
     _insertMessageSorted(arr, msg) {
@@ -842,8 +859,8 @@ Object.assign(NYM.prototype, {
             messageEl.className = 'system-message me-message';
             messageEl.dataset.messageId = message.id;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
-            messageEl.dataset.createdAt = message.created_at || 0;
-            messageEl.dataset.ms = this._messageMs(message);
+            messageEl.dataset.createdAt = this._orderAt(message);
+            messageEl.dataset.ms = this._orderMsForDom(message);
             messageEl.dataset.seq = message._seq || 0;
 
             const cleanAuthor = this.resolveDisplayNym(message.pubkey, message.author);
@@ -889,8 +906,8 @@ Object.assign(NYM.prototype, {
             messageEl.dataset.pubkey = message.pubkey;
             messageEl.dataset.rawContent = message.content;
             messageEl.dataset.timestamp = displayTimestamp.getTime();
-            messageEl.dataset.createdAt = message.created_at || 0;
-            messageEl.dataset.ms = this._messageMs(message);
+            messageEl.dataset.createdAt = this._orderAt(message);
+            messageEl.dataset.ms = this._orderMsForDom(message);
             messageEl.dataset.seq = message._seq || 0;
             if (message.isPM) messageEl.dataset.isPM = '1';
             // NIP-13 committed target; a missing attribute means no nonce tag, distinct from a mined target.
@@ -1209,9 +1226,10 @@ Object.assign(NYM.prototype, {
         if (this._bulkAppending) {
             (this._bulkContainer || container).appendChild(messageEl);
         } else {
-            const msgCreatedAt = message.created_at || 0;
-            const msgHasMs = this._hasRealMsTag(message);
-            const msgMs = msgHasMs ? message._ms : 0;
+            const msgCreatedAt = this._orderAt(message);
+            const msgOrderMs = this._orderMs(message);
+            const msgHasMs = Number.isFinite(msgOrderMs) && msgOrderMs > msgCreatedAt * 1000;
+            const msgMs = msgHasMs ? msgOrderMs : 0;
             const msgSeq = message._seq || 0;
 
             const lastTimestamped = this._lastTimestampedEl(container);
@@ -1235,6 +1253,7 @@ Object.assign(NYM.prototype, {
         }
 
         this._updateBubbleGrouping(messageEl);
+        if (message.isPM && message.isOwn && typeof this._botRunDecorate === 'function') this._botRunDecorate(messageEl, message);
 
         // Restore a manual translation, since a re-render drops it and nothing re-issues it.
         if (typeof this._reapplyManualTranslation === 'function') this._reapplyManualTranslation(messageEl);

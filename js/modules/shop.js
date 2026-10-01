@@ -183,7 +183,8 @@ Object.assign(NYM.prototype, {
         const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: opts && opts.signal ? opts.signal : undefined
         });
         const data = await resp.json().catch(() => ({}));
         return { status: resp.status, data: data || {} };

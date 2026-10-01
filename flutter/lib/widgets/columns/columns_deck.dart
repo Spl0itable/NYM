@@ -17,6 +17,7 @@ import '../../features/groups/group_logic.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/nymbot/nymbot_providers.dart'
     show BotChatController, botChatControllerProvider, mergeBotThreadWithInfo;
+import '../../features/nymbot/bot_runs_view.dart' show botRunTrailing;
 import '../../features/pms/pm_logic.dart';
 import '../../features/reactions/reaction_picker.dart';
 import '../../features/shop/cosmetics.dart';
@@ -1868,6 +1869,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                       scrollKey: widget.desc.storageKey,
                                       onReactionPicker: (msg) =>
                                           showReactionPicker(context, ref, msg),
+                                      trailingFor: widget.desc.storageKey == BotChatController.conversationKey
+                                          ? (m) => botRunTrailing(m, context.nym)
+                                          : null,
                                     ),
                                     ),
                                   );

@@ -756,6 +756,15 @@
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
                     <span class="bot-ctrl-label" id="botAnonBtnLabel">Anon</span>
                 </button>
+                <button class="bot-ctrl-btn bot-stop-all-btn nm-hidden" type="button" id="botStopAllBtn" data-action="botRunStopAll" title="Stop every reply in this chat" aria-label="Stop every reply in this chat">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>
+                    <span class="bot-ctrl-label">Stop</span>
+                </button>
+                <button class="bot-ctrl-btn bot-runs-btn" type="button" id="botRunsBtn" data-action="openBotRunsSheet" title="Running now">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                    <span class="bot-ctrl-label">Running now</span>
+                    <span class="bot-runs-count nm-hidden" id="botRunsCount" data-no-i18n>0</span>
+                </button>
                 <button class="bot-ctrl-btn bot-ctrl-buy" type="button" id="botBuyBtn" data-action="openBotCreditsModal" title="Buy Nymbot credits">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
                     <span class="bot-ctrl-label">Buy</span>
@@ -2380,6 +2389,30 @@
         </div>
     </div>
 
+    <div class="modal" id="botRunsModal">
+        <div class="modal-content bot-runs-modal-content">
+            <button class="modal-close" data-action="closeModal" data-modal-id="botRunsModal">✕</button>
+            <div class="modal-header">Running now</div>
+            <div class="form-group">
+                <label class="form-label" for="botMaxRunsSelect">Requests at once</label>
+                <select class="form-select" id="botMaxRunsSelect" data-on-change="botMaxRunsChange">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                    <option value="9">9</option>
+                    <option value="10">10</option>
+                </select>
+                <div class="form-hint">How many requests can run at the same time across your chats. Each running request holds its credits until it finishes.</div>
+            </div>
+            <div class="bot-runs-list" id="botRunsList"></div>
+        </div>
+    </div>
+
     <div class="modal" id="botAnonModal">
         <div class="modal-content">
             <button class="modal-close" data-action="closeModal" data-modal-id="botAnonModal">✕</button>
@@ -2595,6 +2628,7 @@
     <script defer src="js/brand-marks.js"></script>
     <script defer src="js/modules/pms.js"></script>
     <script defer src="js/modules/anon-bot.js"></script>
+    <script defer src="js/modules/bot-runs.js"></script>
     <script defer src="js/modules/groups.js"></script>
     <script defer src="js/modules/ui-context.js"></script>
     <script defer src="js/modules/mesh/mesh-ui.js"></script>

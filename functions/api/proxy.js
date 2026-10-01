@@ -518,9 +518,9 @@ function translateIpKey(request) {
 }
 
 function translateBuildTokenOk(request, env) {
-  const expected = env && typeof env.NYM_BUILD_TOKEN === 'string' ? env.NYM_BUILD_TOKEN : '';
+  const expected = env && typeof env.NYM_BUILD_TOKEN === 'string' ? env.NYM_BUILD_TOKEN.trim() : '';
   if (expected.length < 16) return false;
-  const got = (request.headers && request.headers.get('X-Nym-Build')) || '';
+  const got = ((request.headers && request.headers.get('X-Nym-Build')) || '').trim();
   if (got.length !== expected.length) return false;
   let diff = 0;
   for (let i = 0; i < expected.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);

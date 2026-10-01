@@ -76,6 +76,9 @@ class Message {
     this.bitchatMessageId,
     this.nymMessageId,
     this.threadRoot,
+    this.replyTo,
+    this.anchorAt,
+    this.anchorMs,
     this.deliveryStatus = DeliveryStatus.sending,
     this.isEdited = false,
     this.channel,
@@ -144,6 +147,12 @@ class Message {
 
   /// Thread root, via NIP-10 `e` root tag for channels or `nymthread` for PMs/groups; null at top level.
   String? threadRoot;
+
+  String? replyTo;
+
+  int? anchorAt;
+
+  int? anchorMs;
   DeliveryStatus deliveryStatus;
   bool isEdited;
 
@@ -224,6 +233,9 @@ class Message {
         'bitchatMessageId': bitchatMessageId,
         'nymMessageId': nymMessageId,
         'threadRoot': threadRoot,
+        if (replyTo != null) 'replyTo': replyTo,
+        if (anchorAt != null) '_anchorAt': anchorAt,
+        if (anchorMs != null) '_anchorMs': anchorMs,
         'deliveryStatus': deliveryStatus.name,
         'isEdited': isEdited,
         'channel': channel,
@@ -303,6 +315,9 @@ class Message {
       bitchatMessageId: j['bitchatMessageId'] as String?,
       nymMessageId: j['nymMessageId'] as String?,
       threadRoot: j['threadRoot'] as String?,
+      replyTo: j['replyTo'] as String?,
+      anchorAt: (j['_anchorAt'] as num?)?.toInt(),
+      anchorMs: (j['_anchorMs'] as num?)?.toInt(),
       deliveryStatus: deliveryStatusFromString(j['deliveryStatus'] as String?),
       isEdited: j['isEdited'] == true,
       channel: j['channel'] as String?,
@@ -315,13 +330,6 @@ class Message {
       powTarget: (j['powTarget'] as num?)?.toInt(),
     );
   }
-}
-
-/// True when `ms` adds real sub-second precision over `created_at * 1000`.
-bool _hasRealMsTag(Message m) {
-  if (m.ms <= 0) return false;
-  final base = m.createdAt * 1000;
-  return m.ms > base;
 }
 
 /// Leading zero bits of a 64-hex event id (NIP-13 proven work); 0 for anything else.
@@ -344,10 +352,21 @@ int powBitsForId(String? id) {
   return bits;
 }
 
+int _orderAt(Message m) => m.anchorAt ?? m.createdAt;
+
+int _orderMs(Message m) => m.anchorMs ?? m.ms;
+
+bool _hasRealOrderMs(Message m) {
+  final ms = _orderMs(m);
+  return ms > 0 && ms > _orderAt(m) * 1000;
+}
+
 int compareMessages(Message a, Message b) {
-  if (a.createdAt != b.createdAt) return a.createdAt - b.createdAt;
-  if (_hasRealMsTag(a) && _hasRealMsTag(b)) {
-    final dm = a.ms - b.ms;
+  final sa = _orderAt(a);
+  final sb = _orderAt(b);
+  if (sa != sb) return sa - sb;
+  if (_hasRealOrderMs(a) && _hasRealOrderMs(b)) {
+    final dm = _orderMs(a) - _orderMs(b);
     if (dm != 0) return dm;
   }
   return a.seq - b.seq;

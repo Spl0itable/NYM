@@ -107,20 +107,6 @@ class SpamFilter {
         .trim();
   }
 
-  /// Matches the glub.chat client tag (not content, not version), which survives rewording.
-  static bool isGlubClient(List<List<String>> tags) {
-    for (final t in tags) {
-      if (t.isEmpty) continue;
-      if (t[0] == 'glub') return true;
-      if (t[0] == 'client' &&
-          t.length > 1 &&
-          t[1].toLowerCase() == 'glub.chat') {
-        return true;
-      }
-    }
-    return false;
-  }
-
   static bool isSpamMessage(
     Object? content, {
     bool enabled = true,

@@ -44,6 +44,8 @@ import '../threads/thread_view.dart' show ThreadView;
 import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import 'bot_credits_modal.dart';
+import 'bot_runs.dart' show kBotRunPollEvery;
+import 'bot_runs_view.dart';
 import 'nymbot_models.dart';
 import 'brand_tile.dart';
 import 'nymbot_providers.dart';
@@ -66,6 +68,9 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
   /// Whether the scroll-to-bottom button shows (>150px up); in the reversed list `offset` is that distance.
   bool _showScrollButton = false;
 
+  Timer? _runsTimer;
+  final Map<String, GlobalKey> _runKeys = <String, GlobalKey>{};
+
   @override
   void initState() {
     super.initState();
@@ -83,13 +88,28 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       engine.attachSigner(nostr.signer);
       engine.ensureIntro();
       engine.refreshBalance();
+      engine.onChatOpen();
+    });
+    _runsTimer = Timer.periodic(kBotRunPollEvery, (_) {
+      if (!mounted) return;
+      final ctl = ref.read(botChatControllerProvider.notifier);
+      if (ctl.runsPollWanted) ctl.pollRuns();
     });
   }
 
   @override
   void dispose() {
+    _runsTimer?.cancel();
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _openRun(String id) {
+    final ctx = _runKeys[id.toLowerCase()]?.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          duration: NymMotion.transition, alignment: 0.5);
+    }
   }
 
   void _onScrolled() {
@@ -146,6 +166,17 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
           onTapBuy: () => _showBuy(context),
           anonOn: state.anonEnabled,
           onTapAnon: () => _showAnon(context),
+          runsCount: ref
+              .read(botChatControllerProvider.notifier)
+              .runsEngine
+              .rows()
+              .length,
+          onTapRuns: () =>
+              showBotRunsSheet(context, ref, c, onOpen: _openRun),
+          onStopAll: () {
+            final runs = ref.read(botChatControllerProvider.notifier);
+            runs.runsEngine.stopAll();
+          },
         ),
         Expanded(
           // Tapping the messages region drops focus when nothing else consumes the tap.
@@ -221,6 +252,10 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
         : const Color(0x26000000);
 
     final mentionToken = '@${stripPubkeySuffix(app.selfNym)}';
+    ref.watch(botChatControllerProvider.select((s) => s.runsVersion));
+    final runs = ref.read(botChatControllerProvider.notifier).runsEngine;
+    bool hasStatus(Message m) =>
+        m.isOwn && botRunHasStatus(runs, m.nymMessageId);
 
     // Fold consecutive same-author messages into 5-minute groups, as messages_list.dart does.
     final units = <List<MessageGroupEntry>>[];
@@ -236,6 +271,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       );
       if (settings.useBubbles &&
           units.isNotEmpty &&
+          !hasStatus(units.last.last.message) &&
           _groupsWith(units.last.last.message, m)) {
         units.last.add(entry);
       } else {
@@ -258,12 +294,23 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
               itemBuilder: (context, revIndex) {
                 final unit = units[units.length - 1 - revIndex];
                 // Keyed by the group's lead id so appended replies don't re-create visible rows and restart their snap-in.
-                return MessageGroup(
+                final group = MessageGroup(
                   key: ValueKey('botgroup_${unit.first.message.id}'),
                   entries: unit,
                   settings: settings,
                   onReactionPicker: (msg) =>
                       showReactionPicker(context, ref, msg),
+                );
+                final last = unit.last.message;
+                if (!hasStatus(last)) return group;
+                final runId = last.nymMessageId!.toLowerCase();
+                return Column(
+                  key: _runKeys.putIfAbsent(runId, GlobalKey.new),
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    group,
+                    BotRunStatusView(id: runId, colors: c),
+                  ],
                 );
               },
             ),
@@ -414,6 +461,11 @@ const String _kSvgAnon =
     '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/>'
     '<line x1="3" y1="21" x2="21" y2="3"/></svg>';
 
+const String _kSvgStop =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
 const String _kSvgBolt =
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
     'stroke-linecap="round" stroke-linejoin="round">'
@@ -429,8 +481,14 @@ class _BotControlBar extends StatelessWidget {
     required this.onTapBuy,
     required this.anonOn,
     required this.onTapAnon,
+    this.runsCount = 0,
+    this.onTapRuns,
+    this.onStopAll,
   });
 
+  final VoidCallback? onStopAll;
+  final int runsCount;
+  final VoidCallback? onTapRuns;
   final bool isPro;
   final String modelLabel;
   final NymColors colors;
@@ -476,6 +534,39 @@ class _BotControlBar extends StatelessWidget {
             compact: compact,
             onTap: onTapAnon,
           ),
+          if (runsCount > 0 && onStopAll != null) ...[
+            SizedBox(width: gap),
+            Tooltip(
+              message: tr('Stop every reply in this chat'),
+              child: Semantics(
+                button: true,
+                label: tr('Stop every reply in this chat'),
+                excludeSemantics: true,
+                child: _CtrlButton(
+                  svg: _kSvgStop,
+                  label: tr('Stop'),
+                  active: false,
+                  labelMaxWidth: labelMax,
+                  colors: c,
+                  compact: compact,
+                  onTap: onStopAll!,
+                ),
+              ),
+            ),
+          ],
+          if (onTapRuns != null) ...[
+            SizedBox(width: gap),
+            _CtrlButton(
+              svg: kSvgBotRuns,
+              label: tr('Running now'),
+              active: false,
+              badge: runsCount > 0 ? runsCount : null,
+              labelMaxWidth: labelMax,
+              colors: c,
+              compact: compact,
+              onTap: onTapRuns!,
+            ),
+          ],
         ],
       ),
     );
@@ -566,8 +657,10 @@ class _CtrlButton extends StatefulWidget {
     required this.compact,
     required this.onTap,
     this.buy = false,
+    this.badge,
   });
 
+  final int? badge;
   final String svg;
   final String label;
   final bool active;
@@ -639,6 +732,26 @@ class _CtrlButtonState extends State<_CtrlButton> {
                   ),
                 ),
               ),
+              if (widget.badge != null) ...[
+                const SizedBox(width: 6),
+                Container(
+                  constraints: const BoxConstraints(minWidth: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  decoration: BoxDecoration(
+                    color: c.primary,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${widget.badge}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: c.bg,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

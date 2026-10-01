@@ -664,7 +664,7 @@ class NymFormat {
 
     tokens = _splitByRegex(
         tokens,
-        RegExp(r'https?://app\.nym\.bar/#([egc]):([^\s<>"]+)',
+        RegExp(r'https?://web\.nymchat\.app/#([egc]):([^\s<>"]+)',
             caseSensitive: false), (m) {
       return _NodeTok(ChannelLinkChip(ref: '${m[1]}:${m[2]}', label: m[0]!));
     });

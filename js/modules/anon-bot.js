@@ -284,6 +284,11 @@
             body.auth = this._botAnonSignAuth(action, endpoint, id, await this._authPayloadHash(body));
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), (opts && opts.timeout) || 45000);
+            const outer = opts && opts.signal;
+            if (outer) {
+                if (outer.aborted) controller.abort();
+                else outer.addEventListener('abort', () => controller.abort(), { once: true });
+            }
             try {
                 const resp = await this._edgeFetch(`https://${host}/api/${endpoint}`, {
                     method: 'POST',
@@ -324,7 +329,8 @@
 
         _botAnonAutoRoute(action) {
             if (!this.botAnonReady()) return false;
-            return action === 'pm' || action === 'balance' || action === 'clear-history';
+            return action === 'pm' || action === 'balance' || action === 'clear-history' ||
+                action === 'pm-cancel' || action === 'pm-steer' || action === 'pm-claim' || action === 'pm-runs';
         },
 
         _botAnonArchive(event) {

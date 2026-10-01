@@ -34,6 +34,7 @@ import {
   botWrapsSweep,
   botWrapsStatus,
   botWrapsMiss,
+  botRunsForget,
   invoiceGet,
   invoiceHas,
   invoicePut,
@@ -77,6 +78,10 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
+import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runTurnsRecent, runTurnAdd, runResultPut,
+  runResultGet, runGet, runCountLive, runStart, runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent,
+  runSteerAdd, runSteerList, runSteerMark, runSweep, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
+  RUN_STEER_CHARS } from "./_runs.js";
 
 
 // Unwraps pq2, pq1 or plain NIP-44, independently at the wrap and seal layers.
@@ -2436,20 +2441,31 @@ var BOT_EFFORT_REVISE_PROMPT = "Read your answer back against the question. "
 
 // Kept as a wrapper so it composes with looking back past the window.
 async function runProEffort(env, proModel, messages, effort, opts, answer) {
+  var usage = botUsageZero();
+  var tally = { calls: 0 };
+  try {
+    return await runProEffortSteps(env, proModel, messages, effort, opts, answer, usage, tally);
+  } catch (e) {
+    throw botStopCarry(e, usage, tally.calls);
+  }
+}
+
+async function runProEffortSteps(env, proModel, messages, effort, opts, answer, usage, tally) {
   var progress = (opts && opts.progress) || function () { };
+  var chat = (opts && opts.chat) || proGatewayChat;
   var of = effort + (opts && opts.extraCalls ? opts.extraCalls : 0);
   var calls = 0;
   var outputTokens = 0;
-  var usage = botUsageZero();
   var convo = messages.slice();
 
   if (effort >= 2) {
     calls++;
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
     progress({ kind: "effort", stage: "planning" });
-    var planned = await proGatewayChat(env, proModel,
+    var planned = await chat(env, proModel,
       convo.concat([{ role: "user", content: BOT_EFFORT_PLAN_PROMPT }]),
       BOT_EFFORT_PLAN_TOKENS, null);
+    tally.calls++;
     outputTokens += planned.outputTokens || 0;
     botUsageAdd(usage, planned.usage);
     var planText = proMessageText(planned.msg);
@@ -2462,6 +2478,7 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
 
   var core = await answer(convo, calls, of);
   calls += core.modelCalls || 1;
+  tally.calls += core.modelCalls || 1;
   outputTokens += core.outputTokens || 0;
   botUsageAdd(usage, core.usage);
   var reply = core.reply;
@@ -2470,11 +2487,12 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
     calls++;
     progress({ kind: "model", call: calls, of: of, model: proModel.label || proModel.model || "" });
     progress({ kind: "effort", stage: "checking" });
-    var revised = await proGatewayChat(env, proModel,
+    var revised = await chat(env, proModel,
       convo.concat([
         { role: "assistant", content: reply },
         { role: "user", content: BOT_EFFORT_REVISE_PROMPT }
       ]), proModel.maxTokens, null);
+    tally.calls++;
     outputTokens += revised.outputTokens || 0;
     botUsageAdd(usage, revised.usage);
     var better = proMessageWithThinking(revised.msg);
@@ -2487,11 +2505,21 @@ async function runProEffort(env, proModel, messages, effort, opts, answer) {
 
 // At most one tool round, since each round is a billed model call; lookups reuse already decrypted turns.
 async function runProRecallChat(env, proModel, messages, dropped, opts) {
+  var usage = botUsageZero();
+  var tally = { calls: 0 };
+  try {
+    return await runProRecallSteps(env, proModel, messages, dropped, opts, usage, tally);
+  } catch (e) {
+    throw botStopCarry(e, usage, tally.calls);
+  }
+}
+
+async function runProRecallSteps(env, proModel, messages, dropped, opts, usage, tally) {
   var progress = (opts && opts.progress) || function () { };
+  var chat = (opts && opts.chat) || proGatewayChat;
   var convo = messages.slice();
   var calls = 0;
   var outputTokens = 0;
-  var usage = botUsageZero();
   var budget = 1 + BOT_RECALL_ROUNDS;
   // Position within the whole reply, so progress lines don't restart when effort passes hand over.
   var priorCalls = Math.max(0, Math.floor(Number(opts && opts.priorCalls) || 0));
@@ -2501,8 +2529,9 @@ async function runProRecallChat(env, proModel, messages, dropped, opts) {
     var lastTurn = calls >= budget;
     progress({ kind: "model", call: priorCalls + calls, of: of,
       model: proModel.label || proModel.model || "" });
-    var r = await proGatewayChat(env, proModel, convo, proModel.maxTokens,
+    var r = await chat(env, proModel, convo, proModel.maxTokens,
       lastTurn ? null : recallToolDefs());
+    tally.calls++;
     var msg = r.msg;
     outputTokens += r.outputTokens || 0;
     botUsageAdd(usage, r.usage);
@@ -2894,6 +2923,269 @@ async function botReleaseStrandedTurn(context) {
 
 function isHex64(x) { return typeof x === "string" && /^[0-9a-f]{64}$/i.test(x); }
 
+var BOT_RUN_THREAD_PREFIX = "nymchat:";
+var BOT_RUN_FLUSH_MS = 1500;
+var BOT_RUN_BEAT_MS = 15000;
+var BOT_RUN_CHECK_MS = 1500;
+var BOT_RUN_STEER_MS = 2000;
+var BOT_RUN_LOCAL_MAX = 2000;
+var BOT_RUN_CTL_RATE = 60;
+var BOT_STOPPED_TEXT = "Stopped.";
+var BOT_STEER_PASSED = "I passed that on to the running request.";
+var BOT_STEER_PREFIX = "Update from the user while you were working. Apply it from here on, and keep replying in the format asked for above:\n";
+var BOT_PENDING_TEXT = "Nymbot is still working on that message — ask again in a moment and the reply will be waiting.";
+var BOT_STEER_TAG_RE = /<steer_run\s+id\s*=\s*"?(R\d{1,2})"?\s*>([\s\S]*?)<\/steer_run\s*>/gi;
+var botRunLocal = new Map();
+
+function botRunThreadKey(threadRoot) {
+  return BOT_RUN_THREAD_PREFIX + (threadRoot ? String(threadRoot).toLowerCase() : "pm");
+}
+
+function botRunThreadRoot(key) {
+  var k = String(key || "");
+  if (k.indexOf(BOT_RUN_THREAD_PREFIX) !== 0) return null;
+  var rest = k.slice(BOT_RUN_THREAD_PREFIX.length);
+  return rest === "pm" ? "" : rest;
+}
+
+function botRunLocalEntry(pk, asked) {
+  var k = String(pk).toLowerCase() + ":" + String(asked).toLowerCase();
+  var e = botRunLocal.get(k);
+  if (!e) {
+    e = { cancel: false, steer: false };
+    botRunLocal.set(k, e);
+    if (botRunLocal.size > BOT_RUN_LOCAL_MAX) botRunLocal.delete(botRunLocal.keys().next().value);
+  }
+  return e;
+}
+
+function botRunWait(context, p) {
+  if (!p || typeof p.then !== "function") return;
+  var quiet = p.then(function () { }, function () { });
+  try {
+    if (context && typeof context.waitUntil === "function") context.waitUntil(quiet);
+  } catch (e) { }
+}
+
+function botRunCipher(botPrivkey, userPubkey) {
+  var key = null;
+  var k = function () {
+    if (!key) key = nip44ConversationKey(botPrivkey, String(userPubkey).toLowerCase());
+    return key;
+  };
+  return {
+    seal: function (text) {
+      var t = String(text || "");
+      if (!t) return "";
+      try { return nip44Encrypt(t, k()); } catch (e) { return ""; }
+    },
+    open: function (text) {
+      if (!text) return "";
+      try { return nip44Decrypt(String(text), k()); } catch (e) { return ""; }
+    }
+  };
+}
+
+function botStopError() {
+  var e = new Error(BOT_STOPPED_TEXT);
+  e.botStopped = true;
+  return e;
+}
+
+function botStopCarry(e, usage, calls) {
+  if (!e || !e.botStopped) return e;
+  e.usage = botUsageAdd(botUsageAdd(botUsageZero(), e.usage), usage);
+  e.modelCalls = (Number(e.modelCalls) || 0) + (Number(calls) || 0);
+  return e;
+}
+
+function botStoppedResult(e) {
+  var src = e && typeof e === "object" ? e : {};
+  return {
+    reply: BOT_STOPPED_TEXT,
+    canceled: true,
+    usage: src.usage || null,
+    modelCalls: Number(src.modelCalls) || 0,
+    outputTokens: 0
+  };
+}
+
+async function botRunGate(ctl, messages) {
+  if (!ctl) return messages;
+  if (ctl.stopped()) throw botStopError();
+  var sent = await ctl.inject(messages);
+  if (ctl.stopped()) throw botStopError();
+  return sent;
+}
+
+function botRunChat(ctl) {
+  if (!ctl) return proGatewayChat;
+  return async function (env, model, messages, maxTokens, tools) {
+    return proGatewayChat(env, model, await botRunGate(ctl, messages), maxTokens, tools);
+  };
+}
+
+function botRunUnpack(cipher, raw) {
+  var text = cipher.open(raw);
+  if (!text) return { p: "" };
+  try {
+    var o = JSON.parse(text);
+    return { p: typeof o.p === "string" ? o.p : "" };
+  } catch (e) { return { p: "" }; }
+}
+
+function botRunControl(env, context, pk, cipher) {
+  var db = env.DB_BOT;
+  var timer = null;
+  var ctl = {
+    asked: null, registered: false, line: "", st: {}, dirty: false,
+    lastWrite: 0, lastBeat: 0, cancel: false, lastCheck: 0, steerAt: 0,
+    notes: [], applied: {}
+  };
+  var local = function () { return ctl.asked ? botRunLocalEntry(pk, ctl.asked) : null; };
+  ctl.payload = function () { return cipher.seal(JSON.stringify({ p: ctl.line || "" })); };
+  ctl.flush = function () {
+    if (!ctl.registered) return null;
+    ctl.dirty = false;
+    ctl.lastWrite = ctl.lastBeat = Date.now();
+    var w = runBeat(db, pk, ctl.asked, ctl.payload(), ctl.lastWrite);
+    botRunWait(context, w);
+    return w;
+  };
+  ctl.note = function (step) {
+    var line = runProgressLine(ctl.st, step);
+    if (line == null || line === ctl.line) return;
+    ctl.line = line;
+    ctl.dirty = true;
+    if (ctl.registered && Date.now() - ctl.lastWrite >= BOT_RUN_FLUSH_MS) ctl.flush();
+  };
+  ctl.refresh = async function () {
+    ctl.lastCheck = Date.now();
+    var loc = local();
+    if (loc && loc.cancel) ctl.cancel = true;
+    if (ctl.cancel || !ctl.asked) return ctl.cancel;
+    if (await runCanceled(db, pk, ctl.asked)) ctl.cancel = true;
+    return ctl.cancel;
+  };
+  ctl.stopped = function () {
+    if (ctl.cancel) return true;
+    var loc = local();
+    if (loc && loc.cancel) {
+      ctl.cancel = true;
+      return true;
+    }
+    if (ctl.asked && Date.now() - ctl.lastCheck >= BOT_RUN_CHECK_MS) botRunWait(context, ctl.refresh());
+    return false;
+  };
+  ctl.inject = async function (messages) {
+    if (!ctl.asked || !Array.isArray(messages)) return messages;
+    var loc = local();
+    if ((loc && loc.steer) || Date.now() - ctl.steerAt >= BOT_RUN_STEER_MS) {
+      if (loc) loc.steer = false;
+      ctl.steerAt = Date.now();
+      var rows = await runSteerList(db, pk, ctl.asked);
+      var fresh = [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (ctl.applied[r.id]) continue;
+        ctl.applied[r.id] = true;
+        var text = cipher.open(r.text);
+        if (!text) continue;
+        ctl.notes.push(text);
+        if (!Number(r.applied_at)) fresh.push(r.id);
+      }
+      if (fresh.length) {
+        await runSteerMark(db, pk, ctl.asked, fresh, Date.now());
+        ctl.note({ kind: "steer" });
+      }
+    }
+    if (!ctl.notes.length) return messages;
+    return messages.concat([{ role: "user", content: BOT_STEER_PREFIX + ctl.notes.map(function (n) { return "- " + n; }).join("\n") }]);
+  };
+  ctl.start = function () {
+    if (timer) return;
+    timer = setInterval(function () {
+      if (ctl.dirty || Date.now() - ctl.lastBeat >= BOT_RUN_BEAT_MS) ctl.flush();
+    }, BOT_RUN_FLUSH_MS);
+  };
+  ctl.stop = function () {
+    if (timer) clearInterval(timer);
+    timer = null;
+  };
+  ctl.finish = async function (state) {
+    ctl.stop();
+    if (!ctl.registered) return;
+    ctl.registered = false;
+    await runEnd(db, pk, ctl.asked, state, null, ctl.payload(), Date.now());
+  };
+  return ctl;
+}
+
+function botRunAge(ms) {
+  var min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return "just now";
+  if (min < 60) return min + " min ago";
+  var h = Math.round(min / 60);
+  return h + (h === 1 ? " hour ago" : " hours ago");
+}
+
+async function botRunOthers(db, pk, thread, exclude, cipher) {
+  var rows = await runLive(db, pk, thread, exclude, Date.now(), 8);
+  var now = Date.now();
+  return rows.map(function (r, i) {
+    return {
+      handle: "R" + (i + 1),
+      asked: r.asked,
+      kind: r.kind || "chat",
+      state: r.state,
+      label: runLabel(cipher.open(r.label)),
+      progress: botRunUnpack(cipher, r.progress).p,
+      age: botRunAge(now - (Number(r.started_at) || now))
+    };
+  });
+}
+
+function botRunOthersBlock(others) {
+  var lines = others.map(function (o) {
+    var now = o.state === "waiting" ? "waiting for the user's approval" : (o.state === "parked" ? "paused, carries on next" : o.progress);
+    return "[" + o.handle + "] (" + o.kind + ", started " + o.age + ") \"" + String(o.label || "").replace(/"/g, "'") + "\"" +
+      (now ? " — now: " + now : "");
+  });
+  return "OTHER REQUESTS STILL RUNNING IN THIS CHAT: the user sent these earlier and they are still being worked on separately; their answers will arrive on their own.\n" +
+    lines.join("\n") +
+    "\nDo not redo or repeat these requests in this reply. If the user asks about them, say they are still in progress; you may report the progress shown here, but never invent their results." +
+    "\nTo pass the user's instruction to one of them (for example \"for that one, also cover X\"), write on its own line <steer_run id=\"R1\">the instruction</steer_run> using its id from the list, and tell the user briefly that you passed it on. Only do this when the message is clearly meant for that running request; if it is unclear which one, ask. The line is removed before the user sees your reply.";
+}
+
+function botSteerTags(text) {
+  var out = [];
+  var re = new RegExp(BOT_STEER_TAG_RE.source, "gi");
+  var m;
+  while ((m = re.exec(String(text || ""))) && out.length < 3) {
+    var said = String(m[2] || "").trim();
+    if (said) out.push({ handle: m[1].toUpperCase(), text: said.slice(0, RUN_STEER_CHARS) });
+  }
+  var rest = String(text || "").replace(new RegExp(BOT_STEER_TAG_RE.source, "gi"), "").replace(/<\/?steer_run\b[^>]*>/gi, "")
+    .replace(/\n{3,}/g, "\n\n").trim();
+  return { steers: out, text: rest };
+}
+
+async function botEarlyClaim(env, pk, eventId, json) {
+  var key = botTurnKey(pk, eventId);
+  var p = null;
+  try { p = await ledgerCall(env, { op: "turn-poll", key: key }); } catch (e) { p = null; }
+  if (p && p.state === "done" && p.result && p.result.body) return json(p.result.body, p.result.status || 200);
+  if (p && p.state === "running") {
+    var waited = await botTurnWait(env, key);
+    if (waited.result) return json(waited.result.body, waited.result.status);
+    if (waited.pending) return json({ pending: true, message: BOT_PENDING_TEXT }, 202);
+    return null;
+  }
+  var stored = await runResultGet(env.DB_BOT, String(pk).toLowerCase(), "e:" + String(eventId).toLowerCase());
+  if (stored && stored.body) return json(stored.body, stored.status || 200);
+  return null;
+}
+
 // Per-user ordered list of NIP-17 gift-wrap event IDs for the private bot thread.
 var BOT_THREAD_MAX = 40;
 async function botGetThread(env, pubkey) {
@@ -3002,7 +3294,9 @@ function maybeSweepBotWraps(context, env) {
   if (now - botWrapSweepLastMs < BOT_WRAP_SWEEP_EVERY_MS) return;
   botWrapSweepLastMs = now;
   var work = botWrapsSweep(env.DB_BOT, now - BOT_WRAP_KEEP_MS, BOT_WRAP_SWEEP_MAX)
-    .catch(function () { return 0; });
+    .catch(function () { return 0; })
+    .then(function () { return runSweep(env.DB_BOT, now, BOT_WRAP_SWEEP_MAX); })
+    .catch(function () { return false; });
   try {
     if (context && typeof context.waitUntil === "function") context.waitUntil(work);
   } catch (e) { }
@@ -3095,6 +3389,9 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   // Which replies another model wrote; empty in single-model chats.
   var voicesBlock = modelVoicesBlock(keptTurns, nowVoice);
   if (voicesBlock) messages.push({ role: "system", content: voicesBlock });
+  if (Array.isArray(runOpts.others) && runOpts.others.length) {
+    messages.push({ role: "system", content: botRunOthersBlock(runOpts.others) });
+  }
 
   // Live web search / changelog lookup, same as public channels.
   var pmSearchResults = [];
@@ -3219,18 +3516,21 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   if (proModel) {
     // The effort wrapper composes with looking back past the window rather than competing for the same call.
     var effort = botEffortLevel(runOpts.effort);
+    var runChat = botRunChat(runOpts.run || null);
     var wrapped = await runProEffort(context.env, proModel, messages, effort, {
       progress: runOpts.progress,
-      extraCalls: canRecall ? BOT_RECALL_ROUNDS : 0
+      extraCalls: canRecall ? BOT_RECALL_ROUNDS : 0,
+      chat: runChat
     }, async function (convo, done, of) {
       if (canRecall) {
         return await runProRecallChat(context.env, proModel, convo, dropped, {
-          progress: runOpts.progress, priorCalls: done, of: of
+          progress: runOpts.progress, priorCalls: done, of: of, chat: runChat
         });
       }
       if (runOpts.progress) {
         runOpts.progress({ kind: "model", call: done + 1, of: of, model: proModel.label || proModel.model || "" });
       }
+      convo = await botRunGate(runOpts.run || null, convo);
       var one = await runProGatewayModel(context.env, proModel, convo, proModel.maxTokens,
         runOpts.progress);
       return { reply: one.text, modelCalls: 1, outputTokens: one.outputTokens,
@@ -3259,6 +3559,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   var reply = "";
   var usage = botUsageZero();
   var billedModel = pmModel;
+  messages = await botRunGate(runOpts.run || null, messages);
   try {
     var primary = await aiRun(ai, pmModel, { messages: messages, max_tokens: maxOut });
     botUsageAdd(usage, proCallUsage(primary));
@@ -3278,6 +3579,7 @@ async function handleBotPMChat(rawMessage, history, context, preTaskType, proMod
   BOT_PM_VISION_FALLBACKS.forEach(function (m) { seesToo[m] = true; });
   for (var f = 0; f < fallbacks.length && !reply.trim(); f++) {
     if (fallbacks[f] === pmModel) continue;
+    if (runOpts.run && runOpts.run.stopped()) throw botStopCarry(botStopError(), usage, 1);
     try {
       var fb = await aiRun(ai, fallbacks[f], {
         messages: seesToo[fallbacks[f]] ? messages : textOnly,
@@ -3503,13 +3805,16 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   function botSelfKem() {
     return botPq ? { pk: botPq.kemPk, fmt: "pq2" } : null;
   }
+  var replyLink = null;
+  var runCipher = botRunCipher(botPrivkey, userPubkey);
   // `threadRoot` files the reply in the thread; `model` is omitted for replies no model wrote.
   async function wrapReplyPair(text, threadRoot, model) {
     var opts = null;
-    if (threadRoot || model) {
+    if (threadRoot || model || replyLink) {
       opts = {};
       if (threadRoot) opts.threadRoot = threadRoot;
       if (model) opts.model = model;
+      if (replyLink) opts.replyTo = replyLink;
     }
     return buildPqGiftWrappedDMPair(
       text, botPrivkey, botPubkey, userPubkey, await userPqKem(), botSelfKem(), opts);
@@ -3792,8 +4097,84 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     return json({ credited: credits, balance: isGift ? undefined : crec.balance, recipient: creditTo, gift: isGift, tier: claimTier, giftEvent: giftEvent });
   }
 
+  if (body.action === "pm-claim") {
+    if (!isHex64(body.eventId)) return json({ error: "Missing message event id" }, 400);
+    var claimPoll = null;
+    try { claimPoll = await ledgerCall(env, { op: "turn-poll", key: botTurnKey(userPubkey, body.eventId) }); } catch (e) { claimPoll = null; }
+    if (claimPoll && claimPoll.state === "done" && claimPoll.result && claimPoll.result.body) {
+      return json(claimPoll.result.body, claimPoll.result.status || 200);
+    }
+    if (claimPoll && claimPoll.state === "running") return json({ pending: true, state: "running" }, 202);
+    var claimStored = await runResultGet(env.DB_BOT, String(userPubkey).toLowerCase(), "e:" + String(body.eventId).toLowerCase());
+    if (claimStored && claimStored.body) return json(claimStored.body, claimStored.status || 200);
+    return json({ unknown: true, error: "Nothing is stored or running for that message." }, 404);
+  }
+
+  if (body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs") {
+    var ctlPk = String(userPubkey).toLowerCase();
+    if (!(await cacheRateTake("runctl", ctlPk, 1, BOT_RUN_CTL_RATE, 60000))) {
+      return json({ error: "Slow down \u2014 too many requests. Try again in a minute." }, 429);
+    }
+    if (body.action === "pm-runs") {
+      var listed = await runListRecent(env.DB_BOT, ctlPk, Date.now(), 20);
+      var listNow = Date.now();
+      var wantAll = body.all === true;
+      var wantThread = typeof body.thread === "string" ? body.thread.toLowerCase() : null;
+      return json({ runs: listed.filter(function (r) {
+        if (r.state === "running" && Number(r.beat_at) <= listNow - RUN_LIVE_MS) return false;
+        if (r.cancel) return false;
+        var root = botRunThreadRoot(r.thread);
+        if (root == null) return wantAll && wantThread == null;
+        return wantThread == null || root === wantThread;
+      }).map(function (r) {
+        var root = botRunThreadRoot(r.thread);
+        return {
+          replyTo: r.asked, thread: root == null ? (r.thread || "") : root, app: root == null ? "nymbot" : "nymchat",
+          kind: r.kind || "chat", label: runLabel(runCipher.open(r.label)), progress: botRunUnpack(runCipher, r.progress).p,
+          state: r.state, startedAt: Number(r.started_at) || 0, updatedAt: Number(r.beat_at) || 0
+        };
+      }) });
+    }
+    var ctlAsked = isHex64(body.replyTo) ? String(body.replyTo).toLowerCase() : "";
+    if (!ctlAsked) return json({ error: "Missing the id of the message that started the request." }, 400);
+    if (body.action === "pm-cancel") {
+      botRunLocalEntry(ctlPk, ctlAsked).cancel = true;
+      var cancelState = await runCancelFlag(env.DB_BOT, ctlPk, ctlAsked, Date.now());
+      return json({ ok: true, state: cancelState || "pending" });
+    }
+    var steerText = typeof body.text === "string" ? body.text.trim() : "";
+    if (!steerText) return json({ error: "There is nothing to pass on." }, 400);
+    if (steerText.length > RUN_STEER_CHARS) return json({ error: "That update is too long; keep it under " + RUN_STEER_CHARS + " characters." }, 413);
+    var steerRow = await runGet(env.DB_BOT, ctlPk, ctlAsked);
+    if (!steerRow || steerRow.state === "pending") {
+      return json({ error: "Nymbot has no request running for that message.", unknown: true }, 404);
+    }
+    var steerNow = Date.now();
+    var steerBeat = Number(steerRow.beat_at) || 0;
+    var steerLive = !steerRow.cancel && (
+      (steerRow.state === "running" && steerBeat > steerNow - RUN_LIVE_MS) ||
+      (steerRow.state === "parked" && steerBeat > steerNow - RUN_PARKED_MS) ||
+      (steerRow.state === "waiting" && steerBeat > steerNow - RUN_WAITING_MS));
+    if (!steerLive) {
+      return json({
+        error: "That request has already finished. Send this as a new message instead.", finished: true,
+        state: steerRow.cancel ? "stopped" : (steerRow.state === "running" ? "failed" : steerRow.state)
+      }, 409);
+    }
+    var steerId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
+    var steered = await runSteerAdd(env.DB_BOT, ctlPk, ctlAsked, steerId, runCipher.seal(steerText), steerNow);
+    if (!steered) return json({ error: "Updates can't be passed on right now." }, 503);
+    botRunLocalEntry(ctlPk, ctlAsked).steer = true;
+    return json({ ok: true, state: steerRow.state, id: steerId });
+  }
+
   if (body.action === "pm") {
     var turnBtcUsd = 0;
+    var turnT0 = Date.now();
+    if (isHex64(body.eventId)) {
+      var early = await botEarlyClaim(env, userPubkey, body.eventId, json);
+      if (early) return early;
+    }
     var proModelKey = typeof body.proModel === "string" ? body.proModel : "";
     var proModel = null;
     if (proModelKey) {
@@ -3892,6 +4273,15 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       try { context._botTurnRelease = fn; } catch (e) { }
     };
     var holdId = null;
+    var runCtl = null;
+    var runPk = String(userPubkey).toLowerCase();
+    var runLinked = function (obj) {
+      if (replyLink && obj && typeof obj === "object") {
+        if (!obj.replyTo) obj.replyTo = replyLink[0];
+        if (!obj.askedId) obj.askedId = replyLink[1];
+      }
+      return obj;
+    };
     var holdTake = async function (amount, tier) {
       var holdTry = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
       var held = await ledgerCall(env, {
@@ -3924,11 +4314,14 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       turnArmRelease(null);
       turnStopHeartbeat();
       await holdDrop();
+      if (runCtl) runCtl.stop();
       var keys = turnKeys;
       turnKeys = [];
       for (var i = 0; i < keys.length; i++) await botTurnAbort(env, keys[i]);
     };
     var turnFail = async function (obj, status) {
+      runLinked(obj);
+      if (runCtl) await runCtl.finish("failed");
       await turnRelease();
       await freeGiveBack();
       return json(obj, status);
@@ -3936,7 +4329,12 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     var turnDone = async function (obj, status) {
       turnArmRelease(null);
       turnStopHeartbeat();
+      runLinked(obj);
+      if (runCtl) await runCtl.finish(obj && obj.stopped ? "stopped" : "done");
       await holdDrop();
+      var storeKeys = ["e:" + String(currentId).toLowerCase()];
+      if (isHex64(msgId)) storeKeys.push("x:" + String(msgId).toLowerCase());
+      await runResultPut(env.DB_BOT, runPk, storeKeys, { body: obj, status: status || 200 }, Date.now());
       var keys = turnKeys;
       turnKeys = [];
       for (var i = 0; i < keys.length; i++) await botTurnFinish(env, keys[i], obj, status);
@@ -3973,6 +4371,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     // Progress writes are best-effort and advisory; defined early because the relay fetch is the slowest part.
     var progressKey = turnKeys.length ? turnKeys[0] : null;
     var pushProgress = function (step) {
+      if (runCtl) runCtl.note(step);
       if (!progressKey) return;
       try {
         var p = ledgerCall(env, { op: "progress-push", key: progressKey, step: step });
@@ -3981,9 +4380,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
     };
 
     var thread = await botGetThread(env, userPubkey);
-    var historyIds = fresh
-      ? []
-      : thread.filter(function (id) { return id !== currentId; });
+    var turnRows = fresh ? [] : await runTurnsRecent(env.DB_BOT, runPk, 120);
+    var historyIds = [];
 
     // A long question arrives in several wraps; `eventId` is still the last, so non-splitting clients are unchanged.
     var partIds = [];
@@ -4065,11 +4463,88 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         await freeGiveBack();
         return msgClaimed;
       }
+      var msgStored = await runResultGet(env.DB_BOT, runPk, "x:" + String(msgId).toLowerCase());
+      if (msgStored && msgStored.body) {
+        var msgReplay = json(msgStored.body, msgStored.status || 200);
+        await turnRelease();
+        await freeGiveBack();
+        return msgReplay;
+      }
     }
     // Localized commands arrive with the canonical token, so the parsers stay English-only.
     message = canonicalizeBotText(message, body && body.cmdAlias);
     // A thread reply carries the root's shared id; the bot answers there with context scoped to that thread.
     var threadRoot = rumorTagValue(currentUnwrapped.rumor, "nymthread");
+    var threadKey = botRunThreadKey(threadRoot);
+    var askX = isHex64(msgId) ? String(msgId).toLowerCase() : String(currentId).toLowerCase();
+    replyLink = [askX, askX];
+    runCtl = botRunControl(env, context, runPk, runCipher);
+    runCtl.asked = askX;
+    if (await runCtl.refresh()) {
+      await freeGiveBack();
+      var stopPair = await wrapReplyPair(BOT_STOPPED_TEXT, threadRoot);
+      return await turnDone({
+        event: stopPair.event, selfEvent: stopPair.selfEvent, stopped: true,
+        balance: (proModel ? proRecord : record).balance || 0, cost: 0, costCredits: 0,
+        taskType: "general", pro: !!proModel
+      });
+    }
+    var runRegister = async function (kind, reserveCredits, pro) {
+      var label = runCipher.seal(runLabel(stripStandingContext(parseBotPMRequest(message).question || message)));
+      if (!runCtl.line) runCtl.line = "started";
+      var run = { asked: askX, thread: threadKey, kind: kind, label: label, progress: runCtl.payload() };
+      var limit = freeTurn ? RUN_FREE : runMaxRuns(body.maxRuns);
+      var got = await runStart(env.DB_BOT, runPk, run, limit, Date.now());
+      if (!got.ok) {
+        var running = await runCountLive(env.DB_BOT, runPk, Date.now());
+        if (freeTurn) {
+          return {
+            error: "A free reply is already being written. Wait for it to finish, or type ?buy for credits to run up to 3 requests at once.",
+            runCap: true, free: true, running: running, limit: RUN_FREE, ceiling: RUN_FREE, noCredits: true, balance: 0
+          };
+        }
+        return {
+          error: running + (running === 1 ? " request is" : " requests are") + " already running. Wait for one to finish.",
+          runCap: true, running: running, limit: limit, ceiling: RUN_CEILING,
+          reserve: { credits: Math.max(0, Math.ceil(Number(reserveCredits) || 0)), pro: !!pro }
+        };
+      }
+      if (!got.unavailable) {
+        runCtl.registered = true;
+        runCtl.lastBeat = Date.now();
+        runCtl.lastWrite = 0;
+        runCtl.start();
+      }
+      return null;
+    };
+    var rowScoped = {};
+    if (!fresh) {
+      var rootKey = threadRoot ? String(threadRoot).toLowerCase() : "";
+      var scopedRows = turnRows.map(function (r) {
+        if (rootKey && r.asked === rootKey && botRunThreadRoot(r.thread) === "") {
+          return { asked: r.asked, thread: threadKey, ids: r.ids, at: r.at };
+        }
+        return r;
+      });
+      scopedRows.forEach(function (r) {
+        if (r.thread === threadKey) runHistoryPlan([], [r], null, 400).forEach(function (id) { rowScoped[id] = true; });
+      });
+      historyIds = runHistoryPlan(thread, scopedRows, threadKey, BOT_THREAD_MAX).filter(function (id) { return id !== currentId; });
+    }
+    var recordTurn = async function (selfEvent, remember) {
+      var latest = thread;
+      try { latest = await botGetThread(env, userPubkey); } catch (e) { latest = thread; }
+      var next = latest.filter(function (id) { return askedIds.indexOf(id) === -1; });
+      if (remember) {
+        next.push.apply(next, askedIds);
+        next.push(selfEvent.id);
+        await runTurnAdd(env.DB_BOT, runPk, askX, threadKey, askedIds.concat([selfEvent.id]), turnT0);
+      }
+      var keep = next;
+      try { keep = await botPutThread(env, userPubkey, next); } catch (e) { }
+      await botCacheWraps(env, userPubkey,
+        wrapsToCache(fetched, [selfEvent], botPrivkey, botPq, scopeOf), keep);
+    };
 
     // Drop cached wraps labelled for another conversation without decrypting; unlabelled rows are kept and filtered below.
     var cacheWant = 0, cacheHit = 0, cacheMiss = 0, cacheGone = 0, cacheDown = false;
@@ -4095,7 +4570,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         }
         if (row) {
           cacheHit++;
-          if (row.labelled && !scopeLabelInThread(row, threadRoot)) continue;
+          if (row.labelled && !scopeLabelInThread(row, threadRoot) && !rowScoped[hid]) continue;
           fetched[hid] = row.event;
           scopeOf[hid] = row;
           keepHistory.push(hid);
@@ -4128,7 +4603,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if (!hu || !hu.rumor || !hu.rumor.content) continue;
       var isBotTurn = hu.author === botPubkey;
       if (!isBotTurn && hu.author !== userPubkey) continue;
-      if (!rumorInThreadScope(hu.rumor, threadRoot)) continue;
+      if (!rumorInThreadScope(hu.rumor, threadRoot) && !rowScoped[historyIds[hk]]) continue;
       var hText = String(hu.rumor.content);
       // Old reasoning blocks are for the user's eyes, not model context.
       if (isBotTurn) hText = hText.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "");
@@ -4160,13 +4635,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       var noMedia = await wrapReplyPair(
         "Pictures, videos and voice clips need credits \u2014 they cost real money to generate, so they are not part of the free daily allowance. Type ?buy to top up; " +
         BOT_FREE_DAILY + " free replies a day stay free.", threadRoot);
-      var noMediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
-      noMediaThread.push.apply(noMediaThread, askedIds);
-      noMediaThread.push(noMedia.selfEvent.id);
-      var noMediaKeep = noMediaThread;
-      try { noMediaKeep = await botPutThread(env, userPubkey, noMediaThread); } catch (e) { }
-      await botCacheWraps(env, userPubkey,
-        wrapsToCache(fetched, [noMedia.selfEvent], botPrivkey, botPq, scopeOf), noMediaKeep);
+      await recordTurn(noMedia.selfEvent, true);
       return await turnDone({
         event: noMedia.event, selfEvent: noMedia.selfEvent,
         balance: 0, cost: 0, taskType: "general", pro: false,
@@ -4195,13 +4664,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
               + BOT_MEDIA_COSTS.image.standard + " credits.";
         }
         var listPair = await wrapReplyPair(listText, threadRoot);
-        var listThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
-        listThread.push.apply(listThread, askedIds);
-        listThread.push(listPair.selfEvent.id);
-        var listKeep = listThread;
-        try { listKeep = await botPutThread(env, userPubkey, listThread); } catch (e) { }
-        await botCacheWraps(env, userPubkey,
-          wrapsToCache(fetched, [listPair.selfEvent], botPrivkey, botPq, scopeOf), listKeep);
+        await recordTurn(listPair.selfEvent, true);
         var listBody = {
           event: listPair.event,
           selfEvent: listPair.selfEvent,
@@ -4277,6 +4740,8 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
             (mediaRecord.balance || 0) + ". Type ?buy for more."
         });
       }
+      var mediaCapNo = await runRegister("media", mediaCost, !!proModel);
+      if (mediaCapNo) return await turnFail(mediaCapNo, 429);
       var mediaHeld = await holdTake(mediaCost, mediaTier);
       if (mediaHeld) return await turnFail(mediaHeld.body, mediaHeld.status);
       var mediaUrl;
@@ -4322,13 +4787,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
           + "` to be explicit, or just say so if you meant something else._";
       }
       var mediaPair = await wrapReplyPair(mediaReply, threadRoot);
-      var mediaThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
-      mediaThread.push.apply(mediaThread, askedIds);
-      mediaThread.push(mediaPair.selfEvent.id);
-      var mediaKeep = mediaThread;
-      try { mediaKeep = await botPutThread(env, userPubkey, mediaThread); } catch (e) { }
-      await botCacheWraps(env, userPubkey,
-        wrapsToCache(fetched, [mediaPair.selfEvent], botPrivkey, botPq, scopeOf), mediaKeep);
+      await recordTurn(mediaPair.selfEvent, true);
       var mediaBody = {
         event: mediaPair.event,
         selfEvent: mediaPair.selfEvent,
@@ -4389,6 +4848,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         error: "This " + taskType + " query needs " + stdRequired + " credits and you have " + record.balance + ". Type ?buy for more."
       });
     }
+    var runCapNo = await runRegister("chat", freeTurn ? 0 : (proModel ? proRequired : stdRequired), !!proModel);
+    if (runCapNo) return await turnFail(runCapNo, 429);
+    var runOthers = fresh ? [] : await botRunOthers(env.DB_BOT, runPk, threadKey, askX, runCipher);
     if (!freeTurn) {
       var turnHeld = await holdTake(proModel ? proRequired : stdRequired, proModel ? "pro" : "standard");
       if (turnHeld) return await turnFail(turnHeld.body, turnHeld.status);
@@ -4409,12 +4871,37 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
         web: body.web === true && !freeTurn,
         webDenied: body.web === true && freeTurn,
         // Which product is asking; only decides whether the reply may mention the other.
-        inApp: isStandaloneNymbot(context.request, env)
+        inApp: isStandaloneNymbot(context.request, env),
+        run: runCtl,
+        others: runOthers
       });
     } catch (e) {
-      var ref = errorRef();
-      console.error("nymbot chat failed ref " + ref, e);
-      return await turnFail({ error: "Nymbot hit an error. Please try again. (ref " + ref + ")" }, 500);
+      if (!(e && e.botStopped) && !(runCtl && runCtl.cancel)) {
+        var ref = errorRef();
+        console.error("nymbot chat failed ref " + ref, e);
+        return await turnFail({ error: "Nymbot hit an error. Please try again. (ref " + ref + ")" }, 500);
+      }
+      chatResult = botStoppedResult(e);
+    }
+    var runStopped = !!(chatResult && chatResult.canceled) || (runCtl ? await runCtl.refresh() : false);
+    if (runStopped) {
+      chatResult.reply = BOT_STOPPED_TEXT;
+      chatResult.canceled = true;
+      if (!botUsageBilled(chatResult.usage)) {
+        chatResult.modelCalls = 0;
+        await freeGiveBack();
+      }
+    } else if (chatResult && typeof chatResult.reply === "string" && /steer_run/i.test(chatResult.reply)) {
+      var steerSaid = botSteerTags(chatResult.reply);
+      for (var sti = 0; sti < steerSaid.steers.length; sti++) {
+        var steerTo = runOthers.filter(function (o) { return o.handle === steerSaid.steers[sti].handle; })[0];
+        if (!steerTo) continue;
+        var steerRowId = bytesToHex(crypto.getRandomValues(new Uint8Array(12)));
+        if (await runSteerAdd(env.DB_BOT, runPk, steerTo.asked, steerRowId, runCipher.seal(steerSaid.steers[sti].text), Date.now())) {
+          botRunLocalEntry(runPk, steerTo.asked).steer = true;
+        }
+      }
+      chatResult.reply = steerSaid.text || BOT_STEER_PASSED;
     }
     var reply = chatResult && chatResult.reply;
     if (!reply) return await turnFail({ error: "Nymbot returned an empty response" }, 500);
@@ -4432,6 +4919,10 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
           stdRequired * BOT_MILLI_PER_CREDIT);
         cost = 0;
       }
+    }
+    if (runStopped && !botUsageBilled(chatResult.usage)) {
+      cost = 0;
+      costMilli = 0;
     }
     if (proModel) {
       var landed = chatResult.modelCalls == null ? 1 : chatResult.modelCalls;
@@ -4475,17 +4966,9 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       if (Number.isFinite(Number(consumed.charged))) cost = Number(consumed.charged);
     }
     // Signed with the model that wrote it, so a later (possibly different) model can tell it apart.
-    var pair = await wrapReplyPair(reply, threadRoot, botReplyVoice(proModel, freeTurn));
-    var updatedThread = thread.filter(function (id) { return askedIds.indexOf(id) === -1; });
+    var pair = await wrapReplyPair(reply, threadRoot, runStopped ? null : botReplyVoice(proModel, freeTurn));
     // A '!' question is answered without the conversation and kept out of later context.
-    if (!fresh) {
-      updatedThread.push.apply(updatedThread, askedIds);
-      updatedThread.push(pair.selfEvent.id);
-    }
-    var updatedKeep = updatedThread;
-    try { updatedKeep = await botPutThread(env, userPubkey, updatedThread); } catch (e) { }
-    await botCacheWraps(env, userPubkey,
-      wrapsToCache(fetched, [pair.selfEvent], botPrivkey, botPq, scopeOf), updatedKeep);
+    await recordTurn(pair.selfEvent, !fresh && !runStopped);
     var wrapStatus = botWrapsStatus();
     var chatBody = {
       cache: {
@@ -4496,6 +4979,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
       },
       event: pair.event,
       selfEvent: pair.selfEvent,
+      stopped: runStopped || undefined,
       balance: spendRecord.balance,
       cost: cost,
       costCredits: costMilli > 0
@@ -4521,6 +5005,7 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   if (body.action === "clear-history") {
     try { await botThreadDelete(env.DB_BOT, userPubkey); } catch (e) { }
     try { await botWrapsDelete(env.DB_BOT, userPubkey); } catch (e) { }
+    await botRunsForget(env.DB_BOT, String(userPubkey).toLowerCase(), BOT_RUN_THREAD_PREFIX);
     return json({ cleared: true });
   }
 
@@ -4627,7 +5112,7 @@ async function onRequest(context) {
     });
   }
 
-  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "pm" || body.action === "pm-progress" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
+  if (body && (body.action === "models" || body.action === "pq-key" || body.action === "pm" || body.action === "pm-progress" || body.action === "pm-claim" || body.action === "pm-cancel" || body.action === "pm-steer" || body.action === "pm-runs" || body.action === "transcribe" || body.action === "balance" || body.action === "create-invoice" || body.action === "check-invoice" || body.action === "claim-credits" || body.action === "transfer-credits" || body.action === "clear-history" || body.action === "voucher-keys" || body.action === "voucher-issue" || body.action === "voucher-redeem")) {
     try {
       return await handleBotPMAction(context, body, privkey, pubkey);
     } catch (e) {

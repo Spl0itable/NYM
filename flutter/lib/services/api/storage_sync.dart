@@ -150,6 +150,7 @@ class StorageSync {
       'tutorialSeen',
       'botPmWelcomed',
       'botPmClearedAt',
+      'botMaxRuns',
     ],
   };
 
@@ -282,6 +283,7 @@ class StorageSync {
       flat['botPmWelcomed'] = kv.getString(StorageKeys.botpmWelcomed) == 'true';
       flat['botPmClearedAt'] =
           kv.getInt(StorageKeys.botpmClearedAt, defaultValue: 0);
+      flat['botMaxRuns'] = kv.getInt(StorageKeys.botpmMaxRuns, defaultValue: 0);
     }
 
     // Landing channel: threaded JSON, then KV, then the PWA default; omitted without [kv] when invalid.

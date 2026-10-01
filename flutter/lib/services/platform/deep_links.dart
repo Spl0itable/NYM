@@ -11,12 +11,7 @@ import '../../models/group.dart';
 // TODO(verify): the PWA has no PM deep-link form (`#pm:`), so none is implemented.
 
 /// Accepted deep-link hosts; keep in sync with the Android intent filter and iOS associated domains.
-const Set<String> kNymLinkHosts = {
-  'web.nymchat.app',
-  'nymchat.app',
-  'app.nymchat.app',
-  'app.nym.bar',
-};
+const Set<String> kNymLinkHosts = {'web.nymchat.app'};
 
 enum NymLinkKind {
   /// Named channel; [NymLink.channel] is sanitized and lowercased.

@@ -4,7 +4,6 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../core/constants/relays.dart';
-import '../../features/messages/spam_filter.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import 'relay_connection.dart';
@@ -494,8 +493,6 @@ class RelayPool implements PoolTransport {
   void _onRelayMessage(String relayUrl, RelayMessage msg) {
     switch (msg) {
       case EventMessage(:final subId, :final event):
-        // Dropped before verification: glub.chat tags every event it sends.
-        if (SpamFilter.isGlubClient(event.tags)) return;
         if (RelayConfig.isAppRelayOnly(
                 event.kind, event.tagValue('g'), event.tagValue('d')) &&
             relayUrl != RelayConfig.appRelay) {

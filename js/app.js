@@ -6457,6 +6457,9 @@ async function applyNostrSettings(s) {
         s.botPmClearedAt > nym._getBotPmClearedAt()) {
         try { nym._setBotPmClearedAt(s.botPmClearedAt); } catch (_) { }
     }
+    if (typeof s.botMaxRuns === 'number' && typeof nym.setBotMaxRuns === 'function') {
+        try { nym.setBotMaxRuns(s.botMaxRuns, { fromSync: true }); } catch (_) { }
+    }
 
     if (s.encryptAtRestPreferred === true) {
         try { localStorage.setItem('nym_encrypt_at_rest_pref', '1'); } catch (_) { }

@@ -225,7 +225,7 @@
         );
 
         formatted = formatted.replace(
-            /https?:\/\/app\.nym\.bar\/#([egc]):([^\s<>"\uFDD0-\uFDD5]+)/gi,
+            /https?:\/\/web\.nymchat\.app\/#([egc]):([^\s<>"\uFDD0-\uFDD5]+)/gi,
             (match, prefix, channelId) => {
                 return `<span class="channel-link" data-action="channelLink" data-channel-ref="${prefix}:${escapeHtml(channelId)}">${match}</span>`;
             }

@@ -196,6 +196,7 @@ class StorageKeys {
   // Bot / shop
   static const botpmWelcomed = 'nym_botpm_welcomed';
   static const botpmClearedAt = 'nym_botpm_cleared_at';
+  static const botpmMaxRuns = 'nym_botpm_max_runs';
   static const botpmProModel = 'nym_botpm_pro_model';
   static const purchasesCache = 'nym_purchases_cache';
   static const activeStyle = 'nym_active_style';

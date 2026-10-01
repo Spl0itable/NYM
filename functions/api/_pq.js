@@ -805,6 +805,8 @@ function botDMRumor(plaintext, botPubkey, recipientPubkey, opts) {
   if (threadRoot) rumor.tags.push(["nymthread", threadRoot]);
   // Model id travels sealed inside the rumor so later turns can tell which model wrote what.
   if (opts && opts.model) rumor.tags.push(["model", String(opts.model).slice(0, 60)]);
+  var link = opts && Array.isArray(opts.replyTo) ? opts.replyTo.filter(function (v) { return typeof v === "string" && /^[0-9a-f]{64}$/i.test(v); }) : [];
+  if (link.length) rumor.tags.push(["nymreply"].concat(link.slice(0, 2).map(function (v) { return v.toLowerCase(); })));
   rumor.id = getEventHash(rumor);
   return rumor;
 }

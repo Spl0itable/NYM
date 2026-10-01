@@ -309,7 +309,6 @@ Object.assign(NYM.prototype, {
         }
 
         if (this.hasBlockedContentPrefix(event.content)) return;
-        if (this.isGlubClientEvent(event)) return;
         if (typeof event.content === 'string') {
             event.content = this.stripMaliciousDomains(event.content);
         }
@@ -983,18 +982,6 @@ Object.assign(NYM.prototype, {
             .replace(/[ \t]{2,}/g, ' ')
             .replace(/[ \t]+([.,!?;:])/g, '$1')
             .trim();
-    },
-
-    // Matched on tags, which survive rewording; the version is deliberately not matched.
-    isGlubClientEvent(event) {
-        if (!event || !Array.isArray(event.tags)) return false;
-        for (const t of event.tags) {
-            if (!Array.isArray(t) || typeof t[0] !== 'string') continue;
-            if (t[0] === 'glub') return true;
-            if (t[0] === 'client' && typeof t[1] === 'string'
-                && t[1].toLowerCase() === 'glub.chat') return true;
-        }
-        return false;
     },
 
     isSpamMessage(content) {

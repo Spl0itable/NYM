@@ -23,6 +23,7 @@ import '../features/emoji/emoji_prefetch.dart' show scheduleCustomEmojiPrefetch;
 import '../features/groups/group_logic.dart';
 import '../features/i18n/i18n.dart';
 import '../features/messages/spam_filter.dart';
+import '../features/nymbot/bot_runs.dart' show anchorBotReply;
 import '../features/messages/trust_graph.dart';
 import '../features/pms/pm_logic.dart';
 import '../features/polls/poll_logic.dart';
@@ -1493,8 +1494,6 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   void _ingestChannelMessage(NostrEvent e, {bool historical = false}) {
     if (e.id.isNotEmpty && !_seenIds.add(e.id)) return;
-    // Also filtered in the transports and pool worker; repeated here because every path crosses this point.
-    if (SpamFilter.isGlubClient(e.tags)) return;
     appAttestRegistry.ingest(e, appAttestAuthority);
     if (!passesVerifiedFilter(e.pubkey,
         selfPubkey: state.selfPubkey, friends: state.friends)) {
@@ -2060,7 +2059,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
       for (final e in list) {
         if (e.pubkey == m.pubkey &&
             e.content == m.content &&
-            (e.createdAt - m.createdAt).abs() < 5) {
+            (e.createdAt - m.createdAt).abs() < 5 &&
+            (m.replyTo == null || e.replyTo == m.replyTo)) {
           dup = e;
           break;
         }
@@ -2109,6 +2109,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (botThreadForeign(m, list)) {
       _holdBotThreadOrphan(m);
       return false;
+    }
+    if (m.replyTo != null && m.anchorAt == null && peer == kNymbotPubkey) {
+      anchorBotReply(list, m);
     }
     m.seq = _nextIngestSeq();
 

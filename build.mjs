@@ -208,6 +208,9 @@ async function run() {
 
   // Vulnerability-disclosure pointer (RFC 9116).
   await emit('.well-known/security.txt', await fs.readFile(path.join(root, '.well-known', 'security.txt')));
+  for (const name of ['apple-app-site-association', 'assetlinks.json']) {
+    await emit(`.well-known/${name}`, await fs.readFile(path.join(root, '.well-known', name)));
+  }
 
   // NYMCHAT_VERSION from js/app.js, served so native apps can show the live version.
   const appJsSource = await fs.readFile(path.join(root, 'js', 'app.js'), 'utf8');

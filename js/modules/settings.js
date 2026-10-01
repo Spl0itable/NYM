@@ -22,7 +22,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
     channels: ['pinnedChannels', 'userJoinedChannels', 'sortByProximity', 'pinnedLandingChannel',
         'hideNonPinned', 'closedPMs', 'leftGroups', 'closedPMTimes',
         'leftGroupTimes'],
-    data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt']
+    data: ['lowDataMode', 'cachePMs', 'tutorialSeen', 'botPmWelcomed', 'botPmClearedAt', 'botMaxRuns']
 };
 
 // Sealed classically, never to the root-derived key (a circular lock). Spec §5.1.
@@ -175,6 +175,7 @@ Object.assign(NYM.prototype, {
             tutorialSeen: localStorage.getItem('nym_tutorial_seen') === 'true',
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
             botPmClearedAt: this._getBotPmClearedAt() || 0,
+            botMaxRuns: typeof this.botMaxRuns === 'function' ? this.botMaxRuns() : 0,
             encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1'
         };
     },

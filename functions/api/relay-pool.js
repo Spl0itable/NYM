@@ -921,7 +921,7 @@ export async function onRequest(context) {
     if (typeof ev.content !== 'string' || typeof ev.pubkey !== 'string') return true;
     if (spam.isHidden(ev.id) || spam.isMuted(ev.pubkey)) return true;
     const frame = JSON.stringify(['EVENT', '', ev]);
-    if (hasBlockedContentPrefix(frame) || isGlubClientFrame(frame)) return true;
+    if (hasBlockedContentPrefix(frame)) return true;
     return isSpamEventFrame(frame, false);
   }
 
@@ -1434,16 +1434,6 @@ export async function onRequest(context) {
   let droppedGeoOriginCount = 0;
   let droppedUnbadgedCount = 0;
   let droppedForgedCount = 0;
-  const RX_GLUB_CLIENT = /\[\s*"client"\s*,\s*"glub\.chat"/i;
-  const RX_GLUB_TAG = /\[\s*"glub"\s*,/i;
-
-  function isGlubClientFrame(raw) {
-    const tagsIdx = raw.indexOf('"tags":');
-    if (tagsIdx === -1) return false;
-    const tags = raw.slice(tagsIdx);
-    return RX_GLUB_CLIENT.test(tags) || RX_GLUB_TAG.test(tags);
-  }
-
   const RX_MACHINE_OBJECT = /^\{\s*"[^"\n]{1,64}"\s*:/;
   const RX_MACHINE_ARRAY = /^\[\s*(?:\{\s*"[^"\n]{1,64}"\s*:|"[^"\n]*"\s*[,\]])/;
   function isMachinePayload(content) {
@@ -1813,7 +1803,7 @@ export async function onRequest(context) {
           }
           seenEvents.set(eventId, 1);
           trimDedup();
-          if (hasBlockedContentPrefix(raw) || isGlubClientFrame(raw) || isSpamEventFrame(raw)) {
+          if (hasBlockedContentPrefix(raw) || isSpamEventFrame(raw)) {
             droppedSpamCount++;
             vetoArchive(eventId);
             return;

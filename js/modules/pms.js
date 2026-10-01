@@ -1283,12 +1283,16 @@ Object.assign(NYM.prototype, {
 
             // Dual-wrapped duplicates: match on the shared `x` nymMessageId, else sender + content + close timestamp.
             const nymMsgIdFromRumor = this.getNymMessageId(rumor);
+            const botReplyTo = (!isOwn && this.isVerifiedBot(senderPubkey) && typeof this.botReplyToFromRumor === 'function')
+                ? (this.botReplyToFromRumor(rumor) || (opts && opts.botReplyTo) || null)
+                : null;
             let dupMsg = null;
             if (nymMsgIdFromRumor) {
                 dupMsg = list.find(m => m.pubkey === senderPubkey && m.nymMessageId === nymMsgIdFromRumor);
             }
             if (!dupMsg) {
-                dupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5);
+                dupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5 &&
+                    (!botReplyTo || m.replyTo === botReplyTo));
             }
             if (dupMsg) {
                 let needsRerender = false;
@@ -1395,8 +1399,10 @@ Object.assign(NYM.prototype, {
                 nymMessageId: nymMsgId,  // For sending Nymchat read receipts
                 threadRoot: (typeof this.threadRootFromRumorTags === 'function')
                     ? this.threadRootFromRumorTags(rumor.tags) : null,
+                replyTo: botReplyTo || undefined,
                 deliveryStatus: isOwn ? 'sent' : undefined
             };
+            if (botReplyTo && typeof this._botReplyAnchor === 'function') this._botReplyAnchor(list, msg);
             // The announcement may still be in flight; fill the verdict in later.
             if (pmIsPq) {
                 this.pqResolveRootVerdict(peerPubkey, nymMsgId || msg.id,
@@ -1735,12 +1741,23 @@ Object.assign(NYM.prototype, {
     },
 
     async sendPM(content, recipientPubkey, options = {}) {
+        if (this.isVerifiedBot(recipientPubkey) &&
+            /^\s*\?(help|commands|balance|buy|clear|transfer|gift|model|anon|git|github)\b/i.test(content || '')) {
+            this._handleBotPM(String(content).trim(), null);
+            return true;
+        }
+        const guardKey = (this.isVerifiedBot(recipientPubkey) && typeof this.botSendGuardTake === 'function')
+            ? `${recipientPubkey}|${options.threadRoot || ''}|${content}` : null;
+        if (guardKey && !this.botSendGuardTake(guardKey)) return true;
         try {
-            if (this.isVerifiedBot(recipientPubkey) &&
-                /^\s*\?(help|commands|balance|buy|clear|transfer|gift|model|anon|git|github)\b/i.test(content || '')) {
-                this._handleBotPM(String(content).trim(), null);
-                return true;
-            }
+            return await this._sendPMOnce(content, recipientPubkey, options);
+        } finally {
+            if (guardKey) this.botSendGuardRelease(guardKey);
+        }
+    },
+
+    async _sendPMOnce(content, recipientPubkey, options = {}) {
+        try {
             if (!this.connected) throw new Error('Not connected to relay');
             if (!content || !content.trim()) return false;
             if (this.isVerifiedBot(recipientPubkey) && this.botAnonEnabled && this.botAnonEnabled()) {
@@ -2498,6 +2515,7 @@ Object.assign(NYM.prototype, {
         bar.classList.remove('nm-hidden');
         this._refreshBotControlBar();
         this._loadBotProCatalog().then(() => this._refreshBotControlBar()).catch(() => { });
+        if (typeof this.botRunsOnChatOpen === 'function') this.botRunsOnChatOpen();
     },
 
     _hideBotControlBar() {
@@ -2830,93 +2848,30 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage('Nymbot: could not publish your encrypted message. Please try again.');
             return;
         }
-        this._setBotTyping(true);
-        try {
-            const apiHost = this._getApiHost();
-            if (!apiHost) { this._setBotTyping(false); return; }
-            const isFresh = /^\s*!\s*\S/.test(content);
-            const proModel = this._getBotProModel();
-            // The worker keeps the ordered thread server-side; fresh skips history.
-            const reqExtra = { eventId: wrapId, fresh: isFresh };
-            // Our signed nym-pq announcement lets the worker seal its reply post-quantum without a lookup.
-            const anonRouted = typeof this.botAnonReady === 'function' && this.botAnonReady();
-            const anonAnnouncement = anonRouted ? this._botAnonAnnouncement() : null;
-            if (anonAnnouncement) {
-                reqExtra.pqAnnouncement = anonAnnouncement;
-            } else if (!anonRouted && this._pqSelfSignedAnnouncement) {
-                reqExtra.pqAnnouncement = this._pqSelfSignedAnnouncement;
-            }
-            const cmdAlias = this.commandAliasHint(content);
-            if (cmdAlias) reqExtra.cmdAlias = cmdAlias;
-            if (proModel) reqExtra.proModel = proModel.key;
-            // `pending`: retry with the same event id to collect the in-flight reply instead of paying for a second.
-            let status, data;
-            for (let tries = 0; ; tries++) {
-                ({ status, data } = await this._botMoneyRequest('pm', reqExtra, { timeout: 180000 }));
-                if (!data || !data.pending || tries >= 5) break;
-                this._setBotTyping(true);  // keep the "thinking" strip up
-                await new Promise(r => setTimeout(r, 3000));
-            }
-            this._setBotTyping(false);
-            this._markBotPMReceipts('read');
-            if (data && data.pending) {
-                this.displaySystemMessage(data.message ||
-                    'Nymbot is still working on that message — its reply will arrive shortly.');
-                return;
-            }
-            if (data && data.noCredits) {
-                const msg = data.error
-                    || (data.pro
-                        ? `You're out of Nymbot Pro credits (${this._creditFigure((data.balanceCredits != null ? data.balanceCredits : data.balance) || 0)} left). Type ?buy and switch to Pro, or ?model off for standard replies.`
-                        : `You're out of Nymbot credits (${this._creditFigure(this._replyBalance(data) || 0)} left). Zap Nymbot or type ?buy to purchase more.`);
-                this.displaySystemMessage(msg);
-                if (this._replyBalance(data) !== null) {
-                    if (data.pro) this._setBotProCreditDisplay(this._replyBalance(data));
-                    else this._setBotCreditDisplay(this._replyBalance(data));
-                }
-                if (typeof this.botAnonReady === 'function' && this.botAnonReady()) this.openBotAnonModal();
-                else this.showBotCreditsModal(null, data.pro ? 'pro' : 'standard');
-                return;
-            }
-            if (data && data.priceUnavailable) {
-                this._showBotPriceRetry(content, wrapId);
-                return;
-            }
-            if (status >= 400 || !data || data.error) {
-                this.displaySystemMessage('Nymbot: ' + ((data && data.error) || 'request failed'));
-                return;
-            }
-            if (data.event) {
-                this.sendDMToRelays(['EVENT', data.event]);
-                this.handleGiftWrapDM(data.event, {});
-            }
-            // The worker re-fetches its own reply as context on later turns.
-            if (data.selfEvent && /^[0-9a-f]{64}$/i.test(data.selfEvent.id || '')) {
-                this.sendDMToRelays(['EVENT', data.selfEvent]);
-            }
-            const replyBalance = this._replyBalance(data);
-            if (replyBalance !== null) {
-                const replyCost = this._replyCost(data);
-                if (data.pro) this._setBotProCreditDisplay(replyBalance);
-                else this._setBotCreditDisplay(replyBalance);
-                if (data.pro && replyCost) {
-                    const sel = this._getBotProModel();
-                    if (sel && replyCost > (sel.credits || 1)) {
-                        this.displaySystemMessage(`Long reply used ${this._creditFigure(replyCost)} Pro credits. Pro balance: ${this._creditFigure(replyBalance)}.`);
-                    }
-                } else if (!data.pro && replyCost > 1) {
-                    this.displaySystemMessage(`${data.taskType || 'Heavy'} reply used ${this._creditFigure(replyCost)} credits. Balance: ${this._creditFigure(replyBalance)}.`);
-                }
-                if (data.lowBalance) {
-                    this.displaySystemMessage(data.pro
-                        ? `Nymbot Pro credits running low: ${this._creditFigure(replyBalance)} left. Type ?buy and switch to Pro to top up.`
-                        : `Nymbot credits running low: ${this._creditFigure(replyBalance)} credit${replyBalance === 1 ? '' : 's'} left. Type ?buy to top up.`);
-                }
-            }
-        } catch (e) {
-            this._setBotTyping(false);
-            this.displaySystemMessage('Nymbot is unavailable right now. Please try again.');
+        const apiHost = this._getApiHost();
+        if (!apiHost) return;
+        const isFresh = /^\s*!\s*\S/.test(content);
+        const proModel = this._getBotProModel();
+        const reqExtra = { eventId: wrapId, fresh: isFresh };
+        const anonRouted = typeof this.botAnonReady === 'function' && this.botAnonReady();
+        const anonAnnouncement = anonRouted ? this._botAnonAnnouncement() : null;
+        if (anonAnnouncement) {
+            reqExtra.pqAnnouncement = anonAnnouncement;
+        } else if (!anonRouted && this._pqSelfSignedAnnouncement) {
+            reqExtra.pqAnnouncement = this._pqSelfSignedAnnouncement;
         }
+        const cmdAlias = this.commandAliasHint(content);
+        if (cmdAlias) reqExtra.cmdAlias = cmdAlias;
+        if (proModel) reqExtra.proModel = proModel.key;
+        const own = this._botOwnMessageForWrap(wrapId);
+        const run = this._botRunStart({
+            id: (own && own.nymMessageId) || wrapId,
+            eventId: wrapId,
+            thread: (own && own.threadRoot) || '',
+            content,
+            extra: reqExtra
+        });
+        if (run && run.done) await run.done;
     },
 
     _showBotPriceRetry(content, wrapId) {

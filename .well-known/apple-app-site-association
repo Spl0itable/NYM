@@ -1,0 +1,16 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["KJ6U2Y9B2M.com.nym.bar"],
+        "components": [
+          { "/": "/" },
+          { "/": "/index.html" }
+        ]
+      }
+    ]
+  },
+  "webcredentials": {
+    "apps": ["KJ6U2Y9B2M.com.nym.bar"]
+  }
+}

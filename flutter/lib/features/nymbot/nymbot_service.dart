@@ -172,6 +172,23 @@ class NymbotService {
     return json;
   }
 
+  Future<({int status, Map<String, dynamic> data})> botAction(
+    String action,
+    Map<String, dynamic> extra, {
+    required String pubkey,
+    Future<Map<String, dynamic>?> Function(String payload)? signedFor,
+    Duration? timeout,
+    bool anon = false,
+  }) =>
+      _botRequest(
+        action,
+        extra,
+        pubkey: pubkey,
+        signedFor: signedFor,
+        timeout: timeout ?? _defaultTimeout,
+        anon: anon,
+      );
+
   /// Standard and Pro credit balances.
   Future<BotBalance> balance({
     required String pubkey,

@@ -203,6 +203,9 @@
                 thinking: m.thinking,
                 // Without it restored history loses reply grouping.
                 threadRoot: m.threadRoot,
+                replyTo: m.replyTo,
+                _anchorAt: m._anchorAt,
+                _anchorMs: m._anchorMs,
                 // NIP-13 target from the sender's nonce tag; dropping it makes reloads report "no proof of work".
                 powTarget: m.powTarget
             };

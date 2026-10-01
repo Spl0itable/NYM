@@ -3643,7 +3643,10 @@ class MessageGroup extends ConsumerStatefulWidget {
     this.columnsMode = false,
     this.onReactionPicker,
     this.scrollKey,
+    this.trailingFor,
   });
+
+  final Widget? Function(Message m)? trailingFor;
 
   final List<MessageGroupEntry> entries;
   final Settings settings;
@@ -3683,7 +3686,7 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
 
     // Only the lead carries a name; `inGroup` strips rows so the group hosts one avatar.
     List<Widget> buildRows() => [
-          for (var i = 0; i < entries.length; i++)
+          for (var i = 0; i < entries.length; i++) ...[
             MessageRow(
               key: ValueKey(entries[i].message.id),
               message: entries[i].message,
@@ -3702,6 +3705,8 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
                   ? _avatarDx
                   : null,
             ),
+            if (widget.trailingFor?.call(entries[i].message) case final t?) t,
+          ],
         ];
 
     if (!useBubbles || first.isSystemRow || first.isMeAction) {

@@ -211,6 +211,13 @@ export async function botThreadDelete(db, pk) {
   try { await db.prepare("DELETE FROM botpm_thread WHERE pubkey = ?").bind(pk).run(); } catch (e) {}
 }
 
+export async function botRunsForget(db, pk, prefix) {
+  if (!hasD1(db) || !prefix) return;
+  var like = String(prefix).replace(/[%_\\]/g, "\\$&") + "%";
+  try { await db.prepare("DELETE FROM botpm_turns WHERE pubkey = ? AND thread LIKE ? ESCAPE '\\'").bind(pk, like).run(); } catch (e) { }
+  try { await db.prepare("DELETE FROM botpm_runs WHERE pubkey = ? AND thread LIKE ? ESCAPE '\\' AND state != 'running'").bind(pk, like).run(); } catch (e) { }
+}
+
 // Created lazily since deployments may not have re-run schema.sql; last status kept per isolate for diagnostics.
 var botWrapsDiag = { ok: 0, repaired: 0, err: "" };
 
@@ -307,8 +314,13 @@ export async function botWrapsPut(db, pk, entries, keepIds) {
   if (Array.isArray(keepIds) && keepIds.length) {
     var ph = keepIds.map(function () { return "?"; }).join(",");
     stmts.push(db.prepare(
-      "DELETE FROM botpm_wraps WHERE pubkey = ? AND id NOT IN (" + ph + ")"
-    ).bind(pk, ...keepIds));
+      "CREATE TABLE IF NOT EXISTS botpm_turns (pubkey TEXT NOT NULL, asked TEXT NOT NULL, thread TEXT NOT NULL DEFAULT '', " +
+      "ids TEXT NOT NULL DEFAULT '[]', at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (pubkey, asked))"
+    ));
+    stmts.push(db.prepare(
+      "DELETE FROM botpm_wraps WHERE pubkey = ? AND id NOT IN (" + ph + ") " +
+      "AND id NOT IN (SELECT j.value FROM (SELECT ids FROM botpm_turns WHERE pubkey = ? ORDER BY at DESC LIMIT 200) t, json_each(t.ids) j)"
+    ).bind(pk, ...keepIds, String(pk).toLowerCase()));
   }
   if (!stmts.length) return;
   try {

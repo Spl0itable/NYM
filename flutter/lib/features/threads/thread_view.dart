@@ -10,6 +10,7 @@ import '../../widgets/chat/message_row.dart';
 import '../../widgets/chat/typing_indicator.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
+import '../nymbot/bot_runs_view.dart' show botRunTrailing;
 import '../reactions/reaction_picker.dart';
 
 /// Focuses the conversation first so the shared composer targets it, then swaps the message area to [m]'s thread.
@@ -114,15 +115,26 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
       });
     }
 
-    Widget row(Message m) => MessageRow(
-          key: ValueKey('thread_${m.id}'),
-          message: m,
-          settings: settings,
-          reactions: reactions[m.id] ?? const [],
-          scrollKey: storageKey,
-          onReactionPicker: (msg) => showReactionPicker(context, ref, msg),
-          showThreadAffordances: false,
-        );
+    Widget row(Message m) {
+      final base = MessageRow(
+        key: ValueKey('thread_${m.id}'),
+        message: m,
+        settings: settings,
+        reactions: reactions[m.id] ?? const [],
+        scrollKey: storageKey,
+        onReactionPicker: (msg) => showReactionPicker(context, ref, msg),
+        showThreadAffordances: false,
+      );
+      final status = widget.thread.view == const ChatView.pm(kNymbotPubkey)
+          ? botRunTrailing(m, c)
+          : null;
+      if (status == null) return base;
+      return Column(
+        key: ValueKey('thread_run_${m.id}'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [base, status],
+      );
+    }
 
     final containerColor = c.isLight
         ? const Color(0x4DFFFFFF)
