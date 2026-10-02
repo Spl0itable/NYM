@@ -15,18 +15,30 @@ const String kSvgBotRuns =
     '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>';
 
 Widget? botRunTrailing(Message m, NymColors colors) {
-  final id = m.nymMessageId;
-  if (!m.isOwn || id == null || id.isEmpty) return null;
   if (m.conversationPubkey != null && m.conversationPubkey != kNymbotPubkey) {
     return null;
   }
+  if (!m.isOwn) {
+    final to = m.replyTo;
+    if (to == null || to.isEmpty) return null;
+    return BotRunOfferView(id: to.toLowerCase(), colors: colors);
+  }
+  final id = m.nymMessageId;
+  if (id == null || id.isEmpty) return null;
   return BotRunStatusView(id: id.toLowerCase(), colors: colors);
 }
 
 bool botRunHasStatus(BotRunsEngine engine, String? id) {
   if (id == null || id.isEmpty) return false;
   final key = id.toLowerCase();
-  return engine.runs.containsKey(key) || engine.notes.containsKey(key);
+  return engine.runs.containsKey(key) ||
+      (engine.notes.containsKey(key) &&
+          engine.notes[key]!.kind != BotRunNoteKind.steerOffer);
+}
+
+bool botRunHasOffer(BotRunsEngine engine, String? replyTo) {
+  if (replyTo == null || replyTo.isEmpty) return false;
+  return engine.notes[replyTo.toLowerCase()]?.kind == BotRunNoteKind.steerOffer;
 }
 
 String botRunAgeText(int startedAt, {int? nowMs}) {
@@ -169,6 +181,8 @@ class BotRunStatusView extends ConsumerWidget {
             _btn(c, tr('Send as a message'),
                 () => controller.sendSteerNote(key)),
           ]));
+        case BotRunNoteKind.steerOffer:
+          break;
         case BotRunNoteKind.error:
           children.add(Text(note.text, style: _text(c, color: c.danger)));
         case BotRunNoteKind.capFree:
@@ -231,6 +245,34 @@ class BotRunStatusView extends ConsumerWidget {
           child: ExcludeSemantics(
             child: Text(label, style: TextStyle(color: fg, fontSize: 12)),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class BotRunOfferView extends ConsumerWidget {
+  const BotRunOfferView({super.key, required this.id, required this.colors});
+
+  final String id;
+  final NymColors colors;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(botChatControllerProvider.select((s) => s.runsVersion));
+    final controller = ref.read(botChatControllerProvider.notifier);
+    final key = id.toLowerCase();
+    if (!botRunHasOffer(controller.runsEngine, key)) {
+      return const SizedBox.shrink();
+    }
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 6, bottom: 4),
+        child: KeyedSubtree(
+          key: const ValueKey('bot-steer-offer-send'),
+          child: BotRunStatusView._btn(colors, tr('Send as a message'),
+              () => controller.sendSteerNote(key)),
         ),
       ),
     );

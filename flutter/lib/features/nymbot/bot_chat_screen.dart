@@ -254,8 +254,9 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
     final mentionToken = '@${stripPubkeySuffix(app.selfNym)}';
     ref.watch(botChatControllerProvider.select((s) => s.runsVersion));
     final runs = ref.read(botChatControllerProvider.notifier).runsEngine;
-    bool hasStatus(Message m) =>
-        m.isOwn && botRunHasStatus(runs, m.nymMessageId);
+    bool hasStatus(Message m) => m.isOwn
+        ? botRunHasStatus(runs, m.nymMessageId)
+        : botRunHasOffer(runs, m.replyTo);
 
     // Fold consecutive same-author messages into 5-minute groups, as messages_list.dart does.
     final units = <List<MessageGroupEntry>>[];
@@ -303,6 +304,15 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                 );
                 final last = unit.last.message;
                 if (!hasStatus(last)) return group;
+                if (!last.isOwn) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      group,
+                      BotRunOfferView(id: last.replyTo!.toLowerCase(), colors: c),
+                    ],
+                  );
+                }
                 final runId = last.nymMessageId!.toLowerCase();
                 return Column(
                   key: _runKeys.putIfAbsent(runId, GlobalKey.new),

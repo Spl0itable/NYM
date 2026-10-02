@@ -2385,6 +2385,7 @@ export async function onRequest(context) {
 
   function cleanupAll() {
     serverOpen = false;
+    try { spam.flush(); } catch {}
     if (archiveEnabled && archiveBuf.size > 0) {
       const finalFlush = flushArchive().catch(() => { });
       if (context && context.waitUntil) { try { context.waitUntil(finalFlush); } catch {} }

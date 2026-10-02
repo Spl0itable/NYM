@@ -1,6 +1,7 @@
 import { hasD1, replica, edgeCacheGet, edgeCachePut, edgeCacheDelete } from './_d1.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 import { cacheRateTake } from './_shared.js';
+import { filterSetSync, NOPE_DDL } from './_filters.js';
 
 export const SPAM_DDL = [
   "CREATE TABLE IF NOT EXISTS spam_config (key TEXT PRIMARY KEY, value TEXT)",
@@ -11,25 +12,24 @@ export const SPAM_DDL = [
   "CREATE INDEX IF NOT EXISTS spam_events_seen ON spam_events (seen_at)",
   "CREATE INDEX IF NOT EXISTS spam_events_pubkey ON spam_events (pubkey, seen_at)",
   "CREATE INDEX IF NOT EXISTS spam_events_sim ON spam_events (sim_key, seen_at)",
-  "CREATE INDEX IF NOT EXISTS spam_events_b0 ON spam_events (b0, seen_at)",
-  "CREATE INDEX IF NOT EXISTS spam_events_b1 ON spam_events (b1, seen_at)",
-  "CREATE INDEX IF NOT EXISTS spam_events_b2 ON spam_events (b2, seen_at)",
-  "CREATE INDEX IF NOT EXISTS spam_events_b3 ON spam_events (b3, seen_at)",
+  "CREATE INDEX IF NOT EXISTS spam_events_b0_set ON spam_events (b0, seen_at) WHERE b0 IS NOT NULL",
+  "CREATE INDEX IF NOT EXISTS spam_events_b1_set ON spam_events (b1, seen_at) WHERE b1 IS NOT NULL",
+  "CREATE INDEX IF NOT EXISTS spam_events_b2_set ON spam_events (b2, seen_at) WHERE b2 IS NOT NULL",
+  "CREATE INDEX IF NOT EXISTS spam_events_b3_set ON spam_events (b3, seen_at) WHERE b3 IS NOT NULL",
   "ALTER TABLE spam_events ADD COLUMN nym_key TEXT",
   "ALTER TABLE spam_events ADD COLUMN lang TEXT",
   "ALTER TABLE spam_events ADD COLUMN badge TEXT",
-  "CREATE INDEX IF NOT EXISTS spam_events_nym ON spam_events (nym_key, seen_at)",
+  "CREATE INDEX IF NOT EXISTS spam_events_nym_set ON spam_events (nym_key, seen_at) WHERE nym_key IS NOT NULL",
   "CREATE TABLE IF NOT EXISTS spam_pubkeys (pubkey TEXT PRIMARY KEY, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL, " +
   "audits INTEGER NOT NULL DEFAULT 0, spam INTEGER NOT NULL DEFAULT 0, ham INTEGER NOT NULL DEFAULT 0, strikes INTEGER NOT NULL DEFAULT 0, " +
   "score REAL NOT NULL DEFAULT 0, channels TEXT, nyms TEXT, last_reason TEXT, muted_until INTEGER NOT NULL DEFAULT 0, " +
   "cleared_at INTEGER NOT NULL DEFAULT 0, cleared_by TEXT)",
-  "CREATE INDEX IF NOT EXISTS spam_pubkeys_score ON spam_pubkeys (score)",
   "CREATE INDEX IF NOT EXISTS spam_pubkeys_last ON spam_pubkeys (last_seen)",
   "ALTER TABLE spam_events ADD COLUMN domains TEXT",
   "ALTER TABLE spam_events ADD COLUMN label TEXT",
   "ALTER TABLE spam_events ADD COLUMN labeled_by TEXT",
   "ALTER TABLE spam_events ADD COLUMN signals TEXT",
-  "CREATE INDEX IF NOT EXISTS spam_events_label ON spam_events (label, seen_at)",
+  "CREATE INDEX IF NOT EXISTS spam_events_labelled ON spam_events (label, seen_at) WHERE label IS NOT NULL",
   "CREATE TABLE IF NOT EXISTS spam_domains (id TEXT NOT NULL, domain TEXT NOT NULL, pubkey TEXT NOT NULL, verdict TEXT NOT NULL, " +
   "seen_at INTEGER NOT NULL, PRIMARY KEY (id, domain))",
   "CREATE INDEX IF NOT EXISTS spam_domains_domain ON spam_domains (domain, seen_at)",
@@ -38,10 +38,17 @@ export const SPAM_DDL = [
   "CREATE INDEX IF NOT EXISTS spam_hidden_seen ON spam_hidden (seen_at)",
   "CREATE INDEX IF NOT EXISTS spam_domains_seen ON spam_domains (seen_at)",
   "CREATE INDEX IF NOT EXISTS spam_events_channel ON spam_events (channel, seen_at)",
-  "INSERT OR IGNORE INTO spam_hidden (id, channel, seen_at) SELECT id, channel, seen_at FROM spam_events WHERE action LIKE '%event-hidden%'"
+  "INSERT OR IGNORE INTO spam_hidden (id, channel, seen_at) SELECT id, channel, seen_at FROM spam_events WHERE action LIKE '%event-hidden%'",
+  "DROP INDEX IF EXISTS spam_events_b0",
+  "DROP INDEX IF EXISTS spam_events_b1",
+  "DROP INDEX IF EXISTS spam_events_b2",
+  "DROP INDEX IF EXISTS spam_events_b3",
+  "DROP INDEX IF EXISTS spam_events_nym",
+  "DROP INDEX IF EXISTS spam_events_label",
+  "DROP INDEX IF EXISTS spam_pubkeys_score"
 ];
 
-export const SPAM_SCHEMA_VERSION = 1;
+export const SPAM_SCHEMA_VERSION = 2;
 const SPAM_SCHEMA_KEY = "schema:worker";
 
 export const SPAM_SETTINGS_KEY = "settings";
@@ -703,8 +710,6 @@ const state = {
   settings: null,
   settingsAt: 0,
   settingsLoading: null,
-  schemaReady: false,
-  schemaLoading: null,
   seen: new Map(),
   exact: new Map(),
   muted: new Map(),
@@ -730,11 +735,31 @@ const state = {
   lastErrorAt: 0,
   statusAt: 0,
   cooldownUntil: 0,
-  counters: { inspected: 0, unbadged: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0, lowTrust: 0, overBudgetDropped: 0, unverified: 0 }
+  wbuf: [],
+  wrows: new Map(),
+  wtimer: null,
+  wflush: Promise.resolve(),
+  wenv: null,
+  wcontext: null,
+  records: new Map(),
+  nopeLive: new Map(),
+  settled: new Map(),
+  campaign: new Map(),
+  campaignFleet: new Map(),
+  schema: new Map(),
+  configReady: false,
+  auditMissing: false,
+  coordMutes: [],
+  coordMuteTimer: null,
+  countersSent: {},
+  countersAt: 0,
+  lastWriteError: null,
+  lastWriteErrorAt: 0,
+  counters: { inspected: 0, unbadged: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0, lowTrust: 0, overBudgetDropped: 0, unverified: 0, lite: 0, flushes: 0, writeErrors: 0, writeRetries: 0, writeDropped: 0, coordClaims: 0, coordJudged: 0, coordKnown: 0, coordMuted: 0, coordPending: 0, coordErrors: 0, coordTimeouts: 0 }
 };
 
 export function _resetSpamState() {
-  state.settings = null; state.settingsAt = 0; state.settingsLoading = null; state.schemaReady = false; state.schemaLoading = null;
+  state.settings = null; state.settingsAt = 0; state.settingsLoading = null;
   state.seen.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear(); state.dropped.clear();
   state.restored.clear(); state.restoredValue = null;
   for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
@@ -743,6 +768,12 @@ export function _resetSpamState() {
   state.queue = []; state.running = 0; state.heldRunning = 0; state.slotWaiters = []; state.generation++; state.budgetMinute = 0; state.budgetUsed = 0;
   state.dossierMinute = 0; state.dossierUsed = 0;
   state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0; state.cooldownUntil = 0;
+  if (state.wtimer) clearTimeout(state.wtimer);
+  state.wtimer = null; state.wbuf = []; state.wrows.clear(); state.wflush = Promise.resolve(); state.wenv = null; state.wcontext = null;
+  state.records.clear(); state.nopeLive.clear(); state.settled.clear(); state.campaign.clear(); state.campaignFleet.clear(); state.schema.clear();
+  state.configReady = false; state.auditMissing = false; state.lastWriteError = null; state.lastWriteErrorAt = 0;
+  if (state.coordMuteTimer) clearTimeout(state.coordMuteTimer);
+  state.coordMutes = []; state.coordMuteTimer = null; state.countersSent = {}; state.countersAt = 0;
   for (const k of Object.keys(state.counters)) state.counters[k] = 0;
   badgeTierCache.clear();
   badgeAuthority = undefined;
@@ -812,13 +843,13 @@ function hideLocally(id) {
 
 function settle(id, drop) {
   const pend = state.pending.get(id);
-  if (!pend) return;
+  if (!pend) { if (drop) lateDrop(id); return; }
   state.pending.delete(id);
   if (pend.timer) clearTimeout(pend.timer);
   for (const w of pend.waiters) {
     try {
       if (drop) {
-        if (w.released) { state.counters.retracted++; if (typeof w.retract === "function") w.retract(); }
+        if (w.released) { w.retracted = true; state.counters.retracted++; if (typeof w.retract === "function") w.retract(); }
         else state.counters.dropped++;
       } else if (!w.released) {
         w.released = true;
@@ -826,6 +857,7 @@ function settle(id, drop) {
       }
     } catch (_) { }
   }
+  if (!drop) rememberSettled(id, pend);
 }
 
 function releaseAll(id) {
@@ -846,19 +878,166 @@ async function noteStatus(env) {
   const db = env && env.DB_NOPE;
   if (!hasD1(db)) return;
   try {
-    await ensureSchema(db);
+    await ensureConfigSchema(env);
+    const fleet = coordOf(env) ? await coordCall(env, COUNTERS_NAME, { op: "fleet" }, COORD_STATUS_TIMEOUT_MS) : null;
     await db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
       .bind(JSON.stringify({
         at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
         lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length,
         cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
         badgeGate: state.settings ? state.settings.requireBadge || "off" : "unloaded", authority: !!authorityPubkey(env),
-        counters: Object.assign({}, state.counters)
+        counters: Object.assign({}, state.counters), fleet: fleet && fleet.totals ? fleet : undefined
       })).run();
   } catch (_) { }
 }
 
+export const _noteStatus = noteStatus;
+export function _forceStatus() { state.statusAt = 0; }
+
 export function spamCounters() { return Object.assign({}, state.counters); }
+
+const COORD_SHARDS_DEFAULT = 16;
+const COORD_POLL_MS = 150;
+const COORD_STATUS_TIMEOUT_MS = 1000;
+const COUNTER_PUSH_MS = 5000;
+const COUNTERS_NAME = "counters";
+const COORD_MUTE_BATCH_MS = 100;
+const COORD_TIMEOUT = Symbol("timeout");
+let COORD_TIMEOUT_MS = 250;
+export function _setCoordTimeoutMs(ms) { COORD_TIMEOUT_MS = ms; }
+
+function coordOf(env) {
+  const ns = env && env.SPAM_COORD;
+  return ns && typeof ns.idFromName === "function" && typeof ns.get === "function" ? ns : null;
+}
+
+function coordShards(env) {
+  const n = Math.floor(Number(env && env.SPAM_COORD_SHARDS));
+  return n >= 1 && n <= 256 ? n : COORD_SHARDS_DEFAULT;
+}
+
+function shardOf(env, job) {
+  const key = job.fp && job.fp.simKey ? "s" + job.fp.simKey : "i" + job.id;
+  return "shard-" + (hash32(key) % coordShards(env));
+}
+
+async function coordCall(env, name, body, timeoutMs) {
+  const ns = coordOf(env);
+  if (!ns) return null;
+  let timer = null;
+  try {
+    const call = (async () => {
+      const res = await ns.get(ns.idFromName(name)).fetch("https://spam-coord/" + body.op, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error("coordinator HTTP " + res.status);
+      return res.json();
+    })();
+    call.catch(() => { });
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(COORD_TIMEOUT), timeoutMs || COORD_TIMEOUT_MS); });
+    const out = await Promise.race([call, timeout]);
+    if (out === COORD_TIMEOUT) { state.counters.coordTimeouts++; state.counters.coordErrors++; return null; }
+    return out && typeof out === "object" && !out.error ? out : null;
+  } catch (_) {
+    state.counters.coordErrors++;
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function coordKnownAllowed(job) {
+  const s = job.settings || state.settings;
+  return !!(s && s.autoEnforce && verdictReusable(job.fp) && !innocuousKind(job.content));
+}
+
+async function coordClaim(env, job) {
+  if (!job.fp) job.fp = fingerprint(job.content);
+  const out = await coordCall(env, shardOf(env, job), { op: "claim", id: job.id, sim: job.fp.simKey || 0, pubkey: job.pubkey, token: INSTANCE_TOKEN, known: coordKnownAllowed(job) });
+  if (out) state.counters.coordClaims++;
+  return out;
+}
+
+function coordPublish(env, context, job, res) {
+  if (!coordOf(env)) return;
+  let body;
+  if (res && res.verdict) {
+    const v = res.verdict;
+    const s = job.settings || state.settings;
+    const strong = !!(v.spam && s && v.confidence >= s.minConfidence);
+    const until = isSpamMuted(job.pubkey) ? state.muted.get(job.pubkey) : 0;
+    body = {
+      op: "outcome", id: job.id, sim: (job.fp && job.fp.simKey) || 0, pubkey: job.pubkey, strong,
+      reusable: verdictReusable(job.fp) && !innocuousKind(job.content) && !res.peer && !["cache", "cross-ref", "peer"].includes(v.model) && v.category !== "muted-sender",
+      row: { verdict: v.spam ? "spam" : "ok", confidence: v.confidence, category: v.category || "", reason: v.reason || "", lang: v.language || "", action: res.action || "" },
+      verdict: { confidence: v.confidence, category: v.category || "", reason: v.reason || "", model: v.model || "" }, muteUntil: until || 0
+    };
+  } else {
+    body = { op: "release", id: job.id, token: INSTANCE_TOKEN };
+  }
+  const p = coordCall(env, shardOf(env, job), body);
+  if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
+}
+
+function coordNoteMute(env, context, pubkey, until) {
+  if (!coordOf(env)) return;
+  state.coordMutes.push({ pubkey, until });
+  if (state.coordMuteTimer) return;
+  state.coordMuteTimer = setTimeout(() => {
+    state.coordMuteTimer = null;
+    const mutes = state.coordMutes.splice(0);
+    if (!mutes.length) return;
+    const n = coordShards(env);
+    const work = Promise.all(Array.from({ length: n }, (_, i) => coordCall(env, "shard-" + i, { op: "mute", mutes })));
+    if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
+  }, COORD_MUTE_BATCH_MS);
+}
+
+export async function pushSpamCounters(env) {
+  if (!coordOf(env)) return false;
+  const deltas = {};
+  let any = false;
+  for (const [k, v] of Object.entries(state.counters)) {
+    const d = v - (state.countersSent[k] || 0);
+    if (d) { deltas[k] = d; any = true; }
+  }
+  state.countersAt = Date.now();
+  if (!any) return true;
+  const snapshot = Object.assign({}, state.counters);
+  const out = await coordCall(env, COUNTERS_NAME, { op: "count", isolate: INSTANCE_TOKEN, deltas }, COORD_STATUS_TIMEOUT_MS);
+  if (!out) return false;
+  for (const k of Object.keys(deltas)) state.countersSent[k] = snapshot[k];
+  return true;
+}
+
+function maybePushCounters(env, context) {
+  if (!coordOf(env) || Date.now() - state.countersAt < COUNTER_PUSH_MS) return;
+  state.countersAt = Date.now();
+  const p = pushSpamCounters(env);
+  if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
+}
+
+async function followCoord(env, context, job, generation, shard) {
+  freeJobSlot(job, generation);
+  pump(env, context);
+  state.counters.coordPending++;
+  const deadline = Date.now() + CLAIM_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, COORD_POLL_MS));
+    if (generation !== state.generation) return;
+    if (!state.pending.has(job.id) && state.dropped.has(job.id)) return;
+    const w = await coordCall(env, shard, { op: "wait", id: job.id });
+    if (w && w.status === "judged" && w.row) {
+      const res = adoptPeer(w.row, job);
+      settle(job.id, verdictDrops(job, res));
+      coalesce(env, context, job);
+      return;
+    }
+    if (!w || w.status === "open") break;
+  }
+  if (generation !== state.generation) return;
+  job.coordSkip = true;
+  state.queue.unshift(job);
+  pump(env, context);
+}
 
 const HIDDEN_LOOKUP_CHUNK = 80;
 const HIDDEN_SINCE_MAX = 5000;
@@ -871,7 +1050,7 @@ export async function hiddenEventIds(env, ids) {
   const db = env && env.DB_NOPE;
   if (!hasD1(db) || !list.length) return withoutRestored(out);
   await syncedSettings(env);
-  const r = replica(db);
+  const r = replica(spamDb(env));
   for (let i = 0; i < list.length; i += HIDDEN_LOOKUP_CHUNK) {
     const chunk = list.slice(i, i + HIDDEN_LOOKUP_CHUNK);
     const ph = chunk.map(() => "?").join(", ");
@@ -900,7 +1079,7 @@ export async function hiddenEventIdsSince(env, channels, sinceMs) {
     for (const id of hit) if (typeof id === "string") out.add(id);
     return withoutRestored(out);
   }
-  const r = replica(db);
+  const r = replica(spamDb(env));
   const ph = list.map(() => "?").join(", ");
   let rs = null;
   try {
@@ -917,27 +1096,48 @@ export async function hiddenEventIdsSince(env, channels, sinceMs) {
   return withoutRestored(out);
 }
 
+export function spamDb(env) {
+  if (env && hasD1(env.DB_SPAM)) return env.DB_SPAM;
+  return env ? env.DB_NOPE : null;
+}
+
+function spamSplit(env) {
+  return !!(env && hasD1(env.DB_SPAM) && env.DB_SPAM !== env.DB_NOPE);
+}
+
 async function migrateSchema(db) {
   try {
     const row = await replica(db).prepare("SELECT value FROM spam_config WHERE key = ?").bind(SPAM_SCHEMA_KEY).first();
-    if (row && Number(row.value) >= SPAM_SCHEMA_VERSION) { state.schemaReady = true; return; }
+    if (row && Number(row.value) >= SPAM_SCHEMA_VERSION) return;
   } catch (_) { }
   for (const ddl of SPAM_DDL) { try { await db.prepare(ddl).run(); } catch (_) { } }
   try {
     await db.prepare("INSERT INTO spam_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value " +
       "WHERE CAST(spam_config.value AS INTEGER) < CAST(excluded.value AS INTEGER)").bind(SPAM_SCHEMA_KEY, String(SPAM_SCHEMA_VERSION)).run();
   } catch (_) { }
-  state.schemaReady = true;
 }
 
-async function ensureSchema(db) {
-  if (state.schemaReady) return;
-  if (!state.schemaLoading) {
-    const p = migrateSchema(db);
-    state.schemaLoading = p;
-    p.then(() => { if (state.schemaLoading === p) state.schemaLoading = null; });
+async function ensureSchema(db, key) {
+  if (!hasD1(db)) return;
+  const k = key || db;
+  let entry = state.schema.get(k);
+  if (entry === true) return;
+  if (!entry) {
+    entry = migrateSchema(db).then(() => { state.schema.set(k, true); }, () => { state.schema.delete(k); });
+    state.schema.set(k, entry);
   }
-  await state.schemaLoading;
+  await entry;
+}
+
+function spamSchemaKey(env) {
+  return spamSplit(env) ? "spam" : "nope";
+}
+
+async function ensureConfigSchema(env) {
+  if (!spamSplit(env)) return ensureSchema(env.DB_NOPE, "nope");
+  if (state.configReady) return;
+  try { await env.DB_NOPE.prepare(SPAM_DDL[0]).run(); } catch (_) { }
+  state.configReady = true;
 }
 
 export const _ensureSchema = ensureSchema;
@@ -953,11 +1153,12 @@ function configFrom(rs) {
   return out;
 }
 
-async function configRows(db) {
+async function configRows(env) {
+  const db = env.DB_NOPE;
   try {
     return configFrom(await replica(db).prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY).all());
   } catch (e) {
-    await ensureSchema(db);
+    await ensureConfigSchema(env);
     return configFrom(await db.prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY).all());
   }
 }
@@ -972,7 +1173,7 @@ export async function readSpamSettings(env) {
   const db = env && env.DB_NOPE;
   if (!hasD1(db)) return base;
   try {
-    const rows = await configRows(db);
+    const rows = await configRows(env);
     return settingsFrom(rows.value, base);
   } catch (e) { return base; }
 }
@@ -984,7 +1185,7 @@ async function loadSpamSettings(env) {
   const hit = await edgeCacheGet(SETTINGS_CACHE_KEY);
   if (hit && typeof hit === "object" && "value" in hit) return { settings: settingsFrom(hit.value, base), restored: hit.restored };
   try {
-    const rows = await configRows(db);
+    const rows = await configRows(env);
     await edgeCachePut(SETTINGS_CACHE_KEY, { value: rows.value, restored: rows.restored }, SETTINGS_CACHE_S);
     return { settings: settingsFrom(rows.value, base), restored: rows.restored };
   } catch (e) { return { settings: base }; }
@@ -992,7 +1193,7 @@ async function loadSpamSettings(env) {
 
 export async function writeSpamSettings(env, settings) {
   const db = env.DB_NOPE;
-  await ensureSchema(db);
+  await ensureConfigSchema(env);
   await db.prepare("INSERT INTO spam_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     .bind(SPAM_SETTINGS_KEY, JSON.stringify(settings)).run();
   state.settings = settings;
@@ -1140,6 +1341,8 @@ function cleanHistory(rec) {
 }
 
 async function loadRecord(r, pubkey) {
+  const own = state.records.get(pubkey);
+  if (own && Date.now() - own.at < RECORD_CACHE_S * 1000) return own.rec;
   const key = "pubkey/" + pubkey;
   const hit = await edgeCacheGet(key);
   if (hit && typeof hit === "object" && "rec" in hit) return hit.rec || null;
@@ -1151,6 +1354,14 @@ async function loadRecord(r, pubkey) {
   return rec || null;
 }
 
+function withBuffered(rows, extra, limit) {
+  if (!extra.length) return rows;
+  const ids = new Set(rows.map((row) => row.id).filter(Boolean));
+  const merged = rows.concat(extra.filter((row) => !ids.has(row.id)));
+  merged.sort((a, b) => (Number(b.seen_at) || Number(b.created_at) || 0) - (Number(a.seen_at) || Number(a.created_at) || 0));
+  return merged.slice(0, limit);
+}
+
 async function rowsOf(query) {
   try {
     const rs = await query();
@@ -1159,8 +1370,7 @@ async function rowsOf(query) {
 }
 
 async function loadDossier(env, job, settings, opts) {
-  const db = env.DB_NOPE;
-  const r = replica(db);
+  const r = replica(spamDb(env));
   const now = job.seenAt;
   const since = now - SIMILAR_WINDOW_MS;
   const labelSince = now - LABELS_WINDOW_MS;
@@ -1169,6 +1379,10 @@ async function loadDossier(env, job, settings, opts) {
   const out = { self: null, record: null, cleanHistory: false, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
   const reusable = verdictReusable(job.fp);
   if (!job.force) {
+    const own = state.wrows.get(job.id);
+    if (own) { out.self = own; return out; }
+  }
+  if (!job.force && !job.coordFresh) {
     try {
       out.self = await r.prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(job.id).first();
     } catch (e) { out.self = null; }
@@ -1191,13 +1405,27 @@ async function loadDossier(env, job, settings, opts) {
     nymQuery = () => r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, label FROM spam_events WHERE " + match +
       " AND pubkey != ? AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) ORDER BY seen_at DESC LIMIT 30").bind(...binds, job.pubkey, since, labelSince).all();
   }
-  const [record, recent, similar, nyms] = await Promise.all([
+  let [record, recent, similar, nyms] = await Promise.all([
     loadRecord(r, job.pubkey),
     light ? null : rowsOf(() => r.prepare("SELECT channel, nym, content, verdict, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8")
       .bind(job.pubkey, job.id).all()),
     similarQuery ? rowsOf(similarQuery) : null,
     nymQuery ? rowsOf(nymQuery) : null
   ]);
+  if (state.wrows.size) {
+    const pending = Array.from(state.wrows.values()).filter((row) => row.id !== job.id);
+    const inWindow = (row) => row.seen_at > since || (row.label != null && row.seen_at > labelSince);
+    if (recent) recent = withBuffered(recent, pending.filter((row) => row.pubkey === job.pubkey), 8);
+    if (similar) {
+      const b = job.fp.bands;
+      similar = withBuffered(similar, pending.filter((row) => inWindow(row) && (row.sim_key === job.fp.simKey || [0, 1, 2, 3].some((i) => b[i] != null && row["b" + i] === b[i]))), 40);
+    }
+    if (nyms) {
+      const stem = nymStem(job.nymKey);
+      const inRange = (k) => !!k && (stem ? k >= stem && k < stem + NYM_RANGE_END : k === job.nymKey);
+      nyms = withBuffered(nyms, pending.filter((row) => inWindow(row) && row.pubkey !== job.pubkey && inRange(row.nym_key)), 30);
+    }
+  }
   out.record = record;
   out.cleanHistory = cleanHistory(out.record);
   if (!light) out.recent = recent || [];
@@ -1242,7 +1470,7 @@ async function loadActivity(env, job, dossier) {
   if (job.channel) chans.add(job.channel);
   const own = (async () => {
     try {
-      return await replica(env.DB_NOPE).prepare("SELECT SUM(seen_at > ?) AS n15, COUNT(*) AS n60, COUNT(DISTINCT CASE WHEN seen_at > ? THEN channel END) AS ch15 FROM spam_events WHERE pubkey = ? AND seen_at > ? AND id != ?")
+      return await replica(spamDb(env)).prepare("SELECT SUM(seen_at > ?) AS n15, COUNT(*) AS n60, COUNT(DISTINCT CASE WHEN seen_at > ? THEN channel END) AS ch15 FROM spam_events WHERE pubkey = ? AND seen_at > ? AND id != ?")
         .bind(now - VELOCITY_WINDOW_MS, now - VELOCITY_WINDOW_MS, job.pubkey, now - VELOCITY_HOUR_MS, job.id).first();
     } catch (_) { return null; }
   })();
@@ -1300,7 +1528,7 @@ async function loadDomainStats(env, job) {
   }
   if (missing.length) {
     try {
-      const rs = await replica(env.DB_NOPE).prepare("SELECT domain, SUM(verdict = 'spam') AS spam, SUM(verdict = 'ok') AS ok, COUNT(DISTINCT pubkey) AS pubkeys, COUNT(DISTINCT CASE WHEN verdict = 'spam' THEN pubkey END) AS spam_pubkeys FROM spam_domains WHERE domain IN (" + missing.map(() => "?").join(", ") + ") AND seen_at > ? AND id != ? GROUP BY domain")
+      const rs = await replica(spamDb(env)).prepare("SELECT domain, SUM(verdict = 'spam') AS spam, SUM(verdict = 'ok') AS ok, COUNT(DISTINCT pubkey) AS pubkeys, COUNT(DISTINCT CASE WHEN verdict = 'spam' THEN pubkey END) AS spam_pubkeys FROM spam_domains WHERE domain IN (" + missing.map(() => "?").join(", ") + ") AND seen_at > ? AND id != ? GROUP BY domain")
         .bind(...missing, job.seenAt - DOMAIN_WINDOW_MS, job.id).all();
       const got = new Map();
       for (const row of (rs && rs.results) || []) {
@@ -1326,7 +1554,7 @@ async function loadDomainStats(env, job) {
 async function fetchExamples(env, now) {
   const hit = await edgeCacheGet(EXAMPLES_CACHE_KEY);
   if (hit && typeof hit === "object" && Array.isArray(hit.spam) && Array.isArray(hit.ok)) return hit;
-  const r = replica(env.DB_NOPE);
+  const r = replica(spamDb(env));
   const ex = { at: now, spam: [], ok: [], labelled: 0 };
   const keys = new Set();
   const take = (rows, side, labelled) => {
@@ -1430,47 +1658,404 @@ function strikesAfter(dossier, strong) {
   return (rec ? Number(rec.strikes) || 0 : 0) + (strong ? 1 : 0);
 }
 
-async function persist(env, job, v, dossier, action, strikesIn) {
-  const db = env.DB_NOPE;
-  await ensureSchema(db);
-  const rec = dossier.record;
-  const strong = v.spam && v.confidence >= job.settings.minConfidence;
-  const prevScore = rec ? Number(rec.score) || 0 : 0;
-  const score = v.spam ? prevScore + v.confidence : Math.max(0, prevScore - 0.5);
-  const strikes = strikesIn != null ? strikesIn : strikesAfter(dossier, strong);
-  const domains = job.domains && job.domains.length ? job.domains.join(",") : null;
-  const signals = job.signals ? JSON.stringify(job.signals) : null;
-  const insert = db.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, lang, badge, domains, signals) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" +
-      (job.source === "report"
-        ? " ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = excluded.verdict, confidence = excluded.confidence, category = excluded.category, reason = excluded.reason, model = excluded.model, action = excluded.action, source = excluded.source, lang = excluded.lang, badge = excluded.badge, domains = excluded.domains, signals = excluded.signals WHERE spam_events.label IS NULL"
-        : " ON CONFLICT(id) DO NOTHING"))
-      .bind(job.id, job.pubkey, clip(job.nym, 80) || null, clip(job.channel, 80) || null, job.kind, clip(job.content, 4000), job.fp.simKey,
-        job.fp.bands[0], job.fp.bands[1], job.fp.bands[2], job.fp.bands[3], job.createdAt || job.seenAt, job.seenAt,
-        v.spam ? "spam" : "ok", v.confidence, v.category || null, v.reason || null, v.model || null, action, job.source || "pool", job.localScore || 0, job.nymKey || null, v.language || null, job.badge && job.badge !== "none" ? job.badge : null, domains, signals);
-  const stmts = [insert];
-  if (/event-hidden/.test(action || "")) stmts.push(db.prepare(HIDE_SYNC_SQL).bind(job.id));
-  if (job.source === "report") stmts.push(db.prepare(UNHIDE_SYNC_SQL).bind(job.id, job.id));
-  const res = (await db.batch(stmts))[0];
-  const changes = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 1;
-  if (changes === 0 && (job.source === "report" || !job.force)) return { lost: true, strikes: 0, score: prevScore };
-  return { lost: false, strikes, score };
+const EVENT_COLS = ["id", "pubkey", "nym", "channel", "kind", "content", "sim_key", "b0", "b1", "b2", "b3", "created_at", "seen_at", "verdict", "confidence", "category", "reason", "model", "action", "source", "local_score", "nym_key", "lang", "badge", "domains", "signals"];
+const EVENT_INSERT_SQL = "INSERT INTO spam_events (" + EVENT_COLS.join(", ") + ") VALUES (" + EVENT_COLS.map(() => "?").join(", ") + ")";
+const EVENT_REPORT_TAIL = " ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = excluded.verdict, confidence = excluded.confidence, category = excluded.category, reason = excluded.reason, model = excluded.model, action = excluded.action, source = excluded.source, lang = excluded.lang, badge = excluded.badge, domains = excluded.domains, signals = excluded.signals WHERE spam_events.label IS NULL";
+const EVENT_POOL_TAIL = " ON CONFLICT(id) DO NOTHING";
+const OWN_ROW_SQL = "EXISTS (SELECT 1 FROM spam_events WHERE id = ? AND seen_at = ? AND verdict = ? AND COALESCE(model, '') = ? AND action = ?)";
+const OWN_ROWS_SQL = "(id, seen_at, verdict, COALESCE(model, ''), action) IN (VALUES ";
+const DOMAIN_UPSERT_SQL = "INSERT INTO spam_domains (id, domain, pubkey, verdict, seen_at) SELECT ?, ?, ?, ?, ? WHERE ";
+const DOMAIN_UPSERT_TAIL = " ON CONFLICT(id, domain) DO UPDATE SET verdict = excluded.verdict, seen_at = excluded.seen_at";
+const RECORD_UPSERT_SQL = "INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason, muted_until) " +
+  "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ";
+const RECORD_UPSERT_TAIL = " ON CONFLICT(pubkey) DO UPDATE SET last_seen = excluded.last_seen, audits = spam_pubkeys.audits + excluded.audits, " +
+  "spam = spam_pubkeys.spam + excluded.spam, ham = spam_pubkeys.ham + excluded.ham, strikes = spam_pubkeys.strikes + ?, score = MAX(?, spam_pubkeys.score + ?), " +
+  "channels = excluded.channels, nyms = excluded.nyms, last_reason = COALESCE(excluded.last_reason, spam_pubkeys.last_reason), " +
+  "muted_until = CASE WHEN excluded.muted_until > 0 THEN excluded.muted_until ELSE spam_pubkeys.muted_until END";
+const MUTE_UPSERT_SQL = "INSERT INTO nope (kind, value, mode, reason, note, created_at, created_by, expires_at) SELECT 'pubkey', ?, ?, ?, ?, ?, ?, ? WHERE ";
+const MUTE_UPSERT_TAIL = " ON CONFLICT(kind, value) DO UPDATE SET mode = CASE WHEN nope.created_by = ? THEN excluded.mode ELSE nope.mode END, " +
+  "expires_at = CASE WHEN nope.created_by = ? THEN excluded.expires_at ELSE nope.expires_at END, " +
+  "reason = CASE WHEN nope.created_by = ? THEN excluded.reason ELSE nope.reason END, note = CASE WHEN nope.created_by = ? THEN excluded.note ELSE nope.note END";
+const MUTE_AUDIT_SQL = "INSERT INTO audit (at, actor, action, kind, value, detail) SELECT ?, ?, 'spam.mute', 'pubkey', ?, ? WHERE ";
+const FLUSH_ROWS = 50;
+const BUFFER_MAX = 2000;
+const WRITE_RETRIES = 8;
+const RECORD_GROUP_MAX = 16;
+const CHANNEL_DELETE_CHUNK = 90;
+const SETTLED_MAX = 2000;
+const SETTLED_TTL_MS = 60000;
+const CAMPAIGN_KEYS_MAX = 4000;
+const CAMPAIGN_PUBKEYS_MAX = 64;
+let FLUSH_MS = 1500;
+export function _setSpamFlushMs(ms) { FLUSH_MS = ms; }
+export function _spamBufferLimit() { return BUFFER_MAX; }
+export function _spamQueueIds() { return state.queue.map((q) => q.id); }
+
+function muteLive(pubkey, rec, now) {
+  if (!rec || !(Number(rec.muted_until) > now)) return false;
+  const live = state.nopeLive.get(pubkey);
+  if (live && live > now) return true;
+  try { return filterSetSync().p.has(pubkey); } catch (_) { return false; }
 }
 
-async function persistRecord(env, job, v, dossier, strikes, score) {
-  const db = env.DB_NOPE;
+function noteCampaign(simKey, pubkey) {
+  if (!simKey) return;
+  let set = state.campaign.get(simKey);
+  if (!set) { set = new Set(); state.campaign.set(simKey, set); trimMap(state.campaign, CAMPAIGN_KEYS_MAX); }
+  if (set.size < CAMPAIGN_PUBKEYS_MAX) set.add(pubkey);
+}
+
+function campaignOthers(simKey, pubkey) {
+  const set = simKey ? state.campaign.get(simKey) : null;
+  const local = set ? set.size - (set.has(pubkey) ? 1 : 0) : 0;
+  const fleet = simKey ? state.campaignFleet.get(simKey) || 0 : 0;
+  return Math.max(local, fleet);
+}
+
+function verdictPlan(job, v, dossier) {
+  const settings = job.settings;
+  const review = job.source === "report";
+  const strong = v.spam && v.confidence >= settings.minConfidence;
+  const enforceable = !review || reviewEvidenceStrong(v, settings, dossier);
+  const enforcing = !!(strong && settings.autoEnforce && enforceable);
+  const strikes = strikesAfter(dossier, strong && enforceable);
+  const plan = enforcing ? planEnforcement(job, v, dossier, strikes) : null;
+  const action = plan ? plan.actions.join(",") : (v.spam ? (strong ? "flagged" : "suspect") : "ok");
+  return { strong, enforcing, strikes, plan, action };
+}
+
+function writeEntry(env, job, v, dossier, p) {
   const rec = dossier.record;
-  const spam = v.spam ? 1 : 0;
-  const strikeDelta = strikes - (rec ? Number(rec.strikes) || 0 : 0);
-  const scoreDelta = v.spam ? v.confidence : -0.5;
-  await rememberDomains(db, job, v.spam ? "spam" : "ok");
-  const row = await db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT(pubkey) DO UPDATE SET last_seen = excluded.last_seen, audits = audits + 1, spam = spam + excluded.spam, ham = ham + excluded.ham, " +
-      "strikes = spam_pubkeys.strikes + ?, score = MAX(0, spam_pubkeys.score + ?), channels = ?, nyms = ?, last_reason = COALESCE(excluded.last_reason, spam_pubkeys.last_reason) RETURNING *")
-      .bind(job.pubkey, job.seenAt, job.seenAt, spam, 1 - spam, strikes, score,
-        mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym), v.spam ? clip(v.reason, 300) : null,
-        strikeDelta, scoreDelta, mergeList(rec && rec.channels, job.channel), mergeList(rec && rec.nyms, job.nym)).first();
-  if (row && row.pubkey === job.pubkey) await edgeCachePut("pubkey/" + job.pubkey, { rec: row }, RECORD_CACHE_S);
+  const now = job.seenAt;
+  const prevScore = rec ? Number(rec.score) || 0 : 0;
+  const score = v.spam ? prevScore + v.confidence : Math.max(0, prevScore - 0.5);
+  const strikeDelta = p.strikes - (rec ? Number(rec.strikes) || 0 : 0);
+  const channels = mergeList(rec && rec.channels, job.channel);
+  const nyms = mergeList(rec && rec.nyms, job.nym);
+  const lastReason = v.spam ? clip(v.reason, 300) : null;
+  const plan = p.plan;
+  let mute = null;
+  if (plan && plan.muteNow && !muteLive(job.pubkey, rec, now)) {
+    mute = {
+      mode: job.settings.mode, reason: plan.reason, note: plan.note, until: plan.until,
+      detail: JSON.stringify({ reason: plan.reason, until: plan.until, event: job.id, channel: job.channel, nym: job.nym, strikes: plan.strikes, campaign: plan.campaign })
+    };
+  }
+  const report = job.source === "report";
+  const ev = {
+    id: job.id, pubkey: job.pubkey, nym: clip(job.nym, 80) || null, channel: clip(job.channel, 80) || null, kind: job.kind, content: clip(job.content, 4000),
+    sim_key: job.fp.simKey, b0: job.fp.bands[0], b1: job.fp.bands[1], b2: job.fp.bands[2], b3: job.fp.bands[3], created_at: job.createdAt || job.seenAt, seen_at: job.seenAt,
+    verdict: v.spam ? "spam" : "ok", confidence: v.confidence, category: v.category || null, reason: v.reason || null, model: v.model || null, action: p.action,
+    source: job.source || "pool", local_score: job.localScore || 0, nym_key: job.nymKey || null, lang: v.language || null,
+    badge: job.badge && job.badge !== "none" ? job.badge : null, domains: job.domains && job.domains.length ? job.domains.join(",") : null,
+    signals: job.signals ? JSON.stringify(job.signals) : null, label: null, labeled_by: null
+  };
+  const recAfter = Object.assign({}, rec || {}, {
+    pubkey: job.pubkey, first_seen: rec ? rec.first_seen : now, last_seen: now, audits: (rec ? Number(rec.audits) || 0 : 0) + 1,
+    spam: (rec ? Number(rec.spam) || 0 : 0) + (v.spam ? 1 : 0), ham: (rec ? Number(rec.ham) || 0 : 0) + (v.spam ? 0 : 1),
+    strikes: p.strikes, score, channels, nyms, last_reason: lastReason || (rec ? rec.last_reason : null) || null,
+    muted_until: mute ? mute.until : (rec ? Number(rec.muted_until) || 0 : 0), cleared_at: rec ? rec.cleared_at || 0 : 0, cleared_by: rec ? rec.cleared_by || null : null
+  });
+  const chan = !!(p.enforcing && job.settings.blockEvents && hasD1(env.DB_CHANNELS));
+  return {
+    id: job.id, pubkey: job.pubkey, seenAt: now, report, guarded: report || !job.force, drop: p.enforcing, ev,
+    hide: /event-hidden/.test(p.action || ""), domains: (job.domains || []).slice(), verdictWord: v.spam ? "spam" : "ok",
+    rec: { spam: v.spam ? 1 : 0, ham: v.spam ? 0 : 1, strikeDelta, scoreDelta: v.spam ? v.confidence : -0.5, strikes: p.strikes, score, channels, nyms, lastReason, mutedUntil: mute ? mute.until : 0 },
+    mute, recAfter, stage: { event: true, rec: true, nope: !!mute, chan }, attempts: 0, lost: false
+  };
+}
+
+function eventStatement(db, e) {
+  return db.prepare(EVENT_INSERT_SQL + (e.report ? EVENT_REPORT_TAIL : EVENT_POOL_TAIL)).bind(...EVENT_COLS.map((c) => e.ev[c] === undefined ? null : e.ev[c]));
+}
+
+function ownKey(e) {
+  return [e.id, e.seenAt, e.ev.verdict, e.ev.model || "", e.ev.action];
+}
+
+function guardOf(e) {
+  return e.guarded ? { sql: OWN_ROW_SQL, binds: ownKey(e) } : { sql: "1", binds: [] };
+}
+
+function recordStatements(db, entries) {
+  const groups = new Map();
+  for (const e of entries) {
+    if (!e.stage.rec) continue;
+    let g = groups.get(e.pubkey);
+    if (!g || g[g.length - 1].length >= RECORD_GROUP_MAX) {
+      if (!g) { g = []; groups.set(e.pubkey, g); }
+      g.push([]);
+    }
+    g[g.length - 1].push(e);
+  }
+  const out = [];
+  for (const chunks of groups.values()) {
+    for (const g of chunks) {
+      let audits = 0, spam = 0, ham = 0, strikes = 0, floor = 0, shift = 0, reason = null, until = 0;
+      g.forEach((e, i) => {
+        audits++; spam += e.rec.spam; ham += e.rec.ham; strikes += e.rec.strikeDelta;
+        floor = i === 0 ? 0 : Math.max(0, floor + e.rec.scoreDelta);
+        shift += e.rec.scoreDelta;
+        if (e.rec.lastReason) reason = e.rec.lastReason;
+        if (e.rec.mutedUntil) until = e.rec.mutedUntil;
+      });
+      const last = g[g.length - 1];
+      const guarded = g.filter((e) => e.guarded);
+      const where = guarded.length
+        ? "(SELECT COUNT(*) FROM spam_events WHERE " + OWN_ROWS_SQL + guarded.map(() => "(?, ?, ?, ?, ?)").join(", ") + ")) = ?"
+        : "1";
+      const whereBinds = guarded.length ? guarded.flatMap(ownKey).concat([guarded.length]) : [];
+      out.push({
+        group: g,
+        stmt: db.prepare(RECORD_UPSERT_SQL + where + RECORD_UPSERT_TAIL).bind(
+          last.pubkey, g[0].seenAt, last.seenAt, audits, spam, ham, last.rec.strikes, last.rec.score, last.rec.channels, last.rec.nyms, reason, until,
+          ...whereBinds, strikes, floor, shift)
+      });
+    }
+  }
+  return out;
+}
+
+function muteStatements(db, e, guarded) {
+  const g = guarded ? guardOf(e) : { sql: "1", binds: [] };
+  const m = e.mute;
+  const out = [db.prepare(MUTE_UPSERT_SQL + g.sql + MUTE_UPSERT_TAIL).bind(e.pubkey, m.mode, m.reason, m.note, e.seenAt, SPAM_ACTOR, m.until, ...g.binds, SPAM_ACTOR, SPAM_ACTOR, SPAM_ACTOR, SPAM_ACTOR)];
+  if (!state.auditMissing) out.push(db.prepare(MUTE_AUDIT_SQL + g.sql).bind(e.seenAt, SPAM_ACTOR, e.pubkey, m.detail, ...g.binds));
+  return out;
+}
+
+async function repairFor(env, err) {
+  const msg = String(err && err.message || err);
+  if (/no such table: audit/i.test(msg) && !state.auditMissing) { state.auditMissing = true; return true; }
+  if (/no such table: nope/i.test(msg)) {
+    for (const ddl of NOPE_DDL) { try { await env.DB_NOPE.prepare(ddl).run(); } catch (_) { } }
+    return true;
+  }
+  return false;
+}
+
+async function batchWithRepair(env, db, build) {
+  try { return await db.batch(build()); } catch (e) {
+    if (!(await repairFor(env, e))) throw e;
+    return db.batch(build());
+  }
+}
+
+async function writeEntries(env, entries) {
+  const sdb = spamDb(env);
+  await ensureSchema(sdb, spamSchemaKey(env));
+  const split = spamSplit(env);
+  let refs = [];
+  let recs = [];
+  const build = () => {
+    const stmts = [];
+    refs = [];
+    for (const e of entries) {
+      if (!e.stage.event) continue;
+      refs.push({ e, at: stmts.length });
+      stmts.push(eventStatement(sdb, e));
+      if (e.hide) stmts.push(sdb.prepare(HIDE_SYNC_SQL).bind(e.id));
+      if (e.report) stmts.push(sdb.prepare(UNHIDE_SYNC_SQL).bind(e.id, e.id));
+      const g = guardOf(e);
+      for (const d of e.domains) stmts.push(sdb.prepare(DOMAIN_UPSERT_SQL + g.sql + DOMAIN_UPSERT_TAIL).bind(e.id, d, e.pubkey, e.verdictWord, e.seenAt, ...g.binds));
+    }
+    recs = recordStatements(sdb, entries);
+    for (const r of recs) { r.at = stmts.length; stmts.push(r.stmt); }
+    if (!split) for (const e of entries) if (e.stage.nope) stmts.push(...muteStatements(sdb, e, true));
+    return stmts;
+  };
+  if (entries.some((e) => e.stage.event || e.stage.rec || (!split && e.stage.nope))) {
+    const res = await batchWithRepair(env, sdb, build);
+    const changed = (i) => { const r = res && res[i]; return r && r.meta && typeof r.meta.changes === "number" ? r.meta.changes : 1; };
+    for (const { e, at } of refs) {
+      e.stage.event = false;
+      if (e.guarded && changed(at) === 0) e.lost = true;
+    }
+    for (const r of recs) {
+      const applied = changed(r.at) > 0;
+      for (const e of r.group) e.stage.rec = !applied && !e.lost;
+    }
+    if (!split) for (const e of entries) if (e.stage.nope) { e.stage.nope = false; if (!e.lost) state.nopeLive.set(e.pubkey, e.mute.until); }
+  }
+  for (const e of entries) if (e.lost) { e.stage.rec = false; e.stage.nope = false; e.stage.chan = false; }
+  const mutes = split ? entries.filter((e) => e.stage.nope && !e.lost) : [];
+  if (mutes.length) {
+    await batchWithRepair(env, env.DB_NOPE, () => mutes.flatMap((e) => muteStatements(env.DB_NOPE, e, false)));
+    for (const e of mutes) { e.stage.nope = false; state.nopeLive.set(e.pubkey, e.mute.until); }
+  }
+  const gone = entries.filter((e) => e.stage.chan && !e.lost);
+  for (let i = 0; i < gone.length; i += CHANNEL_DELETE_CHUNK) {
+    const chunk = gone.slice(i, i + CHANNEL_DELETE_CHUNK);
+    await env.DB_CHANNELS.prepare("DELETE FROM events WHERE id IN (" + chunk.map(() => "?").join(", ") + ")").bind(...chunk.map((e) => e.id)).run();
+    for (const e of chunk) e.stage.chan = false;
+  }
+  return entries;
+}
+
+function entryDone(e) {
+  return !e.stage.event && !e.stage.rec && !e.stage.nope && !e.stage.chan;
+}
+
+function forgetRow(e) {
+  if (state.wrows.get(e.id) === e.ev) state.wrows.delete(e.id);
+}
+
+function noteWriteError(e) {
+  state.counters.writeErrors++;
+  state.lastWriteError = String(e && e.message || e).slice(0, 300);
+  state.lastWriteErrorAt = Date.now();
+}
+
+function enqueueWrite(env, context, entry) {
+  state.wenv = env;
+  if (context) state.wcontext = context;
+  const known = state.wrows.get(entry.id);
+  if (known && known !== entry.ev && !entry.report && entry.stage.event) return;
+  if (!state.wbuf.includes(entry)) state.wbuf.push(entry);
+  state.wrows.set(entry.id, entry.ev);
+  while (state.wbuf.length > BUFFER_MAX) {
+    const old = state.wbuf.shift();
+    forgetRow(old);
+    state.counters.writeDropped++;
+  }
+  if (state.wbuf.length >= FLUSH_ROWS) { kickFlush(env, context, false); return; }
+  if (!state.wtimer) state.wtimer = setTimeout(() => { state.wtimer = null; kickFlush(state.wenv, state.wcontext, true); }, FLUSH_MS);
+}
+
+function kickFlush(env, context, all) {
+  const p = flushSpamWrites(env, { all });
+  if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
+  return p;
+}
+
+async function flushRound(env, all) {
+  if (all && state.wtimer) { clearTimeout(state.wtimer); state.wtimer = null; }
+  if (!env) return;
+  while (state.wbuf.length && (all || state.wbuf.length >= FLUSH_ROWS)) {
+    const chunk = state.wbuf.splice(0, FLUSH_ROWS);
+    try {
+      await writeEntries(env, chunk);
+    } catch (e) {
+      noteWriteError(e);
+      const keep = [];
+      for (const x of chunk) {
+        if (++x.attempts > WRITE_RETRIES) { forgetRow(x); state.counters.writeDropped++; continue; }
+        keep.push(x);
+      }
+      state.wbuf.unshift(...keep);
+      state.counters.writeRetries += keep.length;
+      if (!state.wtimer && state.wbuf.length) state.wtimer = setTimeout(() => { state.wtimer = null; kickFlush(state.wenv, state.wcontext, true); }, FLUSH_MS);
+      return;
+    }
+    state.counters.flushes++;
+    const again = [];
+    for (const x of chunk) {
+      if (x.lost) await afterLostRace(env, x);
+      if (entryDone(x)) forgetRow(x);
+      else again.push(x);
+    }
+    if (again.length) {
+      state.wbuf.push(...again);
+      if (!state.wtimer) state.wtimer = setTimeout(() => { state.wtimer = null; kickFlush(state.wenv, state.wcontext, true); }, FLUSH_MS);
+    }
+  }
+}
+
+export function flushSpamWrites(env, opts) {
+  const all = !(opts && opts.all === false);
+  const run = () => flushRound(env || state.wenv, all).catch((e) => noteWriteError(e));
+  const p = state.wflush.then(run, run);
+  state.wflush = p;
+  return p;
+}
+
+async function peerRow(env, id) {
+  try {
+    return await spamDb(env).prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(id).first();
+  } catch (_) { return null; }
+}
+
+async function afterLostRace(env, e) {
+  state.counters.raced++;
+  const row = await peerRow(env, e.id);
+  if (!row) return;
+  const restored = state.restored.has(e.id);
+  const peerDrops = !restored && row.label !== "ok" && verdictOf(row) === "spam" && /event-hidden/.test(row.action || "");
+  if (peerDrops && !e.drop) {
+    lateDrop(e.id);
+    hideLocally(e.id);
+  }
+}
+
+function rememberSettled(id, pend) {
+  state.settled.set(id, { waiters: pend.waiters, at: Date.now() });
+  trimMap(state.settled, SETTLED_MAX);
+}
+
+function lateDrop(id) {
+  const s = state.settled.get(id);
+  if (!s) return;
+  state.settled.delete(id);
+  if (Date.now() - s.at > SETTLED_TTL_MS) return;
+  for (const w of s.waiters) {
+    if (!w.released || w.retracted) continue;
+    w.retracted = true;
+    state.counters.retracted++;
+    try { if (typeof w.retract === "function") w.retract(); } catch (_) { }
+  }
+}
+
+function applyLocally(job, p, entry, buffered, env, context) {
+  if (p.enforcing) {
+    noteDropped(job.id);
+    if (job.settings.blockEvents) hideLocally(job.id);
+  }
+  if (p.plan && p.plan.muteNow) {
+    muteLocally(job.pubkey, p.plan.until);
+    state.counters.muted++;
+    if (buffered) coordNoteMute(env, context, job.pubkey, p.plan.until);
+  }
+  if (p.strong && verdictReusable(job.fp)) noteCampaign(job.fp.simKey, job.pubkey);
+  if (buffered) {
+    state.records.set(job.pubkey, { rec: entry.recAfter, at: Date.now() });
+    trimMap(state.records, MUTED_MAX);
+  }
+}
+
+function auditResult(job, v, dossier, p, entry) {
+  return { verdict: v, action: p.action, strikes: p.strikes, score: entry.rec.score, similar: (dossier.similar || []).length, similarPubkeys: dossier.similarPubkeys || 0, similarNyms: (dossier.nymMatches || []).length, nymSpam: dossier.nymSpam || 0, signals: job.signals };
+}
+
+async function conclude(env, job, v, dossier, hooks) {
+  const p = verdictPlan(job, v, dossier);
+  const entry = writeEntry(env, job, v, dossier, p);
+  const buffered = !!(hooks && hooks.buffered);
+  if (buffered) {
+    applyLocally(job, p, entry, true, env, hooks.context);
+    if (typeof hooks.onVerdict === "function") { try { hooks.onVerdict(p.enforcing, v); } catch (_) { } }
+    enqueueWrite(env, hooks.context, entry);
+    const put = edgeCachePut("pubkey/" + job.pubkey, { rec: entry.recAfter }, RECORD_CACHE_S);
+    if (hooks.context && typeof hooks.context.waitUntil === "function") { try { hooks.context.waitUntil(put); } catch (_) { } }
+    return auditResult(job, v, dossier, p, entry);
+  }
+  try {
+    await writeEntries(env, [entry]);
+  } catch (e) {
+    noteWriteError(e);
+    enqueueWrite(env, hooks && hooks.context, entry);
+  }
+  if (entry.lost) {
+    state.counters.raced++;
+    const row = await peerRow(env, job.id);
+    if (row) return adoptPeer(row, job);
+    return { verdict: v, action: "ok", strikes: 0, score: 0, similar: 0, similarPubkeys: 0, similarNyms: 0, nymSpam: 0, peer: true };
+  }
+  if (entryDone(entry)) forgetRow(entry);
+  else if (!state.wbuf.includes(entry)) enqueueWrite(env, hooks && hooks.context, entry);
+  applyLocally(job, p, entry, false);
+  if (hooks && typeof hooks.onVerdict === "function") { try { hooks.onVerdict(p.enforcing, v); } catch (_) { } }
+  await edgeCachePut("pubkey/" + job.pubkey, { rec: entry.recAfter }, RECORD_CACHE_S);
+  return auditResult(job, v, dossier, p, entry);
 }
 
 async function rememberDomains(db, job, verdict) {
@@ -1506,37 +2091,6 @@ function planEnforcement(job, v, dossier, strikes) {
   const note = clip(v.reason, 300) + "\nnym: " + (job.nym || "?") + " · channel: " + (job.channel || "?") + "\n" + clip(job.content, 240);
   actions.push("muted");
   return { actions, muteNow: true, until, reason, note, strikes, campaign };
-}
-
-async function applyEnforcement(env, job, plan) {
-  const s = job.settings;
-  const db = env.DB_NOPE;
-  const now = job.seenAt;
-  noteDropped(job.id);
-  if (s.blockEvents) {
-    hideLocally(job.id);
-    if (hasD1(env.DB_CHANNELS)) {
-      try { await env.DB_CHANNELS.prepare("DELETE FROM events WHERE id = ?").bind(job.id).run(); } catch (_) { }
-    }
-  }
-  if (!plan.muteNow) return plan.actions;
-  try {
-    await db.prepare("INSERT INTO nope (kind, value, mode, reason, note, created_at, created_by, expires_at) VALUES ('pubkey', ?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT(kind, value) DO UPDATE SET mode = CASE WHEN nope.created_by = ? THEN excluded.mode ELSE nope.mode END, " +
-      "expires_at = CASE WHEN nope.created_by = ? THEN excluded.expires_at ELSE nope.expires_at END, " +
-      "reason = CASE WHEN nope.created_by = ? THEN excluded.reason ELSE nope.reason END, note = CASE WHEN nope.created_by = ? THEN excluded.note ELSE nope.note END")
-      .bind(job.pubkey, s.mode, plan.reason, plan.note, now, SPAM_ACTOR, plan.until, SPAM_ACTOR, SPAM_ACTOR, SPAM_ACTOR, SPAM_ACTOR).run();
-    await db.prepare("UPDATE spam_pubkeys SET muted_until = ? WHERE pubkey = ?").bind(plan.until, job.pubkey).run();
-    try {
-      await db.prepare("INSERT INTO audit (at, actor, action, kind, value, detail) VALUES (?, ?, 'spam.mute', 'pubkey', ?, ?)")
-        .bind(now, SPAM_ACTOR, job.pubkey, JSON.stringify({ reason: plan.reason, until: plan.until, event: job.id, channel: job.channel, nym: job.nym, strikes: plan.strikes, campaign: plan.campaign })).run();
-    } catch (_) { }
-    muteLocally(job.pubkey, plan.until);
-    state.counters.muted++;
-    return plan.actions;
-  } catch (e) {
-    return plan.actions.map((a) => (a === "muted" ? "mute-failed" : a));
-  }
 }
 
 export function nymIsOnlyEvidence(job, dossier, v) {
@@ -1624,36 +2178,62 @@ export async function auditNow(env, job, hooks) {
       rememberExact(job.fp, v, now);
     }
   }
-  const strong = v.spam && v.confidence >= settings.minConfidence;
-  const enforceable = !review || reviewEvidenceStrong(v, settings, dossier);
-  const enforcing = !!(strong && settings.autoEnforce && enforceable);
-  const strikes = strikesAfter(dossier, strong && enforceable);
-  const plan = enforcing ? planEnforcement(job, v, dossier, strikes) : null;
-  let action = plan ? plan.actions.join(",") : (v.spam ? (strong ? "flagged" : "suspect") : "ok");
-  const persisted = await persist(env, job, v, dossier, action, strikes);
-  if (persisted.lost) {
-    state.counters.raced++;
-    let row = null;
-    try { row = await env.DB_NOPE.prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(job.id).first(); } catch (_) { row = null; }
-    if (row) return adoptPeer(row, job);
-    return { verdict: v, action: "ok", strikes: 0, score: 0, similar: 0, similarPubkeys: 0, similarNyms: 0, nymSpam: 0, peer: true };
-  }
-  if (enforcing) {
-    noteDropped(job.id);
-    if (settings.blockEvents) hideLocally(job.id);
-  }
-  if (hooks && typeof hooks.onVerdict === "function") {
-    try { hooks.onVerdict(enforcing, v); } catch (_) { }
-  }
-  await persistRecord(env, job, v, dossier, strikes, persisted.score);
-  if (plan) {
-    const done = (await applyEnforcement(env, job, plan)).join(",");
-    if (done !== action) {
-      action = done;
-      try { await env.DB_NOPE.batch([env.DB_NOPE.prepare("UPDATE spam_events SET action = ? WHERE id = ?").bind(action, job.id), env.DB_NOPE.prepare(HIDE_SYNC_SQL).bind(job.id)]); } catch (_) { }
+  const rec = dossier.record;
+  if (!job.force && rec && Number(rec.muted_until) > now && muteLive(job.pubkey, rec, now) && !isSpamMuted(job.pubkey, now)) muteLocally(job.pubkey, Number(rec.muted_until));
+  return conclude(env, job, v, dossier, hooks);
+}
+
+async function cachedRecord(pubkey) {
+  const o = state.records.get(pubkey);
+  if (o && Date.now() - o.at < RECORD_CACHE_S * 1000) return o.rec;
+  const hit = await edgeCacheGet("pubkey/" + pubkey);
+  if (hit && typeof hit === "object" && "rec" in hit) return hit.rec || null;
+  return null;
+}
+
+async function liteRecord(env, context, job, cached) {
+  try {
+    const now = job.seenAt;
+    if (!job.fp) job.fp = fingerprint(job.content);
+    if (job.nymKey == null) job.nymKey = nymKey(job.nym);
+    if (!job.nonces) job.nonces = nonceTokens(job.content);
+    if (job.domains == null) job.domains = extractDomains(job.content);
+    let claimed = false;
+    if (coordOf(env) && !job.coordClaimed && !job.force && job.source !== "report") {
+      const c = await coordClaim(env, Object.assign({}, job, { settings: Object.assign({}, job.settings || state.settings, { autoEnforce: false }) }));
+      if (c && (c.status === "pending" || c.status === "judged")) return null;
+      claimed = !!c;
+      job.coordClaimed = claimed;
     }
+    const rec = await cachedRecord(job.pubkey);
+    if (cached && cleanHistory(rec)) {
+      state.queue.push(job);
+      pump(env, context);
+      return;
+    }
+    const others = cached ? campaignOthers(job.fp.simKey, job.pubkey) : 0;
+    const dossier = { self: null, record: rec, cleanHistory: cleanHistory(rec), recent: [], similar: [], similarPubkeys: others, similarSpam: others, similarSpamPubkeys: others, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
+    job.pubkeyUnknown = !rec;
+    if (job.badge == null) job.badge = badgeTier(env, job, now);
+    job.conv = conversationSignals(job);
+    job.signals = buildSignals(job, dossier);
+    let v;
+    if (cached) {
+      v = Object.assign({}, cached, { model: "cache", reason: "same text already judged spam: " + cached.reason });
+      state.counters.cached++;
+    } else {
+      v = { spam: true, confidence: 1, category: "muted-sender", language: "", model: "rule", reason: "the sender was muted while this message waited for its audit" };
+      state.counters.rules++;
+    }
+    state.counters.lite++;
+    const res = await conclude(env, job, v, dossier, { buffered: true, context });
+    if (claimed) coordPublish(env, context, job, res);
+    return res;
+  } catch (e) {
+    state.counters.errors++;
+    state.lastError = String(e && e.message || e).slice(0, 300);
+    state.lastErrorAt = Date.now();
   }
-  return { verdict: v, action, strikes, score: persisted.score, similar: dossier.similar.length, similarPubkeys: dossier.similarPubkeys, similarNyms: dossier.nymMatches.length, nymSpam: dossier.nymSpam, signals: job.signals };
 }
 
 export function reviewEvidenceStrong(v, settings, dossier) {
@@ -1720,20 +2300,25 @@ function evictReleased() {
   return false;
 }
 
-function coalesce(job) {
+function coalesce(env, context, job) {
   const s = job.settings || state.settings;
   if (!s || !s.autoEnforce) return;
   const sameText = verdictReusable(job.fp) && !innocuousKind(job.content) && exactVerdict(job.fp.simKey, Date.now());
   const textKey = sameText && sameText.spam && sameText.confidence >= s.minConfidence ? job.fp.simKey : 0;
   const mutedSender = isSpamMuted(job.pubkey, Date.now()) ? job.pubkey : "";
   if (!textKey && !mutedSender) return;
-  for (const q of state.queue) {
-    if (!(textKey && q.fp && q.fp.simKey === textKey) && !(mutedSender && q.pubkey === mutedSender)) continue;
-    if (!state.pending.has(q.id) || state.restored.has(q.id)) continue;
+  for (let i = state.queue.length - 1; i >= 0; i--) {
+    const q = state.queue[i];
+    const byText = !!(textKey && q.fp && q.fp.simKey === textKey);
+    if (!byText && !(mutedSender && q.pubkey === mutedSender)) continue;
+    if (state.restored.has(q.id)) continue;
+    state.queue.splice(i, 1);
     noteDropped(q.id);
     if (s.blockEvents) hideLocally(q.id);
-    settle(q.id, true);
+    if (state.pending.has(q.id)) settle(q.id, true);
     state.counters.coalesced++;
+    const work = liteRecord(env, context, q, byText ? sameText : null);
+    if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
   }
 }
 
@@ -1776,6 +2361,51 @@ function claimable(job) {
   return !job.force && job.source !== "report" && !job.claimChecked;
 }
 
+async function coordRoute(env, context, job, generation) {
+  const c = await coordClaim(env, job);
+  if (!c) return "fallback";
+  if (c.status === "mine") {
+    job.coordClaimed = true;
+    job.coordFresh = !!c.fresh;
+    return "audit";
+  }
+  if (c.status === "pending") return "pending";
+  const s = job.settings || state.settings;
+  if (c.status === "judged" && c.row) {
+    state.counters.coordJudged++;
+    const res = adoptPeer(c.row, job);
+    settle(job.id, verdictDrops(job, res));
+    coalesce(env, context, job);
+    return "done";
+  }
+  if (c.status === "muted" && Number(c.until) > Date.now()) {
+    state.counters.coordMuted++;
+    job.coordClaimed = true;
+    muteLocally(job.pubkey, Number(c.until));
+    noteDropped(job.id);
+    if (s && s.blockEvents) hideLocally(job.id);
+    settle(job.id, true);
+    coalesce(env, context, job);
+    coordPublish(env, context, job, await liteRecord(env, context, job, null));
+    return "done";
+  }
+  if (c.status === "known" && c.verdict && coordKnownAllowed(job) && Number(c.verdict.confidence) >= s.minConfidence) {
+    state.counters.coordKnown++;
+    job.coordClaimed = true;
+    const known = { spam: true, confidence: Number(c.verdict.confidence) || 0, category: c.verdict.category || "spam", reason: c.verdict.reason || "", model: c.verdict.model || "", at: Date.now() };
+    rememberExact(job.fp, known, job.seenAt || Date.now());
+    state.campaignFleet.set(job.fp.simKey, Math.min(Number(c.others) || 0, CAMPAIGN_PUBKEYS_MAX));
+    trimMap(state.campaignFleet, CAMPAIGN_KEYS_MAX);
+    noteDropped(job.id);
+    if (s && s.blockEvents) hideLocally(job.id);
+    settle(job.id, true);
+    coalesce(env, context, job);
+    coordPublish(env, context, job, await liteRecord(env, context, job, known));
+    return "done";
+  }
+  return "fallback";
+}
+
 async function claimAudit(id) {
   const held = await edgeCacheGet(claimKey(id));
   if (held && held.token && held.token !== INSTANCE_TOKEN && Date.now() - (Number(held.at) || 0) < CLAIM_TTL_S * 1000) return false;
@@ -1812,7 +2442,7 @@ async function followPeer(env, context, job, generation) {
   if (out && out.row) {
     const res = adoptPeer(out.row, job);
     settle(job.id, verdictDrops(job, res));
-    coalesce(job);
+    coalesce(env, context, job);
     return;
   }
   if (out && out.skipped) {
@@ -1827,15 +2457,26 @@ async function runJob(env, context, job, generation) {
   let mine = false;
   if (claimable(job)) {
     job.claimChecked = true;
-    if (!(await claimAudit(job.id))) return followPeer(env, context, job, generation);
-    mine = true;
+    const route = coordOf(env) && !job.coordSkip ? await coordRoute(env, context, job, generation) : "fallback";
+    if (route === "done") {
+      try { await noteStatus(env); } catch (_) { }
+      maybePushCounters(env, context);
+      freeJobSlot(job, generation);
+      pump(env, context);
+      return;
+    }
+    if (route === "pending") return followCoord(env, context, job, generation, shardOf(env, job));
+    if (route === "fallback" && !job.coordSkip) {
+      if (!(await claimAudit(job.id))) return followPeer(env, context, job, generation);
+      mine = true;
+    }
   }
   let res = null;
   try {
-    res = await auditNow(env, job, { onVerdict(drop) { settle(job.id, drop); if (drop) coalesce(job); } });
+    res = await auditNow(env, job, { buffered: true, context, onVerdict(drop) { settle(job.id, drop); if (drop) coalesce(env, context, job); } });
     state.lastAuditAt = Date.now();
     settle(job.id, verdictDrops(job, res));
-    coalesce(job);
+    coalesce(env, context, job);
   } catch (e) {
     state.counters.errors++;
     state.lastError = String(e && e.message || e).slice(0, 300);
@@ -1844,7 +2485,9 @@ async function runJob(env, context, job, generation) {
     settle(job.id, false);
   }
   if (mine) { try { await publishOutcome(job, res); } catch (_) { } }
+  if (job.coordClaimed) coordPublish(env, context, job, res);
   try { await noteStatus(env); } catch (_) { }
+  maybePushCounters(env, context);
   freeJobSlot(job, generation);
   pump(env, context);
 }
@@ -1874,7 +2517,10 @@ const DEVELOPER_MUTE_MARK_MS = 10 * 365 * 86400000;
 async function enforceDeveloperReport(env, settings, r) {
   const now = r.now;
   const db = env.DB_NOPE;
-  await ensureSchema(db);
+  const sdb = spamDb(env);
+  const split = spamSplit(env);
+  await ensureSchema(sdb, spamSchemaKey(env));
+  await ensureConfigSchema(env);
   const channels = replica(env.DB_CHANNELS);
   let rows = [];
   try {
@@ -1899,14 +2545,20 @@ async function enforceDeveloperReport(env, settings, r) {
     if (!job || job.pubkey !== targetPubkey) continue;
     try {
       job.domains = extractDomains(job.content);
-      await db.batch([db.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, domains, label, labeled_by) " +
+      const stmts = [sdb.prepare("INSERT INTO spam_events (id, pubkey, nym, channel, kind, content, sim_key, b0, b1, b2, b3, created_at, seen_at, verdict, confidence, category, reason, model, action, source, local_score, nym_key, domains, label, labeled_by) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'spam', 1, 'reported', ?, 'developer', 'event-hidden,muted', 'report', 0, ?, ?, 'spam', 'developer') " +
         "ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = 'spam', confidence = 1, category = 'reported', reason = excluded.reason, model = 'developer', action = 'event-hidden,muted', source = 'report', domains = excluded.domains, label = 'spam', labeled_by = 'developer'")
         .bind(job.id, job.pubkey, clip(job.nym, 80) || null, clip(job.channel, 80) || null, job.kind, clip(job.content, 4000), job.fp ? job.fp.simKey : fingerprint(job.content).simKey,
           null, null, null, null, job.createdAt || now, now, reason, nymKey(job.nym) || null, job.domains.length ? job.domains.join(",") : null),
-        db.prepare(HIDE_SYNC_SQL).bind(job.id),
-        db.prepare(UNRESTORE_SQL).bind(job.id, SPAM_RESTORED_KEY, "%" + job.id + "%")]);
-      await rememberDomains(db, job, "spam");
+        sdb.prepare(HIDE_SYNC_SQL).bind(job.id)];
+      const unrestore = db.prepare(UNRESTORE_SQL).bind(job.id, SPAM_RESTORED_KEY, "%" + job.id + "%");
+      if (split) {
+        await sdb.batch(stmts);
+        await unrestore.run();
+      } else {
+        await db.batch(stmts.concat([unrestore]));
+      }
+      await rememberDomains(sdb, job, "spam");
       await dropExamples();
     } catch (_) { }
     state.restored.delete(job.id);
@@ -1926,10 +2578,12 @@ async function enforceDeveloperReport(env, settings, r) {
       "expires_at = CASE WHEN nope.created_by = ? THEN 0 ELSE nope.expires_at END, " +
       "reason = CASE WHEN nope.created_by = ? THEN excluded.reason ELSE nope.reason END, note = CASE WHEN nope.created_by = ? THEN excluded.note ELSE nope.note END")
       .bind(targetPubkey, mode, reason, note, now, SPAM_ACTOR, SPAM_ACTOR, SPAM_ACTOR, SPAM_ACTOR, SPAM_ACTOR).run();
-    await db.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason, muted_until) VALUES (?, ?, ?, 1, 1, 0, 1, 1, ?, ?, ?, ?) " +
+    await sdb.prepare("INSERT INTO spam_pubkeys (pubkey, first_seen, last_seen, audits, spam, ham, strikes, score, channels, nyms, last_reason, muted_until) VALUES (?, ?, ?, 1, 1, 0, 1, 1, ?, ?, ?, ?) " +
       "ON CONFLICT(pubkey) DO UPDATE SET last_seen = excluded.last_seen, audits = audits + 1, spam = spam + 1, strikes = strikes + 1, score = score + 1, last_reason = excluded.last_reason, muted_until = excluded.muted_until")
       .bind(targetPubkey, now, now, first ? clip(first.channel, 80) : null, first ? clip(first.nym, 80) : null, reason, now + DEVELOPER_MUTE_MARK_MS).run();
     await edgeCacheDelete("pubkey/" + targetPubkey);
+    state.records.delete(targetPubkey);
+    state.nopeLive.set(targetPubkey, now + DEVELOPER_MUTE_MARK_MS);
     try {
       await db.prepare("INSERT INTO audit (at, actor, action, kind, value, detail) VALUES (?, ?, 'spam.mute', 'pubkey', ?, ?)")
         .bind(now, SPAM_ACTOR, targetPubkey, JSON.stringify({ reason, until: 0, event: r.targetEvent, hidden, developer: true })).run();
@@ -1949,7 +2603,7 @@ async function reporterEstablished(env, ev, reporter, now) {
     if (tier === "attested" || tier === "challenged") return true;
   }
   try {
-    const rec = await replica(env.DB_NOPE).prepare("SELECT first_seen, ham, spam, strikes FROM spam_pubkeys WHERE pubkey = ?").bind(reporter).first();
+    const rec = await replica(spamDb(env)).prepare("SELECT first_seen, ham, spam, strikes FROM spam_pubkeys WHERE pubkey = ?").bind(reporter).first();
     if (rec && Number(rec.spam) === 0 && Number(rec.strikes) === 0 && Number(rec.ham) >= REPORTER_MIN_HAM && Number(rec.first_seen) <= now - REPORTER_MIN_AGE_MS) return true;
   } catch (_) { }
   try {
@@ -2026,7 +2680,7 @@ export async function reviewSpamReport(env, ev, opts) {
       if (await reporterEstablished(env, { tags: [] }, other, now)) reporters++;
     }
   } catch (_) { }
-  const nope = replica(env.DB_NOPE);
+  const nope = replica(spamDb(env));
   const results = [];
   for (const row of rows) {
     let prior = null;
@@ -2077,6 +2731,10 @@ export function spamEngine(env, context) {
       if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
     },
     isHidden(id) { return state.hidden.has(id); },
+    flush() {
+      if (!state.wbuf.length) return Promise.resolve();
+      return kickFlush(env, context, true);
+    },
     isMuted(pubkey) { return typeof pubkey === "string" && isSpamMuted(pubkey.toLowerCase()); },
     inspect(job) {
       const s = state.settings;
@@ -2117,16 +2775,13 @@ export function spamEngine(env, context) {
         noteDropped(job.id);
         if (s.blockEvents) hideLocally(job.id);
         state.counters.dropped++;
+        const work = liteRecord(env, context, queued, known);
+        if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
+        return "drop";
       }
       if (state.queue.length >= MAX_QUEUE && !evictReleased()) {
-        if (known) return "drop";
         state.counters.overflow++;
         return "pass";
-      }
-      if (known) {
-        state.queue.push(queued);
-        pump(env, context);
-        return "drop";
       }
       state.queue.push(queued);
       state.counters.queued++;

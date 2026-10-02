@@ -58,7 +58,7 @@ bool anchorBotReply(List<Message> list, Message reply) {
 
 enum BotRunState { running, claiming, waiting, capped }
 
-enum BotRunNoteKind { stopped, error, capFree, failed, steerLate }
+enum BotRunNoteKind { stopped, error, capFree, failed, steerLate, steerOffer }
 
 enum BotSteerOutcome { ok, finished, answering, tooLong, retry, empty }
 
@@ -349,10 +349,16 @@ class BotRunsEngine {
       for (final id in missedIds is List ? missedIds : const [])
         if (id is String && run.steers.containsKey(id)) run.steers[id]!,
     ];
+    final offerRaw = data['steerOffer'];
+    final offerText = offerRaw is Map && offerRaw['text'] is String
+        ? (offerRaw['text'] as String).trim()
+        : '';
     _end(run);
     if (missed.isNotEmpty && data['stopped'] != true) {
       _note(run,
           BotRunNote(BotRunNoteKind.steerLate, steerText: missed.join('\n\n')));
+    } else if (offerText.isNotEmpty && data['stopped'] != true) {
+      _note(run, BotRunNote(BotRunNoteKind.steerOffer, steerText: offerText));
     }
     await onDelivered(run, data);
   }

@@ -6,7 +6,7 @@ const NOPE_CACHE_KEY = "nope";
 const HEX64 = /^[0-9a-f]{64}$/;
 const REPORT_TARGET_JSON_MAX = 16384;
 
-const NOPE_DDL = [
+export const NOPE_DDL = [
   "CREATE TABLE IF NOT EXISTS nope (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, value TEXT NOT NULL, " +
   "mode TEXT NOT NULL DEFAULT 'shadow', reason TEXT, note TEXT, created_at INTEGER NOT NULL, created_by TEXT, " +
   "expires_at INTEGER NOT NULL DEFAULT 0, report_id TEXT, UNIQUE (kind, value))",

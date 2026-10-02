@@ -411,7 +411,10 @@ class BotChatController extends StateNotifier<BotChatState> {
   Future<void> sendSteerNote(String id) async {
     final note = runsEngine.notes[id.toLowerCase()];
     final text = note?.steerText;
-    if (note == null || note.kind != BotRunNoteKind.steerLate || text == null) {
+    if (note == null ||
+        (note.kind != BotRunNoteKind.steerLate &&
+            note.kind != BotRunNoteKind.steerOffer) ||
+        text == null) {
       return;
     }
     runsEngine.dismissNote(id);
