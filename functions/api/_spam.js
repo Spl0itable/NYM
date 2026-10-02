@@ -49,6 +49,8 @@ export const SPAM_DDL = [
 ];
 
 export const SPAM_SCHEMA_VERSION = 2;
+export const SPAM_ENGINE_VERSION = 2;
+export const SPAM_STATUS_VERSION_PREFIX = "status:v";
 const SPAM_SCHEMA_KEY = "schema:worker";
 
 export const SPAM_SETTINGS_KEY = "settings";
@@ -755,7 +757,7 @@ const state = {
   countersAt: 0,
   lastWriteError: null,
   lastWriteErrorAt: 0,
-  counters: { inspected: 0, unbadged: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0, lowTrust: 0, overBudgetDropped: 0, unverified: 0, lite: 0, flushes: 0, writeErrors: 0, writeRetries: 0, writeDropped: 0, coordClaims: 0, coordJudged: 0, coordKnown: 0, coordMuted: 0, coordPending: 0, coordErrors: 0, coordTimeouts: 0 }
+  counters: { inspected: 0, unbadged: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0, lowTrust: 0, overBudgetDropped: 0, unverified: 0, lite: 0, remuted: 0, recordMuted: 0, flushes: 0, writeErrors: 0, writeRetries: 0, writeDropped: 0, coordClaims: 0, coordJudged: 0, coordKnown: 0, coordMuted: 0, coordPending: 0, coordWaits: 0, coordErrors: 0, coordTimeouts: 0, coordSlow: 0, coordSkipped: 0, coordProbes: 0, coordBreakerOpens: 0, coordBreakerOpenMs: 0 }
 };
 
 export function _resetSpamState() {
@@ -774,6 +776,7 @@ export function _resetSpamState() {
   state.configReady = false; state.auditMissing = false; state.lastWriteError = null; state.lastWriteErrorAt = 0;
   if (state.coordMuteTimer) clearTimeout(state.coordMuteTimer);
   state.coordMutes = []; state.coordMuteTimer = null; state.countersSent = {}; state.countersAt = 0;
+  resetBreaker();
   for (const k of Object.keys(state.counters)) state.counters[k] = 0;
   badgeTierCache.clear();
   badgeAuthority = undefined;
@@ -879,32 +882,54 @@ async function noteStatus(env) {
   if (!hasD1(db)) return;
   try {
     await ensureConfigSchema(env);
-    const fleet = coordOf(env) ? await coordCall(env, COUNTERS_NAME, { op: "fleet" }, COORD_STATUS_TIMEOUT_MS) : null;
-    await db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .bind(JSON.stringify({
-        at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
+    const fleet = coordWouldCall(env, false) ? await coordCall(env, COUNTERS_NAME, { op: "fleet" }, { timeoutMs: COORD_STATUS_TIMEOUT_MS }) : null;
+    await db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?), (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify({
+        engine: SPAM_ENGINE_VERSION, at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
         lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length,
         cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
         badgeGate: state.settings ? state.settings.requireBadge || "off" : "unloaded", authority: !!authorityPubkey(env),
-        counters: Object.assign({}, state.counters), fleet: fleet && fleet.totals ? fleet : undefined
-      })).run();
+        counters: countersNow(Date.now()), fleet: fleet && fleet.totals ? fleet : undefined, coordinator: coordHealth(env, Date.now())
+      }), SPAM_STATUS_VERSION_PREFIX + SPAM_ENGINE_VERSION, JSON.stringify({ engine: SPAM_ENGINE_VERSION, at: now })).run();
   } catch (_) { }
 }
 
 export const _noteStatus = noteStatus;
 export function _forceStatus() { state.statusAt = 0; }
 
-export function spamCounters() { return Object.assign({}, state.counters); }
+export function spamCounters() { return countersNow(Date.now()); }
 
 const COORD_SHARDS_DEFAULT = 16;
-const COORD_POLL_MS = 150;
 const COORD_STATUS_TIMEOUT_MS = 1000;
-const COUNTER_PUSH_MS = 5000;
+const COORD_BACKGROUND_TIMEOUT_MS = 1000;
+const COUNTER_PUSH_MS = 60000;
 const COUNTERS_NAME = "counters";
-const COORD_MUTE_BATCH_MS = 100;
+const COORD_MUTE_BATCH_MS = 500;
+const COORD_MUTE_BATCH_MAX = 500;
+const COORD_BUDGET_MIN_MS = 100;
+const COORD_BUDGET_MAX_MS = 400;
+const COORD_BUDGET_SHARE = 0.08;
+const COORD_WAIT_GAPS_MS = [400, 800];
+const COORD_WAIT_MARGIN_MS = 300;
+const COORD_LOCATIONS = new Set(["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"]);
+const BREAKER_FAILS = 3;
+const BREAKER_WINDOW_MS = 10000;
+const BREAKER_WINDOW_MIN = 6;
+const BREAKER_FAIL_RATE = 0.5;
+const BREAKER_RECENT_MAX = 64;
+const BREAKER_COOLDOWN_MS = 60000;
+const BREAKER_COOLDOWN_MAX_MS = 600000;
 const COORD_TIMEOUT = Symbol("timeout");
-let COORD_TIMEOUT_MS = 250;
-export function _setCoordTimeoutMs(ms) { COORD_TIMEOUT_MS = ms; }
+let COORD_BUDGET_OVERRIDE_MS = 0;
+let BREAKER_COOLDOWN_BASE_MS = BREAKER_COOLDOWN_MS;
+export function _setCoordTimeoutMs(ms) { COORD_BUDGET_OVERRIDE_MS = ms; }
+export function _setCoordCooldownMs(ms) { BREAKER_COOLDOWN_BASE_MS = ms || BREAKER_COOLDOWN_MS; breaker.cooldownMs = BREAKER_COOLDOWN_BASE_MS; }
+
+const breaker = { fails: 0, recent: [], openUntil: 0, openedAt: 0, cooldownMs: BREAKER_COOLDOWN_MS, probing: false };
+
+function resetBreaker() {
+  breaker.fails = 0; breaker.recent = []; breaker.openUntil = 0; breaker.openedAt = 0;
+  breaker.cooldownMs = BREAKER_COOLDOWN_BASE_MS; breaker.probing = false;
+}
 
 function coordOf(env) {
   const ns = env && env.SPAM_COORD;
@@ -916,32 +941,142 @@ function coordShards(env) {
   return n >= 1 && n <= 256 ? n : COORD_SHARDS_DEFAULT;
 }
 
+function coordLocation(env) {
+  const hint = String((env && env.SPAM_COORD_LOCATION) || "").trim().toLowerCase();
+  return COORD_LOCATIONS.has(hint) ? hint : "";
+}
+
 function shardOf(env, job) {
   const key = job.fp && job.fp.simKey ? "s" + job.fp.simKey : "i" + job.id;
   return "shard-" + (hash32(key) % coordShards(env));
 }
 
-async function coordCall(env, name, body, timeoutMs) {
+export function coordBudget(settings) {
+  if (COORD_BUDGET_OVERRIDE_MS > 0) return COORD_BUDGET_OVERRIDE_MS;
+  const hold = settings && Number(settings.holdMs) > 0 ? Number(settings.holdMs) : 5000;
+  return Math.round(Math.min(COORD_BUDGET_MAX_MS, Math.max(COORD_BUDGET_MIN_MS, hold * COORD_BUDGET_SHARE)));
+}
+
+function coordWouldCall(env, critical) {
+  if (!coordOf(env)) return false;
+  if (!breaker.openUntil) return true;
+  return !!critical && !breaker.probing && Date.now() >= breaker.openUntil;
+}
+
+function coordGate(env, critical) {
   const ns = coordOf(env);
   if (!ns) return null;
+  if (!breaker.openUntil) return { ns, probe: false };
+  if (critical && !breaker.probing && Date.now() >= breaker.openUntil) {
+    breaker.probing = true;
+    state.counters.coordProbes++;
+    return { ns, probe: true };
+  }
+  state.counters.coordSkipped++;
+  return null;
+}
+
+function openBreaker(now) {
+  if (!breaker.openedAt) breaker.openedAt = now;
+  breaker.openUntil = now + breaker.cooldownMs;
+  breaker.fails = 0;
+  breaker.recent = [];
+  state.counters.coordBreakerOpens++;
+  console.error("[spam] coordinator breaker open, skipping it for " + Math.round(breaker.cooldownMs / 1000) + "s");
+}
+
+function closeBreaker(now) {
+  if (breaker.openedAt) state.counters.coordBreakerOpenMs += now - breaker.openedAt;
+  breaker.openedAt = 0;
+  breaker.openUntil = 0;
+  breaker.cooldownMs = BREAKER_COOLDOWN_BASE_MS;
+  breaker.fails = 0;
+  breaker.recent = [];
+}
+
+function noteCoordResult(ok, probe, now) {
+  if (probe) {
+    breaker.probing = false;
+    if (ok) { closeBreaker(now); return; }
+    breaker.cooldownMs = Math.min(breaker.cooldownMs * 2, BREAKER_COOLDOWN_MAX_MS);
+    openBreaker(now);
+    return;
+  }
+  if (breaker.openUntil) return;
+  breaker.recent.push({ at: now, ok });
+  while (breaker.recent.length && (breaker.recent[0].at <= now - BREAKER_WINDOW_MS || breaker.recent.length > BREAKER_RECENT_MAX)) breaker.recent.shift();
+  breaker.fails = ok ? 0 : breaker.fails + 1;
+  let failed = 0;
+  for (const r of breaker.recent) if (!r.ok) failed++;
+  if (breaker.fails >= BREAKER_FAILS || (breaker.recent.length >= BREAKER_WINDOW_MIN && failed / breaker.recent.length >= BREAKER_FAIL_RATE)) openBreaker(now);
+}
+
+function coordHealth(env, now) {
+  if (!coordOf(env)) return undefined;
+  const open = breaker.openUntil > 0;
+  return {
+    state: !open ? "on" : breaker.probing ? "probing" : "breaker",
+    openUntil: open ? breaker.openUntil : 0,
+    openForMs: breaker.openedAt ? now - breaker.openedAt : 0,
+    cooldownMs: breaker.cooldownMs,
+    location: coordLocation(env) || undefined
+  };
+}
+
+function countersNow(now) {
+  const out = Object.assign({}, state.counters);
+  if (breaker.openedAt) out.coordBreakerOpenMs += now - breaker.openedAt;
+  return out;
+}
+
+async function coordCall(env, name, body, opts) {
+  const o = opts || {};
+  const gate = coordGate(env, !!o.critical);
+  if (!gate) return null;
+  const ns = gate.ns;
+  const limit = o.timeoutMs || COORD_BACKGROUND_TIMEOUT_MS;
+  const slow = o.slowMs || Math.min(limit, COORD_BUDGET_MAX_MS);
+  const t0 = Date.now();
   let timer = null;
+  let out = null;
+  let ok = false;
+  const abort = typeof AbortController === "function" ? new AbortController() : null;
   try {
     const call = (async () => {
-      const res = await ns.get(ns.idFromName(name)).fetch("https://spam-coord/" + body.op, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const hint = coordLocation(env);
+      const id = ns.idFromName(hint ? hint + ":" + name : name);
+      const stub = hint ? ns.get(id, { locationHint: hint }) : ns.get(id);
+      const init = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+      if (abort) init.signal = abort.signal;
+      const res = await stub.fetch("https://spam-coord/" + body.op, init);
       if (!res.ok) throw new Error("coordinator HTTP " + res.status);
       return res.json();
     })();
     call.catch(() => { });
-    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(COORD_TIMEOUT), timeoutMs || COORD_TIMEOUT_MS); });
-    const out = await Promise.race([call, timeout]);
-    if (out === COORD_TIMEOUT) { state.counters.coordTimeouts++; state.counters.coordErrors++; return null; }
-    return out && typeof out === "object" && !out.error ? out : null;
+    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(COORD_TIMEOUT), limit); });
+    const got = await Promise.race([call, timeout]);
+    if (got === COORD_TIMEOUT) {
+      if (abort) { try { abort.abort(); } catch (_) { } }
+      state.counters.coordTimeouts++;
+      state.counters.coordErrors++;
+    } else if (got && typeof got === "object" && !got.error) {
+      out = got;
+      ok = Date.now() - t0 <= slow;
+      if (!ok) state.counters.coordSlow++;
+    } else {
+      state.counters.coordErrors++;
+    }
   } catch (_) {
     state.counters.coordErrors++;
-    return null;
   } finally {
     if (timer) clearTimeout(timer);
   }
+  noteCoordResult(ok, gate.probe, Date.now());
+  return out;
+}
+
+function keepAlive(context, p) {
+  if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
 }
 
 function coordKnownAllowed(job) {
@@ -949,9 +1084,10 @@ function coordKnownAllowed(job) {
   return !!(s && s.autoEnforce && verdictReusable(job.fp) && !innocuousKind(job.content));
 }
 
-async function coordClaim(env, job) {
+async function coordClaim(env, job, critical) {
   if (!job.fp) job.fp = fingerprint(job.content);
-  const out = await coordCall(env, shardOf(env, job), { op: "claim", id: job.id, sim: job.fp.simKey || 0, pubkey: job.pubkey, token: INSTANCE_TOKEN, known: coordKnownAllowed(job) });
+  const budget = coordBudget(job.settings || state.settings);
+  const out = await coordCall(env, shardOf(env, job), { op: "claim", id: job.id, sim: job.fp.simKey || 0, pubkey: job.pubkey, token: INSTANCE_TOKEN, known: coordKnownAllowed(job) }, { critical, timeoutMs: budget, slowMs: budget });
   if (out) state.counters.coordClaims++;
   return out;
 }
@@ -973,21 +1109,20 @@ function coordPublish(env, context, job, res) {
   } else {
     body = { op: "release", id: job.id, token: INSTANCE_TOKEN };
   }
-  const p = coordCall(env, shardOf(env, job), body);
-  if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
+  keepAlive(context, coordCall(env, shardOf(env, job), body));
 }
 
 function coordNoteMute(env, context, pubkey, until) {
-  if (!coordOf(env)) return;
+  if (!coordOf(env) || breaker.openUntil) return;
   state.coordMutes.push({ pubkey, until });
+  if (state.coordMutes.length > COORD_MUTE_BATCH_MAX) state.coordMutes.splice(0, state.coordMutes.length - COORD_MUTE_BATCH_MAX);
   if (state.coordMuteTimer) return;
   state.coordMuteTimer = setTimeout(() => {
     state.coordMuteTimer = null;
     const mutes = state.coordMutes.splice(0);
-    if (!mutes.length) return;
+    if (!mutes.length || !coordWouldCall(env, false)) return;
     const n = coordShards(env);
-    const work = Promise.all(Array.from({ length: n }, (_, i) => coordCall(env, "shard-" + i, { op: "mute", mutes })));
-    if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
+    keepAlive(context, Promise.all(Array.from({ length: n }, (_, i) => coordCall(env, "shard-" + i, { op: "mute", mutes }))));
   }, COORD_MUTE_BATCH_MS);
 }
 
@@ -1001,8 +1136,9 @@ export async function pushSpamCounters(env) {
   }
   state.countersAt = Date.now();
   if (!any) return true;
+  if (!coordWouldCall(env, false)) return false;
   const snapshot = Object.assign({}, state.counters);
-  const out = await coordCall(env, COUNTERS_NAME, { op: "count", isolate: INSTANCE_TOKEN, deltas }, COORD_STATUS_TIMEOUT_MS);
+  const out = await coordCall(env, COUNTERS_NAME, { op: "count", isolate: INSTANCE_TOKEN, deltas }, { timeoutMs: COORD_STATUS_TIMEOUT_MS });
   if (!out) return false;
   for (const k of Object.keys(deltas)) state.countersSent[k] = snapshot[k];
   return true;
@@ -1011,20 +1147,29 @@ export async function pushSpamCounters(env) {
 function maybePushCounters(env, context) {
   if (!coordOf(env) || Date.now() - state.countersAt < COUNTER_PUSH_MS) return;
   state.countersAt = Date.now();
-  const p = pushSpamCounters(env);
-  if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
+  keepAlive(context, pushSpamCounters(env));
+}
+
+function holdLeft(job) {
+  const p = state.pending.get(job.id);
+  if (!p || p.released) return 0;
+  const s = job.settings || state.settings;
+  return p.at + (s ? Number(s.holdMs) || 0 : 0) - Date.now();
 }
 
 async function followCoord(env, context, job, generation, shard) {
   freeJobSlot(job, generation);
   pump(env, context);
   state.counters.coordPending++;
-  const deadline = Date.now() + CLAIM_WAIT_MS;
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, COORD_POLL_MS));
+  const budget = coordBudget(job.settings || state.settings);
+  for (const gap of COORD_WAIT_GAPS_MS) {
+    if (holdLeft(job) < gap + budget + COORD_WAIT_MARGIN_MS) break;
+    await new Promise((r) => setTimeout(r, gap));
     if (generation !== state.generation) return;
     if (!state.pending.has(job.id) && state.dropped.has(job.id)) return;
-    const w = await coordCall(env, shard, { op: "wait", id: job.id });
+    if (mutedJob(job)) { dropMutedJob(env, context, job, { status: "pending" }); return; }
+    state.counters.coordWaits++;
+    const w = await coordCall(env, shard, { op: "wait", id: job.id }, { timeoutMs: budget, slowMs: budget });
     if (w && w.status === "judged" && w.row) {
       const res = adoptPeer(w.row, job);
       settle(job.id, verdictDrops(job, res));
@@ -1243,6 +1388,15 @@ export function isSpamMuted(pubkey, now) {
   return false;
 }
 
+function recordMuted(pubkey, now) {
+  const own = state.records.get(pubkey);
+  const rec = own && now - own.at < RECORD_CACHE_S * 1000 ? own.rec : null;
+  if (!rec || !(Number(rec.muted_until) > now) || !muteLive(pubkey, rec, now)) return false;
+  muteLocally(pubkey, Number(rec.muted_until));
+  state.counters.recordMuted++;
+  return true;
+}
+
 export function muteLocally(pubkey, until) {
   state.muted.set(pubkey, until);
   trimMap(state.muted, MUTED_MAX);
@@ -1345,13 +1499,23 @@ async function loadRecord(r, pubkey) {
   if (own && Date.now() - own.at < RECORD_CACHE_S * 1000) return own.rec;
   const key = "pubkey/" + pubkey;
   const hit = await edgeCacheGet(key);
-  if (hit && typeof hit === "object" && "rec" in hit) return hit.rec || null;
+  if (hit && typeof hit === "object" && "rec" in hit) return keepMutedRecord(pubkey, hit.rec || null);
   let rec = null;
   try {
     rec = await r.prepare("SELECT * FROM spam_pubkeys WHERE pubkey = ?").bind(pubkey).first();
   } catch (e) { return null; }
   await edgeCachePut(key, { rec: rec || null }, RECORD_CACHE_S);
-  return rec || null;
+  return keepMutedRecord(pubkey, rec || null);
+}
+
+function keepMutedRecord(pubkey, rec) {
+  const now = Date.now();
+  const own = state.records.get(pubkey);
+  if (rec && Number(rec.muted_until) > now && !(own && now - own.at < RECORD_CACHE_S * 1000)) {
+    state.records.set(pubkey, { rec, at: now });
+    trimMap(state.records, MUTED_MAX);
+  }
+  return rec;
 }
 
 function withBuffered(rows, extra, limit) {
@@ -1369,6 +1533,12 @@ async function rowsOf(query) {
   } catch (e) { return null; }
 }
 
+async function selfRow(r, id) {
+  try {
+    return await r.prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(id).first();
+  } catch (e) { return null; }
+}
+
 async function loadDossier(env, job, settings, opts) {
   const r = replica(spamDb(env));
   const now = job.seenAt;
@@ -1382,10 +1552,8 @@ async function loadDossier(env, job, settings, opts) {
     const own = state.wrows.get(job.id);
     if (own) { out.self = own; return out; }
   }
-  if (!job.force && !job.coordFresh) {
-    try {
-      out.self = await r.prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(job.id).first();
-    } catch (e) { out.self = null; }
+  if (!job.force && !job.coordFresh && !(opts && opts.skipSelf)) {
+    out.self = await selfRow(r, job.id);
     if (out.self) return out;
   }
   let similarQuery = null;
@@ -2011,9 +2179,13 @@ function applyLocally(job, p, entry, buffered, env, context) {
     if (job.settings.blockEvents) hideLocally(job.id);
   }
   if (p.plan && p.plan.muteNow) {
-    muteLocally(job.pubkey, p.plan.until);
-    state.counters.muted++;
-    if (buffered) coordNoteMute(env, context, job.pubkey, p.plan.until);
+    const already = isSpamMuted(job.pubkey);
+    muteLocally(job.pubkey, Math.max(p.plan.until, already ? state.muted.get(job.pubkey) : 0));
+    if (already) state.counters.remuted++;
+    else {
+      state.counters.muted++;
+      if (buffered) coordNoteMute(env, context, job.pubkey, p.plan.until);
+    }
   }
   if (p.strong && verdictReusable(job.fp)) noteCampaign(job.fp.simKey, job.pubkey);
   if (buffered) {
@@ -2128,7 +2300,18 @@ export async function auditNow(env, job, hooks) {
     state.counters.skippedBudget++;
     return { skipped: "budget", suspicious: locallySuspicious(job, null) };
   }
-  let dossier = await loadDossier(env, job, settings, { light });
+  const claim = hooks && hooks.claim && typeof hooks.route === "function" ? hooks.claim : null;
+  const loading = loadDossier(env, job, settings, { light, skipSelf: !!claim });
+  if (claim) {
+    loading.catch(() => { });
+    const routed = await hooks.route(await claim);
+    if (routed) return routed;
+    if (!job.force && !job.coordFresh && !state.wrows.has(job.id)) {
+      const self = await selfRow(replica(spamDb(env)), job.id);
+      if (self) return adoptPeer(self, job);
+    }
+  }
+  let dossier = await loading;
   if (dossier.self) return adoptPeer(dossier.self, job);
   if (light && !muted && dossier.cleanHistory) {
     light = false;
@@ -2187,7 +2370,7 @@ async function cachedRecord(pubkey) {
   const o = state.records.get(pubkey);
   if (o && Date.now() - o.at < RECORD_CACHE_S * 1000) return o.rec;
   const hit = await edgeCacheGet("pubkey/" + pubkey);
-  if (hit && typeof hit === "object" && "rec" in hit) return hit.rec || null;
+  if (hit && typeof hit === "object" && "rec" in hit) return keepMutedRecord(pubkey, hit.rec || null);
   return null;
 }
 
@@ -2199,7 +2382,7 @@ async function liteRecord(env, context, job, cached) {
     if (!job.nonces) job.nonces = nonceTokens(job.content);
     if (job.domains == null) job.domains = extractDomains(job.content);
     let claimed = false;
-    if (coordOf(env) && !job.coordClaimed && !job.force && job.source !== "report") {
+    if (coordOf(env) && !job.coordClaimed && !job.claimRouted && !job.force && job.source !== "report") {
       const c = await coordClaim(env, Object.assign({}, job, { settings: Object.assign({}, job.settings || state.settings, { autoEnforce: false }) }));
       if (c && (c.status === "pending" || c.status === "judged")) return null;
       claimed = !!c;
@@ -2361,37 +2544,54 @@ function claimable(job) {
   return !job.force && job.source !== "report" && !job.claimChecked;
 }
 
-async function coordRoute(env, context, job, generation) {
-  const c = await coordClaim(env, job);
-  if (!c) return "fallback";
-  if (c.status === "mine") {
-    job.coordClaimed = true;
-    job.coordFresh = !!c.fresh;
-    return "audit";
-  }
-  if (c.status === "pending") return "pending";
+function mutedJob(job) {
   const s = job.settings || state.settings;
-  if (c.status === "judged" && c.row) {
+  return !!(s && s.autoEnforce && !job.force && job.source !== "report" && !state.restored.has(job.id) && isSpamMuted(job.pubkey));
+}
+
+function dropMutedJob(env, context, job, c) {
+  const s = job.settings || state.settings;
+  noteDropped(job.id);
+  if (s && s.blockEvents) hideLocally(job.id);
+  settle(job.id, true);
+  coalesce(env, context, job);
+  if (c && c.status === "pending") return { routed: "done" };
+  if (c) job.coordClaimed = true;
+  keepAlive(context, liteRecord(env, context, job, null).then((res) => { if (job.coordClaimed) coordPublish(env, context, job, res); }));
+  return { routed: "done" };
+}
+
+async function routeClaim(env, context, job, c) {
+  job.claimRouted = true;
+  const s = job.settings || state.settings;
+  if (c && c.status === "judged" && c.row) {
     state.counters.coordJudged++;
     const res = adoptPeer(c.row, job);
     settle(job.id, verdictDrops(job, res));
     coalesce(env, context, job);
-    return "done";
+    return { routed: "done" };
   }
+  if (mutedJob(job)) return dropMutedJob(env, context, job, c);
+  if (!c) {
+    if (!(await claimAudit(job.id))) return { routed: "peer" };
+    job.cacheMine = true;
+    return null;
+  }
+  if (c.status === "pending") return { routed: "pending" };
+  job.coordClaimed = true;
+  job.coordFresh = c.status === "mine" && !!c.fresh;
   if (c.status === "muted" && Number(c.until) > Date.now()) {
     state.counters.coordMuted++;
-    job.coordClaimed = true;
     muteLocally(job.pubkey, Number(c.until));
     noteDropped(job.id);
     if (s && s.blockEvents) hideLocally(job.id);
     settle(job.id, true);
     coalesce(env, context, job);
-    coordPublish(env, context, job, await liteRecord(env, context, job, null));
-    return "done";
+    keepAlive(context, liteRecord(env, context, job, null).then((res) => coordPublish(env, context, job, res)));
+    return { routed: "done" };
   }
   if (c.status === "known" && c.verdict && coordKnownAllowed(job) && Number(c.verdict.confidence) >= s.minConfidence) {
     state.counters.coordKnown++;
-    job.coordClaimed = true;
     const known = { spam: true, confidence: Number(c.verdict.confidence) || 0, category: c.verdict.category || "spam", reason: c.verdict.reason || "", model: c.verdict.model || "", at: Date.now() };
     rememberExact(job.fp, known, job.seenAt || Date.now());
     state.campaignFleet.set(job.fp.simKey, Math.min(Number(c.others) || 0, CAMPAIGN_PUBKEYS_MAX));
@@ -2400,10 +2600,10 @@ async function coordRoute(env, context, job, generation) {
     if (s && s.blockEvents) hideLocally(job.id);
     settle(job.id, true);
     coalesce(env, context, job);
-    coordPublish(env, context, job, await liteRecord(env, context, job, known));
-    return "done";
+    keepAlive(context, liteRecord(env, context, job, known).then((res) => coordPublish(env, context, job, res)));
+    return { routed: "done" };
   }
-  return "fallback";
+  return null;
 }
 
 async function claimAudit(id) {
@@ -2454,29 +2654,38 @@ async function followPeer(env, context, job, generation) {
 }
 
 async function runJob(env, context, job, generation) {
-  let mine = false;
+  const hooks = { buffered: true, context, onVerdict(drop) { settle(job.id, drop); if (drop) coalesce(env, context, job); } };
+  let claim = null;
+  if (claimable(job) && mutedJob(job)) {
+    job.claimChecked = true;
+    job.claimRouted = true;
+    dropMutedJob(env, context, job, null);
+    freeJobSlot(job, generation);
+    pump(env, context);
+    return;
+  }
   if (claimable(job)) {
     job.claimChecked = true;
-    const route = coordOf(env) && !job.coordSkip ? await coordRoute(env, context, job, generation) : "fallback";
-    if (route === "done") {
-      try { await noteStatus(env); } catch (_) { }
-      maybePushCounters(env, context);
-      freeJobSlot(job, generation);
-      pump(env, context);
-      return;
-    }
-    if (route === "pending") return followCoord(env, context, job, generation, shardOf(env, job));
-    if (route === "fallback" && !job.coordSkip) {
+    if (!job.coordSkip && coordWouldCall(env, true)) {
+      claim = coordClaim(env, job, true);
+      hooks.claim = claim;
+      hooks.route = (c) => routeClaim(env, context, job, c);
+    } else if (!job.coordSkip) {
+      if (coordOf(env)) state.counters.coordSkipped++;
       if (!(await claimAudit(job.id))) return followPeer(env, context, job, generation);
-      mine = true;
+      job.cacheMine = true;
     }
   }
   let res = null;
   try {
-    res = await auditNow(env, job, { buffered: true, context, onVerdict(drop) { settle(job.id, drop); if (drop) coalesce(env, context, job); } });
-    state.lastAuditAt = Date.now();
-    settle(job.id, verdictDrops(job, res));
-    coalesce(env, context, job);
+    res = await auditNow(env, job, hooks);
+    if (res && res.routed === "pending") return followCoord(env, context, job, generation, shardOf(env, job));
+    if (res && res.routed === "peer") return followPeer(env, context, job, generation);
+    if (!(res && res.routed)) {
+      state.lastAuditAt = Date.now();
+      settle(job.id, verdictDrops(job, res));
+      coalesce(env, context, job);
+    }
   } catch (e) {
     state.counters.errors++;
     state.lastError = String(e && e.message || e).slice(0, 300);
@@ -2484,9 +2693,12 @@ async function runJob(env, context, job, generation) {
     console.error("[spam] audit failed for " + job.id + ": " + state.lastError);
     settle(job.id, false);
   }
-  if (mine) { try { await publishOutcome(job, res); } catch (_) { } }
-  if (job.coordClaimed) coordPublish(env, context, job, res);
-  try { await noteStatus(env); } catch (_) { }
+  if (!(res && res.routed)) {
+    if (job.cacheMine) keepAlive(context, publishOutcome(job, res).catch(() => { }));
+    if (job.coordClaimed) coordPublish(env, context, job, res);
+    else if (claim && !job.claimRouted) keepAlive(context, claim.then((c) => { if (c && c.status !== "pending" && c.status !== "judged") coordPublish(env, context, job, null); }));
+  }
+  keepAlive(context, noteStatus(env).catch(() => { }));
   maybePushCounters(env, context);
   freeJobSlot(job, generation);
   pump(env, context);
@@ -2745,7 +2957,7 @@ export function spamEngine(env, context) {
       state.counters.inspected++;
       if (isExemptPubkey(s, pubkey)) return "pass";
       if (state.restored.has(job.id)) return "pass";
-      if (isSpamMuted(pubkey, now)) { state.counters.dropped++; return "drop"; }
+      if (isSpamMuted(pubkey, now) || recordMuted(pubkey, now)) { state.counters.dropped++; return "drop"; }
       if (state.dropped.has(job.id) || state.hidden.has(job.id)) { state.counters.dropped++; return "drop"; }
       if (typeof job.content !== "string" || !job.content.trim()) return "pass";
       if (isCoolingDown(now)) {
