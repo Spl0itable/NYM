@@ -7,6 +7,9 @@ const EDGE_CHALLENGE_CONFIRM_MS = 1500;
 const EDGE_CHALLENGE_NOTE_MIN_MS = 30000;
 const HELD_EVENTS_MAX = 16;
 const HELD_EVENTS_MS = 20000;
+const POOL_QUIET_MS = 60000;
+const POOL_PROBE_TIMEOUT_MS = 10000;
+const POOL_PROBE_BACKOFF_MAX_MS = 10 * 60 * 1000;
 
 Object.assign(NYM.prototype, {
 
@@ -652,11 +655,16 @@ Object.assign(NYM.prototype, {
                     if (typeof this._cvMarkVisibleColumnsRead === 'function') {
                         this._cvMarkVisibleColumnsRead();
                     }
+                    if (typeof this._markOpenConversationReadOnReturn === 'function') {
+                        this._markOpenConversationReadOnReturn();
+                    }
 
                     this.backfillFromD1OnReconnect();
+                    this._catchUpLiveGap();
                 }, delay);
             } else {
                 this._backgroundedAt = Date.now();
+                this._noteLiveGap();
 
                 if (this.reconnectionInterval) {
                     clearInterval(this.reconnectionInterval);
@@ -664,6 +672,8 @@ Object.assign(NYM.prototype, {
                 }
             }
         });
+
+        window.addEventListener('freeze', () => this._noteLiveGap());
 
         window.addEventListener('focus', () => {
             const delay = this.isFlutterWebView ? 200 : 500;
@@ -1375,6 +1385,7 @@ Object.assign(NYM.prototype, {
         this._refreshEphemeralSubscriptions();
 
         this._resubscribeChannels();
+        this._catchUpLiveGap();
     },
 
     closeSubscriptionsForRelay(relayUrl) {
@@ -2048,14 +2059,47 @@ Object.assign(NYM.prototype, {
                 if (healthy) {
                     existing._healthyAt = now;
                 } else if (existing._healthyAt && now - existing._healthyAt > ZOMBIE_MS) {
+                    this._noteLiveGap(existing._healthyAt, true);
                     existing._closing = true;
                     try { existing.ws.close(); } catch (_) { }
                     existing.ws = null;
                     if (this._shardReconnecting) this._shardReconnecting.delete(shard.id);
                     this._reconnectPoolShard(shard);
+                    continue;
+                }
+                if (this._poolShardDeaf(existing, now)) {
+                    try { existing.ws.close(); } catch (_) { }
                 }
             }
         }
+    },
+
+    _poolShardDeaf(p, now) {
+        if (!this._poolProbeFails) this._poolProbeFails = new Map();
+        if (p._probe) {
+            if (now - p._probe.at < POOL_PROBE_TIMEOUT_MS) return false;
+            p._probe = null;
+            this._poolProbeFails.set(p.id, (this._poolProbeFails.get(p.id) || 0) + 1);
+            return true;
+        }
+        if (typeof document !== 'undefined' && document.hidden) return false;
+        const fails = this._poolProbeFails.get(p.id) || 0;
+        const quiet = Math.min(POOL_QUIET_MS * Math.pow(2, fails), POOL_PROBE_BACKOFF_MAX_MS);
+        if (now - Math.max(p._upstreamAt || 0, p._openedAt || 0) < quiet) return false;
+        const bytes = new Uint8Array(32);
+        crypto.getRandomValues(bytes);
+        const probeId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+        p._probe = { id: 'nym-live-' + probeId.slice(0, 12), at: now };
+        this._safeWsSend(p.ws, JSON.stringify(['REQ', p._probe.id, { ids: [probeId], limit: 1 }]), { critical: true });
+        return false;
+    },
+
+    _settlePoolProbe(p) {
+        const id = p._probe && p._probe.id;
+        p._probe = null;
+        p._upstreamAt = Date.now();
+        if (this._poolProbeFails) this._poolProbeFails.delete(p.id);
+        if (id) this._safeWsSend(p.ws, JSON.stringify(['CLOSE', id]), { critical: true });
     },
 
     _startPoolShardHealthCheck() {
@@ -2198,6 +2242,7 @@ Object.assign(NYM.prototype, {
 
                 poolEntry.lastMessage = Date.now();
                 poolEntry._healthyAt = Date.now();
+                poolEntry._openedAt = Date.now();
                 this._syncLegacyPoolSocket();
                 this._flushHeldEvents();
 
@@ -2237,6 +2282,15 @@ Object.assign(NYM.prototype, {
                     }
 
                     if (msgType === 'POOL:SHARDS') {
+                        return;
+                    }
+
+                    if (msgType === 'EVENT' || msgType === 'EOSE' || msgType === 'OK' || msgType === 'POOL:SEEN') {
+                        poolEntry._upstreamAt = Date.now();
+                    }
+
+                    if ((msgType === 'EOSE' || msgType === 'CLOSED') && poolEntry._probe && msg[1] === poolEntry._probe.id) {
+                        this._settlePoolProbe(poolEntry);
                         return;
                     }
 
@@ -2293,6 +2347,7 @@ Object.assign(NYM.prototype, {
                     return;
                 }
 
+                this._noteLiveGap(poolEntry._upstreamAt, true);
                 if (!this._reconnectingShards) this._reconnectingShards = new Set();
                 this._reconnectingShards.add(shard.id);
                 if (this._poolEventBaselines) this._poolEventBaselines.delete(shard.id);
@@ -2553,6 +2608,7 @@ Object.assign(NYM.prototype, {
         if (this._lastEphemeralSubId && this._lastEphemeralFilter) {
             this._safeWsSend(p.ws, JSON.stringify(this._normalizeReqPayload(["REQ", this._lastEphemeralSubId, this._lastEphemeralFilter])), { critical: true });
         }
+        this._catchUpLiveGap();
     },
 
     _getShardSinceFloor(shardId) {
@@ -2743,6 +2799,73 @@ Object.assign(NYM.prototype, {
         this._refreshEphemeralSubscriptions();
 
         this._resubscribeChannels();
+        this._catchUpLiveGap();
+    },
+
+    _noteLiveGap(lastLiveAt, socketLost) {
+        const now = Date.now();
+        const at = lastLiveAt > 0 && lastLiveAt < now ? Math.max(lastLiveAt, now - 86400000) : now;
+        if (!this._liveGapAt || at < this._liveGapAt) this._liveGapAt = at;
+        if (socketLost) this._liveGapSocketLost = true;
+        this._liveGapSeq = (this._liveGapSeq || 0) + 1;
+    },
+
+    _liveGapChannelKeys() {
+        const keys = new Set();
+        const current = this.currentGeohash || this.currentChannel;
+        if (current) keys.add(current);
+        if (this._cvActive && Array.isArray(this._cvColumns)) {
+            for (const col of this._cvColumns) {
+                const key = col && col.type === 'channel' ? (col.geohash || col.channel) : '';
+                if (key) keys.add(key);
+            }
+        }
+        if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => { if (k) keys.add(k); });
+        if (this.pinnedChannels) this.pinnedChannels.forEach(k => { if (k) keys.add(k); });
+        if (typeof document !== 'undefined') {
+            document.querySelectorAll('#channelList .channel-item').forEach(el => {
+                const k = el.dataset && (el.dataset.geohash || el.dataset.channel);
+                if (k) keys.add(k);
+            });
+        }
+        if (this.channels) this.channels.forEach((v, k) => { if (k) keys.add(k); });
+        return [...keys];
+    },
+
+    _scheduleLiveGapSettle(since) {
+        if (this._liveGapSettleTimer) clearTimeout(this._liveGapSettleTimer);
+        this._liveGapSettleSince = Math.min(since, this._liveGapSettleSince || since);
+        this._liveGapSettleTimer = setTimeout(() => {
+            const from = this._liveGapSettleSince;
+            this._liveGapSettleTimer = null;
+            this._liveGapSettleSince = 0;
+            if (typeof this.channelRestoreManyFromD1 !== 'function') return;
+            this.channelRestoreManyFromD1(this._liveGapChannelKeys(), { force: true, since: from }).then((ok) => {
+                if (ok && typeof this.recomputeAllUnreadCounts === 'function') this.recomputeAllUnreadCounts();
+                if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
+            }, () => { });
+        }, this._liveGapSettleMs || 35000);
+    },
+
+    _catchUpLiveGap() {
+        if (!this._liveGapAt || this._liveGapInFlight) return;
+        if (!this._getApiHost || !this._getApiHost()) return;
+        if (this.useRelayProxy && !this._isAnyPoolOpen()) return;
+        const seqAt = this._liveGapSeq;
+        const since = Math.floor(this._liveGapAt / 1000) - 300;
+        this._liveGapInFlight = true;
+        this.backfillFromD1OnReconnect({ force: true, since, socketLost: !!this._liveGapSocketLost, channels: this._liveGapChannelKeys() }).then((ok) => {
+            if (!ok) return;
+            if (this._liveGapSeq === seqAt) {
+                this._liveGapAt = 0;
+                this._liveGapSocketLost = false;
+            }
+            this._scheduleLiveGapSettle(since);
+        }, () => { }).finally(() => {
+            this._liveGapInFlight = false;
+            if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
+            if (this._liveGapAt && this._liveGapSeq !== seqAt) this._catchUpLiveGap();
+        });
     },
 
     // Direct mode only; in pool mode these come from D1 via the pool worker.
@@ -2925,20 +3048,28 @@ Object.assign(NYM.prototype, {
         this.backfillFromD1OnReconnect();
     },
 
-    backfillFromD1OnReconnect() {
-        if (!this._getApiHost || !this._getApiHost()) return;
+    backfillFromD1OnReconnect(opts = {}) {
+        if (!this._getApiHost || !this._getApiHost()) return Promise.resolve(false);
+        const force = !!opts.force;
+        if (!force && this._liveGapAt) return Promise.resolve(false);
         const now = Date.now();
-        if (this._lastD1BackfillAt && now - this._lastD1BackfillAt < 30000) return;
+        if (!force && this._lastD1BackfillAt && now - this._lastD1BackfillAt < 30000) return Promise.resolve(false);
+        const extras = !this._lastD1BackfillAt || now - this._lastD1BackfillAt >= 30000;
         this._lastD1BackfillAt = now;
+        if (force) {
+            this._geohashActivityFetchedAt = 0;
+            this._namedActivityFetchedAt = 0;
+        }
 
         const restorePromises = [];
 
-        if (typeof this.pmRestoreFromD1 === 'function') {
+        const conversations = extras || !!opts.socketLost;
+        if (conversations && typeof this.pmRestoreFromD1 === 'function') {
             restorePromises.push(this.pmRestoreFromD1().catch(() => { }));
         }
 
         // Other members' group messages are deposited under our ephemeral keys, so pull that inbox too.
-        if (typeof this._recoverEphemeralHistory === 'function' &&
+        if (conversations && typeof this._recoverEphemeralHistory === 'function' &&
             typeof this._getAllSelfEphemeralPubkeys === 'function') {
             const ephPks = this._getAllSelfEphemeralPubkeys();
             if (ephPks && ephPks.length) {
@@ -2946,12 +3077,16 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        let channelsRestored = Promise.resolve(true);
         if (typeof this.channelRestoreManyFromD1 === 'function') {
-            const channels = new Set();
+            const channels = new Set(Array.isArray(opts.channels) ? opts.channels : []);
             const current = this.currentGeohash || this.currentChannel;
             if (current) channels.add(current);
             if (this.userJoinedChannels) this.userJoinedChannels.forEach(k => channels.add(k));
-            if (channels.size) restorePromises.push(this.channelRestoreManyFromD1([...channels]).catch(() => { }));
+            if (channels.size) {
+                channelsRestored = this.channelRestoreManyFromD1([...channels], { force, since: opts.since }).catch(() => false);
+                restorePromises.push(channelsRestored);
+            }
         }
 
         const seedPromises = [];
@@ -2962,11 +3097,13 @@ Object.assign(NYM.prototype, {
             seedPromises.push(this.fetchNamedChannelActivityFromD1().catch(() => { }));
         }
 
-        if ((restorePromises.length || seedPromises.length) && typeof this.recomputeAllUnreadCounts === 'function') {
-            Promise.allSettled([...restorePromises, ...seedPromises]).then(() => {
+        const settled = Promise.allSettled([...restorePromises, ...seedPromises]).then(() => {
+            if ((restorePromises.length || seedPromises.length) && typeof this.recomputeAllUnreadCounts === 'function') {
                 this.recomputeAllUnreadCounts();
-            });
-        }
+            }
+        });
+
+        if (!extras) return settled.then(() => channelsRestored);
 
         if (typeof this._emojiRestoreFromD1 === 'function') {
             this._emojiRestoreFromD1().catch(() => { });
@@ -2981,6 +3118,7 @@ Object.assign(NYM.prototype, {
         if (typeof this._fetchVouchesFromD1 === 'function') {
             this._fetchVouchesFromD1().catch(() => { });
         }
+        return settled.then(() => channelsRestored);
     },
 
     _poolSendRelayConfig() {
@@ -3884,23 +4022,29 @@ Object.assign(NYM.prototype, {
     },
 
     _drainRelayMessageQueue() {
-        if (this._relayQueueDraining) return;
+        if (this._relayQueueDraining) {
+            if (this._relayQueueResume && typeof document !== 'undefined' && document.hidden) this._relayQueueResume();
+            return;
+        }
         this._relayQueueDraining = true;
         let rescheduled = false;
         try {
             const start = Date.now();
+            const hidden = typeof document !== 'undefined' && document.hidden;
             while (this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
                 const entry = this._relayMsgQueue.shift();
                 if (entry.ok) this._dispatchRelayMessage(entry.msg, entry.relayUrl);
-                if (Date.now() - start > 24 && this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
+                if (!hidden && Date.now() - start > 24 && this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
                     rescheduled = true;
                     let resumed = false;
                     const resume = () => {
                         if (resumed) return;
                         resumed = true;
+                        if (this._relayQueueResume === resume) this._relayQueueResume = null;
                         this._relayQueueDraining = false;
                         this._drainRelayMessageQueue();
                     };
+                    this._relayQueueResume = resume;
                     if (typeof this._yieldToIdle === 'function') this._yieldToIdle().then(resume, resume);
                     setTimeout(resume, 100);
                     return;

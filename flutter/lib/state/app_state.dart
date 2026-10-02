@@ -928,7 +928,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
   bool _isConversationSeen(String storageKey) {
     final gate = columnsReadGate;
     if (gate != null) return gate(storageKey);
-    return storageKey == state.view.storageKey;
+    return appVisible && storageKey == state.view.storageKey;
+  }
+
+  bool appVisible = true;
+
+  void setAppVisible(bool visible) {
+    appVisible = visible;
   }
 
   bool isConversationSeen(String storageKey) => _isConversationSeen(storageKey);
@@ -971,7 +977,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Clears unread for every column the [columnsReadGate] passes, when the app returns to the foreground.
   void markVisibleColumnsRead() {
     final gate = columnsReadGate;
-    if (gate == null) return;
+    if (gate == null) {
+      final key = state.view.storageKey;
+      if (!appVisible || key.isEmpty) return;
+      if ((state.unreadCounts[key] ?? 0) > 0 ||
+          (state.unreadCounts[state.view.id] ?? 0) > 0) {
+        clearUnread(_unreadStorageKey(key));
+      }
+      return;
+    }
     // Snapshot because `clearUnread` mutates; bare ids are resolved to storage keys so both buckets clear.
     for (final key in state.unreadCounts.keys.toList()) {
       if (gate(key)) clearUnread(_unreadStorageKey(key));

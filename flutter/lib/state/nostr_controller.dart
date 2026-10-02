@@ -39,6 +39,7 @@ import '../features/i18n/i18n.dart';
 import '../features/i18n/localization_service.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/notifications/background_catch_up.dart';
+import '../features/notifications/live_gap.dart';
 import '../features/notifications/notification_routing.dart';
 import '../features/notifications/self_reference.dart';
 import '../features/notifications/notifications_service.dart';
@@ -588,9 +589,14 @@ class NostrController {
     if (svc != null) {
       _ref.read(appStateProvider.notifier).setProxyMode(svc.isProxyMode);
     }
+    if (count == 0 && !wasOffline) _liveGap.note();
     if (count > 0 && wasOffline) {
       // Reconnect edge: re-run the full D1 backfill, since relay REQs only carry new events.
-      unawaited(_backfillFromD1OnReconnect());
+      if (_liveGap.pending) {
+        unawaited(_catchUpLiveGap());
+      } else {
+        unawaited(_backfillFromD1OnReconnect());
+      }
       // Re-send PMs still waiting on a receipt.
       _retryPendingDmsOnReconnect();
       // Publish what the mesh carried while offline.
@@ -645,6 +651,23 @@ class NostrController {
   /// Last reconnect backfill run (ms), for the 30s throttle.
   int _lastD1BackfillAt = 0;
 
+  final LiveGap _liveGap = LiveGap();
+  int _liveGapSinceSec = 0;
+
+  Future<void> _catchUpLiveGap() => _liveGap.run((sinceSec) async {
+        if (_storageSync == null) return false;
+        _lastD1BackfillAt = 0;
+        _lastActivityDiscoveryAt = 0;
+        _liveGapSinceSec = sinceSec;
+        try {
+          await _backfillFromD1OnReconnect();
+          await _restoreAllChannelArchives(force: true, sinceSec: sinceSec);
+        } finally {
+          _liveGapSinceSec = 0;
+        }
+        return true;
+      });
+
   /// Re-pulls the full D1 backlog on reconnect/resume, since relay REQs only carry new events; throttled and idempotent.
   Future<void> _backfillFromD1OnReconnect() async {
     final sync = _storageSync;
@@ -661,7 +684,7 @@ class NostrController {
     await _restorePmArchive(sync);
     await _backfillGroupArchive();
     // Discovery plus archive restore over every current, joined and discovered channel.
-    await _restoreAllChannelArchives();
+    if (_liveGapSinceSec == 0) await _restoreAllChannelArchives();
     // Re-hydrate archived emoji packs that aged off relays on every reconnect.
     unawaited(_restoreEmojiFromD1(sync));
     // Profile zap receipts use a tight relay window, so re-pull them from D1 on every reconnect.
@@ -752,20 +775,22 @@ class NostrController {
   static const int _kChannelBackfillConcurrency = 4;
 
   /// Awaits discovery first so newly discovered channels are in the restore set and don't open empty; best-effort.
-  Future<void> _restoreAllChannelArchives() async {
+  Future<void> _restoreAllChannelArchives(
+      {bool force = false, int sinceSec = 0}) async {
     await _discoverChannelActivity();
     final keys = <String>{
       for (final c in _ref.read(appStateProvider).channels) c.key,
     };
     final view = _ref.read(appStateProvider).view;
     if (view.kind == ViewKind.channel && view.id.isNotEmpty) keys.add(view.id);
-    await _backfillChannelArchivesFor(keys);
+    await _backfillChannelArchivesFor(keys, force: force, sinceSec: sinceSec);
   }
 
   /// Restores [keys] with bounded concurrency; [force] bypasses the per-channel 60s freshness window.
   Future<void> _backfillChannelArchivesFor(
     Iterable<String> keys, {
     bool force = false,
+    int sinceSec = 0,
     void Function(NostrEvent event)? onRestored,
   }) async {
     final list = <String>{
@@ -777,7 +802,7 @@ class NostrController {
     Future<void> worker() async {
       while (next < list.length) {
         await _backfillChannelArchive(list[next++],
-            force: force, onRestored: onRestored);
+            force: force, sinceSec: sinceSec, onRestored: onRestored);
       }
     }
 
@@ -8749,7 +8774,11 @@ class NostrController {
     _appInForeground = true;
     _onViewOpened(_ref.read(appStateProvider).view);
     // Re-pull the full D1 backlog on every resume, even if the socket never dropped; throttled and idempotent.
-    unawaited(_backfillFromD1OnReconnect());
+    if (_liveGap.pending) {
+      unawaited(_catchUpLiveGap());
+    } else {
+      unawaited(_backfillFromD1OnReconnect());
+    }
     _ref.read(appStateProvider.notifier).markVisibleColumnsRead();
     unawaited(_reconcileShopPurchases());
     unawaited(_reconcilePendingZaps());
@@ -8758,6 +8787,7 @@ class NostrController {
   /// Pauses the geo-relay keep-alive unless [keepConnectionsAlive], and flushes a pending settings publish.
   void onAppPaused({bool keepConnectionsAlive = false}) {
     _appInForeground = false;
+    _liveGap.note();
     if (!keepConnectionsAlive) {
       _service?.stopGeoRelayKeepAlive();
     }
@@ -8944,7 +8974,9 @@ class NostrController {
 
   /// Replays a channel's D1 archive through live ingest; [force] skips the 60s window; [onRestored] sees each event.
   Future<void> _backfillChannelArchive(String channelKey,
-      {bool force = true, void Function(NostrEvent event)? onRestored}) async {
+      {bool force = true,
+      int sinceSec = 0,
+      void Function(NostrEvent event)? onRestored}) async {
     final sync = _storageSync;
     if (sync == null || channelKey.isEmpty) return;
     final name = channelKey.toLowerCase();
@@ -8955,7 +8987,7 @@ class NostrController {
       if (produced || _channelBackfillInFlight.containsKey(name)) return;
     }
     final run = _runChannelBackfill(name, channelKey, sync,
-        force: force, onRestored: onRestored);
+        force: force, sinceSec: sinceSec, onRestored: onRestored);
     _channelBackfillInFlight[name] = run;
     try {
       await run;
@@ -8971,10 +9003,13 @@ class NostrController {
   Future<bool> _runChannelBackfill(
       String name, String channelKey, StorageSync sync,
       {required bool force,
+      int sinceSec = 0,
       void Function(NostrEvent event)? onRestored}) async {
     try {
       // Time-bound the fetch (10s → empty) so an orphaned request can't pin the slot; empty tells waiters to retry.
-      final events = await sync.channelGet([name], force: force).timeout(
+      final events = await sync
+          .channelGet([name], force: force, sinceSec: sinceSec)
+          .timeout(
         const Duration(seconds: 10),
         onTimeout: () => const <Map<String, dynamic>>[],
       );

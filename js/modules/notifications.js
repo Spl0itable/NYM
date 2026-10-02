@@ -387,6 +387,7 @@ Object.assign(NYM.prototype, {
     },
 
     _updateNotificationBadge() {
+        this._scheduleAppBadge();
         // Coalesce burst calls into a single DOM update per animation frame.
         if (this._notifBadgeRafPending) return;
         this._notifBadgeRafPending = true;
@@ -395,6 +396,61 @@ Object.assign(NYM.prototype, {
             this._notifBadgeRafPending = false;
             this._doUpdateNotificationBadge();
         });
+    },
+
+    _unreadNotifications() {
+        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
+        const lastRead = this.notificationLastReadTime || 0;
+        return (this.notificationHistory || []).filter(n => {
+            if (n.timestamp <= cutoff24h) return false;
+            if (n.viewed === true) return false;
+            const observedAt = n.receivedAt || n.timestamp || 0;
+            if (observedAt <= lastRead) return false;
+            if (this._notificationAlreadySeen(n.channelInfo, n.timestamp)) return false;
+            const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
+            if (pubkey && this.blockedUsers.has(pubkey)) return false;
+            return true;
+        });
+    },
+
+    _appBadgeCount() {
+        let total = 0;
+        if (this.unreadCounts) {
+            for (const [key, n] of this.unreadCounts) {
+                if ((key.startsWith('pm-') || key.startsWith('group-')) && n > 0) total += n;
+            }
+        }
+        if (this.notificationsEnabled) {
+            for (const n of this._unreadNotifications()) {
+                const type = n.channelInfo && n.channelInfo.type;
+                if (type !== 'pm' && type !== 'group') total++;
+            }
+        }
+        return total;
+    },
+
+    _scheduleAppBadge() {
+        if (this._appBadgeTimer) return;
+        this._appBadgeTimer = setTimeout(() => {
+            this._appBadgeTimer = null;
+            this._applyAppBadge();
+        }, 250);
+    },
+
+    _applyAppBadge() {
+        let count = 0;
+        try { count = this._appBadgeCount(); } catch (_) { return; }
+        if (count === this._appBadgeShown) return;
+        this._appBadgeShown = count;
+        const nav = typeof navigator !== 'undefined' ? navigator : null;
+        if (nav && typeof nav.setAppBadge === 'function') {
+            const done = count > 0 ? nav.setAppBadge(count) : nav.clearAppBadge();
+            if (done && typeof done.catch === 'function') done.catch(() => { });
+            return;
+        }
+        if (typeof document === 'undefined') return;
+        if (this._appBaseTitle === undefined) this._appBaseTitle = document.title.replace(/^\(\d+\+?\) /, '');
+        document.title = count > 0 ? `(${count > 99 ? '99+' : count}) ${this._appBaseTitle}` : this._appBaseTitle;
     },
 
     _doUpdateNotificationBadge() {
@@ -408,18 +464,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
-        const lastRead = this.notificationLastReadTime || 0;
-        const unreadCount = this.notificationHistory.filter(n => {
-            if (n.timestamp <= cutoff24h) return false;
-            if (n.viewed === true) return false;
-            const observedAt = n.receivedAt || n.timestamp || 0;
-            if (observedAt <= lastRead) return false;
-            if (this._notificationAlreadySeen(n.channelInfo, n.timestamp)) return false;
-            const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
-            if (pubkey && this.blockedUsers.has(pubkey)) return false;
-            return true;
-        }).length;
+        const unreadCount = this._unreadNotifications().length;
 
         [desktopBadge, mobileBadge].forEach(badge => {
             if (!badge) return;

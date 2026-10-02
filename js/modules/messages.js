@@ -763,7 +763,11 @@ Object.assign(NYM.prototype, {
                     return;
                 }
                 // A collapsed thread reply is off screen, so it must not advance the read watermark.
-                if (typeof this._markChannelRead === 'function' && message.created_at &&
+                if (document.hidden) {
+                    if (!message.isOwn && !exists && !message.isHistorical) {
+                        this.updateUnreadCount(storageKey, message.created_at);
+                    }
+                } else if (typeof this._markChannelRead === 'function' && message.created_at &&
                     !(typeof this._threadReplyHidden === 'function' && this._threadReplyHidden(message))) {
                     this._markChannelRead(storageKey, message.created_at);
                 }

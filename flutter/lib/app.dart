@@ -177,6 +177,11 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Re-hydrate the open conversation from D1 on resume.
+    try {
+      ref.read(appStateProvider.notifier).setAppVisible(
+          state == AppLifecycleState.resumed ||
+              state == AppLifecycleState.inactive);
+    } catch (_) {}
     if (state == AppLifecycleState.resumed) {
       // Release the keep-alive so the Android notification isn't up while in the foreground.
       unawaited(_backgroundConnectivity.stop());

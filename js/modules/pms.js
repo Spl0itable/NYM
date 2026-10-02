@@ -1473,7 +1473,13 @@ Object.assign(NYM.prototype, {
                     this._addNotificationToHistory(`PM from ${msg.author}`, messageContent, pmChannelInfo, tsSec * 1000);
                 }
             };
-            if (this.inPMMode && this.currentPM === peerPubkey) {
+            if (this.inPMMode && this.currentPM === peerPubkey && document.hidden) {
+                this.displayMessage(msg);
+                if (!isOwn) {
+                    this.updateUnreadCount(conversationKey, msg.created_at);
+                    notifyForPM();
+                }
+            } else if (this.inPMMode && this.currentPM === peerPubkey) {
                 this.displayMessage(msg);
                 this._scheduleScrollToBottom();
                 if (typeof this._markChannelRead === 'function' && !pmThreadHidden) {
@@ -1512,6 +1518,38 @@ Object.assign(NYM.prototype, {
                 this._pmWrapAttempted.delete(event.id);
             }
         }
+    },
+
+    _sendPmReadReceipts(conversationKey) {
+        const pmMsgs = this.pmMessages.get(conversationKey) || [];
+        for (const msg of pmMsgs) {
+            if (msg.isOwn || msg.readReceiptSent) continue;
+            let sent = false;
+            if (msg.bitchatMessageId && (this.bitchatUsers.has(msg.pubkey) || !msg.nymMessageId)) {
+                this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
+                sent = true;
+            }
+            if (msg.nymMessageId) {
+                this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
+                sent = true;
+            }
+            if (sent) msg.readReceiptSent = true;
+        }
+    },
+
+    _markOpenConversationReadOnReturn() {
+        if (this._cvActive || this.userScrolledUp) return;
+        if (typeof document !== 'undefined' && document.hidden) return;
+        let key = null;
+        if (this.inPMMode) {
+            if (this.currentGroup) key = this.getGroupConversationKey(this.currentGroup);
+            else if (this.currentPM) key = this.getPMConversationKey(this.currentPM);
+        } else {
+            key = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+        }
+        if (!key || !((this.unreadCounts && this.unreadCounts.get(key)) > 0)) return;
+        this.clearUnreadCount(key);
+        if (this.inPMMode && this.currentPM && !this.currentGroup) this._sendPmReadReceipts(key);
     },
 
     getPMConversationKey(otherPubkey) {
@@ -1650,6 +1688,10 @@ Object.assign(NYM.prototype, {
 
     _yieldToIdle() {
         return new Promise(resolve => {
+            if (typeof document !== 'undefined' && document.hidden) {
+                resolve();
+                return;
+            }
             if (typeof requestIdleCallback === 'function') {
                 try { requestIdleCallback(() => resolve(), { timeout: 50 }); return; } catch (_) { }
             }
@@ -3403,21 +3445,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
         this.loadPMMessages(conversationKey);
 
-        // Gate on ids stored with the message; bitchatUsers/nymUsers are empty for cache-hydrated messages.
-        const pmMsgs = this.pmMessages.get(conversationKey) || [];
-        for (const msg of pmMsgs) {
-            if (msg.isOwn || msg.readReceiptSent) continue;
-            let sent = false;
-            if (msg.bitchatMessageId && (this.bitchatUsers.has(msg.pubkey) || !msg.nymMessageId)) {
-                this.sendBitchatReceipt(msg.bitchatMessageId, 0x02, msg.pubkey);
-                sent = true;
-            }
-            if (msg.nymMessageId) {
-                this.sendNymReceipt(msg.nymMessageId, 'read', msg.pubkey);
-                sent = true;
-            }
-            if (sent) msg.readReceiptSent = true;
-        }
+        this._sendPmReadReceipts(conversationKey);
         this.recordOwnActivity();
 
         this._restoreDraftForContext();

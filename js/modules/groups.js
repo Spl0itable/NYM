@@ -1627,7 +1627,13 @@ Object.assign(NYM.prototype, {
                 this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
             }
         };
-        if (this.inPMMode && this.currentGroup === groupId) {
+        if (this.inPMMode && this.currentGroup === groupId && document.hidden) {
+            this.displayMessage(msg);
+            if (!isOwn && !senderBlocked) {
+                this.updateUnreadCount(groupConvKey, msg.created_at);
+                notifyForGroup();
+            }
+        } else if (this.inPMMode && this.currentGroup === groupId) {
             this.displayMessage(msg);
             this._scheduleScrollToBottom();
             if (typeof this._markChannelRead === 'function' && !groupThreadHidden) {

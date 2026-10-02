@@ -1735,6 +1735,7 @@ class StorageSync {
   Future<List<Map<String, dynamic>>> channelGet(
     List<String> channelNames, {
     bool force = false,
+    int sinceSec = 0,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final names = <String>[];
@@ -1755,6 +1756,7 @@ class StorageSync {
       stream = await _api.storageStream({
         'action': 'channel-get',
         'channels': names,
+        if (sinceSec > 0) 'since': sinceSec,
       });
     } catch (_) {
       return const [];

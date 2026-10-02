@@ -1416,8 +1416,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     async channelRestoreManyFromD1(channelNames, opts = {}) {
-        if (!Array.isArray(channelNames) || channelNames.length === 0) return;
-        if (!this._getApiHost || !this._getApiHost()) return;
+        if (!Array.isArray(channelNames) || channelNames.length === 0) return true;
+        if (!this._getApiHost || !this._getApiHost()) return false;
         if (!this._channelD1FetchedAt) this._channelD1FetchedAt = new Map();
         const force = !!opts.force;
         const now = Date.now();
@@ -1433,12 +1433,14 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             names.push(name);
             if (names.length >= 50) break;
         }
-        if (names.length === 0) return;
+        if (names.length === 0) return true;
         let resp;
         try {
-            resp = await this._storageApiStream('channel-get', { channels: names }, false);
+            const since = Number(opts.since) > 0 ? Math.floor(Number(opts.since)) : 0;
+            resp = await this._storageApiStream('channel-get', since ? { channels: names, since } : { channels: names }, false);
         } catch (_) {
-            return;
+            for (const name of names) this._channelD1FetchedAt.delete(name);
+            return false;
         }
 
         let applied = false;
@@ -1464,6 +1466,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         const FLUSH = 30;
         let batch = [];
+        let completed = true;
         try {
             if (resp && resp._wsItems) {
                 for (const ev of resp._wsItems) {
@@ -1490,10 +1493,13 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 if (buf) { try { batch.push(JSON.parse(buf)); } catch (_) { } }
             }
             await applyBatch(batch);
-        } catch (_) { }
+        } catch (_) {
+            completed = false;
+        }
 
         // Paint the active channel if its view settled empty before the archive arrived.
         if (applied) this._repaintActiveChannelIfEmpty(names);
+        return completed;
     },
 
     _repaintActiveChannelIfEmpty(names) {
@@ -2351,6 +2357,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     // Store an unread count and stamp the lastRead it was derived from.
     _setUnreadCount(channel, count) {
+        if (typeof this._scheduleAppBadge === 'function') this._scheduleAppBadge();
         if (!this._unreadBasisRead) this._unreadBasisRead = new Map();
         if (count > 0) {
             this.unreadCounts.set(channel, count);
