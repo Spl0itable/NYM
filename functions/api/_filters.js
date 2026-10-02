@@ -30,6 +30,16 @@ function emptySet() {
 
 let cache = emptySet();
 let loading = null;
+let loadingAt = 0;
+const LOAD_TIMEOUT_MS = 4000;
+
+function withTimeout(p, ms) {
+  let timer = null;
+  const limit = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("filter read timed out")), ms); });
+  return Promise.race([Promise.resolve(p).finally(() => { if (timer) clearTimeout(timer); }), limit]);
+}
+
+export function _resetFilterCache() { cache = emptySet(); loading = null; loadingAt = 0; }
 
 async function readRows(db) {
   const hit = await edgeCacheGet(NOPE_CACHE_KEY);
@@ -72,8 +82,11 @@ async function readSet(env) {
 export function filterSet(env) {
   const now = Date.now();
   if (now - cache.at < REFRESH_MS) return Promise.resolve(cache);
+  if (loading && now - loadingAt > LOAD_TIMEOUT_MS + 1000) loading = null;
   if (!loading) {
-    loading = readSet(env).then((s) => { cache = s; loading = null; return s; }, () => { loading = null; cache.at = now; return cache; });
+    const p = withTimeout(readSet(env), LOAD_TIMEOUT_MS).then((s) => { if (loading === p) { cache = s; loading = null; } return cache; }, () => { if (loading === p) { loading = null; cache.at = now; } return cache; });
+    loading = p;
+    loadingAt = now;
   }
   return cache.at ? Promise.resolve(cache) : loading;
 }

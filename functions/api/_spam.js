@@ -2,6 +2,7 @@ import { hasD1, replica, edgeCacheGet, edgeCachePut, edgeCacheDelete } from './_
 import { verifyBadge, authorityPubkey } from './_attest.js';
 import { cacheRateTake } from './_shared.js';
 import { filterSetSync, NOPE_DDL } from './_filters.js';
+import { SPAM_LEXICON } from './_spam-lexicon.js';
 
 export const SPAM_DDL = [
   "CREATE TABLE IF NOT EXISTS spam_config (key TEXT PRIMARY KEY, value TEXT)",
@@ -49,11 +50,12 @@ export const SPAM_DDL = [
 ];
 
 export const SPAM_SCHEMA_VERSION = 2;
-export const SPAM_ENGINE_VERSION = 2;
+export const SPAM_ENGINE_VERSION = 3;
 export const SPAM_STATUS_VERSION_PREFIX = "status:v";
 const SPAM_SCHEMA_KEY = "schema:worker";
 
 export const SPAM_SETTINGS_KEY = "settings";
+export const SPAM_SETTINGS_VERSION_KEY = "settings:version";
 export const SPAM_RESTORED_KEY = "restored";
 const RESTORED_MAX = 500;
 const RESTORED_WINDOW_MS = 7 * 86400000;
@@ -76,6 +78,58 @@ const MUTED_MAX = 5000;
 const MAX_CONCURRENT = 4;
 const HELD_EXTRA_SLOTS = 2;
 const MAX_QUEUE = 200;
+const RULE_CONCURRENT = 32;
+const EVIDENCE_QUEUE_MAX = 2000;
+const ENGINE_CONNS_PER_CONTEXT = 2;
+const CACHE_TIMEOUT_MS = 1000;
+const D1_READ_TIMEOUT_MS = 2500;
+const D1_WRITE_TIMEOUT_MS = 10000;
+const MODEL_TIMEOUT_MS = 20000;
+const STATUS_TIMEOUT_MS = 3000;
+const FLUSH_STEP_MS = 14500;
+const SCHEMA_STEP_MS = 12000;
+const JOB_DEADLINE_MIN_MS = 10000;
+const DELIVER_EVERY_MS = 50;
+const SETTINGS_TIMING_DEFAULT = { versionMs: 5000, refreshMs: 60000, timeoutMs: 3000, backoffMs: 2000, versionCacheS: 3 };
+let SETTINGS_TIMING = Object.assign({}, SETTINGS_TIMING_DEFAULT);
+export function _setSettingsTiming(t) { SETTINGS_TIMING = Object.assign({}, SETTINGS_TIMING_DEFAULT, t || {}); }
+const SETTINGS_VERSION_CACHE_KEY = "settings-version";
+const TAIL_MIN_LEN = 10;
+const TAIL_MAX_LEN = 24;
+const MARKER_PREFIX_MIN = 5;
+const MARKER_PREFIX_MAX = 8;
+const MARKER_WINDOW_MS = 20 * 60000;
+const MARKER_TTL_MS = 30 * 60000;
+const MARKER_TOKENS = 3;
+const MARKER_PUBKEYS = 2;
+const MARKER_TOKENS_ALONE = 6;
+const MARKER_PUBKEYS_ALONE = 3;
+const MARKER_CLUSTER_MAX = 64;
+const MARKER_PREFIXES_MAX = 6000;
+const MARKER_SHARE_KEY = "spam-markers";
+const MARKER_SHARE_S = 600;
+const MARKER_PULL_MS = 30000;
+const BURST_N = 4;
+const BURST_MS = 15000;
+const BURST_DROP_MS = 120000;
+const ACTOR_MS = 6 * 3600000;
+const FAMILY_TTL_MS = 6 * 3600000;
+const NYM_INDEX_MAX = 5000;
+const NYM_PUBKEYS_MAX = 64;
+const URL_TTL_MS = 6 * 3600000;
+const URL_INDEX_MAX = 4000;
+const URL_SPAM_MIN = 2;
+const LINK_ONLY_WORDS = 3;
+const SIM_MIN_TOKENS = 6;
+const SIM_THRESHOLD = 0.3;
+const SIM_CLUSTER = 2;
+const SIM_ENTRIES_MAX = 400;
+const SIM_TTL_MS = 30 * 60000;
+const HAM_DOCS_MAX = 3000;
+const CLEAN_MAX = 5000;
+const CLEAN_TTL_MS = 6 * 3600000;
+const NYM_ROWS_TTL_MS = 20000;
+const NYM_ROWS_MAX = 2000;
 const CLAIM_TTL_S = 20;
 const CLAIM_POLL_MS = 200;
 const OUTCOME_TTL_S = 120;
@@ -170,7 +224,7 @@ export function hash32(s) {
 export function spamTokens(content) {
   if (typeof content !== "string") return [];
   const out = [];
-  for (let w of content.toLowerCase().split(/\s+/)) {
+  for (let w of normalizeText(content).text.toLowerCase().split(/\s+/)) {
     if (!w) continue;
     if (/^(https?:\/\/|www\.)/.test(w)) {
       w = w.replace(/[?#].*$/, "").replace(/[^\p{L}\p{N}\/]+$/u, "");
@@ -208,6 +262,175 @@ export function nonceTokens(content) {
     if (common / (w.length - 1) < NONCE_COMMON_SHARE) out.push(w);
   }
   return out;
+}
+
+const HOMOGLYPHS = { "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s", "ԁ": "d", "ɡ": "g", "һ": "h", "ӏ": "l", "ո": "n", "ս": "u", "ο": "o", "α": "a", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ρ": "p", "τ": "t", "υ": "u", "χ": "x", "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "У": "Y", "І": "I", "Ј": "J", "Ѕ": "S", "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X" };
+const HOMOGLYPH_RE = new RegExp("[" + Object.keys(HOMOGLYPHS).join("") + "]", "g");
+const HOMOGLYPH_TEST = new RegExp("[" + Object.keys(HOMOGLYPHS).join("") + "]");
+const SEPARATED_WORD_RE = /[\p{L}·•∙⋅‧·​‌‍⁠﻿­͏]+/gu;
+const WORD_SEPARATORS_RE = /[·•∙⋅‧·​‌‍⁠﻿­͏]+/u;
+const INVISIBLE_RE = /[​⁠-⁤﻿͏᠎]/g;
+const LATIN_RE = /^\p{Script=Latin}+$/u;
+
+function joinSeparated(word) {
+  if (!WORD_SEPARATORS_RE.test(word)) return null;
+  const parts = word.split(WORD_SEPARATORS_RE);
+  if (parts.length < 2 || parts.some((p) => !p || !LATIN_RE.test(p))) return null;
+  const joined = parts.join("");
+  if (joined.length < 4 || !parts.some((p) => p.length >= 2)) return null;
+  let catalan = true;
+  for (let i = 1; i < parts.length; i++) if (!(/l$/i.test(parts[i - 1]) && /^l/i.test(parts[i]))) catalan = false;
+  if (catalan) return null;
+  return { joined, n: parts.length - 1 };
+}
+
+export function normalizeText(content) {
+  if (typeof content !== "string" || !content) return { text: "", obfuscations: 0 };
+  let n = 0;
+  let t = content.normalize("NFKC");
+  t = t.replace(SEPARATED_WORD_RE, (word) => {
+    const j = joinSeparated(word);
+    if (!j) return word;
+    n += j.n;
+    return j.joined;
+  });
+  t = t.replace(INVISIBLE_RE, "");
+  t = t.replace(/\p{L}+/gu, (word) => {
+    if (!/\p{Script=Latin}/u.test(word) || !HOMOGLYPH_TEST.test(word)) return word;
+    n++;
+    return word.replace(HOMOGLYPH_RE, (c) => HOMOGLYPHS[c]);
+  });
+  return { text: t, obfuscations: n };
+}
+
+function randomish(w) {
+  let common = 0, vowels = 0, run = 0, maxRun = 0;
+  for (let i = 0; i < w.length; i++) {
+    const c = w[i];
+    if ("aeiouy".includes(c)) { vowels++; run = 0; } else { run++; if (run > maxRun) maxRun = run; }
+    if (i + 1 < w.length && COMMON_BIGRAMS.has(w.slice(i, i + 2))) common++;
+  }
+  return common / (w.length - 1) < NONCE_COMMON_SHARE || vowels / w.length < 0.2 || maxRun >= 6;
+}
+
+function tailOf(text) {
+  const m = /(?:^|\s)([A-Za-z]+)[^\p{L}\p{N}]*$/u.exec(text.trim());
+  if (!m) return "";
+  const w = m[1];
+  if (w !== w.toLowerCase() || w.length < TAIL_MIN_LEN || w.length > TAIL_MAX_LEN) return "";
+  return randomish(w) ? w : "";
+}
+
+export function trailingNonce(content) {
+  return tailOf(normalizeText(content).text);
+}
+
+export function bodyText(content) {
+  const t = normalizeText(content).text;
+  const tail = tailOf(t);
+  if (!tail) return t;
+  const i = t.lastIndexOf(tail);
+  return (t.slice(0, i) + t.slice(i + tail.length)).trim();
+}
+
+const TRACKING_PARAM = /^(utm_[a-z_]+|fbclid|gclid|dclid|msclkid|igshid|mc_eid|mc_cid|ref|ref_src|ref_url|si|s|feature|_r|_t|share_id|mibextid|__cft__.*|__tn__)$/i;
+
+export function campaignUrls(content) {
+  const out = [];
+  for (const m of String(content || "").matchAll(/(?:https?:\/\/|www\.)[^\s<>"']+/gi)) {
+    let raw = m[0].replace(/[),.!?;:\]]+$/, "");
+    if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+    let u;
+    try { u = new URL(raw); } catch (_) { continue; }
+    const host = u.hostname.toLowerCase().replace(/^(www|m)\./, "");
+    const params = [];
+    for (const [k, v] of u.searchParams) if (!TRACKING_PARAM.test(k)) params.push(k + "=" + v);
+    params.sort();
+    const key = host + u.pathname.replace(/\/+$/, "") + (params.length ? "?" + params.join("&") : "");
+    if (!out.includes(key)) out.push(key);
+    if (out.length >= DOMAIN_MAX) break;
+  }
+  return out;
+}
+
+function stemWord(w) {
+  for (const suf of ["ings", "ing", "ers", "ed", "er", "es", "ly", "s"]) if (w.endsWith(suf) && w.length - suf.length >= 4) return w.slice(0, -suf.length);
+  return w;
+}
+
+export function skeletonTokens(content) {
+  const stop = lexicon().stop;
+  const t = bodyText(content).toLowerCase().replace(/(?:https?:\/\/|www\.)\S+/g, " ").replace(/(^|\s)[@#]\S+/g, " ");
+  const set = new Set();
+  for (const raw of t.split(/[^\p{L}]+/u)) {
+    if (raw.length < 3) continue;
+    const w = raw.replace(/(.)\1{2,}/gu, "$1$1");
+    if (stop.has(w)) continue;
+    set.add(stemWord(w));
+  }
+  return Array.from(set);
+}
+
+let LEXICON = null;
+
+function compileLexicon(src) {
+  const rx = (r) => { try { return r ? new RegExp(r, "iu") : null; } catch (_) { return null; } };
+  return {
+    slur: new Set(src.slur || []), slurLoose: new Set(src.slurLoose || []), vulgar: new Set(src.vulgar || []), vulgarLoose: new Set(src.vulgarLoose || []),
+    threats: (src.threats || []).map(rx).filter(Boolean), child: rx(src.child), sexual: rx(src.sexual),
+    stop: new Set(String(src.stopWords || "").split(/\s+/).filter(Boolean))
+  };
+}
+
+function lexicon() {
+  if (!LEXICON) LEXICON = compileLexicon(SPAM_LEXICON);
+  return LEXICON;
+}
+
+const collapseLoose = (w) => w.replace(/(.)\1+/gu, "$1");
+
+export function _setSpamLexicon(words) {
+  if (!words) { LEXICON = null; return; }
+  const slur = words.slur || [];
+  const vulgar = words.vulgar || [];
+  LEXICON = compileLexicon(Object.assign({}, SPAM_LEXICON, {
+    slur: slur.map(hash32), slurLoose: slur.map((w) => hash32(collapseLoose(w))), vulgar: vulgar.map(hash32), vulgarLoose: vulgar.map((w) => hash32(collapseLoose(w)))
+  }));
+}
+
+function lexWords(text) {
+  const words = text.toLowerCase().split(/[^\p{L}\p{N}$@|!]+/u).filter(Boolean);
+  const out = words.map((w) => (/[0-9$@|!]/.test(w) && /\p{L}/u.test(w) ? w.replace(/[0134578$@|!]/g, (c) => LEET[c]) : w));
+  let run = [];
+  for (const w of words.concat([""])) {
+    if (w.length === 1 && /\p{L}/u.test(w)) run.push(w);
+    else { if (run.length >= 3) out.push(run.join("")); run = []; }
+  }
+  return out;
+}
+
+export function lexiconHits(content) {
+  const lex = lexicon();
+  const text = normalizeText(content).text;
+  let slur = 0, vulgar = 0;
+  for (const w0 of lexWords(text)) {
+    const w = w0.replace(/[^\p{L}]/gu, "");
+    if (w.length < 3) continue;
+    const tight = w.replace(/(.)\1{2,}/gu, "$1$1");
+    const loose = collapseLoose(w);
+    const squeezed = loose !== w;
+    if (lex.slur.has(hash32(tight)) || (squeezed && lex.slurLoose.has(hash32(loose)))) slur++;
+    else if (lex.vulgar.has(hash32(tight)) || (squeezed && lex.vulgarLoose.has(hash32(loose)))) vulgar++;
+  }
+  const lower = text.toLowerCase().replace(/[‘’`]/g, "'");
+  let threat = 0;
+  for (const re of lex.threats) if (re.test(lower)) threat++;
+  const child = !!(lex.child && lex.sexual && lex.child.test(lower) && lex.sexual.test(lower));
+  return { slur, vulgar, threat, child: child ? 1 : 0 };
+}
+
+export function nymPattern(nym) {
+  return typeof nym === "string" && /^[A-Z][a-z]+-(?:[A-Z][a-z]+)?$/.test(nym.trim());
 }
 
 const REPORT_REVIEWS_PER_REPORTER_HOUR = 5;
@@ -347,7 +570,22 @@ export function ruleVerdict(job, dossier, settings) {
         reason: "links to " + d + ", judged spam " + st.spam + " times from " + st.spamPubkeys + " senders and never ok in the last 7 days" };
     }
   }
-  return null;
+  return abuseVerdict(job) || (job.marker ? markerVerdict(job.marker) : null);
+}
+
+function abuseVerdict(job) {
+  const lex = job.lex;
+  if (!lex) return null;
+  const strong = lex.slur || lex.threat || lex.child;
+  const burst = !!job.burst;
+  if (!((lex.slur && (burst || lex.threat || lex.child)) || ((lex.threat || lex.child) && burst) || (strong && (job.obfuscations || 0) > 0))) return null;
+  const what = [lex.slur ? "a hard slur" : "", lex.threat ? "an explicit threat" : "", lex.child ? "sexual talk about a child" : ""].filter(Boolean).join(" and ");
+  const plus = burst ? " in a burst of messages from one key" : (job.obfuscations || 0) > 0 ? " with obfuscated words" : "";
+  return { spam: true, confidence: 0.97, category: "abuse", language: "", model: "rule", reason: "the message carries " + what + plus };
+}
+
+function markerVerdict(prefix) {
+  return { spam: true, confidence: 0.97, category: "campaign-marker", language: "", model: "rule", reason: "ends with a random token from the campaign marker family \"" + prefix + "\" that other senders judged spam used" };
 }
 
 export function badgeGateRefuses(mode, tier) {
@@ -409,7 +647,7 @@ export function verdictReusable(fp) {
 const BAND_SEEDS = [0x9e3779b9, 0x85ebca6b, 0xc2b2ae35, 0x27d4eb2f];
 
 export function fingerprint(content) {
-  const tokens = spamTokens(content);
+  const tokens = spamTokens(bodyText(content));
   const text = tokens.join(" ");
   const shingles = [];
   if (tokens.length === 1) shingles.push(hash32(tokens[0]));
@@ -537,6 +775,14 @@ export function buildSpamPrompt(job, dossier) {
   lines.push("gibberish score: " + (job.localScore || 0) + " (3+ is drop-worthy on its own)");
   lines.push("random-looking tokens (a bot appending noise so each copy differs): " + (job.nonces && job.nonces.length ? job.nonces.join(", ") : "none"));
   lines.push("near-identical copies seen by this proxy in the last 15 min: " + (job.copies || 0));
+  lines.push("obfuscated words (dots, invisible characters or look-alike letters inside words): " + (job.obfuscations || 0));
+  lines.push("trailing random token: " + (job.tail ? JSON.stringify(job.tail) + (job.marker ? " (shares the campaign marker \"" + job.marker + "\" with spam from other senders)" : "") : "none"));
+  lines.push("burst: " + (job.burst ? "yes, " + job.burstCount + " messages from this key within 15 seconds" : "no"));
+  const lex = job.lex;
+  if (lex && (lex.slur || lex.vulgar || lex.threat || lex.child)) lines.push("lexicon: hard slurs " + lex.slur + ", vulgar words " + lex.vulgar + ", explicit threats " + lex.threat + ", sexual talk about a child " + (lex.child ? "yes" : "no"));
+  if (job.memSimilar) lines.push("reads like recent spam from " + job.memSimilar + " other senders seen by this proxy");
+  if (job.urlSpam) lines.push("links that recent spam verdicts carried: " + job.urlSpam);
+  if (nymPattern(job.nym)) lines.push("nym shape: First-Last or Name- with a trailing hyphen, a pattern bot families use (weak evidence only)");
   const rec = dossier.record;
   lines.push("");
   lines.push("SENDER RECORD");
@@ -651,7 +897,7 @@ async function callTransport(env, t, rawMessages) {
   if (t.kind === "bound") {
     const opts = String(env.SPAM_VIA_GATEWAY || "") === "1" && env.AI_GATEWAY_NAME ? { gateway: { id: env.AI_GATEWAY_NAME } } : undefined;
     const body = { messages, max_tokens: 300, temperature: 0 };
-    const res = opts ? await env.AI.run(t.model, body, opts) : await env.AI.run(t.model, body);
+    const res = await timed(opts ? env.AI.run(t.model, body, opts) : env.AI.run(t.model, body), MODEL_TIMEOUT_MS, "model call");
     return messageText(res);
   }
   const headers = { "Content-Type": "application/json" };
@@ -659,8 +905,15 @@ async function callTransport(env, t, rawMessages) {
   const gatewayToken = env.AI_GATEWAY_TOKEN || token;
   if (gatewayToken) headers["cf-aig-authorization"] = "Bearer " + gatewayToken;
   if (token) headers["Authorization"] = "Bearer " + token;
-  const res = await fetch(t.url, { method: "POST", headers, body: JSON.stringify({ model: t.model, messages, max_tokens: 300, temperature: 0 }) });
-  const raw = await res.text();
+  const abort = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = abort ? setTimeout(() => { try { abort.abort(); } catch (_) { } }, MODEL_TIMEOUT_MS) : null;
+  let res, raw;
+  try {
+    res = await fetch(t.url, Object.assign({ method: "POST", headers, body: JSON.stringify({ model: t.model, messages, max_tokens: 300, temperature: 0 }) }, abort ? { signal: abort.signal } : {}));
+    raw = await res.text();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   let data = null;
   try { data = JSON.parse(raw); } catch (e) { data = null; }
   if (!res.ok) throw new Error("gateway HTTP " + res.status + ": " + raw.slice(0, 160));
@@ -708,10 +961,25 @@ function mergeList(existing, value, cap) {
   return list.slice(0, cap || 10).join(",");
 }
 
+function freshCounters() {
+  return {
+    inspected: 0, unbadged: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0,
+    muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0, lowTrust: 0,
+    overBudgetDropped: 0, unverified: 0, lite: 0, remuted: 0, recordMuted: 0, flushes: 0, writeErrors: 0, writeRetries: 0, writeDropped: 0,
+    fastMarker: 0, fastRepeat: 0, fastUrl: 0, fastSimilar: 0, fastFamily: 0, fastBurst: 0, fastActor: 0, fastLexicon: 0,
+    timeoutDropped: 0, stalls: 0, abandoned: 0, offReleased: 0, ioTimeouts: 0, cacheSkipped: 0, flushAbandoned: 0, settingsTimeouts: 0,
+    parked: 0, modelQueued: 0, delivered: 0
+  };
+}
+
 const state = {
   settings: null,
   settingsAt: 0,
   settingsLoading: null,
+  settingsLoadingAt: 0,
+  settingsRetryAt: 0,
+  settingsCheckAt: 0,
+  settingsVersion: null,
   seen: new Map(),
   exact: new Map(),
   muted: new Map(),
@@ -720,14 +988,21 @@ const state = {
   restored: new Map(),
   restoredValue: null,
   pending: new Map(),
+  pendingBy: new Map(),
   velocity: new Map(),
   examples: null,
   examplesLoading: null,
+  examplesLoadingAt: 0,
   queue: [],
+  parked: new Map(),
+  inflightSim: new Map(),
+  inflight: new Map(),
   running: 0,
-  generation: 0,
-  heldRunning: 0,
+  modelRunning: 0,
+  heldModel: 0,
+  modelWaiters: [],
   slotWaiters: [],
+  generation: 0,
   budgetMinute: 0,
   budgetUsed: 0,
   dossierMinute: 0,
@@ -737,55 +1012,126 @@ const state = {
   lastErrorAt: 0,
   statusAt: 0,
   cooldownUntil: 0,
+  lastProgressAt: 0,
+  stalled: false,
   wbuf: [],
+  wbufSince: 0,
   wrows: new Map(),
   wtimer: null,
-  wflush: Promise.resolve(),
+  wtimerAt: 0,
   wenv: null,
-  wcontext: null,
+  flushRun: null,
+  lastFlushAt: 0,
+  lastFlushError: null,
+  lastFlushErrorAt: 0,
   records: new Map(),
   nopeLive: new Map(),
   settled: new Map(),
   campaign: new Map(),
-  campaignFleet: new Map(),
   schema: new Map(),
   configReady: false,
   auditMissing: false,
-  coordMutes: [],
-  coordMuteTimer: null,
-  countersSent: {},
-  countersAt: 0,
   lastWriteError: null,
   lastWriteErrorAt: 0,
-  counters: { inspected: 0, unbadged: 0, queued: 0, held: 0, audited: 0, cached: 0, rules: 0, coalesced: 0, overflow: 0, dropped: 0, retracted: 0, timedOut: 0, muted: 0, skippedBudget: 0, skippedCooldown: 0, rateLimited: 0, nymOnly: 0, chatter: 0, reportReviews: 0, raced: 0, errors: 0, lowTrust: 0, overBudgetDropped: 0, unverified: 0, lite: 0, remuted: 0, recordMuted: 0, flushes: 0, writeErrors: 0, writeRetries: 0, writeDropped: 0, coordClaims: 0, coordJudged: 0, coordKnown: 0, coordMuted: 0, coordPending: 0, coordWaits: 0, coordErrors: 0, coordTimeouts: 0, coordSlow: 0, coordSkipped: 0, coordProbes: 0, coordBreakerOpens: 0, coordBreakerOpenMs: 0 }
+  tails: new Map(),
+  markers: new Map(),
+  markersDirty: false,
+  markersPulledAt: 0,
+  markerSync: null,
+  nyms: new Map(),
+  stems: new Map(),
+  urls: new Map(),
+  bands: new Map(),
+  sims: [],
+  hamDocs: [],
+  hamDf: new Map(),
+  burstSpam: new Map(),
+  clean: new Map(),
+  nymRows: new Map(),
+  ioBusy: new WeakMap(),
+  counters: freshCounters()
 };
 
+const IO_ROOT = {};
+
 export function _resetSpamState() {
-  state.settings = null; state.settingsAt = 0; state.settingsLoading = null;
+  state.settings = null; state.settingsAt = 0; state.settingsLoading = null; state.settingsLoadingAt = 0; state.settingsRetryAt = 0; state.settingsCheckAt = 0; state.settingsVersion = null;
   state.seen.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear(); state.dropped.clear();
   state.restored.clear(); state.restoredValue = null;
   for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
-  state.pending.clear();
-  state.velocity.clear(); state.examples = null; state.examplesLoading = null;
-  state.queue = []; state.running = 0; state.heldRunning = 0; state.slotWaiters = []; state.generation++; state.budgetMinute = 0; state.budgetUsed = 0;
+  state.pending.clear(); state.pendingBy.clear();
+  state.velocity.clear(); state.examples = null; state.examplesLoading = null; state.examplesLoadingAt = 0;
+  for (const w of state.modelWaiters) { try { w.resolve("gone"); } catch (_) { } }
+  state.queue = []; state.parked.clear(); state.inflightSim.clear(); state.inflight.clear();
+  state.running = 0; state.modelRunning = 0; state.heldModel = 0; state.modelWaiters = []; state.slotWaiters = [];
+  state.generation++; state.budgetMinute = 0; state.budgetUsed = 0;
   state.dossierMinute = 0; state.dossierUsed = 0;
   state.lastAuditAt = 0; state.lastError = null; state.lastErrorAt = 0; state.statusAt = 0; state.cooldownUntil = 0;
+  state.lastProgressAt = 0; state.stalled = false;
   if (state.wtimer) clearTimeout(state.wtimer);
-  state.wtimer = null; state.wbuf = []; state.wrows.clear(); state.wflush = Promise.resolve(); state.wenv = null; state.wcontext = null;
-  state.records.clear(); state.nopeLive.clear(); state.settled.clear(); state.campaign.clear(); state.campaignFleet.clear(); state.schema.clear();
+  state.wtimer = null; state.wtimerAt = 0; state.wbuf = []; state.wbufSince = 0; state.wrows.clear(); state.wenv = null;
+  if (state.flushRun) state.flushRun.abandoned = true;
+  state.flushRun = null; state.lastFlushAt = 0; state.lastFlushError = null; state.lastFlushErrorAt = 0;
+  state.records.clear(); state.nopeLive.clear(); state.settled.clear(); state.campaign.clear(); state.schema.clear();
   state.configReady = false; state.auditMissing = false; state.lastWriteError = null; state.lastWriteErrorAt = 0;
-  if (state.coordMuteTimer) clearTimeout(state.coordMuteTimer);
-  state.coordMutes = []; state.coordMuteTimer = null; state.countersSent = {}; state.countersAt = 0;
-  resetBreaker();
-  for (const k of Object.keys(state.counters)) state.counters[k] = 0;
+  state.tails.clear(); state.markers.clear(); state.markersDirty = false; state.markersPulledAt = 0; state.markerSync = null;
+  state.nyms.clear(); state.stems.clear(); state.urls.clear(); state.bands.clear(); state.sims = []; state.hamDocs = []; state.hamDf.clear();
+  state.burstSpam.clear(); state.clean.clear(); state.nymRows.clear(); state.ioBusy = new WeakMap();
+  state.counters = freshCounters();
   badgeTierCache.clear();
   badgeAuthority = undefined;
+}
+
+function timed(p, ms, what) {
+  let timer = null;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => { state.counters.ioTimeouts++; reject(new Error((what || "I/O") + " timed out after " + ms + " ms")); }, ms);
+  });
+  return Promise.race([Promise.resolve(p).finally(() => { if (timer) clearTimeout(timer); }), limit]);
+}
+
+function isTimeout(e) { return /timed out after/.test(String(e && e.message || e)); }
+
+function ioKey(ctx) { return ctx && typeof ctx === "object" ? ctx : IO_ROOT; }
+
+function ioTake(ctx) {
+  const k = ioKey(ctx);
+  const n = state.ioBusy.get(k) || 0;
+  if (n >= ENGINE_CONNS_PER_CONTEXT) { state.counters.cacheSkipped++; return false; }
+  state.ioBusy.set(k, n + 1);
+  return true;
+}
+
+function ioGive(ctx) {
+  const k = ioKey(ctx);
+  state.ioBusy.set(k, Math.max(0, (state.ioBusy.get(k) || 1) - 1));
+}
+
+async function cacheGet(ctx, key) {
+  if (!ioTake(ctx)) return undefined;
+  const p = Promise.resolve().then(() => edgeCacheGet(key));
+  p.then(() => ioGive(ctx), () => ioGive(ctx));
+  try { return await timed(p, CACHE_TIMEOUT_MS, "cache read"); } catch (_) { return undefined; }
+}
+
+function cachePut(ctx, key, value, ttl) {
+  if (!ioTake(ctx)) return Promise.resolve();
+  const p = Promise.resolve().then(() => edgeCachePut(key, value, ttl));
+  p.then(() => ioGive(ctx), () => ioGive(ctx));
+  return timed(p, CACHE_TIMEOUT_MS, "cache write").catch(() => { });
+}
+
+function cacheDrop(ctx, key) {
+  if (!ioTake(ctx)) return Promise.resolve();
+  const p = Promise.resolve().then(() => edgeCacheDelete(key));
+  p.then(() => ioGive(ctx), () => ioGive(ctx));
+  return timed(p, CACHE_TIMEOUT_MS, "cache delete").catch(() => { });
 }
 
 function dropExamples() {
   state.examples = null;
   state.examplesLoading = null;
-  return edgeCacheDelete(EXAMPLES_CACHE_KEY);
+  return cacheDrop(null, EXAMPLES_CACHE_KEY);
 }
 
 export function _dropExamplesCache() { return dropExamples(); }
@@ -803,13 +1149,20 @@ export function velocityOf(pubkey, now) {
   return { n15: stamps.filter((t) => t > now - VELOCITY_WINDOW_MS).length, n60: stamps.length, stamps };
 }
 
+function burstCount(pubkey, now) {
+  const arr = state.velocity.get(pubkey) || [];
+  let n = 0;
+  for (const t of arr) if (t > now - BURST_MS && t <= now) n++;
+  return n;
+}
+
 export function isCoolingDown(now) {
   return (now || Date.now()) < state.cooldownUntil;
 }
 
 export function isSpamHidden(id) { return state.hidden.has(id); }
 
-export function _expireSpamSettings() { state.settingsAt = 0; }
+export function _expireSpamSettings() { state.settingsAt = 0; state.settingsCheckAt = 0; state.settingsRetryAt = 0; }
 
 function applyRestored(value) {
   state.restoredValue = value || null;
@@ -844,21 +1197,44 @@ function hideLocally(id) {
   if (state.hidden.size > SEEN_MAX) state.hidden.delete(state.hidden.values().next().value);
 }
 
+function deliver(w, action) {
+  if (w.port && w.port.closed) { w.want = null; return true; }
+  const fn = action === "retract" ? w.retract : w.release;
+  let ok = true;
+  try { ok = typeof fn === "function" ? fn() !== false : true; } catch (_) { ok = false; }
+  if (ok) { w.want = null; state.counters.delivered++; return true; }
+  w.want = action;
+  return false;
+}
+
+function addPendingBy(pubkey, id) {
+  let set = state.pendingBy.get(pubkey);
+  if (!set) { set = new Set(); state.pendingBy.set(pubkey, set); }
+  set.add(id);
+}
+
+function forgetPending(id, pend) {
+  state.pending.delete(id);
+  if (pend.timer) { clearTimeout(pend.timer); pend.timer = null; }
+  const pk = pend.job && pend.job.pubkey;
+  const set = pk ? state.pendingBy.get(pk) : null;
+  if (set) { set.delete(id); if (!set.size) state.pendingBy.delete(pk); }
+}
+
 function settle(id, drop) {
   const pend = state.pending.get(id);
   if (!pend) { if (drop) lateDrop(id); return; }
-  state.pending.delete(id);
-  if (pend.timer) clearTimeout(pend.timer);
+  forgetPending(id, pend);
   for (const w of pend.waiters) {
-    try {
-      if (drop) {
-        if (w.released) { w.retracted = true; state.counters.retracted++; if (typeof w.retract === "function") w.retract(); }
-        else state.counters.dropped++;
-      } else if (!w.released) {
-        w.released = true;
-        if (typeof w.release === "function") w.release();
-      }
-    } catch (_) { }
+    if (drop) {
+      if (w.released) {
+        if (!w.retracted) { w.retracted = true; state.counters.retracted++; deliver(w, "retract"); }
+      } else { w.dropped = true; state.counters.dropped++; }
+    } else if (!w.released) {
+      w.released = true;
+      w.releasedAt = Date.now();
+      deliver(w, "release");
+    }
   }
   if (!drop) rememberSettled(id, pend);
 }
@@ -867,10 +1243,96 @@ function releaseAll(id) {
   const pend = state.pending.get(id);
   if (!pend) return;
   pend.released = true;
+  if (pend.timer) { clearTimeout(pend.timer); pend.timer = null; }
   for (const w of pend.waiters) {
-    if (w.released) continue;
+    if (w.released || w.dropped) continue;
     w.released = true;
-    try { if (typeof w.release === "function") w.release(); } catch (_) { }
+    w.releasedAt = Date.now();
+    deliver(w, "release");
+  }
+}
+
+function releaseAllPending() {
+  let n = 0;
+  for (const [id, pend] of Array.from(state.pending.entries())) {
+    if (pend.released) continue;
+    releaseAll(id);
+    n++;
+  }
+  return n;
+}
+
+function holdTimeout(id) {
+  const pend = state.pending.get(id);
+  if (!pend || pend.released) return;
+  if (pend.timer) { clearTimeout(pend.timer); pend.timer = null; }
+  const s = state.settings;
+  const now = Date.now();
+  if (!state.stalled && s && s.enabled && s.autoEnforce && flaggedNow(pend.job, now)) {
+    state.counters.timeoutDropped++;
+    noteDropped(id);
+    if (s.blockEvents) hideLocally(id);
+    settle(id, true);
+    return;
+  }
+  state.counters.timedOut++;
+  releaseAll(id);
+}
+
+function portBusy(port) {
+  for (const w of port.waiters) if (w.want || (!w.released && !w.dropped)) return true;
+  return false;
+}
+
+function portTick(port) {
+  const now = Date.now();
+  for (const w of Array.from(port.waiters)) {
+    if (w.want) deliver(w, w.want);
+    const pend = state.pending.get(w.id);
+    if (pend && !pend.released && now >= pend.deadline) holdTimeout(w.id);
+    if (!pend && !w.released && !w.dropped && !w.want) w.dropped = true;
+    if (!w.want && (w.dropped || w.retracted || (w.released && now - (w.releasedAt || 0) > SETTLED_TTL_MS))) port.waiters.delete(w);
+  }
+}
+
+function ensurePortTimer(port, pulse) {
+  if (port.timer || port.closed) return;
+  port.timer = setInterval(pulse, DELIVER_EVERY_MS);
+}
+
+function engineOff() {
+  const n = releaseAllPending();
+  state.counters.offReleased += n;
+  for (const w of state.modelWaiters.splice(0)) { try { w.resolve("gone"); } catch (_) { } }
+  state.queue = [];
+  state.parked.clear();
+}
+
+function progress() {
+  state.lastProgressAt = Date.now();
+  state.stalled = false;
+}
+
+function abandonJob(job) {
+  if (job.abandoned) return;
+  job.abandoned = true;
+  state.counters.abandoned++;
+  const i = state.modelWaiters.findIndex((w) => w.job === job);
+  if (i !== -1) { const w = state.modelWaiters.splice(i, 1)[0]; try { w.resolve("gone"); } catch (_) { } }
+  finishJob(job);
+}
+
+function watchdog(now) {
+  const s = state.settings;
+  const hold = s ? Number(s.holdMs) || 0 : 0;
+  const busy = state.inflight.size > 0 || state.queue.length > 0 || state.modelWaiters.length > 0;
+  if (!busy) { state.lastProgressAt = now; state.stalled = false; return; }
+  const deadline = Math.max(JOB_DEADLINE_MIN_MS, hold * 3);
+  for (const job of Array.from(state.inflight.values())) if (now - (job.startedAt || now) > deadline) abandonJob(job);
+  if (hold > 0 && !state.stalled && now - state.lastProgressAt > hold * 2) {
+    state.stalled = true;
+    state.counters.stalls++;
+    releaseAllPending();
   }
 }
 
@@ -881,309 +1343,35 @@ async function noteStatus(env) {
   const db = env && env.DB_NOPE;
   if (!hasD1(db)) return;
   try {
-    await ensureConfigSchema(env);
-    const fleet = coordWouldCall(env, false) ? await coordCall(env, COUNTERS_NAME, { op: "fleet" }, { timeoutMs: COORD_STATUS_TIMEOUT_MS }) : null;
+    await timed(ensureConfigSchema(env), STATUS_TIMEOUT_MS, "status schema");
     const payload = JSON.stringify({
-        engine: SPAM_ENGINE_VERSION, at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
-        lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length,
-        cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
-        badgeGate: state.settings ? state.settings.requireBadge || "off" : "unloaded", authority: !!authorityPubkey(env),
-        counters: countersNow(Date.now()), fleet: fleet && fleet.totals ? fleet : undefined, coordinator: coordHealth(env, Date.now())
-      });
-    await db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?), (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-      .bind(payload, SPAM_STATUS_VERSION_PREFIX + SPAM_ENGINE_VERSION, payload).run();
+      engine: SPAM_ENGINE_VERSION, at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
+      lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length + state.modelWaiters.length,
+      cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
+      badgeGate: state.settings ? state.settings.requireBadge || "off" : "unloaded", authority: !!authorityPubkey(env),
+      stalled: state.stalled, settingsVersion: state.settingsVersion || "", markers: state.markers.size,
+      flush: flushHealth(now), counters: Object.assign({}, state.counters)
+    });
+    await timed(db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?), (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .bind(payload, SPAM_STATUS_VERSION_PREFIX + SPAM_ENGINE_VERSION, payload).run(), STATUS_TIMEOUT_MS, "status write");
   } catch (_) { }
+}
+
+function flushHealth(now) {
+  return {
+    buffered: state.wbuf.length, oldestMs: state.wbuf.length ? Math.max(0, now - state.wbufSince) : 0,
+    lastFlushAt: state.lastFlushAt, lastFlushError: state.lastFlushError, lastFlushErrorAt: state.lastFlushErrorAt,
+    inFlightMs: state.flushRun ? now - state.flushRun.at : 0, flushes: state.counters.flushes, dropped: state.counters.writeDropped
+  };
 }
 
 export const _noteStatus = noteStatus;
 export function _forceStatus() { state.statusAt = 0; }
 
-export function spamCounters() { return countersNow(Date.now()); }
-
-const COORD_SHARDS_DEFAULT = 16;
-const COORD_STATUS_TIMEOUT_MS = 1000;
-const COORD_BACKGROUND_TIMEOUT_MS = 1000;
-const COUNTER_PUSH_MS = 60000;
-const COUNTERS_NAME = "counters";
-const COORD_MUTE_BATCH_MS = 500;
-const COORD_MUTE_BATCH_MAX = 500;
-const COORD_BUDGET_MIN_MS = 100;
-const COORD_BUDGET_MAX_MS = 400;
-const COORD_BUDGET_SHARE = 0.08;
-const COORD_WAIT_GAPS_MS = [400, 800];
-const COORD_WAIT_MARGIN_MS = 300;
-const COORD_LOCATIONS = new Set(["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"]);
-const BREAKER_FAILS = 3;
-const BREAKER_WINDOW_MS = 10000;
-const BREAKER_WINDOW_MIN = 6;
-const BREAKER_FAIL_RATE = 0.5;
-const BREAKER_RECENT_MAX = 64;
-const BREAKER_COOLDOWN_MS = 60000;
-const BREAKER_COOLDOWN_MAX_MS = 600000;
-const COORD_TIMEOUT = Symbol("timeout");
-let COORD_BUDGET_OVERRIDE_MS = 0;
-let BREAKER_COOLDOWN_BASE_MS = BREAKER_COOLDOWN_MS;
-export function _setCoordTimeoutMs(ms) { COORD_BUDGET_OVERRIDE_MS = ms; }
-export function _setCoordCooldownMs(ms) { BREAKER_COOLDOWN_BASE_MS = ms || BREAKER_COOLDOWN_MS; breaker.cooldownMs = BREAKER_COOLDOWN_BASE_MS; }
-
-const breaker = { fails: 0, recent: [], openUntil: 0, openedAt: 0, cooldownMs: BREAKER_COOLDOWN_MS, probing: false };
-
-function resetBreaker() {
-  breaker.fails = 0; breaker.recent = []; breaker.openUntil = 0; breaker.openedAt = 0;
-  breaker.cooldownMs = BREAKER_COOLDOWN_BASE_MS; breaker.probing = false;
-}
-
-function coordOf(env) {
-  const ns = env && env.SPAM_COORD;
-  return ns && typeof ns.idFromName === "function" && typeof ns.get === "function" ? ns : null;
-}
-
-function coordShards(env) {
-  const n = Math.floor(Number(env && env.SPAM_COORD_SHARDS));
-  return n >= 1 && n <= 256 ? n : COORD_SHARDS_DEFAULT;
-}
-
-function coordLocation(env) {
-  const hint = String((env && env.SPAM_COORD_LOCATION) || "").trim().toLowerCase();
-  return COORD_LOCATIONS.has(hint) ? hint : "";
-}
-
-function shardOf(env, job) {
-  const key = job.fp && job.fp.simKey ? "s" + job.fp.simKey : "i" + job.id;
-  return "shard-" + (hash32(key) % coordShards(env));
-}
-
-export function coordBudget(settings) {
-  if (COORD_BUDGET_OVERRIDE_MS > 0) return COORD_BUDGET_OVERRIDE_MS;
-  const hold = settings && Number(settings.holdMs) > 0 ? Number(settings.holdMs) : 5000;
-  return Math.round(Math.min(COORD_BUDGET_MAX_MS, Math.max(COORD_BUDGET_MIN_MS, hold * COORD_BUDGET_SHARE)));
-}
-
-function coordWouldCall(env, critical) {
-  if (!coordOf(env)) return false;
-  if (!breaker.openUntil) return true;
-  return !!critical && !breaker.probing && Date.now() >= breaker.openUntil;
-}
-
-function coordGate(env, critical) {
-  const ns = coordOf(env);
-  if (!ns) return null;
-  if (!breaker.openUntil) return { ns, probe: false };
-  if (critical && !breaker.probing && Date.now() >= breaker.openUntil) {
-    breaker.probing = true;
-    state.counters.coordProbes++;
-    return { ns, probe: true };
-  }
-  state.counters.coordSkipped++;
-  return null;
-}
-
-function openBreaker(now) {
-  if (!breaker.openedAt) breaker.openedAt = now;
-  breaker.openUntil = now + breaker.cooldownMs;
-  breaker.fails = 0;
-  breaker.recent = [];
-  state.counters.coordBreakerOpens++;
-  console.error("[spam] coordinator breaker open, skipping it for " + Math.round(breaker.cooldownMs / 1000) + "s");
-}
-
-function closeBreaker(now) {
-  if (breaker.openedAt) state.counters.coordBreakerOpenMs += now - breaker.openedAt;
-  breaker.openedAt = 0;
-  breaker.openUntil = 0;
-  breaker.cooldownMs = BREAKER_COOLDOWN_BASE_MS;
-  breaker.fails = 0;
-  breaker.recent = [];
-}
-
-function noteCoordResult(ok, probe, now) {
-  if (probe) {
-    breaker.probing = false;
-    if (ok) { closeBreaker(now); return; }
-    breaker.cooldownMs = Math.min(breaker.cooldownMs * 2, BREAKER_COOLDOWN_MAX_MS);
-    openBreaker(now);
-    return;
-  }
-  if (breaker.openUntil) return;
-  breaker.recent.push({ at: now, ok });
-  while (breaker.recent.length && (breaker.recent[0].at <= now - BREAKER_WINDOW_MS || breaker.recent.length > BREAKER_RECENT_MAX)) breaker.recent.shift();
-  breaker.fails = ok ? 0 : breaker.fails + 1;
-  let failed = 0;
-  for (const r of breaker.recent) if (!r.ok) failed++;
-  if (breaker.fails >= BREAKER_FAILS || (breaker.recent.length >= BREAKER_WINDOW_MIN && failed / breaker.recent.length >= BREAKER_FAIL_RATE)) openBreaker(now);
-}
-
-function coordHealth(env, now) {
-  if (!coordOf(env)) return undefined;
-  const open = breaker.openUntil > 0;
-  return {
-    state: !open ? "on" : breaker.probing ? "probing" : "breaker",
-    openUntil: open ? breaker.openUntil : 0,
-    openForMs: breaker.openedAt ? now - breaker.openedAt : 0,
-    cooldownMs: breaker.cooldownMs,
-    location: coordLocation(env) || undefined
-  };
-}
-
-function countersNow(now) {
-  const out = Object.assign({}, state.counters);
-  if (breaker.openedAt) out.coordBreakerOpenMs += now - breaker.openedAt;
-  return out;
-}
-
-async function coordCall(env, name, body, opts) {
-  const o = opts || {};
-  const gate = coordGate(env, !!o.critical);
-  if (!gate) return null;
-  const ns = gate.ns;
-  const limit = o.timeoutMs || COORD_BACKGROUND_TIMEOUT_MS;
-  const slow = o.slowMs || Math.min(limit, COORD_BUDGET_MAX_MS);
-  const t0 = Date.now();
-  let timer = null;
-  let out = null;
-  let ok = false;
-  const abort = typeof AbortController === "function" ? new AbortController() : null;
-  try {
-    const call = (async () => {
-      const hint = coordLocation(env);
-      const id = ns.idFromName(hint ? hint + ":" + name : name);
-      const stub = hint ? ns.get(id, { locationHint: hint }) : ns.get(id);
-      const init = { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
-      if (abort) init.signal = abort.signal;
-      const res = await stub.fetch("https://spam-coord/" + body.op, init);
-      if (!res.ok) throw new Error("coordinator HTTP " + res.status);
-      return res.json();
-    })();
-    call.catch(() => { });
-    const timeout = new Promise((resolve) => { timer = setTimeout(() => resolve(COORD_TIMEOUT), limit); });
-    const got = await Promise.race([call, timeout]);
-    if (got === COORD_TIMEOUT) {
-      if (abort) { try { abort.abort(); } catch (_) { } }
-      state.counters.coordTimeouts++;
-      state.counters.coordErrors++;
-    } else if (got && typeof got === "object" && !got.error) {
-      out = got;
-      ok = Date.now() - t0 <= slow;
-      if (!ok) state.counters.coordSlow++;
-    } else {
-      state.counters.coordErrors++;
-    }
-  } catch (_) {
-    state.counters.coordErrors++;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-  noteCoordResult(ok, gate.probe, Date.now());
-  return out;
-}
+export function spamCounters() { return Object.assign({}, state.counters); }
 
 function keepAlive(context, p) {
   if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
-}
-
-function coordKnownAllowed(job) {
-  const s = job.settings || state.settings;
-  return !!(s && s.autoEnforce && verdictReusable(job.fp) && !innocuousKind(job.content));
-}
-
-async function coordClaim(env, job, critical) {
-  if (!job.fp) job.fp = fingerprint(job.content);
-  const budget = coordBudget(job.settings || state.settings);
-  const out = await coordCall(env, shardOf(env, job), { op: "claim", id: job.id, sim: job.fp.simKey || 0, pubkey: job.pubkey, token: INSTANCE_TOKEN, known: coordKnownAllowed(job) }, { critical, timeoutMs: budget, slowMs: budget });
-  if (out) state.counters.coordClaims++;
-  return out;
-}
-
-function coordPublish(env, context, job, res) {
-  if (!coordOf(env)) return;
-  let body;
-  if (res && res.verdict) {
-    const v = res.verdict;
-    const s = job.settings || state.settings;
-    const strong = !!(v.spam && s && v.confidence >= s.minConfidence);
-    const until = isSpamMuted(job.pubkey) ? state.muted.get(job.pubkey) : 0;
-    body = {
-      op: "outcome", id: job.id, sim: (job.fp && job.fp.simKey) || 0, pubkey: job.pubkey, strong,
-      reusable: verdictReusable(job.fp) && !innocuousKind(job.content) && !res.peer && !["cache", "cross-ref", "peer"].includes(v.model) && v.category !== "muted-sender",
-      row: { verdict: v.spam ? "spam" : "ok", confidence: v.confidence, category: v.category || "", reason: v.reason || "", lang: v.language || "", action: res.action || "" },
-      verdict: { confidence: v.confidence, category: v.category || "", reason: v.reason || "", model: v.model || "" }, muteUntil: until || 0
-    };
-  } else {
-    body = { op: "release", id: job.id, token: INSTANCE_TOKEN };
-  }
-  keepAlive(context, coordCall(env, shardOf(env, job), body));
-}
-
-function coordNoteMute(env, context, pubkey, until) {
-  if (!coordOf(env) || breaker.openUntil) return;
-  state.coordMutes.push({ pubkey, until });
-  if (state.coordMutes.length > COORD_MUTE_BATCH_MAX) state.coordMutes.splice(0, state.coordMutes.length - COORD_MUTE_BATCH_MAX);
-  if (state.coordMuteTimer) return;
-  state.coordMuteTimer = setTimeout(() => {
-    state.coordMuteTimer = null;
-    const mutes = state.coordMutes.splice(0);
-    if (!mutes.length || !coordWouldCall(env, false)) return;
-    const n = coordShards(env);
-    keepAlive(context, Promise.all(Array.from({ length: n }, (_, i) => coordCall(env, "shard-" + i, { op: "mute", mutes }))));
-  }, COORD_MUTE_BATCH_MS);
-}
-
-export async function pushSpamCounters(env) {
-  if (!coordOf(env)) return false;
-  const deltas = {};
-  let any = false;
-  for (const [k, v] of Object.entries(state.counters)) {
-    const d = v - (state.countersSent[k] || 0);
-    if (d) { deltas[k] = d; any = true; }
-  }
-  state.countersAt = Date.now();
-  if (!any) return true;
-  if (!coordWouldCall(env, false)) return false;
-  const snapshot = Object.assign({}, state.counters);
-  const out = await coordCall(env, COUNTERS_NAME, { op: "count", isolate: INSTANCE_TOKEN, deltas }, { timeoutMs: COORD_STATUS_TIMEOUT_MS });
-  if (!out) return false;
-  for (const k of Object.keys(deltas)) state.countersSent[k] = snapshot[k];
-  return true;
-}
-
-function maybePushCounters(env, context) {
-  if (!coordOf(env) || Date.now() - state.countersAt < COUNTER_PUSH_MS) return;
-  state.countersAt = Date.now();
-  keepAlive(context, pushSpamCounters(env));
-}
-
-function holdLeft(job) {
-  const p = state.pending.get(job.id);
-  if (!p || p.released) return 0;
-  const s = job.settings || state.settings;
-  return p.at + (s ? Number(s.holdMs) || 0 : 0) - Date.now();
-}
-
-async function followCoord(env, context, job, generation, shard) {
-  freeJobSlot(job, generation);
-  pump(env, context);
-  state.counters.coordPending++;
-  const budget = coordBudget(job.settings || state.settings);
-  for (const gap of COORD_WAIT_GAPS_MS) {
-    if (holdLeft(job) < gap + budget + COORD_WAIT_MARGIN_MS) break;
-    await new Promise((r) => setTimeout(r, gap));
-    if (generation !== state.generation) return;
-    if (!state.pending.has(job.id) && state.dropped.has(job.id)) return;
-    if (mutedJob(job)) { dropMutedJob(env, context, job, { status: "pending" }); return; }
-    state.counters.coordWaits++;
-    const w = await coordCall(env, shard, { op: "wait", id: job.id }, { timeoutMs: budget, slowMs: budget });
-    if (w && w.status === "judged" && w.row) {
-      const res = adoptPeer(w.row, job);
-      settle(job.id, verdictDrops(job, res));
-      coalesce(env, context, job);
-      return;
-    }
-    if (!w || w.status === "open") break;
-  }
-  if (generation !== state.generation) return;
-  job.coordSkip = true;
-  state.queue.unshift(job);
-  pump(env, context);
 }
 
 const HIDDEN_LOOKUP_CHUNK = 80;
@@ -1203,9 +1391,12 @@ export async function hiddenEventIds(env, ids) {
     const ph = chunk.map(() => "?").join(", ");
     let rs = null;
     try {
-      rs = await r.prepare("SELECT id FROM spam_hidden WHERE id IN (" + ph + ")").bind(...chunk).all();
-    } catch (_) {
-      try { rs = await r.prepare("SELECT id FROM spam_events WHERE id IN (" + ph + ") AND action LIKE '%event-hidden%'").bind(...chunk).all(); } catch (_) { rs = null; }
+      rs = await timed(r.prepare("SELECT id FROM spam_hidden WHERE id IN (" + ph + ")").bind(...chunk).all(), D1_READ_TIMEOUT_MS, "hidden read");
+    } catch (e) {
+      if (isTimeout(e)) rs = null;
+      else {
+        try { rs = await timed(r.prepare("SELECT id FROM spam_events WHERE id IN (" + ph + ") AND action LIKE '%event-hidden%'").bind(...chunk).all(), D1_READ_TIMEOUT_MS, "hidden read"); } catch (_) { rs = null; }
+      }
     }
     for (const row of (rs && rs.results) || []) out.add(row.id);
   }
@@ -1221,7 +1412,7 @@ export async function hiddenEventIdsSince(env, channels, sinceMs) {
   const bucket = Math.floor((Number(sinceMs) || 0) / HIDDEN_SINCE_BUCKET_MS);
   const from = bucket * HIDDEN_SINCE_BUCKET_MS;
   const key = "hidden-since/" + bucket + "/" + list.map(encodeURIComponent).join(",");
-  const hit = await edgeCacheGet(key);
+  const hit = await cacheGet(null, key);
   if (Array.isArray(hit)) {
     for (const id of hit) if (typeof id === "string") out.add(id);
     return withoutRestored(out);
@@ -1230,16 +1421,17 @@ export async function hiddenEventIdsSince(env, channels, sinceMs) {
   const ph = list.map(() => "?").join(", ");
   let rs = null;
   try {
-    rs = await r.prepare("SELECT id FROM spam_hidden WHERE channel IN (" + ph + ") AND seen_at > ? ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
-      .bind(...list, from).all();
-  } catch (_) {
+    rs = await timed(r.prepare("SELECT id FROM spam_hidden WHERE channel IN (" + ph + ") AND seen_at > ? ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
+      .bind(...list, from).all(), D1_READ_TIMEOUT_MS, "hidden read");
+  } catch (e) {
+    if (isTimeout(e)) return out;
     try {
-      rs = await r.prepare("SELECT id FROM spam_events WHERE channel IN (" + ph + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
-        .bind(...list, from).all();
+      rs = await timed(r.prepare("SELECT id FROM spam_events WHERE channel IN (" + ph + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
+        .bind(...list, from).all(), D1_READ_TIMEOUT_MS, "hidden read");
     } catch (_) { return out; }
   }
   for (const row of (rs && rs.results) || []) out.add(row.id);
-  await edgeCachePut(key, Array.from(out), HIDDEN_SINCE_CACHE_S);
+  await cachePut(null, key, Array.from(out), HIDDEN_SINCE_CACHE_S);
   return withoutRestored(out);
 }
 
@@ -1252,15 +1444,17 @@ function spamSplit(env) {
   return !!(env && hasD1(env.DB_SPAM) && env.DB_SPAM !== env.DB_NOPE);
 }
 
-async function migrateSchema(db) {
+async function migrateSchema(db, e) {
+  const step = () => { if (e) e.touched = Date.now(); };
   try {
-    const row = await replica(db).prepare("SELECT value FROM spam_config WHERE key = ?").bind(SPAM_SCHEMA_KEY).first();
+    const row = await timed(replica(db).prepare("SELECT value FROM spam_config WHERE key = ?").bind(SPAM_SCHEMA_KEY).first(), D1_READ_TIMEOUT_MS, "schema marker read");
     if (row && Number(row.value) >= SPAM_SCHEMA_VERSION) return;
-  } catch (_) { }
-  for (const ddl of SPAM_DDL) { try { await db.prepare(ddl).run(); } catch (_) { } }
+  } catch (e) { if (isTimeout(e)) throw e; }
+  step();
+  for (const ddl of SPAM_DDL) { try { await timed(db.prepare(ddl).run(), D1_WRITE_TIMEOUT_MS, "schema change"); } catch (_) { } step(); }
   try {
-    await db.prepare("INSERT INTO spam_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value " +
-      "WHERE CAST(spam_config.value AS INTEGER) < CAST(excluded.value AS INTEGER)").bind(SPAM_SCHEMA_KEY, String(SPAM_SCHEMA_VERSION)).run();
+    await timed(db.prepare("INSERT INTO spam_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value " +
+      "WHERE CAST(spam_config.value AS INTEGER) < CAST(excluded.value AS INTEGER)").bind(SPAM_SCHEMA_KEY, String(SPAM_SCHEMA_VERSION)).run(), D1_WRITE_TIMEOUT_MS, "schema marker write");
   } catch (_) { }
 }
 
@@ -1269,11 +1463,14 @@ async function ensureSchema(db, key) {
   const k = key || db;
   let entry = state.schema.get(k);
   if (entry === true) return;
+  if (entry && Date.now() - (entry.touched || entry.at) > SCHEMA_STEP_MS) { state.schema.delete(k); entry = null; }
   if (!entry) {
-    entry = migrateSchema(db).then(() => { state.schema.set(k, true); }, () => { state.schema.delete(k); });
-    state.schema.set(k, entry);
+    const e = { at: Date.now(), touched: Date.now() };
+    e.p = migrateSchema(db, e).then(() => { if (state.schema.get(k) === e) state.schema.set(k, true); }, () => { if (state.schema.get(k) === e) state.schema.delete(k); });
+    state.schema.set(k, e);
+    entry = e;
   }
-  await entry;
+  await timed(entry.p, D1_WRITE_TIMEOUT_MS, "schema check");
 }
 
 function spamSchemaKey(env) {
@@ -1283,30 +1480,38 @@ function spamSchemaKey(env) {
 async function ensureConfigSchema(env) {
   if (!spamSplit(env)) return ensureSchema(env.DB_NOPE, "nope");
   if (state.configReady) return;
-  try { await env.DB_NOPE.prepare(SPAM_DDL[0]).run(); } catch (_) { }
+  try { await timed(env.DB_NOPE.prepare(SPAM_DDL[0]).run(), D1_WRITE_TIMEOUT_MS, "config schema"); } catch (_) { }
   state.configReady = true;
 }
 
 export const _ensureSchema = ensureSchema;
 
-const CONFIG_ROWS_SQL = "SELECT key, value FROM spam_config WHERE key IN (?, ?)";
+const CONFIG_ROWS_SQL = "SELECT key, value FROM spam_config WHERE key IN (?, ?, ?)";
 
 function configFrom(rs) {
-  const out = { value: null, restored: null };
+  const out = { value: null, restored: null, version: "" };
   for (const row of (rs && rs.results) || []) {
     if (row.key === SPAM_SETTINGS_KEY) out.value = row.value || null;
     else if (row.key === SPAM_RESTORED_KEY) out.restored = row.value || null;
+    else if (row.key === SPAM_SETTINGS_VERSION_KEY) out.version = row.value == null ? "" : String(row.value);
   }
   return out;
+}
+
+function fresh(db) {
+  if (db && typeof db.withSession === "function") {
+    try { return db.withSession("first-primary"); } catch (_) { return db; }
+  }
+  return db;
 }
 
 async function configRows(env) {
   const db = env.DB_NOPE;
   try {
-    return configFrom(await replica(db).prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY).all());
+    return configFrom(await fresh(db).prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY, SPAM_SETTINGS_VERSION_KEY).all());
   } catch (e) {
     await ensureConfigSchema(env);
-    return configFrom(await db.prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY).all());
+    return configFrom(await db.prepare(CONFIG_ROWS_SQL).bind(SPAM_SETTINGS_KEY, SPAM_RESTORED_KEY, SPAM_SETTINGS_VERSION_KEY).all());
   }
 }
 
@@ -1325,47 +1530,95 @@ export async function readSpamSettings(env) {
   } catch (e) { return base; }
 }
 
-async function loadSpamSettings(env) {
+async function settingsVersion(env, ctx) {
+  const ttl = SETTINGS_TIMING.versionCacheS;
+  const hit = ttl > 0 ? await cacheGet(ctx, SETTINGS_VERSION_CACHE_KEY) : undefined;
+  if (hit && typeof hit === "object" && typeof hit.v === "string") return hit.v;
+  let v = "";
+  try {
+    const row = await fresh(env.DB_NOPE).prepare("SELECT value FROM spam_config WHERE key = ?").bind(SPAM_SETTINGS_VERSION_KEY).first();
+    v = row && row.value != null ? String(row.value) : "";
+  } catch (_) { v = ""; }
+  if (ttl > 0) cachePut(ctx, SETTINGS_VERSION_CACHE_KEY, { v }, ttl);
+  return v;
+}
+
+async function loadSpamSettings(env, mode, ctx) {
   const base = defaultSpamSettings(env);
   const db = env && env.DB_NOPE;
-  if (!hasD1(db)) return { settings: base };
-  const hit = await edgeCacheGet(SETTINGS_CACHE_KEY);
-  if (hit && typeof hit === "object" && "value" in hit) return { settings: settingsFrom(hit.value, base), restored: hit.restored };
-  try {
-    const rows = await configRows(env);
-    await edgeCachePut(SETTINGS_CACHE_KEY, { value: rows.value, restored: rows.restored }, SETTINGS_CACHE_S);
-    return { settings: settingsFrom(rows.value, base), restored: rows.restored };
-  } catch (e) { return { settings: base }; }
+  if (!hasD1(db)) return { settings: base, version: "" };
+  if (mode === "check") {
+    const version = await settingsVersion(env, ctx);
+    if (version === (state.settingsVersion || "")) return { unchanged: true, version };
+  } else {
+    const hit = await cacheGet(ctx, SETTINGS_CACHE_KEY);
+    if (hit && typeof hit === "object" && "value" in hit) return { settings: settingsFrom(hit.value, base), restored: hit.restored, version: typeof hit.version === "string" ? hit.version : "" };
+  }
+  const rows = await configRows(env);
+  await cachePut(ctx, SETTINGS_CACHE_KEY, { value: rows.value, restored: rows.restored, version: rows.version }, SETTINGS_CACHE_S);
+  return { settings: settingsFrom(rows.value, base), restored: rows.restored, version: rows.version };
+}
+
+function applySettings(out) {
+  const now = Date.now();
+  if (!out) return;
+  if (out.unchanged) return;
+  const prev = state.settings;
+  state.settings = out.settings;
+  if (out.restored !== undefined) applyRestored(out.restored);
+  state.settingsVersion = out.version == null ? "" : out.version;
+  state.settingsCheckAt = now;
+  state.settingsAt = now;
+  const s = out.settings;
+  if (!s || !s.enabled || !s.autoEnforce || (prev && prev.holdMs !== s.holdMs && !(s.holdMs > 0))) engineOff();
 }
 
 export async function writeSpamSettings(env, settings) {
   const db = env.DB_NOPE;
   await ensureConfigSchema(env);
-  await db.prepare("INSERT INTO spam_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-    .bind(SPAM_SETTINGS_KEY, JSON.stringify(settings)).run();
+  const version = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  const sql = "INSERT INTO spam_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+  await db.batch([db.prepare(sql).bind(SPAM_SETTINGS_KEY, JSON.stringify(settings)), db.prepare(sql).bind(SPAM_SETTINGS_VERSION_KEY, version)]);
   state.settings = settings;
+  state.settingsVersion = version;
   state.settingsAt = Date.now();
-  await edgeCachePut(SETTINGS_CACHE_KEY, { value: JSON.stringify(settings), restored: state.restoredValue }, SETTINGS_CACHE_S);
+  state.settingsCheckAt = Date.now();
+  if (SETTINGS_TIMING.versionCacheS > 0) await cachePut(null, SETTINGS_VERSION_CACHE_KEY, { v: version }, SETTINGS_TIMING.versionCacheS);
+  await cachePut(null, SETTINGS_CACHE_KEY, { value: JSON.stringify(settings), restored: state.restoredValue, version }, SETTINGS_CACHE_S);
+  if (!settings.enabled || !settings.autoEnforce) engineOff();
 }
 
 async function syncedSettings(env) {
-  if (state.settings && Date.now() - state.settingsAt < SETTINGS_REFRESH_MS) return state.settings;
+  if (state.settings && Date.now() - state.settingsAt < SETTINGS_TIMING.refreshMs) return state.settings;
   settingsSync(env);
-  if (state.settingsLoading) await state.settingsLoading;
+  if (state.settingsLoading) { try { await timed(state.settingsLoading, SETTINGS_TIMING.timeoutMs, "settings wait"); } catch (_) { } }
   return state.settings || defaultSpamSettings(env);
 }
 
-function settingsSync(env) {
+function settingsSync(env, ctx) {
   const now = Date.now();
-  if (now - state.settingsAt >= SETTINGS_REFRESH_MS && !state.settingsLoading) {
-    state.settingsLoading = loadSpamSettings(env).then((s) => {
-      state.settings = s.settings;
-      if (s.restored !== undefined) applyRestored(s.restored);
-      state.settingsAt = Date.now();
-      state.settingsLoading = null;
-    },
-      () => { state.settingsLoading = null; state.settingsAt = Date.now(); });
+  const T = SETTINGS_TIMING;
+  if (state.settingsLoading && now - state.settingsLoadingAt > T.timeoutMs + 250) {
+    state.settingsLoading = null;
+    state.settingsRetryAt = now + T.backoffMs;
+    state.counters.settingsTimeouts++;
   }
+  if (state.settingsLoading || now < state.settingsRetryAt) return state.settings;
+  const full = !state.settings || now - state.settingsAt >= T.refreshMs;
+  if (!full && now - state.settingsCheckAt < T.versionMs) return state.settings;
+  state.settingsCheckAt = now;
+  const p = timed(loadSpamSettings(env, full ? "full" : "check", ctx), T.timeoutMs, "settings read").then((out) => {
+    if (state.settingsLoading !== p) return;
+    applySettings(out);
+    state.settingsRetryAt = 0;
+  }, (e) => {
+    if (state.settingsLoading !== p) return;
+    if (isTimeout(e)) state.counters.settingsTimeouts++;
+    state.settingsRetryAt = Date.now() + T.backoffMs;
+    if (!state.settings) state.settingsAt = 0;
+  }).finally(() => { if (state.settingsLoading === p) state.settingsLoading = null; });
+  state.settingsLoading = p;
+  state.settingsLoadingAt = now;
   return state.settings;
 }
 
@@ -1416,9 +1669,12 @@ function budgetOk(settings) {
   return true;
 }
 
-async function modelBudgetOk(settings) {
+async function modelBudgetOk(settings, ctx) {
   if (!budgetOk(settings)) return false;
-  return cacheRateTake("spam-model", "all", 1, settings.auditBudgetPerMinute, 60000);
+  if (!ioTake(ctx)) return true;
+  const p = Promise.resolve().then(() => cacheRateTake("spam-model", "all", 1, settings.auditBudgetPerMinute, 60000));
+  p.then(() => ioGive(ctx), () => ioGive(ctx));
+  try { return await timed(p, CACHE_TIMEOUT_MS, "model budget"); } catch (_) { return true; }
 }
 
 function budgetHeadroom(settings) {
@@ -1439,6 +1695,8 @@ export function locallySuspicious(job, dossier) {
   if (!job) return false;
   if ((job.localScore || 0) >= 2 || (job.copies || 0) >= 2) return true;
   if (job.nonces && job.nonces.length) return true;
+  if ((job.obfuscations || 0) > 0 || job.marker || job.burst) return true;
+  if (job.lex && (job.lex.slur || job.lex.threat || job.lex.child)) return true;
   const rec = dossier && dossier.record;
   if (rec && (Number(rec.spam) > 0 || Number(rec.strikes) > 0)) return true;
   return !!(dossier && (dossier.similarSpam > 0 || dossier.nymSpam > 0 || dossier.domainSpam > 0));
@@ -1476,6 +1734,8 @@ function flaggedForAudit(job, dossier) {
   if ((job.localScore || 0) >= 1) return true;
   if ((job.copies || 0) >= 2) return true;
   if (job.nonces && job.nonces.length) return true;
+  if ((job.obfuscations || 0) > 0 || job.burst || job.memSimilar > 0 || job.urlSpam > 0) return true;
+  if (job.lex && (job.lex.slur || job.lex.threat || job.lex.child || job.lex.vulgar)) return true;
   if (dossier && dossier.similarSpam > 0) return true;
   if (dossier && dossier.nymSpam > 0) return true;
   if (dossier && dossier.domainSpam > 0) return true;
@@ -1496,28 +1756,347 @@ function cleanHistory(rec) {
   return !!(rec && Number(rec.ham) > 0 && !(Number(rec.spam) > 0) && !(Number(rec.strikes) > 0));
 }
 
-async function loadRecord(r, pubkey) {
-  const own = state.records.get(pubkey);
-  if (own && Date.now() - own.at < RECORD_CACHE_S * 1000) return own.rec;
-  const key = "pubkey/" + pubkey;
-  const hit = await edgeCacheGet(key);
-  if (hit && typeof hit === "object" && "rec" in hit) return keepMutedRecord(pubkey, hit.rec || null);
-  let rec = null;
-  try {
-    rec = await r.prepare("SELECT * FROM spam_pubkeys WHERE pubkey = ?").bind(pubkey).first();
-  } catch (e) { return null; }
-  await edgeCachePut(key, { rec: rec || null }, RECORD_CACHE_S);
-  return keepMutedRecord(pubkey, rec || null);
+function markClean(pubkey, now) {
+  state.clean.set(pubkey, now);
+  trimMap(state.clean, CLEAN_MAX);
 }
 
-function keepMutedRecord(pubkey, rec) {
-  const now = Date.now();
-  const own = state.records.get(pubkey);
-  if (rec && Number(rec.muted_until) > now && !(own && now - own.at < RECORD_CACHE_S * 1000)) {
-    state.records.set(pubkey, { rec, at: now });
-    trimMap(state.records, MUTED_MAX);
+function isClean(pubkey, now) {
+  const at = state.clean.get(pubkey);
+  if (at === undefined) return false;
+  if (now - at > CLEAN_TTL_MS) { state.clean.delete(pubkey); return false; }
+  return true;
+}
+
+function ensureFeatures(job, now) {
+  if (job.featured) return;
+  job.featured = true;
+  const norm = normalizeText(job.content);
+  job.obfuscations = norm.obfuscations;
+  job.tail = tailOf(norm.text);
+  if (!job.fp) job.fp = fingerprint(job.content);
+  if (job.nymKey == null) job.nymKey = nymKey(job.nym);
+  const nonces = job.nonces || nonceTokens(job.content);
+  job.nonces = job.tail && !nonces.includes(job.tail) ? nonces.concat([job.tail]) : nonces;
+  if (job.domains == null) job.domains = extractDomains(job.content);
+  if (!job.urls) job.urls = campaignUrls(job.content);
+  if (!job.lex) job.lex = lexiconHits(job.content);
+  if (job.burstCount == null) {
+    job.burstCount = job.source === "report" ? 0 : burstCount(job.pubkey, now);
+    job.burst = job.burstCount >= BURST_N;
   }
-  return rec;
+}
+
+function skeletonOf(job) {
+  if (!job.skel) job.skel = skeletonTokens(job.content);
+  return job.skel;
+}
+
+function tailClusters(tok, fn) {
+  for (let L = MARKER_PREFIX_MIN; L <= Math.min(MARKER_PREFIX_MAX, tok.length - 4); L++) fn(tok.slice(0, L), L);
+}
+
+function clusterEstablished(c) {
+  if (!c || c.clean > 0) return false;
+  const t = c.tokens.size, p = c.pubkeys.size;
+  return (t >= MARKER_TOKENS && p >= MARKER_PUBKEYS && c.spam >= 1) || (t >= MARKER_TOKENS_ALONE && p >= MARKER_PUBKEYS_ALONE);
+}
+
+function establishMarkers(tok, now) {
+  let found = "";
+  tailClusters(tok, (p) => {
+    if (found) return;
+    const c = state.tails.get(p);
+    if (c && now - c.last <= MARKER_WINDOW_MS && clusterEstablished(c)) found = p;
+  });
+  if (found) {
+    if (!state.markers.has(found)) state.markersDirty = true;
+    state.markers.set(found, now + MARKER_TTL_MS);
+    trimMap(state.markers, MARKER_PREFIXES_MAX);
+  }
+  return found;
+}
+
+function noteTail(job, now) {
+  const tok = job.tail;
+  if (!tok) return;
+  const clean = isClean(job.pubkey, now);
+  tailClusters(tok, (p) => {
+    let c = state.tails.get(p);
+    if (!c || now - c.last > MARKER_WINDOW_MS) { c = { tokens: new Map(), pubkeys: new Set(), spam: 0, clean: 0, last: now }; state.tails.set(p, c); }
+    if (!c.tokens.has(tok) && c.tokens.size < MARKER_CLUSTER_MAX) c.tokens.set(tok, job.pubkey);
+    if (c.pubkeys.size < MARKER_CLUSTER_MAX) c.pubkeys.add(job.pubkey);
+    if (clean) c.clean++;
+    c.last = now;
+  });
+  trimMap(state.tails, MARKER_PREFIXES_MAX);
+  establishMarkers(tok, now);
+}
+
+function markerFor(tok, now) {
+  if (!tok) return "";
+  let found = "";
+  tailClusters(tok, (p) => {
+    if (found) return;
+    const until = state.markers.get(p);
+    if (until && until > now) found = p;
+  });
+  return found;
+}
+
+function tailShared(tok, pubkey, now) {
+  let shared = false;
+  tailClusters(tok, (p) => {
+    const c = state.tails.get(p);
+    if (!c || now - c.last > MARKER_WINDOW_MS) return;
+    let others = 0;
+    for (const pk of c.pubkeys) if (pk !== pubkey) others++;
+    if (others >= 2 && c.tokens.size >= 3) shared = true;
+  });
+  return shared;
+}
+
+function nymEntry(map, key, create) {
+  let e = map.get(key);
+  if (!e && create) { e = { pubkeys: new Map(), spam: new Map() }; map.set(key, e); trimMap(map, NYM_INDEX_MAX); }
+  return e;
+}
+
+function noteNym(job, now) {
+  if (!job.nymKey) return;
+  const e = nymEntry(state.nyms, job.nymKey, true);
+  e.pubkeys.set(job.pubkey, now);
+  if (e.pubkeys.size > NYM_PUBKEYS_MAX) e.pubkeys.delete(e.pubkeys.keys().next().value);
+}
+
+function familySpam(key, pubkey, now) {
+  if (!key) return 0;
+  const seen = new Set();
+  const count = (e) => {
+    if (!e) return;
+    for (const [pk, at] of e.spam) if (pk !== pubkey && now - at <= FAMILY_TTL_MS) seen.add(pk);
+  };
+  count(state.nyms.get(key));
+  const stem = nymStem(key);
+  if (stem) count(state.stems.get(stem));
+  return seen.size;
+}
+
+function actorFor(key, pubkey, now) {
+  const e = key ? state.nyms.get(key) : null;
+  if (!e) return false;
+  for (const [pk, at] of e.spam) if (pk !== pubkey && now - at <= ACTOR_MS && (e.muted && e.muted.has(pk) || isSpamMuted(pk, now))) return true;
+  return false;
+}
+
+function urlSpamCount(job, now) {
+  let n = 0;
+  for (const u of job.urls || []) {
+    const e = state.urls.get(u);
+    if (e && now - e.at <= URL_TTL_MS && e.spam > 0) n++;
+  }
+  return n;
+}
+
+function urlCampaign(job, now) {
+  for (const u of job.urls || []) {
+    const e = state.urls.get(u);
+    if (e && now - e.at <= URL_TTL_MS && e.spam >= URL_SPAM_MIN && e.ok === 0 && e.pubkeys.size >= 2) return u;
+  }
+  return "";
+}
+
+function linkOnly(job) {
+  if (!(job.urls && job.urls.length)) return false;
+  const rest = bodyText(job.content).replace(/(?:https?:\/\/|www\.)\S+/gi, " ").split(/\s+/).filter((w) => /\p{L}/u.test(w));
+  return rest.length <= LINK_ONLY_WORDS;
+}
+
+function bandMatch(job, now) {
+  const b = job.fp && job.fp.bands;
+  if (!b) return false;
+  let hits = 0;
+  for (let i = 0; i < 4; i++) {
+    if (b[i] == null) continue;
+    const at = state.bands.get(i + ":" + b[i]);
+    if (at && now - at <= SIM_TTL_MS) hits++;
+  }
+  return hits >= 2;
+}
+
+function hamWeight(t) {
+  const n = state.hamDocs.length;
+  return Math.log((n + 2) / ((state.hamDf.get(t) || 0) + 1)) + 0.5;
+}
+
+function simCluster(job, now) {
+  const toks = skeletonOf(job);
+  if (toks.length < SIM_MIN_TOKENS) return 0;
+  const mine = new Set(toks);
+  let mineWeight = 0;
+  const w = new Map();
+  for (const t of mine) { const x = hamWeight(t); w.set(t, x); mineWeight += x; }
+  const pubkeys = new Set();
+  for (const e of state.sims) {
+    if (now - e.at > SIM_TTL_MS || e.pubkey === job.pubkey) continue;
+    let inter = 0, interN = 0, union = mineWeight;
+    for (const t of e.tokens) {
+      const x = w.has(t) ? w.get(t) : hamWeight(t);
+      if (mine.has(t)) { inter += x; interN++; } else union += x;
+    }
+    if (interN >= 4 && union > 0 && inter / union >= SIM_THRESHOLD) pubkeys.add(e.pubkey);
+  }
+  return pubkeys.size;
+}
+
+function noteHam(job) {
+  const toks = skeletonOf(job);
+  if (!toks.length) return;
+  state.hamDocs.push(toks);
+  for (const t of toks) state.hamDf.set(t, (state.hamDf.get(t) || 0) + 1);
+  while (state.hamDocs.length > HAM_DOCS_MAX) {
+    for (const t of state.hamDocs.shift()) {
+      const n = (state.hamDf.get(t) || 1) - 1;
+      if (n <= 0) state.hamDf.delete(t); else state.hamDf.set(t, n);
+    }
+  }
+}
+
+function lexStrong(job) {
+  const lex = job.lex;
+  return !!(lex && (lex.slur || lex.threat || lex.child));
+}
+
+function contentSignal(job, now) {
+  const lex = job.lex || {};
+  return !!(job.tail || (job.obfuscations || 0) > 0 || lex.slur || lex.vulgar || lex.threat || lex.child || urlSpamCount(job, now) > 0 || simCluster(job, now) >= SIM_CLUSTER);
+}
+
+function fastRule(kind, category, confidence, reason, extra) {
+  return Object.assign({ spam: true, confidence, category, language: "", model: "rule", reason, fast: kind }, extra || {});
+}
+
+function fastVerdict(job, now, s) {
+  const pk = job.pubkey;
+  const bs = state.burstSpam.get(pk);
+  if (bs && bs > now) {
+    state.burstSpam.set(pk, now + BURST_DROP_MS);
+    return fastRule("burst", "burst", 0.97, "another message from a key whose burst was judged spam a moment ago");
+  }
+  if (verdictReusable(job.fp) && !innocuousKind(job.content)) {
+    const cached = exactVerdict(job.fp.simKey, now);
+    if (cached && cached.spam && cached.confidence >= s.minConfidence) return Object.assign({}, cached, { fast: "repeat" });
+  }
+  if (isClean(pk, now)) return null;
+  const marker = markerFor(job.tail, now);
+  if (marker) {
+    job.marker = marker;
+    const c = state.tails.get(marker);
+    return Object.assign(markerVerdict(marker), { fast: "marker", evidence: { similarSpamPubkeys: c ? c.pubkeys.size : 0 } });
+  }
+  if (job.nymKey && actorFor(job.nymKey, pk, now) && (job.burst || contentSignal(job, now))) {
+    return fastRule("actor", "same-actor", 0.97, "a new key using the nym \"" + (job.nym || job.nymKey) + "\" of a key muted for spam" + (job.burst ? ", sending a burst" : ", with a spam signal in the message"), { mute: true });
+  }
+  const abuse = abuseVerdict(job);
+  if (abuse) return Object.assign(abuse, { fast: "lexicon" });
+  const url = urlCampaign(job, now);
+  const fam = job.nymKey ? familySpam(job.nymKey, pk, now) : 0;
+  if (url && (linkOnly(job) || job.tail || (job.obfuscations || 0) > 0 || job.burst || lexStrong(job))) {
+    const e = state.urls.get(url);
+    return fastRule("url", "link-spam", 0.95, "links to " + url + ", which recent spam from other senders carried", { evidence: { similarSpamPubkeys: e ? e.pubkeys.size : 0 } });
+  }
+  if (job.nymKey && fam >= FAMILY_SPAM_MIN && ((job.nonces && job.nonces.length) || (job.obfuscations || 0) > 0 || bandMatch(job, now))) {
+    return fastRule("family", "nym-family", 0.95, "other senders using the nym \"" + (job.nym || job.nymKey) + "\" were judged spam (" + fam + " keys) and the message carries " + (job.nonces && job.nonces.length ? "a random-looking token" : (job.obfuscations || 0) > 0 ? "obfuscated words" : "text close to theirs"), { evidence: { nymSpamPubkeys: fam } });
+  }
+  if (skeletonOf(job).length >= SIM_MIN_TOKENS) {
+    const corroborated = job.tail || (job.obfuscations || 0) > 0 || url || job.burst || lexStrong(job) || (job.lex && job.lex.vulgar);
+    if (corroborated) {
+      const sim = simCluster(job, now);
+      if (sim >= SIM_CLUSTER) return fastRule("similar", "campaign", 0.95, "reads like " + sim + " recent spam messages from other senders and carries a second spam signal", { evidence: { similarSpamPubkeys: sim } });
+    }
+  }
+  return null;
+}
+
+function flaggedNow(job, now) {
+  if (!job) return false;
+  const pk = job.pubkey;
+  if (isSpamMuted(pk, now)) return true;
+  const bs = state.burstSpam.get(pk);
+  if (bs && bs > now) return true;
+  const own = state.records.get(pk);
+  const rec = own && now - own.at < RECORD_CACHE_S * 1000 ? own.rec : null;
+  if (rec && (Number(rec.spam) > 0 || Number(rec.strikes) > 0)) return true;
+  if (isClean(pk, now)) return false;
+  if (job.nymKey && familySpam(job.nymKey, pk, now) > 0) return true;
+  if (job.tail && tailShared(job.tail, pk, now)) return true;
+  if (urlSpamCount(job, now) > 0) return true;
+  if (lexStrong(job) || (job.obfuscations || 0) > 0) return true;
+  return false;
+}
+
+function learn(job, v, p, recAfter) {
+  const now = Date.now();
+  const pk = job.pubkey;
+  if (!v) return;
+  ensureFeatures(job, now);
+  if (p.strong) {
+    state.clean.delete(pk);
+    if (job.tail) {
+      tailClusters(job.tail, (pre) => { const c = state.tails.get(pre); if (c) c.spam++; });
+      establishMarkers(job.tail, now);
+    }
+    if (job.nymKey) {
+      const e = nymEntry(state.nyms, job.nymKey, true);
+      e.spam.set(pk, now);
+      if (p.plan && p.plan.muteNow) { if (!e.muted) e.muted = new Set(); e.muted.add(pk); }
+      const stem = nymStem(job.nymKey);
+      if (stem) nymEntry(state.stems, stem, true).spam.set(pk, now);
+    }
+    if (v.fast !== "url") {
+      for (const u of job.urls || []) {
+        let e = state.urls.get(u);
+        if (!e) { e = { spam: 0, ok: 0, pubkeys: new Set(), at: now }; state.urls.set(u, e); trimMap(state.urls, URL_INDEX_MAX); }
+        e.spam++;
+        e.at = now;
+        if (e.pubkeys.size < 64) e.pubkeys.add(pk);
+      }
+    }
+    const b = job.fp && job.fp.bands;
+    if (b) for (let i = 0; i < 4; i++) if (b[i] != null) { state.bands.set(i + ":" + b[i], now); trimMap(state.bands, EXACT_CACHE_MAX * 4); }
+    if (!v.fast && v.model !== "cache") {
+      const toks = skeletonOf(job);
+      if (toks.length >= SIM_MIN_TOKENS) {
+        state.sims.push({ tokens: toks, pubkey: pk, at: now });
+        if (state.sims.length > SIM_ENTRIES_MAX) state.sims.splice(0, state.sims.length - SIM_ENTRIES_MAX);
+      }
+    }
+    if (job.burst || (job.burstCount || 0) >= 2) {
+      state.burstSpam.set(pk, now + BURST_DROP_MS);
+      trimMap(state.burstSpam, MUTED_MAX);
+    }
+    return;
+  }
+  if (!v.spam) {
+    if (!innocuousKind(job.content)) {
+      noteHam(job);
+      for (const u of job.urls || []) { const e = state.urls.get(u); if (e) e.ok++; }
+    }
+    if (cleanHistory(recAfter)) markClean(pk, now);
+  }
+}
+
+function memoryRecord(pubkey, now) {
+  const own = state.records.get(pubkey);
+  if (own && now - own.at < RECORD_CACHE_S * 1000) return own.rec;
+  return undefined;
+}
+
+function rememberRecord(pubkey, rec) {
+  const now = Date.now();
+  state.records.set(pubkey, { rec: rec || null, at: now });
+  trimMap(state.records, MUTED_MAX);
+  if (cleanHistory(rec)) markClean(pubkey, now);
 }
 
 function withBuffered(rows, extra, limit) {
@@ -1528,25 +2107,55 @@ function withBuffered(rows, extra, limit) {
   return merged.slice(0, limit);
 }
 
-async function rowsOf(query) {
-  try {
-    const rs = await query();
-    return (rs && rs.results) || [];
-  } catch (e) { return null; }
+async function readRound(db, list) {
+  if (!list.length) return [];
+  const pick = (q, rs) => { const rows = (rs && rs.results) || []; return q.first ? (rows[0] || null) : rows; };
+  if (typeof db.batch === "function") {
+    try {
+      const res = await timed(db.batch(list.map((q) => q.stmt)), D1_READ_TIMEOUT_MS, "evidence read");
+      if (Array.isArray(res) && res.length === list.length && res.every((x) => x && Array.isArray(x.results))) return list.map((q, i) => pick(q, res[i]));
+    } catch (e) {
+      if (isTimeout(e)) return list.map(() => undefined);
+    }
+  }
+  return Promise.all(list.map(async (q) => {
+    try { return pick(q, await timed(q.stmt.all(), D1_READ_TIMEOUT_MS, "evidence read")); } catch (_) { return undefined; }
+  }));
 }
+
+const SELF_SQL = "SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?";
 
 async function selfRow(r, id) {
   try {
-    return await r.prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(id).first();
+    return await timed(r.prepare(SELF_SQL).bind(id).first(), D1_READ_TIMEOUT_MS, "self read");
   } catch (e) { return null; }
 }
 
+function domainCacheKey(domain) {
+  return "domain/" + encodeURIComponent(domain);
+}
+
+async function cachedDomains(job, ctx) {
+  const found = new Map();
+  const missing = [];
+  const doms = job.domains || [];
+  if (!doms.length) return { found, missing };
+  const hits = job.force ? doms.map(() => undefined) : await Promise.all(doms.map((d) => cacheGet(ctx, domainCacheKey(d))));
+  doms.forEach((d, i) => {
+    const h = hits[i];
+    if (h && typeof h === "object" && "st" in h) found.set(d, h.st);
+    else missing.push(d);
+  });
+  return { found, missing };
+}
+
 async function loadDossier(env, job, settings, opts) {
+  const o = opts || {};
   const r = replica(spamDb(env));
   const now = job.seenAt;
   const since = now - SIMILAR_WINDOW_MS;
   const labelSince = now - LABELS_WINDOW_MS;
-  const light = !!(opts && opts.light);
+  const light = !!o.light;
   const posted = postedAt(job);
   const out = { self: null, record: null, cleanHistory: false, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
   const reusable = verdictReusable(job.fp);
@@ -1554,38 +2163,81 @@ async function loadDossier(env, job, settings, opts) {
     const own = state.wrows.get(job.id);
     if (own) { out.self = own; return out; }
   }
-  if (!job.force && !job.coordFresh && !(opts && opts.skipSelf)) {
-    out.self = await selfRow(r, job.id);
-    if (out.self) return out;
-  }
-  let similarQuery = null;
+  const list = [];
+  const at = {};
+  const add = (name, q) => { at[name] = list.length; list.push(q); };
+  if (!job.force && !o.skipSelf) add("self", { first: true, stmt: r.prepare(SELF_SQL).bind(job.id) });
+  const memRec = job.force ? undefined : memoryRecord(job.pubkey, Date.now());
+  if (memRec === undefined) add("record", { first: true, stmt: r.prepare("SELECT * FROM spam_pubkeys WHERE pubkey = ?").bind(job.pubkey) });
   if (job.fp.simKey) {
     const b = job.fp.bands;
     const clauses = ["sim_key = ?"];
     const binds = [job.fp.simKey];
     for (let i = 0; i < 4; i++) if (b[i] != null) { clauses.push("b" + i + " = ?"); binds.push(b[i]); }
-    similarQuery = () => r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, sim_key, label, labeled_by FROM spam_events WHERE (" + clauses.join(" OR ") +
-      ") AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) AND id != ? ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince, job.id).all();
+    add("similar", { first: false, stmt: r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, sim_key, label, labeled_by FROM spam_events WHERE (" + clauses.join(" OR ") +
+      ") AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) AND id != ? ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince, job.id) });
   }
-  let nymQuery = null;
+  let nymKeyMem = "";
+  let nymCached = null;
   if (job.nymKey && !light) {
     const stem = nymStem(job.nymKey);
-    const match = stem ? "nym_key >= ? AND nym_key < ?" : "nym_key = ?";
-    const binds = stem ? [stem, stem + NYM_RANGE_END] : [job.nymKey];
-    nymQuery = () => r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, label FROM spam_events WHERE " + match +
-      " AND pubkey != ? AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) ORDER BY seen_at DESC LIMIT 30").bind(...binds, job.pubkey, since, labelSince).all();
+    nymKeyMem = stem ? "~" + stem : "=" + job.nymKey;
+    const hit = state.nymRows.get(nymKeyMem);
+    if (hit && Date.now() - hit.at < NYM_ROWS_TTL_MS && !job.force) nymCached = hit.rows;
+    else {
+      const match = stem ? "nym_key >= ? AND nym_key < ?" : "nym_key = ?";
+      const binds = stem ? [stem, stem + NYM_RANGE_END] : [job.nymKey];
+      add("nyms", { first: false, stmt: r.prepare("SELECT id, pubkey, nym, nym_key, channel, content, verdict, confidence, seen_at, label FROM spam_events WHERE " + match +
+        " AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince) });
+    }
   }
-  let [record, recent, similar, nyms] = await Promise.all([
-    loadRecord(r, job.pubkey),
-    light ? null : rowsOf(() => r.prepare("SELECT channel, nym, content, verdict, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8")
-      .bind(job.pubkey, job.id).all()),
-    similarQuery ? rowsOf(similarQuery) : null,
-    nymQuery ? rowsOf(nymQuery) : null
-  ]);
+  const doms = light ? { found: new Map(), missing: [] } : await cachedDomains(job, job.ctx);
+  if (doms.missing.length) {
+    add("domains", { first: false, stmt: r.prepare("SELECT domain, SUM(verdict = 'spam') AS spam, SUM(verdict = 'ok') AS ok, COUNT(DISTINCT pubkey) AS pubkeys, COUNT(DISTINCT CASE WHEN verdict = 'spam' THEN pubkey END) AS spam_pubkeys FROM spam_domains WHERE domain IN (" + doms.missing.map(() => "?").join(", ") + ") AND seen_at > ? AND id != ? GROUP BY domain")
+      .bind(...doms.missing, job.seenAt - DOMAIN_WINDOW_MS, job.id) });
+  }
+  const res = await readRound(r, list);
+  const got = (name) => (at[name] == null ? undefined : res[at[name]]);
+  const self = got("self");
+  if (self) { out.self = self; return out; }
+  let record = memRec;
+  if (record === undefined) {
+    const fetched = got("record");
+    record = fetched === undefined ? null : fetched;
+    if (fetched !== undefined) rememberRecord(job.pubkey, fetched);
+  }
+  let similar = at.similar != null ? got("similar") : null;
+  if (similar === undefined) similar = null;
+  let nyms = null;
+  if (job.nymKey && !light) {
+    let rows = nymCached;
+    if (!rows) {
+      const fetched = got("nyms");
+      if (fetched !== undefined && fetched !== null) {
+        rows = fetched;
+        state.nymRows.set(nymKeyMem, { rows, at: Date.now() });
+        trimMap(state.nymRows, NYM_ROWS_MAX);
+      }
+    }
+    if (rows) nyms = rows.filter((row) => row.pubkey !== job.pubkey).slice(0, 30);
+  }
+  if (doms.missing.length) {
+    const fetched = got("domains");
+    if (fetched !== undefined && fetched !== null) {
+      const map = new Map();
+      for (const row of fetched) map.set(row.domain, { spam: Number(row.spam) || 0, ok: Number(row.ok) || 0, pubkeys: Number(row.pubkeys) || 0, spamPubkeys: Number(row.spam_pubkeys) || 0 });
+      const puts = [];
+      for (const d of doms.missing) {
+        const st = map.get(d) || null;
+        doms.found.set(d, st);
+        if (!job.force) puts.push(cachePut(job.ctx, domainCacheKey(d), { st }, DOMAIN_CACHE_S));
+      }
+      await Promise.all(puts);
+    }
+  }
   if (state.wrows.size) {
     const pending = Array.from(state.wrows.values()).filter((row) => row.id !== job.id);
     const inWindow = (row) => row.seen_at > since || (row.label != null && row.seen_at > labelSince);
-    if (recent) recent = withBuffered(recent, pending.filter((row) => row.pubkey === job.pubkey), 8);
     if (similar) {
       const b = job.fp.bands;
       similar = withBuffered(similar, pending.filter((row) => inWindow(row) && (row.sim_key === job.fp.simKey || [0, 1, 2, 3].some((i) => b[i] != null && row["b" + i] === b[i]))), 40);
@@ -1598,8 +2250,7 @@ async function loadDossier(env, job, settings, opts) {
   }
   out.record = record;
   out.cleanHistory = cleanHistory(out.record);
-  if (!light) out.recent = recent || [];
-  if (similarQuery && similar) {
+  if (at.similar != null && similar) {
     const pks = new Set();
     const spamPks = new Set();
     for (const row of similar) {
@@ -1616,7 +2267,7 @@ async function loadDossier(env, job, settings, opts) {
     if (out.labelledOk) { out.exact = null; state.exact.delete(job.fp.simKey); }
     if (out.cleanHistory) out.exact = null;
   }
-  if (nymQuery && nyms) {
+  if (nyms) {
     const pks = new Set();
     const spamPks = new Set();
     for (const row of nyms) {
@@ -1628,38 +2279,38 @@ async function loadDossier(env, job, settings, opts) {
     out.nymPubkeys = pks.size;
     out.nymSpamPubkeys = spamPks.size;
   }
+  for (const d of (job.domains || []).slice().sort()) {
+    const found = doms.found.get(d);
+    if (!found) continue;
+    const st = Object.assign({}, found);
+    out.domainStats[d] = st;
+    out.domainSpam += st.spam;
+    out.domainSpamPubkeys = Math.max(out.domainSpamPubkeys, st.spamPubkeys);
+  }
   return out;
 }
 
-async function loadActivity(env, job, dossier) {
+function archiveRows(rows) {
+  const out = [];
+  for (const row of rows || []) {
+    try {
+      const ev = JSON.parse(row.json);
+      const n = Array.isArray(ev.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === "n") : null;
+      out.push({ channel: row.channel, nym: n ? n[1] : "", content: typeof ev.content === "string" ? ev.content : "" });
+    } catch (_) { }
+  }
+  return out;
+}
+
+function activityFrom(job, dossier, own, arch) {
   const now = job.seenAt;
   const mem = velocityOf(job.pubkey, now);
   const rec = dossier.record;
   const out = { n15: Math.max(mem.n15, 1), n60: Math.max(mem.n60, 1), ch15: 0, archived: 0, firstSeen: rec ? Number(rec.first_seen) || 0 : 0, rhythm: null };
-  const chans = new Set();
-  if (job.channel) chans.add(job.channel);
-  const own = (async () => {
-    try {
-      return await replica(spamDb(env)).prepare("SELECT SUM(seen_at > ?) AS n15, COUNT(*) AS n60, COUNT(DISTINCT CASE WHEN seen_at > ? THEN channel END) AS ch15 FROM spam_events WHERE pubkey = ? AND seen_at > ? AND id != ?")
-        .bind(now - VELOCITY_WINDOW_MS, now - VELOCITY_WINDOW_MS, job.pubkey, now - VELOCITY_HOUR_MS, job.id).first();
-    } catch (_) { return null; }
-  })();
-  const archive = (async () => {
-    if (!hasD1(env.DB_CHANNELS)) return null;
-    try {
-      const sec15 = Math.floor((now - VELOCITY_WINDOW_MS) / 1000);
-      return await replica(env.DB_CHANNELS).prepare("SELECT w.n15 AS n15, w.ch15 AS ch15, " +
-        "(SELECT created_at FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? ORDER BY created_at ASC LIMIT 1) AS first, " +
-        "(SELECT COUNT(*) FROM (SELECT 1 FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? LIMIT " + ARCHIVE_COUNT_CAP + ")) AS total " +
-        "FROM (SELECT COUNT(*) AS n15, COUNT(DISTINCT channel) AS ch15 FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND created_at > ? AND id != ?) w")
-        .bind(job.pubkey, job.id, job.pubkey, job.id, job.pubkey, sec15, job.id).first();
-    } catch (_) { return null; }
-  })();
-  const [row, arch] = await Promise.all([own, archive]);
-  if (row) {
-    out.n15 = Math.max(out.n15, (Number(row.n15) || 0) + 1);
-    out.n60 = Math.max(out.n60, (Number(row.n60) || 0) + 1);
-    out.ch15 = Math.max(out.ch15, Number(row.ch15) || 0);
+  if (own) {
+    out.n15 = Math.max(out.n15, (Number(own.n15) || 0) + 1);
+    out.n60 = Math.max(out.n60, (Number(own.n60) || 0) + 1);
+    out.ch15 = Math.max(out.ch15, Number(own.ch15) || 0);
   }
   if (arch) {
     out.archived = Number(arch.total) || 0;
@@ -1668,7 +2319,7 @@ async function loadActivity(env, job, dossier) {
     const first = (Number(arch.first) || 0) * 1000;
     if (first > 0 && (!out.firstSeen || first < out.firstSeen)) out.firstSeen = first;
   }
-  out.ch15 = Math.max(out.ch15, chans.size);
+  out.ch15 = Math.max(out.ch15, job.channel ? 1 : 0);
   const stamps = mem.stamps.slice();
   for (const r of dossier.recent || []) if (r && r.created_at) stamps.push(Number(r.created_at));
   stamps.push(job.createdAt || now);
@@ -1676,53 +2327,8 @@ async function loadActivity(env, job, dossier) {
   return out;
 }
 
-function domainCacheKey(domain) {
-  return "domain/" + encodeURIComponent(domain);
-}
-
-async function loadDomainStats(env, job) {
-  const doms = job.domains || [];
-  const out = { stats: {}, spam: 0, spamPubkeys: 0 };
-  if (!doms.length) return out;
-  const useCache = !job.force;
-  const found = new Map();
-  let missing = doms;
-  if (useCache) {
-    const hits = await Promise.all(doms.map((d) => edgeCacheGet(domainCacheKey(d))));
-    missing = [];
-    doms.forEach((d, i) => {
-      const h = hits[i];
-      if (h && typeof h === "object" && "st" in h) found.set(d, h.st);
-      else missing.push(d);
-    });
-  }
-  if (missing.length) {
-    try {
-      const rs = await replica(spamDb(env)).prepare("SELECT domain, SUM(verdict = 'spam') AS spam, SUM(verdict = 'ok') AS ok, COUNT(DISTINCT pubkey) AS pubkeys, COUNT(DISTINCT CASE WHEN verdict = 'spam' THEN pubkey END) AS spam_pubkeys FROM spam_domains WHERE domain IN (" + missing.map(() => "?").join(", ") + ") AND seen_at > ? AND id != ? GROUP BY domain")
-        .bind(...missing, job.seenAt - DOMAIN_WINDOW_MS, job.id).all();
-      const got = new Map();
-      for (const row of (rs && rs.results) || []) {
-        got.set(row.domain, { spam: Number(row.spam) || 0, ok: Number(row.ok) || 0, pubkeys: Number(row.pubkeys) || 0, spamPubkeys: Number(row.spam_pubkeys) || 0 });
-      }
-      await Promise.all(missing.map((d) => {
-        const st = got.get(d) || null;
-        found.set(d, st);
-        return useCache ? edgeCachePut(domainCacheKey(d), { st }, DOMAIN_CACHE_S) : null;
-      }));
-    } catch (_) { }
-  }
-  for (const d of doms.slice().sort()) {
-    const st = found.get(d);
-    if (!st) continue;
-    out.stats[d] = st;
-    out.spam += st.spam;
-    out.spamPubkeys = Math.max(out.spamPubkeys, st.spamPubkeys);
-  }
-  return out;
-}
-
-async function fetchExamples(env, now) {
-  const hit = await edgeCacheGet(EXAMPLES_CACHE_KEY);
+async function fetchExamples(env, now, ctx) {
+  const hit = await cacheGet(ctx, EXAMPLES_CACHE_KEY);
   if (hit && typeof hit === "object" && Array.isArray(hit.spam) && Array.isArray(hit.ok)) return hit;
   const r = replica(spamDb(env));
   const ex = { at: now, spam: [], ok: [], labelled: 0 };
@@ -1736,12 +2342,12 @@ async function fetchExamples(env, now) {
       if (labelled) ex.labelled++;
     }
   };
-  const [l, s, o] = await Promise.all([
-    rowsOf(() => r.prepare("SELECT * FROM (SELECT id, nym, channel, content, sim_key, label, labeled_by, seen_at FROM spam_events WHERE label = 'spam' AND seen_at > ? ORDER BY seen_at DESC LIMIT 40) " +
+  const [l, s, o] = await readRound(r, [
+    { first: false, stmt: r.prepare("SELECT * FROM (SELECT id, nym, channel, content, sim_key, label, labeled_by, seen_at FROM spam_events WHERE label = 'spam' AND seen_at > ? ORDER BY seen_at DESC LIMIT 40) " +
       "UNION ALL SELECT * FROM (SELECT id, nym, channel, content, sim_key, label, labeled_by, seen_at FROM spam_events WHERE label = 'ok' AND seen_at > ? ORDER BY seen_at DESC LIMIT 40) ORDER BY seen_at DESC LIMIT 40")
-      .bind(now - LABELS_WINDOW_MS, now - LABELS_WINDOW_MS).all()),
-    rowsOf(() => r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'spam' AND label IS NULL AND confidence >= 0.9 AND model NOT IN ('cache', 'cross-ref', 'peer', 'developer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS).all()),
-    rowsOf(() => r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'ok' AND label IS NULL AND confidence >= 0.7 AND model NOT IN ('chatter', 'action', 'cache', 'cross-ref', 'peer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS).all())
+      .bind(now - LABELS_WINDOW_MS, now - LABELS_WINDOW_MS) },
+    { first: false, stmt: r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'spam' AND label IS NULL AND confidence >= 0.9 AND model NOT IN ('cache', 'cross-ref', 'peer', 'developer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS) },
+    { first: false, stmt: r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'ok' AND label IS NULL AND confidence >= 0.7 AND model NOT IN ('chatter', 'action', 'cache', 'cross-ref', 'peer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS) }
   ]);
   if (!l) return ex;
   take(l.filter((x) => x.label === "spam"), "spam", true);
@@ -1750,19 +2356,24 @@ async function fetchExamples(env, now) {
   take(s, "spam", false);
   if (!o) return ex;
   take(o, "ok", false);
-  await edgeCachePut(EXAMPLES_CACHE_KEY, ex, EXAMPLES_CACHE_S);
+  await cachePut(ctx, EXAMPLES_CACHE_KEY, ex, EXAMPLES_CACHE_S);
   return ex;
 }
 
-async function loadExamples(env, now) {
+async function loadExamples(env, now, ctx) {
   if (state.examples && now - state.examples.at < EXAMPLES_TTL_MS) return state.examples;
-  if (state.examplesLoading) return state.examplesLoading;
-  const p = fetchExamples(env, now);
+  if (state.examplesLoading && Date.now() - state.examplesLoadingAt < D1_READ_TIMEOUT_MS * 2) {
+    try { return await timed(state.examplesLoading, D1_READ_TIMEOUT_MS, "examples wait"); } catch (_) { return state.examples; }
+  }
+  const p = fetchExamples(env, now, ctx);
   state.examplesLoading = p;
+  state.examplesLoadingAt = Date.now();
   try {
-    const ex = await p;
+    const ex = await timed(p, D1_READ_TIMEOUT_MS * 2, "examples read");
     if (state.examplesLoading === p) state.examples = ex;
     return ex;
+  } catch (_) {
+    return state.examples;
   } finally {
     if (state.examplesLoading === p) state.examplesLoading = null;
   }
@@ -1772,16 +2383,29 @@ async function enrichDossier(env, job, dossier) {
   if (job.domains == null) job.domains = extractDomains(job.content);
   if (!job.nonces) job.nonces = nonceTokens(job.content);
   job.conv = conversationSignals(job);
-  const [activity, dom, examples] = await Promise.all([
-    loadActivity(env, job, dossier),
-    loadDomainStats(env, job),
-    loadExamples(env, job.seenAt)
-  ]);
-  dossier.activity = activity;
-  dossier.domainStats = dom.stats;
-  dossier.domainSpam = dom.spam;
-  dossier.domainSpamPubkeys = dom.spamPubkeys;
-  dossier.examples = examples;
+  const now = job.seenAt;
+  const r = replica(spamDb(env));
+  const spamList = [
+    { first: false, stmt: r.prepare("SELECT channel, nym, content, verdict, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8").bind(job.pubkey, job.id) },
+    { first: true, stmt: r.prepare("SELECT SUM(seen_at > ?) AS n15, COUNT(*) AS n60, COUNT(DISTINCT CASE WHEN seen_at > ? THEN channel END) AS ch15 FROM spam_events WHERE pubkey = ? AND seen_at > ? AND id != ?")
+      .bind(now - VELOCITY_WINDOW_MS, now - VELOCITY_WINDOW_MS, job.pubkey, now - VELOCITY_HOUR_MS, job.id) }
+  ];
+  const ch = hasD1(env.DB_CHANNELS) ? replica(env.DB_CHANNELS) : null;
+  const sec15 = Math.floor((now - VELOCITY_WINDOW_MS) / 1000);
+  const chList = ch ? [
+    { first: true, stmt: ch.prepare("SELECT w.n15 AS n15, w.ch15 AS ch15, " +
+      "(SELECT created_at FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? ORDER BY created_at ASC LIMIT 1) AS first, " +
+      "(SELECT COUNT(*) FROM (SELECT 1 FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? LIMIT " + ARCHIVE_COUNT_CAP + ")) AS total " +
+      "FROM (SELECT COUNT(*) AS n15, COUNT(DISTINCT channel) AS ch15 FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND created_at > ? AND id != ?) w")
+      .bind(job.pubkey, job.id, job.pubkey, job.id, job.pubkey, sec15, job.id) },
+    { first: false, stmt: ch.prepare("SELECT channel, json FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? ORDER BY created_at DESC LIMIT 6").bind(job.pubkey, job.id) }
+  ] : [];
+  const [a, b, examples] = await Promise.all([readRound(r, spamList), ch ? readRound(ch, chList) : Promise.resolve([]), loadExamples(env, now, job.ctx)]);
+  let recent = a[0] || [];
+  if (state.wrows.size) recent = withBuffered(recent, Array.from(state.wrows.values()).filter((row) => row.id !== job.id && row.pubkey === job.pubkey), 8);
+  dossier.recent = recent.length ? recent : archiveRows(b[1]);
+  dossier.activity = activityFrom(job, dossier, a[1] || null, b[0] || null);
+  dossier.examples = examples || null;
   job.signals = buildSignals(job, dossier);
 }
 
@@ -1802,25 +2426,15 @@ export function buildSignals(job, dossier) {
     examples: { spam: ex.spam.length, ok: ex.ok.length, labelled: ex.labelled || 0 }
   };
   if (job.report) out.reporters = job.report.reporters || 1;
+  if (job.obfuscations) out.obfuscated = job.obfuscations;
+  if (job.tail) out.tail = job.tail.slice(0, 8);
+  if (job.marker) out.marker = job.marker;
+  if (job.burstCount) out.burst = job.burstCount;
+  if (job.lex && (job.lex.slur || job.lex.vulgar || job.lex.threat || job.lex.child)) out.lexicon = { slur: job.lex.slur, vulgar: job.lex.vulgar, threat: job.lex.threat, child: job.lex.child };
+  if (job.memSimilar) out.memSimilar = job.memSimilar;
+  if (job.urlSpam) out.urlSpam = job.urlSpam;
+  if (job.fast) out.fast = job.fast;
   return out;
-}
-
-async function recentArchive(env, job) {
-  const db = env.DB_CHANNELS;
-  if (!hasD1(db)) return [];
-  try {
-    const rs = await replica(db).prepare("SELECT channel, json FROM events WHERE pubkey = ? AND kind IN (20000, 23333) AND id != ? ORDER BY created_at DESC LIMIT 6")
-      .bind(job.pubkey, job.id).all();
-    const out = [];
-    for (const row of (rs && rs.results) || []) {
-      try {
-        const ev = JSON.parse(row.json);
-        const n = Array.isArray(ev.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === "n") : null;
-        out.push({ channel: row.channel, nym: n ? n[1] : "", content: typeof ev.content === "string" ? ev.content : "" });
-      } catch (_) { }
-    }
-    return out;
-  } catch (e) { return []; }
 }
 
 function strikesAfter(dossier, strong) {
@@ -1859,7 +2473,7 @@ const CAMPAIGN_PUBKEYS_MAX = 64;
 let FLUSH_MS = 1500;
 export function _setSpamFlushMs(ms) { FLUSH_MS = ms; }
 export function _spamBufferLimit() { return BUFFER_MAX; }
-export function _spamQueueIds() { return state.queue.map((q) => q.id); }
+export function _spamQueueIds() { return state.queue.map((q) => q.id).concat(Array.from(state.inflight.keys()), Array.from(state.parked.values()).flat().map((q) => q.id), state.modelWaiters.map((w) => w.job.id)); }
 
 function muteLive(pubkey, rec, now) {
   if (!rec || !(Number(rec.muted_until) > now)) return false;
@@ -1877,9 +2491,7 @@ function noteCampaign(simKey, pubkey) {
 
 function campaignOthers(simKey, pubkey) {
   const set = simKey ? state.campaign.get(simKey) : null;
-  const local = set ? set.size - (set.has(pubkey) ? 1 : 0) : 0;
-  const fleet = simKey ? state.campaignFleet.get(simKey) || 0 : 0;
-  return Math.max(local, fleet);
+  return set ? set.size - (set.has(pubkey) ? 1 : 0) : 0;
 }
 
 function verdictPlan(job, v, dossier) {
@@ -2074,74 +2686,163 @@ function noteWriteError(e) {
   state.counters.writeErrors++;
   state.lastWriteError = String(e && e.message || e).slice(0, 300);
   state.lastWriteErrorAt = Date.now();
+  state.lastFlushError = state.lastWriteError;
+  state.lastFlushErrorAt = state.lastWriteErrorAt;
 }
+
 
 function enqueueWrite(env, context, entry) {
   state.wenv = env;
-  if (context) state.wcontext = context;
   const known = state.wrows.get(entry.id);
   if (known && known !== entry.ev && !entry.report && entry.stage.event) return;
-  if (!state.wbuf.includes(entry)) state.wbuf.push(entry);
+  if (!state.wbuf.includes(entry)) {
+    if (!state.wbuf.length) state.wbufSince = Date.now();
+    state.wbuf.push(entry);
+  }
   state.wrows.set(entry.id, entry.ev);
   while (state.wbuf.length > BUFFER_MAX) {
     const old = state.wbuf.shift();
     forgetRow(old);
     state.counters.writeDropped++;
   }
-  if (state.wbuf.length >= FLUSH_ROWS) { kickFlush(env, context, false); return; }
-  if (!state.wtimer) state.wtimer = setTimeout(() => { state.wtimer = null; kickFlush(state.wenv, state.wcontext, true); }, FLUSH_MS);
+  maybeFlush(env, context, false);
+  armFlushTimer(env, context);
 }
 
-function kickFlush(env, context, all) {
-  const p = flushSpamWrites(env, { all });
-  if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
-  return p;
+function armFlushTimer(env, context) {
+  const now = Date.now();
+  if (state.wtimer && now - state.wtimerAt < FLUSH_MS * 2 + 1000) return;
+  if (state.wtimer) { try { clearTimeout(state.wtimer); } catch (_) { } }
+  state.wtimerAt = now;
+  state.wtimer = setTimeout(() => { state.wtimer = null; maybeFlush(state.wenv || env, context, true); }, FLUSH_MS);
 }
 
-async function flushRound(env, all) {
-  if (all && state.wtimer) { clearTimeout(state.wtimer); state.wtimer = null; }
-  if (!env) return;
+function flushDue(now, force) {
+  if (!state.wbuf.length) return false;
+  return !!force || state.wbuf.length >= FLUSH_ROWS || now - state.wbufSince >= FLUSH_MS;
+}
+
+function abandonFlush() {
+  const run = state.flushRun;
+  if (!run) return;
+  state.flushRun = null;
+  run.abandoned = true;
+  state.counters.flushAbandoned++;
+  noteWriteError(new Error("a spam write did not finish within " + Math.round(FLUSH_STEP_MS / 1000) + " s"));
+  if (run.chunk) {
+    const back = run.chunk.filter((x) => !state.wbuf.includes(x));
+    for (const x of back) x.uncertain = true;
+    if (back.length) { if (!state.wbuf.length) state.wbufSince = Date.now(); state.wbuf.unshift(...back); }
+    run.chunk = null;
+  }
+}
+
+function flushStale(run, now) {
+  return now - (run.stepAt || run.at) >= FLUSH_STEP_MS;
+}
+
+function maybeFlush(env, context, force) {
+  const now = Date.now();
+  const e = env || state.wenv;
+  if (!e) return null;
+  if (state.flushRun) {
+    if (!flushStale(state.flushRun, now)) return state.flushRun.p;
+    abandonFlush();
+  }
+  if (!flushDue(now, force)) return null;
+  return startFlush(e, context, !!force || now - state.wbufSince >= FLUSH_MS);
+}
+
+function startFlush(env, context, all) {
+  const run = { at: Date.now(), chunk: null, abandoned: false };
+  run.p = flushRound(env, all, run).catch((e) => { if (!run.abandoned) noteWriteError(e); }).finally(() => { if (state.flushRun === run) state.flushRun = null; });
+  state.flushRun = run;
+  keepAlive(context, run.p);
+  return run.p;
+}
+
+async function settleUncertain(env, chunk) {
+  const unsure = chunk.filter((x) => x.uncertain && x.stage.event);
+  if (!unsure.length) return;
+  const rows = await timed(spamDb(env).prepare("SELECT id, seen_at, verdict, model, action FROM spam_events WHERE id IN (" + unsure.map(() => "?").join(", ") + ")").bind(...unsure.map((x) => x.id)).all(), D1_READ_TIMEOUT_MS, "uncertain write check");
+  const byId = new Map(((rows && rows.results) || []).map((r) => [r.id, r]));
+  const split = spamSplit(env);
+  for (const x of unsure) {
+    const r = byId.get(x.id);
+    x.uncertain = false;
+    if (!r) continue;
+    const k = ownKey(x);
+    if (r.seen_at === k[1] && r.verdict === k[2] && (r.model || "") === k[3] && r.action === k[4]) {
+      x.stage.event = false;
+      x.stage.rec = false;
+      if (!split) x.stage.nope = false;
+    }
+  }
+}
+
+async function flushRound(env, all, run) {
   while (state.wbuf.length && (all || state.wbuf.length >= FLUSH_ROWS)) {
+    if (run.abandoned) return;
     const chunk = state.wbuf.splice(0, FLUSH_ROWS);
+    run.chunk = chunk;
+    run.stepAt = Date.now();
     try {
-      await writeEntries(env, chunk);
+      if (chunk.some((x) => x.uncertain)) await ensureSchema(spamDb(env), spamSchemaKey(env));
+      await settleUncertain(env, chunk);
+      await timed(writeEntries(env, chunk), D1_WRITE_TIMEOUT_MS, "spam write");
     } catch (e) {
+      if (run.abandoned) return;
+      run.chunk = null;
       noteWriteError(e);
+      const unsure = isTimeout(e);
       const keep = [];
       for (const x of chunk) {
+        if (unsure) x.uncertain = true;
         if (++x.attempts > WRITE_RETRIES) { forgetRow(x); state.counters.writeDropped++; continue; }
         keep.push(x);
       }
-      state.wbuf.unshift(...keep);
+      if (keep.length) { if (!state.wbuf.length) state.wbufSince = Date.now(); state.wbuf.unshift(...keep); }
       state.counters.writeRetries += keep.length;
-      if (!state.wtimer && state.wbuf.length) state.wtimer = setTimeout(() => { state.wtimer = null; kickFlush(state.wenv, state.wcontext, true); }, FLUSH_MS);
       return;
     }
+    if (run.abandoned) return;
+    run.chunk = null;
     state.counters.flushes++;
+    state.lastFlushAt = Date.now();
+    state.lastFlushError = null;
     const again = [];
     for (const x of chunk) {
       if (x.lost) await afterLostRace(env, x);
       if (entryDone(x)) forgetRow(x);
       else again.push(x);
     }
-    if (again.length) {
-      state.wbuf.push(...again);
-      if (!state.wtimer) state.wtimer = setTimeout(() => { state.wtimer = null; kickFlush(state.wenv, state.wcontext, true); }, FLUSH_MS);
-    }
+    if (again.length) { if (!state.wbuf.length) state.wbufSince = Date.now(); state.wbuf.push(...again); }
+    if (state.wbuf.length) state.wbufSince = Math.max(state.wbufSince, Date.now() - FLUSH_MS);
   }
 }
 
-export function flushSpamWrites(env, opts) {
+export async function flushSpamWrites(env, opts) {
   const all = !(opts && opts.all === false);
-  const run = () => flushRound(env || state.wenv, all).catch((e) => noteWriteError(e));
-  const p = state.wflush.then(run, run);
-  state.wflush = p;
-  return p;
+  const e = env || state.wenv;
+  if (!e) return;
+  for (let i = 0; i < 200; i++) {
+    const run = state.flushRun;
+    if (run) {
+      const left = FLUSH_STEP_MS - (Date.now() - (run.stepAt || run.at));
+      if (left <= 0) { abandonFlush(); continue; }
+      await Promise.race([run.p, new Promise((r) => setTimeout(r, left))]);
+      continue;
+    }
+    if (!state.wbuf.length || (!all && state.wbuf.length < FLUSH_ROWS)) return;
+    const errs = state.counters.writeErrors;
+    await startFlush(e, null, all);
+    if (state.counters.writeErrors !== errs) return;
+  }
 }
 
 async function peerRow(env, id) {
   try {
-    return await spamDb(env).prepare("SELECT verdict, confidence, category, reason, model, action, lang, label FROM spam_events WHERE id = ?").bind(id).first();
+    return await timed(spamDb(env).prepare(SELF_SQL).bind(id).first(), D1_READ_TIMEOUT_MS, "peer read");
   } catch (_) { return null; }
 }
 
@@ -2171,29 +2872,28 @@ function lateDrop(id) {
     if (!w.released || w.retracted) continue;
     w.retracted = true;
     state.counters.retracted++;
-    try { if (typeof w.retract === "function") w.retract(); } catch (_) { }
+    deliver(w, "retract");
   }
 }
 
-function applyLocally(job, p, entry, buffered, env, context) {
+function applyLocally(job, p, entry, buffered, env, context, v) {
   if (p.enforcing) {
     noteDropped(job.id);
     if (job.settings.blockEvents) hideLocally(job.id);
   }
+  let mutedNow = false;
   if (p.plan && p.plan.muteNow) {
     const already = isSpamMuted(job.pubkey);
     muteLocally(job.pubkey, Math.max(p.plan.until, already ? state.muted.get(job.pubkey) : 0));
-    if (already) state.counters.remuted++;
-    else {
-      state.counters.muted++;
-      if (buffered) coordNoteMute(env, context, job.pubkey, p.plan.until);
-    }
+    if (already && job.preMuted) mutedNow = true;
+    else if (already) state.counters.remuted++;
+    else { state.counters.muted++; mutedNow = true; }
   }
   if (p.strong && verdictReusable(job.fp)) noteCampaign(job.fp.simKey, job.pubkey);
-  if (buffered) {
-    state.records.set(job.pubkey, { rec: entry.recAfter, at: Date.now() });
-    trimMap(state.records, MUTED_MAX);
-  }
+  rememberRecord(job.pubkey, entry.recAfter);
+  if (job.nymKey) { const stem = nymStem(job.nymKey); state.nymRows.delete(stem ? "~" + stem : "=" + job.nymKey); }
+  if (job.source !== "report") learn(job, v, p, entry.recAfter);
+  if (env && job.source !== "report" && p.enforcing && (mutedNow || (state.burstSpam.get(job.pubkey) || 0) > Date.now())) dropPendingFrom(env, context, job.pubkey, job.id);
 }
 
 function auditResult(job, v, dossier, p, entry) {
@@ -2204,19 +2904,20 @@ async function conclude(env, job, v, dossier, hooks) {
   const p = verdictPlan(job, v, dossier);
   const entry = writeEntry(env, job, v, dossier, p);
   const buffered = !!(hooks && hooks.buffered);
+  const context = hooks && hooks.context;
   if (buffered) {
-    applyLocally(job, p, entry, true, env, hooks.context);
+    applyLocally(job, p, entry, true, env, context, v);
     if (typeof hooks.onVerdict === "function") { try { hooks.onVerdict(p.enforcing, v); } catch (_) { } }
-    enqueueWrite(env, hooks.context, entry);
-    const put = edgeCachePut("pubkey/" + job.pubkey, { rec: entry.recAfter }, RECORD_CACHE_S);
-    if (hooks.context && typeof hooks.context.waitUntil === "function") { try { hooks.context.waitUntil(put); } catch (_) { } }
+    enqueueWrite(env, context, entry);
+    keepAlive(context, cachePut(job.ctx || context, "pubkey/" + job.pubkey, { rec: entry.recAfter }, RECORD_CACHE_S));
     return auditResult(job, v, dossier, p, entry);
   }
   try {
-    await writeEntries(env, [entry]);
+    await timed(writeEntries(env, [entry]), D1_WRITE_TIMEOUT_MS, "spam write");
   } catch (e) {
     noteWriteError(e);
-    enqueueWrite(env, hooks && hooks.context, entry);
+    if (isTimeout(e)) entry.uncertain = true;
+    enqueueWrite(env, context, entry);
   }
   if (entry.lost) {
     state.counters.raced++;
@@ -2225,10 +2926,10 @@ async function conclude(env, job, v, dossier, hooks) {
     return { verdict: v, action: "ok", strikes: 0, score: 0, similar: 0, similarPubkeys: 0, similarNyms: 0, nymSpam: 0, peer: true };
   }
   if (entryDone(entry)) forgetRow(entry);
-  else if (!state.wbuf.includes(entry)) enqueueWrite(env, hooks && hooks.context, entry);
-  applyLocally(job, p, entry, false);
+  else if (!state.wbuf.includes(entry)) enqueueWrite(env, context, entry);
+  applyLocally(job, p, entry, false, null, null, v);
   if (hooks && typeof hooks.onVerdict === "function") { try { hooks.onVerdict(p.enforcing, v); } catch (_) { } }
-  await edgeCachePut("pubkey/" + job.pubkey, { rec: entry.recAfter }, RECORD_CACHE_S);
+  await cachePut(job.ctx || context, "pubkey/" + job.pubkey, { rec: entry.recAfter }, RECORD_CACHE_S);
   return auditResult(job, v, dossier, p, entry);
 }
 
@@ -2255,12 +2956,13 @@ function planEnforcement(job, v, dossier, strikes) {
   const nymFamily = dossier.nymSpamPubkeys + 1 >= s.campaignCopies;
   const campaign = dossier.similarSpamPubkeys + 1 >= s.campaignCopies || (dossier.similarPubkeys + 1 >= s.campaignCopies && (job.copies || 0) >= 2) || nymFamily;
   const shortFloor = !!innocuousKind(job.content) && strikes < 2;
-  const muteNow = (strikes >= s.strikesToMute && !shortFloor) || campaign;
+  const actor = !!v.mute;
+  const muteNow = (strikes >= s.strikesToMute && !shortFloor) || campaign || actor;
   const actions = [];
   if (s.blockEvents) actions.push("event-hidden");
   if (!muteNow) { actions.push("strike"); return { actions, muteNow: false }; }
   const until = now + Math.round(s.muteHours * 3600000);
-  const why = campaign ? (nymFamily && dossier.similarSpamPubkeys + 1 < s.campaignCopies ? "nym family" : "campaign") : strikes + " strikes";
+  const why = actor ? "same actor as a muted key" : campaign ? (nymFamily && dossier.similarSpamPubkeys + 1 < s.campaignCopies ? "nym family" : "campaign") : strikes + " strikes";
   const reason = "spam engine: " + (v.category || "spam") + " (" + Math.round(v.confidence * 100) + "%, " + why + ")";
   const note = clip(v.reason, 300) + "\nnym: " + (job.nym || "?") + " · channel: " + (job.channel || "?") + "\n" + clip(job.content, 240);
   actions.push("muted");
@@ -2274,6 +2976,7 @@ export function nymIsOnlyEvidence(job, dossier, v) {
   if (!dossier || !(dossier.nymSpam > 0)) return false;
   if (dossier.similarSpam > 0) return false;
   if ((job.copies || 0) >= 2 || (job.localScore || 0) > 0) return false;
+  if ((job.obfuscations || 0) > 0 || job.marker || job.burst || lexStrong(job)) return false;
   const rec = dossier.record;
   if (rec && (Number(rec.spam) > 0 || Number(rec.strikes) > 0)) return false;
   return true;
@@ -2285,10 +2988,7 @@ export async function auditNow(env, job, hooks) {
   job.settings = settings;
   const now = job.seenAt || Date.now();
   job.seenAt = now;
-  if (!job.fp) job.fp = fingerprint(job.content);
-  if (job.nymKey == null) job.nymKey = nymKey(job.nym);
-  if (!job.nonces) job.nonces = nonceTokens(job.content);
-  if (job.domains == null) job.domains = extractDomains(job.content);
+  ensureFeatures(job, now);
   const review = job.source === "report";
   const bypass = !!job.force && !review;
   const innocuous = bypass ? "" : innocuousKind(job.content);
@@ -2296,38 +2996,32 @@ export async function auditNow(env, job, hooks) {
   const posted = postedAt(job);
   const memo = !job.force && !innocuous && reusable ? exactVerdict(job.fp.simKey, now, posted) : null;
   const memoStrong = !!(memo && memo.spam && memo.confidence >= settings.minConfidence);
-  const muted = !job.force && isSpamMuted(job.pubkey, now);
+  let muted = !job.force && isSpamMuted(job.pubkey, now);
   let light = muted || memoStrong;
   if (!bypass && !light && !dossierBudgetOk(settings)) {
     state.counters.skippedBudget++;
     return { skipped: "budget", suspicious: locallySuspicious(job, null) };
   }
-  const claim = hooks && hooks.claim && typeof hooks.route === "function" ? hooks.claim : null;
-  const loading = loadDossier(env, job, settings, { light, skipSelf: !!claim });
-  if (claim) {
-    loading.catch(() => { });
-    const routed = await hooks.route(await claim);
-    if (routed) return routed;
-    if (!job.force && !job.coordFresh && !state.wrows.has(job.id)) {
-      const self = await selfRow(replica(spamDb(env)), job.id);
-      if (self) return adoptPeer(self, job);
-    }
-  }
-  let dossier = await loading;
+  let dossier = await loadDossier(env, job, settings, { light });
   if (dossier.self) return adoptPeer(dossier.self, job);
   if (light && !muted && dossier.cleanHistory) {
     light = false;
-    dossier = await loadDossier(env, job, settings, { light });
+    dossier = await loadDossier(env, job, settings, { light, skipSelf: true });
     if (dossier.self) return adoptPeer(dossier.self, job);
   }
   job.pubkeyUnknown = !dossier.record;
+  const rec0 = dossier.record;
+  if (!job.force && !muted && rec0 && Number(rec0.muted_until) > now && muteLive(job.pubkey, rec0, now)) {
+    muteLocally(job.pubkey, Number(rec0.muted_until));
+    state.counters.recordMuted++;
+    muted = true;
+  }
   if (job.badge == null) job.badge = badgeTier(env, job, now);
-  if (light) {
-    job.conv = conversationSignals(job);
-    job.signals = buildSignals(job, dossier);
-  } else {
-    if (!dossier.recent.length) dossier.recent = await recentArchive(env, job);
-    await enrichDossier(env, job, dossier);
+  job.conv = conversationSignals(job);
+  if (!review && !dossier.cleanHistory) {
+    job.marker = job.marker || markerFor(job.tail, now);
+    job.memSimilar = simCluster(job, now);
+    job.urlSpam = urlSpamCount(job, now);
   }
   let v = null;
   const cached = reusable && !dossier.cleanHistory ? exactVerdict(job.fp.simKey, now, posted) : null;
@@ -2350,9 +3044,16 @@ export async function auditNow(env, job, hooks) {
       state.counters.rules++;
       rememberExact(job.fp, v, now);
     } else {
+      if (!light) await enrichDossier(env, job, dossier);
       if (!job.force && !isCandidate(job, settings, dossier)) return { skipped: "not a candidate" };
       if (!bypass && isCoolingDown(now)) { state.counters.skippedCooldown++; return { skipped: "cooldown", suspicious: locallySuspicious(job, dossier) }; }
-      if (!bypass && !(await modelBudgetOk(settings))) { state.counters.skippedBudget++; return { skipped: "budget", suspicious: locallySuspicious(job, dossier) }; }
+      if (hooks && typeof hooks.beforeModel === "function") {
+        const gate = await hooks.beforeModel();
+        if (gate === "peer") return { routed: "peer" };
+        if (gate === "gone") return { routed: "gone" };
+        if (gate !== "ok") return { skipped: "busy", suspicious: locallySuspicious(job, dossier) };
+      }
+      if (!bypass && !(await modelBudgetOk(settings, job.ctx))) { state.counters.skippedBudget++; return { skipped: "budget", suspicious: locallySuspicious(job, dossier) }; }
       const prompt = buildSpamPrompt(job, dossier);
       v = await askSpamModel(env, settings, prompt);
       state.counters.audited++;
@@ -2363,57 +3064,61 @@ export async function auditNow(env, job, hooks) {
       rememberExact(job.fp, v, now);
     }
   }
+  if (!dossier.activity && !light) dossier.activity = activityFrom(job, dossier, null, null);
+  job.signals = buildSignals(job, dossier);
   const rec = dossier.record;
   if (!job.force && rec && Number(rec.muted_until) > now && muteLive(job.pubkey, rec, now) && !isSpamMuted(job.pubkey, now)) muteLocally(job.pubkey, Number(rec.muted_until));
   return conclude(env, job, v, dossier, hooks);
 }
 
-async function cachedRecord(pubkey) {
+async function cachedRecord(pubkey, ctx) {
   const o = state.records.get(pubkey);
   if (o && Date.now() - o.at < RECORD_CACHE_S * 1000) return o.rec;
-  const hit = await edgeCacheGet("pubkey/" + pubkey);
-  if (hit && typeof hit === "object" && "rec" in hit) return keepMutedRecord(pubkey, hit.rec || null);
+  const hit = await cacheGet(ctx, "pubkey/" + pubkey);
+  if (hit && typeof hit === "object" && "rec" in hit) {
+    const rec = hit.rec || null;
+    if (rec && Number(rec.muted_until) > Date.now()) rememberRecord(pubkey, rec);
+    return rec;
+  }
   return null;
 }
 
-async function liteRecord(env, context, job, cached) {
+const MUTED_SENDER_VERDICT = { spam: true, confidence: 1, category: "muted-sender", language: "", model: "rule", reason: "the sender was muted while this message waited for its audit" };
+const BURST_VERDICT = { spam: true, confidence: 0.97, category: "burst", language: "", model: "rule", reason: "another message from a key whose burst was judged spam a moment ago" };
+
+async function liteRecord(env, context, job, v) {
   try {
     const now = job.seenAt;
-    if (!job.fp) job.fp = fingerprint(job.content);
-    if (job.nymKey == null) job.nymKey = nymKey(job.nym);
-    if (!job.nonces) job.nonces = nonceTokens(job.content);
-    if (job.domains == null) job.domains = extractDomains(job.content);
-    let claimed = false;
-    if (coordOf(env) && !job.coordClaimed && !job.claimRouted && !job.force && job.source !== "report") {
-      const c = await coordClaim(env, Object.assign({}, job, { settings: Object.assign({}, job.settings || state.settings, { autoEnforce: false }) }));
-      if (c && (c.status === "pending" || c.status === "judged")) return null;
-      claimed = !!c;
-      job.coordClaimed = claimed;
-    }
-    const rec = await cachedRecord(job.pubkey);
-    if (cached && cleanHistory(rec)) {
+    ensureFeatures(job, now);
+    const rec = await cachedRecord(job.pubkey, job.ctx || context);
+    const fromCache = !!(v && v.model === "cache" && !v.fast);
+    const repeat = !!(v && (v.fast === "repeat" || fromCache));
+    if (repeat && cleanHistory(rec)) {
       state.queue.push(job);
       pump(env, context);
       return;
     }
-    const others = cached ? campaignOthers(job.fp.simKey, job.pubkey) : 0;
-    const dossier = { self: null, record: rec, cleanHistory: cleanHistory(rec), recent: [], similar: [], similarPubkeys: others, similarSpam: others, similarSpamPubkeys: others, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
+    const ev = (v && v.evidence) || {};
+    const others = repeat ? campaignOthers(job.fp.simKey, job.pubkey) : Number(ev.similarSpamPubkeys) || 0;
+    const fam = Number(ev.nymSpamPubkeys) || 0;
+    const dossier = { self: null, record: rec, cleanHistory: cleanHistory(rec), recent: [], similar: [], similarPubkeys: others, similarSpam: others, similarSpamPubkeys: others, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: fam, nymSpam: fam, nymSpamPubkeys: fam, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
     job.pubkeyUnknown = !rec;
     if (job.badge == null) job.badge = badgeTier(env, job, now);
     job.conv = conversationSignals(job);
+    if (v && v.fast) job.fast = v.fast;
+    dossier.activity = activityFrom(job, dossier, null, null);
     job.signals = buildSignals(job, dossier);
-    let v;
-    if (cached) {
-      v = Object.assign({}, cached, { model: "cache", reason: "same text already judged spam: " + cached.reason });
+    let verdict;
+    if (repeat) {
+      verdict = Object.assign({}, v, { model: "cache", reason: "same text already judged spam: " + String(v.reason || "").replace(/^same text already judged spam: /, "") });
       state.counters.cached++;
     } else {
-      v = { spam: true, confidence: 1, category: "muted-sender", language: "", model: "rule", reason: "the sender was muted while this message waited for its audit" };
+      verdict = v ? Object.assign({}, v) : MUTED_SENDER_VERDICT;
+      delete verdict.evidence;
       state.counters.rules++;
     }
     state.counters.lite++;
-    const res = await conclude(env, job, v, dossier, { buffered: true, context });
-    if (claimed) coordPublish(env, context, job, res);
-    return res;
+    return await conclude(env, job, verdict, dossier, { buffered: true, context });
   } catch (e) {
     state.counters.errors++;
     state.lastError = String(e && e.message || e).slice(0, 300);
@@ -2434,32 +3139,108 @@ export function reviewEvidenceStrong(v, settings, dossier) {
 
 function verdictDrops(job, res) {
   const s = job.settings || state.settings;
-  if (res && (res.skipped === "budget" || res.skipped === "cooldown") && res.suspicious && s && s.autoEnforce) {
+  if (res && (res.skipped === "budget" || res.skipped === "cooldown" || res.skipped === "busy") && res.suspicious && s && s.autoEnforce) {
     state.counters.overBudgetDropped++;
     return true;
   }
   return !!(res && res.verdict && res.verdict.spam && s && s.autoEnforce && res.verdict.confidence >= s.minConfidence);
 }
 
-function releaseSlot(generation) {
-  if (generation !== state.generation) return;
-  const next = state.slotWaiters.shift();
-  if (next) { next(); return; }
+function isHeld(job) {
+  const p = state.pending.get(job.id);
+  return !!(p && !p.released);
+}
+
+function modelSlotFree(job) {
+  if (state.modelRunning < MAX_CONCURRENT) return true;
+  return isHeld(job) && state.modelRunning < MAX_CONCURRENT + HELD_EXTRA_SLOTS && state.heldModel < MAX_CONCURRENT;
+}
+
+function takeModel(job) {
+  job.modelSlot = true;
+  job.heldRun = isHeld(job);
+  state.modelRunning++;
+  if (job.heldRun) state.heldModel++;
+  job.stage = "model";
+}
+
+function freeModel(job) {
+  if (!job.modelSlot) return;
+  job.modelSlot = false;
+  state.modelRunning = Math.max(0, state.modelRunning - 1);
+  if (job.heldRun) state.heldModel = Math.max(0, state.heldModel - 1);
+  job.heldRun = false;
+  grantModel();
+}
+
+function grantModel() {
+  for (;;) {
+    const report = state.slotWaiters.length && state.modelRunning < MAX_CONCURRENT ? state.slotWaiters.shift() : null;
+    if (report) { state.modelRunning++; report(); continue; }
+    if (!state.modelWaiters.length) return;
+    let i = state.modelWaiters.findIndex((w) => isHeld(w.job) && modelSlotFree(w.job));
+    if (i === -1) i = modelSlotFree(state.modelWaiters[0].job) ? 0 : -1;
+    if (i === -1) return;
+    const w = state.modelWaiters.splice(i, 1)[0];
+    takeModel(w.job);
+    w.resolve("ok");
+  }
+}
+
+function freeEvidence(job) {
+  if (!job.evSlot) return;
+  job.evSlot = false;
   state.running = Math.max(0, state.running - 1);
 }
 
+function evictReleasedWaiter() {
+  for (let i = 0; i < state.modelWaiters.length; i++) {
+    const w = state.modelWaiters[i];
+    if (isHeld(w.job)) continue;
+    state.modelWaiters.splice(i, 1);
+    state.counters.overflow++;
+    w.resolve("busy");
+    return true;
+  }
+  return false;
+}
+
+async function acquireModel(env, context, job) {
+  freeEvidence(job);
+  pump(env, context);
+  if (job.abandoned) return "gone";
+  if (!state.modelWaiters.length && modelSlotFree(job)) { takeModel(job); return "ok"; }
+  if (state.modelWaiters.length >= MAX_QUEUE && !evictReleasedWaiter()) { state.counters.overflow++; return "busy"; }
+  state.counters.modelQueued++;
+  job.stage = "modelWait";
+  const p = new Promise((resolve) => state.modelWaiters.push({ job, resolve }));
+  grantModel();
+  return p;
+}
+
+async function beforeModel(env, context, job) {
+  const g = await acquireModel(env, context, job);
+  if (g !== "ok") return g;
+  if (claimable(job) && !job.noClaim) {
+    job.claimChecked = true;
+    if (!(await claimAudit(job.id, job.ctx || context))) { freeModel(job); return "peer"; }
+    job.cacheMine = true;
+  }
+  return "ok";
+}
+
 async function withAuditSlot(env, context, fn) {
-  const generation = state.generation;
-  if (state.running >= MAX_CONCURRENT) {
+  if (state.modelRunning >= MAX_CONCURRENT) {
     if (state.slotWaiters.length >= REPORT_WAITERS_MAX) return { skipped: "busy" };
     await new Promise((resolve) => state.slotWaiters.push(resolve));
   } else {
-    state.running++;
+    state.modelRunning++;
   }
   try {
     return await fn();
   } finally {
-    releaseSlot(generation);
+    state.modelRunning = Math.max(0, state.modelRunning - 1);
+    grantModel();
     pump(env, context);
   }
 }
@@ -2478,64 +3259,126 @@ function evictReleased() {
     const p = state.pending.get(q.id);
     if (p && !p.released) continue;
     state.queue.splice(i, 1);
-    if (p) { if (p.timer) clearTimeout(p.timer); state.pending.delete(q.id); }
+    if (p) forgetPending(q.id, p);
     state.counters.overflow++;
     return true;
   }
   return false;
 }
 
+function takeQueued(pred) {
+  const out = [];
+  for (let i = state.queue.length - 1; i >= 0; i--) if (pred(state.queue[i])) out.push(state.queue.splice(i, 1)[0]);
+  for (const [k, list] of Array.from(state.parked.entries())) {
+    const keep = [];
+    for (const q of list) (pred(q) ? out : keep).push(q);
+    if (keep.length) state.parked.set(k, keep); else state.parked.delete(k);
+  }
+  for (let i = state.modelWaiters.length - 1; i >= 0; i--) {
+    const w = state.modelWaiters[i];
+    if (!pred(w.job)) continue;
+    state.modelWaiters.splice(i, 1);
+    out.push(w.job);
+    w.resolve("gone");
+  }
+  return out;
+}
+
+function dropQueuedJob(env, context, q, v) {
+  const s = q.settings || state.settings;
+  noteDropped(q.id);
+  if (s && s.blockEvents) hideLocally(q.id);
+  if (state.pending.has(q.id)) settle(q.id, true);
+  state.counters.coalesced++;
+  keepAlive(context, liteRecord(env, context, q, v));
+}
+
+function senderVerdict(pubkey) {
+  if (isSpamMuted(pubkey)) return MUTED_SENDER_VERDICT;
+  return BURST_VERDICT;
+}
+
+function dropPendingFrom(env, context, pubkey, exceptId) {
+  const s = state.settings;
+  if (!s || !s.autoEnforce) return;
+  const v = senderVerdict(pubkey);
+  for (const q of takeQueued((x) => x.pubkey === pubkey && x.id !== exceptId && !state.restored.has(x.id))) dropQueuedJob(env, context, q, v);
+  const ids = state.pendingBy.get(pubkey);
+  if (!ids) return;
+  for (const id of Array.from(ids)) {
+    if (id === exceptId || state.restored.has(id)) continue;
+    noteDropped(id);
+    if (s.blockEvents) hideLocally(id);
+    settle(id, true);
+    state.counters.coalesced++;
+  }
+}
+
 function coalesce(env, context, job) {
   const s = job.settings || state.settings;
   if (!s || !s.autoEnforce) return;
-  const sameText = verdictReusable(job.fp) && !innocuousKind(job.content) && exactVerdict(job.fp.simKey, Date.now());
+  const now = Date.now();
+  if (isSpamMuted(job.pubkey, now) || (state.burstSpam.get(job.pubkey) || 0) > now) dropPendingFrom(env, context, job.pubkey, job.id);
+  const sameText = verdictReusable(job.fp) && !innocuousKind(job.content) && exactVerdict(job.fp.simKey, now);
   const textKey = sameText && sameText.spam && sameText.confidence >= s.minConfidence ? job.fp.simKey : 0;
-  const mutedSender = isSpamMuted(job.pubkey, Date.now()) ? job.pubkey : "";
-  if (!textKey && !mutedSender) return;
-  for (let i = state.queue.length - 1; i >= 0; i--) {
-    const q = state.queue[i];
-    const byText = !!(textKey && q.fp && q.fp.simKey === textKey);
-    if (!byText && !(mutedSender && q.pubkey === mutedSender)) continue;
-    if (state.restored.has(q.id)) continue;
-    state.queue.splice(i, 1);
-    noteDropped(q.id);
-    if (s.blockEvents) hideLocally(q.id);
-    if (state.pending.has(q.id)) settle(q.id, true);
-    state.counters.coalesced++;
-    const work = liteRecord(env, context, q, byText ? sameText : null);
-    if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
-  }
+  if (!textKey) return;
+  const repeat = Object.assign({}, sameText, { fast: "repeat" });
+  for (const q of takeQueued((x) => x.fp && x.fp.simKey === textKey && x.id !== job.id && !state.restored.has(x.id))) dropQueuedJob(env, context, q, repeat);
 }
 
-function hasHeldJob() {
-  for (let i = 0; i < state.queue.length; i++) {
-    const p = state.pending.get(state.queue[i].id);
-    if (p && !p.released) return true;
-  }
-  return false;
+function parkIfCopy(job) {
+  if (job.noPark || !verdictReusable(job.fp) || innocuousKind(job.content)) return false;
+  const k = job.fp.simKey;
+  if (!(state.inflightSim.get(k) > 0)) return false;
+  let list = state.parked.get(k);
+  if (!list) { list = []; state.parked.set(k, list); }
+  list.push(job);
+  state.counters.parked++;
+  return true;
 }
 
-function slotOpen() {
-  if (state.running < MAX_CONCURRENT) return true;
-  return state.running < MAX_CONCURRENT + HELD_EXTRA_SLOTS && state.heldRunning < MAX_CONCURRENT && hasHeldJob();
-}
-
-function freeJobSlot(job, generation) {
-  if (job.heldRun && generation === state.generation) state.heldRunning = Math.max(0, state.heldRunning - 1);
-  job.heldRun = false;
-  releaseSlot(generation);
+function unpark(simKey) {
+  const list = state.parked.get(simKey);
+  if (!list) return;
+  state.parked.delete(simKey);
+  for (const q of list) q.noPark = true;
+  state.queue.unshift(...list);
 }
 
 function pump(env, context) {
-  while (state.queue.length && slotOpen()) {
+  const s = state.settings;
+  if (!s || !s.enabled) return;
+  while (state.queue.length && state.running < RULE_CONCURRENT) {
     const job = nextJob();
-    const generation = state.generation;
-    const p = state.pending.get(job.id);
-    job.heldRun = !!(p && !p.released);
-    if (job.heldRun) state.heldRunning++;
-    state.running++;
-    const work = runJob(env, context, job, generation);
-    if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
+    if (!job) break;
+    if (parkIfCopy(job)) continue;
+    startJob(env, context, job);
+  }
+}
+
+function startJob(env, context, job) {
+  job.ctx = context || null;
+  job.evSlot = true;
+  job.abandoned = false;
+  state.running++;
+  job.startedAt = Date.now();
+  job.stage = "evidence";
+  if (!state.inflight.size && !state.modelWaiters.length) state.lastProgressAt = Date.now();
+  state.inflight.set(job.id, job);
+  if (verdictReusable(job.fp)) state.inflightSim.set(job.fp.simKey, (state.inflightSim.get(job.fp.simKey) || 0) + 1);
+  job.simCounted = verdictReusable(job.fp);
+  keepAlive(context, runJob(env, context, job, state.generation));
+}
+
+function finishJob(job) {
+  freeEvidence(job);
+  freeModel(job);
+  if (state.inflight.get(job.id) === job) state.inflight.delete(job.id);
+  if (job.simCounted) {
+    job.simCounted = false;
+    const k = job.fp.simKey;
+    const n = (state.inflightSim.get(k) || 1) - 1;
+    if (n <= 0) { state.inflightSim.delete(k); unpark(k); } else state.inflightSim.set(k, n);
   }
 }
 
@@ -2548,98 +3391,39 @@ function claimable(job) {
 
 function mutedJob(job) {
   const s = job.settings || state.settings;
-  return !!(s && s.autoEnforce && !job.force && job.source !== "report" && !state.restored.has(job.id) && isSpamMuted(job.pubkey));
+  return !!(s && s.autoEnforce && !job.force && job.source !== "report" && !state.restored.has(job.id) && (isSpamMuted(job.pubkey) || (state.burstSpam.get(job.pubkey) || 0) > Date.now()));
 }
 
-function dropMutedJob(env, context, job, c) {
-  const s = job.settings || state.settings;
-  noteDropped(job.id);
-  if (s && s.blockEvents) hideLocally(job.id);
-  settle(job.id, true);
-  coalesce(env, context, job);
-  if (c && c.status === "pending") return { routed: "done" };
-  if (c) job.coordClaimed = true;
-  keepAlive(context, liteRecord(env, context, job, null).then((res) => { if (job.coordClaimed) coordPublish(env, context, job, res); }));
-  return { routed: "done" };
-}
-
-async function routeClaim(env, context, job, c) {
-  job.claimRouted = true;
-  const s = job.settings || state.settings;
-  if (c && c.status === "judged" && c.row) {
-    state.counters.coordJudged++;
-    const res = adoptPeer(c.row, job);
-    settle(job.id, verdictDrops(job, res));
-    coalesce(env, context, job);
-    return { routed: "done" };
-  }
-  if (mutedJob(job)) return dropMutedJob(env, context, job, c);
-  if (!c) {
-    if (!(await claimAudit(job.id))) return { routed: "peer" };
-    job.cacheMine = true;
-    return null;
-  }
-  if (c.status === "pending") return { routed: "pending" };
-  job.coordClaimed = true;
-  job.coordFresh = c.status === "mine" && !!c.fresh;
-  if (c.status === "muted" && Number(c.until) > Date.now()) {
-    state.counters.coordMuted++;
-    muteLocally(job.pubkey, Number(c.until));
-    noteDropped(job.id);
-    if (s && s.blockEvents) hideLocally(job.id);
-    settle(job.id, true);
-    coalesce(env, context, job);
-    keepAlive(context, liteRecord(env, context, job, null).then((res) => coordPublish(env, context, job, res)));
-    return { routed: "done" };
-  }
-  if (c.status === "known" && c.verdict && coordKnownAllowed(job) && Number(c.verdict.confidence) >= s.minConfidence) {
-    state.counters.coordKnown++;
-    const known = { spam: true, confidence: Number(c.verdict.confidence) || 0, category: c.verdict.category || "spam", reason: c.verdict.reason || "", model: c.verdict.model || "", at: Date.now() };
-    rememberExact(job.fp, known, job.seenAt || Date.now());
-    state.campaignFleet.set(job.fp.simKey, Math.min(Number(c.others) || 0, CAMPAIGN_PUBKEYS_MAX));
-    trimMap(state.campaignFleet, CAMPAIGN_KEYS_MAX);
-    noteDropped(job.id);
-    if (s && s.blockEvents) hideLocally(job.id);
-    settle(job.id, true);
-    coalesce(env, context, job);
-    keepAlive(context, liteRecord(env, context, job, known).then((res) => coordPublish(env, context, job, res)));
-    return { routed: "done" };
-  }
-  return null;
-}
-
-async function claimAudit(id) {
-  const held = await edgeCacheGet(claimKey(id));
+async function claimAudit(id, ctx) {
+  const held = await cacheGet(ctx, claimKey(id));
   if (held && held.token && held.token !== INSTANCE_TOKEN && Date.now() - (Number(held.at) || 0) < CLAIM_TTL_S * 1000) return false;
-  await edgeCachePut(claimKey(id), { token: INSTANCE_TOKEN, at: Date.now() }, CLAIM_TTL_S);
-  const back = await edgeCacheGet(claimKey(id));
+  await cachePut(ctx, claimKey(id), { token: INSTANCE_TOKEN, at: Date.now() }, CLAIM_TTL_S);
+  const back = await cacheGet(ctx, claimKey(id));
   return !back || back.token === INSTANCE_TOKEN;
 }
 
-async function awaitOutcome(id) {
+async function awaitOutcome(id, ctx) {
   const deadline = Date.now() + CLAIM_WAIT_MS;
   for (;;) {
-    const out = await edgeCacheGet(outcomeKey(id));
+    const out = await cacheGet(ctx, outcomeKey(id));
     if (out) return out;
     if (Date.now() >= deadline) return null;
     await new Promise((r) => setTimeout(r, Math.min(CLAIM_POLL_MS, Math.max(1, deadline - Date.now()))));
   }
 }
 
-function publishOutcome(job, res) {
+function publishOutcome(job, res, ctx) {
   let out = null;
   if (res && res.verdict) {
     out = { row: { verdict: res.verdict.spam ? "spam" : "ok", confidence: res.verdict.confidence, category: res.verdict.category || "", reason: res.verdict.reason || "", lang: res.verdict.language || "", action: res.action || "", label: null } };
   } else if (res && res.skipped) {
     out = { skipped: res.skipped, suspicious: !!res.suspicious };
   }
-  return edgeCachePut(outcomeKey(job.id), out || { failed: true }, OUTCOME_TTL_S);
+  return cachePut(ctx, outcomeKey(job.id), out || { failed: true }, OUTCOME_TTL_S);
 }
 
 async function followPeer(env, context, job, generation) {
-  freeJobSlot(job, generation);
-  pump(env, context);
-  const out = await awaitOutcome(job.id);
+  const out = await awaitOutcome(job.id, job.ctx || context);
   if (generation !== state.generation) return;
   if (out && out.row) {
     const res = adoptPeer(out.row, job);
@@ -2651,42 +3435,38 @@ async function followPeer(env, context, job, generation) {
     settle(job.id, verdictDrops(job, { skipped: out.skipped, suspicious: out.suspicious }));
     return;
   }
+  job.noClaim = true;
   state.queue.unshift(job);
   pump(env, context);
 }
 
 async function runJob(env, context, job, generation) {
-  const hooks = { buffered: true, context, onVerdict(drop) { settle(job.id, drop); if (drop) coalesce(env, context, job); } };
-  let claim = null;
-  if (claimable(job) && mutedJob(job)) {
-    job.claimChecked = true;
-    job.claimRouted = true;
-    dropMutedJob(env, context, job, null);
-    freeJobSlot(job, generation);
-    pump(env, context);
-    return;
-  }
-  if (claimable(job)) {
-    job.claimChecked = true;
-    if (!job.coordSkip && coordWouldCall(env, true)) {
-      claim = coordClaim(env, job, true);
-      hooks.claim = claim;
-      hooks.route = (c) => routeClaim(env, context, job, c);
-    } else if (!job.coordSkip) {
-      if (coordOf(env)) state.counters.coordSkipped++;
-      if (!(await claimAudit(job.id))) return followPeer(env, context, job, generation);
-      job.cacheMine = true;
-    }
-  }
+  const hooks = {
+    buffered: true, context,
+    onVerdict(drop) { if (job.abandoned && !state.pending.has(job.id)) return; settle(job.id, drop); if (drop) coalesce(env, context, job); },
+    beforeModel: () => beforeModel(env, context, job)
+  };
   let res = null;
+  let peer = false;
   try {
-    res = await auditNow(env, job, hooks);
-    if (res && res.routed === "pending") return followCoord(env, context, job, generation, shardOf(env, job));
-    if (res && res.routed === "peer") return followPeer(env, context, job, generation);
-    if (!(res && res.routed)) {
-      state.lastAuditAt = Date.now();
-      settle(job.id, verdictDrops(job, res));
+    if (claimable(job) && mutedJob(job)) {
+      job.claimChecked = true;
+      noteDropped(job.id);
+      const s = job.settings || state.settings;
+      if (s && s.blockEvents) hideLocally(job.id);
+      settle(job.id, true);
       coalesce(env, context, job);
+      res = { routed: "done" };
+      keepAlive(context, liteRecord(env, context, job, senderVerdict(job.pubkey)));
+    } else {
+      res = await auditNow(env, job, hooks);
+      if (generation !== state.generation) return;
+      if (res && res.routed === "peer") peer = true;
+      else if (!(res && res.routed)) {
+        state.lastAuditAt = Date.now();
+        settle(job.id, verdictDrops(job, res));
+        coalesce(env, context, job);
+      }
     }
   } catch (e) {
     state.counters.errors++;
@@ -2695,15 +3475,59 @@ async function runJob(env, context, job, generation) {
     console.error("[spam] audit failed for " + job.id + ": " + state.lastError);
     settle(job.id, false);
   }
-  if (!(res && res.routed)) {
-    if (job.cacheMine) keepAlive(context, publishOutcome(job, res).catch(() => { }));
-    if (job.coordClaimed) coordPublish(env, context, job, res);
-    else if (claim && !job.claimRouted) keepAlive(context, claim.then((c) => { if (c && c.status !== "pending" && c.status !== "judged") coordPublish(env, context, job, null); }));
-  }
-  keepAlive(context, noteStatus(env).catch(() => { }));
-  maybePushCounters(env, context);
-  freeJobSlot(job, generation);
+  if (generation !== state.generation) return;
+  if (!peer && !(res && res.routed) && job.cacheMine) keepAlive(context, publishOutcome(job, res, job.ctx || context).catch(() => { }));
+  const abandoned = job.abandoned;
+  finishJob(job);
+  if (!abandoned) progress();
+  const status = maybeStatus(env, context);
+  maintenance(env, context);
+  if (status) await status;
+  if (peer) await followPeer(env, context, job, generation);
+}
+
+function maybeStatus(env, context) {
+  if (Date.now() - state.statusAt < SETTINGS_REFRESH_MS) return null;
+  const p = noteStatus(env).catch(() => { });
+  keepAlive(context, p);
+  return p;
+}
+
+function syncMarkers(context) {
+  const now = Date.now();
+  if (state.markerSync) return;
+  const push = state.markersDirty;
+  if (!push && now - state.markersPulledAt < MARKER_PULL_MS) return;
+  state.markersDirty = false;
+  state.markersPulledAt = now;
+  const p = (async () => {
+    const hit = await cacheGet(context, MARKER_SHARE_KEY);
+    const t = Date.now();
+    const list = hit && Array.isArray(hit.m) ? hit.m : [];
+    for (const m of list) {
+      if (!m || typeof m.p !== "string" || m.p.length < MARKER_PREFIX_MIN || m.p.length > MARKER_PREFIX_MAX || !/^[a-z]+$/.test(m.p)) continue;
+      const until = Math.min(Number(m.u) || 0, t + MARKER_TTL_MS);
+      if (until > t && (state.markers.get(m.p) || 0) < until) state.markers.set(m.p, until);
+    }
+    if (push) {
+      const merged = new Map();
+      for (const m of list) if (m && typeof m.p === "string" && Number(m.u) > t) merged.set(m.p, Number(m.u));
+      for (const [p2, u] of state.markers) if (u > t) merged.set(p2, Math.max(u, merged.get(p2) || 0));
+      const out = Array.from(merged.entries()).sort((a, b) => b[1] - a[1]).slice(0, 200).map(([p2, u]) => ({ p: p2, u }));
+      await cachePut(context, MARKER_SHARE_KEY, { m: out }, MARKER_SHARE_S);
+    }
+  })().catch(() => { }).finally(() => { state.markerSync = null; });
+  state.markerSync = p;
+  keepAlive(context, p);
+}
+
+function maintenance(env, context) {
+  const now = Date.now();
+  watchdog(now);
   pump(env, context);
+  maybeFlush(env, context, false);
+  maybeStatus(env, context);
+  syncMarkers(context);
 }
 
 function reportTag(tags, name) {
@@ -2920,20 +3744,35 @@ export async function reviewSpamReport(env, ev, opts) {
   return { reporter, targetPubkey, targetEvent, reporters, results };
 }
 
+
 export function spamEngine(env, context) {
   const db = env && env.DB_NOPE;
   const usable = hasD1(db);
-  if (usable) settingsSync(env);
+  if (usable) settingsSync(env, context);
+  const port = { context, waiters: new Set(), timer: null, closed: false };
+  const pulse = () => {
+    if (port.closed) return;
+    portTick(port);
+    if (usable) { settingsSync(env, context); maintenance(env, context); }
+    if (!portBusy(port) && port.timer) { clearInterval(port.timer); port.timer = null; }
+  };
+  const addWaiter = (pend, job) => {
+    const w = { id: job.id, release: job.release, retract: job.retract, released: false, retracted: false, dropped: false, want: null, port, releasedAt: 0 };
+    pend.waiters.push(w);
+    port.waiters.add(w);
+    ensurePortTimer(port, pulse);
+    return w;
+  };
   return {
     active() {
       if (!usable) return false;
-      const s = settingsSync(env);
+      const s = settingsSync(env, context);
       return !!(s && s.enabled);
     },
     settings() { return state.settings; },
     badgeGate() {
       if (!usable) return "off";
-      const s = settingsSync(env);
+      const s = settingsSync(env, context);
       return s && (s.requireBadge === "challenged" || s.requireBadge === "attested") ? s.requireBadge : "off";
     },
     isExempt(pubkey) {
@@ -2941,13 +3780,21 @@ export function spamEngine(env, context) {
     },
     noteUnbadged() {
       state.counters.unbadged++;
-      const p = noteStatus(env);
-      if (context && typeof context.waitUntil === "function") { try { context.waitUntil(p); } catch (_) { } }
+      keepAlive(context, noteStatus(env));
     },
     isHidden(id) { return state.hidden.has(id); },
     flush() {
-      if (!state.wbuf.length) return Promise.resolve();
-      return kickFlush(env, context, true);
+      if (!state.wbuf.length && !state.flushRun) return Promise.resolve();
+      return maybeFlush(env, context, true) || Promise.resolve();
+    },
+    tick() {
+      if (!usable) return;
+      pulse();
+    },
+    close() {
+      port.closed = true;
+      if (port.timer) { clearInterval(port.timer); port.timer = null; }
+      port.waiters.clear();
     },
     isMuted(pubkey) { return typeof pubkey === "string" && isSpamMuted(pubkey.toLowerCase()); },
     inspect(job) {
@@ -2959,6 +3806,7 @@ export function spamEngine(env, context) {
       state.counters.inspected++;
       if (isExemptPubkey(s, pubkey)) return "pass";
       if (state.restored.has(job.id)) return "pass";
+      watchdog(now);
       if (isSpamMuted(pubkey, now) || recordMuted(pubkey, now)) { state.counters.dropped++; return "drop"; }
       if (state.dropped.has(job.id) || state.hidden.has(job.id)) { state.counters.dropped++; return "drop"; }
       if (typeof job.content !== "string" || !job.content.trim()) return "pass";
@@ -2969,41 +3817,51 @@ export function spamEngine(env, context) {
       }
       const pend = state.pending.get(job.id);
       if (pend) {
-        const w = { release: job.release, retract: job.retract, released: false };
-        pend.waiters.push(w);
-        if (pend.released) { w.released = true; try { if (typeof w.release === "function") w.release(); } catch (_) { } }
+        const w = addWaiter(pend, job);
+        if (pend.released) { w.released = true; w.releasedAt = now; deliver(w, "release"); }
         return "hold";
       }
       if (!noteSeen(job.id)) return "pass";
       noteVelocity(pubkey, now);
-      const fp = fingerprint(job.content);
-      const queued = Object.assign({}, job, { pubkey, fp, nymKey: nymKey(job.nym), seenAt: now, settings: s, source: "pool", force: false });
+      const queued = Object.assign({}, job, { pubkey, nymKey: nymKey(job.nym), seenAt: now, settings: s, source: "pool", force: false });
       delete queued.release;
       delete queued.retract;
-      let known = null;
-      if (s.autoEnforce && verdictReusable(fp) && !innocuousKind(job.content)) {
-        const cached = exactVerdict(fp.simKey, now);
-        if (cached && cached.spam && cached.confidence >= s.minConfidence) known = cached;
+      ensureFeatures(queued, now);
+      noteTail(queued, now);
+      noteNym(queued, now);
+      if (s.autoEnforce) {
+        const fast = fastVerdict(queued, now, s);
+        if (fast) {
+          noteDropped(job.id);
+          if (s.blockEvents) hideLocally(job.id);
+          state.counters.dropped++;
+          const key = "fast" + fast.fast.charAt(0).toUpperCase() + fast.fast.slice(1);
+          if (key in state.counters) state.counters[key]++;
+          if (fast.fast === "actor" && !isSpamMuted(pubkey, now)) { muteLocally(pubkey, now + Math.round(s.muteHours * 3600000)); state.counters.muted++; queued.preMuted = true; }
+          if (fast.fast === "burst" || fast.fast === "actor" || fast.fast === "lexicon") {
+            state.burstSpam.set(pubkey, now + BURST_DROP_MS);
+            trimMap(state.burstSpam, MUTED_MAX);
+            dropPendingFrom(env, context, pubkey, job.id);
+          }
+          keepAlive(context, liteRecord(env, context, queued, fast));
+          return "drop";
+        }
       }
-      if (known) {
-        noteDropped(job.id);
-        if (s.blockEvents) hideLocally(job.id);
-        state.counters.dropped++;
-        const work = liteRecord(env, context, queued, known);
-        if (context && typeof context.waitUntil === "function") { try { context.waitUntil(work); } catch (_) { } }
-        return "drop";
-      }
-      if (state.queue.length >= MAX_QUEUE && !evictReleased()) {
+      if (state.stalled) return "pass";
+      if (state.queue.length >= EVIDENCE_QUEUE_MAX && !evictReleased()) {
         state.counters.overflow++;
         return "pass";
       }
+      if (!state.inflight.size && !state.queue.length && !state.modelWaiters.length) state.lastProgressAt = now;
       state.queue.push(queued);
       state.counters.queued++;
       let verdict = "pass";
       if (s.autoEnforce && s.holdMs > 0 && typeof job.release === "function") {
-        const entry = { waiters: [{ release: job.release, retract: job.retract, released: false }], released: false, timer: null, at: now };
-        entry.timer = setTimeout(() => { entry.timer = null; state.counters.timedOut++; releaseAll(job.id); }, s.holdMs);
+        const entry = { id: job.id, job: queued, waiters: [], released: false, timer: null, at: now, deadline: now + s.holdMs };
         state.pending.set(job.id, entry);
+        addPendingBy(pubkey, job.id);
+        addWaiter(entry, job);
+        entry.timer = setTimeout(() => { entry.timer = null; holdTimeout(job.id); }, s.holdMs);
         state.counters.held++;
         verdict = "hold";
       }

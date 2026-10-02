@@ -346,6 +346,7 @@ export async function onRequest(context) {
     try {
       if (serverOpen && server.readyState === 1) {
         server.send(JSON.stringify(['POOL:PING', Date.now()]));
+        try { spam.tick(); } catch {}
         filterSet(env).then((s) => { gate = s; }, () => { });
         runArchive(flushArchive());
         runArchive(flushEmojiArchive());
@@ -406,6 +407,16 @@ export async function onRequest(context) {
         server.send(typeof data === 'string' ? data : JSON.stringify(data));
       }
     } catch {
+    }
+  }
+
+  function trySendToClient(data) {
+    if (!serverOpen || server.readyState !== 1) return true;
+    try {
+      server.send(data);
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -1538,8 +1549,8 @@ export async function onRequest(context) {
     let mentions = 0;
     for (const t of ev.tags) if (t[0] === 'p' && mentions < 64) mentions++;
     return spam.inspect({
-      release: () => sendToClient(raw.slice(0, -1) + relayTail),
-      retract: () => sendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam'])),
+      release: () => trySendToClient(raw.slice(0, -1) + relayTail),
+      retract: () => trySendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam'])),
       id: eventId,
       kind,
       pubkey: ev.pubkey,
@@ -1767,6 +1778,7 @@ export async function onRequest(context) {
       });
 
       ws.addEventListener('message', (event) => {
+        try { spam.tick(); } catch {}
         let raw = event.data;
         if (typeof raw !== 'string' || raw.length < 10 || raw.length > UPSTREAM_FRAME_MAX) return;
         if (raw.charCodeAt(0) !== 91 || raw.charCodeAt(1) !== 34) {
@@ -2385,7 +2397,8 @@ export async function onRequest(context) {
 
   function cleanupAll() {
     serverOpen = false;
-    try { spam.flush(); } catch {}
+    try { const done = spam.flush(); if (done && context && context.waitUntil) context.waitUntil(done); } catch {}
+    try { spam.close(); } catch {}
     if (archiveEnabled && archiveBuf.size > 0) {
       const finalFlush = flushArchive().catch(() => { });
       if (context && context.waitUntil) { try { context.waitUntil(finalFlush); } catch {} }
