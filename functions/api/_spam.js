@@ -883,13 +883,15 @@ async function noteStatus(env) {
   try {
     await ensureConfigSchema(env);
     const fleet = coordWouldCall(env, false) ? await coordCall(env, COUNTERS_NAME, { op: "fleet" }, { timeoutMs: COORD_STATUS_TIMEOUT_MS }) : null;
-    await db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?), (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify({
+    const payload = JSON.stringify({
         engine: SPAM_ENGINE_VERSION, at: now, model: state.settings ? state.settings.model : null, lastAuditAt: state.lastAuditAt,
         lastError: state.lastError, lastErrorAt: state.lastErrorAt, pending: state.pending.size, queue: state.queue.length,
         cooldownUntil: state.cooldownUntil, viaGateway: String(env.SPAM_VIA_GATEWAY || "") === "1" && !!env.AI_GATEWAY_NAME,
         badgeGate: state.settings ? state.settings.requireBadge || "off" : "unloaded", authority: !!authorityPubkey(env),
         counters: countersNow(Date.now()), fleet: fleet && fleet.totals ? fleet : undefined, coordinator: coordHealth(env, Date.now())
-      }), SPAM_STATUS_VERSION_PREFIX + SPAM_ENGINE_VERSION, JSON.stringify({ engine: SPAM_ENGINE_VERSION, at: now })).run();
+      });
+    await db.prepare("INSERT INTO spam_config (key, value) VALUES ('status', ?), (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .bind(payload, SPAM_STATUS_VERSION_PREFIX + SPAM_ENGINE_VERSION, payload).run();
   } catch (_) { }
 }
 
