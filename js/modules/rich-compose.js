@@ -596,6 +596,50 @@ Object.assign(NYM.prototype, {
         return added;
     },
 
+    addComposerGif(url, title) {
+        if (!url) return null;
+        if (!this._composerAttachments) this._composerAttachments = [];
+        const rec = {
+            id: 'att' + (++this._composerAttachmentSeq),
+            kind: 'image',
+            gif: true,
+            objectUrl: typeof this.getProxiedMediaUrl === 'function' ? this.getProxiedMediaUrl(url) : url,
+            status: 'done',
+            url,
+            alt: title || '',
+            error: '',
+        };
+        this._composerAttachments.push(rec);
+        this.updateComposerMediaPreviews();
+        return rec;
+    },
+
+    pickComposerGif(url, title) {
+        if (!url || this.pendingEdit) return false;
+        if (!this.inPMMode && typeof this.sendImagesOverMesh === 'function' && typeof this.meshShouldCarry === 'function'
+            && this.meshShouldCarry(this.currentGeohash || this.currentChannel)) {
+            this.sendGifOverMesh(url);
+            return true;
+        }
+        this.addComposerGif(url, title);
+        return true;
+    },
+
+    async sendGifOverMesh(url) {
+        let file = null;
+        try {
+            const res = await fetch(typeof this.getProxiedMediaUrl === 'function' ? this.getProxiedMediaUrl(url) : url);
+            if (res.ok) file = new File([await res.blob()], 'gif.gif', { type: 'image/gif' });
+        } catch (_) { }
+        if (!file) {
+            if (typeof this.displaySystemMessage === 'function') {
+                this.displaySystemMessage(typeof this.uiText === 'function' ? this.uiText('Failed to load GIFs') : 'Failed to load GIFs');
+            }
+            return;
+        }
+        await this.sendImagesOverMesh([file]);
+    },
+
     composerAttachmentById(id) {
         return (this._composerAttachments || []).find(a => a.id === id) || null;
     },
@@ -710,7 +754,7 @@ Object.assign(NYM.prototype, {
             const s = this.escapeHtml(a.objectUrl);
             const media = a.kind === 'video'
                 ? `<video class="media-preview-thumb" src="${s}" muted playsinline preload="metadata"></video>`
-                : `<img class="media-preview-thumb" src="${s}" alt="" decoding="async">`;
+                : `<img class="media-preview-thumb" src="${s}" alt="${this.escapeHtml(a.alt || '')}" decoding="async">`;
             const id = this.escapeHtml(a.id);
             let overlay = '';
             let title = '';

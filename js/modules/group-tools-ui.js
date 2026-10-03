@@ -1219,10 +1219,10 @@
             const dis = offline ? ` data-gt-disabled="1" title="${esc(this._gx(T().STRINGS.groupsNeedNet))}"` : '';
             const out = [];
             if (admin) {
-                out.push(`<div class="context-menu-item${offline ? ' gt-disabled' : ''}" data-action="gtOpenSlowmode" data-group-id="${esc(groupId)}"${dis}>${ICONS.slowmode}${esc(this._gx('Slowmode'))}<span class="gt-menu-value">${esc(this._gx(T().slowmodeLabel(group.slowmode)))}</span></div>`);
+                out.push(`<div class="context-menu-item gt-menu-row${offline ? ' gt-disabled' : ''}" data-action="gtOpenSlowmode" data-group-id="${esc(groupId)}"${dis}>${ICONS.slowmode}<span class="gt-menu-label">${esc(this._gx('Slowmode'))}</span><span class="gt-menu-value">${esc(this._gx(T().slowmodeLabel(group.slowmode)))}</span></div>`);
                 out.push(`<div class="context-menu-item${offline ? ' gt-disabled' : ''}" data-action="gtToggleJoinApproval" data-group-id="${esc(groupId)}"${dis}>${checkbox(group.joinApproval === true)}${esc(this._gx('Admins approve join requests'))}</div>`);
                 const n = T().pruneJoinRequests(group.joinRequests || [], nowSec()).length;
-                if (group.joinApproval === true || n) out.push(`<div class="context-menu-item" data-action="gtOpenJoinRequests" data-group-id="${esc(groupId)}">${ICONS.requests}${esc(this._gx('Join requests'))}${n ? `<span class="gt-menu-badge">${n}</span>` : ''}</div>`);
+                if (group.joinApproval === true || n) out.push(`<div class="context-menu-item gt-menu-row" data-action="gtOpenJoinRequests" data-group-id="${esc(groupId)}">${ICONS.requests}<span class="gt-menu-label">${esc(this._gx('Join requests'))}</span>${n ? `<span class="gt-menu-badge">${n}</span>` : ''}</div>`);
             }
             out.push(`<div class="context-menu-item${offline ? ' gt-disabled' : ''}" data-action="gtCreateEvent" data-group-id="${esc(groupId)}"${dis}>${ICONS.event}${esc(this._gx('Create event'))}</div>`);
             out.push(`<div class="context-menu-item${offline ? ' gt-disabled' : ''}" data-action="gtShareLocationGroup" data-group-id="${esc(groupId)}"${dis}>${ICONS.location}${esc(this._gx('Share location'))}</div>`);

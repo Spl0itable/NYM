@@ -323,7 +323,19 @@ Object.assign(NYM.prototype, {
             this._i18nEnqueue([key], 'hi', lang);
             return text;
         }
-        return this._i18nFill(tpl, tokens);
+        const out = this._i18nFill(tpl, tokens);
+        if (out !== text) {
+            if (!this._i18nSources) this._i18nSources = new Map();
+            this._i18nSources.delete(out);
+            this._i18nSources.set(out, text);
+            if (this._i18nSources.size > 200) this._i18nSources.delete(this._i18nSources.keys().next().value);
+        }
+        return out;
+    },
+
+    uiSourceOf(text) {
+        const s = this._i18nSources && this._i18nSources.get(text);
+        return s == null ? text : s;
     },
 
     // Pre-translate source strings at high priority so they're ready as they appear.

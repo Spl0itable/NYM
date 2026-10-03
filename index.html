@@ -802,12 +802,14 @@
                 <div class="typing-indicator-text" id="typingIndicatorText"></div>
             </div>
 
-            <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" data-action="scrollToBottom"
-                title="Scroll to bottom">
-                <svg viewBox="0 0 24 24" width="20" height="20">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
-            </button>
+            <div class="cn-fabs" id="cnFabs">
+                <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" data-action="scrollToBottom"
+                    title="Scroll to bottom">
+                    <svg viewBox="0 0 24 24" width="20" height="20">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </button>
+            </div>
 
             <div class="input-container">
                 <button class="icon-btn input-btn attach-btn" id="attachBtn" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-controls="attachMenu" aria-expanded="false">
@@ -919,7 +921,7 @@
                     </button>
                     <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="file" data-action="selectP2PFile">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
-                        <span class="composer-menu-text"><span class="composer-menu-label">File</span><span class="composer-menu-reason"></span></span>
+                        <span class="composer-menu-text"><span class="composer-menu-label">P2P file</span><span class="composer-menu-reason"></span></span>
                     </button>
                     <button type="button" class="composer-menu-item nm-hidden" id="gtLocationBtn" data-attach-item="location" data-action="gtOpenLocation" role="menuitem">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"></path><circle cx="12" cy="9" r="2.5"></circle></svg>
@@ -2600,6 +2602,14 @@
                     <a href="https://nymchat.app/privacy/" target="_blank" rel="noopener">Privacy Policy</a>
                     <a href="https://nymchat.app/dmca/" target="_blank" rel="noopener">DMCA</a>
                 </div>
+                <div class="about-legal">
+                    <div class="about-attribution" data-no-i18n>Nymchat by 21 Million LLC</div>
+                    <div class="about-copyright"><span data-no-i18n>© 21 Million LLC</span> · <span>Licensed under AGPL-3.0</span></div>
+                    <div class="about-legal-links">
+                        <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">License</a>
+                        <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener">Source code</a>
+                    </div>
+                </div>
                 <div class="about-divider"></div>
                 <div class="about-contact-title">Contact the developer</div>
                 <div class="form-hint nm-h-22">Send feedback, a question, or a bug report. Your message is delivered as an encrypted private message to the Nymchat developer.</div>
@@ -2706,6 +2716,7 @@
     <script defer src="js/modules/composer-model.js"></script>
     <script defer src="js/modules/chat-lock.js"></script>
     <script defer src="js/modules/message-format.js"></script>
+    <script defer src="js/modules/toasts.js"></script>
     <script defer src="js/modules/mesh/mesh-protocol.js"></script>
     <script defer src="js/modules/mesh/mesh-crypto.js"></script>
     <script defer src="js/modules/mesh/mesh-transport.js"></script>
@@ -2714,6 +2725,7 @@
     <script defer src="js/modules/mesh/mesh-extras.js"></script>
     <script defer src="js/modules/mesh/mesh-service.js"></script>
     <script defer src="js/modules/messages.js"></script>
+    <script defer src="js/modules/toasts-ui.js"></script>
     <script defer src="js/brand-marks.js"></script>
     <script defer src="js/modules/pms.js"></script>
     <script defer src="js/modules/anon-bot.js"></script>

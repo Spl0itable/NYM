@@ -310,6 +310,7 @@ export async function onRequest(context) {
   let gate = await filterSet(env);
   const spam = spamEngine(env, context);
   let sockHeld = null;
+  let sockHeldPubkey = '';
 
   const { 0: client, 1: server } = new WebSocketPair();
   server.accept();
@@ -2016,14 +2017,23 @@ export async function onRequest(context) {
     }
   }
 
+  function sampleHeldMuted(ev) {
+    if (!ev || (ev.kind !== 20000 && ev.kind !== 23333) || typeof ev.pubkey !== 'string' || typeof ev.content !== 'string' || !ev.content || !Array.isArray(ev.tags)) return;
+    if (!gate.p.has(ev.pubkey.toLowerCase()) || !spam.wantsSample(ev.pubkey)) return;
+    if (!verifySignedEvent(ev)) return;
+    try { spam.sampleMuted(spamEngineJob(ev, ev.kind, { score: 0, copies: 0 })); } catch { }
+  }
+
   function heldOutbound(ev) {
     if (ev && ev.kind === 1984) runArchive(noteReport(env, ev, 'pool').then((ok) => (ok ? reviewSpamReport(env, ev, { context }) : null)).catch(() => null));
+    if (sockHeld && sockHeldPubkey && !gate.p.has(sockHeldPubkey) && !spam.isMuted(sockHeldPubkey)) { sockHeld = null; sockHeldPubkey = ''; }
     let mode = sockHeld;
     if (!mode) {
       mode = eventHit(gate, ev);
-      if (mode && ev && typeof ev.pubkey === 'string' && gate.p.has(ev.pubkey.toLowerCase())) sockHeld = mode;
+      if (mode && ev && typeof ev.pubkey === 'string' && gate.p.has(ev.pubkey.toLowerCase())) { sockHeld = mode; sockHeldPubkey = ev.pubkey.toLowerCase(); }
     }
     if (!mode) return false;
+    sampleHeldMuted(ev);
     if (ev && typeof ev.id === 'string') {
       sendToClient(JSON.stringify(mode === 'reject'
         ? ['OK', ev.id, false, 'blocked: not accepted']

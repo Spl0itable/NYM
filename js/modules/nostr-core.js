@@ -2355,66 +2355,71 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    handleIncomingEdit(originalEventId, newContent, senderPubkey, editEventId, editAt) {
-        // Store even if the original hasn't arrived (relay delivery is out of order).
-        const existing = this.editedMessages.get(originalEventId);
-        if (!existing || (editEventId && editEventId !== existing.editEventId)) {
-            this.editedMessages.set(originalEventId, {
-                newContent,
-                editEventId,
-                senderPubkey,
-                timestamp: new Date(),
-                editAt: Number(editAt) || 0
-            });
-        }
-
-        if (this.editedMessages.size > 5000) {
-            const entries = Array.from(this.editedMessages.entries());
-            this.editedMessages = new Map(entries.slice(-4000));
-        }
-
-        let found = false;
-        this.messages.forEach((msgs, channel) => {
-            const msg = msgs.find(m => m.id === originalEventId);
-            if (msg && msg.pubkey === senderPubkey) {
-                if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, editAt);
-                msg.content = newContent;
-                msg.isEdited = true;
-                this.persistChannelMessages(channel);
-                found = true;
-            }
-        });
-
-        if (found) {
-            this.updateMessageInDOM(originalEventId, newContent);
-        }
-    },
-
-    handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey, senderVerified = true, editAt = 0) {
-        if (senderVerified !== true || !originalId || !senderPubkey) return;
-        const scopedKey = `${senderPubkey}:${originalId}`;
-        if (!this.editedMessages.has(scopedKey)) {
-            this.editedMessages.set(scopedKey, {
-                newContent,
-                editEventId: null,
+    _takeEdit(key, senderPubkey, cand, msg) {
+        const T = window.NymChatTools;
+        const existing = this.editedMessages.get(key);
+        const mine = existing && existing.senderPubkey === senderPubkey ? existing : null;
+        const cur = mine ? { text: mine.newContent, at: Number(mine.editAt) || 0, id: mine.editEventId || '' } : null;
+        const verdict = T ? T.editVerdict(cur, cand, msg ? msg.created_at : 0) : 'apply';
+        if (verdict === 'apply') {
+            const stale = mine && Array.isArray(mine.stale) ? mine.stale.slice() : [];
+            if (cur && !msg) stale.push({ text: cur.text, at: cur.at });
+            const max = T ? T.LIMITS.editVersionsMax : 20;
+            this.editedMessages.set(key, {
+                newContent: cand.text,
+                editEventId: cand.id || null,
                 senderPubkey,
                 senderVerified: true,
                 timestamp: new Date(),
-                editAt: Number(editAt) || 0
+                editAt: cand.at,
+                stale: stale.slice(-max)
             });
+        } else if (verdict === 'stale') {
+            if (msg) {
+                if (typeof this._noteStaleEdit === 'function') this._noteStaleEdit(msg, cand.text, cand.at);
+            } else {
+                const max = T ? T.LIMITS.editVersionsMax : 20;
+                mine.stale = (Array.isArray(mine.stale) ? mine.stale : []).concat([{ text: cand.text, at: cand.at }]).slice(-max);
+            }
         }
 
         if (this.editedMessages.size > 5000) {
             const entries = Array.from(this.editedMessages.entries());
             this.editedMessages = new Map(entries.slice(-4000));
         }
+        return verdict === 'apply' || verdict === 'same';
+    },
 
+    handleIncomingEdit(originalEventId, newContent, senderPubkey, editEventId, editAt) {
+        if (!originalEventId || !senderPubkey) return;
+        const targets = [];
+        this.messages.forEach((msgs, channel) => {
+            const msg = msgs.find(m => m.id === originalEventId);
+            if (msg && msg.pubkey === senderPubkey) targets.push([msg, channel]);
+        });
+
+        const cand = { text: newContent, at: Number(editAt) || 0, id: editEventId || '' };
+        if (!this._takeEdit(`${senderPubkey}:${originalEventId}`, senderPubkey, cand, targets.length ? targets[0][0] : null)) return;
+        if (!targets.length) return;
+
+        for (const [msg, channel] of targets) {
+            if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, editAt);
+            msg.content = newContent;
+            msg.isEdited = true;
+            this.persistChannelMessages(channel);
+        }
+        this.updateMessageInDOM(originalEventId, newContent);
+    },
+
+    handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey, senderVerified = true, editAt = 0, editId = '') {
+        if (senderVerified !== true || !originalId || !senderPubkey) return;
         const msgs = this.pmMessages.get(conversationKey);
-        if (!msgs) return;
-
-        const msg = msgs.find(m =>
+        const msg = msgs ? msgs.find(m =>
             (m.nymMessageId === originalId || m.id === originalId) && m.pubkey === senderPubkey
-        );
+        ) : null;
+
+        const cand = { text: newContent, at: Number(editAt) || 0, id: editId || '' };
+        if (!this._takeEdit(`${senderPubkey}:${originalId}`, senderPubkey, cand, msg)) return;
         if (!msg) return;
 
         if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, editAt);

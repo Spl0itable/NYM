@@ -339,24 +339,122 @@
             try { localStorage.setItem(C().EDITS_KEY, JSON.stringify(this._ctEdits)); } catch (_) { }
         },
 
+        _noteStaleEdit(msg, text, editAtSec) {
+            if (!msg || typeof text !== 'string') return;
+            const key = this._ctDomId(msg);
+            if (!key) return;
+            const store = this._editStore();
+            const rec = C().recordStaleEdit(store[key], text, editAtSec, msg.content);
+            if (rec === store[key] || (!store[key] && !rec.versions.length)) return;
+            store[key] = rec;
+            this._ctEdits = C().pruneEditStore(store);
+            try { localStorage.setItem(C().EDITS_KEY, JSON.stringify(this._ctEdits)); } catch (_) { }
+        },
+
         editHistoryFor(domId) {
             return this._editStore()[domId] || null;
         },
 
         openEditHistory(domId) {
             const found = this._ctFindMessage(domId);
-            const current = found ? found.msg.content : '';
-            const rec = this.editHistoryFor(domId);
-            const { body } = this._ctModal('editHistoryModal', this._ct('Edit history'));
+            const plan = C().editHistoryPlan(this.editHistoryFor(domId), {
+                online: !!(found && found.msg.pubkey) && this._ehRemoteOk(),
+                mesh: !!(found && found.msg.isMesh),
+            });
+            const { modal, body } = this._ctModal('editHistoryModal', this._ct('Edit history'));
+            const token = (this._ehToken || 0) + 1;
+            this._ehToken = token;
+            this._renderEditHistory(body, domId, plan.view);
+            if (!plan.fetch) return;
+            this.fetchEditHistory(domId).then((view) => {
+                if (this._ehToken !== token || !modal.classList.contains('active')) return;
+                this._renderEditHistory(body, domId, view);
+            });
+        },
+
+        _renderEditHistory(body, domId, view) {
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
-            if (!rec || !rec.versions || !rec.versions.length) {
-                body.innerHTML = `<div class="ct-empty">${esc(this._ct("Earlier versions aren't available on this device."))}</div>`;
-                return;
-            }
-            body.innerHTML = C().editTimeline(rec, current).map((v) => `<div class="ct-version${v.current ? ' current' : ''}">
+            const empty = (text) => `<div class="ct-empty">${esc(this._ct(text))}</div>`;
+            if (view === 'loading') { body.innerHTML = empty('Loading...'); return; }
+            if (view === 'notFound') { body.innerHTML = empty("Earlier versions couldn't be found."); return; }
+            if (view !== 'versions') { body.innerHTML = empty("Earlier versions aren't available on this device."); return; }
+            const found = this._ctFindMessage(domId);
+            const current = found ? found.msg.content : '';
+            body.innerHTML = C().editTimeline(this.editHistoryFor(domId), current).map((v) => `<div class="ct-version${v.current ? ' current' : ''}">
                 <div class="ct-version-time">${esc(v.current ? this._ct('Current, edited {time}', { time: this._formatFullTimestamp(v.at * 1000) }) : this._formatFullTimestamp(v.at * 1000))}</div>
                 <div class="ct-version-text message-content">${this.formatMessageWithQuotes(v.text, 0)}</div>
             </div>`).join('');
+        },
+
+        _ehRemoteOk() {
+            return this._ctOnline() && !!(this._getApiHost && this._getApiHost());
+        },
+
+        async fetchEditHistory(domId) {
+            const found = this._ctFindMessage(domId);
+            if (!found || !found.msg.pubkey) return C().editHistoryPlan(this.editHistoryFor(domId), { done: true }).view;
+            const L = C().LIMITS;
+            const target = { id: domId, pubkey: found.msg.pubkey, at: Number(found.msg.created_at) || 0 };
+            const surface = this._ctSurfaceForKey(found.key);
+            const bag = [];
+            let timer = null;
+            const work = (surface === 'channel' ? this._ehChannelEvents(target, bag) : this._ehWrapEvents(surface, target, bag))
+                .then(() => true, () => false);
+            const ok = await Promise.race([work, new Promise((r) => { timer = setTimeout(() => r(false), L.editFetchTimeoutMs); })]);
+            clearTimeout(timer);
+            const live = this._ctFindMessage(domId);
+            const store = this._editStore();
+            const merged = C().mergeEditHistory(store[domId], C().editSources(target, bag), (live || found).msg.content);
+            if (ok || merged.versions.length) {
+                if (!ok) delete merged.fetched;
+                store[domId] = merged;
+                this._ctEdits = C().pruneEditStore(store);
+                try { localStorage.setItem(C().EDITS_KEY, JSON.stringify(this._ctEdits)); } catch (_) { }
+            }
+            return C().editHistoryPlan(this.editHistoryFor(domId), { done: true }).view;
+        },
+
+        async _ehChannelEvents(target, bag) {
+            const res = await this._storageApiRequest('channel-edits', { id: target.id }, false);
+            const NT = window.NostrTools;
+            for (const ev of (res && Array.isArray(res.events) ? res.events : [])) {
+                if (!ev || (ev.kind !== 20000 && ev.kind !== 23333)) continue;
+                let good = false;
+                try { good = !!(NT && typeof NT.verifyEvent === 'function' && NT.verifyEvent(ev) === true); } catch (_) { good = false; }
+                if (good) bag.push(ev);
+            }
+        },
+
+        async _ehWrapEvents(surface, target, bag) {
+            const L = C().LIMITS;
+            const since = Math.max(0, target.at - L.editFetchSlackSec);
+            const seen = new Set();
+            const probe = (rumor, verified) => { if (verified === true && rumor) bag.push(rumor); };
+            const page = async (extra, withAuth) => {
+                let from = since;
+                for (let i = 0; i < L.editFetchPages; i++) {
+                    const wraps = [];
+                    const resp = await this._storageApiStream('pm-get', Object.assign({ since: from, asc: true, limit: L.editFetchPageSize }, extra), withAuth);
+                    await this._readNdjsonStream(resp, (ev) => { wraps.push(ev); });
+                    for (const w of wraps) {
+                        if (!w || typeof w.id !== 'string' || seen.has(w.id)) continue;
+                        seen.add(w.id);
+                        try { await this.handleGiftWrapDM(w, { fromD1: true, probe }); } catch (_) { }
+                    }
+                    const last = wraps.length ? Number(wraps[wraps.length - 1].created_at) || 0 : 0;
+                    if (wraps.length < L.editFetchPageSize || last <= from) return;
+                    from = last;
+                }
+            };
+            const jobs = [];
+            if (typeof this._pmArchiveAllowed === 'function' && this._pmArchiveAllowed()) jobs.push(page({}, true));
+            if (surface === 'group' && typeof this._getAllSelfEphemeralPubkeys === 'function') {
+                const pks = (this._getAllSelfEphemeralPubkeys() || []).slice(0, 200);
+                if (pks.length) jobs.push(page({ pubkeys: pks }, false));
+            }
+            if (!jobs.length) throw new Error('no archive');
+            const done = await Promise.allSettled(jobs);
+            if (!done.some((d) => d.status === 'fulfilled')) throw new Error('archive unavailable');
         },
 
         _keepStore() {
@@ -857,11 +955,15 @@
             }
             modal.querySelector('.ct-modal-header').textContent = title;
             modal.classList.add('active');
+            this._ctModalStack = (this._ctModalStack || []).filter((x) => x !== id).concat(id);
             if (!this._ctEscBound) {
                 this._ctEscBound = true;
                 document.addEventListener('keydown', (e) => {
-                    if (e.key !== 'Escape') return;
-                    document.querySelectorAll('.ct-modal.active').forEach((m) => this._ctCloseModal(m.id));
+                    if (e.key !== 'Escape' || e.defaultPrevented) return;
+                    const stack = (this._ctModalStack || []).filter((x) => { const m = document.getElementById(x); return m && m.classList.contains('active'); });
+                    if (!stack.length) return;
+                    e.preventDefault();
+                    this._ctCloseModal(stack[stack.length - 1]);
                 });
             }
             return { modal, body: modal.querySelector('.ct-modal-body') };

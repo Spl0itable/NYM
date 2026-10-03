@@ -412,6 +412,26 @@ html.nym-needs-setup #setupModal {
     font-size: 12px;
 }
 
+.about-legal {
+    margin-top: 16px;
+    font-size: 12px;
+}
+
+.about-attribution {
+    color: var(--text);
+}
+
+.about-copyright {
+    margin: 4px 0 6px;
+    color: var(--text-dim);
+}
+
+.about-legal-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+}
+
 .about-divider {
     height: 1px;
     background: var(--glass-border);
@@ -2679,6 +2699,102 @@ body.is-scrolling {
 .secret-copy-toast.visible {
     opacity: 1;
     transform: translate(-50%, 0);
+}
+
+.nym-toasts {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 12px);
+    left: max(16px, env(safe-area-inset-left, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
+    z-index: 10060;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.nym-toast {
+    --toast-accent: var(--secondary);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    width: max-content;
+    max-width: min(480px, 100%);
+    min-width: 0;
+    padding: 10px 10px 10px 14px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--toast-accent);
+    border-radius: var(--radius-xs);
+    background: linear-gradient(var(--bg-tertiary), var(--bg-tertiary)), var(--bg);
+    box-shadow: var(--shadow-md);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    pointer-events: auto;
+    cursor: pointer;
+    touch-action: pan-y;
+    user-select: none;
+    opacity: 0;
+    transform: translateY(-8px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.nym-toast.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.nym-toast.leaving {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.nym-toast.dragging {
+    transition: none;
+}
+
+.nym-toast-success {
+    --toast-accent: var(--primary);
+}
+
+.nym-toast-error {
+    --toast-accent: var(--danger);
+}
+
+.nym-toast-text {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.nym-toast-close {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.nym-toast-close:hover,
+.nym-toast-close:focus-visible {
+    color: var(--text);
+    background: rgb(from var(--text) r g b / 0.1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nym-toast,
+    .nym-toast.visible {
+        transition: none;
+        transform: none;
+    }
 }
 
 .app-dialog-content .modal-actions {

@@ -240,12 +240,14 @@
 
         _voiceToggle(el) {
             if (!el) return;
-            if (this._voiceEl === el && this._voiceAudio) {
+            if (this._voiceEl === el && this._voiceAudio && !el.classList.contains('nym-voice-failed')) {
                 if (this._voiceAudio.paused) this._voiceAudio.play().catch(() => this._voiceFailed(el));
                 else this._voiceAudio.pause();
                 return;
             }
             this._voiceStop();
+            el.classList.remove('nym-voice-failed');
+            el._mirrorIdx = 0;
             const src = this._voiceSourceUrl(el);
             if (!src) {
                 this._voiceFailed(el);
@@ -837,7 +839,10 @@
                 this._mediaNotice(this._mt('Hold to record, release to send. Tap to record hands-free.'));
                 return;
             }
-            await this._sendVoiceNote({ blob, duration: rec.duration, samples: rec.samples, target: rec.target, route: rec.route, once: rec.once });
+            await this._sendVoiceNote({
+                blob, duration: rec.duration, samples: rec.samples, target: rec.target, route: rec.route, once: rec.once,
+                recordedMime: (rec.recorder && rec.recorder.mimeType) || '', requestedMime: rec.mime || '',
+            });
         },
 
         _renderVoiceBar() {
@@ -903,11 +908,37 @@
             return r;
         },
 
+        async _portableVoiceBlob(blob) {
+            const M = NM();
+            const AC = window.AudioContext || window.webkitAudioContext;
+            const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+            if (!AC || !OAC) return null;
+            const ac = new AC();
+            let decoded;
+            try {
+                decoded = await ac.decodeAudioData(await blob.arrayBuffer());
+            } finally {
+                try { await ac.close(); } catch (_) { }
+            }
+            const rate = M.PORTABLE_VOICE_RATE;
+            const off = new OAC(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+            const src = off.createBufferSource();
+            src.buffer = decoded;
+            src.connect(off.destination);
+            src.start();
+            const rendered = await off.startRendering();
+            return new Blob([M.encodeWav(rendered.getChannelData(0), rate)], { type: 'audio/wav' });
+        },
+
         async _sendVoiceNote(n) {
             const M = NM();
-            const mime = M.baseMime(n.blob.type) || 'audio/webm';
+            let blob = n.blob;
+            if (n.route !== 'mesh' && !M.isPortableVoiceMime(n.recordedMime || blob.type, n.requestedMime)) {
+                try { blob = (await this._portableVoiceBlob(blob)) || blob; } catch (_) { }
+            }
+            const mime = M.baseMime(blob.type) || 'audio/webm';
             const waveform = M.computeWaveform(n.samples, M.LIMITS.waveformBars);
-            const bytes = new Uint8Array(await n.blob.arrayBuffer());
+            const bytes = new Uint8Array(await blob.arrayBuffer());
             const desc = { kind: 'voice', mime, duration: n.duration, size: bytes.length, waveform };
             if (n.route === 'mesh') {
                 await this._sendNoteOverMesh(desc, bytes, n.target);
@@ -936,7 +967,7 @@
                 if (err && err.name === 'AbortError') return;
                 this._lastFailedNote = { desc, bytes, target, once, label };
                 const msg = this.escapeHtml(this._mt("Couldn't send: {error}", { error: (err && err.message) || 'upload failed' }));
-                this.displaySystemMessage(msg + ' <button type="button" class="nym-retry-note" data-action="nymRetryNote">' + this.escapeHtml(this._mt('Retry')) + '</button>', 'system', { html: true });
+                this.displaySystemMessage(msg + ' <button type="button" class="nym-retry-note" data-action="nymRetryNote">' + this.escapeHtml(this._mt('Retry')) + '</button>', 'system', { html: true, feed: true });
             }
         },
 
@@ -1196,7 +1227,7 @@
             const host = document.getElementById('composerPanels');
             if (!host) return;
             let bar = document.getElementById('mediaOptionsBar');
-            const list = this._composerAttachments || [];
+            const list = (this._composerAttachments || []).filter((a) => !a.gif);
             if (!list.length) {
                 if (bar) bar.remove();
                 this._composerHd = false;

@@ -716,6 +716,14 @@ body.sidebar-reorder-mode .nav-title {
     pointer-events: auto;
 }
 
+.context-menu.ctx-under-modal {
+    z-index: 10000;
+}
+
+.context-menu-overlay.ctx-under-modal {
+    z-index: 9999;
+}
+
 .context-menu-close {
     position: absolute;
     top: 14px;

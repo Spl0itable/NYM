@@ -425,7 +425,10 @@ Object.assign(NYM.prototype, {
         scrollBtn.title = 'Scroll to bottom';
         scrollBtn.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>';
         scrollBtn.addEventListener('click', (e) => { e.stopPropagation(); scroller.scrollTo({ top: 0, behavior: 'smooth' }); });
-        el.appendChild(scrollBtn);
+        const fabRow = document.createElement('div');
+        fabRow.className = 'cn-fabs cn-fabs-col';
+        fabRow.appendChild(scrollBtn);
+        el.appendChild(fabRow);
 
         const addBtn = this._cvStrip.querySelector('.cv-add-column');
         this._cvStrip.insertBefore(el, addBtn || null);
@@ -438,6 +441,7 @@ Object.assign(NYM.prototype, {
         col.typingAvatarsEl = typing.querySelector('.typing-indicator-avatars');
         col.typingTextEl = typing.querySelector('.typing-indicator-text');
         col.scrollBtn = scrollBtn;
+        col._cnFabs = fabRow;
         col._atBottom = true;
 
         this._cvAttachColumnScroll(col);

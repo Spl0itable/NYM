@@ -70,7 +70,7 @@ class ComposerIcons {
 
 const Map<String, String> kAttachLabels = {
   'photo': 'Photo or video',
-  'file': 'File',
+  'file': 'P2P file',
   'location': 'Location',
   'videoNote': 'Video note',
   'poll': 'Poll',

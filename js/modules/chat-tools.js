@@ -9,6 +9,11 @@
         editVersionsMax: 20,
         editMessagesMax: 1000,
         keepMax: 2000,
+        editFetchTimeoutMs: 8000,
+        editFetchSlackSec: 173400,
+        editFetchPages: 4,
+        editFetchPageSize: 500,
+        editFetchMax: 50,
     });
 
     const SAVED_DTAG = 'nymchat-saved';
@@ -571,6 +576,125 @@
         return out.reverse();
     }
 
+    function editHistoryPlan(rec, env) {
+        const e = env || {};
+        const has = !!(rec && Array.isArray(rec.versions) && rec.versions.length);
+        if (e.done) return { fetch: false, view: has ? 'versions' : 'notFound' };
+        const fetch = !(rec && rec.fetched) && !e.mesh && !!e.online;
+        return { fetch, view: has ? 'versions' : fetch ? 'loading' : (rec && rec.fetched) ? 'notFound' : 'unavailable' };
+    }
+
+    function tagValue(tags, name) {
+        for (const t of (Array.isArray(tags) ? tags : [])) {
+            if (Array.isArray(t) && t[0] === name && typeof t[1] === 'string' && t[1]) return t[1];
+        }
+        return '';
+    }
+
+    function editSources(target, events) {
+        const id = String((target && target.id) || '');
+        const pk = String((target && target.pubkey) || '');
+        const at0 = Number(target && target.at) || 0;
+        let original = null;
+        const edits = [];
+        const seen = new Set();
+        if (!id || !pk) return { original, edits };
+        for (const ev of (Array.isArray(events) ? events : [])) {
+            if (!ev || ev.pubkey !== pk || typeof ev.content !== 'string') continue;
+            const at = Number(ev.created_at) || 0;
+            const ref = tagValue(ev.tags, 'edit');
+            if (ref) {
+                if (ref !== id || at < at0) continue;
+                const key = ev.id ? 'i:' + ev.id : 'v:' + at + '\n' + ev.content;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                edits.push({ text: ev.content, at });
+            } else if (ev.id === id || tagValue(ev.tags, 'x') === id) {
+                if (!original || at < original.at) original = { text: ev.content, at };
+            }
+        }
+        edits.sort(compareEdits);
+        return { original, edits: edits.slice(-LIMITS.editFetchMax) };
+    }
+
+    function compareEdits(a, b) {
+        const x = a || {};
+        const y = b || {};
+        const d = (Number(x.at) || 0) - (Number(y.at) || 0);
+        if (d) return d < 0 ? -1 : 1;
+        const tx = String(x.text == null ? '' : x.text);
+        const ty = String(y.text == null ? '' : y.text);
+        if (tx !== ty) return tx < ty ? -1 : 1;
+        const ix = String(x.id || '');
+        const iy = String(y.id || '');
+        return ix < iy ? -1 : ix > iy ? 1 : 0;
+    }
+
+    function editVerdict(cur, cand, originalAt) {
+        if (!cand || typeof cand.text !== 'string') return 'invalid';
+        const at = Number(cand.at) || 0;
+        const at0 = Number(originalAt) || 0;
+        if (at && at0 && at < at0) return 'invalid';
+        if (!cur) return 'apply';
+        const c = compareEdits(cand, cur);
+        return c > 0 ? 'apply' : c < 0 ? 'stale' : 'same';
+    }
+
+    function recordStaleEdit(rec, text, at, currentText) {
+        const base = rec && Array.isArray(rec.versions) ? rec : { versions: [], editedAt: 0 };
+        const tx = String(text == null ? '' : text);
+        const a = Number(at) || 0;
+        if (tx === String(currentText == null ? '' : currentText)) return base;
+        if (base.versions.some((v) => (Number(v.at) || 0) === a && v.text === tx)) return base;
+        const versions = base.versions.slice();
+        let i = versions.length;
+        while (i > 0 && (Number(versions[i - 1].at) || 0) > a) i--;
+        versions.splice(i, 0, { text: tx, at: a });
+        while (versions.length > LIMITS.editVersionsMax) versions.shift();
+        return Object.assign({}, base, { versions });
+    }
+
+    function mergeEditHistory(rec, found, currentText) {
+        const base = rec && Array.isArray(rec.versions) ? rec : { versions: [], editedAt: 0 };
+        const f = found || {};
+        const cur = String(currentText == null ? '' : currentText);
+        const list = [];
+        const localAt = new Set();
+        const seen = new Set();
+        const add = (text, at, local) => {
+            const tx = String(text == null ? '' : text);
+            const a = Number(at) || 0;
+            if (!local && localAt.has(a)) return;
+            const k = a + '\n' + tx;
+            if (seen.has(k)) return;
+            seen.add(k);
+            if (local) localAt.add(a);
+            list.push({ text: tx, at: a, i: list.length });
+        };
+        const remoteTexts = new Set((Array.isArray(f.edits) ? f.edits : []).map((e) => String(e && e.text == null ? '' : e.text)));
+        for (const v of base.versions) if (!remoteTexts.has(String(v && v.text == null ? '' : v.text))) add(v && v.text, v && v.at, true);
+        let editedAt = Number(base.editedAt) || 0;
+        if (editedAt) localAt.add(editedAt);
+        if (f.original) add(f.original.text, f.original.at, false);
+        for (const e of (Array.isArray(f.edits) ? f.edits : [])) add(e && e.text, e && e.at, false);
+        list.sort((a, b) => (a.at - b.at) || (a.i - b.i));
+        const versions = [];
+        for (const v of list) {
+            if (!versions.length || versions[versions.length - 1].text !== v.text) versions.push({ text: v.text, at: v.at });
+        }
+        if (versions.length && versions[versions.length - 1].text === cur) {
+            const last = versions.pop();
+            if (last.at > editedAt) editedAt = last.at;
+        }
+        if (editedAt) {
+            for (let i = versions.length - 1; i >= 0; i--) if (versions[i].at > editedAt) versions.splice(i, 1);
+        } else if (versions.length) {
+            editedAt = versions[versions.length - 1].at;
+        }
+        while (versions.length > LIMITS.editVersionsMax) versions.shift();
+        return { versions, editedAt, fetched: true };
+    }
+
     function pruneEditStore(store) {
         const keys = Object.keys(store || {});
         if (keys.length <= LIMITS.editMessagesMax) return store;
@@ -683,7 +807,8 @@
         formatStamp, exportTranscript, exportMediaPlan, exportFileName, extForMime,
         crc32, zipStore,
         savedEntry, emptySaved, normalizeSaved, mergeSaved, addSaved, removeSaved, isSaved, trimSavedPayload,
-        recordEdit, editTimeline, pruneEditStore,
+        recordEdit, editTimeline, pruneEditStore, editHistoryPlan, editSources, mergeEditHistory,
+        compareEdits, editVerdict, recordStaleEdit,
         keepTags, parseKeep, applyKeep, isKept, pruneKeep, isExpired, keepAvailable, meshKeepId, parseMeshKeepId,
         replyPrivatelyAllowed, wrapExpiration,
     };

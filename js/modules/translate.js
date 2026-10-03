@@ -313,7 +313,7 @@ Object.assign(NYM.prototype, {
                 this.displaySystemMessage(`Nothing to translate (already in ${this._languageName(targetLang)}).`);
             } else {
                 this._forgetManualTranslation(messageId);
-                this.displaySystemMessage(`Translation: ${translatedText}`);
+                this.displaySystemMessage(`Translation: ${translatedText}`, 'system', { feed: true });
             }
         } catch (err) {
             // Failures aren't recorded so the user can ask again.

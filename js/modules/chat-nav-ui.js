@@ -9,6 +9,7 @@
         down: ico('<polyline points="4 6 8 10 12 6"/>'),
         clock: ico('<circle cx="8" cy="8" r="6"/><polyline points="8 4.5 8 8 10.5 9.5"/>'),
         arrowUp: ico('<line x1="8" y1="13" x2="8" y2="3"/><polyline points="4 7 8 3 12 7"/>', 14),
+        arrowDown: ico('<line x1="8" y1="3" x2="8" y2="13"/><polyline points="4 9 8 13 12 9"/>', 14),
         anon: ico('<circle cx="8" cy="6" r="3"/><path d="M2.5 14c.8-2.6 2.9-4 5.5-4s4.7 1.4 5.5 4"/><line x1="2.5" y1="2.5" x2="13.5" y2="13.5"/>'),
     };
     const MENTION_SAVE_MS = 400;
@@ -84,7 +85,8 @@
             const lastRead = (this.channelLastRead && this.channelLastRead.get(key)) || 0;
             const floor = typeof this._d1UnreadFloor === 'function' ? this._d1UnreadFloor(key) : 0;
             const badge = Math.max((this.unreadCounts && this.unreadCounts.get(key)) || 0, floor || 0);
-            const entry = { key, lastRead, badge, openedAt: nowSec(), openedMs: Date.now(), info: null, landed: false, seenDivider: false, scrolled: false };
+            const openedAt = nowSec();
+            const entry = { key, lastRead, badge, openedAt, openedMs: Date.now(), info: null, landed: false, landing: false, scrolled: false, jump: N().jumpEmpty(lastRead, openedAt) };
             map.set(key, entry);
             this._cnScanMentionsOnOpen(entry);
             return entry;
@@ -93,6 +95,9 @@
         _cnRelease(key) {
             if (!key) return;
             this._cnEntries().delete(key);
+            const dw = this._cnDwellMap().get(key);
+            if (dw && dw.timer) clearTimeout(dw.timer);
+            this._cnDwellMap().delete(key);
             if (typeof document === 'undefined') return;
             const containers = [document.getElementById('messagesContainer')];
             const col = this._cvActive && typeof this._cvColumnForKey === 'function' ? this._cvColumnForKey(key) : null;
@@ -129,9 +134,17 @@
             if (!pre) return null;
             const cap = this._cnCap(entry.key);
             const olderMayExist = (cap > 0 && list.length >= cap) || entry.badge > pre.count;
-            const info = N().firstUnread(list, entry.lastRead, { before: entry.openedAt, olderMayExist, badge: entry.badge });
+            const opts = { before: entry.openedAt, olderMayExist, badge: entry.badge };
+            const info = N().firstUnread(list, entry.lastRead, opts);
             entry.info = info;
+            const prev = this._cnJump(entry);
+            entry.jump = N().jumpSeen(N().jumpAdd(N().jumpStart(list, entry.lastRead, opts), prev.ids), prev.seen);
             return info;
+        },
+
+        _cnJump(entry) {
+            if (!entry.jump) entry.jump = N().jumpEmpty(entry.lastRead, entry.openedAt);
+            return entry.jump;
         },
 
         _cnPlaceDivider(key) {
@@ -154,8 +167,10 @@
                     const fresh = !entry.landed || Date.now() - (entry.openedMs || 0) < 8000;
                     if (fresh && N().landOnDivider(info) && !entry.scrolled) {
                         entry.landed = true;
+                        entry.landing = true;
                         requestAnimationFrame(() => {
-                            if (!divider.isConnected) return;
+                            entry.landing = false;
+                            if (!divider.isConnected) { this._cnUpdateFabs(key); return; }
                             divider.scrollIntoView({ block: 'start' });
                             if (ctx.col) ctx.col._atBottom = false;
                             else this.userScrolledUp = true;
@@ -164,18 +179,79 @@
                     }
                 }
             }
-            this._cnObserveMentions(key);
             this._cnUpdateFabs(key);
         },
 
-        _cnDividerAbove(ctx) {
-            const d = ctx.container.querySelector('.cn-divider');
-            if (!d) return true;
-            const r = d.getBoundingClientRect();
-            const s = ctx.scroller.getBoundingClientRect();
-            if (r.bottom <= s.top + 2) return true;
-            if (r.top < s.bottom) return false;
-            return false;
+        _cnFindMessage(ctx, id) {
+            if (!id) return null;
+            return ctx.container.querySelector('.message' + this._cnSelector(id));
+        },
+
+        _cnDwellMap() {
+            if (!this._cnDwells) this._cnDwells = new Map();
+            return this._cnDwells;
+        },
+
+        _cnSweep(key) {
+            const dwell = this._cnDwellMap();
+            const prev = dwell.get(key);
+            if (prev && prev.timer) clearTimeout(prev.timer);
+            dwell.delete(key);
+            if (typeof document === 'undefined' || document.hidden) return;
+            const ctx = this._cnContextFor(key);
+            if (!ctx || !ctx.scroller) return;
+            const entry = this._cnEntries().get(key);
+            if (entry && entry.landing) return;
+            const jumpIds = entry && entry.jump ? entry.jump.ids.map((e) => e.id) : [];
+            const mc = this._cnMentions().chats[key];
+            const mentionIds = mc ? mc.ids.map((e) => e.id) : [];
+            if (!jumpIds.length && !mentionIds.length) return;
+            const v = ctx.scroller.getBoundingClientRect();
+            if (!(v.height > 0)) return;
+            const inView = [...new Set(jumpIds.concat(mentionIds))].filter((id) => {
+                const el = this._cnFindMessage(ctx, id);
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                return N().seenInView(r.top, r.bottom, v.top, v.bottom);
+            });
+            const step = N().dwellStep(prev ? prev.pending : null, inView, Date.now());
+            if (step.wait > 0) {
+                dwell.set(key, {
+                    pending: step.pending,
+                    timer: setTimeout(() => {
+                        const cur = dwell.get(key);
+                        if (cur) cur.timer = null;
+                        this._cnUpdateFabs(key);
+                    }, step.wait + 30),
+                });
+            }
+            if (!step.seen.length) return;
+            const done = new Set(step.seen);
+            this._cnSweeping = true;
+            try {
+                const sj = jumpIds.filter((id) => done.has(id));
+                if (sj.length) entry.jump = N().jumpSeen(entry.jump, sj);
+                const sm = mentionIds.filter((id) => done.has(id));
+                if (sm.length) {
+                    let state = this._cnMentions();
+                    for (const id of sm) state = N().mentionSeen(state, key, id, Date.now());
+                    this._cnSetMentions(state, [key]);
+                }
+            } finally {
+                this._cnSweeping = false;
+            }
+        },
+
+        _cnOpenKeys() {
+            if (this._cvActive) return (this._cvColumns || []).map((c) => c.key).filter(Boolean);
+            const k = this._cnSingleKey();
+            return k ? [k] : [];
+        },
+
+        _cnJumpDir(ctx, id) {
+            const el = this._cnFindMessage(ctx, id);
+            if (!el) return 'up';
+            return el.getBoundingClientRect().top >= ctx.scroller.getBoundingClientRect().bottom ? 'down' : 'up';
         },
 
         _cnFabHost(ctx) {
@@ -183,6 +259,7 @@
                 if (!ctx.col._cnFabs) {
                     const wrap = document.createElement('div');
                     wrap.className = 'cn-fabs cn-fabs-col';
+                    if (ctx.col.scrollBtn) wrap.appendChild(ctx.col.scrollBtn);
                     ctx.col.el.appendChild(wrap);
                     ctx.col._cnFabs = wrap;
                 }
@@ -196,6 +273,7 @@
                 wrap.id = 'cnFabs';
                 wrap.className = 'cn-fabs';
                 anchor.parentNode.insertBefore(wrap, anchor);
+                wrap.appendChild(anchor);
             }
             return wrap;
         },
@@ -218,6 +296,10 @@
                 at.innerHTML = '<span class="cn-at">@</span><span class="cn-at-count"></span>';
                 host.appendChild(at);
             }
+            const slots = { mention: at, jump, bottom: host.querySelector('.scroll-to-bottom-btn, .cv-scroll-bottom') };
+            const want = N().fabRow(slots);
+            const have = [...host.children].filter((el) => want.some((k) => slots[k] === el));
+            if (have.some((el, i) => el !== slots[want[i]])) for (const k of want) host.appendChild(slots[k]);
             return { jump, at };
         },
 
@@ -227,25 +309,26 @@
             const host = this._cnFabHost(ctx);
             if (!host) return;
             host.dataset.cnKey = key;
+            if (!this._cnSweeping) this._cnSweep(key);
             const { jump, at } = this._cnFabButtons(host);
             const entry = this._cnEntries().get(key);
-            const info = entry ? entry.info : null;
-            let showJump = false;
-            if (info && entry) {
-                const rendered = !!ctx.container.querySelector('.cn-divider');
-                const above = !rendered || this._cnDividerAbove(ctx);
-                showJump = N().showJump(info, above, !rendered && entry.seenDivider);
-            }
+            const st = entry ? this._cnJump(entry) : null;
+            const showJump = !!st && N().jumpCount(st) > 0;
             if (showJump) {
-                const label = N().jumpLabel(info, (s) => this._cn(s));
-                jump.innerHTML = `${ICONS.arrowUp}<span>${this.escapeHtml(label)}</span>`;
+                const label = N().jumpText(st, (s) => this._cn(s));
+                const dir = this._cnJumpDir(ctx, N().jumpTarget(st));
+                if (jump.dataset.cnLabel !== label || jump.dataset.cnDir !== dir) {
+                    jump.dataset.cnLabel = label;
+                    jump.dataset.cnDir = dir;
+                    jump.innerHTML = `${dir === 'down' ? ICONS.arrowDown : ICONS.arrowUp}<span>${this.escapeHtml(label)}</span>`;
+                }
                 jump.title = this._cn(N().STRINGS.jumpFirst);
                 jump.setAttribute('aria-label', label);
             }
             jump.classList.toggle('nm-hidden', !showJump);
             const n = N().mentionCount(this._cnMentions(), key);
             at.classList.toggle('nm-hidden', n <= 0);
-            at.querySelector('.cn-at-count').textContent = n > 1 ? String(n) : '';
+            at.querySelector('.cn-at-count').textContent = n > 0 ? String(n) : '';
             at.title = this._cn(N().STRINGS.mentions);
             at.setAttribute('aria-label', this._cn(N().STRINGS.mentions) + (n ? ' (' + n + ')' : ''));
         },
@@ -258,7 +341,10 @@
             const mark = () => {
                 const k = ctx.col ? ctx.col.key : this._cnSingleKey();
                 const e = this._cnEntries().get(k);
-                if (e) e.scrolled = true;
+                if (e) {
+                    e.scrolled = true;
+                    e.pin = null;
+                }
             };
             sc.addEventListener('wheel', mark, { passive: true });
             sc.addEventListener('touchmove', mark, { passive: true });
@@ -281,11 +367,11 @@
             if (!ctx) return;
             this._cnBindScroll(ctx);
             if (!this._cnEntries().has(key)) {
-                this._cnObserveMentions(key);
                 this._cnUpdateFabs(key);
                 return;
             }
             this._cnPlaceDivider(key);
+            this._cnCenter(key);
         },
 
         async jumpToFirstUnread(key) {
@@ -293,11 +379,10 @@
             const entry = this._cnEntries().get(k);
             const ctx = this._cnContextFor(k);
             if (!entry || !ctx) return false;
-            const info = this._cnComputeInfo(entry);
-            if (!info) return false;
-            const find = () => ctx.container.querySelector('.cn-divider');
-            let d = find();
-            for (let i = 0; !d && i < 20; i++) {
+            this._cnComputeInfo(entry);
+            entry.scrolled = true;
+            const rows = () => this._cnStoreList(k).map((m) => this._cnRow(m));
+            const loadOlder = () => {
                 const before = ctx.container.querySelectorAll('[data-message-id]').length;
                 if (this._cnIsConv(k)) {
                     if (typeof this.loadOlderPMMessages === 'function') this.loadOlderPMMessages(k);
@@ -305,17 +390,49 @@
                     this.loadOlderChannelMessages(k);
                 }
                 this._cnPlaceDivider(k);
-                d = find();
-                if (ctx.container.querySelectorAll('[data-message-id]').length === before) break;
+                return ctx.container.querySelectorAll('[data-message-id]').length !== before;
+            };
+            entry.jump = N().jumpReveal(this._cnJump(entry), rows());
+            let target = N().jumpTarget(entry.jump);
+            let el = this._cnFindMessage(ctx, target);
+            for (let i = 0; i < 40 && (entry.jump.hidden > 0 || (target && !el)); i++) {
+                if (target && !el && !rows().some((r) => r.id === target)) entry.jump = N().jumpSeen(entry.jump, [target]);
+                else if (!loadOlder()) break;
+                entry.jump = N().jumpReveal(entry.jump, rows());
+                target = N().jumpTarget(entry.jump);
+                el = this._cnFindMessage(ctx, target);
             }
-            entry.seenDivider = true;
-            entry.scrolled = true;
-            if (d) d.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            entry.jump = N().jumpSettle(entry.jump);
+            if (el) {
+                entry.pin = { id: target, until: Date.now() + 1500 };
+                this._cnCenter(k);
+                requestAnimationFrame(() => this._cnCenter(k));
+                setTimeout(() => this._cnCenter(k), 300);
+                setTimeout(() => this._cnCenter(k), 900);
+            } else if (target) ctx.scroller.scrollTop = 0;
             else ctx.scroller.scrollTop = -(ctx.scroller.scrollHeight);
             if (ctx.col) ctx.col._atBottom = false;
             else this.userScrolledUp = true;
             this._cnUpdateFabs(k);
-            return !!d;
+            return !!el;
+        },
+
+        _cnCenter(key) {
+            const entry = this._cnEntries().get(key);
+            const ctx = this._cnContextFor(key);
+            const pin = entry && entry.pin;
+            if (!ctx || !pin || Date.now() > pin.until) return;
+            const el = this._cnFindMessage(ctx, pin.id);
+            if (!el) return;
+            const v = ctx.scroller.getBoundingClientRect();
+            const divider = ctx.container.querySelector('.cn-divider');
+            const onDivider = divider && entry.info && entry.info.id === pin.id;
+            const r = (onDivider ? divider : el).getBoundingClientRect();
+            const want = onDivider ? r.top - v.top : (r.top + r.bottom) / 2 - (v.top + v.bottom) / 2;
+            if (Math.abs(want) < 2) return;
+            ctx.scroller.scrollTop += want;
+            if (ctx.col) ctx.col._atBottom = false;
+            else this.userScrolledUp = true;
         },
 
         _cnActiveKey() {
@@ -419,52 +536,13 @@
             if (message.isHistorical) return;
             const away = (typeof document !== 'undefined' && document.hidden)
                 || (ctx.col ? ctx.col._atBottom === false : !!this.userScrolledUp);
-            if (!away || !this._cnIsMention(message)) return;
-            const id = this._cnDomId(message);
-            this._cnSetMentions(N().mentionAdd(this._cnMentions(), key, [{ id, at: message.created_at || 0 }], Date.now()), [key]);
-            this._cnObserveMentions(key);
-        },
-
-        _cnObserver(ctx) {
-            if (typeof IntersectionObserver === 'undefined') return null;
-            const holder = ctx.col || this;
-            if (holder._cnIo && holder._cnIoRoot === ctx.scroller) return holder._cnIo;
-            if (holder._cnIo) holder._cnIo.disconnect();
-            holder._cnIoRoot = ctx.scroller;
-            holder._cnIo = new IntersectionObserver((entries) => {
-                if (typeof document !== 'undefined' && document.hidden) return;
-                const seen = new Map();
-                for (const e of entries) {
-                    if (!e.isIntersecting || e.intersectionRatio < 0.5) continue;
-                    const el = e.target;
-                    const id = el.dataset && el.dataset.messageId;
-                    const k = el.dataset && el.dataset.cnMentionKey;
-                    if (!id || !k) continue;
-                    holder._cnIo.unobserve(el);
-                    if (!seen.has(k)) seen.set(k, []);
-                    seen.get(k).push(id);
-                }
-                if (!seen.size) return;
-                let state = this._cnMentions();
-                for (const [k, ids] of seen) for (const id of ids) state = N().mentionSeen(state, k, id, Date.now());
-                this._cnSetMentions(state, [...seen.keys()]);
-            }, { root: ctx.scroller, threshold: [0.5] });
-            return holder._cnIo;
-        },
-
-        _cnObserveMentions(key) {
-            const ctx = this._cnContextFor(key);
-            if (!ctx) return;
-            const st = this._cnMentions().chats[key];
-            if (!st || !st.ids.length) return;
-            const io = this._cnObserver(ctx);
-            if (!io) return;
-            for (const e of st.ids) {
-                const el = ctx.container.querySelector('.message' + this._cnSelector(e.id));
-                if (!el) continue;
-                el.dataset.cnMentionKey = key;
-                io.observe(el);
+            if (!away) return;
+            const row = this._cnRow(message);
+            if (entry && !row.own && !row.sys) entry.jump = N().jumpAdd(this._cnJump(entry), [row]);
+            if (this._cnIsMention(message)) {
+                this._cnSetMentions(N().mentionAdd(this._cnMentions(), key, [{ id: row.id, at: message.created_at || 0 }], Date.now()), [key]);
             }
+            this._cnUpdateFabs(key);
         },
 
         async jumpToNextMention(key) {
@@ -1504,6 +1582,12 @@
             this._cnRenderAllMentionBadges();
             this._pinAfterLegacyChange();
             setInterval(() => { try { if (this._pinPending()) this._pinSync(); } catch (_) { } }, 10000);
+            if (typeof document !== 'undefined' && document.addEventListener) {
+                document.addEventListener('visibilitychange', () => {
+                    if (document.hidden) return;
+                    for (const k of this._cnOpenKeys()) this._cnUpdateFabs(k);
+                });
+            }
             if (typeof window !== 'undefined' && window.addEventListener) {
                 window.addEventListener('online', () => setTimeout(() => { this._pinSync(); this.refreshScheduled(); }, 1500));
             }

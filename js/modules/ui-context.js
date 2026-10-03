@@ -37,6 +37,7 @@ Object.assign(NYM.prototype, {
     },
 
     setupContextMenu() {
+        this._setupMenuLayers();
         document.getElementById('contextMenuOverlay').addEventListener('click', () => {
             this.closeContextMenu();
         });
@@ -498,6 +499,15 @@ Object.assign(NYM.prototype, {
         setDisplay('ctxAddAdmin', showAddAdmin);
         setDisplay('ctxRemoveAdmin', showRemoveAdmin);
         setDisplay('ctxTransferOwner', showTransfer);
+        const reportOption = document.getElementById('ctxReport');
+        if (reportOption && kickOption) {
+            if (!this._ctxReportHome) {
+                this._ctxReportHome = document.createComment('ctx-report-home');
+                reportOption.before(this._ctxReportHome);
+            }
+            if (showKickOrBan) kickOption.before(reportOption);
+            else this._ctxReportHome.after(reportOption);
+        }
 
         let slapOption = document.getElementById('ctxSlap');
         if (!slapOption) {
@@ -653,11 +663,150 @@ Object.assign(NYM.prototype, {
     },
 
     closeContextMenu() {
+        if (this._menuLayerHold('contextMenu', () => this.closeContextMenu())) return;
         const menu = document.getElementById('contextMenu');
         const wasOpen = menu && menu.classList.contains('active');
         menu.classList.remove('active');
         document.getElementById('contextMenuOverlay').classList.remove('active');
         if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
+    },
+
+    _MENU_LAYER_IDS: ['contextMenu', 'groupContextMenu'],
+
+    _setupMenuLayers() {
+        if (this._menuLayersBound) return;
+        this._menuLayersBound = true;
+        document.addEventListener('click', (e) => this._menuLayerClick(e), true);
+        document.addEventListener('submit', (e) => this._menuLayerSubmit(e), true);
+        window.addEventListener('keydown', (e) => this._menuLayerKey(e), true);
+    },
+
+    _menuLayerModals() {
+        return Array.from(document.querySelectorAll('.modal')).filter((m) =>
+            m.isConnected && !m.closest('.context-menu') && getComputedStyle(m).display !== 'none');
+    },
+
+    _menuLayerFresh(before) {
+        return this._menuLayerModals().filter((m) => !before.has(m));
+    },
+
+    _menuLayerIsDismiss(t) {
+        if (t.classList && t.classList.contains('modal')) return true;
+        const el = t.closest('.modal-close, #appDialogCancelBtn, [data-dismiss], [data-action]');
+        if (!el || !el.closest('.modal')) return false;
+        if (el.matches('.modal-close, #appDialogCancelBtn, [data-dismiss]')) return true;
+        return /^(ctCloseModal|closeModal|close[A-Z]\w*Modal|cancel\w*)$/.test(el.dataset.action || '');
+    },
+
+    _menuLayerFlagDismiss() {
+        this._menuLayerDismissing = true;
+        clearTimeout(this._menuLayerDismissTimer);
+        this._menuLayerDismissTimer = setTimeout(() => { this._menuLayerDismissing = false; }, 0);
+    },
+
+    _menuLayerClick(e) {
+        const t = e.target;
+        if (!t || !t.closest) return;
+        if (this._menuLayer && this._menuLayerIsDismiss(t)) this._menuLayerFlagDismiss();
+        const menu = t.closest('.context-menu.active');
+        if (!menu || menu.hasAttribute('inert') || this._MENU_LAYER_IDS.indexOf(menu.id) < 0) return;
+        const opener = t.closest('.context-menu-item, [data-action], button');
+        const g = { menu, opener: opener && menu.contains(opener) ? opener : null, before: new Set(this._menuLayerModals()), close: null, settled: false };
+        this._menuGesture = g;
+        setTimeout(() => { if (!g.settled) this._menuLayerSettle(g); }, 0);
+    },
+
+    _menuLayerHold(id, close) {
+        const g = this._menuGesture;
+        if (g && !g.settled && g.menu.id === id) {
+            if (!g.close) queueMicrotask(() => { if (!g.settled) this._menuLayerSettle(g); });
+            g.close = close;
+            return true;
+        }
+        if (this._menuLayer && this._menuLayer.menu.id === id) this._menuLayerEnd('drop');
+        return false;
+    },
+
+    _menuLayerSettle(g) {
+        g.settled = true;
+        if (this._menuGesture === g) this._menuGesture = null;
+        if (g.menu.classList.contains('active') && this._menuLayerFresh(g.before).length) {
+            this._menuLayerStart(g);
+            return;
+        }
+        if (g.close) g.close();
+    },
+
+    _menuLayerStart(g) {
+        if (this._menuLayer) this._menuLayerEnd('drop');
+        const menu = g.menu;
+        const layer = { menu, overlay: document.getElementById(menu.id + 'Overlay'), opener: g.opener, before: g.before, done: false };
+        this._menuLayer = layer;
+        menu.setAttribute('inert', '');
+        menu.classList.add('ctx-under-modal');
+        if (layer.overlay) layer.overlay.classList.add('ctx-under-modal');
+        layer.observer = new MutationObserver(() => this._menuLayerCheck());
+        layer.observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style'] });
+    },
+
+    _menuLayerCheck() {
+        const layer = this._menuLayer;
+        if (!layer) return;
+        if (!layer.menu.classList.contains('active')) { this._menuLayerEnd('drop'); return; }
+        if (this._menuLayerFresh(layer.before).length) return;
+        this._menuLayerEnd(this._menuLayerDismissing && !layer.done ? 'restore' : 'close');
+    },
+
+    _menuLayerEnd(mode) {
+        const layer = this._menuLayer;
+        if (!layer) return;
+        this._menuLayer = null;
+        if (layer.observer) layer.observer.disconnect();
+        layer.menu.removeAttribute('inert');
+        layer.menu.classList.remove('ctx-under-modal');
+        if (layer.overlay) layer.overlay.classList.remove('ctx-under-modal');
+        if (mode === 'restore') {
+            const o = layer.opener;
+            if (o && o.isConnected && layer.menu.contains(o)) {
+                if (!o.hasAttribute('tabindex') && o.tabIndex < 0) o.setAttribute('tabindex', '-1');
+                try { o.focus({ preventScroll: true }); } catch (_) { }
+            }
+        } else if (mode === 'close' && layer.menu.classList.contains('active')) {
+            this._menuLayerCloseMenu(layer.menu);
+        }
+    },
+
+    _menuLayerCloseMenu(menu) {
+        if (menu.id === 'groupContextMenu') this.closeGroupContextMenu();
+        else this.closeContextMenu();
+    },
+
+    _menuLayerSubmit(e) {
+        const layer = this._menuLayer;
+        const modal = layer && e.target && e.target.closest ? e.target.closest('.modal') : null;
+        if (modal && !layer.before.has(modal)) layer.done = true;
+    },
+
+    _menuLayerKey(e) {
+        if (e.key !== 'Escape') return;
+        const layer = this._menuLayer;
+        if (layer) {
+            this._menuLayerFlagDismiss();
+            const fresh = this._menuLayerFresh(layer.before);
+            const top = fresh[fresh.length - 1];
+            setTimeout(() => {
+                if (this._menuLayer !== layer || !top || !top.isConnected || getComputedStyle(top).display === 'none') return;
+                const close = top.querySelector('#appDialogCancelBtn, .modal-close, [data-action="ctCloseModal"]');
+                if (close) close.click();
+            }, 0);
+            return;
+        }
+        if (e.defaultPrevented || this._menuLayerModals().length) return;
+        const a = document.activeElement;
+        const open = this._MENU_LAYER_IDS.map((id) => document.getElementById(id)).filter((m) => m && m.classList.contains('active'));
+        if (!open.length || (a && a !== document.body && !open.some((m) => m.contains(a)))) return;
+        e.preventDefault();
+        open.forEach((m) => this._menuLayerCloseMenu(m));
     },
 
     UNFURL_TTL_MS: 7 * 24 * 60 * 60 * 1000,
@@ -2464,11 +2613,15 @@ Object.assign(NYM.prototype, {
             };
         });
         resultsDiv.querySelectorAll('.gif-item').forEach(item => {
-            item.onclick = () => this.insertGif(item.dataset.gifUrl);
+            item.onclick = () => this.insertGif(item.dataset.gifUrl, item.dataset.gifTitle);
         });
     },
 
-    insertGif(gifUrl) {
+    insertGif(gifUrl, title) {
+        if (typeof this.pickComposerGif === 'function' && this.pickComposerGif(gifUrl, title)) {
+            this.closeGifPicker();
+            return;
+        }
         const input = document.getElementById('messageInput');
         const start = input.selectionStart;
         const end = input.selectionEnd;

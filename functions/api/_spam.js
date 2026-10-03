@@ -1,7 +1,7 @@
 import { hasD1, replica, edgeCacheGet, edgeCachePut, edgeCacheDelete } from './_d1.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 import { cacheRateTake } from './_shared.js';
-import { filterSetSync, NOPE_DDL } from './_filters.js';
+import { filterSetSync, forgetBlockedPubkey, reblockPubkey, NOPE_DDL } from './_filters.js';
 import { SPAM_LEXICON } from './_spam-lexicon.js';
 
 export const SPAM_DDL = [
@@ -147,6 +147,17 @@ const NONCE_MIN_LEN = 10;
 const NONCE_COMMON_SHARE = 0.5;
 const COMMON_BIGRAMS = new Set(("th he in er an re on at en nd ti es or te of ed is it al ar st to nt ng se ha as ou io le ve co me de hi ri ro ic ne ea ra ce li ch ll be ma si om ur ca el ta la ns di fo ho pe ec pr no ct us ac ot il tr ly nc et ut ss so rs un lo wa ge ie wh ee wi em ad ol rt po we na ul ni ts mo ow pa im mi ai sh ir su id os iv ia am fi ci vi pl ig tu ev ld ry mp fe bl ab gh ty op wo sa ay ex ke fr oo av ag if ap gr od bo sp rd do uc bu ei ov by rm ep tt oc fa ef cu rn sc gi da yo cr cl du ga qu ue ff ba ey ls va um pp ua up lu go ht ru ug ds lt pi rc rr eg au ck ew mu br bi pt ak pu ui rg ib tl ny ki rk ys ob mm fu ph og ms ye ud mb ip ub oi rl gu dr hr cc tw ft wn nu af hu nn eo vo rv nf xp gn sm fl iz ok nl my gl aw ju oa eq sy sl ps jo lf nv je hy dg ze za zi zo ka ko ku ja ji ya yu vu vy wr wl kn ny nk lk lp lm lb lc ld lg lv lw rb rf rh rp rw sk sn sq sw tc tf tm tn tp tv ws ww ys yl ym yr yv yw zz").split(" "));
 const FAMILY_SPAM_MIN = 2;
+const FANOUT_CHANNELS = 3;
+const REGULAR_MIN_GAPS = 5;
+const COPY_KEYS_MIN = 2;
+const DERIVED_MODELS = new Set(["cache", "cross-ref", "peer"]);
+const DERIVED_CATEGORIES = new Set(["muted-sender", "nym-family", "same-actor", "burst"]);
+const STRONG_RULES = new Set(["campaign-marker", "campaign", "link-spam", "abuse"]);
+const STANDALONE_CATEGORIES = new Set(["ad", "scam", "link-spam"]);
+const MUTED_SENDER = "muted-sender";
+const ORIGIN_TTL_MS = 60000;
+const DEVELOPER_MARK_FLOOR_MS = 1000 * 86400000;
+const AUTO_UNMUTE_BY = "auto-unmute";
 const DOMAIN_RULE_MIN = 10;
 const LEET = { "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "$": "s", "@": "a", "|": "l", "!": "i" };
 
@@ -165,7 +176,10 @@ export function defaultSpamSettings(env) {
     mode: "shadow",
     holdMs: 5000,
     requireBadge: "off",
-    exemptPubkeys: []
+    exemptPubkeys: [],
+    unmuteAfterOk: 2,
+    mutedSampleMinutes: 2,
+    establishedKeyHours: 24
   };
 }
 
@@ -194,6 +208,9 @@ export function normalizeSpamSettings(input, base) {
   if (input.mode === "reject" || input.mode === "shadow") out.mode = input.mode;
   if (input.holdMs != null) out.holdMs = Math.round(clampNum(input.holdMs, 0, 15000, out.holdMs));
   if (input.requireBadge === "off" || input.requireBadge === "challenged" || input.requireBadge === "attested") out.requireBadge = input.requireBadge;
+  if (input.unmuteAfterOk != null) out.unmuteAfterOk = Math.round(clampNum(input.unmuteAfterOk, 0, 10, out.unmuteAfterOk));
+  if (input.mutedSampleMinutes != null) out.mutedSampleMinutes = clampNum(input.mutedSampleMinutes, 0, 60, out.mutedSampleMinutes);
+  if (input.establishedKeyHours != null) out.establishedKeyHours = clampNum(input.establishedKeyHours, 1, 720, out.establishedKeyHours);
   if (Array.isArray(input.exemptPubkeys)) {
     const set = new Set();
     for (const p of input.exemptPubkeys) {
@@ -454,7 +471,7 @@ const RHYTHM_MAX_GAP_MS = 3600000;
 const DOMAIN_WINDOW_MS = 7 * 86400000;
 const DOMAIN_MAX = 5;
 const EXAMPLES_TTL_MS = 5 * 60000;
-const EXAMPLES_CACHE_KEY = "examples";
+const EXAMPLES_CACHE_KEY = "examples-v2";
 const EXAMPLES_CACHE_S = 300;
 const SETTINGS_CACHE_KEY = "settings";
 const SETTINGS_CACHE_S = 60;
@@ -543,6 +560,81 @@ export function rhythmOf(stamps) {
   return { gaps: gaps.length, medianMs: median, cv: Math.round(cv * 100) / 100, regularity: cv < 0.25 ? "regular" : cv < 0.6 ? "mixed" : "irregular" };
 }
 
+function parseSignals(v) {
+  if (!v) return null;
+  if (typeof v === "object") return v;
+  try { const o = JSON.parse(v); return o && typeof o === "object" ? o : null; } catch (_) { return null; }
+}
+
+export function rowSignals(signals) {
+  const s = parseSignals(signals);
+  if (!s) return [];
+  const out = [];
+  if (Number(s.copies) >= 2) out.push("near-copies");
+  if (Number(s.nonce) > 0 || s.tail || s.marker) out.push("a random token");
+  if (Number(s.obfuscated) > 0) out.push("obfuscated words");
+  if (Number(s.gibberish) >= 2) out.push("gibberish");
+  if (Number(s.channels15m) >= FANOUT_CHANNELS) out.push("a spread over " + Number(s.channels15m) + " channels");
+  if (s.rhythm === "regular" && Number(s.gaps) >= REGULAR_MIN_GAPS) out.push("a steady machine rhythm");
+  if (Number(s.urlSpam) > 0) out.push("links recent spam carried");
+  if (Number(s.memSimilar) >= SIM_CLUSTER) out.push("text like spam from other keys");
+  const lex = s.lexicon;
+  if (lex && (Number(lex.slur) > 0 || Number(lex.threat) > 0 || Number(lex.child) > 0)) out.push("a hard slur or threat");
+  return out;
+}
+
+export function rowEvidence(row) {
+  if (!row) return "none";
+  if (row.label === "spam") return "label";
+  if (row.label === "ok" || row.verdict !== "spam") return "ok";
+  if (row.category === MUTED_SENDER || DERIVED_MODELS.has(row.model)) return "derived";
+  if (row.model === "rule" && STRONG_RULES.has(row.category)) return "strong";
+  if (rowSignals(row.signals).length) return "strong";
+  return DERIVED_CATEGORIES.has(row.category) ? "derived" : "weak";
+}
+
+export function messageSignals(job, dossier) {
+  const out = [];
+  const d = dossier || {};
+  if ((job.copies || 0) >= 2) out.push("near-copies seen by this proxy");
+  if ((d.copyPubkeys || 0) >= COPY_KEYS_MIN) out.push("the same text from " + d.copyPubkeys + " other keys");
+  if ((job.nonces && job.nonces.length) || job.marker) out.push("a random-looking token");
+  if ((job.obfuscations || 0) > 0) out.push("obfuscated words");
+  if ((job.localScore || 0) >= 2) out.push("gibberish");
+  if (lexStrong(job)) out.push("a hard slur or threat");
+  if ((job.urlSpam || 0) > 0) out.push("links recent spam carried");
+  if ((job.memSimilar || 0) >= SIM_CLUSTER) out.push("text like recent spam from other keys");
+  for (const dom of job.domains || []) {
+    const st = d.domainStats && d.domainStats[dom];
+    if (st && st.spamPubkeys >= 2 && !(st.ok > 0)) { out.push("a domain that spam from other keys carried"); break; }
+  }
+  const a = d.activity;
+  if (a && a.ch15 >= FANOUT_CHANNELS) out.push("a spread over " + a.ch15 + " channels");
+  if (a && a.rhythm && a.rhythm.regularity === "regular" && a.rhythm.gaps >= REGULAR_MIN_GAPS) out.push("a steady machine rhythm");
+  return out;
+}
+
+export function hardSignals(job, dossier) {
+  const out = messageSignals(job, dossier);
+  const d = dossier || {};
+  if ((d.similarSpam || 0) > 0) out.push("text close to hand-labelled spam or to spam that carried hard signals");
+  if ((d.nymLabelledSpam || 0) > 0 || (d.nymSpamPubkeys || 0) >= FAMILY_SPAM_MIN) out.push("a nym family that was hand-labelled or carried hard signals");
+  if ((d.recentLabelledSpam || 0) > 0) out.push("earlier messages from this key hand-labelled spam");
+  return out;
+}
+
+export function unsupportedSpam(job, dossier, v, settings) {
+  if (!v || !v.spam) return false;
+  if (STANDALONE_CATEGORIES.has(v.category) && v.messageAlone !== false) return false;
+  if (hardSignals(job, dossier).length) return false;
+  if (v.messageAlone === false) return true;
+  const conv = job.conv || conversationSignals(job);
+  if (conv.reply || conv.quote || conv.mentions > 0) return true;
+  const a = dossier && dossier.activity;
+  const hours = settings && settings.establishedKeyHours ? settings.establishedKeyHours : 24;
+  return !!(a && a.firstSeen && (job.seenAt || Date.now()) - a.firstSeen >= hours * 3600000);
+}
+
 export function senderSuspicious(job, dossier, settings) {
   if ((job.localScore || 0) > 0) return true;
   if (job.nonces && job.nonces.length) return true;
@@ -559,10 +651,13 @@ export function ruleVerdict(job, dossier, settings) {
   if (rec && Number(rec.ham) > 0 && Number(rec.spam) === 0 && Number(rec.strikes) === 0) return null;
   const nonces = job.nonces || [];
   const labelled = dossier.nymLabelledSpam || 0;
-  if (job.nymKey && (dossier.nymSpam >= FAMILY_SPAM_MIN || labelled >= 1) && (nonces.length || dossier.similarSpam > 0 || dossier.domainSpam > 0)) {
+  const strongFamily = labelled >= 1 || dossier.nymSpam >= FAMILY_SPAM_MIN;
+  const campaignFamily = nonces.length > 0 && (dossier.nymMachineSpam || 0) >= FAMILY_SPAM_MIN;
+  if (job.nymKey && (strongFamily || campaignFamily) && (nonces.length || dossier.similarSpam > 0 || dossier.domainSpam > 0)) {
+    const n = strongFamily ? dossier.nymSpam : dossier.nymMachineSpam;
     const carries = nonces.length ? "a random-looking token (" + nonces[0] + ")" : dossier.similarSpam > 0 ? "text similar to " + dossier.similarSpam + " message" + (dossier.similarSpam === 1 ? "" : "s") + " judged spam" : "a link on a domain with spam history";
     return { spam: true, confidence: labelled ? 1 : 0.95, category: "nym-family", language: "", model: "rule",
-      reason: "other senders using the nym \"" + (job.nym || job.nymKey) + "\" were judged spam " + dossier.nymSpam + " time" + (dossier.nymSpam === 1 ? "" : "s") + (labelled ? " (" + labelled + " hand-labelled)" : "") + " and the message carries " + carries };
+      reason: "other senders using the nym \"" + (job.nym || job.nymKey) + "\" were judged spam " + n + " time" + (n === 1 ? "" : "s") + (labelled ? " (" + labelled + " hand-labelled)" : "") + " and the message carries " + carries };
   }
   const copies = settings && settings.campaignCopies ? settings.campaignCopies : 3;
   for (const d of job.domains || []) {
@@ -698,7 +793,9 @@ export function parseSpamVerdict(text) {
 
 export const SPAM_SYSTEM_PROMPT = `You are the spam filter for Nymchat, an ephemeral, pseudonymous chat over public Nostr relays. Channels are geohash areas or named rooms; users pick a throwaway nym and post short messages. Public relays are flooded by bot networks that post into many channels: profane insult "personas" that address nobody, gibberish or random tokens, ads, crypto and link spam, the same text under several nyms and pubkeys, machine-written filler in several languages, and messages that repeat with small variations.
 
-Messages come in any language and script (Turkish, Russian, Ukrainian, Spanish, Portuguese, German, Arabic, Persian, Hindi, Indonesian, Chinese, Japanese and more), often colloquial, misspelled, slang, dialect or a regional spelling ("geliyom", "toletini temizle", "q tal", "wsg"). First work out which language the message is in. "gibberish" means random characters, keyboard mashing or token soup with no reading in ANY language; a word or phrase you do not recognise is far more likely a real language you know less well than gibberish, so never use the gibberish category unless you are sure the text has no meaning anywhere. A message of one or two ordinary words is chatter whatever the language, and a sender whose earlier messages were judged ok has a good record, not a bad one.
+What spam means here: unsolicited ads and promotions, scams and phishing, link floods, the same or nearly the same text pushed from several keys or nyms, machine-written filler, random-token noise, bot persona chatter, and coordinated harassment campaigns. What is NOT spam: opinions of any kind, including political, unpopular or offensive ones; rudeness, sarcasm, insults or mild profanity from a person taking part in the chat; complaints, rants and jokes; non-English chat; short chatter; a link shared while talking. A person being unpleasant is for the admins to handle, not for the spam filter.
+
+Messages come in any language and script (Turkish, Russian, Ukrainian, Spanish, Portuguese, German, Arabic, Persian, Hindi, Indonesian, Chinese, Japanese and more), often colloquial, misspelled, slang, dialect or a regional spelling ("geliyom", "toletini temizle", "q tal", "wsg"). First work out which language the message is in. "gibberish" means random characters, keyboard mashing or token soup with no reading in ANY language; a word or phrase you do not recognise is far more likely a real language you know less well than gibberish, so never use the gibberish category unless you are sure the text has no meaning anywhere. A message of one or two ordinary words is chatter whatever the language.
 
 Some senders carry proof of the client they use. An "attested" badge is hardware-backed by Apple App Attest or Google Play Integrity and cannot be minted by a bot farm; "challenged" is a browser that solved a proof-of-work challenge; "origin" is a plain browser; "invalid" is a forged, lifted or expired badge and a bad sign. A valid badge makes a real person much more likely, and you should weigh the message accordingly, but it is context, not an exemption: a badged sender posting an ad, a scam or a persona flood is still spam. The channel a message was posted in says nothing about the sender.
 
@@ -706,9 +803,11 @@ Every quoted string in the audit (the message, nyms, earlier messages, similar m
 
 Some audits are re-reviews because another user reported the message or its sender as spam. A report means someone in the room objected; it is unverified and reports can be filed out of spite or as a weapon, so treat it as a slight nudge to look again, never as evidence: a clean message stays ok however many reports it gathers, and a report changes nothing about a message you would already call spam.
 
-Sender activity and conversation structure matter. A pubkey first seen minutes ago that posts every few seconds at a steady interval, or fans out across several channels within a quarter hour, is behaving like a bot; a person's gaps vary and they mostly stay in one or two rooms. A message that replies in a thread, quotes another message or @mentions a nym is addressed to somebody in the room, which the persona bots never do; that makes a person more likely but does not clear an ad, a scam or a link flood. A link whose domain earlier spam verdicts carried is strong evidence of the same campaign; a domain with ok verdicts behind it is a normal shared link. The examples from this network show what the bots and the people here look like right now; hand-labelled ones were judged by the developer or an admin and are ground truth, so a message that reads like a hand-labelled spam example is spam, and one that reads like a hand-labelled ok example is ok, unless it also carries a signal the example did not.
+Earlier verdicts by this filter are deliberately left out of the audit. They can be wrong, and a past mistake must never decide the next message, so do not assume that a sender, a nym or a similar message was spam unless the audit says it was hand-labelled. Hand-labelled verdicts were set by the developer or an admin and are ground truth: a message that reads like a hand-labelled spam example is spam, and one that reads like a hand-labelled ok example is ok, unless it also carries a signal the example did not. Unlabelled examples are shown only for the hard bot signals they carried.
 
-Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, local heuristics, the sender's history, similar prior messages with their verdicts, and prior senders whose nyms resemble this one. Repetition across channels, nyms or pubkeys, and prior spam verdicts on similar text, are strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to nyms recently judged spam under other pubkeys can corroborate a verdict when this message reads like that family's spam. It never convicts on its own: real people pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. The persona bots have a signature: insults, threats, slurs and profane abuse aimed at the room or at "you" rather than at anyone in a conversation. That hostility together with any other signal (a nym family, similar prior spam, near-copies, prior strikes, a cross-channel spread) IS spam and should be muted. A rude, crude, sexual or angry message from a human talking to the room, with no other signal, is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence.
+Sender activity and conversation structure matter. A pubkey first seen minutes ago that posts every few seconds at a steady interval, or fans out across several channels within a quarter hour, is behaving like a bot; a person's gaps vary and they mostly stay in one or two rooms. A message that replies in a thread, quotes another message or @mentions a nym is addressed to somebody in the room, which the persona bots never do; that makes a person more likely but does not clear an ad, a scam or a link flood. A link whose domain earlier spam verdicts carried from several senders is evidence of the same campaign; a domain with ok verdicts behind it is a normal shared link.
+
+Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, the objective bot signals, the sender's activity, near-copies of the text from other keys, and hand labels. Repetition across channels, nyms or pubkeys is strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to hand-labelled spam nyms can corroborate a verdict when this message reads like that family's spam. A nym never convicts on its own: many people keep one nym and get a fresh key every session, so several keys under one nym in the same room, posting at human gaps and talking to people, is one person and not a campaign; real people also pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. The persona bots have a signature: insults, threats, slurs and profane abuse aimed at the room or at "you" rather than at anyone in a conversation, from keys first seen minutes ago. That hostility together with an objective bot signal (near-copies across keys, random tokens, obfuscated words, a spread over several channels, a steady machine rhythm, a hand-labelled family) IS spam and should be muted. A rude, crude, sexual or angry message from a human talking to the room, with no objective bot signal, is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, opinions and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence, and keep confidence above 0.9 for unmistakable ads, scams and floods or for messages with an objective bot signal.
 
 Respond with ONE JSON object and nothing else, exactly this shape:
 {"spam": true|false, "confidence": 0.0-1.0, "message_alone": true|false, "hostile": true|false, "language": "<ISO 639-1 code of the message, or unknown>", "category": "<one of: bot-flood, gibberish, ad, scam, link-spam, persona-bot, repeat, other, ok>", "reason": "<one sentence>"}
@@ -728,6 +827,12 @@ function agoText(ms) {
 }
 function when(ms) { return ms ? new Date(ms).toISOString().replace(/\.\d+Z$/, "Z") : "?"; }
 function verdictOf(row) { return row ? (row.label === "spam" || row.label === "ok" ? row.label : row.verdict) : ""; }
+function labelNote(row) { return row && (row.label === "spam" || row.label === "ok") ? " → hand-labelled " + row.label : ""; }
+function signalNote(row) {
+  if (!row || row.label || rowEvidence(row) !== "strong") return "";
+  const sig = rowSignals(row.signals);
+  return sig.length ? " (bot signals: " + sig.join(", ") + ")" : "";
+}
 function clip(s, n) { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; }
 function quotedNym(nym) { const n = clip(nym, 64); return n ? JSON.stringify(n) : "?"; }
 
@@ -785,53 +890,55 @@ export function buildSpamPrompt(job, dossier) {
   if (job.memSimilar) lines.push("reads like recent spam from " + job.memSimilar + " other senders seen by this proxy");
   if (job.urlSpam) lines.push("links that recent spam verdicts carried: " + job.urlSpam);
   if (nymPattern(job.nym)) lines.push("nym shape: First-Last or Name- with a trailing hyphen, a pattern bot families use (weak evidence only)");
+  const hard = hardSignals(job, dossier);
+  lines.push("objective bot signals: " + (hard.length ? hard.join("; ") : "none"));
   const rec = dossier.record;
   lines.push("");
-  lines.push("SENDER RECORD");
+  lines.push("SENDER RECORD (machine verdicts are not shown; only hand labels are verdicts)");
   if (!rec) lines.push("no prior audits of this pubkey");
   else {
-    lines.push("audits: " + rec.audits + ", judged spam: " + rec.spam + ", judged ok: " + rec.ham + ", strikes: " + rec.strikes + ", score: " + Number(rec.score || 0).toFixed(2));
+    lines.push("earlier audits: " + rec.audits);
     lines.push("first seen: " + when(rec.first_seen) + ", last seen: " + when(rec.last_seen));
     lines.push("channels posted in: " + (rec.channels || "?"));
     lines.push("nyms used: " + (rec.nyms ? JSON.stringify(clip(rec.nyms, 300)) : "?"));
-    if (rec.last_reason) lines.push("last verdict reason: " + clip(rec.last_reason, 200));
   }
-  if (dossier.recent && dossier.recent.length) {
+  const recent = (dossier.recent || []).filter((r) => r.category !== MUTED_SENDER);
+  if (recent.length) {
     lines.push("recent messages by this pubkey:");
-    for (const r of dossier.recent.slice(0, 8)) lines.push("- [" + (r.channel || "?") + (r.nym ? " as " + quotedNym(r.nym) : "") + "] " + JSON.stringify(clip(r.content, 140)) + (verdictOf(r) ? " (" + verdictOf(r) + (r.label ? ", hand-labelled" : "") + ")" : ""));
+    for (const r of recent.slice(0, 8)) lines.push("- [" + (r.channel || "?") + (r.nym ? " as " + quotedNym(r.nym) : "") + "] " + JSON.stringify(clip(r.content, 140)) + labelNote(r));
   }
   lines.push("");
-  lines.push("SIMILAR PRIOR MESSAGES (last 48h; hand-labelled ones from the last 30 days)");
-  const sim = dossier.similar || [];
+  lines.push("SIMILAR PRIOR MESSAGES (last 48h; hand-labelled ones from the last 30 days; machine verdicts are not shown)");
+  const sim = (dossier.similar || []).filter((r) => r.category !== MUTED_SENDER);
   if (!sim.length) lines.push("none");
   else {
-    lines.push("count: " + sim.length + ", distinct pubkeys: " + dossier.similarPubkeys + ", judged spam: " + dossier.similarSpam + (dossier.similarLabelledSpam ? " (" + dossier.similarLabelledSpam + " hand-labelled)" : ""));
+    lines.push("count: " + sim.length + ", distinct pubkeys: " + dossier.similarPubkeys + ", other keys with the same text: " + (dossier.copyPubkeys || 0) + ", hand-labelled spam: " + (dossier.similarLabelledSpam || 0) + ", with hard bot signals: " + (dossier.similarStrong || 0));
     for (const s of sim.slice(0, LIST_CAP)) {
-      lines.push("- " + when(s.seen_at) + " [" + (s.channel || "?") + "] " + quotedNym(s.nym) + " " + short(s.pubkey) + (s.pubkey === job.pubkey ? " (same sender)" : "") + ": " + JSON.stringify(clip(s.content, 120)) + " → " + verdictOf(s) + (s.label ? " (hand-labelled)" : s.confidence ? " " + Math.round(s.confidence * 100) + "%" : ""));
+      lines.push("- " + when(s.seen_at) + " [" + (s.channel || "?") + "] " + quotedNym(s.nym) + " " + short(s.pubkey) + (s.pubkey === job.pubkey ? " (same sender)" : "") + ": " + JSON.stringify(clip(s.content, 120)) + labelNote(s) + signalNote(s));
     }
   }
   lines.push("");
-  lines.push("OTHER SENDERS WITH A SIMILAR NYM (last 48h, hand-labelled ones from the last 30 days; a shared or similar nym is never spam by itself)");
-  const nyms = dossier.nymMatches || [];
+  lines.push("OTHER SENDERS WITH A SIMILAR NYM (last 48h, hand-labelled ones from the last 30 days; a shared or similar nym is never spam by itself, and one person often uses a fresh key per session; machine verdicts are not shown)");
+  const nyms = (dossier.nymMatches || []).filter((r) => r.category !== MUTED_SENDER);
   if (!job.nymKey) lines.push("n/a (generic or empty nym)");
   else if (!nyms.length) lines.push("none");
   else {
-    lines.push("count: " + nyms.length + ", distinct pubkeys: " + dossier.nymPubkeys + ", judged spam: " + dossier.nymSpam + (dossier.nymLabelledSpam ? " (" + dossier.nymLabelledSpam + " hand-labelled)" : "") + " (from " + dossier.nymSpamPubkeys + " pubkeys)");
+    lines.push("count: " + nyms.length + ", distinct pubkeys: " + dossier.nymPubkeys + ", channels: " + new Set(nyms.map((r) => r.channel || "?")).size + ", hand-labelled spam: " + (dossier.nymLabelledSpam || 0) + ", with hard bot signals: " + (dossier.nymStrong || 0));
     for (const s of nyms.slice(0, LIST_CAP)) {
-      lines.push("- " + when(s.seen_at) + " [" + (s.channel || "?") + "] " + quotedNym(s.nym) + " " + short(s.pubkey) + ": " + JSON.stringify(clip(s.content, 120)) + " → " + verdictOf(s) + (s.label ? " (hand-labelled)" : s.confidence ? " " + Math.round(s.confidence * 100) + "%" : ""));
+      lines.push("- " + when(s.seen_at) + " [" + (s.channel || "?") + "] " + quotedNym(s.nym) + " " + short(s.pubkey) + ": " + JSON.stringify(clip(s.content, 120)) + labelNote(s) + signalNote(s));
     }
   }
   lines.push("");
-  lines.push("EXAMPLES FROM THIS NETWORK (recent verdicts here; hand-labelled ones were set by the developer or an admin and are ground truth)");
+  lines.push("EXAMPLES FROM THIS NETWORK (hand-labelled ones were set by the developer or an admin and are ground truth; unlabelled ones are shown only for the bot signals they carried)");
   const ex = dossier.examples;
   const exSpam = ex ? ex.spam.filter((r) => r.id !== job.id) : [];
   const exOk = ex ? ex.ok.filter((r) => r.id !== job.id) : [];
   if (!exSpam.length && !exOk.length) lines.push("none yet");
   else {
-    lines.push("judged spam:");
+    lines.push("spam:");
     if (!exSpam.length) lines.push("- none");
-    for (const r of exSpam) lines.push("- " + (r.labelled ? "[hand-labelled] " : "") + "[" + (r.channel || "?") + "] " + quotedNym(r.nym) + ": " + JSON.stringify(r.content));
-    lines.push("judged ok:");
+    for (const r of exSpam) lines.push("- " + (r.labelled ? "[hand-labelled] " : r.signals && r.signals.length ? "[bot signals: " + r.signals.join(", ") + "] " : "") + "[" + (r.channel || "?") + "] " + quotedNym(r.nym) + ": " + JSON.stringify(r.content));
+    lines.push("ok:");
     if (!exOk.length) lines.push("- none");
     for (const r of exOk) lines.push("- " + (r.labelled ? "[hand-labelled] " : "") + "[" + (r.channel || "?") + "] " + quotedNym(r.nym) + ": " + JSON.stringify(r.content));
   }
@@ -970,7 +1077,7 @@ function freshCounters() {
     overBudgetDropped: 0, unverified: 0, lite: 0, remuted: 0, recordMuted: 0, flushes: 0, writeErrors: 0, writeRetries: 0, writeDropped: 0,
     fastMarker: 0, fastRepeat: 0, fastUrl: 0, fastSimilar: 0, fastFamily: 0, fastBurst: 0, fastActor: 0, fastLexicon: 0,
     timeoutDropped: 0, stalls: 0, abandoned: 0, offReleased: 0, ioTimeouts: 0, cacheSkipped: 0, flushAbandoned: 0, settingsTimeouts: 0,
-    parked: 0, modelQueued: 0, delivered: 0
+    parked: 0, modelQueued: 0, delivered: 0, unsupported: 0, sampled: 0, unmuted: 0
   };
 }
 
@@ -1050,6 +1157,7 @@ const state = {
   burstSpam: new Map(),
   clean: new Map(),
   nymRows: new Map(),
+  engineMutes: new Map(),
   ioBusy: new WeakMap(),
   counters: freshCounters()
 };
@@ -1078,7 +1186,7 @@ export function _resetSpamState() {
   state.configReady = false; state.auditMissing = false; state.lastWriteError = null; state.lastWriteErrorAt = 0;
   state.tails.clear(); state.markers.clear(); state.markersDirty = false; state.markersPulledAt = 0; state.markerSync = null;
   state.nyms.clear(); state.stems.clear(); state.urls.clear(); state.bands.clear(); state.sims = []; state.hamDocs = []; state.hamDf.clear();
-  state.burstSpam.clear(); state.clean.clear(); state.nymRows.clear(); state.ioBusy = new WeakMap();
+  state.burstSpam.clear(); state.clean.clear(); state.nymRows.clear(); state.engineMutes.clear(); state.ioBusy = new WeakMap();
   state.counters = freshCounters();
   badgeTierCache.clear();
   badgeAuthority = undefined;
@@ -1742,8 +1850,8 @@ function flaggedForAudit(job, dossier) {
   if (job.nonces && job.nonces.length) return true;
   if ((job.obfuscations || 0) > 0 || job.burst || job.memSimilar > 0 || job.urlSpam > 0) return true;
   if (job.lex && (job.lex.slur || job.lex.threat || job.lex.child || job.lex.vulgar)) return true;
-  if (dossier && dossier.similarSpam > 0) return true;
-  if (dossier && dossier.nymSpam > 0) return true;
+  if (dossier && (dossier.similarSpam > 0 || dossier.similarMachineSpam > 0)) return true;
+  if (dossier && (dossier.nymSpam > 0 || dossier.nymMachineSpam > 0)) return true;
   if (dossier && dossier.domainSpam > 0) return true;
   if (dossier && dossier.activity && (dossier.activity.n15 >= 5 || (dossier.activity.rhythm && dossier.activity.rhythm.regularity === "regular"))) return true;
   if (job.fp.simKey && state.exact.has(job.fp.simKey)) return true;
@@ -1975,7 +2083,7 @@ function lexStrong(job) {
 
 function contentSignal(job, now) {
   const lex = job.lex || {};
-  return !!(job.tail || (job.obfuscations || 0) > 0 || lex.slur || lex.vulgar || lex.threat || lex.child || urlSpamCount(job, now) > 0 || simCluster(job, now) >= SIM_CLUSTER);
+  return !!(job.tail || (job.obfuscations || 0) > 0 || lex.slur || lex.threat || lex.child || urlSpamCount(job, now) > 0 || simCluster(job, now) >= SIM_CLUSTER);
 }
 
 function fastRule(kind, category, confidence, reason, extra) {
@@ -2044,7 +2152,7 @@ function flaggedNow(job, now) {
 function learn(job, v, p, recAfter) {
   const now = Date.now();
   const pk = job.pubkey;
-  if (!v) return;
+  if (!v || p.derived) return;
   ensureFeatures(job, now);
   if (p.strong) {
     state.clean.delete(pk);
@@ -2052,7 +2160,7 @@ function learn(job, v, p, recAfter) {
       tailClusters(job.tail, (pre) => { const c = state.tails.get(pre); if (c) c.spam++; });
       establishMarkers(job.tail, now);
     }
-    if (job.nymKey) {
+    if (job.nymKey && p.backed) {
       const e = nymEntry(state.nyms, job.nymKey, true);
       e.spam.set(pk, now);
       if (p.plan && p.plan.muteNow) { if (!e.muted) e.muted = new Set(); e.muted.add(pk); }
@@ -2163,7 +2271,7 @@ async function loadDossier(env, job, settings, opts) {
   const labelSince = now - LABELS_WINDOW_MS;
   const light = !!o.light;
   const posted = postedAt(job);
-  const out = { self: null, record: null, cleanHistory: false, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
+  const out = { self: null, record: null, cleanHistory: false, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, similarStrong: 0, similarMachineSpam: 0, copyPubkeys: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, nymStrong: 0, nymMachineSpam: 0, nymMachineSpamPubkeys: 0, recentLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
   const reusable = verdictReusable(job.fp);
   if (!job.force) {
     const own = state.wrows.get(job.id);
@@ -2180,7 +2288,7 @@ async function loadDossier(env, job, settings, opts) {
     const clauses = ["sim_key = ?"];
     const binds = [job.fp.simKey];
     for (let i = 0; i < 4; i++) if (b[i] != null) { clauses.push("b" + i + " = ?"); binds.push(b[i]); }
-    add("similar", { first: false, stmt: r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, seen_at, sim_key, label, labeled_by FROM spam_events WHERE (" + clauses.join(" OR ") +
+    add("similar", { first: false, stmt: r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, category, model, signals, seen_at, sim_key, b0, b1, b2, b3, label, labeled_by FROM spam_events WHERE (" + clauses.join(" OR ") +
       ") AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) AND id != ? ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince, job.id) });
   }
   let nymKeyMem = "";
@@ -2193,7 +2301,7 @@ async function loadDossier(env, job, settings, opts) {
     else {
       const match = stem ? "nym_key >= ? AND nym_key < ?" : "nym_key = ?";
       const binds = stem ? [stem, stem + NYM_RANGE_END] : [job.nymKey];
-      add("nyms", { first: false, stmt: r.prepare("SELECT id, pubkey, nym, nym_key, channel, content, verdict, confidence, seen_at, label FROM spam_events WHERE " + match +
+      add("nyms", { first: false, stmt: r.prepare("SELECT id, pubkey, nym, nym_key, channel, content, verdict, confidence, category, model, signals, seen_at, label FROM spam_events WHERE " + match +
         " AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince) });
     }
   }
@@ -2259,31 +2367,51 @@ async function loadDossier(env, job, settings, opts) {
   if (at.similar != null && similar) {
     const pks = new Set();
     const spamPks = new Set();
+    const copyPks = new Set();
+    const exactPks = new Set();
+    const b = job.fp.bands;
+    let weakExact = null;
     for (const row of similar) {
       pks.add(row.pubkey);
       const earlier = Number(row.seen_at) <= posted;
-      if (verdictOf(row) === "spam" && earlier) { out.similarSpam++; spamPks.add(row.pubkey); }
+      const ev = rowEvidence(row);
+      const same = row.sim_key === job.fp.simKey;
+      if (earlier && row.pubkey !== job.pubkey && (same || [0, 1, 2, 3].filter((i) => b[i] != null && row["b" + i] === b[i]).length >= 2)) copyPks.add(row.pubkey);
+      if (earlier && same && row.pubkey !== job.pubkey) exactPks.add(row.pubkey);
+      if ((ev === "label" || ev === "strong") && earlier) { out.similarSpam++; spamPks.add(row.pubkey); }
+      if (ev === "strong") out.similarStrong++;
+      if ((ev === "label" || ev === "strong" || ev === "weak") && earlier) out.similarMachineSpam++;
       if (row.label === "spam") out.similarLabelledSpam++;
-      if (!out.labelledOk && row.label === "ok" && row.sim_key === job.fp.simKey) out.labelledOk = row;
-      if (reusable && earlier && !out.exact && row.sim_key === job.fp.simKey && verdictOf(row) === "spam" && (row.label === "spam" || Number(row.confidence) >= settings.minConfidence) && row.pubkey !== job.pubkey) out.exact = row;
+      if (!out.labelledOk && row.label === "ok" && same) out.labelledOk = row;
+      if (reusable && earlier && same && row.pubkey !== job.pubkey && verdictOf(row) === "spam" && (row.label === "spam" || Number(row.confidence) >= settings.minConfidence)) {
+        if (!out.exact && (ev === "label" || ev === "strong")) out.exact = row;
+        else if (!weakExact && ev === "weak") weakExact = row;
+      }
     }
     out.similar = similar;
     out.similarPubkeys = pks.size;
     out.similarSpamPubkeys = spamPks.size;
+    out.copyPubkeys = copyPks.size;
+    if (!out.exact && weakExact && exactPks.size >= COPY_KEYS_MIN) out.exact = weakExact;
     if (out.labelledOk) { out.exact = null; state.exact.delete(job.fp.simKey); }
     if (out.cleanHistory) out.exact = null;
   }
   if (nyms) {
     const pks = new Set();
     const spamPks = new Set();
+    const machinePks = new Set();
     for (const row of nyms) {
       pks.add(row.pubkey);
-      if (verdictOf(row) === "spam") { out.nymSpam++; spamPks.add(row.pubkey); }
+      const ev = rowEvidence(row);
+      if (ev === "label" || ev === "strong") { out.nymSpam++; spamPks.add(row.pubkey); }
+      if (ev === "label" || ev === "strong" || ev === "weak") { out.nymMachineSpam++; machinePks.add(row.pubkey); }
+      if (ev === "strong") out.nymStrong++;
       if (row.label === "spam") out.nymLabelledSpam++;
     }
     out.nymMatches = nyms;
     out.nymPubkeys = pks.size;
     out.nymSpamPubkeys = spamPks.size;
+    out.nymMachineSpamPubkeys = machinePks.size;
   }
   for (const d of (job.domains || []).slice().sort()) {
     const found = doms.found.get(d);
@@ -2344,24 +2472,23 @@ async function fetchExamples(env, now, ctx) {
       if (ex[side].length >= EXAMPLES_PER_SIDE) break;
       if (keys.has(row.sim_key)) continue;
       keys.add(row.sim_key);
-      ex[side].push({ id: row.id, nym: row.nym || "", channel: row.channel || "", content: clip(row.content, 160), labelled, by: row.labeled_by || "" });
+      const item = { id: row.id, nym: row.nym || "", channel: row.channel || "", content: clip(row.content, 160), labelled, by: row.labeled_by || "" };
+      if (!labelled) item.signals = rowSignals(row.signals);
+      ex[side].push(item);
       if (labelled) ex.labelled++;
     }
   };
-  const [l, s, o] = await readRound(r, [
+  const [l, s] = await readRound(r, [
     { first: false, stmt: r.prepare("SELECT * FROM (SELECT id, nym, channel, content, sim_key, label, labeled_by, seen_at FROM spam_events WHERE label = 'spam' AND seen_at > ? ORDER BY seen_at DESC LIMIT 40) " +
       "UNION ALL SELECT * FROM (SELECT id, nym, channel, content, sim_key, label, labeled_by, seen_at FROM spam_events WHERE label = 'ok' AND seen_at > ? ORDER BY seen_at DESC LIMIT 40) ORDER BY seen_at DESC LIMIT 40")
       .bind(now - LABELS_WINDOW_MS, now - LABELS_WINDOW_MS) },
-    { first: false, stmt: r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'spam' AND label IS NULL AND confidence >= 0.9 AND model NOT IN ('cache', 'cross-ref', 'peer', 'developer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS) },
-    { first: false, stmt: r.prepare("SELECT id, nym, channel, content, sim_key FROM spam_events WHERE verdict = 'ok' AND label IS NULL AND confidence >= 0.7 AND model NOT IN ('chatter', 'action', 'cache', 'cross-ref', 'peer', 'rule', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 30").bind(now - EXAMPLES_WINDOW_MS) }
+    { first: false, stmt: r.prepare("SELECT id, nym, channel, content, sim_key, category, model, signals, verdict, label FROM spam_events WHERE verdict = 'spam' AND label IS NULL AND confidence >= 0.9 AND model NOT IN ('cache', 'cross-ref', 'peer', 'developer', 'label') AND seen_at > ? ORDER BY seen_at DESC LIMIT 60").bind(now - EXAMPLES_WINDOW_MS) }
   ]);
   if (!l) return ex;
   take(l.filter((x) => x.label === "spam"), "spam", true);
   take(l.filter((x) => x.label === "ok"), "ok", true);
   if (!s) return ex;
-  take(s, "spam", false);
-  if (!o) return ex;
-  take(o, "ok", false);
+  take(s.filter((x) => rowEvidence(x) === "strong" && rowSignals(x.signals).length), "spam", false);
   await cachePut(ctx, EXAMPLES_CACHE_KEY, ex, EXAMPLES_CACHE_S);
   return ex;
 }
@@ -2392,7 +2519,7 @@ async function enrichDossier(env, job, dossier) {
   const now = job.seenAt;
   const r = replica(spamDb(env));
   const spamList = [
-    { first: false, stmt: r.prepare("SELECT channel, nym, content, verdict, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8").bind(job.pubkey, job.id) },
+    { first: false, stmt: r.prepare("SELECT channel, nym, content, verdict, category, label, created_at FROM spam_events WHERE pubkey = ? AND id != ? ORDER BY seen_at DESC LIMIT 8").bind(job.pubkey, job.id) },
     { first: true, stmt: r.prepare("SELECT SUM(seen_at > ?) AS n15, COUNT(*) AS n60, COUNT(DISTINCT CASE WHEN seen_at > ? THEN channel END) AS ch15 FROM spam_events WHERE pubkey = ? AND seen_at > ? AND id != ?")
       .bind(now - VELOCITY_WINDOW_MS, now - VELOCITY_WINDOW_MS, job.pubkey, now - VELOCITY_HOUR_MS, job.id) }
   ];
@@ -2410,6 +2537,7 @@ async function enrichDossier(env, job, dossier) {
   let recent = a[0] || [];
   if (state.wrows.size) recent = withBuffered(recent, Array.from(state.wrows.values()).filter((row) => row.id !== job.id && row.pubkey === job.pubkey), 8);
   dossier.recent = recent.length ? recent : archiveRows(b[1]);
+  dossier.recentLabelledSpam = dossier.recent.filter((row) => row.label === "spam").length;
   dossier.activity = activityFrom(job, dossier, a[1] || null, b[0] || null);
   dossier.examples = examples || null;
   job.signals = buildSignals(job, dossier);
@@ -2440,6 +2568,8 @@ export function buildSignals(job, dossier) {
   if (job.memSimilar) out.memSimilar = job.memSimilar;
   if (job.urlSpam) out.urlSpam = job.urlSpam;
   if (job.fast) out.fast = job.fast;
+  const hard = hardSignals(job, dossier);
+  if (hard.length) out.hard = hard;
   return out;
 }
 
@@ -2504,19 +2634,23 @@ function verdictPlan(job, v, dossier) {
   const settings = job.settings;
   const review = job.source === "report";
   const strong = v.spam && v.confidence >= settings.minConfidence;
+  const derived = v.category === MUTED_SENDER;
   const enforceable = !review || reviewEvidenceStrong(v, settings, dossier);
   const enforcing = !!(strong && settings.autoEnforce && enforceable);
-  const strikes = strikesAfter(dossier, strong && enforceable);
+  const strikes = strikesAfter(dossier, strong && enforceable && !derived);
+  const hard = hardSignals(job, dossier);
   const plan = enforcing ? planEnforcement(job, v, dossier, strikes) : null;
   const action = plan ? plan.actions.join(",") : (v.spam ? (strong ? "flagged" : "suspect") : "ok");
-  return { strong, enforcing, strikes, plan, action };
+  const backed = !derived && (hard.length > 0 || !!v.fast || (v.model === "rule" && STRONG_RULES.has(v.category)));
+  return { strong, enforcing, strikes, plan, action, derived, backed, hard };
 }
 
 function writeEntry(env, job, v, dossier, p) {
   const rec = dossier.record;
   const now = job.seenAt;
   const prevScore = rec ? Number(rec.score) || 0 : 0;
-  const score = v.spam ? prevScore + v.confidence : Math.max(0, prevScore - 0.5);
+  const counted = v.spam && !p.derived;
+  const score = p.derived ? prevScore : v.spam ? prevScore + v.confidence : Math.max(0, prevScore - 0.5);
   const strikeDelta = p.strikes - (rec ? Number(rec.strikes) || 0 : 0);
   const channels = mergeList(rec && rec.channels, job.channel);
   const nyms = mergeList(rec && rec.nyms, job.nym);
@@ -2540,7 +2674,7 @@ function writeEntry(env, job, v, dossier, p) {
   };
   const recAfter = Object.assign({}, rec || {}, {
     pubkey: job.pubkey, first_seen: rec ? rec.first_seen : now, last_seen: now, audits: (rec ? Number(rec.audits) || 0 : 0) + 1,
-    spam: (rec ? Number(rec.spam) || 0 : 0) + (v.spam ? 1 : 0), ham: (rec ? Number(rec.ham) || 0 : 0) + (v.spam ? 0 : 1),
+    spam: (rec ? Number(rec.spam) || 0 : 0) + (counted ? 1 : 0), ham: (rec ? Number(rec.ham) || 0 : 0) + (v.spam ? 0 : 1),
     strikes: p.strikes, score, channels, nyms, last_reason: lastReason || (rec ? rec.last_reason : null) || null,
     muted_until: mute ? mute.until : (rec ? Number(rec.muted_until) || 0 : 0), cleared_at: rec ? rec.cleared_at || 0 : 0, cleared_by: rec ? rec.cleared_by || null : null
   });
@@ -2548,7 +2682,7 @@ function writeEntry(env, job, v, dossier, p) {
   return {
     id: job.id, pubkey: job.pubkey, seenAt: now, report, guarded: report || !job.force, drop: p.enforcing, ev,
     hide: /event-hidden/.test(p.action || ""), domains: (job.domains || []).slice(), verdictWord: v.spam ? "spam" : "ok",
-    rec: { spam: v.spam ? 1 : 0, ham: v.spam ? 0 : 1, strikeDelta, scoreDelta: v.spam ? v.confidence : -0.5, strikes: p.strikes, score, channels, nyms, lastReason, mutedUntil: mute ? mute.until : 0 },
+    rec: { spam: counted ? 1 : 0, ham: v.spam ? 0 : 1, strikeDelta, scoreDelta: p.derived ? 0 : v.spam ? v.confidence : -0.5, strikes: p.strikes, score, channels, nyms, lastReason, mutedUntil: mute ? mute.until : 0 },
     mute, recAfter, stage: { event: true, rec: true, nope: !!mute, chan }, attempts: 0, lost: false
   };
 }
@@ -2894,6 +3028,11 @@ function applyLocally(job, p, entry, buffered, env, context, v) {
     if (already && job.preMuted) mutedNow = true;
     else if (already) state.counters.remuted++;
     else { state.counters.muted++; mutedNow = true; }
+    if (entry.mute) noteEngineMute(job.pubkey, entry.mute.until);
+  }
+  if (p.strong && !p.derived) {
+    const em = state.engineMutes.get(job.pubkey);
+    if (em) { em.okRun = 0; em.oks = []; }
   }
   if (p.strong && verdictReusable(job.fp)) noteCampaign(job.fp.simKey, job.pubkey);
   rememberRecord(job.pubkey, entry.recAfter);
@@ -2903,7 +3042,7 @@ function applyLocally(job, p, entry, buffered, env, context, v) {
 }
 
 function auditResult(job, v, dossier, p, entry) {
-  return { verdict: v, action: p.action, strikes: p.strikes, score: entry.rec.score, similar: (dossier.similar || []).length, similarPubkeys: dossier.similarPubkeys || 0, similarNyms: (dossier.nymMatches || []).length, nymSpam: dossier.nymSpam || 0, signals: job.signals };
+  return { verdict: v, action: p.action, strikes: p.strikes, score: entry.rec.score, similar: (dossier.similar || []).length, similarPubkeys: dossier.similarPubkeys || 0, similarNyms: (dossier.nymMatches || []).length, nymSpam: dossier.nymSpam || 0, signals: job.signals, hard: p.hard };
 }
 
 async function conclude(env, job, v, dossier, hooks) {
@@ -2959,8 +3098,10 @@ function adoptPeer(row, job) {
 function planEnforcement(job, v, dossier, strikes) {
   const s = job.settings;
   const now = job.seenAt;
-  const nymFamily = dossier.nymSpamPubkeys + 1 >= s.campaignCopies;
-  const campaign = dossier.similarSpamPubkeys + 1 >= s.campaignCopies || (dossier.similarPubkeys + 1 >= s.campaignCopies && (job.copies || 0) >= 2) || nymFamily;
+  const own = messageSignals(job, dossier);
+  const familyKeys = own.length ? Math.max(dossier.nymSpamPubkeys || 0, dossier.nymMachineSpamPubkeys || 0) : dossier.nymSpamPubkeys || 0;
+  const nymFamily = familyKeys + 1 >= s.campaignCopies && (own.length > 0 || (dossier.nymLabelledSpam || 0) > 0);
+  const campaign = dossier.similarSpamPubkeys + 1 >= s.campaignCopies || (dossier.copyPubkeys || 0) + 1 >= s.campaignCopies || (dossier.similarPubkeys + 1 >= s.campaignCopies && (job.copies || 0) >= 2) || nymFamily;
   const shortFloor = !!innocuousKind(job.content) && strikes < 2;
   const actor = !!v.mute;
   const muteNow = (strikes >= s.strikesToMute && !shortFloor) || campaign || actor;
@@ -2968,7 +3109,7 @@ function planEnforcement(job, v, dossier, strikes) {
   if (s.blockEvents) actions.push("event-hidden");
   if (!muteNow) { actions.push("strike"); return { actions, muteNow: false }; }
   const until = now + Math.round(s.muteHours * 3600000);
-  const why = actor ? "same actor as a muted key" : campaign ? (nymFamily && dossier.similarSpamPubkeys + 1 < s.campaignCopies ? "nym family" : "campaign") : strikes + " strikes";
+  const why = actor ? "same actor as a muted key" : campaign ? (nymFamily && dossier.similarSpamPubkeys + 1 < s.campaignCopies && (dossier.copyPubkeys || 0) + 1 < s.campaignCopies ? "nym family" : "campaign") : strikes + " strikes";
   const reason = "spam engine: " + (v.category || "spam") + " (" + Math.round(v.confidence * 100) + "%, " + why + ")";
   const note = clip(v.reason, 300) + "\nnym: " + (job.nym || "?") + " · channel: " + (job.channel || "?") + "\n" + clip(job.content, 240);
   actions.push("muted");
@@ -2979,7 +3120,7 @@ export function nymIsOnlyEvidence(job, dossier, v) {
   if (!v || !v.spam || v.messageAlone !== false) return false;
   if (v.hostile === true) return false;
   if (job.nonces && job.nonces.length) return false;
-  if (!dossier || !(dossier.nymSpam > 0)) return false;
+  if (!dossier || !(dossier.nymSpam > 0 || dossier.nymMachineSpam > 0)) return false;
   if (dossier.similarSpam > 0) return false;
   if ((job.copies || 0) >= 2 || (job.localScore || 0) > 0) return false;
   if ((job.obfuscations || 0) > 0 || job.marker || job.burst || lexStrong(job)) return false;
@@ -3002,7 +3143,7 @@ export async function auditNow(env, job, hooks) {
   const posted = postedAt(job);
   const memo = !job.force && !innocuous && reusable ? exactVerdict(job.fp.simKey, now, posted) : null;
   const memoStrong = !!(memo && memo.spam && memo.confidence >= settings.minConfidence);
-  let muted = !job.force && isSpamMuted(job.pubkey, now);
+  let muted = !job.force && !job.sample && isSpamMuted(job.pubkey, now);
   let light = muted || memoStrong;
   if (!bypass && !light && !dossierBudgetOk(settings)) {
     state.counters.skippedBudget++;
@@ -3017,7 +3158,7 @@ export async function auditNow(env, job, hooks) {
   }
   job.pubkeyUnknown = !dossier.record;
   const rec0 = dossier.record;
-  if (!job.force && !muted && rec0 && Number(rec0.muted_until) > now && muteLive(job.pubkey, rec0, now)) {
+  if (!job.force && !job.sample && !muted && rec0 && Number(rec0.muted_until) > now && muteLive(job.pubkey, rec0, now)) {
     muteLocally(job.pubkey, Number(rec0.muted_until));
     state.counters.recordMuted++;
     muted = true;
@@ -3051,7 +3192,7 @@ export async function auditNow(env, job, hooks) {
       rememberExact(job.fp, v, now);
     } else {
       if (!light) await enrichDossier(env, job, dossier);
-      if (!job.force && !isCandidate(job, settings, dossier)) return { skipped: "not a candidate" };
+      if (!job.force && !job.sample && !isCandidate(job, settings, dossier)) return { skipped: "not a candidate" };
       if (!bypass && isCoolingDown(now)) { state.counters.skippedCooldown++; return { skipped: "cooldown", suspicious: locallySuspicious(job, dossier) }; }
       if (hooks && typeof hooks.beforeModel === "function") {
         const gate = await hooks.beforeModel();
@@ -3066,6 +3207,9 @@ export async function auditNow(env, job, hooks) {
       if (nymIsOnlyEvidence(job, dossier, v)) {
         v = Object.assign({}, v, { spam: false, category: "ok", confidence: Math.min(v.confidence, 0.5), reason: "let through: the message is not spam on its own and only the nym resembles prior spam (model: " + clip(v.reason, 200) + ")" });
         state.counters.nymOnly++;
+      } else if (unsupportedSpam(job, dossier, v, settings)) {
+        v = Object.assign({}, v, { spam: false, category: "ok", confidence: Math.min(v.confidence, 0.5), reason: "let through: no objective spam signal backs the model's " + (v.category || "spam") + " call on a sender who " + (v.messageAlone === false ? "would only be convicted by history" : "is talking to people or has an established key") + " (model: " + clip(v.reason, 200) + ")" });
+        state.counters.unsupported++;
       }
       rememberExact(job.fp, v, now);
     }
@@ -3130,6 +3274,129 @@ async function liteRecord(env, context, job, v) {
     state.lastError = String(e && e.message || e).slice(0, 300);
     state.lastErrorAt = Date.now();
   }
+}
+
+function noteEngineMute(pubkey, until) {
+  const now = Date.now();
+  reblockPubkey(pubkey);
+  const e = state.engineMutes.get(pubkey);
+  if (e) Object.assign(e, { at: now, until, okRun: 0, oks: [], lastSampleAt: 0, origin: "engine", originAt: now });
+  else {
+    state.engineMutes.set(pubkey, { at: now, until, okRun: 0, oks: [], lastSampleAt: 0, origin: "engine", originAt: now, busy: false });
+    trimMap(state.engineMutes, MUTED_MAX);
+  }
+}
+
+function sampleWanted(pubkey, now, s) {
+  if (!s || !s.enabled || !s.autoEnforce || !(s.unmuteAfterOk > 0) || !(s.mutedSampleMinutes > 0)) return false;
+  let e = state.engineMutes.get(pubkey);
+  if (!e) {
+    e = { at: now, until: 0, okRun: 0, oks: [], lastSampleAt: 0, origin: null, originAt: 0, busy: false };
+    state.engineMutes.set(pubkey, e);
+    trimMap(state.engineMutes, MUTED_MAX);
+  }
+  if (e.busy) return false;
+  if (e.origin && e.origin !== "engine" && now - e.originAt < ORIGIN_TTL_MS) return false;
+  if (now - Math.max(e.at, e.lastSampleAt) < s.mutedSampleMinutes * 60000) return false;
+  return budgetHeadroom(s);
+}
+
+function maybeSampleMuted(env, context, job, pubkey, now, s) {
+  if (state.restored.has(job.id) || typeof job.content !== "string" || !job.content.trim()) return false;
+  if (!sampleWanted(pubkey, now, s) || !noteSeen(job.id)) return false;
+  const e = state.engineMutes.get(pubkey);
+  e.busy = true;
+  e.lastSampleAt = now;
+  noteVelocity(pubkey, now);
+  const queued = Object.assign({}, job, { pubkey, nymKey: nymKey(job.nym), seenAt: now, settings: s, source: "sample", sample: true, force: false });
+  delete queued.release;
+  delete queued.retract;
+  delete queued.discard;
+  keepAlive(context, runSample(env, context, queued, e));
+  return true;
+}
+
+function originOf(row) {
+  if (!row) return "none";
+  if (row.created_by !== SPAM_ACTOR) return "admin";
+  return Number(row.expires_at) > 0 ? "engine" : "developer";
+}
+
+async function muteOrigin(env, pubkey, e) {
+  const now = Date.now();
+  if (e.origin && now - e.originAt < ORIGIN_TTL_MS) return e.origin;
+  const db = env && env.DB_NOPE;
+  if (!hasD1(db)) return "none";
+  let row = null;
+  try {
+    row = await timed(replica(db).prepare("SELECT created_by, expires_at FROM nope WHERE kind = 'pubkey' AND value = ?").bind(pubkey).first(), D1_READ_TIMEOUT_MS, "mute origin read");
+  } catch (_) { return "unknown"; }
+  e.origin = originOf(row);
+  e.originAt = now;
+  return e.origin;
+}
+
+async function runSample(env, context, job, e) {
+  try {
+    if ((await muteOrigin(env, job.pubkey, e)) !== "engine") return;
+    state.counters.sampled++;
+    const res = await auditNow(env, job, { buffered: true, context });
+    if (!res || !res.verdict) return;
+    if (res.verdict.spam || (res.hard && res.hard.length)) { e.okRun = 0; e.oks = []; return; }
+    if (res.verdict.model === "chatter" || res.verdict.model === "action" || innocuousKind(job.content)) return;
+    e.okRun++;
+    e.oks.push(job.id);
+    if (e.okRun >= job.settings.unmuteAfterOk) await liftEngineMute(env, context, job.pubkey, e);
+  } catch (err) {
+    state.counters.errors++;
+    state.lastError = String(err && err.message || err).slice(0, 300);
+    state.lastErrorAt = Date.now();
+  } finally {
+    e.busy = false;
+  }
+}
+
+function forgetMute(pubkey) {
+  state.muted.delete(pubkey);
+  state.nopeLive.delete(pubkey);
+  state.burstSpam.delete(pubkey);
+  state.engineMutes.delete(pubkey);
+  const own = state.records.get(pubkey);
+  if (own && own.rec) own.rec = Object.assign({}, own.rec, { muted_until: 0, strikes: 0 });
+  for (const n of state.nyms.values()) if (n.muted) n.muted.delete(pubkey);
+}
+
+async function liftEngineMute(env, context, pubkey, e) {
+  const now = Date.now();
+  const db = env.DB_NOPE;
+  let removed = 0;
+  try {
+    const res = await timed(db.prepare("DELETE FROM nope WHERE kind = 'pubkey' AND value = ? AND created_by = ? AND expires_at > 0").bind(pubkey, SPAM_ACTOR).run(), D1_WRITE_TIMEOUT_MS, "unmute");
+    removed = res && res.meta && typeof res.meta.changes === "number" ? res.meta.changes : 0;
+  } catch (_) { return false; }
+  if (!removed) {
+    let row = null;
+    try {
+      row = await timed(fresh(db).prepare("SELECT created_by, expires_at FROM nope WHERE kind = 'pubkey' AND value = ?").bind(pubkey).first(), D1_READ_TIMEOUT_MS, "mute origin read");
+    } catch (_) { return false; }
+    if (row) { e.origin = originOf(row); e.originAt = now; e.okRun = 0; e.oks = []; return false; }
+  }
+  const detail = JSON.stringify({ reason: "auto-unmute: " + e.okRun + " sampled audits in a row came back ok with no hard bot signal", oks: e.okRun, events: e.oks.slice(-10), mutedAt: e.at, removed: removed > 0 });
+  if (!state.auditMissing) {
+    try {
+      await timed(db.prepare("INSERT INTO audit (at, actor, action, kind, value, detail) VALUES (?, ?, 'spam.unmute', 'pubkey', ?, ?)").bind(now, SPAM_ACTOR, pubkey, detail).run(), D1_WRITE_TIMEOUT_MS, "unmute audit");
+    } catch (err) {
+      if (/no such table: audit/i.test(String(err && err.message || err))) state.auditMissing = true;
+    }
+  }
+  try {
+    await timed(spamDb(env).prepare("UPDATE spam_pubkeys SET muted_until = 0, strikes = 0, cleared_at = ?, cleared_by = ? WHERE pubkey = ? AND muted_until < ?")
+      .bind(now, AUTO_UNMUTE_BY, pubkey, now + DEVELOPER_MARK_FLOOR_MS).run(), D1_WRITE_TIMEOUT_MS, "unmute record");
+  } catch (_) { }
+  forgetMute(pubkey);
+  keepAlive(context, Promise.all([cacheDrop(context, "pubkey/" + pubkey), forgetBlockedPubkey(pubkey)]).catch(() => { }));
+  state.counters.unmuted++;
+  return true;
 }
 
 export function reviewEvidenceStrong(v, settings, dossier) {
@@ -3807,6 +4074,28 @@ export function spamEngine(env, context) {
       port.waiters.clear();
     },
     isMuted(pubkey) { return typeof pubkey === "string" && isSpamMuted(pubkey.toLowerCase()); },
+    wantsSample(pubkey) {
+      const s = state.settings;
+      if (!usable || typeof pubkey !== "string" || !s || !s.enabled) return false;
+      const pk = pubkey.toLowerCase();
+      if (isExemptPubkey(s, pk)) return false;
+      const e = state.engineMutes.get(pk);
+      const now = Date.now();
+      if (e && (e.busy || (e.origin && e.origin !== "engine" && now - e.originAt < ORIGIN_TTL_MS))) return false;
+      if (e && now - Math.max(e.at, e.lastSampleAt) < s.mutedSampleMinutes * 60000) return false;
+      return !!(s.autoEnforce && s.unmuteAfterOk > 0 && s.mutedSampleMinutes > 0);
+    },
+    sampleMuted(job) {
+      const s = state.settings;
+      if (!usable || !s || !s.enabled || !job || job.verified !== true || typeof job.pubkey !== "string" || !job.id) return false;
+      const pubkey = job.pubkey.toLowerCase();
+      const now = Date.now();
+      if (isExemptPubkey(s, pubkey)) return false;
+      let muted = isSpamMuted(pubkey, now) || recordMuted(pubkey, now);
+      if (!muted) { try { muted = filterSetSync().p.has(pubkey); } catch (_) { muted = false; } }
+      if (!muted) return false;
+      return maybeSampleMuted(env, context, job, pubkey, now, s);
+    },
     inspect(job) {
       const s = state.settings;
       if (!s || !s.enabled || !job || typeof job.pubkey !== "string" || !job.id) return "pass";
@@ -3817,7 +4106,11 @@ export function spamEngine(env, context) {
       if (isExemptPubkey(s, pubkey)) return "pass";
       if (state.restored.has(job.id)) return "pass";
       watchdog(now);
-      if (isSpamMuted(pubkey, now) || recordMuted(pubkey, now)) { state.counters.dropped++; return "drop"; }
+      if (isSpamMuted(pubkey, now) || recordMuted(pubkey, now)) {
+        state.counters.dropped++;
+        maybeSampleMuted(env, context, job, pubkey, now, s);
+        return "drop";
+      }
       if (state.dropped.has(job.id) || state.hidden.has(job.id)) { state.counters.dropped++; return "drop"; }
       if (typeof job.content !== "string" || !job.content.trim()) return "pass";
       if (isCoolingDown(now)) {

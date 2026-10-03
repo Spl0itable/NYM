@@ -627,18 +627,26 @@ Object.assign(NYM.prototype, {
         return btoa(JSON.stringify(signed));
     },
 
+    _blossomType(file) {
+        return String((file && file.type) || '').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+    },
+
     async _putToBlossom(file, hashHex, server, signal) {
         const auth = await this._signBlossomEvent(hashHex, 'upload');
         const resp = await this._edgeFetch(this._getBlossomUploadUrl(server), {
             method: 'PUT',
             headers: {
                 'Authorization': `Nostr ${auth}`,
-                'Content-Type': file.type || 'application/octet-stream'
+                'Content-Type': this._blossomType(file)
             },
             body: file,
             signal
         });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (!resp.ok) {
+            const err = new Error(`HTTP ${resp.status}`);
+            err.status = resp.status;
+            throw err;
+        }
         const data = await resp.json();
         if (!data.url) throw new Error('No URL in response');
         return data.url;
@@ -646,13 +654,17 @@ Object.assign(NYM.prototype, {
 
     async _uploadWithFallback(file, hashHex, signal) {
         let lastErr = null;
-        for (const server of BLOSSOM_SERVERS) {
+        if (!this._blossomRejects) this._blossomRejects = new Set();
+        const type = this._blossomType(file);
+        const candidates = BLOSSOM_SERVERS.filter(s => !this._blossomRejects.has(s + ' ' + type));
+        for (const server of (candidates.length ? candidates : BLOSSOM_SERVERS)) {
             if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
             try {
                 const url = await this._putToBlossom(file, hashHex, server, signal);
                 return { url, server };
             } catch (e) {
                 if (e && e.name === 'AbortError') throw e;
+                if (e && e.status === 415) this._blossomRejects.add(server + ' ' + type);
                 lastErr = e;
             }
         }
@@ -692,7 +704,7 @@ Object.assign(NYM.prototype, {
         if (noteTags.length) content = MN.stripMediaNotes(content);
         if (!this.mediaFallbacks || !this.mediaFallbacks.size) return noteTags;
         const tags = noteTags.slice();
-        const re = /(https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(?:\?[^\s]*)?)/gi;
+        const re = /(https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov|m4a|mp3|aac|opus|wav|oga|flac)(?:\?[^\s]*)?)/gi;
         const seen = new Set();
         let m;
         while ((m = re.exec(content)) !== null) {
@@ -2305,8 +2317,8 @@ Object.assign(NYM.prototype, {
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found: ${matchList}`, 'system', { html: true });
-            this.displaySystemMessage('Please specify using the #xxxx suffix');
+            this.displaySystemMessage(`Multiple users found: ${matchList}`, 'system', { html: true, feed: true });
+            this.displaySystemMessage('Please specify using the #xxxx suffix', 'system', { feed: true });
             return null;
         }
 

@@ -10,3 +10,4 @@ const String kPrivacyUrl = '$kSiteBase/privacy/';
 const String kDmcaUrl = '$kSiteBase/dmca/';
 
 const String kGithubUrl = 'https://github.com/Spl0itable/NYM';
+const String kLicenseUrl = 'https://www.gnu.org/licenses/agpl-3.0.html';

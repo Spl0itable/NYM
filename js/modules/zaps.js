@@ -1990,8 +1990,8 @@ Object.assign(NYM.prototype, {
             const matchList = matches.map(m =>
                 `${this.formatNymWithPubkey(m.nym, m.pubkey)}`
             ).join(', ');
-            this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true });
-            this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey');
+            this.displaySystemMessage(`Multiple users found with nym "${this.escapeHtml(searchNym)}": ${matchList}`, 'system', { html: true, feed: true });
+            this.displaySystemMessage('Please specify using the #xxxx suffix or full pubkey', 'system', { feed: true });
             return;
         }
 

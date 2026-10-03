@@ -641,6 +641,27 @@ Object.assign(NYM.prototype, {
         this.updateUnreadCount(storageKey, message.created_at);
     },
 
+    _applyPendingEdit(message) {
+        const editLookupId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
+        const pendingEdit = (message.pubkey && this.editedMessages.get(`${message.pubkey}:${editLookupId}`))
+            || this.editedMessages.get(editLookupId);
+        if (!pendingEdit || pendingEdit.senderPubkey !== message.pubkey) return;
+        const editAt = pendingEdit.editAt || (pendingEdit.timestamp ? Math.floor(pendingEdit.timestamp.getTime() / 1000) : 0);
+        const T = window.NymChatTools;
+        if (T && T.editVerdict(null, { text: pendingEdit.newContent, at: editAt }, message.created_at) === 'invalid') return;
+        if (typeof this._noteEdit === 'function' && message.content !== pendingEdit.newContent) {
+            this._noteEdit(message, pendingEdit.newContent, editAt);
+        }
+        message.content = pendingEdit.newContent;
+        message.isEdited = true;
+        if (typeof this._noteStaleEdit === 'function' && Array.isArray(pendingEdit.stale)) {
+            for (const s of pendingEdit.stale) {
+                if (T && T.editVerdict(null, s, message.created_at) === 'invalid') continue;
+                this._noteStaleEdit(message, s.text, s.at);
+            }
+        }
+    },
+
     displayMessage(message) {
         if (this.deletedEventIds.has(message.id) ||
             (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId)) ||
@@ -651,17 +672,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        // Apply pending edits that arrived before the original message.
-        const editLookupId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-        const pendingEdit = (message.pubkey && this.editedMessages.get(`${message.pubkey}:${editLookupId}`))
-            || this.editedMessages.get(editLookupId);
-        if (pendingEdit && pendingEdit.senderPubkey === message.pubkey) {
-            if (typeof this._noteEdit === 'function' && message.content !== pendingEdit.newContent) {
-                this._noteEdit(message, pendingEdit.newContent, pendingEdit.editAt || (pendingEdit.timestamp ? Math.floor(pendingEdit.timestamp.getTime() / 1000) : 0));
-            }
-            message.content = pendingEdit.newContent;
-            message.isEdited = true;
-        }
+        this._applyPendingEdit(message);
 
         if (message.blocked || this.blockedUsers.has(message.pubkey)) {
             return;
@@ -853,7 +864,7 @@ Object.assign(NYM.prototype, {
             if (spamHit) {
                 const escContent = this.escapeHtml(message.content);
                 const html = `Your message was flagged by the spam filter and not shown to anyone but yourself. <button class="spam-false-positive-btn" data-action="reportSpamFalsePositive" data-spam-content="${escContent}">Report false positive</button>`;
-                this.displaySystemMessage(html, 'system', { html: true });
+                this.displaySystemMessage(html, 'system', { html: true, feed: true });
             }
         } else if (this.blockedUsers.has(message.pubkey) || keywordHit || spamHit) {
             return;
@@ -1749,7 +1760,11 @@ Object.assign(NYM.prototype, {
         document.getElementById('imageModal').classList.add('active');
     },
 
-    displaySystemMessage(content, type = 'system', { html = false } = {}) {
+    displaySystemMessage(content, type = 'system', { html = false, feed = false, kind = null } = {}) {
+        if (type !== 'action' && !feed && typeof this.showToast === 'function') {
+            this.showToast(content, { html, kind });
+            return;
+        }
         const container = (this._cvActive && this._cvFocusedListEl && this._cvFocusedListEl())
             || document.getElementById('messagesContainer');
         const messageEl = document.createElement('div');
@@ -1762,10 +1777,7 @@ Object.assign(NYM.prototype, {
         }
         container.appendChild(messageEl);
 
-        if (this._cvActive && container !== document.getElementById('messagesContainer')) {
-            const sc = container.closest('.messages-container');
-            if (sc) sc.scrollTop = 0;
-        } else {
+        if (!this._cvActive || container === document.getElementById('messagesContainer')) {
             this._scheduleScrollToBottom();
         }
     },
@@ -2191,10 +2203,12 @@ Object.assign(NYM.prototype, {
 
             const signedEvent = await this.signEvent(event);
 
-            this.editedMessages.set(originalEventId, {
+            this.editedMessages.set(`${this.pubkey}:${originalEventId}`, {
                 newContent,
                 editEventId: signedEvent.id,
-                timestamp: new Date(now * 1000)
+                senderPubkey: this.pubkey,
+                timestamp: new Date(now * 1000),
+                editAt: now
             });
 
             this.messages.forEach((msgs) => {
@@ -2677,6 +2691,17 @@ Object.assign(NYM.prototype, {
     async sendMessagePseudonymous() {
         const input = document.getElementById('messageInput');
         let content = input.value.trim();
+
+        if (typeof this.composerHasPendingUploads === 'function'
+            && this.composerHasPendingUploads()) {
+            this.displaySystemMessage('Still uploading — send again once the attachments finish.');
+            return;
+        }
+        const attachmentUrls = typeof this.composerAttachmentUrls === 'function'
+            ? this.composerAttachmentUrls() : [];
+        if (attachmentUrls.length) {
+            content = (content ? content + ' ' : '') + attachmentUrls.join(' ');
+        }
 
         if (!content && !this.pendingQuote) return;
 

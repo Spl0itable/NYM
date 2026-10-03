@@ -10,6 +10,10 @@ body.columns-mode #messagesScroller {
     display: none;
 }
 
+body.columns-mode #cnFabs {
+    display: none;
+}
+
 body.columns-mode #columnsStrip {
     display: flex;
 }

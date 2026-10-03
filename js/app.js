@@ -4852,6 +4852,7 @@ async function checkSavedConnection() {
             nym._loadEphemeralKeys();
             nym._loadBotAnonState();
             nym._loadLastPMSyncTime();
+            nym._refreshPmSupportBadges();
             nym._loadLeftGroups();
 
             // Load synced settings from D1 (encrypted), falling back to relays.
@@ -5030,6 +5031,7 @@ async function initializeNym() {
         nym._loadEphemeralKeys();
         nym._loadBotAnonState();
         nym._loadLastPMSyncTime();
+        nym._refreshPmSupportBadges();
         nym._loadLeftGroups();
 
         // Load synced settings from D1 (encrypted), falling back to relays.
@@ -5891,6 +5893,7 @@ function applyNostrLogin(pubkey, secretKey, method) {
     nym._loadEphemeralKeys();
     nym._loadBotAnonState();
     nym._loadLastPMSyncTime();
+    nym._refreshPmSupportBadges();
     nym._loadLeftGroups();
 
     nym._updateNotificationBadge();

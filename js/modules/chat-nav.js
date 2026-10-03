@@ -129,6 +129,156 @@
         return !!(info && info.id && dividerAbove && !dismissed);
     }
 
+    const JUMP = Object.freeze({ seenRatio: 0.5, dwellMs: 500, seenMax: 500 });
+    const FABS = Object.freeze({ order: Object.freeze(['mention', 'jump', 'bottom']), gap: 8, right: 24, rightPhone: 16, rightColumn: 16, phoneMax: 768 });
+
+    function seenInView(top, bottom, viewTop, viewBottom) {
+        const t = num(top), b = num(bottom), vt = num(viewTop), vb = num(viewBottom);
+        const h = b - t;
+        const vh = vb - vt;
+        if (!(h > 0) || !(vh > 0)) return false;
+        const vis = Math.min(b, vb) - Math.max(t, vt);
+        if (!(vis > 0)) return false;
+        return vis >= h * JUMP.seenRatio || vis >= vh * JUMP.seenRatio;
+    }
+
+    function dwellStep(pending, visibleIds, nowMs) {
+        const p = pending && typeof pending === 'object' ? pending : {};
+        const now = num(nowMs);
+        const next = {};
+        const seen = [];
+        let due = 0;
+        for (const id of (Array.isArray(visibleIds) ? visibleIds : [])) {
+            if (typeof id !== 'string' || !id || next[id] !== undefined || seen.indexOf(id) >= 0) continue;
+            const since = Object.prototype.hasOwnProperty.call(p, id) ? num(p[id]) : now;
+            if (now - since >= JUMP.dwellMs) {
+                seen.push(id);
+                continue;
+            }
+            next[id] = since;
+            const left = since + JUMP.dwellMs - now;
+            if (!due || left < due) due = left;
+        }
+        return { pending: next, seen, wait: due };
+    }
+
+    function fabRow(visible) {
+        const v = visible || {};
+        return FABS.order.filter((k) => !!v[k]);
+    }
+
+    function fabRight(width, column) {
+        if (column) return FABS.rightColumn;
+        return num(width) > 0 && num(width) <= FABS.phoneMax ? FABS.rightPhone : FABS.right;
+    }
+
+    function jumpEmpty(floor, before) {
+        return { floor: Math.max(0, Math.floor(num(floor))), before: Math.max(0, Math.floor(num(before))), ids: [], hidden: 0, seen: [] };
+    }
+
+    function jumpNorm(raw) {
+        const r = raw && typeof raw === 'object' ? raw : {};
+        const s = jumpEmpty(r.floor, r.before);
+        const have = new Set();
+        for (const e of (Array.isArray(r.ids) ? r.ids : [])) {
+            if (!e || typeof e.id !== 'string' || !e.id || have.has(e.id)) continue;
+            have.add(e.id);
+            s.ids.push({ id: e.id, at: Math.max(0, Math.floor(num(e.at))) });
+        }
+        for (const id of (Array.isArray(r.seen) ? r.seen : [])) if (typeof id === 'string' && id && s.seen.indexOf(id) < 0) s.seen.push(id);
+        s.ids.sort((a, b) => (a.at - b.at) || cmpStr(a.id, b.id));
+        s.hidden = Math.max(0, Math.floor(num(r.hidden)));
+        return s;
+    }
+
+    function jumpStart(list, lastRead, opts) {
+        const o = opts || {};
+        const s = jumpEmpty(lastRead, o.before);
+        const info = firstUnread(list, lastRead, o);
+        if (!info) return s;
+        for (let i = info.index; i < list.length; i++) {
+            const m = list[i] || {};
+            if (m.own || m.sys || !m.id) continue;
+            if (num(m.at) > s.floor) s.ids.push({ id: String(m.id), at: Math.floor(num(m.at)) });
+        }
+        const out = jumpNorm(s);
+        out.hidden = info.beyond ? Math.max(0, info.count - out.ids.length) : 0;
+        return out;
+    }
+
+    function jumpSeen(state, ids) {
+        const s = jumpNorm(state);
+        const list = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id);
+        if (!list.length) return s;
+        const gone = new Set(list);
+        s.ids = s.ids.filter((e) => !gone.has(e.id));
+        for (const id of list) {
+            const i = s.seen.indexOf(id);
+            if (i >= 0) s.seen.splice(i, 1);
+            s.seen.push(id);
+        }
+        if (s.seen.length > JUMP.seenMax) s.seen = s.seen.slice(s.seen.length - JUMP.seenMax);
+        return s;
+    }
+
+    function jumpAdd(state, items) {
+        const s = jumpNorm(state);
+        const have = new Set(s.ids.map((e) => e.id));
+        const seen = new Set(s.seen);
+        for (const it of (Array.isArray(items) ? items : [])) {
+            if (!it || it.own || it.sys || typeof it.id !== 'string' || !it.id) continue;
+            if (have.has(it.id) || seen.has(it.id)) continue;
+            have.add(it.id);
+            s.ids.push({ id: it.id, at: Math.max(0, Math.floor(num(it.at))) });
+        }
+        s.ids.sort((a, b) => (a.at - b.at) || cmpStr(a.id, b.id));
+        return s;
+    }
+
+    function jumpReveal(state, list) {
+        const s = jumpNorm(state);
+        if (!(s.hidden > 0) || !Array.isArray(list)) return s;
+        const have = new Set(s.ids.map((e) => e.id));
+        const seen = new Set(s.seen);
+        let found = 0;
+        for (const m of list) {
+            if (!m || m.own || m.sys || !m.id) continue;
+            const id = String(m.id);
+            const at = num(m.at);
+            if (at <= s.floor || (s.before > 0 && at > s.before)) continue;
+            if (have.has(id) || seen.has(id)) continue;
+            have.add(id);
+            s.ids.push({ id, at: Math.floor(at) });
+            found++;
+        }
+        s.ids.sort((a, b) => (a.at - b.at) || cmpStr(a.id, b.id));
+        s.hidden = Math.max(0, s.hidden - found);
+        return s;
+    }
+
+    function jumpSettle(state) {
+        const s = jumpNorm(state);
+        s.hidden = 0;
+        return s;
+    }
+
+    function jumpCount(state) {
+        const s = jumpNorm(state);
+        return s.ids.length + s.hidden;
+    }
+
+    function jumpTarget(state) {
+        const s = jumpNorm(state);
+        return s.ids.length ? s.ids[0].id : null;
+    }
+
+    function jumpText(state, t) {
+        const n = jumpCount(state);
+        if (n <= 0) return '';
+        const tr = (x) => (typeof t === 'function' ? t(x) : x);
+        return fill(tr(STRINGS.nNew), { n });
+    }
+
     function emptyMentions() {
         return { v: 1, chats: {} };
     }
@@ -719,6 +869,8 @@
     G.NymChatNav = {
         LIMITS, KEYS, STRINGS, STATUSES,
         firstUnread, landOnDivider, jumpLabel, showJump,
+        JUMP, FABS, seenInView, dwellStep, fabRow, fabRight, jumpEmpty, jumpNorm, jumpStart, jumpSeen, jumpAdd, jumpReveal, jumpSettle,
+        jumpCount, jumpTarget, jumpText,
         emptyMentions, normalizeMentions, mentionAdd, mentionSeen, mentionClear, mentionPrune, mentionDrop,
         mentionNext, mentionCount, mentionScan,
         pinKey, pinParse, pinKeyForChat, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,

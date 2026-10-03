@@ -19,7 +19,7 @@ class ComposerStrings {
   static const List<String> ui = [
     'Attach',
     'Photo or video',
-    'File',
+    'P2P file',
     'Location',
     'Video note',
     'Poll',

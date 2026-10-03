@@ -39,6 +39,8 @@
     const RX_IN_TEXT = /(https?:\/\/[^\s#<>"]+)#(nym:[A-Za-z0-9=;:.\/_+-]+)/g;
     const RX_LOCAL_IN_TEXT = /nymlocal:([A-Za-z0-9]{1,40})#(nym:[A-Za-z0-9=;:.\/_+-]+)/g;
     const KIND_PREFIX = { voice: 'audio/', round: 'video/', photo: 'image/', video: 'video/' };
+    const PORTABLE_VOICE_RATE = 16000;
+    const PORTABLE_AUDIO = ['audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav'];
 
     function formatDurationValue(seconds) {
         const d = Math.max(0, Math.min(3600, Number(seconds) || 0));
@@ -312,7 +314,7 @@
     function extForMime(mime) {
         const base = String(mime || '').split(';')[0].trim().toLowerCase();
         const map = {
-            'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3',
+            'audio/mp4': 'm4a', 'audio/aac': 'aac', 'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/wav': 'wav',
             'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov',
             'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
         };
@@ -321,6 +323,45 @@
 
     function baseMime(mime) {
         return String(mime || '').split(';')[0].trim().toLowerCase();
+    }
+
+    function mimeCodecs(mime) {
+        const m = /codecs\s*=\s*"?([^";]+)"?/i.exec(String(mime || ''));
+        return m ? m[1].trim().toLowerCase() : '';
+    }
+
+    function isPortableVoiceMime(recorded, requested) {
+        const base = baseMime(recorded) || baseMime(requested);
+        if (PORTABLE_AUDIO.indexOf(base) < 0) return false;
+        const codecs = mimeCodecs(recorded) || (baseMime(requested) === base ? mimeCodecs(requested) : '');
+        return !/opus|vorbis|flac/.test(codecs);
+    }
+
+    function encodeWav(samples, sampleRate) {
+        const src = samples || [];
+        const n = src.length;
+        const rate = Math.max(1, Math.floor(Number(sampleRate) || PORTABLE_VOICE_RATE));
+        const out = new Uint8Array(44 + n * 2);
+        const v = new DataView(out.buffer);
+        const str = (o, s) => { for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i); };
+        str(0, 'RIFF');
+        v.setUint32(4, 36 + n * 2, true);
+        str(8, 'WAVE');
+        str(12, 'fmt ');
+        v.setUint32(16, 16, true);
+        v.setUint16(20, 1, true);
+        v.setUint16(22, 1, true);
+        v.setUint32(24, rate, true);
+        v.setUint32(28, rate * 2, true);
+        v.setUint16(32, 2, true);
+        v.setUint16(34, 16, true);
+        str(36, 'data');
+        v.setUint32(40, n * 2, true);
+        for (let i = 0; i < n; i++) {
+            const x = Math.max(-1, Math.min(1, Number(src[i]) || 0));
+            v.setInt16(44 + i * 2, x < 0 ? Math.round(x * 32768) : Math.round(x * 32767), true);
+        }
+        return out;
     }
 
     function meshFileName(d) {
@@ -555,7 +596,7 @@
         encodeDescriptor, attachDescriptor, parseDescriptor, parseMediaUrl, findMediaNotes,
         imetaTagsForContent, stripMediaNotes, previewText, plainLabel, onceLabel, onceContent,
         formatClock, formatBytes, nextSpeed, parseSpeed, speedLabel, scaledDimensions,
-        extForMime, baseMime, meshFileName, parseMeshFileName, meshOnceReceiptId, parseMeshOnceReceiptId,
+        extForMime, baseMime, mimeCodecs, isPortableVoiceMime, encodeWav, PORTABLE_VOICE_RATE, meshFileName, parseMeshFileName, meshOnceReceiptId, parseMeshOnceReceiptId,
         featureState, meshSizeCheck, preferredMime,
         hexToBytes, bytesToHex, randomHex, newOnceSecret, encryptOnce, decryptOnce,
         createOnceStore, createTranscriptStore,

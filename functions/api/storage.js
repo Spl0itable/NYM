@@ -784,6 +784,8 @@ var STORAGE_RATE_WINDOW_MS = 60000;
 var PM_DEPOSIT_RATE = 600;
 var PM_DEPOSIT_IP_RATE = 3000;
 var ZAP_PUT_RATE = 300;
+var CHANNEL_EDITS_RATE = 60;
+var CHANNEL_EDITS_MAX = 50;
 
 function requestIp(context) {
   try {
@@ -999,7 +1001,7 @@ async function handlePmAction(context, body) {
       try {
         var inboxPh = inboxPks.map(function () { return "?"; }).join(",");
         inboxRows = (await replica(env.DB_PM).prepare(
-          "SELECT event FROM pm WHERE pubkey IN (" + inboxPh + ") AND created_at >= ? ORDER BY created_at DESC LIMIT ?"
+          "SELECT event FROM pm WHERE pubkey IN (" + inboxPh + ") AND created_at >= ? ORDER BY created_at " + (body.asc === true ? "ASC" : "DESC") + " LIMIT ?"
         ).bind(...inboxPks, inboxSince, inboxLimit).all()).results || [];
       } catch (e) { inboxRows = []; }
     }
@@ -1087,7 +1089,7 @@ async function handlePmAction(context, body) {
     var sql = "SELECT event FROM pm WHERE pubkey = ? AND created_at >= ?";
     var binds = [userPubkey, since];
     if (before) { sql += " AND created_at < ?"; binds.push(before); }
-    sql += " ORDER BY created_at DESC LIMIT ?";
+    sql += " ORDER BY created_at " + (body.asc === true ? "ASC" : "DESC") + " LIMIT ?";
     binds.push(limit);
     var rows = [];
     try { rows = (await replica(env.DB_PM).prepare(sql).bind(...binds).all()).results || []; } catch (e) { rows = []; }
@@ -1174,6 +1176,46 @@ async function handleChannelAction(context, body) {
       outEvents.push(parsed);
     }
     return json({ events: outEvents });
+  }
+
+  if (body.action === "channel-edits") {
+    var editId = typeof body.id === "string" ? body.id : "";
+    if (!/^[0-9a-f]{64}$/.test(editId)) return json({ error: "Invalid id." }, 400);
+    if (!(await cacheRateTake("channel-edits", requestIp(context), 1, CHANNEL_EDITS_RATE, STORAGE_RATE_WINDOW_MS))) {
+      return json({ error: "Too many requests. Try again in a minute." }, 429);
+    }
+    var editFloor = Math.floor((Date.now() - CHANNEL_TTL_MS) / 1000);
+    var editCeil = Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S;
+    var editDb = replica(env.DB_CHANNELS);
+    var origRow = await editDb.prepare(
+      "SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE id = ? AND kind IN (20000, 23333) AND created_at >= ? AND created_at <= ?"
+    ).bind(editId, editFloor, editCeil).first().catch(function () { return null; });
+    if (!origRow) return json({ events: [] });
+    var editRows = [];
+    try {
+      editRows = (await editDb.prepare(
+        "SELECT id, channel, kind, pubkey, created_at, json, stored_at FROM events WHERE channel = ? AND pubkey = ? AND kind = ?"
+        + " AND created_at >= ? AND created_at <= ? AND instr(json, ?) > 0 ORDER BY created_at ASC LIMIT ?"
+      ).bind(origRow.channel, origRow.pubkey, origRow.kind, origRow.created_at, editCeil,
+        '["edit","' + editId + '"', CHANNEL_EDITS_MAX).all()).results || [];
+    } catch (e) { editRows = []; }
+    var editAll = [origRow].concat(editRows.filter(function (r) { return r.id !== origRow.id; }));
+    var gateX = await filterSet(env);
+    if (gateX.n) editAll = editAll.filter(function (r) { return !rowHit(gateX, r); });
+    var hiddenX = await hiddenEventIdsSince(env, [origRow.channel], editFloor * 1000 - HIDDEN_LOOKBACK_MS);
+    if (hiddenX.size) editAll = editAll.filter(function (r) { return !hiddenX.has(r.id); });
+    var badgeX = await badgeGateMode(env);
+    if (badgeX !== "off") {
+      var engineX = spamEngine(env, null);
+      editAll = editAll.filter(function (r) { return !archivedBadgeRefused(env, r, badgeX, engineX); });
+    }
+    var editEvents = [];
+    for (var xi = 0; xi < editAll.length; xi++) {
+      var xev = null;
+      try { xev = JSON.parse(editAll[xi].json); } catch (e) { xev = null; }
+      if (xev && xev.id === editAll[xi].id) editEvents.push(xev);
+    }
+    return json({ events: editEvents });
   }
 
   // Public, unauthenticated; the origin gate already limits this to Nymchat clients.

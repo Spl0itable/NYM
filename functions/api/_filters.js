@@ -1,5 +1,5 @@
 import { getEventHash, schnorr } from './_shared.js';
-import { hasD1, replica, edgeCacheGet, edgeCachePut } from './_d1.js';
+import { hasD1, replica, edgeCacheGet, edgeCachePut, edgeCacheDelete } from './_d1.js';
 
 const REFRESH_MS = 60000;
 const NOPE_CACHE_KEY = "nope";
@@ -29,8 +29,12 @@ function emptySet() {
 }
 
 let cache = emptySet();
+let previous = null;
 let loading = null;
 let loadingAt = 0;
+const forgotten = new Map();
+const FORGOTTEN_MS = REFRESH_MS * 2;
+const FORGOTTEN_MAX = 5000;
 const LOAD_TIMEOUT_MS = 4000;
 
 function withTimeout(p, ms) {
@@ -39,7 +43,7 @@ function withTimeout(p, ms) {
   return Promise.race([Promise.resolve(p).finally(() => { if (timer) clearTimeout(timer); }), limit]);
 }
 
-export function _resetFilterCache() { cache = emptySet(); loading = null; loadingAt = 0; }
+export function _resetFilterCache() { cache = emptySet(); previous = null; loading = null; loadingAt = 0; forgotten.clear(); }
 
 async function readRows(db) {
   const hit = await edgeCacheGet(NOPE_CACHE_KEY);
@@ -69,7 +73,7 @@ async function readSet(env) {
     const v = String(r.value || "").trim().toLowerCase();
     if (!v) continue;
     const mode = r.mode === "reject" ? "reject" : "shadow";
-    if (r.kind === "pubkey" && HEX64.test(v)) out.p.set(v, mode);
+    if (r.kind === "pubkey" && HEX64.test(v)) { if (!((forgotten.get(v) || 0) > now)) out.p.set(v, mode); }
     else if (r.kind === "event" && HEX64.test(v)) out.e.set(v, mode);
     else if (r.kind === "media") out.m.push(v);
     else if (r.kind === "domain") out.d.push(v.replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\./, ""));
@@ -84,7 +88,7 @@ export function filterSet(env) {
   if (now - cache.at < REFRESH_MS) return Promise.resolve(cache);
   if (loading && now - loadingAt > LOAD_TIMEOUT_MS + 1000) loading = null;
   if (!loading) {
-    const p = withTimeout(readSet(env), LOAD_TIMEOUT_MS).then((s) => { if (loading === p) { cache = s; loading = null; } return cache; }, () => { if (loading === p) { loading = null; cache.at = now; } return cache; });
+    const p = withTimeout(readSet(env), LOAD_TIMEOUT_MS).then((s) => { if (loading === p) { previous = cache; cache = s; loading = null; } return cache; }, () => { if (loading === p) { loading = null; cache.at = now; } return cache; });
     loading = p;
     loadingAt = now;
   }
@@ -93,6 +97,18 @@ export function filterSet(env) {
 
 export function filterSetSync() {
   return cache;
+}
+
+export function forgetBlockedPubkey(pubkey) {
+  const pk = String(pubkey || "").toLowerCase();
+  forgotten.set(pk, Date.now() + FORGOTTEN_MS);
+  if (forgotten.size > FORGOTTEN_MAX) forgotten.delete(forgotten.keys().next().value);
+  for (const set of [cache, previous]) if (set && set.p.delete(pk)) set.n = Math.max(0, set.n - 1);
+  return Promise.resolve().then(() => edgeCacheDelete(NOPE_CACHE_KEY)).catch(() => { });
+}
+
+export function reblockPubkey(pubkey) {
+  forgotten.delete(String(pubkey || "").toLowerCase());
 }
 
 function afterBrace(raw) {
