@@ -7,6 +7,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../i18n/i18n.dart';
 import '../mesh/mesh_controller.dart';
+import '../toasts/toast_center.dart';
 import 'chat_tools_service.dart';
 
 class KeyValueChatToolsPrefs implements ChatToolsPrefs {
@@ -67,8 +68,10 @@ final chatToolsProvider = Provider<ChatToolsService>((ref) {
       groupMembers: (gid) =>
           ref.read(appStateProvider.notifier).groupById(gid)?.members,
       findMessage: (id) => findMessageAnywhere(ref.read(appStateProvider), id),
-      notice: (text) =>
-          ref.read(appStateProvider.notifier).addSystemMessage(tr(text)),
+      fetchEditEvents: (surface, id, at) => ref
+          .read(nostrControllerProvider)
+          .editHistoryEvents(surface, id, at),
+      notice: (text) => showToast(tr(text)),
       onChanged: () {
         ref.read(chatToolsRevisionProvider.notifier).state++;
         ref.read(appStateProvider.notifier).touch();

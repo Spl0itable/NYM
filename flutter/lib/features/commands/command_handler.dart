@@ -23,6 +23,8 @@ abstract class CommandEngine {
 
   void systemMessage(String text);
 
+  void feedMessage(String text);
+
   void join(String channel);
 
   /// Empties the rendered conversation, then shows 'Chat cleared'.
@@ -195,7 +197,7 @@ class CommandDispatcher {
   void _dispatch(CommandSpec spec, String args) {
     switch (spec.id) {
       case 'help':
-        engine.systemMessage(buildHelpMessageText());
+        engine.feedMessage(buildHelpMessageText());
       case 'join':
         if (args.isEmpty) {
           engine.systemMessage(tr(

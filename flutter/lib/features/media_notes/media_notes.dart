@@ -541,6 +541,7 @@ String extForMime(String? mime) {
     'audio/webm': 'webm',
     'audio/ogg': 'ogg',
     'audio/mpeg': 'mp3',
+    'audio/wav': 'wav',
     'video/mp4': 'mp4',
     'video/webm': 'webm',
     'video/quicktime': 'mov',
@@ -725,4 +726,33 @@ MediaFeatureState featureState(String feature, MediaFeatureContext c) {
     ok: false,
     reason: MediaNoteReasons.meshTooLarge.replaceAll('{size}', formatBytes(n)),
   );
+}
+
+class ModelDownloadLimits {
+  const ModelDownloadLimits(
+      {this.pollMs = 1000, this.stallMs = 20000, this.maxMs = 600000});
+
+  final int pollMs;
+  final int stallMs;
+  final int maxMs;
+}
+
+const ModelDownloadLimits kModelDownload = ModelDownloadLimits();
+
+String modelDownloadStage({
+  String? status,
+  bool? installResult,
+  int elapsedMs = 0,
+  bool sawDownloading = false,
+  bool canceled = false,
+  ModelDownloadLimits limits = kModelDownload,
+}) {
+  if (canceled) return 'canceled';
+  if (installResult == false) return 'failed';
+  if (status == 'available' || installResult == true) return 'done';
+  if (status == 'unavailable') return 'failed';
+  if (elapsedMs >= limits.maxMs) return 'timeout';
+  if (status == 'downloading' || sawDownloading) return 'downloading';
+  if (elapsedMs >= limits.stallMs) return 'stalled';
+  return 'starting';
 }

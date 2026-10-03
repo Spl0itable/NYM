@@ -12,6 +12,7 @@ import '../calls/call_providers.dart';
 import '../chat_tools/chat_tools_providers.dart' show KeyValueChatToolsPrefs;
 import '../i18n/i18n.dart';
 import '../mesh/mesh_controller.dart';
+import '../toasts/toast_center.dart';
 import 'group_tools.dart';
 import 'group_tools_service.dart';
 
@@ -94,8 +95,7 @@ final groupToolsProvider = Provider<GroupToolsService>((ref) {
       meshPeerFor: (pk) =>
           ref.read(meshControllerProvider.notifier).bridge?.peerIdForPubkey(pk),
       sendMeshPm: (pk, content) => ctl().gtSendMeshPm(pk, content),
-      notice: (text) =>
-          ref.read(appStateProvider.notifier).addSystemMessage(text),
+      notice: (text) => showToast(text),
       notify: (title, body, route, type) =>
           ctl().gtNotify(title: title, body: body, route: route, type: type),
       nymOf: (pk) => ctl().gtNym(pk),

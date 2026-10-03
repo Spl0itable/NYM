@@ -3,9 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
-import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
 import '../i18n/i18n.dart';
+import '../toasts/toast_center.dart';
 import 'translate_target.dart';
 import 'translate_languages.dart';
 import 'translate_service.dart';
@@ -60,11 +60,9 @@ class _MessageTranslationState extends ConsumerState<MessageTranslation> {
       target,
       () => _service.translate(plain, target),
       onStarted: (future) {
-        // Capture the notifier so the failure message lands even if disposed; attached per request so it posts once.
-        final notifier = ref.read(appStateProvider.notifier);
         future.then<void>((_) {}, onError: (Object err) {
           final msg = err is TranslateException ? err.message : err.toString();
-          notifier.addSystemMessage(tr('Translation failed: {error}',
+          showToast(tr('Translation failed: {error}',
               {'error': msg.isEmpty ? tr('Unknown error') : msg}));
         });
       },

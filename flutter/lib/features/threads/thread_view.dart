@@ -12,6 +12,7 @@ import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import '../nymbot/bot_runs_view.dart' show botRunTrailing;
 import '../reactions/reaction_picker.dart';
+import '../toasts/toast_center.dart';
 
 /// Focuses the conversation first so the shared composer targets it, then swaps the message area to [m]'s thread.
 void openMessageThread(WidgetRef ref, Message m,
@@ -26,7 +27,7 @@ void openMessageThread(WidgetRef ref, Message m,
   }
   if (!threadEligibleRoot(root)) {
     if (!silent) {
-      ref.read(appStateProvider.notifier).addSystemMessage(tr(
+      showToast(tr(
           'This message cannot start a thread yet — try again once it has '
           'finished sending.'));
     }

@@ -7,6 +7,7 @@ const BOT_RUN_DEFAULT_LIMIT = 3;
 const BOT_RUN_CEILING = 10;
 const BOT_RUN_HEX64 = /^[0-9a-f]{64}$/i;
 const BOT_RUN_STEER_KEEP_MS = 2 * 3600 * 1000;
+const BOT_RUN_ENDED_GRACE_MS = 60000;
 
 Object.assign(NYM.prototype, {
 
@@ -318,11 +319,28 @@ Object.assign(NYM.prototype, {
 
     _botRunEnd(run) {
         const runs = this.botRuns();
-        if (runs.get(run.id) === run) runs.delete(run.id);
+        if (runs.get(run.id) === run) {
+            runs.delete(run.id);
+            this._botRunsEnded().set(run.id, this._botRunNow());
+            if (Array.isArray(this._botRemoteRuns)) this._botRemoteRuns = this._botRemoteRuns.filter((r) => r.replyTo.toLowerCase() !== run.id);
+        }
         run.gen++;
         this._botRunPersist();
         this._botRunChanged(run);
         this._botRunPumpWaiting();
+    },
+
+    _botRunsEnded() {
+        if (!(this._botRunsEndedMap instanceof Map)) this._botRunsEndedMap = new Map();
+        const map = this._botRunsEndedMap;
+        const now = this._botRunNow();
+        for (const [id, at] of [...map]) if (now - at > BOT_RUN_MAX_AGE_MS) map.delete(id);
+        return map;
+    },
+
+    _botRunEndedHere(r) {
+        const at = this._botRunsEnded().get(r.replyTo.toLowerCase());
+        return !!at && (r.state !== 'running' || this._botRunNow() - at < BOT_RUN_ENDED_GRACE_MS);
     },
 
     _botRunPumpWaiting() {
@@ -576,7 +594,7 @@ Object.assign(NYM.prototype, {
             this._botRunsRenderIndicator();
             return;
         }
-        const rows = data.runs.filter((r) => r && typeof r.replyTo === 'string' && r.app !== 'nymbot');
+        const rows = data.runs.filter((r) => r && typeof r.replyTo === 'string' && r.app !== 'nymbot' && !this._botRunEndedHere(r));
         this._botRemoteRuns = rows;
         const runs = this.botRuns();
         for (const r of rows) {

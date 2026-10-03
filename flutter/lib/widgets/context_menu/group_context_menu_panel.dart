@@ -19,6 +19,7 @@ import '../../features/group_tools/group_tools_providers.dart';
 import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/pms/new_pm_modal.dart' show resolveRecipientPubkey;
+import '../../features/toasts/toast_center.dart';
 import '../../models/group.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -27,6 +28,7 @@ import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import 'context_menu_actions.dart';
 import 'context_menu_panel.dart';
+import 'menu_layer.dart';
 
 /// Right-side group context-menu panel: header, role-gated owner/member controls, invite link, and member list.
 class GroupContextMenuPanel extends ConsumerStatefulWidget {
@@ -54,7 +56,7 @@ class GroupContextMenuPanel extends ConsumerStatefulWidget {
         child: GroupContextMenuPanel(
           groupId: groupId,
           animation: anim,
-          onClose: () => Navigator.of(ctx).maybePop(),
+          onClose: () => closeMenuRoute(ctx),
         ),
       ),
     );
@@ -367,9 +369,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           if (!mounted) return;
           final fresh = _buildInviteLink(group, self) ?? link;
           await Clipboard.setData(ClipboardData(text: fresh));
-          ref
-              .read(appStateProvider.notifier)
-              .addSystemMessage(tr('Copied group invite link to clipboard'));
+          showToast(tr('Copied group invite link to clipboard'));
           widget.onClose();
         },
       ),
@@ -524,6 +524,11 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         color: item.disabled ? c.textDim : c.text,
         onTap: () {
           final rootContext = Navigator.of(context, rootNavigator: true).context;
+          final sheet = item.openSheet;
+          if (sheet != null) {
+            openOverMenu(widget.onClose, () => sheet(rootContext));
+            return;
+          }
           widget.onClose();
           if (rootContext.mounted) item.onTap(rootContext);
         },
@@ -564,6 +569,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       maxLength: 40,
     );
     if (name == null) return;
+    widget.onClose();
     await controller.updateGroupMetadata(group.id, name: name);
   }
 
@@ -579,6 +585,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       multiline: true,
     );
     if (desc == null) return;
+    widget.onClose();
     await controller.updateGroupMetadata(group.id, description: desc);
   }
 
@@ -648,21 +655,22 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
   }
 
   Future<void> _addMembers(Group group) async {
+    final controller = ref.read(nostrControllerProvider);
     final picked = await _AddMembersDialog.show(context, group);
     if (picked == null || picked.isEmpty) return;
-    await ref.read(nostrControllerProvider).addGroupMembers(group.id, picked);
+    widget.onClose();
+    await controller.addGroupMembers(group.id, picked);
   }
 
   Future<void> _openChatTool(Group group, {required bool media}) async {
     final rootContext = Navigator.of(context, rootNavigator: true).context;
-    widget.onClose();
     final key = 'group-${group.id}';
-    if (!rootContext.mounted) return;
-    if (media) {
-      await ChatMediaPanel.open(rootContext, key);
-    } else {
-      await ExportChatPanel.open(rootContext, key);
-    }
+    await openOverMenu(
+      widget.onClose,
+      () => media
+          ? ChatMediaPanel.open(rootContext, key)
+          : ExportChatPanel.open(rootContext, key),
+    );
   }
 
   /// Closes the panel first so it isn't left over the departed group.
@@ -844,9 +852,11 @@ class _ActionRowState extends State<_ActionRow> {
                   ),
                 ),
               ),
-              if (widget.trailing != null)
+              if (widget.trailing != null) ...[
+                const SizedBox(width: 12),
                 Text(widget.trailing!,
                     style: TextStyle(color: c.textDim, fontSize: 12)),
+              ],
             ],
           ),
         ),

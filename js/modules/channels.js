@@ -1473,8 +1473,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                     }
                     try { await this.handleEvent(ev); applied = true; } catch (_) { }
                 }
+                if (typeof this._yieldIfDue === 'function') await this._yieldIfDue();
             }
-            if (typeof this._yieldToIdle === 'function') await this._yieldToIdle();
         };
 
         const FLUSH = 30;

@@ -29,6 +29,7 @@ import 'services/platform/deep_links.dart';
 import 'state/app_state.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
+import 'widgets/common/toast_host.dart';
 
 /// Root widget; rebuilds when the theme setting or platform brightness changes.
 class NymchatApp extends ConsumerStatefulWidget {
@@ -335,7 +336,8 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
             systemNavigationBarIconBrightness:
                 isLight ? Brightness.dark : Brightness.light,
           ),
-          child: PrivacyShield(child: child ?? const SizedBox.shrink()),
+          child: PrivacyShield(
+              child: ToastHost(child: child ?? const SizedBox.shrink())),
         );
       },
       // Keyed on the boot generation so sign-out remounts a pristine gate.

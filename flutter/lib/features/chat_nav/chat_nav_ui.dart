@@ -33,6 +33,8 @@ class ChatNavIcons {
       '$_open<circle cx="8" cy="8" r="6"/><polyline points="8 4.5 8 8 10.5 9.5"/></svg>';
   static const String arrowUp =
       '$_open<line x1="8" y1="13" x2="8" y2="3"/><polyline points="4 7 8 3 12 7"/></svg>';
+  static const String arrowDown =
+      '$_open<line x1="8" y1="3" x2="8" y2="13"/><polyline points="4 9 8 13 12 9"/></svg>';
   static const String anon =
       '$_open<circle cx="8" cy="6" r="3"/><path d="M2.5 14c.8-2.6 2.9-4 5.5-4s4.7 1.4 5.5 4"/><line x1="2.5" y1="2.5" x2="13.5" y2="13.5"/></svg>';
 }
@@ -86,22 +88,30 @@ class ChatNavListBinding {
   int? dividerIndex;
   Map<String, int> _indexById = const {};
   int _maxIndex = 0;
-  bool _above = false;
   bool _landing = false;
   String? _lastId;
   int _lastAt = 0;
+  List<Message> _messages = const [];
+  Map<String, num> _pending = const {};
+  Timer? _dwellTimer;
+  int _shownCount = -1;
+  int _shownMentions = -1;
+  bool _down = false;
 
   ChatNavService get nav => ref.read(chatNavProvider);
 
   String get storageKey => _key;
+
+  bool get jumpDown => _down;
 
   String? prepare(String key, List<Message> messages) {
     if (key != _key) {
       _key = key;
       _lastId = null;
       _lastAt = 0;
-      _above = false;
+      _resetDwell();
     }
+    _messages = messages;
     if (key.isEmpty) return dividerId = null;
     final n = nav;
     if (!n.hasEntry(key)) n.capture(key);
@@ -176,50 +186,81 @@ class ChatNavListBinding {
     return done.future;
   }
 
-  static double _visible(ItemPosition p) {
-    final h = p.itemTrailingEdge - p.itemLeadingEdge;
-    if (h <= 0) return 0;
-    final top = p.itemTrailingEdge > 1 ? 1.0 : p.itemTrailingEdge;
-    final bottom = p.itemLeadingEdge < 0 ? 0.0 : p.itemLeadingEdge;
-    final v = top - bottom;
-    if (v <= 0) return 0;
-    return v >= 0.5 ? 1 : v / h;
+  void _resetDwell() {
+    _dwellTimer?.cancel();
+    _dwellTimer = null;
+    _pending = const {};
   }
 
   void update() {
     if (_key.isEmpty) return;
+    _dwellTimer?.cancel();
+    _dwellTimer = null;
     final pos = positions.itemPositions.value;
-    final di = dividerIndex;
-    bool above;
-    if (di == null) {
-      above = true;
-    } else {
-      ItemPosition? p;
-      var maxVis = -1;
-      for (final q in pos) {
-        if (q.index == di) p = q;
-        if (q.index > maxVis) maxVis = q.index;
-      }
-      above = p != null ? p.itemTrailingEdge > 1.01 : di > maxVis;
-    }
     final n = nav;
-    final queued = n.queuedMentionIds(_key);
-    if (queued.isNotEmpty &&
-        !_landing &&
-        !n.shouldLand(_key) &&
-        ref.read(appStateProvider.notifier).appVisible) {
-      final seen = <String>[];
-      for (final id in queued) {
+    final jumpIds = n.jumpIds(_key).toSet();
+    final mentionIds = n.queuedMentionIds(_key).toSet();
+    if (jumpIds.isEmpty && mentionIds.isEmpty) {
+      _pending = const {};
+    } else if (!ref.read(appStateProvider.notifier).appVisible) {
+      _pending = const {};
+      _dwellTimer = Timer(const Duration(seconds: 1), update);
+    } else if (_landing || n.shouldLand(_key)) {
+      _pending = const {};
+    } else {
+      final inView = <String>[];
+      for (final id in {...jumpIds, ...mentionIds}) {
         final idx = _indexById[id];
         if (idx == null) continue;
         for (final q in pos) {
-          if (q.index == idx && _visible(q) >= 0.5) seen.add(id);
+          if (q.index == idx &&
+              seenInView(q.itemLeadingEdge, q.itemTrailingEdge, 0, 1)) {
+            inView.add(id);
+          }
         }
       }
-      if (seen.isNotEmpty) n.markMentionsSeen(_key, seen);
+      final step =
+          dwellStep(_pending, inView, DateTime.now().millisecondsSinceEpoch);
+      _pending = step.pending;
+      if (step.seen.isNotEmpty) {
+        final sj = [for (final id in step.seen) if (jumpIds.contains(id)) id];
+        final sm = [
+          for (final id in step.seen) if (mentionIds.contains(id)) id
+        ];
+        if (sj.isNotEmpty) n.markJumpSeen(_key, sj);
+        if (sm.isNotEmpty) n.markMentionsSeen(_key, sm);
+      }
+      if (step.wait > 0) {
+        _dwellTimer =
+            Timer(Duration(milliseconds: step.wait.ceil() + 30), update);
+      }
     }
-    if (above != _above) {
-      _above = above;
+    _refresh(pos);
+  }
+
+  void _refresh(Iterable<ItemPosition> pos) {
+    final n = nav;
+    final count = n.jumpCountFor(_key);
+    final mentions = n.mentionCountFor(_key);
+    var down = _down;
+    final target = n.jumpTargetFor(_key);
+    final idx = target == null ? null : _indexById[target];
+    if (idx != null && pos.isNotEmpty) {
+      var minVis = 1 << 30;
+      var maxVis = -1;
+      for (final q in pos) {
+        if (q.itemTrailingEdge <= 0 || q.itemLeadingEdge >= 1) continue;
+        if (q.index < minVis) minVis = q.index;
+        if (q.index > maxVis) maxVis = q.index;
+      }
+      if (maxVis >= 0) down = idx < minVis;
+    } else if (idx == null) {
+      down = false;
+    }
+    if (count != _shownCount || mentions != _shownMentions || down != _down) {
+      _shownCount = count;
+      _shownMentions = mentions;
+      _down = down;
       fabs.value++;
     }
   }
@@ -228,18 +269,23 @@ class ChatNavListBinding {
     if (_key.isNotEmpty) nav.markScrolled(_key);
   }
 
-  bool get jumpShown =>
-      nav.jumpVisible(_key, rendered: dividerIndex != null, above: _above);
+  bool get jumpShown => _key.isNotEmpty && nav.jumpCountFor(_key) > 0;
 
   Future<void> jumpFirst(MessageListScroller scroller) async {
     final n = nav;
     n.markScrolled(_key);
+    n.revealJump(_key, _messages);
+    n.settleJump(_key);
+    final target = n.jumpTargetFor(_key);
     final di = dividerIndex;
-    if (di != null) {
+    if (target != null && target == dividerId && di != null) {
       await _landAt(scroller, di, animate: true);
-    } else {
-      n.dismissJump(_key);
+    } else if (target != null && _indexById.containsKey(target)) {
+      scroller.scrollToMessage(target);
+    } else if (target == null) {
       await scroller.animateTo(index: _maxIndex, alignment: 0.9);
+    } else {
+      await scroller.animateTo(index: 0, alignment: 0);
     }
     fabs.value++;
   }
@@ -266,13 +312,23 @@ class ChatNavListBinding {
     return false;
   }
 
-  void dispose() => fabs.dispose();
+  void dispose() {
+    _resetDwell();
+    fabs.dispose();
+  }
 }
 
 class ChatNavFabs extends ConsumerWidget {
-  const ChatNavFabs({super.key, required this.binding});
+  const ChatNavFabs({
+    super.key,
+    required this.binding,
+    this.bottom,
+    this.slot = 40,
+  });
 
   final ChatNavListBinding binding;
+  final Widget? bottom;
+  final double slot;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -281,28 +337,44 @@ class ChatNavFabs extends ConsumerWidget {
       valueListenable: binding.fabs,
       builder: (context, _, _) {
         final key = binding.storageKey;
-        if (key.isEmpty) return const SizedBox.shrink();
         final nav = ref.read(chatNavProvider);
-        final count = nav.mentionCountFor(key);
+        final count = key.isEmpty ? 0 : nav.mentionCountFor(key);
         final jump = binding.jumpShown;
-        if (!jump && count <= 0) return const SizedBox.shrink();
+        final order =
+            fabRow(bottom: bottom != null, jump: jump, mention: count > 0);
+        if (order.isEmpty) return const SizedBox.shrink();
         final scroller = ref.read(messageListScrollerProvider(key));
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (jump)
-              _JumpPill(
-                label: nav.jumpText(key),
-                onTap: () => unawaited(binding.jumpFirst(scroller)),
-              ),
-            if (jump && count > 0) const SizedBox(height: 8),
-            if (count > 0)
-              _MentionFab(
+        final children = <Widget>[];
+        for (final k in order) {
+          if (children.isNotEmpty) {
+            children.add(const SizedBox(width: ChatFabs.gap));
+          }
+          switch (k) {
+            case 'mention':
+              children.add(_MentionFab(
                 count: count,
                 onTap: () => binding.jumpMention(scroller),
-              ),
-          ],
+              ));
+            case 'jump':
+              children.add(Flexible(
+                child: _JumpPill(
+                  label: nav.jumpTextFor(key),
+                  down: binding.jumpDown,
+                  onTap: () => unawaited(binding.jumpFirst(scroller)),
+                ),
+              ));
+            case 'bottom':
+              children.add(bottom!);
+          }
+        }
+        return ConstrainedBox(
+          key: const ValueKey('chat-nav-row'),
+          constraints: BoxConstraints(minHeight: slot),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: children,
+          ),
         );
       },
     );
@@ -310,9 +382,10 @@ class ChatNavFabs extends ConsumerWidget {
 }
 
 class _JumpPill extends StatelessWidget {
-  const _JumpPill({required this.label, required this.onTap});
+  const _JumpPill({required this.label, required this.down, required this.onTap});
 
   final String label;
+  final bool down;
   final VoidCallback onTap;
 
   @override
@@ -337,14 +410,23 @@ class _JumpPill extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  NymSvgIcon(ChatNavIcons.arrowUp, size: 14, color: c.primary),
+                  NymSvgIcon(
+                    down ? ChatNavIcons.arrowDown : ChatNavIcons.arrowUp,
+                    key: ValueKey(down ? 'chat-nav-jump-down' : 'chat-nav-jump-up'),
+                    size: 14,
+                    color: c.primary,
+                  ),
                   const SizedBox(width: 6),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: c.primary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: c.primary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ],
@@ -372,65 +454,43 @@ class _MentionFab extends StatelessWidget {
       child: Semantics(
         button: true,
         label: label,
-        child: SizedBox(
-          width: 44,
-          height: 44,
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                left: 2,
-                top: 2,
-                child: Material(
-                  color: c.glassBg,
-                  shape: CircleBorder(side: BorderSide(color: c.glassBorder)),
-                  elevation: 4,
-                  child: InkWell(
-                    key: const ValueKey('chat-nav-mention'),
-                    customBorder: const CircleBorder(),
-                    onTap: onTap,
-                    child: SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: Center(
-                        child: Text(
-                          '@',
-                          style: TextStyle(
-                            color: c.primary,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            height: 1,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              if (count > 1)
-                Positioned(
-                  right: -2,
-                  top: -2,
-                  child: Container(
-                    constraints:
-                        const BoxConstraints(minWidth: 18, minHeight: 18),
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    decoration: BoxDecoration(
+        child: Material(
+          color: c.glassBg,
+          shape: StadiumBorder(side: BorderSide(color: c.glassBorder)),
+          elevation: 4,
+          child: InkWell(
+            key: const ValueKey('chat-nav-mention'),
+            customBorder: const StadiumBorder(),
+            onTap: onTap,
+            child: Container(
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '@',
+                    style: TextStyle(
                       color: c.primary,
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      '$count',
-                      style: TextStyle(
-                        color: c.bg,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                      ),
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      height: 1,
                     ),
                   ),
-                ),
-            ],
+                  const SizedBox(width: 4),
+                  Text(
+                    '$count',
+                    key: const ValueKey('chat-nav-mention-count'),
+                    style: TextStyle(
+                      color: c.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      height: 1,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),

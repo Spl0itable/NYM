@@ -539,12 +539,24 @@
             return el;
         },
 
+        _clRenderEntrySoon() {
+            if (this._clRenderTimer) return;
+            this._clRenderTimer = setTimeout(() => {
+                this._clRenderTimer = null;
+                try { this._clRenderEntry(); } catch (_) { }
+            }, 60);
+        },
+
         _clRenderEntry() {
             const el = this._clEnsureEntry();
             if (!el) return;
             const show = L().entryVisible(this._clState(), !!this._clRevealed);
             el.classList.toggle('nm-hidden', !show);
             const badge = el.querySelector('.cl-entry-badge');
+            if (!show) {
+                if (badge) badge.classList.add('nm-hidden');
+                return;
+            }
             const b = this.chatLockBadges();
             if (badge) {
                 badge.textContent = b.shown > 99 ? '99+' : String(b.shown);
@@ -645,6 +657,10 @@
         _clMarkRows() {
             if (typeof document === 'undefined') return;
             const state = this._clState();
+            if (!Object.keys(state.items || {}).length) {
+                document.querySelectorAll('#pmList .cl-locked-row, #channelList .cl-locked-row').forEach((row) => row.classList.remove('cl-locked-row'));
+                return;
+            }
             document.querySelectorAll('#pmList .pm-item, #channelList .channel-item').forEach((row) => {
                 const k = this._clLockKeyForItem(row);
                 row.classList.toggle('cl-locked-row', !!k && L().isLocked(state, k));
@@ -660,7 +676,7 @@
             const obs = new MutationObserver(() => {
                 if (queued) return;
                 queued = true;
-                Promise.resolve().then(() => { queued = false; this._clMarkRows(); this._clRenderEntry(); });
+                Promise.resolve().then(() => { queued = false; this._clMarkRows(); this._clRenderEntrySoon(); });
             });
             for (const list of lists) obs.observe(list, { childList: true });
         },
@@ -696,7 +712,8 @@
         _clNotifLocked(channelInfo) {
             if (!channelInfo) return false;
             const [type, route, sender] = this._clNotifRoute(channelInfo);
-            return L().notificationLocked(this._clState(), type, route, sender);
+            const state = this._clState();
+            return L().notificationLockKeys(type, route, sender).some((k) => L().isLocked(state, k));
         },
 
         _clRedactText() {
@@ -893,6 +910,7 @@
             const total = origBadge.apply(this, arguments);
             let hidden = 0;
             try {
+                if (!Object.keys(this._clState().items || {}).length) return Math.max(0, total);
                 for (const e of this._clUnreadEntries()) {
                     const k = String(e.key || '');
                     if ((k.startsWith('pm-') || k.startsWith('group-')) && e.n > 0 && this.isConversationLocked(k)) hidden += e.n;
@@ -906,6 +924,7 @@
     if (typeof origUnread === 'function') {
         NYM.prototype._unreadNotifications = function () {
             const list = origUnread.apply(this, arguments) || [];
+            if (!Object.keys(this._clState().items || {}).length) return list.filter((n) => !(n && n.locked));
             return list.filter((n) => !this._clNotifHidden(n));
         };
     }
@@ -914,7 +933,7 @@
     if (typeof origRender === 'function') {
         NYM.prototype._renderUnreadBadge = function () {
             const r = origRender.apply(this, arguments);
-            try { this._clRenderEntry(); } catch (_) { }
+            try { this._clRenderEntrySoon(); } catch (_) { }
             return r;
         };
     }

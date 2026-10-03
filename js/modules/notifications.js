@@ -74,7 +74,7 @@ Object.assign(NYM.prototype, {
         this.notificationHistory.push(entry);
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
-        this._saveNotificationHistory();
+        this._saveNotificationHistorySoon();
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
         if (typeof this._debouncedNostrSettingsSave === 'function') {
@@ -181,7 +181,7 @@ Object.assign(NYM.prototype, {
         if (entry.viewed) this._rememberNotificationSeen(entry);
         this.notificationHistory.push(entry);
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
-        this._saveNotificationHistory();
+        this._saveNotificationHistorySoon();
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
     },
@@ -246,6 +246,14 @@ Object.assign(NYM.prototype, {
             }
             return parsed.filter(n => n.timestamp > cutoff24h);
         } catch { return []; }
+    },
+
+    _saveNotificationHistorySoon() {
+        if (typeof this._schedulePersist === 'function') {
+            this._schedulePersist('nh', 'history', () => this._saveNotificationHistory());
+            return;
+        }
+        this._saveNotificationHistory();
     },
 
     _saveNotificationHistory() {

@@ -370,6 +370,16 @@ class GroupToolsService {
     if (g == null) return false;
     final interval = GroupTools.normalizeSlowmode(g.slowmode);
     final exempt = GroupTools.slowmodeExempt(role(groupId, sender));
+    if (interval == 0 || exempt) {
+      var cleared = false;
+      for (final m in list) {
+        if (m.slowHeld && m.pubkey == sender) {
+          m.slowHeld = false;
+          cleared = true;
+        }
+      }
+      return cleared;
+    }
     final mine = [
       for (final m in list)
         if (m.pubkey == sender) m,

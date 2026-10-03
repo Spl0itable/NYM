@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/message.dart';
@@ -7,6 +9,7 @@ import '../../state/settings_provider.dart';
 import '../chat_tools/chat_tools_providers.dart' show KeyValueChatToolsPrefs;
 import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
+import '../toasts/toast_center.dart';
 import 'dm_polls_service.dart';
 
 final dmPollsRevisionProvider = StateProvider<int>((ref) => 0);
@@ -23,6 +26,7 @@ Message? findDmPollMessage(AppState s, String pollId) {
 
 DmPollsHooks dmPollsAppHooks(Ref ref) {
   NostrController ctl() => ref.read(nostrControllerProvider);
+  var touchQueued = false;
   return DmPollsHooks(
     selfPubkey: () => ref.read(appStateProvider).selfPubkey,
     group: (id) => ref.read(appStateProvider.notifier).groupById(id),
@@ -33,11 +37,17 @@ DmPollsHooks dmPollsAppHooks(Ref ref) {
     sendControl: (rumor, recipients, gid) =>
         ctl().dpSendControl(rumor, recipients, gid),
     newId: PmLogic.generateSharedEventId,
-    notice: (text) =>
-        ref.read(appStateProvider.notifier).addSystemMessage(text),
+    notice: (text) => showToast(text),
     onChanged: () {
       ref.read(dmPollsRevisionProvider.notifier).state++;
-      ref.read(appStateProvider.notifier).touch();
+      if (touchQueued) return;
+      touchQueued = true;
+      scheduleMicrotask(() {
+        touchQueued = false;
+        try {
+          ref.read(appStateProvider.notifier).touch();
+        } catch (_) {}
+      });
     },
     translate: (text, [vars]) => tr(text, vars),
   );

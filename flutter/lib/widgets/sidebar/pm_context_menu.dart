@@ -8,6 +8,7 @@ import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/pms/pm_logic.dart';
+import '../../features/toasts/toast_center.dart';
 import '../../models/channel.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -339,7 +340,7 @@ Future<void> showPmContextMenu(
         final wasViewing = view.kind == ViewKind.pm && view.id == pubkey;
         notifier.closePM(pubkey);
         if (wasViewing) controller.switchChannel(kDefaultChannel);
-        notifier.addSystemMessage(tr('PM conversation deleted'));
+        showToast(tr('PM conversation deleted'));
       },
     ),
   ];

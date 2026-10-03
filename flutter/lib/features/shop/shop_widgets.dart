@@ -8,6 +8,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../i18n/i18n.dart';
+import '../toasts/toast_center.dart';
 import 'cosmetics.dart'
     show
         CosmeticAura,
@@ -1001,9 +1002,7 @@ class RecoveryCodeRow extends StatelessWidget {
           onTap: () async {
             await Clipboard.setData(ClipboardData(text: code));
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(tr('Copied recovery code'))),
-              );
+              showToast(tr('Copied recovery code'));
             }
           },
           child: Tooltip(

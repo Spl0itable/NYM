@@ -25,7 +25,6 @@ import 'settings_widgets.dart';
 /// Bundled fallback version, shown until the live version resolves; keep in sync with `NYMCHAT_VERSION` at release.
 const String kAboutVersion = 'v3.75.545';
 
-const String kAboutAttribution = 'Nymchat by 21 Million LLC';
 const String kAboutCopyright = '© 21 Million LLC';
 
 /// Live version JSON (`{"version":"vX.Y.Z"}`) published by the main build; cached for the session.
@@ -883,28 +882,27 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     return Padding(
       key: const ValueKey('about-license'),
       padding: const EdgeInsets.only(top: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
-          Text(
-            kAboutAttribution,
-            style: TextStyle(color: c.text, fontSize: 12),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            [kAboutCopyright, tr('Licensed under AGPL-3.0')].join(' · '),
-            style: TextStyle(color: c.textDim, fontSize: 12),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 14,
-            runSpacing: 6,
-            children: [
-              _link(c, tr('License'), kLicenseUrl),
-              _link(c, tr('Source code'), kGithubUrl),
-            ],
-          ),
+          _creditLink(c, kAboutCopyright, kCopyrightUrl),
+          Text(' · ', style: TextStyle(color: c.textDim, fontSize: 12)),
+          _creditLink(c, tr('Licensed under AGPL-3.0'), kLicenseUrl),
         ],
+      ),
+    );
+  }
+
+  Widget _creditLink(NymColors c, String text, String url) {
+    return Semantics(
+      link: true,
+      linkUrl: Uri.parse(url),
+      child: InkWell(
+        onTap: () => _openLink(url),
+        child: Text(
+          text,
+          style: TextStyle(color: c.secondary, fontSize: 12),
+        ),
       ),
     );
   }

@@ -219,7 +219,7 @@ Object.assign(NYM.prototype, {
             if (await this._verifyRelayEventAsync(events[i])) {
                 try { await this.handleEvent(events[i]); } catch (_) { }
             }
-            if (Date.now() - sliceStart > 16 && i + 1 < events.length && typeof this._yieldToIdle === 'function') {
+            if (Date.now() - sliceStart > 10 && i + 1 < events.length && typeof this._yieldToIdle === 'function') {
                 await this._yieldToIdle();
                 sliceStart = Date.now();
             }

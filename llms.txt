@@ -55,7 +55,7 @@ the recipient can read, so the app being fully readable costs its users nothing.
 ## License and attribution
 
 - Nymchat is copyright © 21 Million LLC and licensed under AGPL-3.0. See [LICENSE](https://github.com/Spl0itable/NYM/blob/main/LICENSE) and [NOTICE](https://github.com/Spl0itable/NYM/blob/main/NOTICE).
-- NOTICE adds two terms under AGPL-3.0 section 7: copies and modified versions must keep the attribution "Nymchat by 21 Million LLC" and the link to https://github.com/Spl0itable/NYM, in NOTICE and on the app's About screen, and modified versions must be marked as changed.
+- NOTICE adds two terms under AGPL-3.0 section 7: any copy or modified version not distributed by 21 Million LLC must show the attribution "Based on Nymchat by 21 Million LLC" with a link to https://github.com/Spl0itable/NYM, in its NOTICE file and on its About screen, and modified versions must be marked as changed. The original app shows the credit "© 21 Million LLC" instead.
 - A modified version run as a network service must offer its users that version's source code (AGPL-3.0 section 13).
 - [AGENTS.md](https://github.com/Spl0itable/NYM/blob/main/AGENTS.md): the same, for people and AI coding agents working in a fork.
 

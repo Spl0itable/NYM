@@ -131,7 +131,19 @@
         return null;
     }
 
+    const chatLockKeyMemo = new Map();
+
     function lockKeyForChat(chatKey, selfPubkey) {
+        const memoKey = String(selfPubkey || '') + '|' + String(chatKey || '');
+        const hit = chatLockKeyMemo.get(memoKey);
+        if (hit !== undefined) return hit;
+        const out = lockKeyForChatUncached(chatKey, selfPubkey);
+        if (chatLockKeyMemo.size >= 5000) chatLockKeyMemo.clear();
+        chatLockKeyMemo.set(memoKey, out);
+        return out;
+    }
+
+    function lockKeyForChatUncached(chatKey, selfPubkey) {
         const k = String(chatKey || '');
         if (k.indexOf('pm-') === 0) {
             const parts = k.slice(3).toLowerCase().split('-').filter(Boolean);

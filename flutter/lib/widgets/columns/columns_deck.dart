@@ -14,6 +14,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/chat_nav/chat_nav.dart';
 import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/chat_nav/chat_nav_service.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
@@ -1933,17 +1934,21 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                             });
                           }),
                   ),
-                  if (_showScrollButton && messages.isNotEmpty)
-                    Positioned(
-                      right: 16,
-                      bottom: 16,
-                      child: _ScrollBottomButton(onTap: _scrollToBottom),
-                    ),
                   if (messages.isNotEmpty)
                     Positioned(
-                      right: 14,
-                      bottom: _showScrollButton ? 62 : 16,
-                      child: ChatNavFabs(binding: _nav),
+                      left: ChatFabs.rightColumn,
+                      right: fabRight(0, true),
+                      bottom: 16,
+                      child: Align(
+                        alignment: Alignment.bottomRight,
+                        child: ChatNavFabs(
+                          binding: _nav,
+                          slot: 36,
+                          bottom: _showScrollButton
+                              ? _ScrollBottomButton(onTap: _scrollToBottom)
+                              : null,
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -2944,6 +2949,7 @@ class _ScrollBottomButtonState extends State<_ScrollBottomButton> {
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           child: Container(
+            key: const ValueKey('chat-nav-bottom'),
             width: 36,
             height: 36,
             alignment: Alignment.center,

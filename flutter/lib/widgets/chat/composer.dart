@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
@@ -14,6 +13,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/toasts/toast_center.dart';
+import '../../features/toasts/toast_model.dart';
 import '../common/css_focus_ring.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
@@ -294,29 +295,36 @@ class _ComposerState extends ConsumerState<Composer> {
     if (rec == null) return;
     final target = _voiceTarget ?? ref.read(appStateProvider).view;
     final route = _voiceRoute;
-    final recorded = await rec.stop(send: send);
+    RecordedVoice? recorded;
+    Object? stopError;
+    try {
+      recorded = await rec.stop(send: send);
+    } catch (e) {
+      stopError = e;
+    }
     if (mounted && _voice == rec) setState(() => _voice = null);
     rec.dispose();
     if (!send) return;
+    if (stopError != null) {
+      showToast(tr(kVoiceSendFailed, {'error': '$stopError'}),
+          kind: ToastKind.error);
+      return;
+    }
     if (recorded == null) {
       _onSystemMessage(
           tr('Hold to record, release to send. Tap to record hands-free.'));
       return;
     }
-    final bytes = await File(recorded.path).readAsBytes();
-    try {
-      File(recorded.path).deleteSync();
-    } catch (_) {}
-    final desc = MediaNote(
-      kind: 'voice',
-      mime: recorded.mime,
-      duration: recorded.duration,
-      size: bytes.length,
-      waveform: computeWaveform(recorded.samples),
-    );
-    await ref
-        .read(mediaNoteSenderProvider)
-        .send(desc, bytes, target, route: route, once: recorded.once);
+    await ref.read(mediaNoteSenderProvider).sendRecording(
+          path: recorded.path,
+          kind: 'voice',
+          mime: recorded.mime,
+          duration: recorded.duration,
+          samples: recorded.samples,
+          target: target,
+          route: route,
+          once: recorded.once,
+        );
   }
 
   Future<void> _openVideoNote() async {
@@ -332,19 +340,15 @@ class _ComposerState extends ConsumerState<Composer> {
         onceAllowed: onceAllowed,
         maxSeconds: st.maxSeconds ?? MediaNoteLimits.roundMaxSeconds);
     if (note == null || !mounted) return;
-    final bytes = await File(note.path).readAsBytes();
-    try {
-      File(note.path).deleteSync();
-    } catch (_) {}
-    final desc = MediaNote(
-      kind: 'round',
-      mime: note.mime,
-      duration: note.duration,
-      size: bytes.length,
-    );
-    await ref
-        .read(mediaNoteSenderProvider)
-        .send(desc, bytes, view, route: route, once: note.once);
+    await ref.read(mediaNoteSenderProvider).sendRecording(
+          path: note.path,
+          kind: 'round',
+          mime: note.mime,
+          duration: note.duration,
+          target: view,
+          route: route,
+          once: note.once,
+        );
   }
 
   List<String> _translateFavorites = const [];
@@ -406,6 +410,14 @@ class _ComposerState extends ConsumerState<Composer> {
   bool get _overlayActive => _paletteActive
       ? _paletteRows.isNotEmpty
       : (_botPaletteActive ? _botRows.isNotEmpty : _acActive);
+  bool get _composerDocked =>
+      _overlayActive ||
+      _pendingEdit != null ||
+      _pendingQuote != null ||
+      _formatToolbarOpen ||
+      _attachments.isNotEmpty ||
+      composerMediaMatches(_controller.text, knownMedia: _uploadedMedia)
+          .isNotEmpty;
 
   @override
   void dispose() {
@@ -655,7 +667,7 @@ class _ComposerState extends ConsumerState<Composer> {
     ref.read(nostrControllerProvider).ensureProfiles([pubkey]);
     final nym = ref.read(usersProvider)[pubkey]?.nym ??
         'anon#${pubkey.substring(pubkey.length - 4)}';
-    _onSystemMessage(
+    ref.read(appStateProvider.notifier).addSystemMessage(
         tr('@{nym} was unbanned. They can be re-invited.', {'nym': nym}));
   }
 
@@ -707,14 +719,7 @@ class _ComposerState extends ConsumerState<Composer> {
     if (mounted) setState(() {});
   }
 
-  void _onSystemMessage(String text) {
-    if (!mounted) return;
-    // Also shows a SnackBar so feedback is visible when scrolled away.
-    ref.read(appStateProvider.notifier).addSystemMessage(text);
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(content: Text(text), duration: const Duration(seconds: 3)),
-    );
-  }
+  void _onSystemMessage(String text) => showToast(text);
 
   Future<SharedPreferences> _ensurePrefs() async {
     if (_prefs != null) return _prefs!;
@@ -804,9 +809,44 @@ class _ComposerState extends ConsumerState<Composer> {
     setState(() => _recents = next);
   }
 
-  void _onGifSelected(String url) {
-    _insertAtCaret(url);
+  void _onGifSelected(GifItem gif) {
     _emojiPortal.hide();
+    if (_pendingEdit != null) {
+      _insertAtCaret(gif.url);
+      return;
+    }
+    final meshBridge = ref.read(meshControllerProvider.notifier).bridge;
+    final view = ref.read(appStateProvider).view;
+    if (meshBridge != null && meshBridge.shouldSendOverMesh(view)) {
+      unawaited(_sendGifOverMesh(view, gif.url));
+      return;
+    }
+    setState(() => _attachments.add(ComposerAttachment(
+          id: ++_attachmentSeq,
+          isVideo: false,
+          contentType: 'image/gif',
+          status: ComposerAttachmentStatus.done,
+          url: gif.url,
+          label: gif.title,
+          hosted: true,
+        )));
+    _focus.requestFocus();
+  }
+
+  Future<void> _sendGifOverMesh(ChatView view, String url) async {
+    final bytes = await ref.read(giphyServiceProvider).bytes(url);
+    if (bytes == null) {
+      _onSystemMessage(tr('Failed to load GIFs'));
+      return;
+    }
+    final meshBridge = ref.read(meshControllerProvider.notifier).bridge;
+    final ok = meshBridge != null &&
+        meshSizeCheck(bytes.length).ok &&
+        await meshBridge.sendFileFromComposer(view, 'gif.gif', 'image/gif', bytes);
+    if (!ok) {
+      _onSystemMessage(tr(MediaNoteReasons.meshTooLarge,
+          {'size': formatBytes(bytes.length)}));
+    }
   }
 
   /// Recomputes the trigger and dropdown contents on every input change.
@@ -1739,7 +1779,15 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget _input(BuildContext context, bool inputEnabled) {
     final focus = Focus(
       onKeyEvent: _onKey,
-      child: _textField(context, inputEnabled),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(end: _composerDocked ? 0 : NymRadius.md),
+        duration: MediaQuery.of(context).disableAnimations
+            ? Duration.zero
+            : NymMotion.transition,
+        curve: NymMotion.curve,
+        builder: (context, topRadius, _) =>
+            _textField(context, inputEnabled, topRadius),
+      ),
     );
     // Nested portals paint above the popout; translate must live in the main tree or it never builds in popout.
     return CompositedTransformTarget(
@@ -1903,7 +1951,8 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   /// The message input with its inline translate/format buttons; tall drafts get the popout treatment.
-  Widget _textField(BuildContext context, bool inputEnabled) {
+  Widget _textField(
+      BuildContext context, bool inputEnabled, double topRadius) {
     final c = context.nym;
     final hasText = _controller.text.trim().isNotEmpty;
     final focused = _focus.hasFocus;
@@ -1933,9 +1982,11 @@ class _ComposerState extends ConsumerState<Composer> {
         ? Colors.black.withValues(alpha: focused ? 0.02 : 0.04)
         : Colors.white.withValues(alpha: focused ? 0.07 : 0.05);
     final fill = _popout ? c.bgTertiary : flatFill;
-    // Bottom corners only: the field grows out of the one-line input.
-    const radius = BorderRadius.vertical(bottom: Radius.circular(NymRadius.md));
-    final border = OutlineInputBorder(
+    final radius = BorderRadius.vertical(
+      top: Radius.circular(topRadius),
+      bottom: const Radius.circular(NymRadius.md),
+    );
+    final border = _FieldBorder(
       borderRadius: radius,
       borderSide: BorderSide(color: _popout ? c.primaryA(0.30) : c.glassBorder),
     );
@@ -2001,7 +2052,7 @@ class _ComposerState extends ConsumerState<Composer> {
         contentPadding: EdgeInsets.fromLTRB(16, 10, hasText ? 94 : 66, 10),
         border: border,
         enabledBorder: border,
-        focusedBorder: OutlineInputBorder(
+        focusedBorder: _FieldBorder(
           borderRadius: radius,
           borderSide: BorderSide(color: c.primaryA(0.30)),
         ),
@@ -2180,12 +2231,13 @@ class _ComposerState extends ConsumerState<Composer> {
     final chipShowing = _pendingEdit != null || _pendingQuote != null;
     final stripShowing = matches.isNotEmpty || _attachments.isNotEmpty;
 
-    if (_attachments.isEmpty) {
+    final uploads = [for (final a in _attachments) if (!a.hosted) a];
+    if (uploads.isEmpty) {
       _composerHd = false;
       _composerOnce = false;
     } else {
       panels.add(MediaOptionsBar(
-        attachments: _attachments,
+        attachments: uploads,
         hd: _composerHd,
         once: _composerOnce,
         hdState: _mediaFeature('hd'),
@@ -2952,6 +3004,16 @@ class _SendButtonState extends State<_SendButton> {
       ),
     );
   }
+}
+
+class _FieldBorder extends OutlineInputBorder {
+  const _FieldBorder({super.borderSide, super.borderRadius});
+
+  @override
+  ShapeBorder? lerpFrom(ShapeBorder? a, double t) =>
+      a is OutlineInputBorder && a.borderSide == borderSide
+          ? this
+          : super.lerpFrom(a, t);
 }
 
 class _PreviewChip extends StatelessWidget {

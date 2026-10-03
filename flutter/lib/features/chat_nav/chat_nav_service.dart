@@ -23,7 +23,7 @@ class ChatNavEntry {
   FirstUnread? info;
   bool landed = false;
   bool scrolled = false;
-  bool dismissed = false;
+  late Map<String, dynamic> jump = jumpEmpty(lastRead, openedAt);
 }
 
 class ScheduleResult {
@@ -85,6 +85,8 @@ class ChatNavHooks {
     this.onChanged,
     this.now,
     this.random,
+    this.storeRaw,
+    this.plainlyVisible,
   });
 
   static bool _never() => false;
@@ -98,6 +100,8 @@ class ChatNavHooks {
   final List<String> Function()? legacyPinnedChannels;
   final void Function(List<String> channels, bool persist)? applyPinnedChannels;
   final List<Message> Function(String key)? storeList;
+  final List<Message> Function(String key)? storeRaw;
+  final bool Function(Message m)? plainlyVisible;
   final int Function(String key)? lastRead;
   final int Function(String key)? badge;
   final bool Function(Message m)? isMention;
@@ -192,6 +196,15 @@ class ChatNavService {
     final older = e.badge > pre.count;
     e.info = firstUnread(rows, e.lastRead,
         before: e.openedAt, olderMayExist: older, badge: e.badge);
+    final start = jumpStart(rows, e.lastRead,
+        before: e.openedAt, olderMayExist: older, badge: e.badge);
+    final prev = e.jump;
+    e.jump = jumpSeen(
+        jumpAdd(start, [
+          for (final x in (prev['ids'] as List).cast<Map<String, dynamic>>())
+            ChatNavRow(id: x['id'] as String, at: x['at'] as int),
+        ]),
+        (prev['seen'] as List).cast<String>());
     if (e.info != null) _rescanFor(e, list);
     return e.info;
   }
@@ -215,21 +228,51 @@ class ChatNavService {
 
   void markScrolled(String key) => _entries[key]?.scrolled = true;
 
-  void dismissJump(String key) {
+  int jumpCountFor(String key) {
+    final e = _entries[key];
+    return e == null ? 0 : jumpCount(e.jump);
+  }
+
+  String? jumpTargetFor(String key) {
+    final e = _entries[key];
+    return e == null ? null : jumpTarget(e.jump);
+  }
+
+  List<String> jumpIds(String key) {
+    final e = _entries[key];
+    if (e == null) return const [];
+    return [
+      for (final x in (e.jump['ids'] as List).cast<Map<String, dynamic>>())
+        x['id'] as String,
+    ];
+  }
+
+  String jumpTextFor(String key) {
+    final e = _entries[key];
+    return e == null ? '' : jumpText(e.jump, _tr);
+  }
+
+  void markJumpSeen(String key, Iterable<String> ids) {
     final e = _entries[key];
     if (e == null) return;
-    e.dismissed = true;
-    e.scrolled = true;
-    _changed();
+    final before = jumpCount(e.jump);
+    e.jump = jumpSeen(e.jump, ids);
+    if (jumpCount(e.jump) != before) _changed();
   }
 
-  bool jumpVisible(String key, {required bool rendered, required bool above}) {
+  void revealJump(String key, [List<Message>? list]) {
     final e = _entries[key];
-    if (e == null) return false;
-    return showJump(e.info, rendered ? above : true, !rendered && e.dismissed);
+    if (e == null) return;
+    e.jump = jumpReveal(e.jump, [for (final m in list ?? _store(key)) _row(m)]);
   }
 
-  String jumpText(String key) => jumpLabel(_entries[key]?.info, _tr);
+  void settleJump(String key) {
+    final e = _entries[key];
+    if (e == null) return;
+    final before = jumpCount(e.jump);
+    e.jump = jumpSettle(e.jump);
+    if (jumpCount(e.jump) != before) _changed();
+  }
 
   String get _mentionKey => 'nym_unread_mentions:${hooks.selfPubkey()}';
 
@@ -301,6 +344,8 @@ class ChatNavService {
     }
     if (unread <= 0) return false;
     final floor = hooks.lastRead?.call(key) ?? 0;
+    final fast = _rawMentionScan(key, floor);
+    if (fast != null) return fast;
     final list = _store(key);
     for (var i = list.length - 1; i >= 0; i--) {
       final m = list[i];
@@ -310,8 +355,34 @@ class ChatNavService {
     return false;
   }
 
+  bool? _rawMentionScan(String key, int floor) {
+    final raw = hooks.storeRaw;
+    final plain = hooks.plainlyVisible;
+    if (raw == null || plain == null) return null;
+    final list = raw(key);
+    for (var i = list.length - 1; i >= 0; i--) {
+      final m = list[i];
+      if (m.createdAt <= floor) {
+        if (plain(m)) return false;
+        return null;
+      }
+      if (_isMention(m)) return plain(m) ? true : null;
+    }
+    return false;
+  }
+
   void noteLive(String key, Message m, {required bool away}) {
-    if (!away || !_isMention(m)) return;
+    if (!away) return;
+    final e = _entries[key];
+    if (e != null) {
+      final row = _row(m);
+      if (!row.own && !row.sys) {
+        final before = jumpCount(e.jump);
+        e.jump = jumpAdd(e.jump, [row]);
+        if (jumpCount(e.jump) != before) _changed();
+      }
+    }
+    if (!_isMention(m)) return;
     _setMentions(mentionAdd(mentions(), key, [
       {'id': m.id, 'at': m.createdAt}
     ], _nowMs));

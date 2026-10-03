@@ -1683,35 +1683,70 @@ Object.assign(NYM.prototype, {
     },
 
     expandImage(src, context) {
-        const modalImg = document.getElementById('modalImage');
-        const modalVid = document.getElementById('modalVideo');
-        if (window.resetImageModalZoom) window.resetImageModalZoom();
-        modalImg.src = src;
-        modalImg.style.display = '';
-        modalVid.classList.add('nm-hidden');
-        modalVid.style.display = 'none';
-        modalVid.pause();
-        if (modalVid.dataset.ownBlob) {
-            URL.revokeObjectURL(modalVid.dataset.ownBlob);
-            delete modalVid.dataset.ownBlob;
-            delete modalVid.dataset.blobLoaded;
-        }
-        modalVid.removeAttribute('src');
-        while (modalVid.firstChild) modalVid.firstChild.remove();
-        if (context && Array.isArray(context.gallery) && context.gallery.length > 1) {
-            window._imageModalGallery = { sources: context.gallery.slice(), index: context.index || 0 };
+        const gallery = context && Array.isArray(context.gallery) && context.gallery.length > 1 ? context.gallery : null;
+        if (gallery) {
+            this.openMediaViewer(gallery.map((s) => ({ src: s, kind: 'image' })), context.index || 0);
         } else {
-            window._imageModalGallery = null;
+            this.openMediaViewer([{ src, kind: 'image' }], 0);
         }
-        if (typeof window.updateImageModalGalleryNav === 'function') window.updateImageModalGalleryNav();
-        document.getElementById('imageModal').classList.add('active');
     },
 
     expandVideo(src) {
-        const modalImg = document.getElementById('modalImage');
+        this.openMediaViewer([{ src, kind: 'video' }], 0);
+    },
+
+    openMediaViewer(items, index, opts) {
+        const list = (items || []).filter((it) => it && it.src);
+        if (!list.length) return;
+        const o = opts || {};
+        const modal = document.getElementById('imageModal');
+        const wasOpen = modal.classList.contains('active');
+        window._imageModalGallery = {
+            items: list.map((it) => Object.assign({}, it)),
+            index: Math.max(0, Math.min(list.length - 1, Number(index) || 0)),
+            onReveal: typeof o.onReveal === 'function' ? o.onReveal : null,
+        };
+        if (!wasOpen) this._viewerReturnFocus = o.returnFocus || document.activeElement;
+        this._viewerShow();
+        modal.classList.add('active');
+        if (!wasOpen) {
+            const close = document.getElementById('imageModalCloseBtn');
+            if (close) { try { close.focus({ preventScroll: true }); } catch (_) { close.focus(); } }
+        }
+    },
+
+    viewerStep(delta) {
+        const g = window._imageModalGallery;
+        if (!g || !g.items || g.items.length < 2) return false;
+        const next = g.index + delta;
+        if (next < 0 || next >= g.items.length) return false;
+        g.index = next;
+        this._viewerShow();
+        return true;
+    },
+
+    viewerRevealSpoiler() {
+        const g = window._imageModalGallery;
+        const it = g && g.items[g.index];
+        if (!it || !it.spoiler || it.revealed) return;
+        it.revealed = true;
+        if (g.onReveal) { try { g.onReveal(it); } catch (_) { } }
+        this._viewerShow();
+    },
+
+    _viewerClosed() {
+        this._viewerPreloaded = [];
+        const back = this._viewerReturnFocus;
+        this._viewerReturnFocus = null;
+        const target = typeof back === 'function' ? back() : back;
+        if (target && target.isConnected && typeof target.focus === 'function') {
+            try { target.focus({ preventScroll: true }); } catch (_) { target.focus(); }
+        }
+    },
+
+    _viewerResetVideo() {
         const modalVid = document.getElementById('modalVideo');
-        modalImg.style.display = 'none';
-        modalImg.src = '';
+        try { modalVid.pause(); } catch (_) { }
         if (modalVid.dataset.ownBlob) {
             URL.revokeObjectURL(modalVid.dataset.ownBlob);
             delete modalVid.dataset.ownBlob;
@@ -1719,16 +1754,63 @@ Object.assign(NYM.prototype, {
         }
         modalVid.removeAttribute('src');
         while (modalVid.firstChild) modalVid.firstChild.remove();
+        modalVid.classList.add('nm-hidden');
+        modalVid.style.display = 'none';
+        return modalVid;
+    },
 
+    _viewerShow() {
+        const g = window._imageModalGallery;
+        const it = g && g.items[g.index];
+        if (!it) return;
+        const modalImg = document.getElementById('modalImage');
+        const spoiler = document.getElementById('modalSpoiler');
+        if (window.resetImageModalZoom) window.resetImageModalZoom();
+        const modalVid = this._viewerResetVideo();
+        if (spoiler) spoiler.classList.add('nm-hidden');
+        if (it.spoiler && !it.revealed) {
+            modalImg.style.display = 'none';
+            modalImg.removeAttribute('src');
+            if (spoiler) {
+                spoiler.textContent = typeof this.uiText === 'function' ? this.uiText('Spoiler, tap to reveal') : 'Spoiler, tap to reveal';
+                spoiler.classList.remove('nm-hidden');
+            }
+        } else if (it.kind === 'video') {
+            modalImg.style.display = 'none';
+            modalImg.removeAttribute('src');
+            this._viewerLoadVideo(modalVid, it.src);
+        } else {
+            modalImg.src = it.src;
+            modalImg.style.display = '';
+        }
+        if (typeof window.updateImageModalGalleryNav === 'function') window.updateImageModalGalleryNav();
+        this._viewerPreload();
+    },
+
+    _viewerPreload() {
+        const g = window._imageModalGallery;
+        const out = [];
+        if (g && g.items.length > 1) {
+            for (const d of [1, -1]) {
+                const it = g.items[g.index + d];
+                if (!it || it.kind === 'video' || (it.spoiler && !it.revealed)) continue;
+                const im = new Image();
+                im.decoding = 'async';
+                im.src = it.src;
+                out.push(it.src);
+            }
+        }
+        this._viewerPreloaded = out;
+    },
+
+    _viewerLoadVideo(modalVid, src) {
         const ext = src.split('.').pop().split('?')[0].toLowerCase();
         const mimeTypes = { mp4: 'video/mp4', webm: 'video/webm', ogg: 'video/ogg', mov: 'video/mp4' };
         const mimeType = mimeTypes[ext] || 'video/mp4';
 
-        // A blob URL from the inline player fallback is used directly.
         if (src.startsWith('blob:')) {
             modalVid.src = src;
         } else {
-            // Try the direct source first, falling back to a blob URL for Safari.
             const source = document.createElement('source');
             source.src = src;
             source.type = mimeType;
@@ -1740,6 +1822,7 @@ Object.assign(NYM.prototype, {
                 try {
                     const resp = await fetch(src);
                     const blob = await resp.blob();
+                    if (source.parentNode !== modalVid) return;
                     modalVid.removeAttribute('src');
                     while (modalVid.firstChild) modalVid.firstChild.remove();
                     const ownBlob = URL.createObjectURL(blob);
@@ -1757,7 +1840,6 @@ Object.assign(NYM.prototype, {
         modalVid.load();
         modalVid.classList.remove('nm-hidden');
         modalVid.style.display = '';
-        document.getElementById('imageModal').classList.add('active');
     },
 
     displaySystemMessage(content, type = 'system', { html = false, feed = false, kind = null } = {}) {

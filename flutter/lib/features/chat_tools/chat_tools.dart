@@ -11,6 +11,11 @@ class ChatToolsLimits {
   static const int editVersionsMax = 20;
   static const int editMessagesMax = 1000;
   static const int keepMax = 2000;
+  static const int editFetchTimeoutMs = 8000;
+  static const int editFetchSlackSec = 173400;
+  static const int editFetchPages = 4;
+  static const int editFetchPageSize = 500;
+  static const int editFetchMax = 50;
 
   static Map<String, num> toJson() => {
         'savedMax': savedMax,
@@ -20,6 +25,11 @@ class ChatToolsLimits {
         'editVersionsMax': editVersionsMax,
         'editMessagesMax': editMessagesMax,
         'keepMax': keepMax,
+        'editFetchTimeoutMs': editFetchTimeoutMs,
+        'editFetchSlackSec': editFetchSlackSec,
+        'editFetchPages': editFetchPages,
+        'editFetchPageSize': editFetchPageSize,
+        'editFetchMax': editFetchMax,
       };
 }
 
@@ -891,7 +901,7 @@ bool trimSavedPayload(Map<String, dynamic> p) {
 }
 
 class EditRecord {
-  const EditRecord(this.versions, this.editedAt);
+  const EditRecord(this.versions, this.editedAt, {this.fetched = false});
 
   factory EditRecord.fromJson(dynamic j) {
     if (j is! Map || j['versions'] is! List) return const EditRecord([], 0);
@@ -900,16 +910,198 @@ class EditRecord {
         if (v is Map)
           EditVersion('${v['text'] ?? ''}',
               v['at'] is num ? (v['at'] as num).toInt() : 0),
-    ], j['editedAt'] is num ? (j['editedAt'] as num).toInt() : 0);
+    ], j['editedAt'] is num ? (j['editedAt'] as num).toInt() : 0,
+        fetched: j['fetched'] == true);
   }
 
   final List<EditVersion> versions;
   final int editedAt;
+  final bool fetched;
 
   Map<String, dynamic> toJson() => {
         'versions': [for (final v in versions) v.toJson()],
         'editedAt': editedAt,
+        if (fetched) 'fetched': true,
       };
+}
+
+typedef EditHistoryPlan = ({bool fetch, String view});
+
+EditHistoryPlan editHistoryPlan(EditRecord? rec,
+    {bool online = false, bool mesh = false, bool done = false}) {
+  final has = rec != null && rec.versions.isNotEmpty;
+  if (done) return (fetch: false, view: has ? 'versions' : 'notFound');
+  final fetch = !(rec?.fetched ?? false) && !mesh && online;
+  return (
+    fetch: fetch,
+    view: has
+        ? 'versions'
+        : fetch
+            ? 'loading'
+            : (rec?.fetched ?? false)
+                ? 'notFound'
+                : 'unavailable',
+  );
+}
+
+class EditSources {
+  const EditSources(this.original, this.edits);
+  final EditVersion? original;
+  final List<EditVersion> edits;
+
+  Map<String, dynamic> toJson() => {
+        'original': original?.toJson(),
+        'edits': [for (final e in edits) e.toJson()],
+      };
+}
+
+String _editTagValue(dynamic tags, String name) {
+  if (tags is! List) return '';
+  for (final t in tags) {
+    if (t is List && t.length > 1 && t[0] == name && t[1] is String) {
+      final v = t[1] as String;
+      if (v.isNotEmpty) return v;
+    }
+  }
+  return '';
+}
+
+EditSources editSources({
+  required String id,
+  required String pubkey,
+  required int at,
+  required List<Map<String, dynamic>> events,
+}) {
+  EditVersion? original;
+  final edits = <EditVersion>[];
+  final seen = <String>{};
+  if (id.isEmpty || pubkey.isEmpty) return const EditSources(null, []);
+  for (final ev in events) {
+    final content = ev['content'];
+    if (ev['pubkey'] != pubkey || content is! String) continue;
+    final createdAt = ev['created_at'];
+    final evAt = createdAt is num ? createdAt.toInt() : 0;
+    final evId = ev['id'] is String ? ev['id'] as String : '';
+    final ref = _editTagValue(ev['tags'], 'edit');
+    if (ref.isNotEmpty) {
+      if (ref != id || evAt < at) continue;
+      final key = evId.isNotEmpty ? 'i:$evId' : 'v:$evAt\n$content';
+      if (!seen.add(key)) continue;
+      edits.add(EditVersion(content, evAt));
+    } else if (evId == id || _editTagValue(ev['tags'], 'x') == id) {
+      if (original == null || evAt < original.at) {
+        original = EditVersion(content, evAt);
+      }
+    }
+  }
+  final indexed = [for (var i = 0; i < edits.length; i++) (i, edits[i])];
+  indexed.sort((a, b) {
+    final d = a.$2.at - b.$2.at;
+    if (d != 0) return d;
+    final t = a.$2.text.compareTo(b.$2.text);
+    return t != 0 ? t : a.$1 - b.$1;
+  });
+  final sorted = [for (final e in indexed) e.$2];
+  final keep = sorted.length > ChatToolsLimits.editFetchMax
+      ? sorted.sublist(sorted.length - ChatToolsLimits.editFetchMax)
+      : sorted;
+  return EditSources(original, keep);
+}
+
+EditRecord mergeEditHistory(
+    EditRecord? rec, EditSources found, String currentText) {
+  final base = rec ?? const EditRecord([], 0);
+  final list = <(int, EditVersion)>[];
+  final localAt = <int>{};
+  final seen = <String>{};
+  void add(String text, int at, bool local) {
+    if (!local && localAt.contains(at)) return;
+    if (!seen.add('$at\n$text')) return;
+    if (local) localAt.add(at);
+    list.add((list.length, EditVersion(text, at)));
+  }
+
+  final remoteTexts = {for (final e in found.edits) e.text};
+  for (final v in base.versions) {
+    if (!remoteTexts.contains(v.text)) add(v.text, v.at, true);
+  }
+  var editedAt = base.editedAt;
+  if (editedAt != 0) localAt.add(editedAt);
+  final original = found.original;
+  if (original != null) add(original.text, original.at, false);
+  for (final e in found.edits) {
+    add(e.text, e.at, false);
+  }
+  list.sort((a, b) {
+    final d = a.$2.at - b.$2.at;
+    return d != 0 ? d : a.$1 - b.$1;
+  });
+  final versions = <EditVersion>[];
+  for (final e in list) {
+    if (versions.isEmpty || versions.last.text != e.$2.text) {
+      versions.add(EditVersion(e.$2.text, e.$2.at));
+    }
+  }
+  if (versions.isNotEmpty && versions.last.text == currentText) {
+    final last = versions.removeLast();
+    if (last.at > editedAt) editedAt = last.at;
+  }
+  if (editedAt != 0) {
+    versions.removeWhere((v) => v.at > editedAt);
+  } else if (versions.isNotEmpty) {
+    editedAt = versions.last.at;
+  }
+  while (versions.length > ChatToolsLimits.editVersionsMax) {
+    versions.removeAt(0);
+  }
+  return EditRecord(versions, editedAt, fetched: true);
+}
+
+class EditCandidate {
+  const EditCandidate(this.text, this.at, [this.id = '']);
+
+  factory EditCandidate.fromJson(dynamic j) {
+    final m = j is Map ? j : const {};
+    return EditCandidate('${m['text'] ?? ''}',
+        m['at'] is num ? (m['at'] as num).toInt() : 0, '${m['id'] ?? ''}');
+  }
+
+  final String text;
+  final int at;
+  final String id;
+}
+
+int compareEdits(EditCandidate a, EditCandidate b) {
+  if (a.at != b.at) return a.at < b.at ? -1 : 1;
+  final t = a.text.compareTo(b.text);
+  if (t != 0) return t < 0 ? -1 : 1;
+  final i = a.id.compareTo(b.id);
+  return i < 0 ? -1 : (i > 0 ? 1 : 0);
+}
+
+String editVerdict(EditCandidate? cur, EditCandidate cand, int originalAt) {
+  if (cand.at != 0 && originalAt != 0 && cand.at < originalAt) return 'invalid';
+  if (cur == null) return 'apply';
+  final c = compareEdits(cand, cur);
+  return c > 0 ? 'apply' : (c < 0 ? 'stale' : 'same');
+}
+
+EditRecord recordStaleEdit(
+    EditRecord? rec, String? text, int at, String? currentText) {
+  final base = rec ?? const EditRecord([], 0);
+  final tx = text ?? '';
+  if (tx == (currentText ?? '')) return base;
+  if (base.versions.any((v) => v.at == at && v.text == tx)) return base;
+  final versions = [...base.versions];
+  var i = versions.length;
+  while (i > 0 && versions[i - 1].at > at) {
+    i--;
+  }
+  versions.insert(i, EditVersion(tx, at));
+  while (versions.length > ChatToolsLimits.editVersionsMax) {
+    versions.removeAt(0);
+  }
+  return EditRecord(versions, base.editedAt, fetched: base.fetched);
 }
 
 class EditVersion {

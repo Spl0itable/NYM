@@ -314,6 +314,7 @@ window.nymHapticTap = function (ms) {
         'imageModalPrev':             function (e) { e.stopPropagation(); if (window.navigateImageModalGallery) window.navigateImageModalGallery(-1); },
         'imageModalNext':             function (e) { e.stopPropagation(); if (window.navigateImageModalGallery) window.navigateImageModalGallery(1); },
         'videoModalStop':             function (e) { e.stopPropagation(); },
+        'imageModalRevealSpoiler':    function (e) { e.stopPropagation(); nym().viewerRevealSpoiler(); },
 
         'openMessageThread':          function (_e, t) { nym().openMessageThread(t); },
         'closeThreadView':            function () { nym().closeThreadView(); },

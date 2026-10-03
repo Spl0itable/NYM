@@ -50,6 +50,7 @@ import '../identity/key_backup/key_backup_store.dart';
 import '../identity/nick_edit_modal.dart';
 import '../../widgets/wallpaper/wallpaper_cache.dart';
 import '../../services/filter/filter_packs.dart';
+import '../toasts/toast_center.dart';
 import 'settings_helpers.dart';
 import 'settings_widgets.dart';
 
@@ -562,11 +563,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
-  /// Posts a transient system pill post-frame, after the dialog pops.
   void _systemMessage(String text) {
-    final notifier = ref.read(appStateProvider.notifier);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      notifier.addSystemMessage(text);
+      showToast(text);
     });
   }
 

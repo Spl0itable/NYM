@@ -1,0 +1,30 @@
+Nymchat
+Copyright © 21 Million LLC
+
+Web app: https://web.nymchat.app
+Source: https://github.com/Spl0itable/NYM
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License, version 3
+(AGPL-3.0), as published by the Free Software Foundation. See the LICENSE
+file for the full text. It is distributed without any warranty, to the
+extent permitted by applicable law.
+
+Additional terms under AGPL-3.0 section 7(b)
+
+Any copy or modified version of this program that is not distributed by
+21 Million LLC must show the attribution
+"Based on Nymchat by 21 Million LLC" with a link to the original source
+repository, https://github.com/Spl0itable/NYM, both in its NOTICE file
+and in the Appropriate Legal Notices shown on its About screen. That
+attribution and link may not be removed or obscured.
+
+The original app distributed by 21 Million LLC shows the credit
+"© 21 Million LLC", linked to https://nostrservices.com, on its About
+screen instead.
+
+As section 7(c) also permits, a modified version must be marked in a
+reasonable way as changed from the original version, for example by saying
+so in this NOTICE file and on the About screen.
+
+No other terms are added to the AGPL-3.0.

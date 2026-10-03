@@ -42,6 +42,7 @@ import '../i18n/i18n.dart';
 import '../messages/format/nym_format.dart' show NymFormat;
 import '../reactions/reaction_picker.dart';
 import '../threads/thread_view.dart' show ThreadView;
+import '../toasts/toast_center.dart';
 import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import 'bot_credits_modal.dart';
@@ -1283,10 +1284,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     _gifPortal.show();
   }
 
-  /// A system line in the bot conversation, for upload errors.
-  void _systemLine(String text) => ref
-      .read(appStateProvider.notifier)
-      .addSystemMessage(text, storageKey: BotChatController.conversationKey);
+  void _systemLine(String text) => showToast(text);
 
   void _cancelUpload() {
     setState(() {
@@ -1964,7 +1962,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
             onDismiss: _hideGifPicker,
             child: GifPicker(
               favoritesStore: FavoriteGifsStore(prefs),
-              onSelect: _onGifSelected,
+              onSelect: (gif) => _onGifSelected(gif.url),
               onClose: _hideGifPicker,
             ),
           );

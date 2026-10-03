@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../state/app_state.dart';
+import '../toasts/toast_center.dart';
 import 'call_service.dart';
 import 'call_state.dart';
 
@@ -11,7 +11,7 @@ final callServiceProvider = Provider<CallService>((ref) {
   final service = CallService(ref);
   service.onSystemMessage = (message) {
     try {
-      ref.read(appStateProvider.notifier).addSystemMessage(message);
+      showToast(message);
     } catch (_) {
       // Best-effort; never throw from a status toast.
     }

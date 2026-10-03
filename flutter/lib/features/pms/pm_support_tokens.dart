@@ -69,7 +69,16 @@ class PmSupportTokens {
     final ordered = _newestFirst(next);
     _byPeer[peer] = ordered.take(perPeer).toList();
     while (_byPeer.length > maxPeers) {
-      _byPeer.remove(_byPeer.keys.first);
+      String? stalest;
+      var stalestTs = 0;
+      for (final entry in _byPeer.entries) {
+        final newest = entry.value.isEmpty ? 0 : entry.value.first.ts;
+        if (stalest == null || newest < stalestTs) {
+          stalest = entry.key;
+          stalestTs = newest;
+        }
+      }
+      _byPeer.remove(stalest);
     }
     return true;
   }

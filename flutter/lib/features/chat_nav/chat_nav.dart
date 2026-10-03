@@ -262,6 +262,241 @@ String jumpLabel(FirstUnread? info, [ChatNavTr? t]) {
 bool showJump(FirstUnread? info, bool dividerAbove, bool dismissed) =>
     info != null && info.id.isNotEmpty && dividerAbove && !dismissed;
 
+class ChatJump {
+  const ChatJump._();
+
+  static const double seenRatio = 0.5;
+  static const int dwellMs = 500;
+  static const int seenMax = 500;
+
+  static Map<String, num> toJson() =>
+      {'seenRatio': seenRatio, 'dwellMs': dwellMs, 'seenMax': seenMax};
+}
+
+class ChatFabs {
+  const ChatFabs._();
+
+  static const List<String> order = ['mention', 'jump', 'bottom'];
+  static const double gap = 8;
+  static const double right = 24;
+  static const double rightPhone = 16;
+  static const double rightColumn = 16;
+  static const double phoneMax = 768;
+
+  static Map<String, Object> toJson() => {
+        'order': order,
+        'gap': gap,
+        'right': right,
+        'rightPhone': rightPhone,
+        'rightColumn': rightColumn,
+        'phoneMax': phoneMax,
+      };
+}
+
+bool seenInView(num top, num bottom, num viewTop, num viewBottom) {
+  final t = _num(top), b = _num(bottom), vt = _num(viewTop), vb = _num(viewBottom);
+  final h = b - t;
+  final vh = vb - vt;
+  if (!(h > 0) || !(vh > 0)) return false;
+  final vis = (b < vb ? b : vb) - (t > vt ? t : vt);
+  if (!(vis > 0)) return false;
+  return vis >= h * ChatJump.seenRatio || vis >= vh * ChatJump.seenRatio;
+}
+
+class DwellStep {
+  const DwellStep(this.pending, this.seen, this.wait);
+
+  final Map<String, num> pending;
+  final List<String> seen;
+  final num wait;
+
+  Map<String, Object> toJson() =>
+      {'pending': pending, 'seen': seen, 'wait': wait};
+}
+
+DwellStep dwellStep(Object? pending, List<Object?> visibleIds, num nowMs) {
+  final p = pending is Map ? pending : const {};
+  final now = _num(nowMs);
+  final next = <String, num>{};
+  final seen = <String>[];
+  num due = 0;
+  for (final raw in visibleIds) {
+    if (raw is! String || raw.isEmpty || next.containsKey(raw) || seen.contains(raw)) {
+      continue;
+    }
+    final since = p.containsKey(raw) ? _num(p[raw]) : now;
+    if (now - since >= ChatJump.dwellMs) {
+      seen.add(raw);
+      continue;
+    }
+    next[raw] = since;
+    final left = since + ChatJump.dwellMs - now;
+    if (due == 0 || left < due) due = left;
+  }
+  return DwellStep(next, seen, due);
+}
+
+List<String> fabRow({bool bottom = false, bool jump = false, bool mention = false}) {
+  final v = {'bottom': bottom, 'jump': jump, 'mention': mention};
+  return [for (final k in ChatFabs.order) if (v[k] == true) k];
+}
+
+double fabRight(num width, bool column) {
+  if (column) return ChatFabs.rightColumn;
+  final w = _num(width);
+  return w > 0 && w <= ChatFabs.phoneMax ? ChatFabs.rightPhone : ChatFabs.right;
+}
+
+Map<String, dynamic> jumpEmpty([Object? floor, Object? before]) {
+  final f = _floor(floor);
+  final b = _floor(before);
+  return {
+    'floor': f < 0 ? 0 : f,
+    'before': b < 0 ? 0 : b,
+    'ids': <Map<String, dynamic>>[],
+    'hidden': 0,
+    'seen': <String>[],
+  };
+}
+
+List<Map<String, dynamic>> _jumpIds(Map<String, dynamic> s) =>
+    (s['ids'] as List).cast<Map<String, dynamic>>();
+
+List<String> _jumpSeenList(Map<String, dynamic> s) =>
+    (s['seen'] as List).cast<String>();
+
+void _jumpSort(List<Map<String, dynamic>> ids) {
+  ids.sort((a, b) {
+    final d = (a['at'] as int) - (b['at'] as int);
+    return d != 0 ? d : _cmp(a['id'] as String, b['id'] as String);
+  });
+}
+
+Map<String, dynamic> jumpNorm(Object? raw) {
+  final r = raw is Map ? raw : const {};
+  final s = jumpEmpty(r['floor'], r['before']);
+  final ids = _jumpIds(s);
+  final have = <String>{};
+  final rawIds = r['ids'];
+  if (rawIds is List) {
+    for (final e in rawIds) {
+      if (e is! Map) continue;
+      final id = e['id'];
+      if (id is! String || id.isEmpty || have.contains(id)) continue;
+      have.add(id);
+      final at = _floor(e['at']);
+      ids.add(<String, dynamic>{'id': id, 'at': at < 0 ? 0 : at});
+    }
+  }
+  final seen = _jumpSeenList(s);
+  final rawSeen = r['seen'];
+  if (rawSeen is List) {
+    for (final id in rawSeen) {
+      if (id is String && id.isNotEmpty && !seen.contains(id)) seen.add(id);
+    }
+  }
+  _jumpSort(ids);
+  final hidden = _floor(r['hidden']);
+  s['hidden'] = hidden < 0 ? 0 : hidden;
+  return s;
+}
+
+Map<String, dynamic> jumpStart(List<ChatNavRow> list, num lastRead,
+    {num before = 0, bool olderMayExist = false, num badge = 0}) {
+  final s = jumpEmpty(lastRead, before);
+  final info = firstUnread(list, lastRead,
+      before: before, olderMayExist: olderMayExist, badge: badge);
+  if (info == null) return s;
+  final floor = s['floor'] as int;
+  for (var i = info.index; i < list.length; i++) {
+    final m = list[i];
+    if (m.own || m.sys || m.id.isEmpty) continue;
+    if (m.at > floor) _jumpIds(s).add({'id': m.id, 'at': m.at.floor()});
+  }
+  final out = jumpNorm(s);
+  final n = _jumpIds(out).length;
+  out['hidden'] = info.beyond && info.count > n ? info.count - n : 0;
+  return out;
+}
+
+Map<String, dynamic> jumpSeen(Object? state, Iterable<String> ids) {
+  final s = jumpNorm(state);
+  final list = [for (final id in ids) if (id.isNotEmpty) id];
+  if (list.isEmpty) return s;
+  final gone = list.toSet();
+  _jumpIds(s).removeWhere((e) => gone.contains(e['id']));
+  final seen = _jumpSeenList(s);
+  for (final id in list) {
+    seen.remove(id);
+    seen.add(id);
+  }
+  if (seen.length > ChatJump.seenMax) {
+    s['seen'] = seen.sublist(seen.length - ChatJump.seenMax);
+  }
+  return s;
+}
+
+Map<String, dynamic> jumpAdd(Object? state, List<ChatNavRow> items) {
+  final s = jumpNorm(state);
+  final ids = _jumpIds(s);
+  final have = {for (final e in ids) e['id'] as String};
+  final seen = _jumpSeenList(s).toSet();
+  for (final it in items) {
+    if (it.own || it.sys || it.id.isEmpty) continue;
+    if (have.contains(it.id) || seen.contains(it.id)) continue;
+    have.add(it.id);
+    final at = it.at.floor();
+    ids.add({'id': it.id, 'at': at < 0 ? 0 : at});
+  }
+  _jumpSort(ids);
+  return s;
+}
+
+Map<String, dynamic> jumpReveal(Object? state, List<ChatNavRow> list) {
+  final s = jumpNorm(state);
+  final hidden = s['hidden'] as int;
+  if (hidden <= 0) return s;
+  final ids = _jumpIds(s);
+  final have = {for (final e in ids) e['id'] as String};
+  final seen = _jumpSeenList(s).toSet();
+  final floor = s['floor'] as int;
+  final before = s['before'] as int;
+  var found = 0;
+  for (final m in list) {
+    if (m.own || m.sys || m.id.isEmpty) continue;
+    if (m.at <= floor || (before > 0 && m.at > before)) continue;
+    if (have.contains(m.id) || seen.contains(m.id)) continue;
+    have.add(m.id);
+    ids.add({'id': m.id, 'at': m.at.floor()});
+    found++;
+  }
+  _jumpSort(ids);
+  s['hidden'] = hidden - found > 0 ? hidden - found : 0;
+  return s;
+}
+
+Map<String, dynamic> jumpSettle(Object? state) {
+  final s = jumpNorm(state);
+  s['hidden'] = 0;
+  return s;
+}
+
+int jumpCount(Object? state) {
+  final s = jumpNorm(state);
+  return _jumpIds(s).length + (s['hidden'] as int);
+}
+
+String? jumpTarget(Object? state) {
+  final ids = _jumpIds(jumpNorm(state));
+  return ids.isEmpty ? null : ids.first['id'] as String;
+}
+
+String jumpText(Object? state, [ChatNavTr? t]) {
+  final n = jumpCount(state);
+  if (n <= 0) return '';
+  return _fill(_tr(t, ChatNavStrings.nNew), {'n': n});
+}
+
 Map<String, dynamic> emptyMentions() =>
     <String, dynamic>{'v': 1, 'chats': <String, dynamic>{}};
 

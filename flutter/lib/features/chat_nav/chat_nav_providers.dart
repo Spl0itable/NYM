@@ -8,6 +8,7 @@ import '../chat_tools/chat_tools_providers.dart';
 import '../group_tools/group_tools_providers.dart';
 import '../i18n/i18n.dart';
 import '../notifications/self_reference.dart';
+import '../toasts/toast_center.dart';
 import 'chat_nav_service.dart';
 
 String chatNavAlias(String key) {
@@ -17,14 +18,21 @@ String chatNavAlias(String key) {
   return key;
 }
 
+final Expando<(String, String, String?, bool)> _selfMentionMemo =
+    Expando<(String, String, String?, bool)>();
+
 bool chatNavMentions(Ref ref, Message m) {
   if (m.isOwn) return false;
   if (m.isGroup && ref.read(groupToolsProvider).mentionsAll(m)) return true;
-  return contentMentionsSelf(
-    content: m.content,
-    nym: ref.read(appStateProvider).selfNym,
-    pubkey: ref.read(nostrControllerProvider).identity?.pubkey,
-  );
+  final nym = ref.read(appStateProvider).selfNym;
+  final pubkey = ref.read(nostrControllerProvider).identity?.pubkey;
+  final hit = _selfMentionMemo[m];
+  if (hit != null && hit.$1 == m.content && hit.$2 == nym && hit.$3 == pubkey) {
+    return hit.$4;
+  }
+  final r = contentMentionsSelf(content: m.content, nym: nym, pubkey: pubkey);
+  _selfMentionMemo[m] = (m.content, nym, pubkey, r);
+  return r;
 }
 
 final chatNavRevisionProvider = StateProvider<int>((ref) => 0);
@@ -47,6 +55,9 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
           .read(nostrControllerProvider)
           .applyPinnedChannels(channels, persist),
       storeList: (key) => visibleMessagesFor(ref.read(appStateProvider), key),
+      storeRaw: (key) =>
+          ref.read(appStateProvider).messages[key] ?? const <Message>[],
+      plainlyVisible: (m) => plainlyVisible(ref.read(appStateProvider), m),
       lastRead: (key) =>
           ref.read(appStateProvider.notifier).channelLastRead[key] ?? 0,
       badge: (key) {
@@ -73,8 +84,7 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
       groupSendBlocked: (key, text) => ref
           .read(groupToolsProvider)
           .sendBlockedReason(chatNavAlias(key), text),
-      notice: (text) =>
-          ref.read(appStateProvider.notifier).addSystemMessage(text),
+      notice: (text) => showToast(text),
       onChanged: () {
         if (bump) return;
         bump = true;

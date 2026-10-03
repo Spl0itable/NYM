@@ -6,6 +6,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/secret_screen.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/toasts/toast_center.dart';
 import '../../state/settings_provider.dart';
 import 'keyboard_inset_dialog.dart';
 
@@ -388,8 +389,7 @@ class _AppDialogState extends State<_AppDialog> {
               }
               final msg = widget.copiedMessage;
               if (msg != null) {
-                ScaffoldMessenger.maybeOf(context)
-                    ?.showSnackBar(SnackBar(content: Text(msg)));
+                showToast(msg);
               }
             },
             style: TextButton.styleFrom(

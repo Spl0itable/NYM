@@ -7,6 +7,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../features/chat_nav/chat_nav.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/polls/poll_card.dart';
@@ -555,17 +556,22 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         },
                       ),
                     ),
-                    // This Stack already ends at the composer top, so a small inset replaces the PWA's `bottom:90`.
-                    if (_showScrollButton)
-                      Positioned(
-                        right: 24,
-                        bottom: 16,
-                        child: _ScrollToBottomButton(onTap: _scrollToBottom),
-                      ),
                     Positioned(
-                      right: 22,
-                      bottom: _showScrollButton ? 66 : 16,
-                      child: ChatNavFabs(binding: _nav),
+                      left: ChatFabs.rightPhone,
+                      right: fabRight(MediaQuery.sizeOf(context).width, false),
+                      bottom: 16,
+                      child: Align(
+                        alignment: Alignment.bottomRight,
+                        child: ChatNavFabs(
+                          binding: _nav,
+                          slot: _fabSlot(context),
+                          bottom: _showScrollButton
+                              ? _ScrollToBottomButton(
+                                  size: _fabSlot(context),
+                                  onTap: _scrollToBottom)
+                              : null,
+                        ),
+                      ),
                     ),
                   ],
                 );
@@ -780,10 +786,14 @@ class _UnitsBuild {
   final Map<int, String> unitByIndex;
 }
 
+double _fabSlot(BuildContext context) =>
+    MediaQuery.sizeOf(context).width <= ChatFabs.phoneMax ? 36 : 40;
+
 /// 40x40 scroll-to-bottom FAB; unlike the columns copy, it carries the light-mode style.
 class _ScrollToBottomButton extends StatefulWidget {
-  const _ScrollToBottomButton({required this.onTap});
+  const _ScrollToBottomButton({required this.onTap, this.size = 40});
   final VoidCallback onTap;
+  final double size;
 
   @override
   State<_ScrollToBottomButton> createState() => _ScrollToBottomButtonState();
@@ -828,8 +838,9 @@ class _ScrollToBottomButtonState extends State<_ScrollToBottomButton> {
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           child: Container(
-            width: 40,
-            height: 40,
+            key: const ValueKey('chat-nav-bottom'),
+            width: widget.size,
+            height: widget.size,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: fill,

@@ -41,6 +41,16 @@
     const KIND_PREFIX = { voice: 'audio/', round: 'video/', photo: 'image/', video: 'video/' };
     const PORTABLE_VOICE_RATE = 16000;
     const PORTABLE_AUDIO = ['audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav'];
+    const VOICE_CONVERT = Object.freeze({
+        timeoutMs: 8000,
+        minPeak: 1e-4,
+        slackSeconds: 1.5,
+        slackFraction: 0.3,
+        probeLength: 1600,
+        probeFreq: 440,
+        probeAmp: 0.5,
+        probeTolerance: 0.02,
+    });
 
     function formatDurationValue(seconds) {
         const d = Math.max(0, Math.min(3600, Number(seconds) || 0));
@@ -364,6 +374,61 @@
         return out;
     }
 
+    const MODEL_DOWNLOAD = Object.freeze({ pollMs: 1000, stallMs: 20000, maxMs: 600000 });
+
+    function modelDownloadStage(s, limits) {
+        const st = s || {};
+        const lim = Object.assign({}, MODEL_DOWNLOAD, limits || {});
+        if (st.canceled) return 'canceled';
+        if (st.installResult === false) return 'failed';
+        if (st.status === 'available' || st.installResult === true) return 'done';
+        if (st.status === 'unavailable') return 'failed';
+        const elapsed = Number(st.elapsedMs) || 0;
+        if (elapsed >= lim.maxMs) return 'timeout';
+        if (st.status === 'downloading' || st.sawDownloading) return 'downloading';
+        if (elapsed >= lim.stallMs) return 'stalled';
+        return 'starting';
+    }
+
+    function checkPortableVoice(samples, rate, expectedSeconds) {
+        const n = samples && samples.length ? samples.length : 0;
+        if (!n) return { ok: false, reason: 'empty' };
+        let peak = 0;
+        for (let i = 0; i < n; i++) {
+            const x = samples[i];
+            if (typeof x !== 'number' || !isFinite(x)) return { ok: false, reason: 'nan' };
+            const a = Math.abs(x);
+            if (a > peak) peak = a;
+        }
+        if (peak < VOICE_CONVERT.minPeak) return { ok: false, reason: 'silent' };
+        const want = Number(expectedSeconds);
+        if (want > 0) {
+            const got = n / Math.max(1, Number(rate) || PORTABLE_VOICE_RATE);
+            const slack = Math.max(VOICE_CONVERT.slackSeconds, want * VOICE_CONVERT.slackFraction);
+            if (Math.abs(got - want) > slack) return { ok: false, reason: 'length' };
+        }
+        return { ok: true, reason: '' };
+    }
+
+    function voiceProbeSignal() {
+        const n = VOICE_CONVERT.probeLength;
+        const out = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+            out[i] = VOICE_CONVERT.probeAmp * Math.sin(2 * Math.PI * VOICE_CONVERT.probeFreq * i / PORTABLE_VOICE_RATE);
+        }
+        return out;
+    }
+
+    function voiceProbeMatches(expected, actual) {
+        if (!expected || !actual || actual.length < expected.length) return false;
+        for (let i = 0; i < expected.length; i++) {
+            const a = actual[i];
+            if (typeof a !== 'number' || !isFinite(a)) return false;
+            if (Math.abs(a - expected[i]) > VOICE_CONVERT.probeTolerance) return false;
+        }
+        return true;
+    }
+
     function meshFileName(d) {
         if (!d || KINDS.indexOf(d.kind) < 0) return '';
         if ((d.kind === 'photo' || d.kind === 'video') && !d.once) return '';
@@ -587,6 +652,12 @@
                 m[key] = { text: String(text || '').slice(0, 20000), t: nowMs || Date.now() };
                 writeJsonMap(storage, TRANSCRIPTS_KEY, m, 200);
             },
+            count() {
+                return Object.keys(readJsonMap(storage, TRANSCRIPTS_KEY)).length;
+            },
+            clear() {
+                try { storage.removeItem(TRANSCRIPTS_KEY); } catch (_) { }
+            },
         };
     }
 
@@ -596,7 +667,8 @@
         encodeDescriptor, attachDescriptor, parseDescriptor, parseMediaUrl, findMediaNotes,
         imetaTagsForContent, stripMediaNotes, previewText, plainLabel, onceLabel, onceContent,
         formatClock, formatBytes, nextSpeed, parseSpeed, speedLabel, scaledDimensions,
-        extForMime, baseMime, mimeCodecs, isPortableVoiceMime, encodeWav, PORTABLE_VOICE_RATE, meshFileName, parseMeshFileName, meshOnceReceiptId, parseMeshOnceReceiptId,
+        extForMime, baseMime, mimeCodecs, isPortableVoiceMime, encodeWav, PORTABLE_VOICE_RATE,
+        VOICE_CONVERT, checkPortableVoice, MODEL_DOWNLOAD, modelDownloadStage, voiceProbeSignal, voiceProbeMatches, meshFileName, parseMeshFileName, meshOnceReceiptId, parseMeshOnceReceiptId,
         featureState, meshSizeCheck, preferredMime,
         hexToBytes, bytesToHex, randomHex, newOnceSecret, encryptOnce, decryptOnce,
         createOnceStore, createTranscriptStore,

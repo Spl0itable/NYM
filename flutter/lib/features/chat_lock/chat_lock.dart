@@ -228,7 +228,17 @@ String _fill(String s, Map<String, Object?>? vars) {
 
 int _cmpStr(String a, String b) => a.compareTo(b);
 
+final Map<String, String> _lockKeyMemo = <String, String>{};
+
 String lockKey(String kind, Object? id) {
+  final memoKey = '$kind\u0000${id ?? ''}';
+  final hit = _lockKeyMemo[memoKey];
+  if (hit != null) return hit;
+  if (_lockKeyMemo.length >= 4096) _lockKeyMemo.clear();
+  return _lockKeyMemo[memoKey] = _lockKeyOf(kind, id);
+}
+
+String _lockKeyOf(String kind, Object? id) {
   final raw = (id == null ? '' : '$id').trim();
   if (kind == 'dm') {
     final pk = raw.toLowerCase();
@@ -540,7 +550,7 @@ class ChatLockBadges {
 
 ChatLockBadges badges(Iterable<({String key, Object? n})> entries,
     Object? state, String? selfPubkey, bool revealed) {
-  final s = normalizeLocks(state);
+  final s = _asState(state);
   var main = 0;
   var locked = 0;
   for (final e in entries) {
@@ -590,7 +600,8 @@ List<String> notificationLockKeys(String? type, String? route, String? sender) {
 
 bool notificationLocked(
     Object? state, String? type, String? route, String? sender) {
-  final s = normalizeLocks(state);
+  final s = _asState(state);
+  if (_items(s).isEmpty) return false;
   return notificationLockKeys(type, route, sender).any((k) => isLocked(s, k));
 }
 

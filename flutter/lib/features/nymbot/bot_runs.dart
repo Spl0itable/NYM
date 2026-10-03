@@ -19,6 +19,7 @@ const Duration kBotRunMaxAge = Duration(hours: 1);
 const Duration kBotRunPmTimeout = Duration(seconds: 180);
 const Duration kBotRunPollEvery = Duration(seconds: 5);
 const Duration kBotRunSteerKeep = Duration(hours: 2);
+const Duration kBotRunEndedGrace = Duration(seconds: 60);
 const int _claimFirstMs = 3000;
 const int _claimCapMs = 60000;
 
@@ -235,6 +236,7 @@ class BotRunsEngine {
   final Map<String, BotRun> runs = <String, BotRun>{};
   final Map<String, BotRunNote> notes = <String, BotRunNote>{};
   List<Map<String, dynamic>> remote = const <Map<String, dynamic>>[];
+  final Map<String, int> _ended = <String, int>{};
   final Set<String> _guard = <String>{};
   final Map<String, _FarSteer> _far = <String, _FarSteer>{};
   bool _farChecking = false;
@@ -420,7 +422,14 @@ class BotRunsEngine {
   }
 
   void _end(BotRun run) {
-    if (identical(runs[run.id], run)) runs.remove(run.id);
+    if (identical(runs[run.id], run)) {
+      runs.remove(run.id);
+      _ended[run.id] = _now();
+      remote = [
+        for (final r in remote)
+          if ('${r['replyTo']}'.toLowerCase() != run.id) r,
+      ];
+    }
     run.gen++;
     _persist();
     _changed();
@@ -670,7 +679,10 @@ class BotRunsEngine {
     }
     remote = [
       for (final r in list)
-        if (r is Map && r['replyTo'] is String && r['app'] != 'nymbot')
+        if (r is Map &&
+            r['replyTo'] is String &&
+            r['app'] != 'nymbot' &&
+            !_endedHere(r))
           r.cast<String, dynamic>(),
     ];
     for (final r in remote) {
@@ -689,6 +701,15 @@ class BotRunsEngine {
       }
     }
     _changed();
+  }
+
+  bool _endedHere(Map r) {
+    final now = _now();
+    _ended.removeWhere((_, at) => now - at > kBotRunMaxAge.inMilliseconds);
+    final at = _ended['${r['replyTo']}'.toLowerCase()];
+    return at != null &&
+        (r['state'] != 'running' ||
+            now - at < kBotRunEndedGrace.inMilliseconds);
   }
 
   List<BotRunRow> rows() {

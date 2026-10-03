@@ -2,10 +2,12 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -44,6 +46,16 @@ class GiphyService {
   Future<List<GifItem>> trending() => _parse(_api.giphyTrending());
 
   Future<List<GifItem>> search(String query) => _parse(_api.giphySearch(query));
+
+  Future<Uint8List?> bytes(String url) async {
+    try {
+      final res = await http.get(Uri.parse(proxiedMedia(url)));
+      if (res.statusCode != 200 || res.bodyBytes.isEmpty) return null;
+      return res.bodyBytes;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<List<GifItem>> _parse(Future<Map<String, dynamic>> req) async {
     final body = await req;
@@ -107,7 +119,6 @@ class FavoriteGifsStore {
   }
 }
 
-/// [onSelect] receives the chosen GIF url.
 class GifPicker extends ConsumerStatefulWidget {
   const GifPicker({
     super.key,
@@ -121,7 +132,7 @@ class GifPicker extends ConsumerStatefulWidget {
   final Widget? tabs;
 
   final FavoriteGifsStore favoritesStore;
-  final ValueChanged<String> onSelect;
+  final ValueChanged<GifItem> onSelect;
 
   /// When null, close falls back to `Navigator.maybePop`.
   final VoidCallback? onClose;
@@ -428,7 +439,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
     return _GifTile(
       gif: gif,
       favorite: _isFavorite(gif.url),
-      onSelect: () => widget.onSelect(gif.url),
+      onSelect: () => widget.onSelect(gif),
       onToggleFavorite: () => _toggleFavorite(gif),
     );
   }

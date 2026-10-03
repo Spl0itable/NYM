@@ -66,6 +66,10 @@ final RegExp _htmlTagRe = RegExp(r'<[^>]*>');
 final RegExp _dupSuffixRe =
     RegExp(r'@([^@#\s]+)#([0-9a-f]{4})#\2\b', caseSensitive: false);
 
+String? _selfRxKey;
+RegExp? _selfQuoteRx;
+RegExp? _selfAtRx;
+
 bool contentMentionsSelf({
   required String content,
   required String nym,
@@ -75,19 +79,24 @@ bool contentMentionsSelf({
   if (cleanNym.isEmpty || content.isEmpty) return false;
   final rawSuffix = pubkey != null ? getPubkeySuffix(pubkey) : '';
   final sfx = rawSuffix == '????' ? '' : RegExp.escape(rawSuffix);
-  final esc = RegExp.escape(cleanNym);
+  final rxKey = '$cleanNym\u0000$sfx';
+  if (_selfRxKey != rxKey) {
+    final esc = RegExp.escape(cleanNym);
+    final tail = sfx.isNotEmpty
+        ? '(?:#$sfx\\b|(?!#[0-9a-f]{4})(?:\\b|\$))'
+        : '(?!#[0-9a-f]{4})(?:\\b|\$)';
+    _selfQuoteRx = RegExp('^\\s*>+\\s*@$esc(?:#$sfx)?\\s*:',
+        caseSensitive: false, multiLine: true);
+    _selfAtRx = RegExp('@$esc$tail', caseSensitive: false);
+    _selfRxKey = rxKey;
+  }
   var clean = content
       .replaceAll(_htmlTagRe, '')
       .replaceAllMapped(_dupSuffixRe, (m) => '@${m[1]}#${m[2]}');
-  final quoteToMe = RegExp('^\\s*>+\\s*@$esc(?:#$sfx)?\\s*:',
-      caseSensitive: false, multiLine: true);
-  if (quoteToMe.hasMatch(clean)) return true;
+  if (_selfQuoteRx!.hasMatch(clean)) return true;
   clean = clean
       .split('\n')
       .where((line) => !line.trimLeft().startsWith('>'))
       .join('\n');
-  final tail = sfx.isNotEmpty
-      ? '(?:#$sfx\\b|(?!#[0-9a-f]{4})(?:\\b|\$))'
-      : '(?!#[0-9a-f]{4})(?:\\b|\$)';
-  return RegExp('@$esc$tail', caseSensitive: false).hasMatch(clean);
+  return _selfAtRx!.hasMatch(clean);
 }

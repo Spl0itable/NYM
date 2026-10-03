@@ -634,7 +634,7 @@ Object.assign(NYM.prototype, {
             Promise.resolve()
                 .then(() => this.handleGiftWrapDM(event, opts))
                 .catch(() => { })
-                .then(() => this._yieldToIdle())
+                .then(() => this._yieldIfDue())
                 .then(() => {
                     this._decryptActive--;
                     this._pumpDecryptQueue();
@@ -918,7 +918,11 @@ Object.assign(NYM.prototype, {
             let senderVerified = true;
             if (isBitchatWrap) {
                 senderVerified = false;
-            } else if (!seal || seal.pubkey !== rumor.pubkey || !NT.verifyEvent(seal)) {
+            } else if (!seal || seal.pubkey !== rumor.pubkey) {
+                return;
+            } else if (!(typeof this._verifyRelayEventAsync === 'function'
+                ? (await this._verifyRelayEventAsync(seal)) === true
+                : NT.verifyEvent(seal))) {
                 return;
             }
             if (!senderVerified && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(rumor.pubkey)) return;
@@ -1767,23 +1771,38 @@ Object.assign(NYM.prototype, {
     },
 
     _yieldToIdle() {
+        const done = () => { this._sliceStartedAt = this._perfNow(); };
+        try {
+            if (typeof scheduler !== 'undefined' && scheduler && typeof scheduler.yield === 'function') {
+                return scheduler.yield().then(done, done);
+            }
+        } catch (_) { }
         return new Promise(resolve => {
-            if (typeof document !== 'undefined' && document.hidden) {
-                resolve();
-                return;
+            const finish = () => { done(); resolve(); };
+            if (typeof MessageChannel === 'function') {
+                try {
+                    const ch = new MessageChannel();
+                    ch.port1.onmessage = () => { ch.port1.onmessage = null; ch.port1.close(); finish(); };
+                    ch.port2.postMessage(0);
+                    return;
+                } catch (_) { }
             }
-            let settled = false;
-            const done = () => {
-                if (settled) return;
-                settled = true;
-                resolve();
-            };
-            setTimeout(done, 100);
-            if (typeof requestIdleCallback === 'function') {
-                try { requestIdleCallback(done, { timeout: 50 }); return; } catch (_) { }
-            }
-            if (typeof requestAnimationFrame === 'function') requestAnimationFrame(done);
+            setTimeout(finish, 0);
         });
+    },
+
+    _perfNow() {
+        return (typeof performance !== 'undefined' && performance && typeof performance.now === 'function') ? performance.now() : Date.now();
+    },
+
+    _sliceDue(budgetMs = 10) {
+        const at = this._sliceStartedAt;
+        return !at || this._perfNow() - at > budgetMs;
+    },
+
+    _yieldIfDue(budgetMs = 10) {
+        if (!this._sliceDue(budgetMs)) return Promise.resolve();
+        return this._yieldToIdle();
     },
 
     async pmRestoreFromD1() {
@@ -1832,17 +1851,13 @@ Object.assign(NYM.prototype, {
         // Suppress the settings save the replay would otherwise trigger.
         this._restoreFromD1Depth = (this._restoreFromD1Depth || 0) + 1;
         try {
-            const CHUNK = 10;
-            for (let i = 0; i < events.length; i += CHUNK) {
-                const end = Math.min(i + CHUNK, events.length);
-                for (let k = i; k < end; k++) {
-                    const ev = events[k];
-                    if (!ev || typeof ev.id !== 'string') continue;
-                    if (this._pmArchivedIds.has(ev.id)) continue;
-                    this._pmArchivedIds.add(ev.id);
-                    try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
-                }
-                if (end < events.length) await this._yieldToIdle();
+            for (let k = 0; k < events.length; k++) {
+                const ev = events[k];
+                if (!ev || typeof ev.id !== 'string') continue;
+                if (this._pmArchivedIds.has(ev.id)) continue;
+                this._pmArchivedIds.add(ev.id);
+                try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
+                if (k + 1 < events.length) await this._yieldIfDue();
             }
         } finally {
             this._restoreFromD1Depth = Math.max(0, (this._restoreFromD1Depth || 1) - 1);

@@ -22,6 +22,7 @@ import '../globe/topojson.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/discord_timestamp.dart';
 import '../messages/format/message_content.dart';
+import '../toasts/toast_center.dart';
 import 'group_tools.dart';
 import 'group_tools_providers.dart';
 import 'group_tools_service.dart';
@@ -710,9 +711,7 @@ class _GtLocationCardState extends ConsumerState<GtLocationCard> {
                 label: tr('Copy coordinates'),
                 onTap: () async {
                   await Clipboard.setData(ClipboardData(text: coords));
-                  ref
-                      .read(appStateProvider.notifier)
-                      .addSystemMessage(tr('Coordinates copied.'));
+                  showToast(tr('Coordinates copied.'));
                 },
               ),
               if (own)
@@ -934,10 +933,7 @@ Text _hint(BuildContext context, String text) =>
 GroupToolsService _svc(BuildContext context) =>
     ProviderScope.containerOf(context, listen: false).read(groupToolsProvider);
 
-void _notice(BuildContext context, String text) => ProviderScope.containerOf(
-  context,
-  listen: false,
-).read(appStateProvider.notifier).addSystemMessage(text);
+void _notice(BuildContext context, String text) => showToast(text);
 
 bool _gate(
   BuildContext context,
@@ -1181,8 +1177,8 @@ class _JoinRequestsBody extends ConsumerWidget {
   }
 }
 
-Future<void> showGtSlowmodePicker(BuildContext context, String groupId) {
-  return _gtPanel<void>(
+Future<bool> showGtSlowmodePicker(BuildContext context, String groupId) async {
+  final done = await _gtPanel<bool>(
     context,
     tr('Slowmode'),
     Consumer(
@@ -1209,7 +1205,7 @@ Future<void> showGtSlowmodePicker(BuildContext context, String groupId) {
                   OutlinedButton(
                     key: ValueKey('gtSlow-$s'),
                     onPressed: () {
-                      Navigator.of(context).pop();
+                      Navigator.of(context).pop(true);
                       ref.read(groupToolsProvider).setSlowmode(groupId, s);
                     },
                     style: OutlinedButton.styleFrom(
@@ -1227,25 +1223,27 @@ Future<void> showGtSlowmodePicker(BuildContext context, String groupId) {
       },
     ),
   );
+  return done == true;
 }
 
-Future<void> showGtCreateEvent(BuildContext context, String groupId) async {
+Future<bool> showGtCreateEvent(BuildContext context, String groupId) async {
   final svc = _svc(context);
   if (svc.hooks.group(groupId) == null) {
     _notice(context, tr('Events can only be created in a group.'));
-    return;
+    return false;
   }
-  if (!_gate(context, 'event', 'group')) return;
+  if (!_gate(context, 'event', 'group')) return false;
   final blocked = svc.sendBlockedReason(groupId, '');
   if (blocked != null) {
     _notice(context, blocked);
-    return;
+    return false;
   }
-  await _gtPanel<void>(
+  final done = await _gtPanel<bool>(
     context,
     tr('New event'),
     _CreateEventBody(groupId: groupId),
   );
+  return done == true;
 }
 
 class _CreateEventBody extends ConsumerStatefulWidget {
@@ -1347,7 +1345,7 @@ class _CreateEventBodyState extends ConsumerState<_CreateEventBody> {
       _notice(context, tr('Add a title, date and time.'));
       return;
     }
-    Navigator.of(context).pop();
+    Navigator.of(context).pop(true);
     await ref
         .read(nostrControllerProvider)
         .gtSendGroupContent(widget.groupId, content);
@@ -1495,18 +1493,24 @@ class _CreateEventBodyState extends ConsumerState<_CreateEventBody> {
   }
 }
 
-Future<void> showGtShareLocation(BuildContext context, GtChat chat) async {
+const Object _kGtPickOnMap = 'pick';
+
+Future<bool> showGtShareLocation(BuildContext context, GtChat chat) async {
   final a = _svc(context).gate(
     chat.isGroup ? 'location' : 'location',
     chat.isGroup ? 'group' : 'dm',
     peer: chat.isGroup ? null : chat.id,
   );
-  if (!a.ok) return;
-  await _gtPanel<void>(
+  if (!a.ok) return false;
+  final done = await _gtPanel<Object>(
     context,
     tr('Share location'),
     _ShareLocationBody(chat: chat, mesh: a.mesh),
   );
+  if (done == _kGtPickOnMap && context.mounted) {
+    return showGtMapPicker(context, chat);
+  }
+  return done == true;
 }
 
 class _ShareLocationBody extends ConsumerWidget {
@@ -1537,7 +1541,7 @@ class _ShareLocationBody extends ConsumerWidget {
           onTap: () async {
             final nav = Navigator.of(context);
             final root = Navigator.of(context, rootNavigator: true).context;
-            nav.pop();
+            nav.pop(true);
             final pos = await currentGtPosition();
             if (!root.mounted) return;
             if (pos == null) {
@@ -1564,11 +1568,7 @@ class _ShareLocationBody extends ConsumerWidget {
         GtButton(
           key: const ValueKey('gtPickOnMap'),
           label: tr('Pick on map'),
-          onTap: () {
-            final root = Navigator.of(context, rootNavigator: true).context;
-            Navigator.of(context).pop();
-            showGtMapPicker(root, chat);
-          },
+          onTap: () => Navigator.of(context).pop(_kGtPickOnMap),
         ),
         const SizedBox(height: 12),
         Text(
@@ -1589,7 +1589,7 @@ class _ShareLocationBody extends ConsumerWidget {
                     context,
                     rootNavigator: true,
                   ).context;
-                  Navigator.of(context).pop();
+                  Navigator.of(context).pop(true);
                   final pos = await currentGtPosition();
                   if (!root.mounted) return;
                   if (pos == null) {
@@ -1624,7 +1624,7 @@ class _ShareLocationBody extends ConsumerWidget {
             label: tr('Stop sharing live location'),
             danger: true,
             onTap: () {
-              Navigator.of(context).pop();
+              Navigator.of(context).pop(true);
               svc.stopLive();
             },
           ),
@@ -1634,8 +1634,13 @@ class _ShareLocationBody extends ConsumerWidget {
   }
 }
 
-Future<void> showGtMapPicker(BuildContext context, GtChat chat) {
-  return _gtPanel<void>(context, tr('Pick on map'), _MapPickerBody(chat: chat));
+Future<bool> showGtMapPicker(BuildContext context, GtChat chat) async {
+  final done = await _gtPanel<bool>(
+    context,
+    tr('Pick on map'),
+    _MapPickerBody(chat: chat),
+  );
+  return done == true;
 }
 
 class _MapPickerBody extends ConsumerStatefulWidget {
@@ -1716,7 +1721,7 @@ class _MapPickerBodyState extends ConsumerState<_MapPickerBody> {
               label: tr('Send this spot'),
               primary: true,
               onTap: () {
-                Navigator.of(context).pop();
+                Navigator.of(context).pop(true);
                 ref
                     .read(groupToolsProvider)
                     .sendPin(
@@ -1735,17 +1740,17 @@ class _MapPickerBodyState extends ConsumerState<_MapPickerBody> {
 String gtCallLinkUrl(CallLink link) =>
     '$kNymchatShareHost/#call=${GroupTools.encodeCallLink(link)}';
 
-Future<void> showGtCreateCallLink(
+Future<bool> showGtCreateCallLink(
   BuildContext context, {
   String? groupId,
   String? pubkey,
 }) async {
-  if (!_gate(context, 'callLink', 'none')) return;
+  if (!_gate(context, 'callLink', 'none')) return false;
   final container = ProviderScope.containerOf(context, listen: false);
   if (!(container.read(nostrControllerProvider).relayService?.canSign ??
       false)) {
     _notice(context, tr('Call links need a logged-in account.'));
-    return;
+    return false;
   }
   var name = '';
   if (groupId != null) {
@@ -1755,23 +1760,32 @@ Future<void> showGtCreateCallLink(
   } else if (pubkey != null) {
     name = container.read(nostrControllerProvider).gtNym(pubkey);
   }
-  await _gtPanel<void>(
+  var created = false;
+  final done = await _gtPanel<bool>(
     context,
     tr('New call link'),
     _CreateCallLinkBody(
       groupId: groupId,
       pubkey: pubkey,
       name: name.isEmpty ? tr('Call') : name,
+      onCreated: () => created = true,
     ),
   );
+  return done == true || created;
 }
 
 class _CreateCallLinkBody extends ConsumerStatefulWidget {
-  const _CreateCallLinkBody({this.groupId, this.pubkey, required this.name});
+  const _CreateCallLinkBody({
+    this.groupId,
+    this.pubkey,
+    required this.name,
+    this.onCreated,
+  });
 
   final String? groupId;
   final String? pubkey;
   final String name;
+  final VoidCallback? onCreated;
 
   @override
   ConsumerState<_CreateCallLinkBody> createState() =>
@@ -1822,9 +1836,7 @@ class _CreateCallLinkBodyState extends ConsumerState<_CreateCallLinkBody> {
                 label: tr('Copy link'),
                 onTap: () async {
                   await Clipboard.setData(ClipboardData(text: url));
-                  ref
-                      .read(appStateProvider.notifier)
-                      .addSystemMessage(tr('Call link copied.'));
+                  showToast(tr('Call link copied.'));
                 },
               ),
               if (widget.groupId != null || widget.pubkey != null) ...[
@@ -1834,7 +1846,7 @@ class _CreateCallLinkBodyState extends ConsumerState<_CreateCallLinkBody> {
                   label: tr('Send in this chat'),
                   primary: true,
                   onTap: () {
-                    Navigator.of(context).pop();
+                    Navigator.of(context).pop(true);
                     final ctl = ref.read(nostrControllerProvider);
                     if (widget.groupId != null) {
                       ctl.gtSendGroupContent(widget.groupId!, url);
@@ -1923,6 +1935,7 @@ class _CreateCallLinkBodyState extends ConsumerState<_CreateCallLinkBody> {
                       name: _name.text,
                       groupId: widget.groupId,
                     );
+                widget.onCreated?.call();
                 setState(() => _created = link);
               },
             ),
@@ -2020,9 +2033,7 @@ class _CallLinksBody extends ConsumerWidget {
                           await Clipboard.setData(
                             ClipboardData(text: gtCallLinkUrl(l)),
                           );
-                          ref
-                              .read(appStateProvider.notifier)
-                              .addSystemMessage(tr('Call link copied.'));
+                          showToast(tr('Call link copied.'));
                         },
                       ),
                       const SizedBox(width: 6),
@@ -2092,18 +2103,12 @@ Future<void> joinCallLinkFlow(BuildContext context, String input) async {
   if (!ok) return;
   if (!await calls.probeMedia(link.kind)) return;
   await svc.requestLinkJoin(link);
-  container
-      .read(appStateProvider.notifier)
-      .addSystemMessage(tr('Asked {host} to let you in…', {'host': host}));
+  showToast(tr('Asked {host} to let you in…', {'host': host}));
   Timer(const Duration(minutes: 2), () {
     final j = svc.pendingLinkJoin;
     if (j != null && j.id == link.id) {
       svc.consumeLinkJoin();
-      container
-          .read(appStateProvider.notifier)
-          .addSystemMessage(
-            tr('The host did not answer. They may be offline.'),
-          );
+      showToast(tr('The host did not answer. They may be offline.'));
     }
   });
 }
@@ -2116,6 +2121,7 @@ class GtMenuItem {
     required this.onTap,
     this.trailing,
     this.disabled = false,
+    this.openSheet,
   });
 
   final String key;
@@ -2124,6 +2130,7 @@ class GtMenuItem {
   final String? trailing;
   final bool disabled;
   final void Function(BuildContext rootContext) onTap;
+  final Future<bool> Function(BuildContext rootContext)? openSheet;
 }
 
 List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
@@ -2145,6 +2152,7 @@ List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
         onTap: (ctx) => offline
             ? blocked(ctx, GroupToolsStrings.groupsNeedNet)
             : showGtSlowmodePicker(ctx, g.id),
+        openSheet: offline ? null : (ctx) => showGtSlowmodePicker(ctx, g.id),
       ),
     );
     out.add(
@@ -2172,6 +2180,10 @@ List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
           label: tr('Join requests'),
           trailing: n > 0 ? '$n' : null,
           onTap: (ctx) => showGtJoinRequests(ctx, g.id),
+          openSheet: (ctx) async {
+            await showGtJoinRequests(ctx, g.id);
+            return false;
+          },
         ),
       );
     }
@@ -2183,6 +2195,7 @@ List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
       label: tr('Create event'),
       disabled: offline,
       onTap: (ctx) => showGtCreateEvent(ctx, g.id),
+      openSheet: offline ? null : (ctx) => showGtCreateEvent(ctx, g.id),
     ),
   );
   out.add(
@@ -2192,6 +2205,9 @@ List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
       label: tr('Share location'),
       disabled: offline,
       onTap: (ctx) => showGtShareLocation(ctx, GtChat.group(g.id)),
+      openSheet: offline
+          ? null
+          : (ctx) => showGtShareLocation(ctx, GtChat.group(g.id)),
     ),
   );
   out.add(
@@ -2201,6 +2217,9 @@ List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
       label: tr('Create call link'),
       disabled: offline,
       onTap: (ctx) => showGtCreateCallLink(ctx, groupId: g.id),
+      openSheet: offline
+          ? null
+          : (ctx) => showGtCreateCallLink(ctx, groupId: g.id),
     ),
   );
   return out;

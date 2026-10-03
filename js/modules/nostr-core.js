@@ -7,6 +7,7 @@ const _RX_MALICIOUS_DOMAIN = new RegExp(
     '(?:https?:\\/\\/)?(?:[\\w-]+\\.)*(?:'
     + _MALICIOUS_DOMAINS.map(d => d.replace(/\./g, '\\.')).join('|')
     + ')\\b(?:\\/[^\\s]*)?', 'gi');
+const _RX_MALICIOUS_HINT = new RegExp(_MALICIOUS_DOMAINS.map(d => d.replace(/\./g, '\\.')).join('|'), 'i');
 const _RX_BLOCKED_CONTENT_BLOB = /^(?:(?:bitchat1|encmedia|enc):[A-Za-z0-9+\/=_-]{24,}|test_\d+_\d+)$/;
 const _RX_REGEX_ESCAPE_NC = /[.*+?^${}()|[\]\\]/g;
 const _quoteMentionCache = new Map();
@@ -310,8 +311,8 @@ Object.assign(NYM.prototype, {
                 this._cacheD1Profile(pk, rec.event);
                 found.add(pk);
             } catch (_) { }
-            if ((i + 1) % 10 === 0 && i + 1 < records.length && typeof this._yieldToIdle === 'function') {
-                await this._yieldToIdle();
+            if (i + 1 < records.length && typeof this._yieldIfDue === 'function') {
+                await this._yieldIfDue();
             }
         }
         return found;
@@ -991,6 +992,7 @@ Object.assign(NYM.prototype, {
 
     stripMaliciousDomains(content) {
         if (typeof content !== 'string' || !content) return content;
+        if (!_RX_MALICIOUS_HINT.test(content)) return content;
         _RX_MALICIOUS_DOMAIN.lastIndex = 0;
         if (!_RX_MALICIOUS_DOMAIN.test(content)) return content;
         _RX_MALICIOUS_DOMAIN.lastIndex = 0;
@@ -3013,7 +3015,7 @@ Object.assign(NYM.prototype, {
         let guard = 0;
         let sliceStart = Date.now();
         const breathe = async () => {
-            if (Date.now() - sliceStart <= 16) return;
+            if (Date.now() - sliceStart <= 10) return;
             if (typeof this._yieldToIdle === 'function') await this._yieldToIdle();
             sliceStart = Date.now();
         };

@@ -1827,6 +1827,38 @@ class StorageSync {
     return events;
   }
 
+  Future<List<Map<String, dynamic>>> pmScanForward({
+    required int since,
+    int limit = 500,
+    List<String>? pubkeys,
+  }) async {
+    List<String>? keys;
+    if (pubkeys != null) {
+      final seen = <String>{};
+      keys = [
+        for (final raw in pubkeys)
+          if (_isHex64(raw.toLowerCase()) && seen.add(raw.toLowerCase()))
+            raw.toLowerCase(),
+      ].take(200).toList();
+      if (keys.isEmpty) return const [];
+    } else if (!_durable) {
+      throw StateError('no archive');
+    }
+    final stream = await _api.storageStream({
+      'action': 'pm-get',
+      if (keys == null) 'pubkey': _pubkey,
+      'pubkeys': ?keys,
+      'since': since,
+      'asc': true,
+      'limit': limit,
+      if (keys == null) 'auth': await _auth('pm-get'),
+    });
+    return [
+      for (final item in stream.items)
+        if (item is Map && item['id'] is String) Map<String, dynamic>.from(item),
+    ];
+  }
+
   /// Restores up to 5 pages of 200 at boot and resets the pager.
   Future<List<Map<String, dynamic>>> pmRestoreFromD1() async {
     if (!_durable) return const [];

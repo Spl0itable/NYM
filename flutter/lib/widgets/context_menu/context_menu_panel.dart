@@ -19,6 +19,7 @@ import '../../features/mesh/mesh_controller.dart';
 import '../../features/messages/inline_network_image.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/shop/cosmetics.dart';
+import '../../features/toasts/toast_center.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../../models/group.dart';
 import '../../models/message.dart';
@@ -31,6 +32,7 @@ import '../nym_icons.dart';
 import 'context_menu_actions.dart';
 import 'group_context_menu_panel.dart';
 import 'interaction_hooks.dart';
+import 'menu_layer.dart';
 import 'profile_badges.dart';
 import 'report_modal.dart';
 
@@ -89,7 +91,7 @@ class ContextMenuPanel extends ConsumerWidget {
               onReact: onReact,
               onTranslateInline: onTranslateInline,
               backToGroupId: backGroup,
-              onClose: () => Navigator.of(ctx).maybePop(),
+              onClose: () => closeMenuRoute(ctx),
             ),
           ),
         );
@@ -178,9 +180,7 @@ class ContextMenuPanel extends ConsumerWidget {
                 cosmetics,
                 user,
                 controller,
-                () => ref
-                    .read(appStateProvider.notifier)
-                    .addSystemMessage(tr('Copied pubkey to clipboard')),
+                () => showToast(tr('Copied pubkey to clipboard')),
                 isMeshPeer,
               ),
               if (about.isNotEmpty)
@@ -595,9 +595,9 @@ class ContextMenuPanel extends ConsumerWidget {
         await _zap(context, ref);
         break;
       case CtxAction.report:
-        onClose();
-        if (context.mounted) {
-          await ReportModal.show(
+        await openOverMenu(
+          onClose,
+          () => ReportModal.show(
             context,
             targetNym: fullNym,
             hasMessage: t.messageId != null,
@@ -610,8 +610,8 @@ class ContextMenuPanel extends ConsumerWidget {
                 details: details,
               );
             },
-          );
-        }
+          ),
+        );
         break;
       case CtxAction.friend:
         onClose();
@@ -734,9 +734,19 @@ class ContextMenuPanel extends ConsumerWidget {
       ({List<ChatToolAction> actions, Message? msg, String? key}) t) async {
     final rootContext = Navigator.of(context, rootNavigator: true).context;
     final read = ProviderScope.containerOf(context).read;
-    onClose();
     final msg = t.msg;
     final key = t.key;
+    if (a == ChatToolAction.media || a == ChatToolAction.export) {
+      if (key == null || !rootContext.mounted) return;
+      await openOverMenu(
+        onClose,
+        () => a == ChatToolAction.media
+            ? ChatMediaPanel.open(rootContext, key)
+            : ExportChatPanel.open(rootContext, key),
+      );
+      return;
+    }
+    onClose();
     switch (a) {
       case ChatToolAction.save:
       case ChatToolAction.unsave:
@@ -747,13 +757,8 @@ class ContextMenuPanel extends ConsumerWidget {
       case ChatToolAction.unkeep:
         if (msg != null) await ChatToolsActions.toggleKeep(read, msg);
       case ChatToolAction.media:
-        if (key != null && rootContext.mounted) {
-          await ChatMediaPanel.open(rootContext, key);
-        }
       case ChatToolAction.export:
-        if (key != null && rootContext.mounted) {
-          await ExportChatPanel.open(rootContext, key);
-        }
+        break;
     }
   }
 
@@ -816,8 +821,9 @@ class ContextMenuPanel extends ConsumerWidget {
       okLabel: okLabel,
       danger: danger,
     );
+    if (!ok) return;
     onClose();
-    if (ok) await action();
+    await action();
   }
 
   Future<void> _translate(BuildContext context, WidgetRef ref) async {
@@ -835,10 +841,8 @@ class ContextMenuPanel extends ConsumerWidget {
             );
     if (lnAddr == null || lnAddr.isEmpty) {
       // Tell the user the target cannot receive zaps rather than failing silently.
-      ref.read(appStateProvider.notifier).addSystemMessage(
-            tr('@{nym} cannot receive zaps (no lightning address set)',
-                {'nym': stripPubkeySuffix(target.nym)}),
-          );
+      showToast(tr('@{nym} cannot receive zaps (no lightning address set)',
+          {'nym': stripPubkeySuffix(target.nym)}));
       return;
     }
     if (!context.mounted) return;

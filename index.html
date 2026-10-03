@@ -819,12 +819,12 @@
                     </svg>
                 </button>
                 <div class="input-wrapper">
-                    <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
-                    <div class="autocomplete-dropdown" id="channelAutocomplete"></div>
-                    <div class="emoji-autocomplete" id="emojiAutocomplete"></div>
-                    <div class="command-palette" id="commandPalette"></div>
-                    <div class="command-palette kaomoji-autocomplete" id="kaomojiAutocomplete"></div>
-                    <div class="upload-progress" id="uploadProgress">
+                    <div class="autocomplete-dropdown" id="autocompleteDropdown" data-composer-dock></div>
+                    <div class="autocomplete-dropdown" id="channelAutocomplete" data-composer-dock></div>
+                    <div class="emoji-autocomplete" id="emojiAutocomplete" data-composer-dock></div>
+                    <div class="command-palette" id="commandPalette" data-composer-dock></div>
+                    <div class="command-palette kaomoji-autocomplete" id="kaomojiAutocomplete" data-composer-dock></div>
+                    <div class="upload-progress" id="uploadProgress" data-composer-dock>
                         <button class="upload-progress-close" data-action="cancelUpload" title="Cancel upload" aria-label="Cancel upload">
                             <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -836,7 +836,7 @@
                             <div class="progress-fill" id="progressFill"></div>
                         </div>
                     </div>
-                    <div class="edit-preview nm-hidden" id="editPreview">
+                    <div class="edit-preview nm-hidden" id="editPreview" data-composer-dock>
                         <div class="edit-preview-bar"></div>
                         <div class="edit-preview-content">
                             <span class="edit-preview-label">Editing message</span>
@@ -849,7 +849,7 @@
                             </svg>
                         </button>
                     </div>
-                    <div class="quote-preview nm-hidden" id="quotePreview">
+                    <div class="quote-preview nm-hidden" id="quotePreview" data-composer-dock>
                         <div class="quote-preview-bar"></div>
                         <div class="quote-preview-content">
                             <span class="quote-preview-author" id="quotePreviewAuthor"></span>
@@ -862,7 +862,7 @@
                             </svg>
                         </button>
                     </div>
-                    <div class="composer-panels" id="composerPanels">
+                    <div class="composer-panels" id="composerPanels" data-composer-dock>
                         <div class="media-preview-strip nm-hidden" id="mediaPreviewStrip" data-sig=""></div>
                         <div class="format-toolbar nm-hidden" id="formatToolbar" role="toolbar" aria-label="Message formatting"></div>
                     </div>
@@ -987,13 +987,15 @@
     </div>
 
     <!-- Image/Video Modal -->
-    <div class="image-modal" id="imageModal" data-action="closeImageModal">
-        <span class="image-modal-close" data-action="closeImageModal">×</span>
-        <span class="image-modal-download" data-action="downloadModalMedia" title="Download">⤓</span>
-        <button class="image-modal-nav image-modal-prev nm-hidden" id="imageModalPrev" data-action="imageModalPrev" title="Previous">‹</button>
-        <button class="image-modal-nav image-modal-next nm-hidden" id="imageModalNext" data-action="imageModalNext" title="Next">›</button>
+    <div class="image-modal" id="imageModal" data-action="closeImageModal" role="dialog" aria-modal="true" aria-label="Media viewer">
+        <button type="button" class="image-modal-close" id="imageModalCloseBtn" data-action="closeImageModal" title="Close" aria-label="Close">×</button>
+        <button type="button" class="image-modal-download" data-action="downloadModalMedia" title="Download" aria-label="Download">⤓</button>
+        <button type="button" class="image-modal-nav image-modal-prev nm-hidden" id="imageModalPrev" data-action="imageModalPrev" title="Previous" aria-label="Previous">‹</button>
+        <button type="button" class="image-modal-nav image-modal-next nm-hidden" id="imageModalNext" data-action="imageModalNext" title="Next" aria-label="Next">›</button>
         <img id="modalImage" src="" alt="Expanded image" decoding="async" loading="lazy">
         <video id="modalVideo" controls playsinline webkit-playsinline class="nm-hidden nm-h-17" data-action="videoModalStop"></video>
+        <button type="button" class="image-modal-spoiler nm-hidden" id="modalSpoiler" data-action="imageModalRevealSpoiler">Spoiler, tap to reveal</button>
+        <div class="image-modal-counter nm-hidden" id="imageModalCounter" aria-live="polite"></div>
     </div>
 
     <!-- Poll Modal -->
@@ -2175,6 +2177,13 @@
                         <div class="form-hint">Style used when generating random nicknames</div>
                     </div>
 
+                    <div class="form-group" id="speechModelGroup">
+                        <label class="form-label">Voice message transcription</label>
+                        <div class="form-hint" id="speechModelStatus" role="status" aria-live="polite"></div>
+                        <button class="icon-btn nm-h-73" id="speechTranscriptsClearBtn" data-action="nymSpeechTranscriptsClear">Delete saved transcripts</button>
+                        <div class="form-hint">Transcription runs on this device. Your browser keeps the speech model after the first download and reuses it. Nymchat can't delete the model; your browser's settings can.</div>
+                    </div>
+
                     <div class="form-group nm-hidden" id="autoEphemeralSettingGroup">
                         <label class="form-label">Auto Ephemeral Mode on Restart</label>
                         <select class="form-select" id="autoEphemeralSelect">
@@ -2603,12 +2612,7 @@
                     <a href="https://nymchat.app/dmca/" target="_blank" rel="noopener">DMCA</a>
                 </div>
                 <div class="about-legal">
-                    <div class="about-attribution" data-no-i18n>Nymchat by 21 Million LLC</div>
-                    <div class="about-copyright"><span data-no-i18n>© 21 Million LLC</span> · <span>Licensed under AGPL-3.0</span></div>
-                    <div class="about-legal-links">
-                        <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">License</a>
-                        <a href="https://github.com/Spl0itable/NYM" target="_blank" rel="noopener">Source code</a>
-                    </div>
+                    <div class="about-copyright"><a href="https://nostrservices.com" target="_blank" rel="noopener" data-no-i18n>© 21 Million LLC</a> · <a href="https://github.com/Spl0itable/NYM/blob/main/LICENSE" target="_blank" rel="noopener">Licensed under AGPL-3.0</a></div>
                 </div>
                 <div class="about-divider"></div>
                 <div class="about-contact-title">Contact the developer</div>

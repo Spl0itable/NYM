@@ -4357,19 +4357,15 @@ Object.assign(NYM.prototype, {
     },
 
     _drainRelayMessageQueue() {
-        if (this._relayQueueDraining) {
-            if (this._relayQueueResume && typeof document !== 'undefined' && document.hidden) this._relayQueueResume();
-            return;
-        }
+        if (this._relayQueueDraining) return;
         this._relayQueueDraining = true;
         let rescheduled = false;
         try {
             const start = Date.now();
-            const hidden = typeof document !== 'undefined' && document.hidden;
             while (this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
                 const entry = this._relayMsgQueue.shift();
                 if (entry.ok) this._dispatchRelayMessage(entry.msg, entry.relayUrl);
-                if (!hidden && Date.now() - start > 24 && this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
+                if (Date.now() - start > 12 && this._relayMsgQueue.length && this._relayMsgQueue[0].ready) {
                     rescheduled = true;
                     let resumed = false;
                     const resume = () => {

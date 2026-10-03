@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-enum TranscribeStatus { available, downloadable, unavailable }
+import 'media_notes.dart';
+
+enum TranscribeStatus { available, downloadable, downloading, unavailable }
 
 class TranscribeAvailability {
   const TranscribeAvailability(this.status, [this.reason = '']);
@@ -24,13 +26,39 @@ const String kSpeechDenied =
 const String kSpeechNoBuild =
     "This version of the app can't transcribe on this device.";
 
+const String kModelStarting = 'Starting the speech model download…';
+const String kModelDownloading = 'Downloading the speech model…';
+const String kModelPreparing = 'Preparing the speech model…';
+const String kModelDownloadLabel = 'Speech model download';
+const String kModelFailed = "The speech model couldn't be downloaded.";
+const String kModelStalled =
+    "The speech model download didn't start. This device may not offer on-device speech models.";
+const String kModelTimeout = 'The speech model download is taking too long.';
+const String kModelCanceled =
+    'Canceled. The system may still finish the download in the background.';
+
 const List<String> kTranscriptionStrings = <String>[
   kNoSpeechEngine,
   kNoSpeechModel,
   kSpeechOsTooOld,
   kSpeechDenied,
   kSpeechNoBuild,
+  kModelStarting,
+  kModelDownloading,
+  kModelPreparing,
+  kModelDownloadLabel,
+  kModelFailed,
+  kModelStalled,
+  kModelTimeout,
+  kModelCanceled,
 ];
+
+String transcribeStatusName(TranscribeStatus s) => switch (s) {
+      TranscribeStatus.available => 'available',
+      TranscribeStatus.downloadable => 'downloadable',
+      TranscribeStatus.downloading => 'downloading',
+      TranscribeStatus.unavailable => 'unavailable',
+    };
 
 String transcribeReasonText(String code) {
   switch (code) {
@@ -69,6 +97,8 @@ class TranscriptionService {
           return const TranscribeAvailability(TranscribeStatus.available);
         case 'downloadable':
           return const TranscribeAvailability(TranscribeStatus.downloadable);
+        case 'downloading':
+          return const TranscribeAvailability(TranscribeStatus.downloading);
       }
       return TranscribeAvailability(
           TranscribeStatus.unavailable, transcribeReasonText(reason));
@@ -99,3 +129,6 @@ class TranscriptionService {
 
 final transcriptionServiceProvider =
     Provider<TranscriptionService>((ref) => TranscriptionService());
+
+final modelDownloadLimitsProvider =
+    Provider<ModelDownloadLimits>((ref) => kModelDownload);

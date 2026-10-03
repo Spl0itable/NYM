@@ -27,6 +27,7 @@ import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
 import '../shop/shop_controller.dart' show shopControllerProvider;
 import '../commands/command_i18n.dart';
+import '../toasts/toast_center.dart';
 import 'bot_commands.dart';
 import 'bot_runs.dart';
 import 'nymbot_models.dart';
@@ -278,7 +279,7 @@ class BotChatController extends StateNotifier<BotChatState> {
           priceRetry: BotPriceRetry(
               message: _ownMessageFor(run.id) ?? _specMessage(run.spec),
               wrapId: run.eventId));
-      _system(kBotPriceUnavailableText);
+      _systemFeed(kBotPriceUnavailableText);
     },
     onOpenBuy: (pro) {
       if (anon.ready) {
@@ -650,8 +651,9 @@ class BotChatController extends StateNotifier<BotChatState> {
   String get _botNym =>
       stripPubkeySuffix(_appState.users[kNymbotPubkey]?.nym ?? 'Nymbot');
 
-  /// Centered system line, localized here so every English caller string gets translated.
-  void _system(String text) =>
+  void _system(String text) => showToast(tr(text));
+
+  void _systemFeed(String text) =>
       _app.addSystemMessage(tr(text), storageKey: conversationKey);
 
   /// Local-only bot-styled info bubble; a repeated [id] replaces the old one with a fresh timestamp.
@@ -1588,7 +1590,7 @@ class BotChatController extends StateNotifier<BotChatState> {
       if (havePro > 0) {
         segs.add('$havePro Pro credit${havePro == 1 ? '' : 's'}');
       }
-      _system('Transfer ALL ${segs.join(' and ')} to @$targetNym? This '
+      _systemFeed('Transfer ALL ${segs.join(' and ')} to @$targetNym? This '
           'empties your balance. To confirm, type: ?transfer @$targetNym'
           '#${getPubkeySuffix(targetPubkey)} confirm');
       return;

@@ -10,6 +10,8 @@ import '../core/constants/event_kinds.dart';
 import '../core/constants/history_window.dart';
 import '../core/utils/nym_utils.dart';
 import '../features/channels/channel_manager.dart';
+import '../features/chat_tools/chat_tools.dart'
+    show ChatToolsLimits, EditCandidate, editVerdict;
 import '../features/chat_tools/chat_tools_service.dart' show chatToolsHidden;
 import '../features/emoji/custom_emoji.dart'
     show
@@ -28,6 +30,7 @@ import '../features/nymbot/bot_runs.dart' show anchorBotReply;
 import '../features/messages/trust_graph.dart';
 import '../features/pms/pm_logic.dart';
 import '../features/polls/poll_logic.dart';
+import '../features/toasts/toast_center.dart';
 import '../features/zaps/zap_logic.dart';
 import '../models/channel.dart';
 import '../models/group.dart';
@@ -886,6 +889,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   void Function(Message m, String newContent, int editAt)? onBeforeEdit;
 
+  void Function(Message m, String text, int editAt)? onStaleEdit;
+
   /// Fired when a new PM row is created so the critical REQ starts watching the contact's profile.
   void Function(String peerPubkey)? onPMConversationAdded;
 
@@ -1068,6 +1073,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   final Map<String, int> _pendingEditAt = <String, int>{};
 
+  final Map<String, EditCandidate> _editHeads = <String, EditCandidate>{};
+
+  final Map<String, List<EditCandidate>> _staleEdits =
+      <String, List<EditCandidate>>{};
+
   /// PM peers the user closed; their older backlog is ignored.
   final Set<String> _closedPMs = <String>{};
 
@@ -1113,6 +1123,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _seenIds.clear();
     _seenNymMessageIds.clear();
     _pendingEdits.clear();
+    _editHeads.clear();
+    _staleEdits.clear();
     _closedPMs.clear();
     _closedPMTimes.clear();
     _leftGroups.clear();
@@ -1146,6 +1158,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     _seenIds.clear();
     _seenNymMessageIds.clear();
     _pendingEdits.clear();
+    _editHeads.clear();
+    _staleEdits.clear();
     _closedPMs.clear();
     _closedPMTimes.clear();
     _leftGroups.clear();
@@ -1576,7 +1590,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final editId = e.tagValue('edit');
     if (editId != null && editId.isNotEmpty) {
       applyEditOrDefer(editId, e.content,
-          editorPubkey: e.pubkey, editAt: e.createdAt);
+          editorPubkey: e.pubkey, editAt: e.createdAt, editId: e.id);
       return;
     }
     // `nymmesh` tag marks a relay replay of a mesh message; registering its id drops whichever copy arrives second.
@@ -3357,6 +3371,18 @@ class AppStateNotifier extends StateNotifier<AppState> {
           if (m.content != newContent) {
             onBeforeEdit?.call(m, newContent, editAt);
           }
+          if (authorPubkey == null) {
+            final head = EditCandidate(
+                newContent,
+                editAt > 0
+                    ? editAt
+                    : DateTime.now().millisecondsSinceEpoch ~/ 1000);
+            _setEditHead('${m.id}|${m.pubkey}', head);
+            final nid = m.nymMessageId;
+            if (nid != null && nid.isNotEmpty) {
+              _setEditHead('$nid|${m.pubkey}', head);
+            }
+          }
           m.content = newContent;
           m.isEdited = true;
           changed = true;
@@ -3369,19 +3395,41 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   /// Applies an incoming edit in place, or buffers it until the original arrives; never append it as a new message.
   void applyEditOrDefer(String originalId, String newContent,
-      {required String editorPubkey, bool verified = true, int editAt = 0}) {
+      {required String editorPubkey,
+      bool verified = true,
+      int editAt = 0,
+      String editId = ''}) {
     if (!verified || originalId.isEmpty || editorPubkey.isEmpty) return;
-    if (_hasMessageWithId(originalId)) {
+    final cand = EditCandidate(newContent,
+        editAt > 0 ? editAt : DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        editId);
+    final headKey = '$originalId|$editorPubkey';
+    final target = _findEditTarget(originalId, editorPubkey);
+    if (target != null) {
+      final verdict = editVerdict(_editHeads[headKey], cand, target.createdAt);
+      if (verdict == 'stale') {
+        onStaleEdit?.call(target, cand.text, cand.at);
+        return;
+      }
+      if (verdict == 'invalid') return;
+      _setEditHead(headKey, cand);
       applyLocalEdit(originalId, newContent,
-          authorPubkey: editorPubkey, editAt: editAt);
-    } else {
+          authorPubkey: editorPubkey, editAt: cand.at);
+    } else if (!_hasMessageWithId(originalId)) {
+      final prior = _editHeads[headKey];
+      final verdict = editVerdict(prior, cand, 0);
+      if (verdict == 'stale') {
+        _parkStaleEdit(headKey, cand);
+        return;
+      }
+      if (verdict != 'apply') return;
+      if (prior != null) _parkStaleEdit(headKey, prior);
+      _setEditHead(headKey, cand);
       final byEditor =
           _pendingEdits.putIfAbsent(originalId, () => <String, String>{});
       byEditor.remove(editorPubkey);
       byEditor[editorPubkey] = newContent;
-      _pendingEditAt['$originalId|$editorPubkey'] = editAt > 0
-          ? editAt
-          : DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      _pendingEditAt[headKey] = cand.at;
       if (_pendingEditAt.length > 4000) {
         _pendingEditAt.remove(_pendingEditAt.keys.first);
       }
@@ -3409,13 +3457,51 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (pending == null) return false;
     var applied = false;
     for (final entry in pending.entries) {
-      final at = _pendingEditAt.remove('$hitKey|${entry.key}') ?? 0;
+      final headKey = '$hitKey|${entry.key}';
+      final at = _pendingEditAt.remove(headKey) ?? 0;
+      final stale = _staleEdits.remove(headKey) ?? const <EditCandidate>[];
+      final target = _findEditTarget(hitKey, entry.key);
+      if (target == null) continue;
+      if (editVerdict(null, EditCandidate(entry.value, at), target.createdAt) ==
+          'invalid') {
+        continue;
+      }
       if (applyLocalEdit(hitKey, entry.value,
           authorPubkey: entry.key, editAt: at)) {
         applied = true;
       }
+      for (final s in stale) {
+        if (editVerdict(null, s, target.createdAt) == 'invalid') continue;
+        onStaleEdit?.call(target, s.text, s.at);
+      }
     }
     return applied;
+  }
+
+  Message? _findEditTarget(String originalId, String authorPubkey) {
+    for (final list in state.messages.values) {
+      for (final m in list) {
+        if ((m.id == originalId || m.nymMessageId == originalId) &&
+            m.pubkey == authorPubkey) {
+          return m;
+        }
+      }
+    }
+    return null;
+  }
+
+  void _setEditHead(String key, EditCandidate head) {
+    _editHeads.remove(key);
+    _editHeads[key] = head;
+    if (_editHeads.length > 4000) _editHeads.remove(_editHeads.keys.first);
+  }
+
+  void _parkStaleEdit(String key, EditCandidate edit) {
+    final list = _staleEdits.remove(key) ?? <EditCandidate>[];
+    list.add(edit);
+    if (list.length > ChatToolsLimits.editVersionsMax) list.removeAt(0);
+    _staleEdits[key] = list;
+    if (_staleEdits.length > 2000) _staleEdits.remove(_staleEdits.keys.first);
   }
 
   bool _hasMessageWithId(String messageId) {
@@ -4201,7 +4287,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         final reason = keywordHit
             ? tr('matched one of your blocked keywords')
             : tr('matched a block rule');
-        addSystemMessage(tr(
+        showToast(tr(
             'Your message {reason} and was hidden locally. It was still sent.',
             {'reason': reason}));
       } else if (state.clientGatesActive &&
@@ -4442,6 +4528,14 @@ List<Message> visibleMessagesFor(AppState s, String storageKey) {
   }
   visible.sort(compareMessages);
   return visible;
+}
+
+bool plainlyVisible(AppState s, Message m) {
+  if (m.expiresAt != null || m.threadRoot != null) return false;
+  final canFilter = s.blockedUsers.isNotEmpty ||
+      s.blockedKeywords.isNotEmpty ||
+      appSpamFilterEnabled;
+  return !canFilter || !s.isMessageFiltered(m);
 }
 
 /// The id a thread reply points at: nymMessageId for PM/group, event id for channels.

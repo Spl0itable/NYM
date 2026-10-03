@@ -136,6 +136,9 @@
                 nymVoiceSeek(e, t) { e.stopPropagation(); self._voiceSeekFromEvent(t.closest('.nym-voice'), e); },
                 nymVoiceSpeed(e) { e.stopPropagation(); self._cycleVoiceSpeed(); },
                 nymVoiceTranscribe(e, t) { e.stopPropagation(); self._transcribeVoice(t.closest('.nym-voice')); },
+                nymModelCancel(e, t) { e.stopPropagation(); const el = t.closest('.nym-voice'); if (el && el._modelView) el._modelView.cancel(); },
+                nymModelRetry(e, t) { e.stopPropagation(); self._transcribeVoice(t.closest('.nym-voice'), { consented: true }); },
+                nymSpeechTranscriptsClear(e) { e.stopPropagation(); self.clearSavedTranscripts(); },
                 nymRoundToggle(e, t) { e.stopPropagation(); self._roundToggle(t.closest('.nym-round')); },
                 nymOnceOpen(e, t) { e.stopPropagation(); self._openOnce(t.closest('.nym-once')); },
                 nymOnceClose(e) { e.stopPropagation(); self._closeOnceViewer(); },
@@ -400,8 +403,8 @@
             }
             let status = 'unavailable';
             try { status = await SR.available({ langs: [lang], processLocally: true }); } catch (_) { }
-            if (status === 'available') return { ok: true, SR };
-            if (status === 'downloadable' || status === 'downloading') return { ok: true, SR, needsInstall: true };
+            if (status === 'available') return { ok: true, SR, status };
+            if (status === 'downloadable' || status === 'downloading') return { ok: true, SR, needsInstall: true, status };
             return { ok: false, reason: this._mt('No on-device speech model is available for {lang}.', { lang }) };
         },
 
@@ -420,8 +423,8 @@
             return await resp.arrayBuffer();
         },
 
-        async _transcribeVoice(el) {
-            if (!el || el.dataset.transcribing) return;
+        async _transcribeVoice(el, opts) {
+            if (!el || el.dataset.transcribing || el._modelView) return;
             const key = this._voiceKey(el);
             const cached = this._transcripts.get(key);
             if (cached != null) { this._showTranscript(el, cached); return; }
@@ -432,16 +435,14 @@
                 return;
             }
             if (cap.needsInstall) {
-                const ok = await window.showAppConfirm(
-                    this._mt('Transcription runs on this device. A speech model for {lang} needs to be downloaded once. The audio never leaves this device.', { lang }),
-                    { okLabel: this._mt('Download model') });
-                if (!ok) return;
-                let installed = false;
-                try { installed = await cap.SR.install({ langs: [lang], processLocally: true }); } catch (_) { }
-                if (!installed) {
-                    this._showTranscript(el, null, this._mt("The speech model couldn't be downloaded."));
-                    return;
+                const running = this._speechInstalls && this._speechInstalls.get(lang);
+                if (!running && !(opts && opts.consented) && cap.status !== 'downloading') {
+                    const ok = await window.showAppConfirm(
+                        this._mt('Transcription runs on this device. A speech model for {lang} needs to be downloaded once. The audio never leaves this device.', { lang }),
+                        { okLabel: this._mt('Download model') });
+                    if (!ok) return;
                 }
+                if (!(await this._installSpeechModel(el, cap.SR, lang))) return;
             }
             el.dataset.transcribing = '1';
             this._showTranscript(el, null, this._mt('Transcribing on this device…'));
@@ -455,6 +456,206 @@
             } finally {
                 delete el.dataset.transcribing;
             }
+        },
+
+        _modelLimits() {
+            return Object.assign({}, NM().MODEL_DOWNLOAD, this._modelDownloadLimits || {});
+        },
+
+        _startSpeechInstall(SR, lang) {
+            const M = NM();
+            const lim = this._modelLimits();
+            const opts = { langs: [lang], processLocally: true };
+            const job = {
+                lang, startedAt: Date.now(), status: 'downloadable', installResult: undefined,
+                sawDownloading: false, canceled: false, stage: 'starting', listeners: new Set(), watchers: 0,
+            };
+            const notify = () => job.listeners.forEach((f) => { try { f(job); } catch (_) { } });
+            try {
+                Promise.resolve(SR.install(opts)).then((r) => { job.installResult = r === true; }, () => { job.installResult = false; });
+            } catch (_) {
+                job.installResult = false;
+            }
+            const final = ['done', 'failed', 'stalled', 'timeout', 'canceled'];
+            job.promise = (async () => {
+                for (;;) {
+                    job.stage = M.modelDownloadStage({
+                        status: job.status, installResult: job.installResult, elapsedMs: Date.now() - job.startedAt,
+                        sawDownloading: job.sawDownloading, canceled: job.canceled,
+                    }, lim);
+                    notify();
+                    if (final.indexOf(job.stage) >= 0) return job.stage;
+                    await new Promise((r) => setTimeout(r, lim.pollMs));
+                    if (job.installResult !== undefined || job.canceled) continue;
+                    try { job.status = await this._voiceWithin(SR.available(opts), Math.max(2000, lim.pollMs * 5)); } catch (_) { }
+                    if (job.status === 'downloading') job.sawDownloading = true;
+                }
+            })();
+            return job;
+        },
+
+        _modelStageText(stage) {
+            if (stage === 'downloading') return this._mt('Downloading the speech model…');
+            if (stage === 'preparing') return this._mt('Preparing the speech model…');
+            return this._mt('Starting the speech model download…');
+        },
+
+        _mountModelProgress(el, job) {
+            const foot = el.querySelector('.nym-voice-foot') || el;
+            const old = el.querySelector('.nym-model-dl');
+            if (old) old.remove();
+            const tx = el.querySelector('.nym-voice-tx');
+            const box = el.querySelector('.nym-voice-transcript');
+            if (tx) tx.hidden = true;
+            if (box) box.hidden = true;
+            const panel = document.createElement('div');
+            panel.className = 'nym-model-dl';
+            panel.setAttribute('role', 'group');
+            panel.setAttribute('aria-label', this._mt('Speech model download'));
+            const row = document.createElement('div');
+            row.className = 'nym-model-dl-row';
+            const stage = document.createElement('span');
+            stage.className = 'nym-model-dl-stage';
+            stage.setAttribute('aria-live', 'polite');
+            const meta = document.createElement('span');
+            meta.className = 'nym-model-dl-meta';
+            row.appendChild(stage);
+            row.appendChild(meta);
+            const bar = document.createElement('div');
+            bar.className = 'nym-model-dl-bar';
+            bar.setAttribute('role', 'progressbar');
+            bar.setAttribute('aria-label', this._mt('Speech model download'));
+            bar.appendChild(document.createElement('span'));
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.className = 'nym-model-dl-cancel';
+            cancel.dataset.action = 'nymModelCancel';
+            cancel.textContent = this._mt('Cancel');
+            panel.appendChild(row);
+            panel.appendChild(bar);
+            panel.appendChild(cancel);
+            foot.appendChild(panel);
+            let shown = job.stage;
+            const paint = () => {
+                const text = this._modelStageText(shown);
+                if (stage.textContent !== text) stage.textContent = text;
+                const clock = NM().formatClock((Date.now() - job.startedAt) / 1000);
+                if (meta.textContent !== clock) meta.textContent = clock;
+                bar.setAttribute('aria-valuetext', text + ' ' + clock);
+            };
+            const onJob = (j) => { if (j.stage === 'starting' || j.stage === 'downloading') shown = j.stage; paint(); };
+            job.listeners.add(onJob);
+            job.watchers++;
+            const timer = setInterval(paint, 500);
+            paint();
+            let resolveCancel;
+            const view = {
+                canceled: new Promise((r) => { resolveCancel = r; }),
+                cancel() {
+                    resolveCancel('canceled');
+                },
+                setStage(s) { shown = s; paint(); },
+                remove() {
+                    clearInterval(timer);
+                    job.listeners.delete(onJob);
+                    panel.remove();
+                    if (el._modelView === view) el._modelView = null;
+                },
+            };
+            el._modelView = view;
+            return view;
+        },
+
+        async _installSpeechModel(el, SR, lang) {
+            if (!this._speechInstalls) this._speechInstalls = new Map();
+            let job = this._speechInstalls.get(lang);
+            if (!job) {
+                job = this._startSpeechInstall(SR, lang);
+                this._speechInstalls.set(lang, job);
+                const own = job;
+                job.promise.then(() => { if (this._speechInstalls.get(lang) === own) this._speechInstalls.delete(lang); });
+            }
+            const view = this._mountModelProgress(el, job);
+            const outcome = await Promise.race([job.promise, view.canceled]);
+            if (outcome === 'canceled') {
+                job.watchers--;
+                if (job.watchers <= 0) job.canceled = true;
+                view.remove();
+                this._showTranscript(el, null, this._mt('Canceled. Your browser may still finish the download in the background.'));
+                this._showTranscribeButton(el);
+                return false;
+            }
+            job.watchers--;
+            if (outcome === 'done') {
+                view.setStage('preparing');
+                try { await this._voiceWithin(SR.available({ langs: [lang], processLocally: true }), 3000); } catch (_) { }
+                view.remove();
+                return true;
+            }
+            view.remove();
+            let msg;
+            if (outcome === 'stalled') msg = this._mt("The speech model download didn't start. This browser may not offer on-device speech models.");
+            else if (outcome === 'timeout') msg = this._mt('The speech model download is taking too long.');
+            else msg = this._mt("The speech model couldn't be downloaded.");
+            this._showModelRetry(el, msg);
+            this._voiceErrorToast(msg);
+            return false;
+        },
+
+        _showTranscribeButton(el) {
+            const tx = el.querySelector('.nym-voice-tx');
+            if (tx) tx.hidden = false;
+        },
+
+        _showModelRetry(el, msg) {
+            this._showTranscript(el, null, msg);
+            const box = el.querySelector('.nym-voice-transcript');
+            if (!box) return;
+            box.appendChild(document.createTextNode(' '));
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'nym-model-retry';
+            retry.dataset.action = 'nymModelRetry';
+            retry.textContent = this._mt('Retry');
+            box.appendChild(retry);
+        },
+
+        async refreshSpeechModelSettings() {
+            const status = document.getElementById('speechModelStatus');
+            const clear = document.getElementById('speechTranscriptsClearBtn');
+            if (!status) return;
+            if (!this._transcripts) this._transcripts = NM().createTranscriptStore(window.localStorage);
+            const n = this._transcripts.count();
+            if (clear) {
+                clear.textContent = this._mt('Delete saved transcripts ({count})', { count: n });
+                clear.disabled = n === 0;
+            }
+            status.textContent = this._mt('Checking…');
+            const lang = this._transcribeLang();
+            let cap;
+            try { cap = await this._transcribeCapability(lang); } catch (_) { cap = { ok: false, reason: this._mt('No on-device speech model is available for {lang}.', { lang }) }; }
+            let text;
+            if (!cap.ok) text = cap.reason;
+            else if (!cap.needsInstall) text = this._mt('The speech model for {lang} is downloaded on this device and is reused for every transcription.', { lang });
+            else if (cap.status === 'downloading' || (this._speechInstalls && this._speechInstalls.get(lang))) text = this._mt('The speech model for {lang} is downloading.', { lang });
+            else text = this._mt('The speech model for {lang} is not downloaded yet. It downloads the first time you transcribe a voice message.', { lang });
+            status.textContent = text;
+        },
+
+        async clearSavedTranscripts() {
+            if (!this._transcripts) this._transcripts = NM().createTranscriptStore(window.localStorage);
+            const n = this._transcripts.count();
+            if (!n) return;
+            const ok = await window.showAppConfirm(this._mt('Delete {count} saved transcripts from this device?', { count: n }), { okLabel: this._mt('Delete'), danger: true });
+            if (!ok) return;
+            this._transcripts.clear();
+            document.querySelectorAll('.nym-voice').forEach((el) => {
+                if (el.dataset.transcribing || el._modelView) return;
+                const box = el.querySelector('.nym-voice-transcript');
+                if (box) { box.hidden = true; box.textContent = ''; }
+                this._showTranscribeButton(el);
+            });
+            await this.refreshSpeechModelSettings();
         },
 
         async _runLocalRecognition(SR, bytes, lang) {
@@ -757,15 +958,24 @@
                 return;
             }
             if (this._voiceRec !== rec) { rec.stream.getTracks().forEach((t) => t.stop()); return; }
-            rec.mime = NM().preferredMime('voice', (m) => window.MediaRecorder.isTypeSupported(m));
             try {
-                rec.recorder = new MediaRecorder(rec.stream, Object.assign({ audioBitsPerSecond: NM().LIMITS.voiceBitrate }, rec.mime ? { mimeType: rec.mime } : {}));
-            } catch (_) {
-                rec.recorder = new MediaRecorder(rec.stream);
+                rec.mime = NM().preferredMime('voice', (m) => window.MediaRecorder.isTypeSupported(m));
+                try {
+                    rec.recorder = new MediaRecorder(rec.stream, Object.assign({ audioBitsPerSecond: NM().LIMITS.voiceBitrate }, rec.mime ? { mimeType: rec.mime } : {}));
+                } catch (_) {
+                    rec.mime = '';
+                    rec.recorder = new MediaRecorder(rec.stream);
+                }
+                rec.recorder.ondataavailable = (e) => { if (e.data && e.data.size) rec.chunks.push(e.data); };
+                rec.stopPromise = new Promise((r) => { rec.recorder.onstop = r; });
+                rec.recorder.start(250);
+            } catch (err) {
+                rec.stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) { } });
+                this._voiceRec = null;
+                this._renderVoiceBar();
+                this._voiceErrorToast(this._mt("Voice messages can't be recorded in this browser: {error}", { error: (err && err.message) || this._mt('unknown error') }));
+                return;
             }
-            rec.recorder.ondataavailable = (e) => { if (e.data && e.data.size) rec.chunks.push(e.data); };
-            rec.stopPromise = new Promise((r) => { rec.recorder.onstop = r; });
-            rec.recorder.start(250);
             rec.startedAt = Date.now();
             try {
                 const AC = window.AudioContext || window.webkitAudioContext;
@@ -818,10 +1028,10 @@
             clearInterval(rec.sampleTimer);
             if (rec.recorder && rec.recorder.state !== 'inactive') {
                 try { rec.recorder.stop(); } catch (_) { }
-                await rec.stopPromise;
+                await this._voiceWithin(rec.stopPromise, this._voiceStopTimeoutMs || 3000).catch(() => { });
             }
-            if (rec.stream) rec.stream.getTracks().forEach((t) => t.stop());
-            if (rec.audioCtx) { try { await rec.audioCtx.close(); } catch (_) { } }
+            if (rec.stream) rec.stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) { } });
+            if (rec.audioCtx) { try { Promise.resolve(rec.audioCtx.close()).catch(() => { }); } catch (_) { } }
             const type = NM().baseMime((rec.recorder && rec.recorder.mimeType) || rec.mime) || 'audio/webm';
             rec.blob = new Blob(rec.chunks, { type });
             return rec.blob;
@@ -831,9 +1041,16 @@
             const rec = this._voiceRec;
             if (!rec) return;
             clearInterval(rec.tick);
-            const blob = await this._finishVoiceCapture(rec);
-            this._voiceRec = null;
-            this._renderVoiceBar();
+            let blob = null;
+            try {
+                blob = await this._finishVoiceCapture(rec);
+            } catch (err) {
+                if (send) this._voiceSendFailed(err);
+                send = false;
+            } finally {
+                this._voiceRec = null;
+                this._renderVoiceBar();
+            }
             if (!send) return;
             if (!blob || rec.duration < NM().LIMITS.minVoiceSeconds) {
                 this._mediaNotice(this._mt('Hold to record, release to send. Tap to record hands-free.'));
@@ -908,43 +1125,100 @@
             return r;
         },
 
-        async _portableVoiceBlob(blob) {
+        _voiceWithin(promise, ms) {
+            let timer = null;
+            const limit = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), ms); });
+            return Promise.race([Promise.resolve(promise), limit]).finally(() => clearTimeout(timer));
+        },
+
+        _voiceCloseQuietly(ac) {
+            try { Promise.resolve(ac && ac.close && ac.close()).catch(() => { }); } catch (_) { }
+        },
+
+        async _webAudioFaithful(OAC, ms) {
+            const M = NM();
+            const rate = M.PORTABLE_VOICE_RATE;
+            const probe = M.voiceProbeSignal();
+            const off = new OAC(1, probe.length, rate);
+            const buf = off.createBuffer(1, probe.length, rate);
+            if (typeof buf.copyToChannel === 'function') buf.copyToChannel(probe, 0);
+            else buf.getChannelData(0).set(probe);
+            const src = off.createBufferSource();
+            src.buffer = buf;
+            src.connect(off.destination);
+            src.start();
+            const rendered = await this._voiceWithin(off.startRendering(), ms);
+            return M.voiceProbeMatches(probe, rendered.getChannelData(0));
+        },
+
+        async _portableVoiceBlob(blob, expectedSeconds) {
             const M = NM();
             const AC = window.AudioContext || window.webkitAudioContext;
             const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
             if (!AC || !OAC) return null;
+            const ms = this._voiceConvertTimeoutMs || M.VOICE_CONVERT.timeoutMs;
+            if (!(await this._webAudioFaithful(OAC, ms))) return null;
             const ac = new AC();
             let decoded;
             try {
-                decoded = await ac.decodeAudioData(await blob.arrayBuffer());
+                decoded = await this._voiceWithin(ac.decodeAudioData(await blob.arrayBuffer()), ms);
             } finally {
-                try { await ac.close(); } catch (_) { }
+                this._voiceCloseQuietly(ac);
             }
             const rate = M.PORTABLE_VOICE_RATE;
+            if (!decoded || !(decoded.duration > 0)) return null;
             const off = new OAC(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
             const src = off.createBufferSource();
             src.buffer = decoded;
             src.connect(off.destination);
             src.start();
-            const rendered = await off.startRendering();
-            return new Blob([M.encodeWav(rendered.getChannelData(0), rate)], { type: 'audio/wav' });
+            const rendered = await this._voiceWithin(off.startRendering(), ms);
+            const samples = rendered.getChannelData(0);
+            if (!M.checkPortableVoice(samples, rate, expectedSeconds).ok) return null;
+            return new Blob([M.encodeWav(samples, rate)], { type: 'audio/wav' });
+        },
+
+        _voiceWaveform(samples) {
+            const M = NM();
+            const bars = M.LIMITS.waveformBars;
+            try {
+                const clean = Array.from(samples || [], (v) => (typeof v === 'number' && isFinite(v) ? v : 0));
+                const out = M.computeWaveform(clean, bars);
+                if (Array.isArray(out) && out.every((v) => Number.isFinite(v))) return out;
+            } catch (_) { }
+            return new Array(bars).fill(0);
+        },
+
+        _voiceErrorToast(text) {
+            if (typeof this.showToast === 'function') this.showToast(text, { kind: 'error' });
+            else this._mediaNotice(text);
+        },
+
+        _voiceSendFailed(err) {
+            this._voiceErrorToast(this._mt("Couldn't send the voice message: {error}", { error: (err && err.message) || this._mt('unknown error') }));
         },
 
         async _sendVoiceNote(n) {
             const M = NM();
-            let blob = n.blob;
-            if (n.route !== 'mesh' && !M.isPortableVoiceMime(n.recordedMime || blob.type, n.requestedMime)) {
-                try { blob = (await this._portableVoiceBlob(blob)) || blob; } catch (_) { }
+            try {
+                let blob = n.blob;
+                if (!blob || !blob.size) throw new Error(this._mt('the recording is empty'));
+                if (n.route !== 'mesh' && !M.isPortableVoiceMime(n.recordedMime || blob.type, n.requestedMime)) {
+                    try { blob = (await this._portableVoiceBlob(blob, n.duration)) || blob; } catch (_) { }
+                }
+                const mime = M.baseMime(blob.type) || 'audio/webm';
+                const waveform = this._voiceWaveform(n.samples);
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                const desc = { kind: 'voice', mime, duration: n.duration, size: bytes.length, waveform };
+                if (n.route === 'mesh') {
+                    await this._sendNoteOverMesh(desc, bytes, n.target);
+                    return;
+                }
+                await this._uploadAndSendNote(desc, bytes, n.target, !!n.once, this._mt('Sending voice message…'));
+            } catch (err) {
+                if (err && err.name === 'AbortError') return;
+                this._voiceSendFailed(err);
             }
-            const mime = M.baseMime(blob.type) || 'audio/webm';
-            const waveform = M.computeWaveform(n.samples, M.LIMITS.waveformBars);
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            const desc = { kind: 'voice', mime, duration: n.duration, size: bytes.length, waveform };
-            if (n.route === 'mesh') {
-                await this._sendNoteOverMesh(desc, bytes, n.target);
-                return;
-            }
-            await this._uploadAndSendNote(desc, bytes, n.target, !!n.once, this._mt('Sending voice message…'));
         },
 
         async _uploadAndSendNote(desc, bytes, target, once, label) {
@@ -967,7 +1241,9 @@
                 if (err && err.name === 'AbortError') return;
                 this._lastFailedNote = { desc, bytes, target, once, label };
                 const msg = this.escapeHtml(this._mt("Couldn't send: {error}", { error: (err && err.message) || 'upload failed' }));
-                this.displaySystemMessage(msg + ' <button type="button" class="nym-retry-note" data-action="nymRetryNote">' + this.escapeHtml(this._mt('Retry')) + '</button>', 'system', { html: true, feed: true });
+                const html = msg + ' <button type="button" class="nym-retry-note" data-action="nymRetryNote">' + this.escapeHtml(this._mt('Retry')) + '</button>';
+                if (typeof this.showToast === 'function') this.showToast(html, { html: true, kind: 'error' });
+                this.displaySystemMessage(html, 'system', { html: true, feed: true });
             }
         },
 

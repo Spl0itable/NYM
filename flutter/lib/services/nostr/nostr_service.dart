@@ -360,6 +360,7 @@ class NostrService {
 
   /// Swaps the signing identity in place for hardcore mode without reconnecting or re-subscribing, as the PWA does.
   void rotateIdentity(Identity newIdentity, EventSigner? newSigner) {
+    _candidateGen++;
     identity = newIdentity;
     signer = newSigner;
   }
@@ -1285,6 +1286,7 @@ class NostrService {
   List<({Uint8List kemSk, Uint8List kemPk})> _pqSelfKeys = const [];
 
   void setPqSelfKeys(List<({Uint8List kemSk, Uint8List kemPk})> keys) {
+    _candidateGen++;
     _pqSelfKeys = List.unmodifiable(keys);
   }
 
@@ -1292,6 +1294,7 @@ class NostrService {
   final List<Uint8List> _ephemeralSks = [];
 
   void setEphemeralKeys(List<Uint8List> sks) {
+    _candidateGen++;
     _ephemeralSks
       ..clear()
       ..addAll(sks);
@@ -1302,6 +1305,7 @@ class NostrService {
 
   void setAnonBotKeys(
       List<({Uint8List sk, Uint8List kemSk, Uint8List kemPk})> keys) {
+    _candidateGen++;
     _anonBotKeys = List.unmodifiable(keys);
   }
 
@@ -1309,6 +1313,13 @@ class NostrService {
   void unwrapArchivedWrap(NostrEvent wrap) {
     if (wrap.kind != EventKind.giftWrap) return;
     unawaited(_handleGiftWrap(wrap, fromArchive: true));
+  }
+
+  Future<GiftWrapUnwrapped?> probeArchivedWrap(NostrEvent wrap) async {
+    if (wrap.kind != EventKind.giftWrap) return null;
+    GiftWrapUnwrapped? out;
+    await _unwrapAndEmit(null, wrap, fromArchive: true, sink: (u) => out = u);
+    return out;
   }
 
   /// Unwraps a live wrap from an auxiliary sub as live, so it is archived and notified (unlike [unwrapArchivedWrap]).
@@ -1333,8 +1344,16 @@ class NostrService {
 
   static final Set<String> _unwrapsInFlight = <String>{};
 
-  Future<void> _unwrapAndEmit(NostrHandlers handlers, NostrEvent wrap,
-      {required bool fromArchive}) async {
+  @visibleForTesting
+  static int debugUnwrapAttempts = 0;
+
+  int _candidateGen = 0;
+
+  final LinkedHashMap<String, int> _failedWraps = LinkedHashMap<String, int>();
+
+  Future<void> _unwrapAndEmit(NostrHandlers? handlers, NostrEvent wrap,
+      {required bool fromArchive,
+      void Function(GiftWrapUnwrapped u)? sink}) async {
     final candidates = _candidates(wrap);
 
     // NIP-46: no local identity key, so self-addressed wraps unwrap via the remote `nip44_decrypt`.
@@ -1350,18 +1369,42 @@ class NostrService {
       }
       if (res != null) {
         await _emitUnwrapped(handlers, wrap, res.seal, res.rumor,
-            isBitchat: false, isPq: res.isPq, fromArchive: fromArchive);
+            isBitchat: false,
+            isPq: res.isPq,
+            fromArchive: fromArchive,
+            sink: sink);
         return;
       }
     }
 
     if (candidates.isEmpty) return;
+    final remoteTried = sig != null && sig.isRemote && _isAddressedToSelf(wrap);
+    final gen = _candidateGen;
+    if (sink == null &&
+        !remoteTried &&
+        wrap.id.isNotEmpty &&
+        _failedWraps[wrap.id] == gen) {
+      return;
+    }
+    debugUnwrapAttempts++;
     // Local-key unwrap runs in the crypto worker, falling back inline on web or failure.
     final res = await _cryptoWorker.unwrap(wrap, candidates);
-    if (res == null) return;
+    if (res == null) {
+      if (sink == null && !remoteTried && wrap.id.isNotEmpty) {
+        _failedWraps.remove(wrap.id);
+        _failedWraps[wrap.id] = gen;
+        while (_failedWraps.length > 5000) {
+          _failedWraps.remove(_failedWraps.keys.first);
+        }
+      }
+      return;
+    }
 
     await _emitUnwrapped(handlers, wrap, res.seal, res.rumor,
-        fromArchive: fromArchive, isBitchat: res.isBitchat, isPq: res.isPq);
+        fromArchive: fromArchive,
+        isBitchat: res.isBitchat,
+        isPq: res.isPq,
+        sink: sink);
   }
 
   /// True when [wrap] is p-tagged to our identity pubkey rather than an ephemeral group key.
@@ -1407,16 +1450,17 @@ class NostrService {
 
   /// Verifies NIP-59 seal authorship and emits the rumor; shared by local and remote paths.
   Future<void> _emitUnwrapped(
-    NostrHandlers handlers,
+    NostrHandlers? handlers,
     NostrEvent wrap,
     NostrEvent seal,
     Map<String, dynamic> rumor, {
     required bool isBitchat,
     bool isPq = false,
     bool fromArchive = false,
+    void Function(GiftWrapUnwrapped u)? sink,
   }) async {
     // Record the id once decrypted, even if the seal is forged, so replays skip it.
-    _rememberProcessedWrap(wrap.id);
+    if (sink == null) _rememberProcessedWrap(wrap.id);
     final rumorPubkey = rumor['pubkey'] as String?;
     if (rumorPubkey == null || rumorPubkey.isEmpty) return;
 
@@ -1436,7 +1480,7 @@ class NostrService {
       }
     }
 
-    handlers.onGiftWrap!(GiftWrapUnwrapped(
+    final out = GiftWrapUnwrapped(
       wrapId: wrap.id,
       wrapCreatedAt: wrap.createdAt,
       rumor: emitRumor,
@@ -1445,7 +1489,12 @@ class NostrService {
       isPq: isPq,
       rawWrap: wrap.toJson(),
       fromArchive: fromArchive,
-    ));
+    );
+    if (sink != null) {
+      sink(out);
+    } else {
+      handlers?.onGiftWrap?.call(out);
+    }
   }
 
   /// Decodes `bitchat1:` content to text (adding an `x` id tag if missing); null for receipts; other content unchanged.

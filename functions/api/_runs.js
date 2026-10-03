@@ -6,6 +6,7 @@ export var RUN_FREE = 1;
 export var RUN_LIVE_MS = 45000;
 export var RUN_WAITING_MS = 1800000;
 export var RUN_PARKED_MS = 600000;
+export var RUN_AWAITING_MS = 86400000;
 export var RUN_RESULT_KEEP_MS = 2 * 3600 * 1000;
 export var RUN_TURN_KEEP_MS = 90 * 86400 * 1000;
 export var RUN_ROW_KEEP_MS = 86400 * 1000;
@@ -485,9 +486,9 @@ export async function runLive(db, pk, thread, exclude, now, limit) {
   return withTables(db, async function () {
     var rs = await db.prepare(
       "SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND thread = ? AND asked != ? AND cancel = 0 AND (" +
-      "(state = 'running' AND beat_at > ?) OR (state = 'waiting' AND beat_at > ?) OR (state = 'parked' AND beat_at > ?)) " +
+      "(state = 'running' AND beat_at > ?) OR (state = 'waiting' AND beat_at > ?) OR (state = 'parked' AND beat_at > ?) OR (state = 'awaiting' AND beat_at > ?)) " +
       "ORDER BY started_at LIMIT ?"
-    ).bind(pk, thread || "", exclude || "", at - RUN_LIVE_MS, at - RUN_WAITING_MS, at - RUN_PARKED_MS, limit || 8).all();
+    ).bind(pk, thread || "", exclude || "", at - RUN_LIVE_MS, at - RUN_WAITING_MS, at - RUN_PARKED_MS, at - RUN_AWAITING_MS, limit || 8).all();
     return (rs && rs.results) || [];
   }, []);
 }
@@ -496,9 +497,9 @@ export async function runListRecent(db, pk, now, limit) {
   var at = now || Date.now();
   return withTables(db, async function () {
     var rs = await db.prepare(
-      "SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND beat_at > ? AND state IN ('running', 'parked', 'waiting') " +
-      "ORDER BY started_at DESC LIMIT ?"
-    ).bind(pk, at - 3600000, limit || 20).all();
+      "SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND ((beat_at > ? AND state IN ('running', 'parked', 'waiting')) " +
+      "OR (beat_at > ? AND state = 'awaiting')) ORDER BY started_at DESC LIMIT ?"
+    ).bind(pk, at - 3600000, at - RUN_AWAITING_MS, limit || 20).all();
     return (rs && rs.results) || [];
   }, []);
 }
@@ -506,7 +507,7 @@ export async function runListRecent(db, pk, now, limit) {
 export async function runListSince(db, pk, since, limit) {
   return withTables(db, async function () {
     var rs = await db.prepare(
-      "SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND beat_at > ? AND (state IN ('done', 'stopped', 'failed', 'parked', 'waiting') OR cancel = 1) " +
+      "SELECT " + RUN_COLS + " FROM botpm_runs WHERE pubkey = ? AND beat_at > ? AND (state IN ('done', 'stopped', 'failed', 'parked', 'waiting', 'awaiting', 'expired') OR cancel = 1) " +
       "AND state != 'pending' ORDER BY beat_at DESC LIMIT ?"
     ).bind(pk, Number(since) || 0, limit || 50).all();
     return (rs && rs.results) || [];

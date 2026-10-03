@@ -378,4 +378,4 @@ Copyright © 21 Million LLC
 
 Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the [LICENSE](LICENSE) file for the full text, or https://www.gnu.org/licenses/agpl-3.0.html.
 
-[NOTICE](NOTICE) adds two additional terms under AGPL-3.0 section 7: copies and modified versions must keep the credit "Nymchat by 21 Million LLC" and the link to the original source, in NOTICE and on the app's About screen, and must mark themselves as modified. [AGENTS.md](AGENTS.md) explains what that means for a fork.
+[NOTICE](NOTICE) adds two additional terms under AGPL-3.0 section 7: any copy or modified version not distributed by 21 Million LLC must show the attribution "Based on Nymchat by 21 Million LLC" with a link to the original source, https://github.com/Spl0itable/NYM, in its NOTICE file and on its About screen, and modified versions must mark themselves as modified. The original app shows the credit "© 21 Million LLC" instead. [AGENTS.md](AGENTS.md) explains what that means for a fork.

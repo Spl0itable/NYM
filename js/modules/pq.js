@@ -565,10 +565,20 @@
         pqSelfCandidates() {
             if (!this.pqCapable()) return [];
             const NC = window.NymCrypto;
-            const out = [];
             const epoch = this._pqEpoch();
-            const floor = Math.max(0, epoch - 3);
             const root = this.pqRoot();
+            let basis = null;
+            try { basis = `${this.pubkey}:${epoch}:${root ? NC.pqRootFingerprint(root) : '-'}`; } catch (_) { basis = null; }
+            const memo = this._pqCandidatesCache;
+            if (basis && memo && memo.basis === basis && memo.privkey === this.privkey) return memo.list.slice();
+            const list = this._pqSelfCandidatesFresh(NC, epoch, root);
+            if (basis) this._pqCandidatesCache = { basis, privkey: this.privkey, list };
+            return list.slice();
+        },
+
+        _pqSelfCandidatesFresh(NC, epoch, root) {
+            const out = [];
+            const floor = Math.max(0, epoch - 3);
             if (root) {
                 for (let e = epoch; e >= floor; e--) {
                     try {

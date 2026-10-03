@@ -26,6 +26,7 @@ import '../i18n/i18n.dart';
 import '../media_notes/media_notes.dart' show parseMeshFileName;
 import '../messages/format/message_content.dart';
 import '../messages/inline_network_image.dart';
+import '../toasts/toast_center.dart';
 import 'chat_tools.dart';
 import 'chat_tools_providers.dart';
 import 'chat_tools_service.dart';
@@ -90,6 +91,8 @@ const List<String> kChatToolsStrings = <String>[
   'DM with {name}',
   'Edit history',
   "Earlier versions aren't available on this device.",
+  "Earlier versions couldn't be found.",
+  'Loading...',
   'Current, edited {time}',
   "Kept here. Others will see it once you're back online.",
   "Unkept here. Others will see it once you're back online.",
@@ -284,7 +287,7 @@ void jumpToMessage(ChatToolsReader read, String id) {
   final app = read(appStateProvider.notifier);
   final found = findMessageAnywhere(read(appStateProvider), id);
   if (found == null) {
-    app.addSystemMessage(
+    showToast(
         tr("The original message isn't loaded on this device anymore."));
     return;
   }
@@ -322,8 +325,7 @@ class ChatToolsActions {
     final found = findMessageAnywhere(s, m.nymMessageId ?? m.id) ??
         findMessageAnywhere(s, m.id);
     if (found == null) {
-      read(appStateProvider.notifier)
-          .addSystemMessage(tr('This message is no longer available.'));
+      showToast(tr('This message is no longer available.'));
       return;
     }
     if (tools.isMessageSaved(found.msg)) {
@@ -365,16 +367,16 @@ class ChatToolsActions {
     SchedulerBinding.instance.scheduleFrame();
     final bridgePeer = read(chatToolsProvider).hooks.meshPeerFor?.call(m.pubkey);
     if (s.connectedRelays == 0 && bridgePeer == null) {
-      read(appStateProvider.notifier).addSystemMessage(tr(
+      showToast(tr(
           "You're offline. Your reply will need the internet or this person in Bluetooth range."));
     }
     return true;
   }
 }
 
-Future<void> _showPanel(BuildContext context, Widget child) {
+Future<bool?> _showPanel(BuildContext context, Widget child) {
   final isLight = context.nym.isLight;
-  return showDialog<void>(
+  return showDialog<bool>(
     context: context,
     barrierColor: isLight ? const Color(0x73000000) : const Color(0xBF000000),
     builder: (_) => child,
@@ -584,7 +586,7 @@ class SavedMessagesPanel extends ConsumerWidget {
   }
 }
 
-class EditHistorySheet extends ConsumerWidget {
+class EditHistorySheet extends ConsumerStatefulWidget {
   const EditHistorySheet({super.key, required this.message});
 
   final Message message;
@@ -593,24 +595,58 @@ class EditHistorySheet extends ConsumerWidget {
       _showPanel(context, EditHistorySheet(message: message));
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<EditHistorySheet> createState() => _EditHistorySheetState();
+}
+
+class _EditHistorySheetState extends ConsumerState<EditHistorySheet> {
+  late String _view;
+
+  @override
+  void initState() {
+    super.initState();
+    final tools = ref.read(chatToolsProvider);
+    final plan = tools.editHistoryPlanFor(widget.message);
+    _view = plan.view;
+    if (plan.fetch) {
+      tools.fetchEditHistory(widget.message).then((view) {
+        if (mounted) setState(() => _view = view);
+      });
+    }
+  }
+
+  Widget _note(BuildContext context, String text) {
+    final c = context.nym;
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Text(tr(text),
+          textAlign: TextAlign.center,
+          style: TextStyle(color: c.textDim, fontStyle: FontStyle.italic)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final c = context.nym;
     final settings = ref.watch(settingsProvider);
-    final rec = ref.read(chatToolsProvider).editHistoryFor(chatDomId(message));
+    final message = widget.message;
     String when(int at) => formatFullTimestamp(
         DateTime.fromMillisecondsSinceEpoch(at * 1000),
         settings.timeFormat,
         settings.dateFormat);
-    if (rec == null || rec.versions.isEmpty) {
+    if (_view == 'loading') {
       return _PanelShell(
-        title: tr('Edit history'),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Text(tr("Earlier versions aren't available on this device."),
-              textAlign: TextAlign.center,
-              style: TextStyle(color: c.textDim, fontStyle: FontStyle.italic)),
-        ),
-      );
+          title: tr('Edit history'), child: _note(context, 'Loading...'));
+    }
+    if (_view == 'notFound') {
+      return _PanelShell(
+          title: tr('Edit history'),
+          child: _note(context, "Earlier versions couldn't be found."));
+    }
+    final rec = ref.read(chatToolsProvider).editHistoryFor(chatDomId(message));
+    if (_view != 'versions' || rec == null || rec.versions.isEmpty) {
+      return _PanelShell(
+          title: tr('Edit history'),
+          child: _note(context, "Earlier versions aren't available on this device."));
     }
     final timeline = editTimeline(rec, message.content);
     return _PanelShell(
@@ -706,7 +742,7 @@ class ChatMediaPanel extends ConsumerStatefulWidget {
 
   final String storageKey;
 
-  static Future<void> open(BuildContext context, String storageKey) =>
+  static Future<bool?> open(BuildContext context, String storageKey) =>
       _showPanel(context, ChatMediaPanel(storageKey: storageKey));
 
   @override
@@ -755,7 +791,29 @@ class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
         setState(() => _revealed.add(key));
         return;
       }
-      Navigator.of(context).maybePop();
+      if (_tab == 'media') {
+        final viewer = <ViewerItem>[];
+        for (var i = 0; i < items.length; i++) {
+          final m = items[i];
+          final path = src.localPaths[m.url];
+          viewer.add(ViewerItem(
+            url: m.url,
+            isVideo: m.kind == 'video',
+            spoiler: m.spoiler,
+            revealed: _revealed.contains('$i:${m.url}'),
+            image: path != null && m.kind == 'image' ? FileImage(File(path)) : null,
+            id: i,
+          ));
+        }
+        final at = viewer.indexWhere((v) => '${v.id}:${v.url}' == key);
+        if (at >= 0) {
+          openMediaViewer(context, viewer, at, onReveal: (v) {
+            if (mounted) setState(() => _revealed.add('${v.id}:${v.url}'));
+          });
+          return;
+        }
+      }
+      Navigator.of(context).pop(true);
       jumpToMessage(ref.read, it.nid.isNotEmpty ? it.nid : it.mid);
     }
 
@@ -915,7 +973,7 @@ class ExportChatPanel extends ConsumerWidget {
 
   final String storageKey;
 
-  static Future<void> open(BuildContext context, String storageKey) =>
+  static Future<bool?> open(BuildContext context, String storageKey) =>
       _showPanel(context, ExportChatPanel(storageKey: storageKey));
 
   @override
@@ -942,7 +1000,7 @@ class ExportChatPanel extends ConsumerWidget {
               key: const ValueKey('exportTxt'),
               label: tr('Text transcript (.txt)'),
               onTap: () async {
-                Navigator.of(context).maybePop();
+                Navigator.of(context).pop(true);
                 await ChatExporter(ref.read).exportText(storageKey);
               },
             ),
@@ -950,7 +1008,7 @@ class ExportChatPanel extends ConsumerWidget {
               key: const ValueKey('exportZip'),
               label: tr('Transcript and media (.zip)'),
               onTap: () async {
-                Navigator.of(context).maybePop();
+                Navigator.of(context).pop(true);
                 await ChatExporter(ref.read).exportZip(storageKey);
               },
             ),
@@ -1014,7 +1072,7 @@ class ChatExporter {
     final zip = zipStore(entries, _now, _offsetMin);
     final name = exportFileName(info['n']!, _now, _offsetMin, 'zip');
     await _deliver(name, zip, 'application/zip');
-    _read(appStateProvider.notifier).addSystemMessage(tr(
+    showToast(tr(
         'Exported {count} messages and {media} media files.',
         {'count': src.messages.where((m) => !m.system).length, 'media': entries.length - 1}));
     return (name: name, entries: [for (final e in entries) e.name]);
@@ -1046,7 +1104,7 @@ class ChatExporter {
       await File(path).writeAsBytes(bytes, flush: true);
       await SharePlus.instance.share(ShareParams(files: [XFile(path, mimeType: mime)], subject: name));
     } catch (e) {
-      _read(appStateProvider.notifier).addSystemMessage(
+      showToast(
           tr("Couldn't open the share sheet: {error}", {'error': '$e'}));
     }
   }

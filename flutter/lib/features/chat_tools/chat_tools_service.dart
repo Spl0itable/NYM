@@ -77,6 +77,9 @@ class ChatToolsHooks {
     this.notice,
     this.onChanged,
     this.now,
+    this.fetchEditEvents,
+    this.editFetchTimeout =
+        const Duration(milliseconds: ChatToolsLimits.editFetchTimeoutMs),
   });
 
   static bool _never() => false;
@@ -97,6 +100,9 @@ class ChatToolsHooks {
   final void Function(String text)? notice;
   final void Function()? onChanged;
   final int Function()? now;
+  final Future<List<Map<String, dynamic>>> Function(
+      String surface, String id, int at)? fetchEditEvents;
+  final Duration editFetchTimeout;
 }
 
 class ChatToolsService {
@@ -241,6 +247,21 @@ class ChatToolsService {
 
   Map<String, dynamic>? _editsCache;
 
+  bool _editsFlushQueued = false;
+
+  void _persistEdits() {
+    if (_editsFlushQueued) return;
+    _editsFlushQueued = true;
+    scheduleMicrotask(flushEdits);
+  }
+
+  void flushEdits() {
+    if (!_editsFlushQueued) return;
+    _editsFlushQueued = false;
+    final cache = _editsCache;
+    if (cache != null) _prefs.write(ChatToolsKeys.edits, jsonEncode(cache));
+  }
+
   Map<String, dynamic> _edits() => _editsCache ??= _readMap(ChatToolsKeys.edits);
 
   void noteEdit(Message m, String nextContent, int editAtSec) {
@@ -256,12 +277,71 @@ class ChatToolsService {
     }
     store[key] = rec.toJson();
     _editsCache = pruneEditStore(store);
-    _prefs.write(ChatToolsKeys.edits, jsonEncode(_editsCache));
+    _persistEdits();
+  }
+
+  void noteStaleEdit(Message m, String text, int editAtSec) {
+    final key = chatDomId(m);
+    if (key.isEmpty) return;
+    final store = _edits();
+    final prev = store[key] == null ? null : EditRecord.fromJson(store[key]);
+    final rec = recordStaleEdit(prev, text, editAtSec, m.content);
+    if (identical(rec, prev) ||
+        rec.versions.isEmpty ||
+        (prev != null && jsonEncode(rec.toJson()) == jsonEncode(prev.toJson()))) {
+      return;
+    }
+    store[key] = rec.toJson();
+    _editsCache = pruneEditStore(store);
+    _persistEdits();
   }
 
   EditRecord? editHistoryFor(String domId) {
     final v = _edits()[domId];
     return v == null ? null : EditRecord.fromJson(v);
+  }
+
+  String _editSurface(Message m) =>
+      m.isGroup ? 'group' : (m.isPM ? 'dm' : 'channel');
+
+  EditHistoryPlan editHistoryPlanFor(Message m) => editHistoryPlan(
+        editHistoryFor(chatDomId(m)),
+        online: hooks.fetchEditEvents != null &&
+            m.pubkey.isNotEmpty &&
+            hooks.online(),
+        mesh: m.viaMesh,
+      );
+
+  Future<String> fetchEditHistory(Message m) async {
+    final domId = chatDomId(m);
+    final fetcher = hooks.fetchEditEvents;
+    if (domId.isEmpty || m.pubkey.isEmpty || fetcher == null) {
+      return editHistoryPlan(editHistoryFor(domId), done: true).view;
+    }
+    final bag = <Map<String, dynamic>>[];
+    var ok = false;
+    try {
+      bag.addAll(await fetcher(_editSurface(m), domId, m.createdAt)
+          .timeout(hooks.editFetchTimeout));
+      ok = true;
+    } catch (_) {
+      ok = false;
+    }
+    final live = hooks.findMessage?.call(domId)?.msg ?? m;
+    final found = editSources(
+        id: domId, pubkey: m.pubkey, at: m.createdAt, events: bag);
+    final merged = mergeEditHistory(editHistoryFor(domId), found, live.content);
+    if (ok || merged.versions.isNotEmpty) {
+      final rec = ok
+          ? merged
+          : EditRecord(merged.versions, merged.editedAt);
+      final store = _edits();
+      store[domId] = rec.toJson();
+      _editsCache = pruneEditStore(store);
+      _editsFlushQueued = true;
+      flushEdits();
+    }
+    return editHistoryPlan(editHistoryFor(domId), done: true).view;
   }
 
   Map<String, dynamic>? _keepCache;

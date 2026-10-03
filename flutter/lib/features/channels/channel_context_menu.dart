@@ -16,6 +16,7 @@ import '../chat_nav/chat_nav_ui.dart';
 import '../chat_lock/chat_lock_ui.dart';
 import '../i18n/i18n.dart';
 import '../settings/settings_screen.dart';
+import '../toasts/toast_center.dart';
 
 class ChannelMenuAction {
   const ChannelMenuAction({
@@ -93,9 +94,7 @@ List<ChannelMenuAction> buildChannelMenuActions(
         );
         if (!ok || !context.mounted) return;
         controller.blockChannel(key);
-        ref
-            .read(appStateProvider.notifier)
-            .addSystemMessage(tr('Blocked channel #{name}', {'name': key}));
+        showToast(tr('Blocked channel #{name}', {'name': key}));
       },
     ),
   ];

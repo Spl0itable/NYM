@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/constants/relays.dart';
 import '../../core/crypto/bech32_codec.dart' show encodeNevent;
+import '../../features/toasts/toast_center.dart';
 import 'event_details_sheet.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -1988,9 +1989,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       case 'copy':
         if (message.content.isEmpty) return;
         Clipboard.setData(ClipboardData(text: message.content));
-        ref
-            .read(appStateProvider.notifier)
-            .addSystemMessage(tr('Message copied to clipboard'));
+        showToast(tr('Message copied to clipboard'));
         return;
       case 'react':
         _quickReact(context, settings.swipeReactEmoji);
@@ -1999,9 +1998,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         if (message.pubkey.isEmpty) return;
         // Zapping your own message prints a notice instead of silently no-opping.
         if (message.isOwn) {
-          ref
-              .read(appStateProvider.notifier)
-              .addSystemMessage(tr('Cannot zap your own message'));
+          showToast(tr('Cannot zap your own message'));
           return;
         }
         _zapMessage(context, baseNym);
@@ -2023,8 +2020,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   /// Posts a checking note, resolves the LN address fresh (not just cache), then opens the modal or reports failure.
   Future<void> _zapMessage(BuildContext context, String baseNym) async {
-    final notifier = ref.read(appStateProvider.notifier);
-    notifier.addSystemMessage(
+    showToast(
         tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
     final String? lnAddr;
     try {
@@ -2032,12 +2028,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           .read(nostrControllerProvider)
           .resolveLightningAddressForZap(message.pubkey);
     } catch (_) {
-      notifier.addSystemMessage(
+      showToast(
           tr('Failed to check if @{nym} can receive zaps', {'nym': baseNym}));
       return;
     }
     if (lnAddr == null || lnAddr.isEmpty) {
-      notifier.addSystemMessage(tr(
+      showToast(tr(
           '@{nym} cannot receive zaps (no lightning address set)',
           {'nym': baseNym}));
       return;

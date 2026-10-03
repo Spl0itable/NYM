@@ -400,9 +400,9 @@
     }
 
     function mentionCount(state, key) {
-        const s = normalizeMentions(state);
-        const c = s.chats[key];
-        return c ? c.ids.length : 0;
+        if (!key || !state || typeof state !== 'object' || !state.chats || typeof state.chats !== 'object') return 0;
+        if (!Object.prototype.propertyIsEnumerable.call(state.chats, key)) return 0;
+        return normMentionChat(state.chats[key]).ids.length;
     }
 
     function mentionScan(list, floorSec, beforeSec) {

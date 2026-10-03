@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../toasts/toast_center.dart';
 import 'pq_root.dart';
 import '../../core/crypto/pq.dart' as pq;
 import '../../core/crypto/bech32_codec.dart';
@@ -1262,11 +1263,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     if (!mounted) return;
     setState(() => _saving = false);
     Navigator.of(context).pop();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-          content:
-              Text(ok ? tr('Profile updated') : tr('Could not save profile'))),
-    );
+    showToast(ok ? tr('Profile updated') : tr('Could not save profile'));
   }
 
   /// Fills the nick field with a random nym.
@@ -1282,7 +1279,6 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     } else {
       Clipboard.setData(ClipboardData(text: value));
     }
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(confirm)));
+    showToast(confirm);
   }
 }

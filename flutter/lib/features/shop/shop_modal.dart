@@ -10,6 +10,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/crypto/key_format.dart' show normalizePubkeyInput;
+import '../toasts/toast_center.dart';
 import 'shop_purchase_policy.dart';
 import '../../core/constants/relays.dart';
 import '../../core/theme/nym_colors.dart';
@@ -259,9 +260,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     // No client-side format check or case-folding; the server judges the code.
     final code = _recoveryController.text.trim();
     if (code.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(tr('Enter a recovery code'))),
-      );
+      showToast(tr('Enter a recovery code'));
       return;
     }
     final identity = _shopIdentity(ref);
@@ -278,8 +277,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       }
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text(message)));
+    showToast(message);
   }
 
   Widget _tabs(NymColors c) {
@@ -604,9 +602,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       builder: (_) => _InvoiceDialog(item: item, identity: identity),
     );
     if (granted == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(tr('{name} unlocked!', {'name': item.name}))),
-      );
+      showToast(tr('{name} unlocked!', {'name': item.name}));
     }
   }
 
@@ -637,9 +633,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     );
     // Only a settled claim confirms the gift.
     if (granted == true && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(tr('Gift sent: {name}', {'name': item.name}))),
-      );
+      showToast(tr('Gift sent: {name}', {'name': item.name}));
     }
   }
 
@@ -647,9 +641,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   Future<void> _transfer(ShopItem item) async {
     final identity = _shopIdentity(ref);
     if (identity == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(tr('Sign in to transfer items.'))),
-      );
+      showToast(tr('Sign in to transfer items.'));
       return;
     }
     final recipient = await _promptRecipientPubkey(
@@ -673,24 +665,14 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             gifterNym: _gifterNym(ref),
           );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              tr('{name} transferred to {pk}...', {
-                'name': item.name,
-                'pk': recipient.substring(0, 8),
-              }),
-            ),
-          ),
-        );
+        showToast(tr('{name} transferred to {pk}...', {
+          'name': item.name,
+          'pk': recipient.substring(0, 8),
+        }));
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(
-                  tr('Transfer failed: {error}', {'error': _errorMessage(e)}))),
-        );
+        showToast(tr('Transfer failed: {error}', {'error': _errorMessage(e)}));
       }
     }
   }

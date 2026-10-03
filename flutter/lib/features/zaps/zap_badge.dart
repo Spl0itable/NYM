@@ -11,6 +11,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/chat/message_row.dart' show abbreviateNumber;
 import '../../widgets/context_menu/interaction_hooks.dart';
 import '../i18n/i18n.dart';
+import '../toasts/toast_center.dart';
 import 'zap_modal.dart';
 
 const Color _kLightning = Color(0xFFF7931A);
@@ -221,14 +222,13 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     // Prefer the live profile nym over the one frozen onto the message.
     final liveNym = ref.read(appStateProvider).users[message.pubkey]?.nym;
     final baseNym = pickDisplayNym(liveNym, message.author);
-    final notifier = ref.read(appStateProvider.notifier);
-    notifier.addSystemMessage(
+    showToast(
         tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
     final controller = ref.read(nostrControllerProvider);
     final lnAddr =
         await controller.resolveLightningAddressForZap(message.pubkey);
     if (lnAddr == null || lnAddr.isEmpty) {
-      notifier.addSystemMessage(tr(
+      showToast(tr(
           '@{nym} cannot receive zaps (no lightning address set)',
           {'nym': baseNym}));
       return;

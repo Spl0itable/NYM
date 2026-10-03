@@ -2424,7 +2424,7 @@ body.chat-bubbles .edited-indicator-irc {
     width: 100%;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--glass-border);
-    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    border-radius: var(--radius-md);
     color: var(--text-bright, #ffffff);
     padding: 10px 16px;
     font-family: var(--font-sans);
@@ -2598,9 +2598,13 @@ div.message-input .rich-md-quote {
     max-height: min(40vh, 360px);
     background: var(--bg-tertiary);
     border-color: rgb(from var(--primary) r g b / 0.3);
-    border-radius: 0 0 var(--radius-md) var(--radius-md);
     box-shadow: var(--shadow-lg);
     z-index: 12;
+}
+
+.input-wrapper.composer-docked .message-input {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
 }
 
 .input-container.composer-popout .quote-preview,
@@ -3750,6 +3754,74 @@ body.chat-bubbles .msg-skeleton .message-group-stack .message:last-child { margi
 .nym-voice-transcript.note {
     color: var(--text-dim);
     font-style: italic;
+}
+
+.nym-model-dl {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: min(260px, 100%);
+    padding: 8px 10px;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-xs);
+    font-size: 12px;
+    color: var(--text);
+}
+
+.nym-model-dl-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.nym-model-dl-meta {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+.nym-model-dl-bar {
+    position: relative;
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: rgb(from var(--primary) r g b / 0.15);
+}
+
+.nym-model-dl-bar > span {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 35%;
+    border-radius: 2px;
+    background: var(--primary);
+    animation: nym-model-dl-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes nym-model-dl-slide {
+    from { left: -35%; }
+    to { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nym-model-dl-bar > span {
+        animation: none;
+        left: 0;
+        width: 100%;
+        opacity: 0.5;
+    }
+}
+
+.nym-model-dl-cancel,
+.nym-model-retry {
+    align-self: flex-start;
+    border: 1px solid var(--glass-border);
+    background: none;
+    color: var(--text);
+    border-radius: var(--radius-xs);
+    font-size: 11px;
+    font-style: normal;
+    padding: 3px 7px;
+    cursor: pointer;
 }
 
 .nym-voice.nym-voice-failed .nym-voice-time {

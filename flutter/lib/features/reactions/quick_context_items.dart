@@ -13,6 +13,7 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../widgets/context_menu/report_modal.dart';
 import '../../features/zaps/zap_modal.dart';
 import '../i18n/i18n.dart';
+import '../toasts/toast_center.dart';
 import 'quick_react_popup.dart';
 
 /// Builds the gated long-press quick-context items; the translate and edit rows appear only when their callback is supplied.
@@ -80,9 +81,7 @@ List<QuickContextItem> buildQuickContextItems(
       svg: ctxActionSvg(CtxAction.copyMessage),
       onTap: () async {
         await Clipboard.setData(ClipboardData(text: content));
-        ref
-            .read(appStateProvider.notifier)
-            .addSystemMessage(tr('Message copied to clipboard'));
+        showToast(tr('Message copied to clipboard'));
       },
     ));
     if (onTranslate != null) {
@@ -158,21 +157,19 @@ Future<void> _zap(
   String baseNym,
 ) async {
   // Cache first, then a kind-0 fetch, so unseen senders aren't reported as unable to receive zaps.
-  final notifier = ref.read(appStateProvider.notifier);
-  notifier.addSystemMessage(
-      tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
+  showToast(tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
   final String? lnAddr;
   try {
     lnAddr = await ref
         .read(nostrControllerProvider)
         .resolveLightningAddressForZap(message.pubkey);
   } catch (_) {
-    notifier.addSystemMessage(
+    showToast(
         tr('Failed to check if @{nym} can receive zaps', {'nym': baseNym}));
     return;
   }
   if (lnAddr == null || lnAddr.isEmpty) {
-    notifier.addSystemMessage(tr(
+    showToast(tr(
         '@{user} cannot receive zaps (no lightning address set)',
         {'user': baseNym}));
     return;

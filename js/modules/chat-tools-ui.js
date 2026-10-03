@@ -890,7 +890,7 @@
                 if (g.tab === 'media') {
                     let thumb = '';
                     if (it.kind === 'image') {
-                        const src = it.local ? ((this._meshLocalMedia && this._meshLocalMedia.get(it.url.slice(9)) || {}).url || '') : this.getProxiedMediaUrl(it.url);
+                        const src = this._ctMediaSrc(it);
                         thumb = src ? `<img src="${esc(src)}" alt="" loading="lazy" decoding="async">` : '';
                     } else {
                         thumb = `<span class="ct-media-video">${esc(this._ct(it.name === 'round' ? C().STRINGS.round : 'Video'))}</span>`;
@@ -910,6 +910,11 @@
                 <div class="ct-gallery ct-gallery-${g.tab}">${items || `<div class="ct-empty">${esc(empty)}</div>`}</div>${older}`;
         },
 
+        _ctMediaSrc(it) {
+            if (it.local) return ((this._meshLocalMedia && this._meshLocalMedia.get(it.url.slice(9))) || {}).url || '';
+            return this.getProxiedMediaUrl(it.url);
+        },
+
         galleryTab(tab) {
             if (!this._ctGallery || ['media', 'files', 'links'].indexOf(tab) < 0) return;
             this._ctGallery.tab = tab;
@@ -925,6 +930,27 @@
                 g.revealed.add(idx);
                 this._renderGallery();
                 return;
+            }
+            if (g.tab === 'media' && typeof this.openMediaViewer === 'function') {
+                const items = this._ctGalleryItems.map((x, i) => ({
+                    src: this._ctMediaSrc(x),
+                    kind: x.kind === 'video' ? 'video' : 'image',
+                    spoiler: !!x.spoiler,
+                    revealed: g.revealed.has(i),
+                    idx: i,
+                })).filter((x) => x.src);
+                const at = items.findIndex((x) => x.idx === idx);
+                if (at >= 0) {
+                    this.openMediaViewer(items, at, {
+                        returnFocus: () => document.querySelector('#chatMediaModal .ct-media-tile[data-idx="' + idx + '"]'),
+                        onReveal: (x) => {
+                            if (this._ctGallery !== g) return;
+                            g.revealed.add(x.idx);
+                            this._renderGallery();
+                        },
+                    });
+                    return;
+                }
             }
             this._ctCloseModal('chatMediaModal');
             const found = this._ctFindMessage(it.nid) || this._ctFindMessage(it.mid);

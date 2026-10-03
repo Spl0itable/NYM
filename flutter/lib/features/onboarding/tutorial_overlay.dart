@@ -7,6 +7,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/secret_screen.dart';
 import '../i18n/i18n.dart';
+import '../toasts/toast_center.dart';
 
 /// Tutorial step targets; unregistered targets fall back to a centered card.
 enum TutorialTarget {
@@ -679,8 +680,7 @@ class _TutorialOverlayState extends State<TutorialOverlay> {
             _keyBtn(c, tr('Copy'), key: Key('${keyPrefix}Copy'), onTap: () async {
               await SecretScreen.copy(value);
               if (!mounted) return;
-              ScaffoldMessenger.maybeOf(context)
-                  ?.showSnackBar(SnackBar(content: Text(copied)));
+              showToast(copied);
             }),
           ],
         ),

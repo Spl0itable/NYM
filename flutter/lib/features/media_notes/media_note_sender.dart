@@ -1,4 +1,6 @@
 
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,6 +10,8 @@ import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import '../mesh/mesh_bridge.dart';
 import '../mesh/mesh_controller.dart';
+import '../toasts/toast_center.dart';
+import '../toasts/toast_model.dart';
 import 'media_notes.dart';
 import 'once_crypto.dart';
 
@@ -19,6 +23,10 @@ typedef MediaMeshSend = Future<String?> Function(
 const String kMeshNotRunning = "The Bluetooth mesh isn't running.";
 const String kSendingVoice = 'Sending voice message…';
 const String kSendingVideoNote = 'Sending video note…';
+const String kVoiceSendFailed = "Couldn't send the voice message: {error}";
+const String kVideoNoteSendFailed = "Couldn't send the video note: {error}";
+const String kRecordingEmpty = 'the recording is empty';
+typedef MediaFileRead = Future<Uint8List> Function(String path);
 typedef MediaNotice = void Function(String text, {bool retry});
 
 class PendingMediaNote {
@@ -62,7 +70,8 @@ class MediaNoteSender {
     required this.sendContent,
     required this.sendMesh,
     required this.notice,
-  });
+    MediaFileRead? readFile,
+  }) : readFile = readFile ?? ((path) => File(path).readAsBytes());
 
   factory MediaNoteSender.live(Ref ref) => MediaNoteSender(
         upload: (bytes, type) =>
@@ -78,12 +87,13 @@ class MediaNoteSender {
         notice: (text, {retry = false}) {
           final app = ref.read(appStateProvider.notifier);
           if (retry) {
+            showToast(text, kind: ToastKind.error);
             app.addSystemMessageWithAction(
                 text,
                 SystemAction(
                     kind: SystemActionKind.retryMediaNote, label: tr('Retry')));
           } else {
-            app.addSystemMessage(text);
+            showToast(text);
           }
         },
       );
@@ -92,6 +102,7 @@ class MediaNoteSender {
   final MediaContentSend sendContent;
   final MediaMeshSend sendMesh;
   final MediaNotice notice;
+  final MediaFileRead readFile;
 
   PendingMediaNote? failed;
   final ValueNotifier<String?> sending = ValueNotifier<String?>(null);
@@ -100,6 +111,54 @@ class MediaNoteSender {
       {required String route, bool once = false}) {
     if (route == 'mesh') return sendOverMesh(desc, bytes, target, once: once);
     return uploadAndSend(desc, bytes, target, once: once);
+  }
+
+  Future<bool> sendRecording({
+    required String path,
+    required String kind,
+    required String mime,
+    required ChatView target,
+    required String route,
+    double? duration,
+    List<double> samples = const [],
+    bool once = false,
+  }) async {
+    final failText = kind == 'round' ? kVideoNoteSendFailed : kVoiceSendFailed;
+    Uint8List bytes;
+    try {
+      bytes = await readFile(path);
+      if (bytes.isEmpty) throw StateError(tr(kRecordingEmpty));
+    } catch (e) {
+      notice(tr(failText, {'error': _short(e)}));
+      return false;
+    } finally {
+      try {
+        final f = File(path);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
+    List<int> waveform = const [];
+    if (kind == 'voice') {
+      try {
+        waveform = computeWaveform(
+            [for (final v in samples) v.isFinite ? v : 0.0]);
+      } catch (_) {
+        waveform = List<int>.filled(MediaNoteLimits.waveformBars, 0);
+      }
+    }
+    final desc = MediaNote(
+      kind: kind,
+      mime: mime,
+      duration: duration,
+      size: bytes.length,
+      waveform: waveform,
+    );
+    try {
+      return await send(desc, bytes, target, route: route, once: once);
+    } catch (e) {
+      notice(tr(failText, {'error': _short(e)}));
+      return false;
+    }
   }
 
   Future<bool> uploadAndSend(MediaNote desc, Uint8List bytes, ChatView target,

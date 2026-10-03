@@ -10,6 +10,7 @@ import '../../state/settings_provider.dart';
 import '../chat_tools/chat_tools_providers.dart';
 import '../i18n/i18n.dart';
 import '../identity/vault_settings_modal.dart' show identityVaultProvider;
+import '../toasts/toast_center.dart';
 import 'chat_lock.dart';
 import 'chat_lock_service.dart';
 import 'screen_privacy.dart';
@@ -105,7 +106,7 @@ final chatLockProvider = Provider<ChatLockService>((ref) {
       },
       notice: (text) {
         try {
-          ref.read(appStateProvider.notifier).addSystemMessage(text);
+          showToast(text);
         } catch (_) {}
       },
       onChanged: () {

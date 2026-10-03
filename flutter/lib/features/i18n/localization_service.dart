@@ -150,13 +150,25 @@ class LocalizationService {
     }
   }
 
+  final Map<String, String> _sources = {};
+
+  String sourceOf(String text) => _sources[text] ?? text;
+
   /// Synchronous: returns the cached translation or the English [source] and queues a miss; `{name}` args apply afterwards.
   String translate(String source, [Map<String, Object?>? args]) {
     if (source.isEmpty) return source;
     _seen.add(source);
     if (!isActive) return _subst(source, args);
     final hit = _cache[source];
-    if (hit != null) return _subst(hit, args);
+    if (hit != null) {
+      final out = _subst(hit, args);
+      if (out != source) {
+        _sources.remove(out);
+        _sources[out] = source;
+        if (_sources.length > 200) _sources.remove(_sources.keys.first);
+      }
+      return out;
+    }
     if (!_requested.contains(source) && !_failed.contains(source)) {
       // Rendered strings jump to the top lane; parked failures are skipped so they can't starve the sweep.
       _sweepPending.remove(source);

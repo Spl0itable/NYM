@@ -35,6 +35,7 @@ const BOT_TURN_RESULT_TTL_S = 900;
 const BOT_TURN_MAX_RESULT_BYTES = 512 * 1024;
 // How long a truncated agent run stays parked for the next turn to continue.
 const BOT_RESUME_TTL_S = 1800;
+const BOT_RESUME_WAIT_TTL_S = 86400;
 const BOT_RESUME_MAX_BYTES = 512 * 1024;
 const BOT_PROGRESS_TTL_S = 900;
 const BOT_PROGRESS_MAX_STEPS = 120;
@@ -103,8 +104,11 @@ export class NymLedger {
       "CREATE TABLE IF NOT EXISTS bot_draft (id TEXT PRIMARY KEY, text TEXT NOT NULL, seq INTEGER NOT NULL, at INTEGER NOT NULL, exp INTEGER NOT NULL);"
     );
     this.sql.exec(
-      "CREATE TABLE IF NOT EXISTS turn_notify (id TEXT PRIMARY KEY, owner TEXT NOT NULL, token TEXT NOT NULL, env TEXT NOT NULL, chat TEXT NOT NULL, text TEXT, exp INTEGER NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS turn_notify (id TEXT PRIMARY KEY, owner TEXT NOT NULL, token TEXT NOT NULL, env TEXT NOT NULL, chat TEXT NOT NULL, text TEXT, exp INTEGER NOT NULL, opts TEXT);"
     );
+    try {
+      this.sql.exec("ALTER TABLE turn_notify ADD COLUMN opts TEXT;");
+    } catch (e) { }
     this.sql.exec(
       "CREATE TABLE IF NOT EXISTS gate (id TEXT PRIMARY KEY, next_at INTEGER NOT NULL, limited_at INTEGER NOT NULL);"
     );
@@ -291,7 +295,7 @@ export class NymLedger {
       case "turn-abort": return this._turnAbort(a.key);
       case "turn-finish": return this._turnFinish(a.key, a.result);
       case "notify-put": return this._notifyPut(a);
-      case "resume-put": return this._resumePut(a.id, a.owner, a.state);
+      case "resume-put": return this._resumePut(a.id, a.owner, a.state, a.ttl);
       case "resume-take": return this._resumeTake(a.id, a.owner);
       case "progress-push": return this._progressPush(a.key, a.step);
       case "progress-read": return this._progressRead(a.key, a.after, a.draftAfter);
@@ -450,6 +454,7 @@ export class NymLedger {
     if (!tokenOk) return { ok: false, error: "bad token" };
     if (typeof a.chat !== "string" || !BOT_NOTIFY_CHAT_RE.test(a.chat)) return { ok: false, error: "bad chat" };
     const text = typeof a.text === "string" && a.text.trim() ? a.text.trim().slice(0, 80) : null;
+    const opts = this._notifyOpts(a);
     const now = Math.floor(Date.now() / 1000);
     const ttl = Math.max(1, Math.min(BOT_NOTIFY_MAX_TTL_S, Math.floor(Number(a.ttl) || BOT_NOTIFY_MAX_TTL_S)));
     const turn = this._turnRow(key);
@@ -460,24 +465,48 @@ export class NymLedger {
     ).toArray();
     if ((held.length ? Number(held[0].n) || 0 : 0) >= BOT_NOTIFY_PER_OWNER) return { ok: false, capped: true };
     this.sql.exec(
-      "INSERT INTO turn_notify (id, owner, token, env, chat, text, exp) VALUES (?, ?, ?, ?, ?, ?, ?) " +
+      "INSERT INTO turn_notify (id, owner, token, env, chat, text, exp, opts) VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT(id) DO UPDATE SET owner = excluded.owner, token = excluded.token, env = excluded.env, " +
-      "chat = excluded.chat, text = excluded.text, exp = excluded.exp;",
-      key, owner, token, a.env, a.chat, text, now + ttl
+      "chat = excluded.chat, text = excluded.text, exp = excluded.exp, opts = excluded.opts;",
+      key, owner, token, a.env, a.chat, text, now + ttl, opts
     );
     return { ok: true, expiresIn: ttl };
+  }
+
+  _notifyOpts(a) {
+    const out = {};
+    if (Array.isArray(a.want)) {
+      out.want = a.want.filter((w) => typeof w === "string" && /^[a-z]{1,16}$/.test(w)).slice(0, 16);
+    }
+    if (a.texts && typeof a.texts === "object" && !Array.isArray(a.texts)) {
+      const texts = {};
+      for (const k of Object.keys(a.texts).slice(0, 16)) {
+        const v = a.texts[k];
+        if (/^[a-z]{1,16}$/.test(k) && typeof v === "string" && v.trim()) texts[k] = v.trim().slice(0, 80);
+      }
+      out.texts = texts;
+    }
+    const min = Math.floor(Number(a.min) || 0);
+    if (min > 0 && min <= 3600) out.min = min;
+    return Object.keys(out).length ? JSON.stringify(out) : null;
   }
 
   _notifyTake(key) {
     const now = Math.floor(Date.now() / 1000);
     this._notifySweep(now);
     const rows = this.sql.exec(
-      "SELECT token, env, chat, text FROM turn_notify WHERE id = ? LIMIT 1;", key
+      "SELECT token, env, chat, text, opts FROM turn_notify WHERE id = ? LIMIT 1;", key
     ).toArray();
     if (!rows.length) return null;
     this.sql.exec("DELETE FROM turn_notify WHERE id = ?;", key);
     const r = rows[0];
-    return { token: r.token, env: r.env, chat: r.chat, text: r.text || null };
+    let opts = {};
+    try {
+      opts = r.opts ? JSON.parse(r.opts) || {} : {};
+    } catch {
+      opts = {};
+    }
+    return Object.assign({ token: r.token, env: r.env, chat: r.chat, text: r.text || null }, opts);
   }
 
   _withNotify(out, key) {
@@ -486,7 +515,7 @@ export class NymLedger {
     return out;
   }
 
-  _resumePut(id, owner, state) {
+  _resumePut(id, owner, state, ttl) {
     if (typeof id !== "string" || !/^[0-9a-f]{32,64}$/i.test(id)) return { ok: false };
     if (typeof owner !== "string" || !/^[0-9a-f]{64}$/i.test(owner)) return { ok: false };
     let encoded;
@@ -498,6 +527,8 @@ export class NymLedger {
     // Too big to park is not an error: the run just can't be continued.
     if (!encoded || encoded.length > BOT_RESUME_MAX_BYTES) return { ok: false, tooLarge: true };
     const now = Math.floor(Date.now() / 1000);
+    const asked = Math.floor(Number(ttl) || 0);
+    const keep = asked > BOT_RESUME_TTL_S ? Math.min(asked, BOT_RESUME_WAIT_TTL_S) : BOT_RESUME_TTL_S;
     this.sql.exec("DELETE FROM bot_resume WHERE exp < ?;", now);
     this.sql.exec(
       "INSERT INTO bot_resume (id, owner, state, exp) VALUES (?, ?, ?, ?) " +
@@ -505,9 +536,9 @@ export class NymLedger {
       id,
       owner.toLowerCase(),
       encoded,
-      now + BOT_RESUME_TTL_S
+      now + keep
     );
-    return { ok: true, expiresIn: BOT_RESUME_TTL_S };
+    return { ok: true, expiresIn: keep };
   }
 
   // Single use, so a resend replays the finished turn rather than continuing the run twice.

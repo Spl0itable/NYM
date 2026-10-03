@@ -1128,6 +1128,7 @@ Object.assign(NYM.prototype, {
 
         const input = document.getElementById('messageInput');
         this._initRichMessageInput(input);
+        this._watchComposerDock(input);
 
         ['autocompleteDropdown', 'channelAutocomplete', 'emojiAutocomplete', 'commandPalette', 'kaomojiAutocomplete'].forEach((id) => {
             const dd = document.getElementById(id);
@@ -1942,6 +1943,20 @@ Object.assign(NYM.prototype, {
         if (textarea.id === 'messageInput') {
             if (typeof this.updateComposerMediaPreviews === 'function') this.updateComposerMediaPreviews();
         }
+    },
+
+    _syncComposerDock(wrapper) {
+        if (!wrapper) return;
+        const docked = [...wrapper.querySelectorAll('[data-composer-dock]')].some((el) => el.offsetHeight > 0);
+        if (wrapper.classList.contains('composer-docked') !== docked) wrapper.classList.toggle('composer-docked', docked);
+    },
+
+    _watchComposerDock(input) {
+        const wrapper = input && input.closest('.input-wrapper');
+        if (!wrapper || wrapper._dockObserver || typeof MutationObserver === 'undefined') return;
+        wrapper._dockObserver = new MutationObserver(() => this._syncComposerDock(wrapper));
+        wrapper._dockObserver.observe(wrapper, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
+        this._syncComposerDock(wrapper);
     },
 
     _refreshComposerOffsets() {

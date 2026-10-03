@@ -10,6 +10,8 @@ import '../../widgets/common/app_dialog.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/media_fallbacks.dart';
+import '../toasts/toast_center.dart';
+import '../toasts/toast_model.dart';
 import 'media_note_files.dart';
 import 'media_note_stores.dart';
 import 'media_notes.dart';
@@ -36,6 +38,19 @@ bool canPlayVoiceMime(String mime, TargetPlatform platform) {
 
 String transcribeLanguage() =>
     PlatformDispatcher.instance.locale.toLanguageTag();
+
+final modelClockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
+
+typedef VoiceNoteTempFile = Future<String> Function(
+    MediaNote note, String? localPath);
+
+final voiceNoteTempFileProvider =
+    Provider<VoiceNoteTempFile>((ref) => (note, localPath) async {
+          final bytes = localPath != null
+              ? await MediaNoteFiles.readLocal(localPath)
+              : await MediaNoteFiles.fetch(note.url);
+          return MediaNoteFiles.writeTemp(bytes, note.mime);
+        });
 
 class VoiceNotePlayer extends ConsumerStatefulWidget {
   const VoiceNotePlayer({
@@ -67,6 +82,11 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
   String? _transcript;
   String? _transcriptNote;
   bool _transcribing = false;
+  String? _modelStage;
+  DateTime? _modelStarted;
+  bool _modelCanceled = false;
+  bool _modelRetry = false;
+  Timer? _modelTicker;
 
   String get _key => widget.note.local || widget.localPath != null
       ? 'local:${widget.localPath ?? widget.note.url}'
@@ -85,6 +105,8 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
 
   @override
   void dispose() {
+    _modelTicker?.cancel();
+    _modelCanceled = true;
     for (final s in _subs) {
       s.cancel();
     }
@@ -188,8 +210,8 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
     if (p != null && _playing) await p.setPlaybackRate(next);
   }
 
-  Future<void> _transcribe() async {
-    if (_transcribing) return;
+  Future<void> _transcribe({bool consented = false}) async {
+    if (_transcribing || _modelStage != null) return;
     final cached = ref.read(transcriptStoreProvider).get(_key);
     if (cached != null) {
       setState(() => _transcript = cached);
@@ -203,21 +225,17 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
       setState(() => _transcriptNote = tr(avail.reason, {'lang': lang}));
       return;
     }
-    if (avail.status == TranscribeStatus.downloadable) {
-      final ok = await showAppConfirm(
-        context,
-        tr('Transcription runs on this device. A speech model for {lang} needs to be downloaded once. The audio never leaves this device.',
-            {'lang': lang}),
-        okLabel: tr('Download model'),
-      );
-      if (!ok || !mounted) return;
-      if (!await svc.install(lang)) {
-        if (mounted) {
-          setState(() =>
-              _transcriptNote = tr("The speech model couldn't be downloaded."));
-        }
-        return;
+    if (avail.status != TranscribeStatus.available) {
+      if (!consented && avail.status == TranscribeStatus.downloadable) {
+        final ok = await showAppConfirm(
+          context,
+          tr('Transcription runs on this device. A speech model for {lang} needs to be downloaded once. The audio never leaves this device.',
+              {'lang': lang}),
+          okLabel: tr('Download model'),
+        );
+        if (!ok || !mounted) return;
       }
+      if (!await _downloadModel(svc, lang)) return;
     }
     setState(() {
       _transcribing = true;
@@ -225,11 +243,8 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
     });
     String? path;
     try {
-      final local = widget.localPath;
-      final bytes = local != null
-          ? await MediaNoteFiles.readLocal(local)
-          : await MediaNoteFiles.fetch(widget.note.url);
-      path = await MediaNoteFiles.writeTemp(bytes, widget.note.mime);
+      path = await ref.read(voiceNoteTempFileProvider)(
+          widget.note, widget.localPath);
       final text = await svc.transcribe(path, lang);
       ref.read(transcriptStoreProvider).set(_key, text);
       if (mounted) {
@@ -246,6 +261,146 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
       await MediaNoteFiles.deleteQuietly(path);
       if (mounted) setState(() => _transcribing = false);
     }
+  }
+
+  Future<bool> _downloadModel(TranscriptionService svc, String lang) async {
+    final limits = ref.read(modelDownloadLimitsProvider);
+    final now = ref.read(modelClockProvider);
+    final started = now();
+    setState(() {
+      _modelStage = 'starting';
+      _modelStarted = started;
+      _modelCanceled = false;
+      _modelRetry = false;
+      _transcriptNote = null;
+    });
+    _modelTicker?.cancel();
+    _modelTicker = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (mounted) setState(() {});
+    });
+    bool? installResult;
+    String? status;
+    var sawDownloading = false;
+    svc.install(lang).then((ok) {
+      if (!ok) installResult = false;
+    }, onError: (Object _) {
+      installResult = false;
+    });
+    const terminal = {'done', 'failed', 'stalled', 'timeout', 'canceled'};
+    String stage;
+    while (true) {
+      stage = modelDownloadStage(
+        status: status,
+        installResult: installResult,
+        elapsedMs: now().difference(started).inMilliseconds,
+        sawDownloading: sawDownloading,
+        canceled: _modelCanceled,
+        limits: limits,
+      );
+      if (!mounted) {
+        _modelTicker?.cancel();
+        return false;
+      }
+      if (terminal.contains(stage)) break;
+      setState(() => _modelStage = stage);
+      await Future<void>.delayed(Duration(milliseconds: limits.pollMs));
+      if (_modelCanceled || installResult != null || !mounted) continue;
+      try {
+        status = transcribeStatusName((await svc.availability(lang)).status);
+      } catch (_) {}
+      if (status == 'downloading') sawDownloading = true;
+    }
+    _modelTicker?.cancel();
+    _modelTicker = null;
+    if (stage == 'done') {
+      setState(() => _modelStage = 'preparing');
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return false;
+      setState(() => _modelStage = null);
+      return true;
+    }
+    final String note;
+    if (stage == 'canceled') {
+      note = tr(kModelCanceled);
+    } else if (stage == 'stalled') {
+      note = tr(kModelStalled);
+    } else if (stage == 'timeout') {
+      note = tr(kModelTimeout);
+    } else {
+      note = tr(kModelFailed);
+    }
+    setState(() {
+      _modelStage = null;
+      _transcriptNote = note;
+      _modelRetry = stage != 'canceled';
+    });
+    if (stage != 'canceled') showToast(note, kind: ToastKind.error);
+    return false;
+  }
+
+  String _modelStageText(String stage) => switch (stage) {
+        'downloading' => tr(kModelDownloading),
+        'preparing' => tr(kModelPreparing),
+        _ => tr(kModelStarting),
+      };
+
+  Widget _modelPanel(NymColors c) {
+    final stage = _modelStageText(_modelStage!);
+    final elapsed = _modelStarted == null
+        ? 0.0
+        : ref.read(modelClockProvider)().difference(_modelStarted!).inMilliseconds /
+            1000;
+    final clock = formatClock(elapsed);
+    return Container(
+      key: const ValueKey('modelDownload'),
+      constraints: const BoxConstraints(maxWidth: 260),
+      margin: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: c.glassBorder),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(stage,
+                      style: TextStyle(color: c.text, fontSize: 12)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(clock,
+                  style: TextStyle(
+                      color: c.textDim,
+                      fontSize: 12,
+                      fontFeatures: const [FontFeature.tabularFigures()])),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              minHeight: 4,
+              color: c.primary,
+              backgroundColor: c.primaryA(0.15),
+              semanticsLabel: tr(kModelDownloadLabel),
+              semanticsValue: '$stage $clock',
+            ),
+          ),
+          const SizedBox(height: 6),
+          _SmallButton(
+            key: const ValueKey('modelCancel'),
+            label: tr('Cancel'),
+            onTap: () => setState(() => _modelCanceled = true),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -367,12 +522,13 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (_transcript == null)
+                  if (_transcript == null && _modelStage == null && !_modelRetry)
                     _SmallButton(
                       key: const ValueKey('voiceTranscribe'),
                       label: tr('Transcribe'),
                       onTap: _transcribe,
                     ),
+                  if (_modelStage != null) _modelPanel(c),
                   if (_transcript != null || _transcriptNote != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
@@ -390,6 +546,18 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
                               : FontStyle.normal,
                           fontSize: 13,
                         ),
+                      ),
+                    ),
+                  if (_modelRetry && _modelStage == null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: _SmallButton(
+                        key: const ValueKey('modelRetry'),
+                        label: tr('Retry'),
+                        onTap: () {
+                          setState(() => _modelRetry = false);
+                          _transcribe(consented: true);
+                        },
                       ),
                     ),
                 ],

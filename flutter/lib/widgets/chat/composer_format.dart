@@ -606,9 +606,13 @@ class ComposerAttachment {
     this.status = ComposerAttachmentStatus.uploading,
     this.url = '',
     this.error = '',
+    this.label = '',
+    this.hosted = false,
   });
 
   final int id;
+  final String label;
+  final bool hosted;
   final bool isVideo;
   final String contentType;
 
@@ -717,6 +721,7 @@ class ComposerMediaStrip extends StatelessWidget {
                   isVideo: attachments[i].isVideo,
                   status: attachments[i].status,
                   error: attachments[i].error,
+                  label: attachments[i].label,
                   onRemove: onRemoveAttachment == null
                       ? null
                       : () => onRemoveAttachment!(attachments[i]),
@@ -740,8 +745,10 @@ class _MediaThumb extends StatelessWidget {
     this.onRetry,
     this.status = ComposerAttachmentStatus.done,
     this.error = '',
+    this.label = '',
   });
 
+  final String label;
   final String url;
   final Uint8List? bytes;
   final bool isVideo;
@@ -791,6 +798,10 @@ class _MediaThumb extends StatelessWidget {
             (56 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
         errorBuilder: (_, _, _) => _broken(c),
       );
+    }
+
+    if (label.isNotEmpty) {
+      media = Semantics(label: label, image: true, child: media);
     }
 
     final tile = GestureDetector(

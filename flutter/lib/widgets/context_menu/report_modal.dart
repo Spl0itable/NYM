@@ -31,13 +31,13 @@ class ReportModal extends StatefulWidget {
     ('other', 'Other'),
   ];
 
-  static Future<void> show(
+  static Future<bool?> show(
     BuildContext context, {
     required String targetNym,
     bool hasMessage = false,
     void Function(String type, String details, bool reportMessage)? onSubmit,
   }) {
-    return showDialog<void>(
+    return showDialog<bool>(
       context: context,
       barrierColor: const Color(0xB3000000),
       builder: (_) => ReportModal(
@@ -254,7 +254,7 @@ class _ReportModalState extends State<ReportModal> {
 
   void _submit() {
     widget.onSubmit?.call(_type, _details.text, _reportMessage);
-    Navigator.of(context).maybePop();
+    Navigator.of(context).pop(true);
   }
 
   Widget _closeButton(NymColors c) {

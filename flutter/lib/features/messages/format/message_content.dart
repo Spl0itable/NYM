@@ -36,6 +36,7 @@ import '../../i18n/i18n.dart';
 import '../../media_notes/media_note_view.dart' show audioOrMediaNote;
 import '../../nymbot/nymbot_threads.dart' show threadChainFor;
 import '../../shop/cosmetics.dart';
+import '../../toasts/toast_center.dart';
 import '../expanded_messages.dart';
 import '../nostr_ref_card.dart';
 import '../inline_network_image.dart';
@@ -286,10 +287,8 @@ class MessageContent extends ConsumerWidget {
     }
 
     final app = ref.read(appStateProvider.notifier);
-    void reportUnavailable() => app.addSystemMessage(
-          tr('Original message is not available'),
-          storageKey: ref.read(appStateProvider).view.storageKey,
-        );
+    void reportUnavailable() =>
+        showToast(tr('Original message is not available'));
 
     final target = conversationHoldingEvent(ref.read(appStateProvider), eventId);
     if (target == null) {
@@ -2957,12 +2956,8 @@ class _QuoteBox extends ConsumerWidget {
       messages,
       hostMessageId: hostMessageId,
     );
-    // Say so when there's nothing to jump to; the captured notifier survives this widget's disposal.
-    final app = ref.read(appStateProvider.notifier);
-    void reportUnavailable() => app.addSystemMessage(
-          tr('Original message is not available'),
-          storageKey: key,
-        );
+    void reportUnavailable() =>
+        showToast(tr('Original message is not available'));
     if (target == null) {
       reportUnavailable();
       return;
@@ -3308,19 +3303,50 @@ Future<void> openFullscreenMedia(
         BuildContext context, List<String> urls, int index) =>
     _FullscreenImageViewer.open(context, urls, index);
 
+class ViewerItem {
+  const ViewerItem({
+    required this.url,
+    this.isVideo = false,
+    this.spoiler = false,
+    this.revealed = false,
+    this.image,
+    this.id = 0,
+  });
+
+  final String url;
+  final bool isVideo;
+  final bool spoiler;
+  final bool revealed;
+  final ImageProvider? image;
+  final int id;
+}
+
+Future<void> openMediaViewer(
+  BuildContext context,
+  List<ViewerItem> items,
+  int index, {
+  ValueChanged<ViewerItem>? onReveal,
+}) =>
+    _FullscreenImageViewer.openItems(context, items, index, onReveal: onReveal);
+
 class _FullscreenImageViewer extends StatefulWidget {
   const _FullscreenImageViewer(
-      {required this.urls, required this.initialIndex});
-  final List<String> urls;
+      {required this.items, required this.initialIndex, this.onReveal});
+  final List<ViewerItem> items;
   final int initialIndex;
+  final ValueChanged<ViewerItem>? onReveal;
 
-  static Future<void> open(BuildContext context, List<String> urls, int index) {
+  static Future<void> open(BuildContext context, List<String> urls, int index) =>
+      openItems(context, [for (final u in urls) ViewerItem(url: u)], index);
+
+  static Future<void> openItems(
+      BuildContext context, List<ViewerItem> items, int index,
+      {ValueChanged<ViewerItem>? onReveal}) {
     return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder<void>(
         opaque: false,
-        // The backdrop is painted in-page because swipe-to-dismiss fades it live.
-        pageBuilder: (_, _, _) =>
-            _FullscreenImageViewer(urls: urls, initialIndex: index),
+        pageBuilder: (_, _, _) => _FullscreenImageViewer(
+            items: items, initialIndex: index, onReveal: onReveal),
       ),
     );
   }
@@ -3334,7 +3360,18 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
   static const double _minScale = 1;
   static const double _maxScale = 5;
 
-  late int _index = widget.initialIndex;
+  late int _index = widget.initialIndex.clamp(0, widget.items.length - 1);
+
+  late final Set<int> _revealed = {
+    for (var i = 0; i < widget.items.length; i++)
+      if (!widget.items[i].spoiler || widget.items[i].revealed) i,
+  };
+
+  ViewerItem get _item => widget.items[_index];
+
+  bool get _hidden => !_revealed.contains(_index);
+
+  bool get _zoomable => !_item.isVideo && !_hidden;
 
   // Live translate and scale transform.
   double _scale = 1, _tx = 0, _ty = 0;
@@ -3352,6 +3389,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
   /// Crossfade flag during gallery navigation.
   bool _fadingOut = false;
   Timer? _navTimer;
+  int? _navTarget;
 
   /// Measures the unscaled image box for pan clamping.
   final GlobalKey _imgKey = GlobalKey();
@@ -3364,6 +3402,51 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
     _navTimer?.cancel();
     _anim.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _preloadNeighbors();
+  }
+
+  ImageProvider _providerFor(ViewerItem it) {
+    final own = it.image;
+    if (own != null) return own;
+    final url = proxiedMedia(it.url);
+    return CachedNetworkImageProvider(url,
+        headers: InlineNetworkImage.imageHeadersFor(url));
+  }
+
+  void _preloadNeighbors() {
+    for (final i in [_index + 1, _index - 1]) {
+      if (i < 0 || i >= widget.items.length) continue;
+      final it = widget.items[i];
+      if (it.isVideo || !_revealed.contains(i)) continue;
+      precacheImage(_providerFor(it), context, onError: (_, _) {});
+    }
+  }
+
+  void _reveal() {
+    setState(() => _revealed.add(_index));
+    widget.onReveal?.call(_item);
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent e) {
+    if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
+    if (e.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _navigate(1);
+      return KeyEventResult.handled;
+    }
+    if (e.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _navigate(-1);
+      return KeyEventResult.handled;
+    }
+    if (e.logicalKey == LogicalKeyboardKey.escape) {
+      Navigator.of(context).maybePop();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   /// Animates the transform to the target.
@@ -3421,13 +3504,14 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
     _startTy = _ty;
     _startFocal = d.focalPoint;
     // Two fingers pinch; one pans when zoomed, else swipes to dismiss.
-    _mode =
-        d.pointerCount >= 2 ? 'pinch' : (_scale > _minScale ? 'pan' : 'swipe');
+    _mode = d.pointerCount >= 2 && _zoomable
+        ? 'pinch'
+        : (_scale > _minScale ? 'pan' : 'swipe');
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
     // Adding or lifting a finger re-baselines the gesture.
-    final wantPinch = d.pointerCount >= 2;
+    final wantPinch = d.pointerCount >= 2 && _zoomable;
     if (_mode == null || wantPinch != (_mode == 'pinch')) {
       _startScale = _scale;
       _startTx = _tx;
@@ -3460,7 +3544,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
     if (d.pointerCount == 0) _mode = null;
     if (mode == 'swipe') {
       // Galleries page on a mostly horizontal release past 60px; releases past 100px dismiss; else spring back.
-      final hasGallery = widget.urls.length > 1;
+      final hasGallery = widget.items.length > 1;
       final horizontal = _tx.abs() > _ty.abs();
       if (hasGallery && horizontal) {
         if (_tx.abs() > 60) {
@@ -3489,6 +3573,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
 
   /// Toggles zoom 1 <-> 2.5.
   void _onDoubleTap() {
+    if (!_zoomable) return;
     if (_scale > _minScale) {
       _reset(animate: true);
     } else {
@@ -3498,8 +3583,9 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
 
   /// Clamped at the ends (no wraparound); resets zoom and crossfades.
   bool _navigate(int delta) {
-    final next = _index + delta;
-    if (next < 0 || next >= widget.urls.length) return false;
+    final next = (_navTarget ?? _index) + delta;
+    if (next < 0 || next >= widget.items.length) return false;
+    _navTarget = next;
     setState(() {
       _fadingOut = true;
       _swipeBgAlpha = null;
@@ -3510,160 +3596,216 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
       if (!mounted) return;
       setState(() {
         _index = next;
+        _navTarget = null;
         _fadingOut = false;
       });
+      _preloadNeighbors();
     });
     return true;
   }
 
   /// Hands the image URL to the platform to download or open.
   Future<void> _download() async {
-    await launchSafeUrl(widget.urls[_index]);
+    await launchSafeUrl(_item.url);
+  }
+
+  Widget _content(NymColors c, Size screen) {
+    if (_hidden) {
+      return Semantics(
+        button: true,
+        label: tr('Spoiler, tap to reveal'),
+        child: GestureDetector(
+          key: const ValueKey('viewerSpoiler'),
+          onTap: _reveal,
+          child: Container(
+            width: math.min(320, screen.width - 32),
+            height: 200,
+            alignment: Alignment.center,
+            color: const Color(0xEB141423),
+            child: Text(tr('Spoiler, tap to reveal'),
+                style: TextStyle(color: c.text, fontSize: 15)),
+          ),
+        ),
+      );
+    }
+    if (_item.isVideo) {
+      return KeyedSubtree(
+        key: const ValueKey('viewerVideo'),
+        child: VideoMessage(
+          key: ValueKey('viewerVideo-$_index'),
+          url: _item.url,
+          maxSize: math.min(screen.width, screen.height) * 0.9,
+          bordered: false,
+        ),
+      );
+    }
+    final own = _item.image;
+    if (own != null) {
+      return Image(
+          image: own,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => const Icon(Icons.broken_image,
+              color: Colors.white54, size: 48));
+    }
+    return CachedNetworkImage(
+      imageUrl: proxiedMedia(_item.url),
+      httpHeaders: InlineNetworkImage.imageHeadersFor(proxiedMedia(_item.url)),
+      fit: BoxFit.contain,
+      errorWidget: (_, _, _) =>
+          const Icon(Icons.broken_image, color: Colors.white54, size: 48),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
     final screen = MediaQuery.of(context).size;
-    final multi = widget.urls.length > 1;
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Stack(
-        children: [
-          // Backdrop, live-faded by the swipe; tap dismisses.
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: () => Navigator.of(context).maybePop(),
-              behavior: HitTestBehavior.opaque,
-              child: ColoredBox(
-                color: Colors.black.withValues(alpha: _swipeBgAlpha ?? 0.85),
+    final multi = widget.items.length > 1;
+    final gutter = screen.width < 600 ? 16.0 : 20.0;
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _onKey,
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).maybePop(),
+                behavior: HitTestBehavior.opaque,
+                child: ColoredBox(
+                  color: Colors.black.withValues(alpha: _swipeBgAlpha ?? 0.85),
+                ),
               ),
             ),
-          ),
-          Center(
-            child: GestureDetector(
-              // Tapping the unzoomed image closes; a zoomed one swallows the tap.
-              onTap: _scale > _minScale
-                  ? null
-                  : () => Navigator.of(context).maybePop(),
-              onDoubleTap: _onDoubleTap,
-              onScaleStart: _onScaleStart,
-              onScaleUpdate: _onScaleUpdate,
-              onScaleEnd: _onScaleEnd,
-              child: Transform.translate(
-                offset: Offset(_tx, _ty),
-                child: Transform.scale(
-                  scale: _scale,
-                  alignment: Alignment.center,
-                  child: AnimatedOpacity(
-                    opacity: _fadingOut ? 0 : 1,
-                    duration: const Duration(milliseconds: 120),
-                    curve: Curves.linear,
-                    child: Container(
-                      key: _imgKey,
-                      constraints: BoxConstraints(
-                        maxWidth: screen.width * 0.9,
-                        maxHeight: screen.height * 0.9,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: c.glassBorder),
-                        borderRadius: NymRadius.rmd,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black
-                                .withValues(alpha: c.isLight ? 0.2 : 0.5),
-                            offset: const Offset(0, 8),
-                            blurRadius: c.isLight ? 40 : 32,
-                          ),
-                        ],
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      // CachedNetworkImage opens from the inline tile's disk cache, at full resolution.
-                      child: CachedNetworkImage(
-                        imageUrl: proxiedMedia(widget.urls[_index]),
-                        httpHeaders: InlineNetworkImage.imageHeadersFor(
-                            proxiedMedia(widget.urls[_index])),
-                        fit: BoxFit.contain,
-                        errorWidget: (_, _, _) => const Icon(
-                            Icons.broken_image,
-                            color: Colors.white54,
-                            size: 48),
+            Center(
+              child: GestureDetector(
+                onTap: _scale > _minScale
+                    ? null
+                    : () => Navigator.of(context).maybePop(),
+                onDoubleTap: _zoomable ? _onDoubleTap : null,
+                onScaleStart: _onScaleStart,
+                onScaleUpdate: _onScaleUpdate,
+                onScaleEnd: _onScaleEnd,
+                child: Transform.translate(
+                  offset: Offset(_tx, _ty),
+                  child: Transform.scale(
+                    scale: _scale,
+                    alignment: Alignment.center,
+                    child: AnimatedOpacity(
+                      opacity: _fadingOut ? 0 : 1,
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.linear,
+                      child: Container(
+                        key: _imgKey,
+                        constraints: BoxConstraints(
+                          maxWidth: screen.width * 0.9,
+                          maxHeight: screen.height * 0.9,
+                        ),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: c.glassBorder),
+                          borderRadius: NymRadius.rmd,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black
+                                  .withValues(alpha: c.isLight ? 0.2 : 0.5),
+                              offset: const Offset(0, 8),
+                              blurRadius: c.isLight ? 40 : 32,
+                            ),
+                          ],
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: _content(c, screen),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-          if (multi) ...[
-            // Prev hides at the first image and next at the last; no wraparound.
-            if (_index > 0)
+            if (multi) ...[
+              if (_index > 0)
+                Positioned(
+                  left: gutter,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: _chip('‹', 44, 32, () => _navigate(-1),
+                        key: const ValueKey('viewerPrev'),
+                        label: tr('Previous'),
+                        padding: const EdgeInsets.only(bottom: 4)),
+                  ),
+                ),
+              if (_index < widget.items.length - 1)
+                Positioned(
+                  right: gutter,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: _chip('›', 44, 32, () => _navigate(1),
+                        key: const ValueKey('viewerNext'),
+                        label: tr('Next'),
+                        padding: const EdgeInsets.only(bottom: 4)),
+                  ),
+                ),
               Positioned(
-                left: 20,
-                top: 0,
-                bottom: 0,
+                bottom: 28,
+                left: 0,
+                right: 0,
                 child: Center(
-                  child: _chip('‹', 44, 32, () => _navigate(-1),
-                      padding: const EdgeInsets.only(bottom: 4)),
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text('${_index + 1} / ${widget.items.length}',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 13)),
+                  ),
                 ),
               ),
-            if (_index < widget.urls.length - 1)
-              Positioned(
-                right: 20,
-                top: 0,
-                bottom: 0,
-                child: Center(
-                  child: _chip('›', 44, 32, () => _navigate(1),
-                      padding: const EdgeInsets.only(bottom: 4)),
-                ),
-              ),
+            ],
             Positioned(
-              bottom: 28,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Text('${_index + 1} / ${widget.urls.length}',
-                    style:
-                        const TextStyle(color: Colors.white70, fontSize: 13)),
+              top: 20,
+              right: gutter + 50,
+              child: SafeArea(
+                  child: _chip('⤓', 40, 22, _download, label: tr('Download'))),
+            ),
+            Positioned(
+              top: 20,
+              right: gutter,
+              child: SafeArea(
+                child: _chip('×', 40, 24, () => Navigator.of(context).maybePop(),
+                    label: tr('Close')),
               ),
             ),
           ],
-          Positioned(
-            top: 20,
-            right: 70,
-            child: SafeArea(child: _chip('⤓', 40, 22, _download)),
-          ),
-          Positioned(
-            top: 20,
-            right: 20,
-            child: SafeArea(
-              child: _chip('×', 40, 24, () => Navigator.of(context).maybePop()),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 
   /// Glass circle for close, download and nav buttons.
   Widget _chip(String glyph, double side, double fontSize, VoidCallback onTap,
-      {EdgeInsets padding = EdgeInsets.zero}) {
+      {EdgeInsets padding = EdgeInsets.zero, Key? key, String? label}) {
     final c = context.nym;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: side,
-        height: side,
-        padding: padding,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xCC141423),
-          shape: BoxShape.circle,
-          border: Border.all(color: c.glassBorder),
-        ),
-        child: Text(
-          glyph,
-          style: TextStyle(color: c.text, fontSize: fontSize, height: 1),
+    return Semantics(
+      key: key,
+      button: true,
+      label: label,
+      excludeSemantics: label != null,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: side,
+          height: side,
+          padding: padding,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: const Color(0xCC141423),
+            shape: BoxShape.circle,
+            border: Border.all(color: c.glassBorder),
+          ),
+          child: Text(
+            glyph,
+            style: TextStyle(color: c.text, fontSize: fontSize, height: 1),
+          ),
         ),
       ),
     );

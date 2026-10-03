@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/crypto/bech32_codec.dart' as bech32;
 import '../core/crypto/key_format.dart' show normalizePubkeyInput;
 import '../core/crypto/bitchat.dart' as bitchat;
+import '../core/crypto/crypto_worker.dart' show CryptoWorker;
 import '../core/crypto/gift_wrap.dart' as giftwrap;
 import '../core/crypto/keys.dart' as keys;
 import '../core/crypto/ml_kem.dart';
@@ -20,6 +21,7 @@ import '../core/constants/relays.dart';
 import '../core/constants/storage_keys.dart';
 import '../core/theme/nym_colors.dart';
 import '../core/utils/nym_utils.dart';
+import '../features/toasts/toast_center.dart';
 import '../services/api/api_config.dart';
 import '../features/calls/call_providers.dart';
 import '../features/commands/action_rate_limit.dart';
@@ -257,6 +259,73 @@ class NostrController {
     }
   }
 
+  Future<List<Map<String, dynamic>>> editHistoryEvents(
+      String surface, String id, int at) async {
+    if (surface == 'channel') {
+      if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) return const [];
+      final api = _api ??= ApiClient();
+      final res = await api.storageAction(
+          <String, dynamic>{'action': 'channel-edits', 'id': id});
+      final list = res['events'];
+      final rows = <Map<String, dynamic>>[
+        if (list is List)
+          for (final e in list)
+            if (e is Map) Map<String, dynamic>.from(e),
+      ];
+      final ok = await verifiedRows(rows, _verifyArchived);
+      return [
+        for (final e in ok)
+          if (e.kind == 20000 || e.kind == 23333) e.toJson(),
+      ];
+    }
+    final sync = _storageSync;
+    final service = _service;
+    if (sync == null || service == null) throw StateError('no archive');
+    final out = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    Future<void> scan(List<String>? pubkeys) async {
+      var from = max(0, at - chat_tools.ChatToolsLimits.editFetchSlackSec);
+      for (var i = 0; i < chat_tools.ChatToolsLimits.editFetchPages; i++) {
+        final wraps = await sync.pmScanForward(
+            since: from,
+            limit: chat_tools.ChatToolsLimits.editFetchPageSize,
+            pubkeys: pubkeys);
+        final probes = <Future<GiftWrapUnwrapped?>>[];
+        for (final w in wraps) {
+          if (!seen.add('${w['id']}')) continue;
+          probes.add(Future<GiftWrapUnwrapped?>.sync(
+                  () => service.probeArchivedWrap(NostrEvent.fromJson(w)))
+              .catchError((Object _) => null));
+        }
+        for (final u in await Future.wait(probes)) {
+          if (u != null && u.senderVerified) out.add(u.rumor);
+        }
+        final last = wraps.isEmpty
+            ? 0
+            : ((wraps.last['created_at'] as num?)?.toInt() ?? 0);
+        if (wraps.length < chat_tools.ChatToolsLimits.editFetchPageSize ||
+            last <= from) {
+          return;
+        }
+        from = last;
+      }
+    }
+
+    Future<bool> attempt(List<String>? pubkeys) =>
+        scan(pubkeys).then((_) => true, onError: (_) => false);
+    final ephPks = surface == 'group'
+        ? (_groups?.allEphemeralPubkeys() ?? const <String>[])
+        : const <String>[];
+    final jobs = <Future<bool>>[
+      if (sync.durableIdentity) attempt(null),
+      if (ephPks.isNotEmpty) attempt(ephPks),
+    ];
+    if (jobs.isEmpty) throw StateError('no archive');
+    final done = await Future.wait(jobs);
+    if (!done.contains(true)) throw StateError('archive unavailable');
+    return out;
+  }
+
   /// Debounce for the encrypted settings publish (5s).
   Timer? _settingsSyncTimer;
 
@@ -384,9 +453,13 @@ class NostrController {
     if (sink != null) {
       sink(localizeCommandTokensIn(text));
     } else {
-      debugPrint('[system] $text');
+      showToast(localizeCommandTokensIn(text));
     }
   }
+
+  void _emitFeedMessage(String text) => _ref
+      .read(appStateProvider.notifier)
+      .addSystemMessage(localizeCommandTokensIn(text));
 
   /// Boots the identity and connects; [unlockedSecrets] holds decrypted vault secrets so the at-rest blob isn't read.
   Future<void> init({Map<String, String>? unlockedSecrets}) async {
@@ -1444,6 +1517,7 @@ class NostrController {
       // Register NIP-30 emoji so `:shortcode:` tokens render.
       if (event.tags.isNotEmpty) {
         _ref.read(liveCustomEmojiProvider.notifier).ingestEmojiTags(event.tags);
+        _ref.read(mediaFallbacksProvider).ingestImetaTags(event.tags);
       }
       // Register inbound P2P file offers so the card's download works; our own are registered at share time.
       if (event.pubkey != (_identity?.pubkey ?? '')) {
@@ -2621,6 +2695,7 @@ class NostrController {
     // Register NIP-30 emoji so `:shortcode:` tokens render.
     if (tags.isNotEmpty) {
       _ref.read(liveCustomEmojiProvider.notifier).ingestEmojiTags(tags);
+      _ref.read(mediaFallbacksProvider).ingestImetaTags(tags);
     }
 
     final knownGroup = groupId == null ? null : appState.groupById(groupId);
@@ -2658,7 +2733,8 @@ class NostrController {
       appState.applyEditOrDefer(editId, content,
           editorPubkey: senderPubkey,
           verified: u.senderVerified,
-          editAt: (rumor['created_at'] as num?)?.toInt() ?? 0);
+          editAt: (rumor['created_at'] as num?)?.toInt() ?? 0,
+          editId: rumor['id'] is String ? rumor['id'] as String : '');
       return;
     }
 
@@ -2726,7 +2802,6 @@ class NostrController {
     if (u.senderVerified &&
         !anonAuthor &&
         senderPubkey.isNotEmpty &&
-        senderPubkey != self &&
         !_ref.read(appStateProvider).blockedUsers.contains(senderPubkey)) {
       _notePmSupportToken(senderPubkey, rumor);
     }
@@ -5187,11 +5262,22 @@ class NostrController {
   String? pmSupportTokenFor(String pubkey) =>
       _pmSupportStore().newestFor(pubkey);
 
-  void _notePmSupportToken(String peer, Map<String, dynamic> rumor) {
+  static String? _supportReplyRecipient(List<List<String>> tags, String? self) {
+    for (final t in tags) {
+      if (t.length > 1 && t[0] == 'p' && t[1] != self) return t[1];
+    }
+    return null;
+  }
+
+  void _notePmSupportToken(String sender, Map<String, dynamic> rumor) {
     final token = PmLogic.supportTokenOf(rumor);
     if (token == null) return;
     final store = _pmSupportStore();
-    if (peer == _pmSupportOwner) return;
+    final owner = _pmSupportOwner;
+    final peer = sender == owner
+        ? _supportReplyRecipient(_tags(rumor), owner)
+        : sender;
+    if (peer == null || peer == owner) return;
     final ts = (rumor['created_at'] as num?)?.toInt() ?? 0;
     if (!store.record(peer, token, ts)) return;
     unawaited(_ref.read(keyValueStoreProvider).setString(
@@ -5652,7 +5738,7 @@ class NostrController {
         .map((u) => '${stripPubkeySuffix(u.nym)}#${getPubkeySuffix(u.pubkey)}')
         .toList()
       ..sort();
-    _emitSystemMessage(tr('Online nyms in this channel: {names}',
+    _emitFeedMessage(tr('Online nyms in this channel: {names}',
         {'names': names.isEmpty ? tr('none') : names.join(', ')}));
   }
 
@@ -5701,7 +5787,7 @@ class NostrController {
   void cmdShare() {
     final state = _ref.read(appStateProvider);
     if (state.view.kind != ViewKind.channel) return;
-    _emitSystemMessage('https://app.nym.bar/#${state.view.id}');
+    _emitFeedMessage('https://app.nym.bar/#${state.view.id}');
   }
 
   /// `/quit`: stops the service and clears the saved dev nsec and pubkey-scoped lightning address.
@@ -6769,7 +6855,7 @@ class NostrController {
         unawaited(_sendGroupHistoryTo(group, pk));
       }
     }
-    _emitSystemMessage(content);
+    _emitFeedMessage(content);
     return true;
   }
 
@@ -10028,6 +10114,9 @@ class NostrController {
   @visibleForTesting
   void processGiftWrapForTest(GiftWrapUnwrapped u) => _processGiftWrap(u);
 
+  @visibleForTesting
+  void onEventForTest(NostrEvent event) => _onEvent(event);
+
   /// Test seam: applies an inbound payload like a real settings-get.
   @visibleForTesting
   void applySyncedSettingsForTest(Map<String, dynamic> p) {
@@ -10813,6 +10902,8 @@ class NostrController {
     final tools = _ref.read(chatToolsProvider);
     _ref.read(appStateProvider.notifier).onBeforeEdit =
         (m, next, at) => tools.noteEdit(m, next, at);
+    _ref.read(appStateProvider.notifier).onStaleEdit =
+        (m, text, at) => tools.noteStaleEdit(m, text, at);
     _chatToolsTimer?.cancel();
     _chatToolsTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _ref
@@ -10917,6 +11008,17 @@ class NostrController {
     List<List<String>> extraTags,
     int at,
   ) async {
+    final off = await CryptoWorker.instance.wrapOne(
+      rumor: rumor,
+      senderPrivkey: sk,
+      recipientPubkey: to,
+      expiration: expiration,
+      recipientKemPk: kem,
+      layered: layered,
+      extraTags: extraTags,
+      at: at,
+    );
+    if (off != null) return off;
     if (kem == null) {
       return giftwrap.nip59Wrap(
           rumor: rumor,
@@ -11029,14 +11131,20 @@ class NostrController {
           content: text,
         );
         final members = <String>{...group.members, identity.pubkey};
+        final jobs = <Future<NostrEvent>>[];
         for (final pk in members) {
           final self = pk == identity.pubkey;
           final kem = self ? pqSelfKey() : _pqGroupKeyFor(pk);
           final layered = kem != null &&
               (self ? pqSelfUsesLayered() : _pqGroupLayeredFor(pk));
-          final w = await _scheduledWrap(
-              rumor, sk, pk, kem, layered, expiration, const [], at);
-          events.add({'e': w.toJson(), 'r': self ? 'self' : 'dep'});
+          jobs.add(_scheduledWrap(
+              rumor, sk, pk, kem, layered, expiration, const [], at));
+        }
+        final wraps = await Future.wait(jobs);
+        var i = 0;
+        for (final pk in members) {
+          final self = pk == identity.pubkey;
+          events.add({'e': wraps[i++].toJson(), 'r': self ? 'self' : 'dep'});
         }
       }
       return (
@@ -11531,40 +11639,46 @@ class NostrController {
 
     final api = ApiClient();
     try {
-      for (final server in kBlossomServers) {
-        try {
-          final data = await api.uploadBlob(bytes, server, authHeader,
-              contentType: contentType);
-          final url = data['url'];
-          if (url is String && url.isNotEmpty) {
-            onProgress?.call(1.0);
-            // Mirror to the other servers in the background so the bytes upload once.
-            unawaited(_mirrorBlobBackground(url, server, authHeader));
-            return url;
-          }
-        } catch (e) {
-          debugPrint('Blossom upload to $server failed: $e');
-        }
-      }
+      final done = await _blossomUploader.upload(kBlossomServers, contentType,
+          (server, type) async {
+        final data =
+            await api.uploadBlob(bytes, server, authHeader, contentType: type);
+        final url = data['url'];
+        return url is String ? url : null;
+      });
+      if (done == null) return null;
+      onProgress?.call(1.0);
+      final fallbacks = _ref.read(mediaFallbacksProvider);
+      fallbacks.recordPredictedMirrors(done.url, [
+        for (final s in kBlossomServers)
+          if (s != done.server) predictMirrorUrl(s, hashHex, done.url),
+      ]);
+      unawaited(_mirrorBlobBackground(done.url, done.server, authHeader)
+          .then((mirrors) => fallbacks.recordConfirmedMirrors(done.url, mirrors)));
+      return done.url;
     } finally {
       api.dispose();
     }
-    return null;
   }
 
+  final BlossomUploader _blossomUploader = BlossomUploader();
+
   /// Mirrors a blob to the other Blossom servers via the proxy with the same upload auth; best-effort.
-  Future<void> _mirrorBlobBackground(
+  Future<List<String>> _mirrorBlobBackground(
     String primaryUrl,
     String excludeServer,
     String authHeader,
   ) async {
     final remaining = kBlossomServers.where((s) => s != excludeServer).toList();
-    if (remaining.isEmpty) return;
+    final mirrors = <String>[];
+    if (remaining.isEmpty) return mirrors;
     final api = ApiClient();
     try {
       await Future.wait(remaining.map((server) async {
         try {
-          await api.mirrorBlob(primaryUrl, server, authHeader);
+          final data = await api.mirrorBlob(primaryUrl, server, authHeader);
+          final url = data['url'];
+          if (url is String && url.isNotEmpty) mirrors.add(url);
         } catch (e) {
           debugPrint('Blossom mirror to $server failed: $e');
         }
@@ -11572,6 +11686,7 @@ class NostrController {
     } finally {
       api.dispose();
     }
+    return mirrors;
   }
 
   /// Shares [bytes] as a P2P file and announces the offer in the active conversation.
@@ -12248,7 +12363,7 @@ final p2pServiceProvider = Provider<P2PService>((ref) {
   // Route transfer status into the conversation and subscribe now so a pure receiver is listening.
   service.onSystemMessage = (m) {
     try {
-      ref.read(appStateProvider.notifier).addSystemMessage(m);
+      showToast(m);
     } catch (_) {}
   };
   service.start();
@@ -12299,6 +12414,8 @@ class _CommandEngineAdapter implements CommandEngine {
       unawaited(_c._sendMessageContent(content));
   @override
   void systemMessage(String text) => _c._emitSystemMessage(text);
+  @override
+  void feedMessage(String text) => _c._emitFeedMessage(text);
 
   @override
   void join(String channel) => _c.cmdJoin(channel);
