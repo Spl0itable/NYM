@@ -1332,7 +1332,10 @@ Object.assign(NYM.prototype, {
         // Skip per-insert pruning during bulk render, which would make channel switching quadratic.
         if (!this._bulkAppending && !_threadRender) {
             const domMessages = container.querySelectorAll('[data-message-id]');
-            const domLimit = this.userScrolledUp
+            const pruneCol = this._cvActive && Array.isArray(this._cvColumns)
+                ? this._cvColumns.find((c) => c.listEl === container) : null;
+            const readingUp = pruneCol ? pruneCol._atBottom === false : this.userScrolledUp;
+            const domLimit = readingUp
                 ? (message.isPM ? this.pmStorageLimit : this.channelMessageLimit)
                 : (message.isPM ? this.pmDomNodeLimit : this.channelDomNodeLimit);
             if (domMessages.length > domLimit) {
@@ -1343,7 +1346,7 @@ Object.assign(NYM.prototype, {
                 }
                 const startMap = message.isPM ? this.pmRenderedStart : this.channelRenderedStart;
                 if (startMap) {
-                    const renderKey = message.isPM
+                    const renderKey = pruneCol ? pruneCol.key : message.isPM
                         ? (this.currentGroup
                             ? this.getGroupConversationKey(this.currentGroup)
                             : (this.currentPM ? this.getPMConversationKey(this.currentPM) : null))

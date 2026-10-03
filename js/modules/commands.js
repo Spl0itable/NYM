@@ -670,7 +670,7 @@ Object.assign(NYM.prototype, {
                 this.displaySystemMessage("Nymbot can't be added to group chats. Use ?ask or @Nymbot in a channel instead.");
                 return;
             }
-            await this.addMemberToGroup(this.currentGroup, targetPubkey);
+            await this.addMembersToGroup(this.currentGroup, [targetPubkey]);
             return;
         }
 
@@ -798,7 +798,7 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage("Nymbot can't be added to group chats. Use ?ask or @Nymbot in a channel instead.");
             return;
         }
-        await this.addMemberToGroup(this.currentGroup, targetPubkey);
+        await this.addMembersToGroup(this.currentGroup, [targetPubkey]);
     },
 
     _resolveGroupTarget(args, usage) {

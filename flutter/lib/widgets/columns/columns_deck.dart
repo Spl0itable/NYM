@@ -2140,34 +2140,14 @@ class _DragHandleState extends State<_DragHandle> {
       child: SizedBox(
         width: 14,
         height: 14,
-        child: CustomPaint(
-          painter: _SixDotPainter(
-            color: _hover ? c.textBright : widget.color,
-          ),
+        child: NymSvgIcon(
+          NymIcons.dragHandle,
+          size: 14,
+          color: _hover ? c.textBright : widget.color,
         ),
       ),
     );
   }
-}
-
-class _SixDotPainter extends CustomPainter {
-  _SixDotPainter({required this.color});
-  final Color color;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color;
-    final sx = size.width / 24, sy = size.height / 24;
-    const r = 1.4;
-    for (final cx in [9.0, 15.0]) {
-      for (final cy in [6.0, 12.0, 18.0]) {
-        canvas.drawCircle(Offset(cx * sx, cy * sy), r * sx, paint);
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(_SixDotPainter old) => old.color != color;
 }
 
 class _GroupGlyphPainter extends CustomPainter {
@@ -2388,7 +2368,7 @@ class _HoverCloseButtonState extends State<_HoverCloseButton> {
             duration: NymMotion.transition,
             curve: NymMotion.curve,
             builder: (context, color, _) => NymSvgIcon(
-              NymIcons.close,
+              NymIcons.columnClose,
               size: widget.size,
               color: color ?? target,
             ),
@@ -2856,9 +2836,8 @@ class _TabRow extends StatelessWidget {
               child: SizedBox(
                 width: 16,
                 height: 16,
-                child: CustomPaint(
-                  painter: _SixDotPainter(color: c.textDim),
-                ),
+                child: NymSvgIcon(NymIcons.dragHandle,
+                    size: 16, color: c.textDim),
               ),
             ),
           ),

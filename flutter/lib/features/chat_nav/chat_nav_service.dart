@@ -233,6 +233,11 @@ class ChatNavService {
     return e == null ? 0 : jumpCount(e.jump);
   }
 
+  List<String> jumpLeadFor(String key) {
+    final e = _entries[key];
+    return e == null ? const [] : jumpLead(e.jump);
+  }
+
   String? jumpTargetFor(String key) {
     final e = _entries[key];
     return e == null ? null : jumpTarget(e.jump);

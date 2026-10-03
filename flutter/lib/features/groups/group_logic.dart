@@ -42,6 +42,50 @@ const int kGroupResyncOfflineGapSec = 3 * 24 * 60 * 60;
 /// Per-group cooldown between key-resync requests.
 const int kGroupResyncCooldownSec = 24 * 60 * 60;
 
+class GroupCapEntry {
+  const GroupCapEntry(this.pk, [this.at]);
+  final String pk;
+  final num? at;
+}
+
+class GroupCapResult {
+  const GroupCapResult(this.members, this.dropped);
+  final List<String> members;
+  final List<String> dropped;
+}
+
+GroupCapResult groupCapRoster({
+  required int max,
+  required Iterable<GroupCapEntry> entries,
+  Iterable<String> banned = const [],
+}) {
+  final ban = banned.toSet();
+  final best = <String, num>{};
+  for (final e in entries) {
+    if (ban.contains(e.pk)) continue;
+    final raw = e.at;
+    final at = (raw == null || raw.isNaN || raw < 0) ? 0 : raw;
+    final prev = best[e.pk];
+    if (prev == null || at < prev) best[e.pk] = at;
+  }
+  final order = best.keys.toList()
+    ..sort((a, b) {
+      final c = best[a]!.compareTo(best[b]!);
+      return c != 0 ? c : a.compareTo(b);
+    });
+  final keep = max < 0 ? 0 : (max > order.length ? order.length : max);
+  return GroupCapResult(order.sublist(0, keep), order.sublist(keep));
+}
+
+class GroupAdmitResult {
+  const GroupAdmitResult(this.added, this.evicted, this.refused);
+  final List<String> added;
+  final List<String> evicted;
+  final List<String> refused;
+
+  bool get changed => added.isNotEmpty || evicted.isNotEmpty;
+}
+
 /// Ephemeral keypair: raw 32-byte sk plus 64-hex x-only pk.
 class EphemeralKey {
   EphemeralKey({required this.sk, required this.pk});
@@ -543,12 +587,109 @@ class GroupLogic {
     ];
   }
 
+  static GroupAdmitResult admitMembers(
+    Group g,
+    Map<String, int> candidates, {
+    bool respectRemovals = true,
+    int max = kMaxGroupMembers,
+  }) {
+    final known = g.members.toSet();
+    final fresh = <String, int>{};
+    candidates.forEach((pk, rawAt) {
+      if (pk.isEmpty) return;
+      final at = rawAt < 0 ? 0 : rawAt;
+      if (known.contains(pk)) {
+        final cur = g.memberAt[pk];
+        if (cur != null && at < cur) g.memberAt[pk] = at;
+        return;
+      }
+      if (g.banned.contains(pk)) return;
+      if (respectRemovals && (g.memberRemovedAt[pk] ?? -1) > at) return;
+      final prev = fresh[pk];
+      if (prev == null || at < prev) fresh[pk] = at;
+    });
+    final r = groupCapRoster(
+      max: max,
+      entries: [
+        for (final pk in g.members) GroupCapEntry(pk, g.memberAt[pk] ?? 0),
+        for (final e in fresh.entries) GroupCapEntry(e.key, e.value),
+      ],
+      banned: g.banned,
+    );
+    final keep = r.members.toSet();
+    final added = [
+      for (final pk in r.members)
+        if (!known.contains(pk)) pk,
+    ];
+    final evicted = [
+      for (final pk in g.members)
+        if (!keep.contains(pk)) pk,
+    ];
+    final refused = [
+      for (final pk in r.dropped)
+        if (!known.contains(pk)) pk,
+    ];
+    if (added.isEmpty && evicted.isEmpty) {
+      return GroupAdmitResult(const [], const [], refused);
+    }
+    final next = [
+      for (final pk in g.members)
+        if (keep.contains(pk)) pk,
+      ...added,
+    ];
+    g.members
+      ..clear()
+      ..addAll(next);
+    for (final pk in added) {
+      g.memberAt[pk] = fresh[pk]!;
+    }
+    for (final pk in evicted) {
+      g.memberAt.remove(pk);
+      g.mods.remove(pk);
+      g.admins.remove(pk);
+    }
+    return GroupAdmitResult(added, evicted, refused);
+  }
+
+  static void recordRemoval(Group g, String pubkey, int ts) {
+    if (pubkey.isEmpty) return;
+    final at = ts < 0 ? 0 : ts;
+    if (at >= (g.memberRemovedAt[pubkey] ?? 0)) g.memberRemovedAt[pubkey] = at;
+    g.memberAt.remove(pubkey);
+    if (g.memberRemovedAt.length > 200) {
+      final keys = g.memberRemovedAt.keys.toList()
+        ..sort((a, b) =>
+            g.memberRemovedAt[a]!.compareTo(g.memberRemovedAt[b]!));
+      for (final k in keys.take(g.memberRemovedAt.length - 200)) {
+        g.memberRemovedAt.remove(k);
+      }
+    }
+  }
+
+  static const String joinDeclinedFullContent = 'group is full';
+
+  static List<List<String>> joinDeclinedFullTags({
+    required String joiner,
+    required String groupId,
+    required String groupName,
+    required String sharedEventId,
+  }) =>
+      [
+        ['p', joiner],
+        ['g', groupId],
+        ['subject', groupName.length > 80 ? groupName.substring(0, 80) : groupName],
+        ['type', 'group-join-declined'],
+        ['reason', 'full'],
+        ['x', sharedEventId],
+      ];
+
   static bool isBareShell(Group g, String selfPubkey) =>
       (g.createdBy == null || g.createdBy!.isEmpty) &&
       g.members.where((pk) => pk != selfPubkey).isEmpty;
 
   static bool applyRoster(
-      Group g, List<List<String>> tags, String senderPubkey, String selfPubkey) {
+      Group g, List<List<String>> tags, String senderPubkey, String selfPubkey,
+      {int ts = 0}) {
     final bootstrap = isBareShell(g, selfPubkey);
     if (!bootstrap && !canModerate(g, senderPubkey)) return false;
     List<String> tagged(String k) => [
@@ -558,8 +699,30 @@ class GroupLogic {
     final members = tagged('p');
     if (members.isEmpty) return false;
     final banned = tagged('ban').toSet();
-    final next = members.where((pk) => !banned.contains(pk)).toSet().toList();
+    final known = g.members.toSet();
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final at = ts < 0 ? 0 : (ts < nowSec ? ts : nowSec);
+    for (final pk in members) {
+      final cur = g.memberAt[pk];
+      if (known.contains(pk) && cur != null && at < cur) g.memberAt[pk] = at;
+    }
+    final capped = groupCapRoster(
+      max: kMaxGroupMembers,
+      entries: [
+        for (final pk in members)
+          GroupCapEntry(pk, known.contains(pk) ? (g.memberAt[pk] ?? 0) : at),
+      ],
+      banned: banned,
+    ).members.toSet();
+    final next = members
+        .where((pk) => !banned.contains(pk) && capped.contains(pk))
+        .toSet()
+        .toList();
     if (!next.contains(selfPubkey)) return false;
+    for (final pk in next) {
+      if (!known.contains(pk)) g.memberAt[pk] = at;
+    }
+    g.memberAt.removeWhere((pk, _) => !next.contains(pk));
     final admins =
         tagged('admin').where((pk) => next.contains(pk)).toSet().toList();
     final mods = tagged('mod')
@@ -721,6 +884,7 @@ class GroupLogic {
         // Removing yourself is a voluntary leave: always allowed, never bans.
         if (senderPubkey == target) {
           recordModEvent(group, ts, modKey, targetPubkey: target);
+          recordRemoval(group, target, ts);
           group.members.remove(target);
           group.mods.remove(target);
           group.admins.remove(target);
@@ -735,6 +899,7 @@ class GroupLogic {
           return GroupControlResult.unauthorized;
         }
         recordModEvent(group, ts, modKey, targetPubkey: target);
+        recordRemoval(group, target, ts);
         group.members.remove(target);
         group.mods.remove(target);
         group.admins.remove(target);
@@ -812,25 +977,30 @@ class GroupLogic {
         if (!canAddMembers(group, senderPubkey)) {
           return GroupControlResult.unauthorized;
         }
-        final added = <String>[];
+        final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        final addTs = ts < nowSec + 300 ? ts : nowSec + 300;
+        final joinAt = ts < nowSec ? ts : nowSec;
+        final senderMods = canModerate(group, senderPubkey);
+        final candidates = <String, int>{};
+        final unbanned = <String>[];
         for (final t in tags) {
           if (t.isNotEmpty && t[0] == 'p' && t.length > 1) {
             final pk = t[1];
-            if (!group.members.contains(pk)) {
-              group.members.add(pk);
-              added.add(pk);
-            }
-            // Re-admitting a banned user clears the ban (owner/mod only).
-            if (group.banned.contains(pk) && canModerate(group, senderPubkey)) {
+            if (group.banned.contains(pk)) {
+              if (!senderMods) continue;
               group.banned.remove(pk);
+              unbanned.add(pk);
             }
+            candidates[pk] = joinAt;
           }
         }
-        if (added.isEmpty) return GroupControlResult.noop;
+        final admit = admitMembers(group, candidates);
+        for (final pk in unbanned) {
+          if (!group.members.contains(pk)) group.banned.add(pk);
+        }
+        if (!admit.changed) return GroupControlResult.noop;
         // Advance each re-added member's clock so a replayed older kick can't remove them.
-        final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        final addTs = ts < nowSec + 300 ? ts : nowSec + 300;
-        for (final pk in added) {
+        for (final pk in admit.added) {
           bumpModTargetTs(group, pk, addTs);
         }
         return GroupControlResult.applied;
@@ -845,6 +1015,7 @@ class GroupLogic {
         if (!group.members.contains(senderPubkey)) {
           return GroupControlResult.noop;
         }
+        recordRemoval(group, senderPubkey, ts);
         group.members.remove(senderPubkey);
         group.mods.remove(senderPubkey);
         _modLog(group,

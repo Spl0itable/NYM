@@ -87,7 +87,12 @@ class Group {
     this.slowmodeSince = 0,
     this.joinApproval = false,
     List<JoinRequest>? joinRequests,
+    Map<String, int>? memberAt,
+    Map<String, int>? memberRemovedAt,
+    this.joinedVia,
   })  : joinRequests = joinRequests ?? <JoinRequest>[],
+        memberAt = memberAt ?? <String, int>{},
+        memberRemovedAt = memberRemovedAt ?? <String, int>{},
         members = members ?? <String>[],
         mods = mods ?? <String>[],
         admins = admins ?? <String>[],
@@ -139,6 +144,12 @@ class Group {
   bool joinApproval;
   List<JoinRequest> joinRequests;
 
+  final Map<String, int> memberAt;
+
+  final Map<String, int> memberRemovedAt;
+
+  String? joinedVia;
+
   bool isOwner(String pubkey) => createdBy == pubkey;
   bool isMod(String pubkey) => mods.contains(pubkey);
   bool canModerate(String pubkey) => isOwner(pubkey) || isMod(pubkey);
@@ -176,7 +187,19 @@ class Group {
         if (joinApproval) 'joinApproval': true,
         if (joinRequests.isNotEmpty)
           'joinRequests': joinRequests.map((r) => r.toJson()).toList(),
+        if (memberAt.isNotEmpty) 'memberAt': memberAt,
+        if (memberRemovedAt.isNotEmpty) 'memberRemovedAt': memberRemovedAt,
+        if (joinedVia != null) 'joinedVia': joinedVia,
       };
+
+  static Map<String, int>? parseTimeMap(Object? v) {
+    if (v is! Map) return null;
+    final out = <String, int>{};
+    v.forEach((k, t) {
+      if (t is num && t.isFinite) out[k.toString()] = t < 0 ? 0 : t.toInt();
+    });
+    return out;
+  }
 
   factory Group.fromJson(Map<String, dynamic> j) => Group(
         id: j['id'] as String,
@@ -227,6 +250,9 @@ class Group {
           for (final r in (j['joinRequests'] as List?) ?? const [])
             if (JoinRequest.fromJson(r) != null) JoinRequest.fromJson(r)!,
         ],
+        memberAt: parseTimeMap(j['memberAt']),
+        memberRemovedAt: parseTimeMap(j['memberRemovedAt']),
+        joinedVia: j['joinedVia'] is String ? j['joinedVia'] as String : null,
       );
 }
 

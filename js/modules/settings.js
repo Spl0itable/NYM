@@ -312,7 +312,9 @@ Object.assign(NYM.prototype, {
                 shareHistory: group.shareHistory === true,
                 metaUpdatedAt: group.metaUpdatedAt || 0,
                 metaUpdatedBy: group.metaUpdatedBy || null,
-                modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : []
+                modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
+                memberAt: this._gcMemberAtSnapshot(group),
+                memberRemovedAt: this._gcRemovedSnapshot(group)
             };
         }
         return data;
@@ -553,15 +555,18 @@ Object.assign(NYM.prototype, {
                 for (const [groupId, g] of oversized) {
                     const base = this._groupSyncDTag('nymchat-groups', groupId);
                     const members = Array.isArray(g.members) ? g.members : [];
-                    const head = { ...g, members: [] };
+                    const at = g.memberAt || {};
+                    const head = { ...g, members: [], memberAt: {} };
                     const perShard = Math.max(1,
-                        Math.floor((BUDGET - entryBytes(head)) / 70));
+                        Math.floor((BUDGET - entryBytes(head)) / 150));
                     let shard = 0;
                     for (let i = 0; i < members.length; i += perShard) {
                         const chunk = members.slice(i, i + perShard);
+                        const chunkAt = {};
+                        for (const pk of chunk) if (at[pk] !== undefined) chunkAt[pk] = at[pk];
                         const payload = shard === 0
-                            ? { ...head, members: chunk }
-                            : { members: chunk };
+                            ? { ...head, members: chunk, memberAt: chunkAt }
+                            : { members: chunk, memberAt: chunkAt };
                         await this._publishCategoryWrap(
                             { groupConversations: { [groupId]: payload } },
                             `${base}-${shard}`, now, [trimGroupModLogs]);

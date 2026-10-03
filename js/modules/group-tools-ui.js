@@ -279,6 +279,20 @@
                 return;
             }
             if (!this._gtGate('approval', 'group').ok) return;
+            const refreshList = () => { const m = document.getElementById('gtJoinRequestsModal'); if (m && m.classList.contains('active')) this.openJoinRequests(groupId); };
+            const banned = Array.isArray(group.banned) && group.banned.includes(joinerPubkey);
+            if (approve && !banned && !group.members.includes(joinerPubkey)) {
+                if (group.members.length >= (this.MAX_GROUP_MEMBERS || 100)) {
+                    this._gtNotice(this._gx('{group} is full. Remove someone to approve {nym}.', { group: group.name || 'Group', nym: this.getNymFromPubkey(joinerPubkey) }));
+                    refreshList();
+                    return;
+                }
+                const added = await this.addMemberToGroup(groupId, joinerPubkey);
+                if (added !== true) {
+                    refreshList();
+                    return;
+                }
+            }
             group.joinRequests = T().removeJoinRequest(group.joinRequests || [], joinerPubkey);
             this.groupConversations.set(groupId, group);
             this._saveGroupConversations();
@@ -289,8 +303,7 @@
                 await this._sendGiftWrapsAsync(deciders, rumor, null, groupId);
             }
             if (approve) {
-                if (Array.isArray(group.banned) && group.banned.includes(joinerPubkey)) return;
-                if (!group.members.includes(joinerPubkey)) await this.addMemberToGroup(groupId, joinerPubkey);
+                if (banned) return;
                 this._gtNotice(this._gx('Approved. {nym} was added to the group.', { nym: this.getNymFromPubkey(joinerPubkey) }));
             } else {
                 const rumor = { kind: 14, created_at: nowSec(), tags: [['p', joinerPubkey], ['g', groupId], ['subject', group.name], ['type', T().TYPES.joinDeclined], ['x', this._generateSharedEventId()]], content: '', pubkey: this.pubkey };
@@ -351,7 +364,17 @@
                 if (isOwn) return true;
                 const pend = this._gtPendingJoins();
                 const p = pend[groupId];
-                if (!p) return true;
+                const fullReason = msgType === TY.joinDeclined && tagv('reason') === 'full';
+                if (!p) {
+                    if (fullReason) {
+                        const group = this.groupConversations.get(groupId);
+                        if (group && group.members.includes(this.pubkey) && senderPubkey !== this.pubkey
+                            && (senderPubkey === group.joinedVia || this._isGroupOwner(groupId, senderPubkey) || this._isGroupAdmin(groupId, senderPubkey))) {
+                            this._gcLeaveFull(groupId, group.name);
+                        }
+                    }
+                    return true;
+                }
                 if (msgType === TY.joinWaiting) {
                     if (senderPubkey !== p.a) return true;
                     p.deciders = (rumor.tags || []).filter((t) => Array.isArray(t) && t[0] === 'decider' && /^[0-9a-f]{64}$/.test(t[1] || '')).map((t) => t[1]).slice(0, 20);
@@ -367,6 +390,11 @@
                 if (!allowed.includes(senderPubkey)) return true;
                 delete pend[groupId];
                 this._gtSavePendingJoins();
+                if (this._pendingInviteJoins) this._pendingInviteJoins.delete(groupId);
+                if (fullReason) {
+                    this._gtNotice(this._gx("{group} is full, so you couldn't join.", { group: p.n || 'Group' }));
+                    return true;
+                }
                 const body = this._gx('Your request to join "{name}" was declined.', { name: p.n });
                 this._gtNotice(body);
                 this.showNotification(this._gx('Join request declined'), body, { type: 'group', groupId, pubkey: senderPubkey, eventId: 'join-declined-' + groupId }, Date.now());
@@ -381,6 +409,7 @@
             const { body } = this._ctModal('gtJoinRequestsModal', this._gx('Join requests'));
             const list = T().pruneJoinRequests(group.joinRequests || [], nowSec());
             const canDecide = T().mayApproveJoins(this._gtRole(groupId, this.pubkey));
+            const full = (group.members || []).length >= (this.MAX_GROUP_MEMBERS || 100);
             const esc = (s) => this.escapeHtml(String(s));
             if (!list.length) {
                 body.innerHTML = `<div class="ct-empty">${esc(this._gx('No pending join requests.'))}</div>`;
@@ -391,7 +420,7 @@
                 <img class="avatar-message" src="${esc(this.getAvatarUrl(r.pubkey))}" alt="">
                 <div class="gt-join-info"><div class="gt-join-nym">${esc(this.getNymFromPubkey(r.pubkey))}</div>
                 <div class="gt-join-time">${this.formatMessage('<t:' + r.ts + ':R>')}</div></div>
-                ${canDecide ? `<button class="send-btn gt-join-approve" data-action="gtJoinApprove" data-group-id="${esc(groupId)}" data-pubkey="${esc(r.pubkey)}">${esc(this._gx('Approve'))}</button>
+                ${canDecide ? `${full ? `<span class="gt-join-full">${esc(this._gx('Full'))}</span>` : ''}<button class="send-btn gt-join-approve" data-action="gtJoinApprove" data-group-id="${esc(groupId)}" data-pubkey="${esc(r.pubkey)}"${full ? ` disabled title="${esc(this._gx('Group is full'))}"` : ''}>${esc(this._gx('Approve'))}</button>
                 <button class="icon-btn gt-join-decline" data-action="gtJoinDecline" data-group-id="${esc(groupId)}" data-pubkey="${esc(r.pubkey)}">${esc(this._gx('Decline'))}</button>` : ''}
             </div>`).join('');
         },
@@ -443,15 +472,18 @@
                 const { modal, body } = this._ctModal('gtInvitePreviewModal', this._gx('Join group'));
                 const banner = p.banner ? `<div class="gt-inv-banner"><img src="${esc(this.getProxiedMediaUrl(p.banner))}" alt="" data-error-action="groupImgError"></div>` : '<div class="gt-inv-banner gt-inv-banner-empty"></div>';
                 const avatar = p.avatar ? `<img class="gt-inv-avatar" src="${esc(this.getProxiedMediaUrl(p.avatar))}" alt="" data-error-action="groupImgError">` : `<span class="gt-inv-avatar gt-inv-avatar-empty">${ICONS.requests}</span>`;
-                const members = p.memberCount == null ? '' : `<div class="gt-inv-members">${esc(p.memberCount === 1 ? this._gx('1 member') : this._gx('{n} members', { n: p.memberCount }))}</div>`;
+                const capMax = this.MAX_GROUP_MEMBERS || 100;
+                const full = p.memberCount != null && p.memberCount >= capMax;
+                const members = p.memberCount == null ? '' : `<div class="gt-inv-members">${esc(this._gx('{n}/{max} members', { n: p.memberCount, max: capMax }) + (full ? ' · ' + this._gx('Full') : ''))}</div>`;
                 const admins = p.admins.length ? `<div class="gt-inv-admins">${esc(this._gx('Admins: {list}', { list: p.admins.join(', ') }))}</div>` : '';
                 const desc = p.description ? `<div class="gt-inv-desc" role="button" tabindex="0" data-action="gtToggleInviteDesc" title="${esc(p.description)}">${esc(p.description)}</div>` : '';
                 const note = !p.verified ? `<div class="gt-inv-note">${esc(this._gx('This link has no group details. Ask the sender for a fresh link to see them.'))}</div>`
                     : (p.approval ? `<div class="gt-inv-note">${esc(this._gx('An admin approves join requests for this group.'))}</div>` : '');
                 const waiting = pending && pending.waiting;
+                const joinLabel = full ? this._gx('Group is full') : (waiting ? this._gx('Waiting for approval') : this._gx('Join'));
                 body.innerHTML = `<div class="gt-inv-card">${banner}<div class="gt-inv-head">${avatar}<div class="gt-inv-name">${esc(p.name)}</div></div>${desc}${members}${admins}${note}
                     <div class="gt-inv-actions"><button class="icon-btn" data-gt-inv="cancel">${esc(this._gx('Cancel'))}</button>
-                    <button class="send-btn" data-gt-inv="join" ${waiting ? 'disabled' : ''}>${esc(waiting ? this._gx('Waiting for approval') : this._gx('Join'))}</button></div></div>`;
+                    <button class="send-btn" data-gt-inv="join" ${(waiting || full) ? 'disabled' : ''}>${esc(joinLabel)}</button></div></div>`;
                 let done = false;
                 const finish = (v) => {
                     if (done) return;

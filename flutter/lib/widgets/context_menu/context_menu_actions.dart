@@ -148,13 +148,14 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     if (!t.isSelf) CtxAction.friend,
     if (!t.isSelf && !showKickOrBan) CtxAction.report,
     if (t.isSelf && hasMessage && hasContent) CtxAction.edit,
-    if (canDeleteOwn || canModDelete) CtxAction.delete,
+    if (canDeleteOwn || (canModDelete && !showKickOrBan)) CtxAction.delete,
     if (showAddMod) CtxAction.makeMod,
     if (showRemoveMod) CtxAction.revokeMod,
     if (showAddAdmin) CtxAction.makeAdmin,
     if (showRemoveAdmin) CtxAction.revokeAdmin,
     if (showTransfer) CtxAction.transferOwner,
     if (showKickOrBan) CtxAction.report,
+    if (canModDelete && showKickOrBan) CtxAction.delete,
     if (showKickOrBan) CtxAction.kick,
     if (showKickOrBan) CtxAction.ban,
     if (!t.isSelf) CtxAction.block,
@@ -215,7 +216,7 @@ String ctxActionLabel(CtxAction a, CtxTarget t) {
   }
 }
 
-String ctxActionSvg(CtxAction a) {
+String ctxActionSvg(CtxAction a, [CtxTarget? t]) {
   switch (a) {
     case CtxAction.react:
       return NymIcons.ctxReact;
@@ -240,7 +241,7 @@ String ctxActionSvg(CtxAction a) {
     case CtxAction.translate:
       return NymIcons.translate;
     case CtxAction.friend:
-      return NymIcons.ctxFriend;
+      return t != null && t.isFriend ? NymIcons.ctxUnfriend : NymIcons.ctxFriend;
     case CtxAction.report:
       return NymIcons.ctxReport;
     case CtxAction.edit:
@@ -248,11 +249,13 @@ String ctxActionSvg(CtxAction a) {
     case CtxAction.delete:
       return NymIcons.ctxDelete;
     case CtxAction.makeMod:
-    case CtxAction.makeAdmin:
       return NymIcons.ctxMakeMod;
+    case CtxAction.makeAdmin:
+      return NymIcons.ctxMakeAdmin;
     case CtxAction.revokeMod:
-    case CtxAction.revokeAdmin:
       return NymIcons.ctxRevokeMod;
+    case CtxAction.revokeAdmin:
+      return NymIcons.ctxRevokeAdmin;
     case CtxAction.transferOwner:
       return NymIcons.ctxTransferOwner;
     case CtxAction.kick:

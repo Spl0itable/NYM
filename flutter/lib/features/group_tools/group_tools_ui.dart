@@ -19,6 +19,7 @@ import '../calls/call_providers.dart';
 import '../calls/call_signaling.dart' show CallPhase;
 import '../channels/channel_share.dart' show kNymchatShareHost;
 import '../globe/topojson.dart';
+import '../groups/group_logic.dart' show kMaxGroupMembers;
 import '../i18n/i18n.dart';
 import '../messages/format/discord_timestamp.dart';
 import '../messages/format/message_content.dart';
@@ -42,6 +43,10 @@ class GroupToolIcons {
       '$_open<path d="M8 14.5s4.5-4.2 4.5-8a4.5 4.5 0 0 0-9 0c0 3.8 4.5 8 4.5 8z"/><circle cx="8" cy="6.5" r="1.6"/></svg>';
   static const String callLink =
       '$_open<path d="M6.5 9.5l3-3"/><path d="M7 4.5l1.2-1.2a2.5 2.5 0 0 1 3.5 3.5L10.5 8"/><path d="M9 11.5l-1.2 1.2a2.5 2.5 0 0 1-3.5-3.5L5.5 8"/></svg>';
+  static const String checkboxOn =
+      '$_open<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5"/></svg>';
+  static const String checkboxOff =
+      '$_open<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/></svg>';
   static const String calls =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14l4-4"/><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"/><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"/></svg>';
 }
@@ -977,6 +982,7 @@ class _InvitePreviewBodyState extends State<_InvitePreviewBody> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final p = widget.preview;
+    final full = (p.memberCount ?? 0) >= kMaxGroupMembers;
     return Column(
       key: const ValueKey('gtInvitePreview'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1039,9 +1045,11 @@ class _InvitePreviewBodyState extends State<_InvitePreviewBody> {
             padding: const EdgeInsets.only(top: 4),
             child: _hint(
               context,
-              p.memberCount == 1
-                  ? tr('1 member')
-                  : tr('{n} members', {'n': '${p.memberCount}'}),
+              tr('{n}/{max} members', {
+                    'n': '${p.memberCount}',
+                    'max': '$kMaxGroupMembers',
+                  }) +
+                  (full ? ' · ${tr('Full')}' : ''),
             ),
           ),
         if (p.admins.isNotEmpty)
@@ -1081,9 +1089,11 @@ class _InvitePreviewBodyState extends State<_InvitePreviewBody> {
             const SizedBox(width: 8),
             GtButton(
               key: const ValueKey('gtInviteJoin'),
-              label: widget.waiting ? tr('Waiting for approval') : tr('Join'),
+              label: full
+                  ? tr('Group is full')
+                  : (widget.waiting ? tr('Waiting for approval') : tr('Join')),
               primary: true,
-              onTap: widget.waiting
+              onTap: widget.waiting || full
                   ? null
                   : () => Navigator.of(context).pop(true),
             ),
@@ -1131,6 +1141,7 @@ class _JoinRequestsBody extends ConsumerWidget {
     final canDecide = GroupTools.mayApproveJoins(
       svc.role(groupId, ref.read(appStateProvider).selfPubkey),
     );
+    final full = g != null && g.members.length >= kMaxGroupMembers;
     final nym = ref.read(nostrControllerProvider);
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -1156,11 +1167,22 @@ class _JoinRequestsBody extends ConsumerWidget {
                   ),
                 ),
                 if (canDecide) ...[
+                  if (full)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Text(
+                        tr('Full'),
+                        key: ValueKey('gtApproveFull-${r.pubkey}'),
+                        style: TextStyle(color: c.warning, fontSize: 12),
+                      ),
+                    ),
                   GtButton(
                     key: ValueKey('gtApprove-${r.pubkey}'),
                     label: tr('Approve'),
                     primary: true,
-                    onTap: () => svc.decideJoin(groupId, r.pubkey, true),
+                    onTap: full
+                        ? null
+                        : () => svc.decideJoin(groupId, r.pubkey, true),
                   ),
                   const SizedBox(width: 6),
                   GtButton(
@@ -2159,8 +2181,8 @@ List<GtMenuItem> gtGroupMenuItems(WidgetRef ref, Group g) {
       GtMenuItem(
         key: 'gtMenuApproval',
         svg: g.joinApproval
-            ? NymIcons.checkboxChecked
-            : NymIcons.checkboxUnchecked,
+            ? GroupToolIcons.checkboxOn
+            : GroupToolIcons.checkboxOff,
         label: tr('Admins approve join requests'),
         disabled: offline,
         onTap: (ctx) => offline

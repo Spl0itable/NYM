@@ -152,15 +152,33 @@ class QuickReactPopup extends StatelessWidget {
     required this.emojis,
     required this.onReact,
     required this.onMore,
+    this.onMenu,
+    this.menuLabel = '',
   });
 
   final List<String> emojis;
   final ValueChanged<String> onReact;
   final VoidCallback onMore;
+  final VoidCallback? onMenu;
+  final String menuLabel;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    Widget expand({required Widget child, required VoidCallback onTap}) =>
+        Container(
+          margin: const EdgeInsets.only(left: 2),
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                  color: c.isLight
+                      ? const Color(0x1A000000)
+                      : const Color(0x1AFFFFFF)),
+            ),
+          ),
+          child: _btn(child: child, onTap: onTap),
+        );
+    final menu = onMenu;
     return Material(
       type: MaterialType.transparency,
       child: Container(
@@ -183,22 +201,20 @@ class QuickReactPopup extends StatelessWidget {
           children: [
             for (final e in emojis)
               _EmojiButton(emoji: e, onTap: () => onReact(e)),
-            Container(
-              margin: const EdgeInsets.only(left: 2),
-              decoration: BoxDecoration(
-                border: Border(
-                  left: BorderSide(
-                      color: c.isLight
-                          ? const Color(0x1A000000)
-                          : const Color(0x1AFFFFFF)),
+            expand(
+              child: NymSvgIcon(NymIcons.quickReactMore,
+                  size: 14, color: c.textDim),
+              onTap: onMore,
+            ),
+            if (menu != null)
+              Tooltip(
+                message: menuLabel,
+                child: expand(
+                  child: NymSvgIcon(NymIcons.userOptions,
+                      size: 15, color: c.textDim),
+                  onTap: menu,
                 ),
               ),
-              child: _btn(
-                child:
-                    Icon(Icons.keyboard_arrow_down, size: 18, color: c.textDim),
-                onTap: onMore,
-              ),
-            ),
           ],
         ),
       ),
@@ -271,9 +287,8 @@ void showQuickReactPopup(
   required List<String> emojis,
   required ValueChanged<String> onReact,
   required VoidCallback onMore,
-  @Deprecated('The PWA pill has no ⋮ menu button; this is ignored. '
-      'Remove the onMenu: argument from the message_row call site.')
   VoidCallback? onMenu,
+  String menuLabel = '',
   Rect? spotlightRect,
   List<QuickContextItem> contextItems = const [],
 }) {
@@ -296,6 +311,13 @@ void showQuickReactPopup(
         close();
         onMore();
       },
+      onMenu: onMenu == null
+          ? null
+          : () {
+              close();
+              onMenu();
+            },
+      menuLabel: menuLabel,
       contextItems: contextItems
           .map((it) => QuickContextItem(
                 label: it.label,
@@ -323,9 +345,13 @@ class _QuickReactOverlay extends StatefulWidget {
     required this.contextItems,
     required this.onDismiss,
     this.spotlightRect,
+    this.onMenu,
+    this.menuLabel = '',
   });
 
   final Rect anchorRect;
+  final VoidCallback? onMenu;
+  final String menuLabel;
 
   /// Pressed message bounds for the spotlight cutout; [anchorRect] is the zero-size press point; null dims everything.
   final Rect? spotlightRect;
@@ -400,6 +426,8 @@ class _QuickReactOverlayState extends State<_QuickReactOverlay>
                   emojis: widget.emojis,
                   onReact: widget.onReact,
                   onMore: widget.onMore,
+                  onMenu: widget.onMenu,
+                  menuLabel: widget.menuLabel,
                 ),
               ),
               if (widget.contextItems.isNotEmpty) ...[

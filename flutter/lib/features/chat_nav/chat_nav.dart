@@ -491,6 +491,16 @@ String? jumpTarget(Object? state) {
   return ids.isEmpty ? null : ids.first['id'] as String;
 }
 
+List<String> jumpLead(Object? state) {
+  final ids = _jumpIds(jumpNorm(state));
+  if (ids.isEmpty) return const [];
+  final at = ids.first['at'] as int;
+  return [
+    for (final e in ids)
+      if (e['at'] == at) e['id'] as String,
+  ];
+}
+
 String jumpText(Object? state, [ChatNavTr? t]) {
   final n = jumpCount(state);
   if (n <= 0) return '';

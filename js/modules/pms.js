@@ -3897,6 +3897,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         this._resetNewGroupMediaPreview();
         this._toggleNewGroupFields();
         this._updateNewPMModalTitle();
+        this._updateAddMembersSpots();
         document.getElementById('newPMModal').classList.add('active');
         setTimeout(() => {
             document.getElementById('pmRecipientInput').focus();
@@ -3914,6 +3915,28 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         document.getElementById('pmStartBtn').textContent = 'Add';
         this._toggleNewGroupFields();
         this._updateNewPMModalTitle();
+        this._updateAddMembersSpots();
+    },
+
+    _addMembersRemaining() {
+        const group = this._addMembersGroupId ? this.groupConversations.get(this._addMembersGroupId) : null;
+        if (!group) return null;
+        return Math.max(0, (this.MAX_GROUP_MEMBERS || 100) - (group.members || []).length);
+    },
+
+    _updateAddMembersSpots() {
+        const el = document.getElementById('pmAddMembersSpots');
+        if (!el) return;
+        const remaining = this._addMembersRemaining();
+        if (remaining === null) {
+            el.textContent = '';
+            el.classList.add('nm-hidden');
+            return;
+        }
+        const left = Math.max(0, remaining - this._newPMRecipients.length);
+        const label = typeof this._gx === 'function' ? this._gx('{n} spots left', { n: left }) : `${left} spots left`;
+        el.textContent = label;
+        el.classList.remove('nm-hidden');
     },
 
     startGroupFromPM(extraPubkey = null) {
@@ -4159,6 +4182,8 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
     addNewPMRecipient(pubkey, nym) {
         if (this._newPMRecipients.some(r => r.pubkey === pubkey)) return;
+        const remaining = this._addMembersRemaining();
+        if (remaining !== null && this._newPMRecipients.length >= remaining) return;
         // Nymbot can be messaged 1:1 but never added to a group chat.
         if (this.isVerifiedBot(pubkey) && this._newPMRecipients.length > 0) {
             this.displaySystemMessage("Nymbot can only be messaged 1:1, not added to a group chat.");
@@ -4170,6 +4195,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         }
         this._newPMRecipients.push({ pubkey, nym });
         this._renderNewPMRecipientChips();
+        this._updateAddMembersSpots();
         document.getElementById('pmRecipientInput').value = '';
         document.getElementById('pmSuggestions').style.display = 'none';
         this._toggleNewGroupFields();
@@ -4192,6 +4218,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
     removeNewPMRecipient(pubkey) {
         this._newPMRecipients = this._newPMRecipients.filter(r => r.pubkey !== pubkey);
         this._renderNewPMRecipientChips();
+        this._updateAddMembersSpots();
         this._toggleNewGroupFields();
         this._updateNewPMModalTitle();
         document.getElementById('pmStartBtn').disabled = this._newPMRecipients.length === 0;
@@ -4213,9 +4240,8 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             const recipients = [...this._newPMRecipients];
             this._addMembersGroupId = null;
             closeModal('newPMModal');
-            for (const r of recipients) {
-                await this.addMemberToGroup(groupId, r.pubkey);
-            }
+            this._updateAddMembersSpots();
+            await this.addMembersToGroup(groupId, recipients.map(r => r.pubkey));
             return;
         }
 

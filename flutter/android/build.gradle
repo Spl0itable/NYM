@@ -44,6 +44,9 @@ subprojects { project ->
                 targetCompatibility = JavaVersion.VERSION_17
             }
         }
+        project.androidComponents {
+            finalizeDsl { ext -> ext.compileSdk = 36 }
+        }
     }
 }
 

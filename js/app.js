@@ -6331,10 +6331,11 @@ async function applyNostrSettingsAdditive(s) {
             // A group the user has left must never come back from synced data.
             if (nym.leftGroups && nym.leftGroups.has(groupId)) continue;
             if (!nym.groupConversations.has(groupId)) {
-                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy, banner: group.banner, avatar: group.avatar, description: group.description });
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy, banner: group.banner, avatar: group.avatar, description: group.description, banned: group.banned, memberAtMap: (group.memberAt && typeof group.memberAt === 'object') ? group.memberAt : {} });
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
+                    if (group.memberRemovedAt && typeof group.memberRemovedAt === 'object') g.memberRemovedAt = { ...group.memberRemovedAt };
                     g.mods = Array.isArray(group.mods) ? [...group.mods] : [];
                     g.banned = Array.isArray(group.banned) ? [...group.banned] : [];
                     if (group.banner) g.banner = group.banner;
@@ -6374,10 +6375,8 @@ async function applyNostrSettingsAdditive(s) {
                         if (!g.avatar && group.avatar) g.avatar = group.avatar;
                         if (!g.description && group.description) g.description = group.description;
                     }
-                    if (Array.isArray(group.members) && group.members.length) {
-                        const cur = new Set(Array.isArray(g.members) ? g.members : []);
-                        for (const pk of group.members) cur.add(pk);
-                        g.members = [...cur];
+                    if ((Array.isArray(group.members) && group.members.length) || group.memberRemovedAt) {
+                        nym._gcMergeSynced(groupId, group);
                     }
                     if (Array.isArray(group.admins)) {
                         const cur = new Set(Array.isArray(g.admins) ? g.admins : []);
@@ -7016,10 +7015,11 @@ async function applyNostrSettings(s) {
             // Same left-group guard as the additive path, to avoid a sidebar flash.
             if (nym.leftGroups && nym.leftGroups.has(groupId)) continue;
             if (!nym.groupConversations.has(groupId)) {
-                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { banner: group.banner, avatar: group.avatar, description: group.description });
+                nym.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { banner: group.banner, avatar: group.avatar, description: group.description, banned: group.banned, memberAtMap: (group.memberAt && typeof group.memberAt === 'object') ? group.memberAt : {} });
                 const g = nym.groupConversations.get(groupId);
                 if (g) {
                     if (group.createdBy) g.createdBy = group.createdBy;
+                    if (group.memberRemovedAt && typeof group.memberRemovedAt === 'object') g.memberRemovedAt = { ...group.memberRemovedAt };
                     if (group.banner) g.banner = group.banner;
                     if (group.avatar) g.avatar = group.avatar;
                     if (group.description) g.description = group.description;
@@ -7051,10 +7051,8 @@ async function applyNostrSettings(s) {
                         if (!g.avatar && group.avatar) g.avatar = group.avatar;
                         if (!g.description && group.description) g.description = group.description;
                     }
-                    if (Array.isArray(group.members) && group.members.length) {
-                        const cur = new Set(Array.isArray(g.members) ? g.members : []);
-                        for (const pk of group.members) cur.add(pk);
-                        g.members = [...cur];
+                    if ((Array.isArray(group.members) && group.members.length) || group.memberRemovedAt) {
+                        nym._gcMergeSynced(groupId, group);
                     }
                     if (Array.isArray(group.admins)) {
                         const cur = new Set(Array.isArray(g.admins) ? g.admins : []);

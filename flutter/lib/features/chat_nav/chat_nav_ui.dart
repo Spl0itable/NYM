@@ -97,6 +97,7 @@ class ChatNavListBinding {
   int _shownCount = -1;
   int _shownMentions = -1;
   bool _down = false;
+  Map<int, List<Message>>? _members;
 
   ChatNavService get nav => ref.read(chatNavProvider);
 
@@ -122,6 +123,7 @@ class ChatNavListBinding {
   void bind(Map<String, int> indexById, int maxIndex) {
     _indexById = indexById;
     _maxIndex = maxIndex;
+    _members = null;
     final id = dividerId;
     dividerIndex = id == null ? null : indexById[id];
   }
@@ -208,14 +210,15 @@ class ChatNavListBinding {
     } else if (_landing || n.shouldLand(_key)) {
       _pending = const {};
     } else {
+      final want = {...jumpIds, ...mentionIds};
       final inView = <String>[];
-      for (final id in {...jumpIds, ...mentionIds}) {
-        final idx = _indexById[id];
-        if (idx == null) continue;
-        for (final q in pos) {
-          if (q.index == idx &&
-              seenInView(q.itemLeadingEdge, q.itemTrailingEdge, 0, 1)) {
-            inView.add(id);
+      final members = _membersByIndex();
+      for (final q in pos) {
+        final group = members[q.index];
+        if (group == null || !group.any((m) => want.contains(m.id))) continue;
+        for (final s in _slices(q, group)) {
+          if (want.contains(s.$1) && seenInView(s.$3, s.$2, 0, 1)) {
+            inView.add(s.$1);
           }
         }
       }
@@ -238,12 +241,36 @@ class ChatNavListBinding {
     _refresh(pos);
   }
 
+  Map<int, List<Message>> _membersByIndex() {
+    final cached = _members;
+    if (cached != null) return cached;
+    final out = <int, List<Message>>{};
+    for (final m in _messages) {
+      final i = _indexById[m.id];
+      if (i != null) (out[i] ??= <Message>[]).add(m);
+    }
+    return _members = out;
+  }
+
+  static double _weight(Message m) => 1 + m.content.length / 40;
+
+  String? _first() {
+    final n = nav;
+    final lead = n.jumpLeadFor(_key);
+    if (lead.length < 2) return n.jumpTargetFor(_key);
+    final want = lead.toSet();
+    for (final m in _messages) {
+      if (want.contains(m.id)) return m.id;
+    }
+    return n.jumpTargetFor(_key);
+  }
+
   void _refresh(Iterable<ItemPosition> pos) {
     final n = nav;
     final count = n.jumpCountFor(_key);
     final mentions = n.mentionCountFor(_key);
     var down = _down;
-    final target = n.jumpTargetFor(_key);
+    final target = _first();
     final idx = target == null ? null : _indexById[target];
     if (idx != null && pos.isNotEmpty) {
       var minVis = 1 << 30;
@@ -269,6 +296,57 @@ class ChatNavListBinding {
     if (_key.isNotEmpty) nav.markScrolled(_key);
   }
 
+  Future<void> _reveal(MessageListScroller scroller, String id) async {
+    final idx = _indexById[id];
+    if (idx == null) return;
+    await scroller.animateTo(
+      index: idx,
+      alignment: 0.4,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+    final group = _membersByIndex()[idx];
+    if (group != null && group.length > 1) {
+      await WidgetsBinding.instance.endOfFrame;
+      await WidgetsBinding.instance.endOfFrame;
+      final shift = _sliceShift(idx, id, group);
+      if (shift != null && shift.$2.abs() > 0.02) {
+        await scroller.animateTo(
+            index: idx,
+            alignment: shift.$1 + shift.$2,
+            duration: const Duration(milliseconds: 1));
+      }
+    }
+    update();
+  }
+
+  (double, double)? _sliceShift(int idx, String id, List<Message> group) {
+    ItemPosition? p;
+    for (final q in positions.itemPositions.value) {
+      if (q.index == idx) p = q;
+    }
+    if (p == null) return null;
+    for (final s in _slices(p, group)) {
+      if (s.$1 == id) return (p.itemLeadingEdge, 0.5 - (s.$2 + s.$3) / 2);
+    }
+    return null;
+  }
+
+  static Iterable<(String, double, double)> _slices(
+      ItemPosition p, List<Message> group) sync* {
+    var total = 0.0;
+    for (final m in group) {
+      total += _weight(m);
+    }
+    final span = p.itemTrailingEdge - p.itemLeadingEdge;
+    var top = p.itemTrailingEdge;
+    for (final m in group) {
+      final bottom = top - span * _weight(m) / total;
+      yield (m.id, top, bottom);
+      top = bottom;
+    }
+  }
+
   bool get jumpShown => _key.isNotEmpty && nav.jumpCountFor(_key) > 0;
 
   Future<void> jumpFirst(MessageListScroller scroller) async {
@@ -276,16 +354,20 @@ class ChatNavListBinding {
     n.markScrolled(_key);
     n.revealJump(_key, _messages);
     n.settleJump(_key);
-    final target = n.jumpTargetFor(_key);
+    var target = _first();
+    for (var guard = 0;
+        guard < 200 && target != null && !_indexById.containsKey(target);
+        guard++) {
+      n.markJumpSeen(_key, [target]);
+      target = _first();
+    }
     final di = dividerIndex;
     if (target != null && target == dividerId && di != null) {
       await _landAt(scroller, di, animate: true);
     } else if (target != null && _indexById.containsKey(target)) {
-      scroller.scrollToMessage(target);
-    } else if (target == null) {
-      await scroller.animateTo(index: _maxIndex, alignment: 0.9);
+      await _reveal(scroller, target);
     } else {
-      await scroller.animateTo(index: 0, alignment: 0);
+      await scroller.animateTo(index: _maxIndex, alignment: 0.9);
     }
     fabs.value++;
   }
@@ -303,7 +385,7 @@ class ChatNavListBinding {
         continue;
       }
       n.markScrolled(_key);
-      scroller.scrollToMessage(id);
+      unawaited(_reveal(scroller, id));
       ref.read(flashedMessageProvider.notifier).flash(id);
       n.markMentionsSeen(_key, [id]);
       fabs.value++;

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../nym_icons.dart';
 
 /// Always-visible overflow button opening the same menu as a sidebar row's long-press.
 class SidebarRowMenuButton extends StatelessWidget {
@@ -33,10 +34,12 @@ class SidebarRowMenuButton extends StatelessWidget {
         child: SizedBox(
           width: 22,
           height: 22,
-          child: Icon(
-            Icons.more_vert,
-            size: 16,
-            color: c.textDim.withValues(alpha: 0.7),
+          child: Center(
+            child: NymSvgIcon(
+              NymIcons.rowMenu,
+              size: 16,
+              color: c.textDim.withValues(alpha: 0.7),
+            ),
           ),
         ),
       ),

@@ -731,6 +731,22 @@
         return { ok: false, reason: null, mesh: false };
     }
 
+    function groupCapRoster(input) {
+        const o = input || {};
+        const max = Math.max(0, Math.floor(Number(o.max) || 0));
+        const banned = new Set(Array.isArray(o.banned) ? o.banned : []);
+        const best = new Map();
+        for (const e of (Array.isArray(o.entries) ? o.entries : [])) {
+            if (!e || typeof e.pk !== 'string' || !e.pk || banned.has(e.pk)) continue;
+            let at = Number(e.at);
+            if (!Number.isFinite(at) || at < 0) at = 0;
+            const cur = best.get(e.pk);
+            if (cur === undefined || at < cur) best.set(e.pk, at);
+        }
+        const sorted = [...best].sort((a, b) => (a[1] - b[1]) || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+        return { members: sorted.slice(0, max).map((e) => e[0]), dropped: sorted.slice(max).map((e) => e[0]) };
+    }
+
     G.NymGroupTools = {
         LIMITS, STRINGS, TYPES, CALL_SIGNALS, SLOWMODE_SECONDS, SLOWMODE_GRACE_SEC, LIVE_DURATIONS_SEC,
         REMINDER_OFFSETS_MIN, CALL_LINK_EXPIRY_SEC, RSVP_STATUSES, SUMMARY_KIND,
@@ -745,5 +761,6 @@
         addCallLink, revokeCallLink,
         coordDecimals, buildLocation, parseLocation, precisionText, geohashAccuracy, liveState, liveSupersedes,
         mapFrame, liveDurationLabel, availability, PICK_START_SPAN, pickAccuracy, pickZoomIn, pickZoomOut, pickTap,
+        groupCapRoster,
     };
 })();

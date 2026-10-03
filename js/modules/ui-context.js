@@ -627,6 +627,12 @@ Object.assign(NYM.prototype, {
             }
         }
         deleteOption.style.display = (canDeleteOwn || canModDelete) ? 'block' : 'none';
+        if (!this._ctxDeleteHome) {
+            this._ctxDeleteHome = document.createComment('ctx-delete-home');
+            deleteOption.before(this._ctxDeleteHome);
+        }
+        if (canModDelete && kickOption && kickOption.style.display !== 'none') kickOption.before(deleteOption);
+        else this._ctxDeleteHome.after(deleteOption);
 
         document.getElementById('ctxReport').style.display = pubkey === this.pubkey ? 'none' : 'block';
 

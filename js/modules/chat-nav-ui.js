@@ -248,6 +248,37 @@
             return k ? [k] : [];
         },
 
+        _cnJumpFirst(ctx, st, rows) {
+            const lead = N().jumpLead(st);
+            if (lead.length < 2) return N().jumpTarget(st);
+            if (rows) {
+                const want = new Set(lead);
+                const hit = rows.find((r) => want.has(r.id));
+                if (hit) return hit.id;
+            }
+            const el = ctx.container.querySelector(lead.map((id) => '.message' + this._cnSelector(id)).join(','));
+            return el ? el.dataset.messageId : N().jumpTarget(st);
+        },
+
+        _cnLoadOlder(ctx, k) {
+            const prev = this._cvLoadCtx;
+            if (ctx.col) this._cvLoadCtx = { container: ctx.container, scroller: ctx.scroller };
+            try {
+                if (this._cnIsConv(k)) {
+                    if (typeof this.loadOlderPMMessages === 'function') this.loadOlderPMMessages(k);
+                } else if (typeof this.loadOlderChannelMessages === 'function') {
+                    this.loadOlderChannelMessages(k);
+                }
+            } finally {
+                this._cvLoadCtx = prev;
+            }
+        },
+
+        _cnAway(ctx) {
+            if (typeof document !== 'undefined' && document.hidden) return true;
+            return Math.abs(ctx.scroller.scrollTop) > (ctx.col ? 120 : 150);
+        },
+
         _cnJumpDir(ctx, id) {
             const el = this._cnFindMessage(ctx, id);
             if (!el) return 'up';
@@ -316,7 +347,7 @@
             const showJump = !!st && N().jumpCount(st) > 0;
             if (showJump) {
                 const label = N().jumpText(st, (s) => this._cn(s));
-                const dir = this._cnJumpDir(ctx, N().jumpTarget(st));
+                const dir = this._cnJumpDir(ctx, this._cnJumpFirst(ctx, st));
                 if (jump.dataset.cnLabel !== label || jump.dataset.cnDir !== dir) {
                     jump.dataset.cnLabel = label;
                     jump.dataset.cnDir = dir;
@@ -384,22 +415,20 @@
             const rows = () => this._cnStoreList(k).map((m) => this._cnRow(m));
             const loadOlder = () => {
                 const before = ctx.container.querySelectorAll('[data-message-id]').length;
-                if (this._cnIsConv(k)) {
-                    if (typeof this.loadOlderPMMessages === 'function') this.loadOlderPMMessages(k);
-                } else if (typeof this.loadOlderChannelMessages === 'function') {
-                    this.loadOlderChannelMessages(k);
-                }
+                this._cnLoadOlder(ctx, k);
                 this._cnPlaceDivider(k);
                 return ctx.container.querySelectorAll('[data-message-id]').length !== before;
             };
-            entry.jump = N().jumpReveal(this._cnJump(entry), rows());
-            let target = N().jumpTarget(entry.jump);
+            let list = rows();
+            entry.jump = N().jumpReveal(this._cnJump(entry), list);
+            let target = this._cnJumpFirst(ctx, entry.jump, list);
             let el = this._cnFindMessage(ctx, target);
             for (let i = 0; i < 40 && (entry.jump.hidden > 0 || (target && !el)); i++) {
-                if (target && !el && !rows().some((r) => r.id === target)) entry.jump = N().jumpSeen(entry.jump, [target]);
+                if (target && !el && !list.some((r) => r.id === target)) entry.jump = N().jumpSeen(entry.jump, [target]);
                 else if (!loadOlder()) break;
-                entry.jump = N().jumpReveal(entry.jump, rows());
-                target = N().jumpTarget(entry.jump);
+                list = rows();
+                entry.jump = N().jumpReveal(entry.jump, list);
+                target = this._cnJumpFirst(ctx, entry.jump, list);
                 el = this._cnFindMessage(ctx, target);
             }
             entry.jump = N().jumpSettle(entry.jump);
@@ -409,8 +438,7 @@
                 requestAnimationFrame(() => this._cnCenter(k));
                 setTimeout(() => this._cnCenter(k), 300);
                 setTimeout(() => this._cnCenter(k), 900);
-            } else if (target) ctx.scroller.scrollTop = 0;
-            else ctx.scroller.scrollTop = -(ctx.scroller.scrollHeight);
+            } else ctx.scroller.scrollTop = -(ctx.scroller.scrollHeight);
             if (ctx.col) ctx.col._atBottom = false;
             else this.userScrolledUp = true;
             this._cnUpdateFabs(k);
@@ -533,11 +561,10 @@
                     }, 150);
                 }
             }
-            if (message.isHistorical) return;
-            const away = (typeof document !== 'undefined' && document.hidden)
-                || (ctx.col ? ctx.col._atBottom === false : !!this.userScrolledUp);
-            if (!away) return;
+            if (message.isHistorical || this._bulkAppending) return;
+            if (!this._cnAway(ctx)) return;
             const row = this._cnRow(message);
+            if (!this._cnFindMessage(ctx, row.id)) return;
             if (entry && !row.own && !row.sys) entry.jump = N().jumpAdd(this._cnJump(entry), [row]);
             if (this._cnIsMention(message)) {
                 this._cnSetMentions(N().mentionAdd(this._cnMentions(), key, [{ id: row.id, at: message.created_at || 0 }], Date.now()), [key]);
@@ -557,8 +584,7 @@
                     const inStore = this._cnStoreList(k).some((m) => this._cnDomId(m) === id);
                     if (!inStore) break;
                     const before = ctx.container.querySelectorAll('[data-message-id]').length;
-                    if (this._cnIsConv(k)) { if (typeof this.loadOlderPMMessages === 'function') this.loadOlderPMMessages(k); }
-                    else if (typeof this.loadOlderChannelMessages === 'function') this.loadOlderChannelMessages(k);
+                    this._cnLoadOlder(ctx, k);
                     el = ctx.container.querySelector('.message' + this._cnSelector(id));
                     if (ctx.container.querySelectorAll('[data-message-id]').length === before) break;
                 }

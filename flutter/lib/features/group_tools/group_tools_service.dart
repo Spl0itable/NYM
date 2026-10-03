@@ -5,6 +5,7 @@ import 'dart:math';
 import '../../models/group.dart';
 import '../../models/message.dart';
 import '../chat_tools/chat_tools_service.dart' show ChatToolsPrefs;
+import '../groups/group_logic.dart' show kMaxGroupMembers;
 import 'group_tools.dart';
 
 class GroupToolsKeys {
@@ -586,6 +587,22 @@ class GroupToolsService {
       return;
     }
     if (!gate('approval', 'group').ok) return;
+    final banned = g.banned.contains(joiner);
+    if (approve && !banned && !g.members.contains(joiner)) {
+      if (isFullFor(g, joiner)) {
+        _notice('{group} is full. Remove someone to approve {nym}.', {
+          'group': g.name.isEmpty ? 'Group' : g.name,
+          'nym': _nym(joiner),
+        });
+        _changed();
+        return;
+      }
+      await hooks.addMember?.call(groupId, joiner);
+      if (hooks.group(groupId)?.members.contains(joiner) != true) {
+        _changed();
+        return;
+      }
+    }
     g.joinRequests = GroupTools.removeJoinRequest(g.joinRequests, joiner);
     hooks.saveGroup?.call(g);
     final deciders = _deciders(g);
@@ -596,10 +613,7 @@ class GroupToolsService {
       ], deciders);
     }
     if (approve) {
-      if (g.banned.contains(joiner)) return;
-      if (!g.members.contains(joiner)) {
-        await hooks.addMember?.call(groupId, joiner);
-      }
+      if (banned) return;
       _notice('Approved. {nym} was added to the group.', {'nym': _nym(joiner)});
     } else {
       await hooks.sendDirect?.call(joiner, [
@@ -612,6 +626,9 @@ class GroupToolsService {
     }
     _changed();
   }
+
+  bool isFullFor(Group g, String joiner) =>
+      !g.members.contains(joiner) && g.members.length >= kMaxGroupMembers;
 
   Map<String, PendingJoin>? _pendingCache;
   String? _pendingPk;
@@ -739,6 +756,11 @@ class GroupToolsService {
       }
       if (sender != p.inviter && !p.deciders.contains(sender)) return true;
       clearPendingJoin(groupId);
+      if (tv('reason') == 'full') {
+        _notice('{group} is full, so you couldn\'t join.', {'group': p.name});
+        _changed();
+        return true;
+      }
       final body = _t('Your request to join "{name}" was declined.', {
         'name': p.name,
       });

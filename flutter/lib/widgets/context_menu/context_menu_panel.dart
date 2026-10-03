@@ -223,7 +223,7 @@ class ContextMenuPanel extends ConsumerWidget {
                           ),
                       if (i < actions.length)
                         _ActionItem(
-                          svg: ctxActionSvg(actions[i]),
+                          svg: ctxActionSvg(actions[i], target),
                           label: ctxActionLabel(actions[i], target),
                           color: _colorFor(actions[i], c),
                           onTap: () =>
@@ -932,7 +932,7 @@ class _PubkeyBlockState extends State<_PubkeyBlock> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _CopyPubkeyRow(
-              icon: Icons.copy,
+              svg: NymIcons.ctxCopy,
               label: isNpub ? tr('Copy npub') : tr('Copy hex pubkey'),
               onTap: () async {
                 await Clipboard.setData(ClipboardData(text: shown));
@@ -942,7 +942,7 @@ class _PubkeyBlockState extends State<_PubkeyBlock> {
             ),
             const SizedBox(width: 4),
             _CopyPubkeyRow(
-              icon: Icons.swap_horiz,
+              svg: NymIcons.ctxSwapFormat,
               label: isNpub ? tr('Show hex') : tr('Show npub'),
               onTap: _toggle,
             ),
@@ -956,11 +956,11 @@ class _PubkeyBlockState extends State<_PubkeyBlock> {
 class _CopyPubkeyRow extends StatefulWidget {
   const _CopyPubkeyRow({
     required this.onTap,
-    required this.icon,
+    required this.svg,
     required this.label,
   });
   final Future<void> Function() onTap;
-  final IconData icon;
+  final String svg;
   final String label;
 
   @override
@@ -990,8 +990,8 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(widget.icon, size: 12, color: color),
-              const SizedBox(width: 2),
+              NymSvgIcon(widget.svg, size: 12, color: color),
+              const SizedBox(width: 4),
               Text(widget.label,
                   style: TextStyle(color: color, fontSize: 11)),
             ],

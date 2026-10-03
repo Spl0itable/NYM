@@ -117,6 +117,7 @@ class GroupManager {
   }) async {
     if (!_service.canSign) return null;
     final members = <String>{...memberPubkeys, selfPubkey}.toList();
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final groupNonce = GroupLogic.generateGroupId();
     final groupId = GroupLogic.genesisId(selfPubkey, groupNonce);
     final group = Group(
@@ -132,6 +133,7 @@ class GroupManager {
           (description != null && description.isNotEmpty) ? description : null,
       allowMemberInvites: allowMemberInvites,
       lastMessageTime: DateTime.now().millisecondsSinceEpoch,
+      memberAt: {for (final pk in members) pk: nowSec},
     );
 
     final eph = keysFor(groupId).ensureSelf();
@@ -143,6 +145,7 @@ class GroupManager {
       nymMessageId: GroupLogic.generateGroupId(),
       ephemeralPk: eph.pk,
       content: 'You\'ve been added to group "${group.name}".',
+      nowSec: nowSec,
     );
 
     // The first invite uses real pubkeys; no member keys exist yet.
@@ -258,6 +261,7 @@ class GroupManager {
     required String selfPubkey,
     required String content,
     MessagingSettings settings = const MessagingSettings(),
+    int? nowSec,
   }) async {
     if (!_service.canSign) return false;
     final ek = keysFor(group.id);
@@ -269,6 +273,7 @@ class GroupManager {
       nymMessageId: GroupLogic.generateGroupId(),
       ephemeralPk: eph.pk,
       content: content,
+      nowSec: nowSec,
     );
     return _service.publishGroupMessage(
       rumor: rumor,

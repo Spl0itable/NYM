@@ -141,6 +141,8 @@ class _PendingDm {
 class NostrController {
   NostrController(this._ref) {
     _rememberSyncedBaseline();
+    _ref.read(appStateProvider.notifier).onGroupMembersEvicted =
+        _onGroupMembersEvicted;
   }
 
   final Ref _ref;
@@ -2980,6 +2982,12 @@ class NostrController {
     for (final t in tags) {
       if (t.length > 1 && t[0] == 'p') _maybeBackfillProfiles(t[1]);
     }
+    if (type == GroupToolsTypes.joinDeclined &&
+        _tagValue(tags, 'reason') == 'full' &&
+        _lostJoinRace(groupId, tags, senderPubkey, appState)) {
+      _leaveFullGroupLocally(groupId);
+      return;
+    }
     if (GroupToolsTypes.all.contains(type)) {
       unawaited(_ref.read(groupToolsProvider).handleControl(type, tags,
           groupId, senderPubkey, (rumor['created_at'] as num?)?.toInt() ?? 0));
@@ -3054,19 +3062,20 @@ class NostrController {
               banner: banner,
               description: description,
               members: members,
-              mods: mods);
+              mods: mods,
+              membersAt: _joinAt(inviteTs));
         } else if (senderPubkey == self ||
             GroupLogic.canAddMembers(existingGroup, senderPubkey)) {
-          appState.enrichGroupIdentity(groupId, members: members);
+          appState.enrichGroupIdentity(groupId,
+              members: members, membersAt: _joinAt(inviteTs));
         }
         _processPendingGroupHistory(groupId);
         unawaited(announceGroupEphemeralKey(groupId));
         return;
       }
-      appState.upsertGroup(Group(
+      final invited = Group(
         id: groupId,
         name: name,
-        members: members,
         mods: mods,
         admins: admins,
         createdBy: owner,
@@ -3082,7 +3091,13 @@ class NostrController {
         inviteEpoch: int.tryParse(_tagValue(tags, 'invite_epoch') ?? '') ?? 0,
         shareHistory: _tagValue(tags, 'share_history') == '1',
         lastMessageTime: DateTime.now().millisecondsSinceEpoch,
-      ));
+      );
+      invited.joinedVia = senderPubkey;
+      if (!_admitBootstrapRoster(
+          invited, {for (final pk in members) pk: _joinAt(inviteTs)})) {
+        return;
+      }
+      appState.upsertGroup(invited);
       final createdGroup = appState.groupById(groupId);
       if (createdGroup != null &&
           GroupLogic.applyGroupToolsMeta(createdGroup, tags, inviteTs)) {
@@ -3160,7 +3175,8 @@ class NostrController {
       final identity = _identity;
       if (group == null || identity == null) return;
       if (senderPubkey == identity.pubkey) return;
-      if (GroupLogic.applyRoster(group, tags, senderPubkey, identity.pubkey)) {
+      if (GroupLogic.applyRoster(group, tags, senderPubkey, identity.pubkey,
+          ts: (rumor['created_at'] as num?)?.toInt() ?? 0)) {
         appState.notifyGroupsChanged();
       }
       return;
@@ -3191,7 +3207,7 @@ class NostrController {
       final rank =
           GroupLogic.joinAdmitRank(group, identity.pubkey, senderPubkey);
       if (rank <= 0) {
-        unawaited(addGroupMembers(groupId, [senderPubkey]));
+        unawaited(addGroupMembers(groupId, [senderPubkey], viaJoin: true));
         return;
       }
       unawaited(Future<void>.delayed(
@@ -3202,7 +3218,7 @@ class NostrController {
         if (now.members.contains(senderPubkey)) return;
         if (now.banned.contains(senderPubkey)) return;
         if (!GroupLogic.canAddMembers(now, identity.pubkey)) return;
-        unawaited(addGroupMembers(groupId, [senderPubkey]));
+        unawaited(addGroupMembers(groupId, [senderPubkey], viaJoin: true));
       }));
       return;
     }
@@ -3251,10 +3267,9 @@ class NostrController {
             final allowInv = _tagValue(tags, 'allow_invites');
             final inviteEnabledTag = _tagValue(tags, 'invite_enabled');
             final inviteEpochTag = _tagValue(tags, 'invite_epoch');
-            appState.upsertGroup(Group(
+            final joined = Group(
               id: groupId,
               name: name,
-              members: members,
               mods: mods,
               admins: admins,
               createdBy: claimedOwner,
@@ -3272,7 +3287,14 @@ class NostrController {
               lastMessageTime: inviteTs > 0
                   ? inviteTs * 1000
                   : DateTime.now().millisecondsSinceEpoch,
-            ));
+            );
+            joined.joinedVia = senderPubkey;
+            if (!_admitBootstrapRoster(joined, {
+              for (final pk in members) pk: pk == self ? _joinAt(inviteTs) : 0,
+            })) {
+              return;
+            }
+            appState.upsertGroup(joined);
             final created = appState.groupById(groupId);
             if (created != null &&
                 GroupLogic.applyGroupToolsMeta(created, tags, inviteTs)) {
@@ -3288,7 +3310,8 @@ class NostrController {
               banner: banner,
               description: description,
               members: members,
-              mods: mods);
+              mods: mods,
+              membersAt: _joinAt(inviteTs));
         }
       }
     }
@@ -6397,26 +6420,31 @@ class NostrController {
   // Group owner / membership controls.
 
   /// Leaves [groupId]: notifies members, then drops the group locally and switches away if open.
-  Future<bool> leaveGroup(String groupId) async {
+  Future<bool> leaveGroup(String groupId, {bool quiet = false}) async {
     final identity = _identity;
     final groups = _groups;
     final appState = _ref.read(appStateProvider.notifier);
     final group = appState.groupById(groupId);
-    if (identity == null || groups == null || group == null) return false;
+    if (identity == null || group == null) return false;
+    if (groups == null && !quiet) return false;
 
     // Notify the other members (best-effort; needs a signer).
     final suffix = getPubkeySuffix(identity.pubkey);
     final leaveContent =
         '${stripPubkeySuffix(identity.nym)}#$suffix left the group.';
-    await groups.sendLeave(
-      group: group,
-      selfPubkey: identity.pubkey,
-      content: leaveContent,
-      settings: _msgSettings,
-    );
+    if (!quiet) {
+      await groups!.sendLeave(
+        group: group,
+        selfPubkey: identity.pubkey,
+        content: leaveContent,
+        settings: _msgSettings,
+      );
+    }
 
     // Remove the group's ephemeral keys after the leave wrap (which uses them) and before the persist below.
-    groups.removeGroup(groupId);
+    groups?.removeGroup(groupId);
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final selfModTs = group.modTsByTarget[identity.pubkey] ?? 0;
 
     // Drop locally via the always-authorized self-removal path, which persists and syncs the leave.
     appState.applyGroupControl(
@@ -6426,7 +6454,7 @@ class NostrController {
         ['kick', identity.pubkey],
       ],
       senderPubkey: identity.pubkey,
-      ts: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      ts: selfModTs > nowSec ? selfModTs : nowSec,
       eventId: GroupLogic.generateGroupId(),
     );
 
@@ -6845,38 +6873,66 @@ class NostrController {
   }
 
   /// Adds members and broadcasts one `group-add-member`; banned users need a moderator; true if any added.
-  Future<bool> addGroupMembers(String groupId, List<String> pubkeys) async {
+  Future<bool> addGroupMembers(String groupId, List<String> pubkeys,
+      {bool viaJoin = false}) async {
     final identity = _identity;
     final groups = _groups;
+    final testSend = addMembersSenderForTest;
     final appState = _ref.read(appStateProvider.notifier);
     final group = appState.groupById(groupId);
-    if (identity == null || groups == null || group == null) return false;
-    if (!GroupLogic.canAddMembers(group, identity.pubkey)) return false;
+    if (identity == null || group == null) return false;
+    if (groups == null && testSend == null) return false;
+    if (!GroupLogic.canAddMembers(group, identity.pubkey)) {
+      _emitSystemMessage(tr(
+          'Only the group owner or an admin can add new members to this group.'));
+      return false;
+    }
 
     final canMod = GroupLogic.canModerate(group, identity.pubkey);
-    final added = <String>[];
-    var capHit = false;
+    final wanted = <String>[];
+    var bannedRefused = false;
     for (final pk in pubkeys) {
       if (pk.isEmpty || pk == identity.pubkey) continue;
-      if (group.members.contains(pk)) continue;
-      // Each message costs one gift wrap per member, so bound fan-out.
-      if (group.members.length >= kMaxGroupMembers) {
-        capHit = true;
-        break;
+      if (group.members.contains(pk) || wanted.contains(pk)) continue;
+      if (group.banned.contains(pk) && !canMod) {
+        bannedRefused = true;
+        continue;
       }
-      // Re-admitting a banned user requires owner/mod.
-      if (group.banned.contains(pk)) {
-        if (!canMod) continue;
-        group.banned.remove(pk);
-      }
-      group.members.add(pk);
-      added.add(pk);
+      wanted.add(pk);
     }
-    if (capHit) {
+    if (bannedRefused) {
       _emitSystemMessage(tr(
-          'This group is full ({n} members max).', {'n': '$kMaxGroupMembers'}));
+          'That user was removed from this group and can only be re-invited by the group owner or a moderator.'));
     }
+    final room = kMaxGroupMembers - group.members.length;
+    final fit = wanted.take(room > 0 ? room : 0).toList();
+    final skipped = wanted.skip(fit.length).toList();
+    if (skipped.isNotEmpty) {
+      final groupName = group.name.isEmpty ? tr('Group') : group.name;
+      if (viaJoin) {
+        for (final pk in skipped) {
+          _emitSystemMessage(tr('{group} is full, so {nym} couldn\'t join.',
+              {'group': groupName, 'nym': _nymDisplayFor(pk)}));
+          unawaited(_sendJoinDeclinedFull(group, pk));
+        }
+      } else {
+        _emitSystemMessage(tr(
+            '{group} is full, so these weren\'t added: {names}.', {
+          'group': groupName,
+          'names': skipped.map(_nymDisplayFor).join(', '),
+        }));
+      }
+    }
+    if (fit.isEmpty) return false;
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    for (final pk in fit) {
+      group.banned.remove(pk);
+    }
+    final admit =
+        GroupLogic.admitMembers(group, {for (final pk in fit) pk: nowSec});
+    final added = admit.added;
     if (added.isEmpty) return false;
+    (_ownGroupAdds[groupId] ??= <String>{}).addAll(added);
     appState.upsertGroup(group);
 
     final inviter = '${stripPubkeySuffix(identity.nym)}#'
@@ -6885,13 +6941,18 @@ class NostrController {
     final content = added.length == 1
         ? '$names was added by $inviter.'
         : '$names were added by $inviter.';
-    await groups.addMembers(
-      group: group,
-      selfPubkey: identity.pubkey,
-      content: content,
-      settings: _msgSettings,
-    );
-    if (group.shareHistory) {
+    if (testSend != null) {
+      await testSend(group, content, nowSec);
+    } else {
+      await groups!.addMembers(
+        group: group,
+        selfPubkey: identity.pubkey,
+        content: content,
+        settings: _msgSettings,
+        nowSec: nowSec,
+      );
+    }
+    if (group.shareHistory && groups != null) {
       for (final pk in added) {
         unawaited(_sendGroupHistoryTo(group, pk));
       }
@@ -6899,6 +6960,78 @@ class NostrController {
     _emitFeedMessage(content);
     return true;
   }
+
+  final Map<String, Set<String>> _ownGroupAdds = {};
+
+  int _joinAt(int createdAt) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    return createdAt < nowSec ? createdAt : nowSec;
+  }
+
+  bool _admitBootstrapRoster(Group group, Map<String, int> members) {
+    final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
+    GroupLogic.admitMembers(group, members, respectRemovals: false);
+    if (self.isEmpty || group.members.contains(self)) return true;
+    final name = group.name.isEmpty ? tr('Group') : group.name;
+    _emitSystemMessage(
+        tr('{group} is full, so you couldn\'t join.', {'group': name}));
+    return false;
+  }
+
+  Future<bool> _sendJoinDeclinedFull(Group group, String joiner) {
+    final tags = GroupLogic.joinDeclinedFullTags(
+      joiner: joiner,
+      groupId: group.id,
+      groupName: group.name,
+      sharedEventId: PmLogic.generateSharedEventId(),
+    );
+    return gtSendDirect(
+        joiner, tags.sublist(1), GroupLogic.joinDeclinedFullContent);
+  }
+
+  void _onGroupMembersEvicted(String groupId, List<String> evicted) {
+    final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
+    final group = _ref.read(appStateProvider.notifier).groupById(groupId);
+    final own = _ownGroupAdds[groupId];
+    if (group != null && own != null) {
+      final name = group.name.isEmpty ? tr('Group') : group.name;
+      for (final pk in evicted) {
+        if (pk == self || !own.remove(pk)) continue;
+        _emitSystemMessage(tr('{group} is full, so {nym} wasn\'t added.',
+            {'group': name, 'nym': _nymDisplayFor(pk)}));
+        unawaited(_sendJoinDeclinedFull(group, pk));
+      }
+    }
+    if (self.isNotEmpty && evicted.contains(self)) {
+      scheduleMicrotask(() => _leaveFullGroupLocally(groupId));
+    }
+  }
+
+  bool _lostJoinRace(String groupId, List<List<String>> tags,
+      String senderPubkey, AppStateNotifier appState) {
+    final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
+    final group = appState.groupById(groupId);
+    if (group == null || self.isEmpty || senderPubkey == self) return false;
+    if (_tagValue(tags, 'p') != self) return false;
+    if (!group.members.contains(self)) return false;
+    if (_ref.read(groupToolsProvider).isPendingJoin(groupId)) return false;
+    return senderPubkey == group.joinedVia ||
+        GroupLogic.isOwner(group, senderPubkey) ||
+        GroupLogic.isAdmin(group, senderPubkey);
+  }
+
+  void _leaveFullGroupLocally(String groupId) {
+    final group = _ref.read(appStateProvider.notifier).groupById(groupId);
+    if (group == null || _leavingFull.contains(groupId)) return;
+    _leavingFull.add(groupId);
+    final name = group.name.isEmpty ? tr('Group') : group.name;
+    _emitSystemMessage(
+        tr('{group} is full, so you couldn\'t join.', {'group': name}));
+    unawaited(leaveGroup(groupId, quiet: true)
+        .whenComplete(() => _leavingFull.remove(groupId)));
+  }
+
+  final Set<String> _leavingFull = <String>{};
 
   /// Strips control chars, collapses whitespace, caps at 40.
   static String _sanitizeGroupName(String name) {
@@ -10156,6 +10289,17 @@ class NostrController {
   void processGiftWrapForTest(GiftWrapUnwrapped u) => _processGiftWrap(u);
 
   @visibleForTesting
+  void setIdentityForTest(Identity identity) => _identity = identity;
+
+  @visibleForTesting
+  Future<bool> Function(Group group, String content, int nowSec)?
+      addMembersSenderForTest;
+
+  @visibleForTesting
+  Future<bool> Function(String to, List<List<String>> tags, String content)?
+      sendDirectForTest;
+
+  @visibleForTesting
   void onGiftWrapForTest(GiftWrapUnwrapped u) => _onGiftWrap(u);
 
   @visibleForTesting
@@ -10798,6 +10942,8 @@ class NostrController {
 
   Future<bool> gtSendDirect(
       String to, List<List<String>> tags, String content) async {
+    final testSend = sendDirectForTest;
+    if (testSend != null) return testSend(to, tags, content);
     final identity = _identity;
     final service = _service;
     if (identity == null || service == null || !service.canSign) return false;
@@ -11453,6 +11599,8 @@ class NostrController {
       'shareHistory': g.shareHistory == true,
       'metaUpdatedAt': g.metaUpdatedAt,
       'modLog': [for (final e in modLog) e.toJson()],
+      if (g.memberAt.isNotEmpty) 'memberAt': g.memberAt,
+      if (g.memberRemovedAt.isNotEmpty) 'memberRemovedAt': g.memberRemovedAt,
     };
   }
 
@@ -11481,6 +11629,7 @@ class NostrController {
         ? g.modSeenIds.sublist(g.modSeenIds.length - 100)
         : g.modSeenIds;
     data['historyReceived'] = g.historyReceived;
+    if (g.joinedVia != null) data['joinedVia'] = g.joinedVia;
     return data;
   }
 

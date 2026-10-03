@@ -2391,6 +2391,28 @@ body:not(.chat-bubbles) .message.supporter-style {
     color: var(--text-dim);
 }
 
+.ctx-status-row.group-full {
+    color: var(--warning);
+}
+
+.context-menu-copy-pubkey[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: default;
+    pointer-events: none;
+}
+
+.gt-join-full {
+    font-size: 12px;
+    color: var(--warning);
+    margin-right: 4px;
+}
+
+.gt-add-spots {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 6px;
+}
+
 .ctx-status-row .user-status-dot {
     position: static;
     box-shadow: none;

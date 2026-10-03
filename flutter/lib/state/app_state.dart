@@ -903,6 +903,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Fired on any group store mutation to drive the debounced cross-device group sync.
   void Function()? onGroupStoreChanged;
 
+  void Function(String groupId, List<String> evicted)? onGroupMembersEvicted;
+
+  void _reportEvicted(String groupId, List<String> evicted) {
+    if (evicted.isNotEmpty) onGroupMembersEvicted?.call(groupId, evicted);
+  }
+
   /// Storage key → last-read created_at (sec); only newer messages bump the unread badge.
   final Map<String, int> _channelLastRead = <String, int>{};
 
@@ -2378,6 +2384,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     String? description,
     List<String>? members,
     List<String>? mods,
+    int membersAt = 0,
   }) {
     final g = groupById(groupId);
     if (g == null) return false;
@@ -2403,13 +2410,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
       g.description = description;
       changed = true;
     }
+    var evicted = const <String>[];
     if (members != null) {
-      for (final pk in members) {
-        if (pk.isNotEmpty && !g.members.contains(pk)) {
-          g.members.add(pk);
-          changed = true;
-        }
-      }
+      final admit = GroupLogic.admitMembers(
+          g, {for (final pk in members) pk: membersAt});
+      if (admit.changed) changed = true;
+      evicted = admit.evicted;
     }
     if (mods != null && g.mods.isEmpty) {
       for (final pk in mods) {
@@ -2423,6 +2429,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       _scheduleEmit();
       onGroupStoreChanged?.call();
     }
+    _reportEvicted(groupId, evicted);
     return changed;
   }
 
@@ -2440,27 +2447,26 @@ class AppStateNotifier extends StateNotifier<AppState> {
     String senderPubkey = '',
   }) {
     final existing = groupById(groupId);
+    final seenAt = timestampMs ~/ 1000;
     if (existing == null) {
       if (_leftGroups.contains(groupId)) return;
-      state.groups.add(Group(
+      final created = Group(
         id: groupId,
         name: name,
-        members: memberPubkeys.toSet().toList(),
         lastMessageTime: timestampMs,
-      ));
+      );
+      GroupLogic.admitMembers(
+          created, {for (final pk in memberPubkeys) pk: seenAt});
+      state.groups.add(created);
       _scheduleEmit();
       // A group learned from a message (missed invite) is synced immediately.
       onGroupStoreChanged?.call();
       return;
     }
     var changed = false;
-    for (final pk in memberPubkeys) {
-      if (existing.banned.contains(pk)) continue;
-      if (!existing.members.contains(pk)) {
-        existing.members.add(pk);
-        changed = true;
-      }
-    }
+    final admit = GroupLogic.admitMembers(
+        existing, {for (final pk in memberPubkeys) pk: seenAt});
+    if (admit.changed) changed = true;
     final nameAuthoritative =
         senderPubkey.isNotEmpty && existing.createdBy == senderPubkey;
     if (nameAuthoritative && name.isNotEmpty && name != existing.name) {
@@ -2475,6 +2481,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       _scheduleEmit();
       onGroupStoreChanged?.call();
     }
+    _reportEvicted(groupId, admit.evicted);
   }
 
   Group? groupById(String id) {
@@ -2531,12 +2538,21 @@ class AppStateNotifier extends StateNotifier<AppState> {
       });
     }
 
+    final syncedAt = Group.parseTimeMap(data['memberAt']) ?? <String, int>{};
+    final syncedRemovedAt =
+        Group.parseTimeMap(data['memberRemovedAt']) ?? <String, int>{};
+    Map<String, int> syncedMembers(int unknownAt, Map<String, int> removed) => {
+          for (final pk in strList(data['members']))
+            if ((removed[pk] ?? -1) <= (syncedAt[pk] ?? 0))
+              pk: syncedAt[pk] ?? unknownAt,
+        };
     final existing = groupById(groupId);
     if (existing == null) {
-      state.groups.add(Group(
+      final created = Group(
         id: groupId,
         name: (data['name'] ?? '') as String,
-        members: strList(data['members']),
+        memberRemovedAt: syncedRemovedAt,
+        joinedVia: nz(data['joinedVia']),
         lastMessageTime: (data['lastMessageTime'] as num?)?.toInt() ??
             DateTime.now().millisecondsSinceEpoch,
         createdBy: nz(data['createdBy']),
@@ -2561,13 +2577,35 @@ class AppStateNotifier extends StateNotifier<AppState> {
             ? (data['modSeenIds'] as List).map((e) => e.toString()).toList()
             : null,
         modLog: parseLog(data['modLog']),
-      ));
+      );
+      GroupLogic.admitMembers(created, syncedMembers(0, syncedRemovedAt));
+      state.groups.add(created);
       _scheduleEmit();
       return true;
     }
 
     final g = existing;
     var changed = false;
+    syncedRemovedAt.forEach((pk, at) {
+      if (at > (g.memberRemovedAt[pk] ?? -1)) {
+        g.memberRemovedAt[pk] = at;
+        changed = true;
+      }
+      if (pk != state.selfPubkey &&
+          g.members.contains(pk) &&
+          at > (g.memberAt[pk] ?? 0)) {
+        g.members.remove(pk);
+        g.mods.remove(pk);
+        g.admins.remove(pk);
+        g.memberAt.remove(pk);
+        changed = true;
+      }
+    });
+    final syncAdmit = GroupLogic.admitMembers(
+        g,
+        syncedMembers(DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            g.memberRemovedAt));
+    if (syncAdmit.changed) changed = true;
     if ((g.createdBy == null || g.createdBy!.isEmpty)) {
       final owner = nz(data['createdBy']);
       if (owner != null) {
@@ -2672,6 +2710,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
       changed = true;
     }
     if (changed) _scheduleEmit();
+    _reportEvicted(groupId, syncAdmit.evicted);
     return changed;
   }
 
@@ -2765,6 +2804,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
         ];
       }
     }
+    final before = List<String>.of(g.members);
     final result = GroupLogic.applyControlEvent(
       group: g,
       type: type,
@@ -2796,6 +2836,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
       _scheduleEmit();
       onGroupStoreChanged?.call();
+      if (type == GroupControlType.addMember) {
+        _reportEvicted(groupId,
+            [for (final pk in before) if (!g.members.contains(pk)) pk]);
+      }
     }
     return result;
   }

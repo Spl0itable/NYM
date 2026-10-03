@@ -523,6 +523,61 @@ class NymIcons {
   static const String addReaction =
       '<svg viewBox="0 0 20 20" fill="currentColor">'
       '<path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"/></svg>';
+
+  static const String ctxUnfriend =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+      '<circle cx="6" cy="5" r="2.5"/>'
+      '<path d="M 1.5 14 C 1.5 10.5 3.5 9 6 9 C 8.5 9 10.5 10.5 10.5 14" stroke-linecap="round"/>'
+      '<line x1="11" y1="8" x2="15" y2="8" stroke-linecap="round" stroke-width="1.5"/></svg>';
+
+  static const String ctxMakeAdmin =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+      '<path d="M 8 1.5 L 13.5 3.5 L 13.5 8 C 13.5 11 11 13.5 8 14.5 C 5 13.5 2.5 11 2.5 8 L 2.5 3.5 Z" stroke-linejoin="round"/>'
+      '<path d="M 5.75 8 L 7.25 9.5 L 10.25 6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  static const String ctxRevokeAdmin =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+      '<path d="M 8 1.5 L 13.5 3.5 L 13.5 8 C 13.5 11 11 13.5 8 14.5 C 5 13.5 2.5 11 2.5 8 L 2.5 3.5 Z" stroke-linejoin="round"/>'
+      '<line x1="4" y1="4" x2="12" y2="12" stroke-linecap="round"/></svg>';
+
+  static const String groupRemoveAvatar =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+      '<circle cx="8" cy="6" r="3"/>'
+      '<path d="M 2.5 14 C 2.5 10.5 5 9 8 9 C 11 9 13.5 10.5 13.5 14" stroke-linecap="round"/>'
+      '<line x1="3" y1="3" x2="13" y2="13" stroke-linecap="round"/></svg>';
+
+  static const String groupRemoveBanner =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">'
+      '<rect x="2" y="3" width="12" height="10" rx="1"/>'
+      '<line x1="3" y1="3" x2="13" y2="13" stroke-linecap="round"/></svg>';
+
+  static const String quickReactMore =
+      '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<path d="M4 6 L8 10 L12 6"/></svg>';
+
+  static const String userOptions = '<svg viewBox="0 0 16 16" fill="currentColor">'
+      '<circle cx="8" cy="3" r="1.4"/>'
+      '<circle cx="8" cy="8" r="1.4"/>'
+      '<circle cx="8" cy="13" r="1.4"/></svg>';
+
+  static const String rowMenu = '<svg viewBox="0 0 24 24" fill="currentColor">'
+      '<circle cx="12" cy="5" r="1.8"/>'
+      '<circle cx="12" cy="12" r="1.8"/>'
+      '<circle cx="12" cy="19" r="1.8"/></svg>';
+
+  static const String dragHandle = '<svg viewBox="0 0 24 24" fill="currentColor">'
+      '<circle cx="9" cy="6" r="1.4"/>'
+      '<circle cx="15" cy="6" r="1.4"/>'
+      '<circle cx="9" cy="12" r="1.4"/>'
+      '<circle cx="15" cy="12" r="1.4"/>'
+      '<circle cx="9" cy="18" r="1.4"/>'
+      '<circle cx="15" cy="18" r="1.4"/></svg>';
+
+  static const String columnClose =
+      '<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none">'
+      '<line x1="18" y1="6" x2="6" y2="18"/>'
+      '<line x1="6" y1="6" x2="18" y2="18"/></svg>';
 }
 
 class NymSvgIcon extends StatelessWidget {

@@ -871,23 +871,15 @@ class _ChatRow extends ConsumerWidget {
   void _openQuickReact(BuildContext context, Rect anchor) {
     final recents =
         ProviderScope.containerOf(context).read(recentEmojisProvider);
-    // Non-self rows get a "User options" item under the quick-react pill.
-    final contextItems = (!msg.isSelf && msg.pubkey.isNotEmpty)
-        ? [
-            QuickContextItem(
-              label: tr('User options'),
-              svg: NymIcons.info,
-              onTap: () => showCallUserMenu(context, msg.pubkey),
-            ),
-          ]
-        : const <QuickContextItem>[];
+    final canMenu = !msg.isSelf && msg.pubkey.isNotEmpty;
     showQuickReactPopup(
       context,
       anchorRect: anchor,
       emojis: quickReactEmojis(recents),
       onReact: (e) => onReact(msg.mid, e),
       onMore: () => onMorePicker(msg.mid),
-      contextItems: contextItems,
+      onMenu: canMenu ? () => showCallUserMenu(context, msg.pubkey) : null,
+      menuLabel: tr('User options'),
     );
   }
 

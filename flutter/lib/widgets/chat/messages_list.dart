@@ -286,7 +286,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     }
 
     // Mention flags never apply to self or PM/group rows, nor while the self nym is still unknown.
-    final merged = <_ListEntry>[
+    final raw = <_ListEntry>[
       for (final m in messages)
         _MsgEntry(MessageGroupEntry(
           message: m,
@@ -297,7 +297,13 @@ class _MessagesListState extends ConsumerState<MessagesList> {
               m.content.contains(mentionToken),
         )),
       for (final p in polls) _PollEntry(p),
-    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    ];
+    final order = List<int>.generate(raw.length, (i) => i)
+      ..sort((a, b) {
+        final d = raw[a].createdAt.compareTo(raw[b].createdAt);
+        return d != 0 ? d : a - b;
+      });
+    final merged = [for (final i in order) raw[i]];
 
     // Fold same-author bubble runs in merged order, so polls and system or `/me` rows break a run.
     final units = <_RenderUnit>[];

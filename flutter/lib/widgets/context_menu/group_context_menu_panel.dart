@@ -279,10 +279,12 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
           ),
           const SizedBox(height: 2),
           Text(
-            group.members.length == 1
-                ? tr('{count} member', {'count': group.members.length})
-                : tr('{count} members', {'count': group.members.length}),
-            style: TextStyle(color: c.textDim, fontSize: 12),
+            tr('{n}/{max} members', {'n': group.members.length, 'max': kMaxGroupMembers}) +
+                (group.members.length >= kMaxGroupMembers ? ' · ${tr('Full')}' : ''),
+            style: TextStyle(
+              color: group.members.length >= kMaxGroupMembers ? c.warning : c.textDim,
+              fontSize: 12,
+            ),
           ),
           ..._inviteLinkRows(c, group),
         ],
@@ -364,6 +366,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         ),
       ),
       _CopyInviteRow(
+        full: group.members.length >= kMaxGroupMembers,
         onTap: () async {
           await ref.read(groupToolsProvider).ensureSummary(group.id);
           if (!mounted) return;
@@ -433,9 +436,8 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         onTap: () => _changeImage(group, avatar: true),
       ));
       if ((group.avatar ?? '').isNotEmpty) {
-        // The PWA has no "Remove Avatar" glyph, so reuse the avatar one.
         rows.add(_ActionRow(
-          svg: NymIcons.groupChangeAvatar,
+          svg: NymIcons.groupRemoveAvatar,
           label: tr('Remove Avatar'),
           color: c.text,
           onTap: () => _removeImage(group, avatar: true),
@@ -449,7 +451,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ));
       if ((group.banner ?? '').isNotEmpty) {
         rows.add(_ActionRow(
-          svg: NymIcons.groupChangeBanner,
+          svg: NymIcons.groupRemoveBanner,
           label: tr('Remove Banner'),
           color: c.text,
           onTap: () => _removeImage(group, avatar: false),
@@ -866,8 +868,9 @@ class _ActionRowState extends State<_ActionRow> {
 }
 
 class _CopyInviteRow extends StatefulWidget {
-  const _CopyInviteRow({required this.onTap});
+  const _CopyInviteRow({required this.onTap, this.full = false});
   final Future<void> Function() onTap;
+  final bool full;
 
   @override
   State<_CopyInviteRow> createState() => _CopyInviteRowState();
@@ -879,6 +882,14 @@ class _CopyInviteRowState extends State<_CopyInviteRow> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    if (widget.full) {
+      return Padding(
+        key: const ValueKey('groupInviteFull'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Text(tr('Group is full'),
+            style: TextStyle(color: c.warning, fontSize: 11)),
+      );
+    }
     final color = _hover ? c.primary : c.textDim;
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -896,8 +907,8 @@ class _CopyInviteRowState extends State<_CopyInviteRow> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.copy, size: 12, color: color),
-              const SizedBox(width: 2),
+              NymSvgIcon(NymIcons.ctxCopy, size: 12, color: color),
+              const SizedBox(width: 4),
               Text(tr('Copy Invite Link'),
                   style: TextStyle(color: color, fontSize: 11)),
             ],
@@ -1090,7 +1101,14 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
     super.dispose();
   }
 
+  int get _spotsLeft {
+    final left =
+        kMaxGroupMembers - widget.group.members.length - _picked.length;
+    return left > 0 ? left : 0;
+  }
+
   void _add() {
+    if (_spotsLeft <= 0) return;
     final users = ref.read(usersProvider);
     final pk = resolveRecipientPubkey(_controller.text, users);
     if (pk == null) return;
@@ -1164,11 +1182,23 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                               ],
                             ),
                           ),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            tr('{n} spots left', {'n': '$_spotsLeft'}),
+                            key: const ValueKey('addMembersSpotsLeft'),
+                            style: TextStyle(
+                              color: _spotsLeft > 0 ? c.textDim : c.warning,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
                         Row(
                           children: [
                             Expanded(
                               child: TextField(
                                 controller: _controller,
+                                enabled: _spotsLeft > 0,
                                 style: TextStyle(color: c.inputText, fontSize: 14),
                                 onSubmitted: (_) => _add(),
                                 decoration: InputDecoration(
@@ -1199,7 +1229,7 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
                             ),
                             const SizedBox(width: 8),
                             TextButton(
-                              onPressed: _add,
+                              onPressed: _spotsLeft > 0 ? _add : null,
                               child: Text(tr('Add'),
                                   style: TextStyle(color: c.primary)),
                             ),

@@ -381,11 +381,166 @@ Object.assign(NYM.prototype, {
                     shareHistory: group.shareHistory === true,
                     historyReceived: group.historyReceived === true,
                     modLog: Array.isArray(group.modLog) ? group.modLog.slice(-50) : [],
+                    memberAt: this._gcMemberAtSnapshot(group),
+                    memberRemovedAt: this._gcRemovedSnapshot(group),
+                    joinedVia: group.joinedVia || null,
                     ...(typeof this._gtGroupSnapshot === 'function' ? this._gtGroupSnapshot(group) : {}),
                 };
             }
             localStorage.setItem(`nym_groups_${this.pubkey}`, JSON.stringify(data));
         } catch (_) { }
+    },
+
+    _gcMax() {
+        return this.MAX_GROUP_MEMBERS || 100;
+    },
+
+    _gcSec(v) {
+        const n = Math.floor(Number(v));
+        return Number.isFinite(n) && n > 0 ? n : 0;
+    },
+
+    _gcMemberAtSnapshot(group) {
+        const out = {};
+        const at = (group && group.memberAt) || {};
+        for (const pk of (group && group.members) || []) if (at[pk] !== undefined) out[pk] = at[pk];
+        return out;
+    },
+
+    _gcRemovedSnapshot(group) {
+        const rm = (group && group.memberRemovedAt) || {};
+        const entries = Object.entries(rm).filter(([, t]) => typeof t === 'number' && t > 0).sort((a, b) => b[1] - a[1]).slice(0, 200);
+        return Object.fromEntries(entries);
+    },
+
+    _gcNoteRemoved(group, pubkey, ts) {
+        if (!group || !pubkey) return;
+        if (!group.memberRemovedAt || typeof group.memberRemovedAt !== 'object') group.memberRemovedAt = {};
+        const t = this._gcSec(ts) || Math.floor(Date.now() / 1000);
+        if (t > (group.memberRemovedAt[pubkey] || 0)) group.memberRemovedAt[pubkey] = t;
+        if (group.memberAt) delete group.memberAt[pubkey];
+    },
+
+    _gcCapApply(group, candidates) {
+        if (!group.memberAt || typeof group.memberAt !== 'object') group.memberAt = {};
+        const all = [...new Set([...(Array.isArray(group.members) ? group.members : []), ...(candidates || [])])];
+        const res = window.NymGroupTools.groupCapRoster({
+            max: this._gcMax(),
+            entries: all.map(pk => ({ pk, at: group.memberAt[pk] || 0 })),
+            banned: Array.isArray(group.banned) ? group.banned : []
+        });
+        const keep = new Set(res.members);
+        group.members = all.filter(pk => keep.has(pk));
+        for (const pk of Object.keys(group.memberAt)) if (!keep.has(pk)) delete group.memberAt[pk];
+        if (res.dropped.length) {
+            if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => keep.has(pk));
+            if (Array.isArray(group.admins)) group.admins = group.admins.filter(pk => keep.has(pk));
+        }
+        return res.dropped;
+    },
+
+    _gcMerge(group, additions, at, opts = {}) {
+        if (!group.memberAt || typeof group.memberAt !== 'object') group.memberAt = {};
+        const removed = group.memberRemovedAt || {};
+        const current = new Set(Array.isArray(group.members) ? group.members : []);
+        const t = this._gcSec(at);
+        const fresh = [];
+        for (const pk of additions || []) {
+            if (!pk) continue;
+            if (current.has(pk)) {
+                if (group.memberAt[pk] !== undefined && t < group.memberAt[pk]) group.memberAt[pk] = t;
+                continue;
+            }
+            if (!opts.force && removed[pk] !== undefined && removed[pk] > t) continue;
+            if (group.memberAt[pk] === undefined || t < group.memberAt[pk]) group.memberAt[pk] = t;
+            fresh.push(pk);
+        }
+        return this._gcCapApply(group, fresh);
+    },
+
+    _gcMergeSynced(groupId, incoming) {
+        const g = this.groupConversations.get(groupId);
+        if (!g || !incoming) return [];
+        const inAt = (incoming.memberAt && typeof incoming.memberAt === 'object') ? incoming.memberAt : {};
+        const inRm = (incoming.memberRemovedAt && typeof incoming.memberRemovedAt === 'object') ? incoming.memberRemovedAt : {};
+        if (!g.memberAt || typeof g.memberAt !== 'object') g.memberAt = {};
+        if (!g.memberRemovedAt || typeof g.memberRemovedAt !== 'object') g.memberRemovedAt = {};
+        for (const [pk, v] of Object.entries(inRm)) {
+            const t = this._gcSec(v);
+            if (t > (g.memberRemovedAt[pk] || 0)) g.memberRemovedAt[pk] = t;
+        }
+        g.members = (g.members || []).filter(pk => pk === this.pubkey || !((g.memberRemovedAt[pk] || 0) > (g.memberAt[pk] || 0)));
+        for (const pk of Object.keys(g.memberAt)) if (!g.members.includes(pk)) delete g.memberAt[pk];
+        const nowSec = Math.floor(Date.now() / 1000);
+        const fresh = [];
+        for (const pk of Array.isArray(incoming.members) ? incoming.members : []) {
+            if (!pk || typeof pk !== 'string') continue;
+            const known = inAt[pk] !== undefined;
+            const t = this._gcSec(inAt[pk]);
+            if (g.members.includes(pk)) {
+                if (known && g.memberAt[pk] !== undefined && t < g.memberAt[pk]) g.memberAt[pk] = t;
+                continue;
+            }
+            if (g.memberRemovedAt[pk] !== undefined && g.memberRemovedAt[pk] > t) continue;
+            g.memberAt[pk] = known ? t : nowSec;
+            fresh.push(pk);
+        }
+        const dropped = this._gcCapApply(g, fresh);
+        this._gcHandleDropped(groupId, dropped);
+        return dropped;
+    },
+
+    _gcHandleDropped(groupId, dropped) {
+        if (!dropped || !dropped.length) return;
+        const group = this.groupConversations.get(groupId);
+        const name = (group && group.name) || 'Group';
+        for (const pk of dropped) {
+            const key = groupId + ':' + pk;
+            if (this._gcLocalAdds && this._gcLocalAdds.has(key)) {
+                this._gcLocalAdds.delete(key);
+                this.displaySystemMessage(this._gx("{group} is full, so {nym} wasn't added.", { group: name, nym: this.getNymFromPubkey(pk) }));
+                this._gcSendFullDecline(groupId, pk, name).catch(() => { });
+            }
+        }
+        if (dropped.includes(this.pubkey)) this._gcLeaveFull(groupId, name);
+    },
+
+    async _gcSendFullDecline(groupId, joinerPubkey, name) {
+        if (!this._canSendGiftWraps()) return;
+        const tags = [
+            ['p', joinerPubkey],
+            ['g', groupId],
+            ['subject', String(name || 'Group').slice(0, 80)],
+            ['type', 'group-join-declined'],
+            ['reason', 'full'],
+            ['x', this._generateSharedEventId()]
+        ];
+        const rumor = { kind: 14, created_at: Math.floor(Date.now() / 1000), tags, content: 'group is full', pubkey: this.pubkey };
+        await this._sendGiftWrapsAsync([joinerPubkey], rumor, null);
+    },
+
+    _gcLeaveFull(groupId, name) {
+        if (!this._gcLeaving) this._gcLeaving = new Set();
+        if (this._gcLeaving.has(groupId)) return;
+        this._gcLeaving.add(groupId);
+        setTimeout(() => {
+            this._gcLeaving.delete(groupId);
+            if (!this.groupConversations.has(groupId)) return;
+            this.displaySystemMessage(this._gx("{group} is full, so you couldn't join.", { group: name || 'Group' }));
+            this.leaveGroup(groupId, { quiet: true }).catch(() => { });
+        }, 0);
+    },
+
+    async _gcRefuseFullJoin(groupId, joinerPubkey) {
+        const group = this.groupConversations.get(groupId);
+        const name = (group && group.name) || 'Group';
+        this.displaySystemMessage(this._gx("{group} is full, so {nym} couldn't join.", { group: name, nym: this.getNymFromPubkey(joinerPubkey) }));
+        await this._gcSendFullDecline(groupId, joinerPubkey, name);
+    },
+
+    _gcIsFull(groupId) {
+        const g = this.groupConversations.get(groupId);
+        return !!g && (g.members || []).length >= this._gcMax();
     },
 
     _isGroupOwner(groupId, pubkey) {
@@ -575,6 +730,7 @@ Object.assign(NYM.prototype, {
     async groupCtxCopyInviteLink() {
         const groupId = this._groupCtxGroupId;
         if (!groupId) return;
+        if (this._gcIsFull(groupId)) return;
         if (typeof this._gtEnsureSummary === 'function' && this.connected) await this._gtEnsureSummary(groupId);
         const link = this.buildGroupInviteLink(groupId);
         if (!link) {
@@ -729,10 +885,12 @@ Object.assign(NYM.prototype, {
         const members = tagged('p');
         if (!members.length) return;
         const banned = new Set(tagged('ban'));
-        const next = members.filter(pk => !banned.has(pk));
+        const next = [...new Set(members.filter(pk => !banned.has(pk)))];
         if (!next.includes(this.pubkey)) return;
-        group.members = [...new Set(next)];
+        const nextSet = new Set(next);
         group.banned = [...banned];
+        group.members = (group.members || []).filter(pk => nextSet.has(pk));
+        const rosterDropped = this._gcMerge(group, next, Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000)), { force: true });
         if (bareShell) {
             const ownerTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'owner' && t[1]);
             if (ownerTag && !group.createdBy) group.createdBy = ownerTag[1];
@@ -745,6 +903,7 @@ Object.assign(NYM.prototype, {
         this._debouncedNostrSettingsSave();
         this.updateGroupConversationUI(groupId);
         if (this.inPMMode && this.currentGroup === groupId) this.openGroup(groupId);
+        this._gcHandleDropped(groupId, rosterDropped);
     },
 
     async _handleGroupJoinRequest(rumor, groupId, joinerPubkey) {
@@ -758,6 +917,10 @@ Object.assign(NYM.prototype, {
         if (reqEpoch !== (group.inviteEpoch || 0)) return;
         if (group.members.includes(joinerPubkey)) return;
         if (Array.isArray(group.banned) && group.banned.includes(joinerPubkey)) return;
+        if (group.joinApproval !== true && this._gcIsFull(groupId)) {
+            await this._gcRefuseFullJoin(groupId, joinerPubkey);
+            return;
+        }
         if (group.joinApproval === true && typeof this._gtQueueJoinRequest === 'function') {
             const reqTs = Math.min(Math.floor(rumor.created_at || 0) || Math.floor(Date.now() / 1000), Math.floor(Date.now() / 1000));
             await this._gtQueueJoinRequest(groupId, joinerPubkey, this.pubkey, reqTs, true);
@@ -773,6 +936,10 @@ Object.assign(NYM.prototype, {
             if (!now || now.members.includes(joinerPubkey)) return;
             if (Array.isArray(now.banned) && now.banned.includes(joinerPubkey)) return;
             if (!this._canAddMembers(groupId, this.pubkey)) return;
+            if (this._gcIsFull(groupId)) {
+                await this._gcRefuseFullJoin(groupId, joinerPubkey);
+                return;
+            }
         }
         await this.addMemberToGroup(groupId, joinerPubkey);
     },
@@ -835,7 +1002,7 @@ Object.assign(NYM.prototype, {
                     }
                 }
                 if (!this.groupConversations.has(groupId)) {
-                    this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy });
+                    this.addGroupConversation(groupId, group.name, group.members || [], group.lastMessageTime || Date.now(), { createdBy: group.createdBy, memberAtMap: (group.memberAt && typeof group.memberAt === 'object') ? group.memberAt : {} });
                     // Restore role data, which addGroupConversation doesn't merge.
                     const g = this.groupConversations.get(groupId);
                     if (g) {
@@ -857,6 +1024,8 @@ Object.assign(NYM.prototype, {
                         if (group.shareHistory === true) g.shareHistory = true;
                         if (group.historyReceived === true) g.historyReceived = true;
                         g.modLog = Array.isArray(group.modLog) ? [...group.modLog] : [];
+                        if (group.memberRemovedAt && typeof group.memberRemovedAt === 'object') g.memberRemovedAt = { ...group.memberRemovedAt };
+                        if (group.joinedVia) g.joinedVia = group.joinedVia;
                         if (typeof this._gtRestoreGroup === 'function') this._gtRestoreGroup(g, group);
                     }
                 }
@@ -987,7 +1156,9 @@ Object.assign(NYM.prototype, {
             const leftAt = this.leftGroupTimes?.get(groupId) || 0;
             const msgTs = Math.floor(rumor.created_at || 0);
             const isReinviteType = (msgType === 'group-invite' || msgType === 'group-add-member' || msgType === 'group-unban');
-            if (!isReinviteType || msgTs <= leftAt) {
+            const isJoinReply = (msgType === 'group-join-declined' || msgType === 'group-join-waiting')
+                && !!(this._pendingInviteJoins && this._pendingInviteJoins.has(groupId));
+            if (!isJoinReply && (!isReinviteType || msgTs <= leftAt)) {
                 return;
             }
         }
@@ -1071,6 +1242,7 @@ Object.assign(NYM.prototype, {
             const group = this.groupConversations.get(groupId);
             if (group) {
                 group.members = group.members.filter(pk => pk !== senderPubkey);
+                this._gcNoteRemoved(group, senderPubkey, rumor.created_at);
                 if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== senderPubkey);
                 if (Array.isArray(group.admins)) group.admins = group.admins.filter(pk => pk !== senderPubkey);
                 this.groupConversations.set(groupId, group);
@@ -1153,7 +1325,7 @@ Object.assign(NYM.prototype, {
                     groupName,
                     inviteMembers,
                     (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
-                    { createdBy: senderPubkey, mods: inviteMods, admins: inviteAdmins,
+                    { memberAt: Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000)), createdBy: senderPubkey, mods: inviteMods, admins: inviteAdmins,
                       genesisOwner: inviteGenesis === true ? inviteGOwner : null,
                       genesisNonce: inviteGenesis === true ? inviteGNonce : null,
                       avatar: inviteAvatar, banner: inviteBanner, description: inviteDesc, allowMemberInvites: inviteAllowInvites, inviteEnabled, inviteEpoch, shareHistory: inviteShareHistory }
@@ -1163,6 +1335,7 @@ Object.assign(NYM.prototype, {
             if (grp && !grp.createdBy) {
                 grp.createdBy = senderPubkey;
             }
+            if (grp && !existingInviteGroup && !grp.joinedVia) grp.joinedVia = senderPubkey;
             if (grp && inviteMods.length > 0 && (!Array.isArray(grp.mods) || grp.mods.length === 0)) {
                 grp.mods = [...inviteMods];
             }
@@ -1269,12 +1442,15 @@ Object.assign(NYM.prototype, {
                 const addTs = Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000) + 300);
                 for (const pk of newMembers) this._bumpModTargetTs(existingGroup, pk, addTs);
             }
+            const addAt = Math.min(Math.floor(rumor.created_at || 0), Math.floor(Date.now() / 1000));
             this.addGroupConversation(
                 groupId,
                 groupName,
                 addMemberPubkeys,
                 (rumor.created_at || Math.floor(Date.now() / 1000)) * 1000,
                 {
+                    memberAt: addAt,
+                    memberAtMap: existingGroup ? undefined : { [this.pubkey]: addAt },
                     createdBy: trustBootstrap ? claimedOwner : undefined,
                     mods: trustBootstrap ? addMods : [],
                     admins: trustBootstrap ? addAdmins : [],
@@ -1292,6 +1468,12 @@ Object.assign(NYM.prototype, {
                 }
             );
             const grpAdd = this.groupConversations.get(groupId);
+            if (grpAdd && !existingGroup && !grpAdd.joinedVia) grpAdd.joinedVia = senderPubkey;
+            if (grpAdd) {
+                const kept = newMembers.filter(pk => grpAdd.members.includes(pk));
+                newMembers.length = 0;
+                newMembers.push(...kept);
+            }
             if (trustBootstrap && grpAdd && addAvatar && !grpAdd.avatar) grpAdd.avatar = addAvatar;
             if (trustBootstrap && grpAdd && addBanner && !grpAdd.banner) grpAdd.banner = addBanner;
             if (trustBootstrap && grpAdd && addDesc && !grpAdd.description) grpAdd.description = addDesc;
@@ -1385,6 +1567,7 @@ Object.assign(NYM.prototype, {
                 const grp = this.groupConversations.get(groupId);
                 if (grp) {
                     grp.members = grp.members.filter(pk => pk !== removedPubkey);
+                    this._gcNoteRemoved(grp, removedPubkey, rumor.created_at);
                     if (Array.isArray(grp.mods)) grp.mods = grp.mods.filter(pk => pk !== removedPubkey);
                     if (Array.isArray(grp.admins)) grp.admins = grp.admins.filter(pk => pk !== removedPubkey);
                     if (banTag) {
@@ -1604,6 +1787,7 @@ Object.assign(NYM.prototype, {
             || (!grpForRoster.createdBy && grpForRoster.members.filter(pk => pk !== this.pubkey).length === 0)
             || grpForRoster.members.includes(senderPubkey);
         this.addGroupConversation(groupId, groupName, rosterFromSender ? memberPubkeys : [], tsSec * 1000, {
+            memberAt: tsSec,
             nameAuthoritative: !!grpForRoster && grpForRoster.createdBy === senderPubkey
         });
         const rhTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'rh' && t[1]);
@@ -1788,14 +1972,21 @@ Object.assign(NYM.prototype, {
             group.banned = group.banned.filter(pk => pk !== newMemberPubkey);
         }
 
-        group.members = [...group.members, newMemberPubkey];
+        const addAt = Math.floor(Date.now() / 1000);
+        this._gcMerge(group, [newMemberPubkey], addAt, { force: true });
+        if (!group.members.includes(newMemberPubkey)) {
+            this.displaySystemMessage(`This group is full (${this.MAX_GROUP_MEMBERS} members max).`);
+            return false;
+        }
+        if (!this._gcLocalAdds) this._gcLocalAdds = new Set();
+        this._gcLocalAdds.add(groupId + ':' + newMemberPubkey);
         this.groupConversations.set(groupId, group);
 
         if (!this.users.has(newMemberPubkey)) {
             await this.fetchProfileDirect(newMemberPubkey);
         }
 
-        const now = Math.floor(Date.now() / 1000);
+        const now = addAt;
         const nymMessageId = this._generateSharedEventId();
         const newMemberName = this.getNymFromPubkey(newMemberPubkey);
         const inviterName = this.getNymFromPubkey(this.pubkey);
@@ -1848,6 +2039,39 @@ Object.assign(NYM.prototype, {
         }
 
         return true;
+    },
+
+    async addMembersToGroup(groupId, pubkeys) {
+        const group = this.groupConversations.get(groupId);
+        if (!group) {
+            this.displaySystemMessage('Group not found');
+            return 0;
+        }
+        if (!this._canSendGiftWraps()) {
+            this.displaySystemMessage('Adding members requires a logged-in account');
+            return 0;
+        }
+        if (!this._canAddMembers(groupId, this.pubkey)) {
+            this.displaySystemMessage('Only the group owner or an admin can add new members to this group.');
+            return 0;
+        }
+        const skipped = [];
+        let added = 0;
+        for (const pk of [...new Set(pubkeys || [])].filter(Boolean)) {
+            const g = this.groupConversations.get(groupId);
+            if (!g) break;
+            if (!g.members.includes(pk) && g.members.length >= this._gcMax()) {
+                skipped.push(pk);
+                continue;
+            }
+            if (await this.addMemberToGroup(groupId, pk)) added++;
+        }
+        if (skipped.length) {
+            const g = this.groupConversations.get(groupId);
+            const names = skipped.map(pk => this.getNymFromPubkey(pk)).join(', ');
+            this.displaySystemMessage(this._gx("{group} is full, so these weren't added: {names}.", { group: (g && g.name) || 'Group', names }));
+        }
+        return added;
     },
 
     // Forwarded entries can't carry the original authors' signatures, so the receiver marks them unverified.
@@ -2444,10 +2668,10 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    async leaveGroup(groupId) {
+    async leaveGroup(groupId, opts = {}) {
         const group = this.groupConversations.get(groupId);
 
-        if (group && this._canSendGiftWraps()) {
+        if (group && !opts.quiet && this._canSendGiftWraps()) {
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length > 0) {
                 const now = Math.floor(Date.now() / 1000);
@@ -2554,6 +2778,7 @@ Object.assign(NYM.prototype, {
         const ek = this.groupEphemeralKeys.get(groupId);
         if (ek) { delete ek.members[pubkey]; this._saveEphemeralKeys(); }
         group.members = group.members.filter(pk => pk !== pubkey);
+        this._gcNoteRemoved(group, pubkey, now);
         if (Array.isArray(group.mods)) group.mods = group.mods.filter(pk => pk !== pubkey);
         if (Array.isArray(group.admins)) group.admins = group.admins.filter(pk => pk !== pubkey);
         if (ban) {
@@ -3191,13 +3416,20 @@ Object.assign(NYM.prototype, {
 
     addGroupConversation(groupId, name, members, timestamp = Date.now(), opts = {}) {
         const existing = this.groupConversations.get(groupId);
-        const allMembers = [...new Set(members)];
+        let allMembers = [...new Set(members)];
+        const baseAt = opts.memberAt !== undefined ? this._gcSec(opts.memberAt) : this._gcSec(Math.floor(timestamp / 1000));
 
         if (!existing) {
-            if (this.leftGroups.has(groupId)) return;
+            if (this.leftGroups.has(groupId)) return [];
+            const map = opts.memberAtMap && typeof opts.memberAtMap === 'object' ? opts.memberAtMap : null;
+            const shell = { members: [], memberAt: {}, banned: Array.isArray(opts.banned) ? opts.banned : [] };
+            for (const pk of allMembers) shell.memberAt[pk] = map ? this._gcSec(map[pk]) : baseAt;
+            const newDropped = this._gcCapApply(shell, allMembers);
+            allMembers = shell.members;
             this.groupConversations.set(groupId, {
                 name,
                 members: allMembers,
+                memberAt: shell.memberAt,
                 lastMessageTime: timestamp,
                 createdBy: opts.createdBy || null,
                 admins: Array.isArray(opts.admins) ? [...opts.admins] : [],
@@ -3237,14 +3469,23 @@ Object.assign(NYM.prototype, {
                 }
             }
             this.updateViewMoreButton('pmList');
+            this._gcHandleDropped(groupId, newDropped);
+            return newDropped;
         } else {
-            const merged = [...new Set([...existing.members, ...allMembers])];
+            const capped = {
+                members: Array.isArray(existing.members) ? existing.members.slice() : [],
+                memberAt: { ...(existing.memberAt || {}) },
+                memberRemovedAt: existing.memberRemovedAt || {},
+                banned: Array.isArray(existing.banned) ? existing.banned : []
+            };
+            const mergeDropped = this._gcMerge(capped, allMembers, baseAt);
             const next = {
                 ...existing,
                 name: opts.nameAuthoritative === false
                     ? (existing.name || name)
                     : (name || existing.name),
-                members: merged,
+                members: capped.members,
+                memberAt: capped.memberAt,
                 lastMessageTime: Math.max(existing.lastMessageTime || 0, timestamp),
                 admins: Array.isArray(existing.admins) ? existing.admins : [],
                 mods: Array.isArray(existing.mods) ? existing.mods : [],
@@ -3261,8 +3502,15 @@ Object.assign(NYM.prototype, {
             if (opts.inviteEnabled !== undefined) next.inviteEnabled = opts.inviteEnabled;
             if (opts.inviteEpoch !== undefined) next.inviteEpoch = opts.inviteEpoch;
             if (opts.shareHistory !== undefined) next.shareHistory = opts.shareHistory;
+            if (mergeDropped.length) {
+                const keep = new Set(next.members);
+                next.mods = next.mods.filter(pk => keep.has(pk));
+                next.admins = next.admins.filter(pk => keep.has(pk));
+            }
             this.groupConversations.set(groupId, next);
             this.updateGroupConversationUI(groupId);
+            this._gcHandleDropped(groupId, mergeDropped);
+            return mergeDropped;
         }
     },
 
@@ -3761,13 +4009,31 @@ Object.assign(NYM.prototype, {
         }
 
         document.getElementById('grpCtxName').textContent = group.name || 'Group';
-        document.getElementById('grpCtxMemberCount').textContent = `${group.members.length} member${group.members.length === 1 ? '' : 's'}`;
+        const capText = (x) => (typeof this.uiText === 'function' ? this.uiText(x) : x);
+        const capMax = this.MAX_GROUP_MEMBERS || 100;
+        const capCount = group.members.length;
+        const capFull = capCount >= capMax;
+        const capEl = document.getElementById('grpCtxMemberCount');
+        capEl.textContent = capText('{n}/{max} members').split('{n}').join(String(capCount)).split('{max}').join(String(capMax))
+            + (capFull ? ' · ' + capText('Full') : '');
+        capEl.classList.toggle('group-full', capFull);
         document.getElementById('grpCtxBio').textContent = group.description || '';
 
         const inviteLink = this._canAddMembers(groupId, this.pubkey) ? this.buildGroupInviteLink(groupId) : null;
         const grpCtxInviteLink = document.getElementById('grpCtxInviteLink');
         const grpCtxCopyInvite = document.getElementById('grpCtxCopyInvite');
-        if (inviteLink) {
+        if (grpCtxCopyInvite) {
+            grpCtxCopyInvite.removeAttribute('aria-disabled');
+            grpCtxCopyInvite.classList.remove('disabled');
+        }
+        if (inviteLink && capFull) {
+            if (grpCtxInviteLink) { grpCtxInviteLink.textContent = capText('Group is full'); grpCtxInviteLink.classList.remove('nm-hidden'); }
+            if (grpCtxCopyInvite) {
+                grpCtxCopyInvite.classList.remove('nm-hidden');
+                grpCtxCopyInvite.setAttribute('aria-disabled', 'true');
+                grpCtxCopyInvite.classList.add('disabled');
+            }
+        } else if (inviteLink) {
             if (grpCtxInviteLink) { grpCtxInviteLink.textContent = inviteLink; grpCtxInviteLink.classList.remove('nm-hidden'); }
             if (grpCtxCopyInvite) grpCtxCopyInvite.classList.remove('nm-hidden');
         } else {

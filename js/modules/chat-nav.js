@@ -272,6 +272,13 @@
         return s.ids.length ? s.ids[0].id : null;
     }
 
+    function jumpLead(state) {
+        const s = jumpNorm(state);
+        if (!s.ids.length) return [];
+        const at = s.ids[0].at;
+        return s.ids.filter((e) => e.at === at).map((e) => e.id);
+    }
+
     function jumpText(state, t) {
         const n = jumpCount(state);
         if (n <= 0) return '';
@@ -870,7 +877,7 @@
         LIMITS, KEYS, STRINGS, STATUSES,
         firstUnread, landOnDivider, jumpLabel, showJump,
         JUMP, FABS, seenInView, dwellStep, fabRow, fabRight, jumpEmpty, jumpNorm, jumpStart, jumpSeen, jumpAdd, jumpReveal, jumpSettle,
-        jumpCount, jumpTarget, jumpText,
+        jumpCount, jumpTarget, jumpLead, jumpText,
         emptyMentions, normalizeMentions, mentionAdd, mentionSeen, mentionClear, mentionPrune, mentionDrop,
         mentionNext, mentionCount, mentionScan,
         pinKey, pinParse, pinKeyForChat, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,
