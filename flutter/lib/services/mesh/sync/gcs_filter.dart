@@ -132,15 +132,17 @@ class GcsFilter {
   }
 
   /// First 8 bytes of SHA-256 over the id, top bit cleared to stay positive in signed 64-bit.
-  static int _h64(Uint8List id16) {
+  static BigInt _h64(Uint8List id16) {
     final digest = sha256.convert(id16).bytes;
-    var x = 0;
+    var x = BigInt.zero;
     final take = math.min(8, digest.length);
     for (var i = 0; i < take; i++) {
-      x = (x << 8) | digest[i];
+      x = (x << 8) | BigInt.from(digest[i]);
     }
-    return x & 0x7fffffffffffffff;
+    return x & _mask63;
   }
+
+  static final BigInt _mask63 = (BigInt.one << 63) - BigInt.one;
 
   static int _hashRange(int count, int p) {
     if (count <= 0) return 1;
@@ -154,9 +156,9 @@ class GcsFilter {
     return product > 0xFFFFFFFF ? 0xFFFFFFFF : product;
   }
 
-  static int _mapHash(int hash, int modulo) {
+  static int _mapHash(BigInt hash, int modulo) {
     if (modulo <= 1) return 0;
-    final value = hash % modulo;
+    final value = (hash % BigInt.from(modulo)).toInt();
     return value == 0 ? 1 : value;
   }
 
