@@ -1109,9 +1109,7 @@ class NostrController {
     _liveInboundTimer?.cancel();
     _liveInboundTimer = null;
     _liveInboundBuffer.clear();
-    _giftWrapFlushTimer?.cancel();
-    _giftWrapFlushTimer = null;
-    _giftWrapInbound.clear();
+    _cancelGiftWrapInbound();
     _settingsSyncTimer?.cancel();
     _vouchPublishTimer?.cancel();
     _vouchPublishTimer = null;
@@ -2349,9 +2347,18 @@ class NostrController {
   final List<GiftWrapUnwrapped> _giftWrapInbound = <GiftWrapUnwrapped>[];
   Timer? _giftWrapFlushTimer;
   static const int _kGiftWrapFlushCap = 256;
+  static const int _kGiftWrapSliceMicros = 8000;
+
+  @visibleForTesting
+  int giftWrapSliceMicros = _kGiftWrapSliceMicros;
+
+  bool _giftWrapDraining = false;
+  int _giftWrapEpoch = 0;
+  Future<void>? _giftWrapDrain;
 
   void _onGiftWrap(GiftWrapUnwrapped u) {
     _giftWrapInbound.add(u);
+    if (_giftWrapDraining) return;
     if (_giftWrapInbound.length >= _kGiftWrapFlushCap) {
       _flushGiftWrapInbound();
     } else {
@@ -2359,22 +2366,56 @@ class NostrController {
     }
   }
 
-  /// Drains the buffer in one batched emit, preserving order and isolating failures.
   void _flushGiftWrapInbound() {
     _giftWrapFlushTimer?.cancel();
     _giftWrapFlushTimer = null;
-    if (_giftWrapInbound.isEmpty) return;
-    final batch = List<GiftWrapUnwrapped>.of(_giftWrapInbound);
-    _giftWrapInbound.clear();
-    _ref.read(appStateProvider.notifier).runBatched(() {
-      for (final u in batch) {
-        try {
-          _processGiftWrap(u);
-        } catch (_) {
-          // Skip a single failed wrap; never abort the batch.
+    if (_giftWrapDraining || _giftWrapInbound.isEmpty) return;
+    _giftWrapDraining = true;
+    _giftWrapDrain = _drainGiftWrapInbound(_giftWrapEpoch);
+  }
+
+  Future<void> _drainGiftWrapInbound(int epoch) async {
+    try {
+      var pending = <GiftWrapUnwrapped>[];
+      var next = 0;
+      while (true) {
+        if (next >= pending.length) {
+          if (_giftWrapInbound.isEmpty) return;
+          pending = List<GiftWrapUnwrapped>.of(_giftWrapInbound);
+          _giftWrapInbound.clear();
+          next = 0;
         }
+        next = _runGiftWrapSlice(pending, next);
+        await Future<void>.delayed(Duration.zero);
+        if (epoch != _giftWrapEpoch) return;
+      }
+    } finally {
+      if (epoch == _giftWrapEpoch) _giftWrapDraining = false;
+    }
+  }
+
+  int _runGiftWrapSlice(List<GiftWrapUnwrapped> batch, int start) {
+    final watch = Stopwatch()..start();
+    var i = start;
+    _ref.read(appStateProvider.notifier).runBatched(() {
+      while (i < batch.length) {
+        try {
+          _processGiftWrap(batch[i]);
+        } catch (_) {}
+        i++;
+        if (watch.elapsedMicroseconds >= giftWrapSliceMicros) break;
       }
     });
+    return i;
+  }
+
+  void _cancelGiftWrapInbound() {
+    _giftWrapFlushTimer?.cancel();
+    _giftWrapFlushTimer = null;
+    _giftWrapInbound.clear();
+    _giftWrapEpoch++;
+    _giftWrapDraining = false;
+    _giftWrapDrain = null;
   }
 
   void _processGiftWrap(GiftWrapUnwrapped u) {
@@ -10115,6 +10156,13 @@ class NostrController {
   void processGiftWrapForTest(GiftWrapUnwrapped u) => _processGiftWrap(u);
 
   @visibleForTesting
+  void onGiftWrapForTest(GiftWrapUnwrapped u) => _onGiftWrap(u);
+
+  @visibleForTesting
+  Future<void> get giftWrapDrainForTest =>
+      _giftWrapDrain ?? Future<void>.value();
+
+  @visibleForTesting
   void onEventForTest(NostrEvent event) => _onEvent(event);
 
   /// Test seam: applies an inbound payload like a real settings-get.
@@ -12330,9 +12378,7 @@ class NostrController {
     _liveInboundTimer = null;
     _liveInboundBuffer.clear();
     // Drop buffered unwrapped gift-wraps; the session is tearing down.
-    _giftWrapFlushTimer?.cancel();
-    _giftWrapFlushTimer = null;
-    _giftWrapInbound.clear();
+    _cancelGiftWrapInbound();
     _settingsSyncTimer?.cancel();
     _profileBackfillTimer?.cancel();
     _pqRootWaitTimer?.cancel();

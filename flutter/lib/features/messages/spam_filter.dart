@@ -91,12 +91,18 @@ class SpamFilter {
     ')\\b(?:\\/[^\\s]*)?',
     caseSensitive: false,
   );
+  static final RegExp _rxMaliciousHint = RegExp(
+    maliciousDomains.map((d) => d.replaceAll('.', '\\.')).join('|'),
+    caseSensitive: false,
+  );
   static final RegExp _rxDoubleSpace = RegExp(r'[ \t]{2,}');
   static final RegExp _rxSpaceBeforePunct = RegExp(r'[ \t]+([.,!?;:])');
 
   /// Removes known-malicious domains, leaving the rest of the message intact.
   static String stripMaliciousDomains(String content) {
-    if (content.isEmpty || !_rxMaliciousDomain.hasMatch(content)) {
+    if (content.isEmpty ||
+        !_rxMaliciousHint.hasMatch(content) ||
+        !_rxMaliciousDomain.hasMatch(content)) {
       return content;
     }
     return content
