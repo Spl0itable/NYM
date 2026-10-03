@@ -39,6 +39,7 @@ import '../emoji/emoji_data.dart';
 import '../emoji/emoji_picker.dart';
 import '../emoji/gif_picker.dart';
 import '../i18n/i18n.dart';
+import '../messages/format/nym_format.dart' show NymFormat;
 import '../reactions/reaction_picker.dart';
 import '../threads/thread_view.dart' show ThreadView;
 import '../translate/translate_languages.dart';
@@ -49,6 +50,7 @@ import 'bot_runs_view.dart';
 import 'nymbot_models.dart';
 import 'brand_tile.dart';
 import 'nymbot_providers.dart';
+import '../chat_lock/chat_lock_providers.dart';
 
 /// Private Nymbot chat over the canonical bot PM thread, with tier/model switching and credit buying.
 class BotChatScreen extends ConsumerStatefulWidget {
@@ -376,7 +378,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       isScrollControlled: true,
       backgroundColor: c.bgSecondary,
       builder: (_) => Consumer(
-        builder: (_, sheetRef, __) => ProModelPickerSheet(
+        builder: (_, sheetRef, _) => ProModelPickerSheet(
           colors: c,
           catalog: sheetRef.watch(proModelCatalogProvider),
           current: current,
@@ -1138,7 +1140,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
 
   /// Chip preview: markup stripped, capped at 120.
   static String _quotePreviewText(String text) {
-    final clean = text
+    final clean = NymFormat.stripForPreview(text)
         .replaceAll(RegExp(r'<[^>]*>'), '')
         .replaceAll(RegExp(r'[*_~`>#]'), '');
     return clean.length > 120 ? '${clean.substring(0, 120)}...' : clean;
@@ -1375,7 +1377,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   Future<void> _pickAndShareFile() async {
     FilePickerResult? result;
     try {
-      result = await FilePicker.platform.pickFiles(withData: true);
+      result = await FilePicker.pickFiles(withData: true);
     } catch (_) {
       return;
     }
@@ -1814,9 +1816,13 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
       borderRadius: radius,
       borderSide: BorderSide(color: c.glassBorder),
     );
+    final incog = ref.watch(incognitoFieldFlagsProvider);
     final field = TextField(
       controller: _controller,
       focusNode: _focus,
+      enableIMEPersonalizedLearning: incog.imeLearning,
+      autocorrect: incog.autocorrect,
+      enableSuggestions: incog.suggestions,
       groupId: _acGroupId,
       onTapOutside: (_) {
         if (_suggestions.isNotEmpty && !_suppressPalette) {
@@ -2785,7 +2791,7 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
                     style: TextStyle(color: c.lightning, fontSize: 11)),
               if (rates != null || tags.isNotEmpty)
                 Text(
-                    [if (rates != null) rates, if (tags.isNotEmpty) tags]
+                    [?rates, if (tags.isNotEmpty) tags]
                         .join(' — '),
                     style: TextStyle(color: c.textDim, fontSize: 11)),
             ],

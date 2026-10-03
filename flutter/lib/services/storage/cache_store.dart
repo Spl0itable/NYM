@@ -17,7 +17,7 @@ import 'secure_store.dart';
 
 /// SQLCipher-encrypted mirror of the PWA's IndexedDB `nym-cache`, with the same LRU limits and no app state.
 class CacheStore {
-  CacheStore({Database? db}) : _db = db;
+  CacheStore({this._db});
 
   /// LRU caps per store (`STORE_LIMITS` in persistence.js).
   static const Map<String, int> storeLimits = {

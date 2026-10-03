@@ -24,6 +24,23 @@ function _getQuoteMentionPattern(author) {
 
 Object.assign(NYM.prototype, {
 
+    _notifPreviewText(text) {
+        const MN = window.NymMediaNotes;
+        if (MN && typeof text === 'string' && text.indexOf('#nym:') !== -1) {
+            text = MN.previewText(text, (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s));
+        }
+        if (typeof text === 'string' && text.indexOf('nympoll:') !== -1 && typeof this._dpPreview === 'function') {
+            text = this._dpPreview(text);
+        }
+        const GT = window.NymGroupTools;
+        if (GT && typeof text === 'string') {
+            const pv = GT.previewText(text);
+            text = (pv === 'Location' || pv === 'Live location') && typeof this.uiText === 'function' ? this.uiText(pv) : pv;
+        }
+        const F = window.NymFormat;
+        return F && typeof F.stripForPreview === 'function' ? F.stripForPreview(text) : text;
+    },
+
     // NIP-13 committed difficulty, or null without a nonce tag; achieved zero bits alone don't prove work.
     _powTargetFromEvent(event) {
         const tag = event && Array.isArray(event.tags)
@@ -508,7 +525,7 @@ Object.assign(NYM.prototype, {
             const editTag = event.tags.find(t => t[0] === 'edit');
             if (editTag && editTag[1]) {
                 const originalId = editTag[1];
-                this.handleIncomingEdit(originalId, event.content, event.pubkey, event.id);
+                this.handleIncomingEdit(originalId, event.content, event.pubkey, event.id, event.created_at);
                 return;
             }
 
@@ -627,13 +644,13 @@ Object.assign(NYM.prototype, {
                 if (shouldNotify) {
                     this.channelNotificationTracking.get(channelKey).add(event.id);
                     // `message._ms` (skew-corrected) so the bell agrees with the list and future stamps don't pin to the top.
-                    this.showNotification(nym, message.content, _channelNotifInfo(),
+                    this.showNotification(nym, this._notifPreviewText(message.content), _channelNotifInfo(),
                         message._ms || message.timestamp.getTime());
                 }
 
                 if (isHistorical && !message.isOwn && !message._spamGated &&
                     _channelAddressesMe && !this.blockedUsers.has(event.pubkey)) {
-                    this._addNotificationToHistory(nym, message.content,
+                    this._addNotificationToHistory(nym, this._notifPreviewText(message.content),
                         _channelNotifInfo(), message.timestamp.getTime());
                 }
             }
@@ -2338,7 +2355,7 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
-    handleIncomingEdit(originalEventId, newContent, senderPubkey, editEventId) {
+    handleIncomingEdit(originalEventId, newContent, senderPubkey, editEventId, editAt) {
         // Store even if the original hasn't arrived (relay delivery is out of order).
         const existing = this.editedMessages.get(originalEventId);
         if (!existing || (editEventId && editEventId !== existing.editEventId)) {
@@ -2346,7 +2363,8 @@ Object.assign(NYM.prototype, {
                 newContent,
                 editEventId,
                 senderPubkey,
-                timestamp: new Date()
+                timestamp: new Date(),
+                editAt: Number(editAt) || 0
             });
         }
 
@@ -2359,6 +2377,7 @@ Object.assign(NYM.prototype, {
         this.messages.forEach((msgs, channel) => {
             const msg = msgs.find(m => m.id === originalEventId);
             if (msg && msg.pubkey === senderPubkey) {
+                if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, editAt);
                 msg.content = newContent;
                 msg.isEdited = true;
                 this.persistChannelMessages(channel);
@@ -2371,7 +2390,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey, senderVerified = true) {
+    handleIncomingPMEdit(originalId, newContent, senderPubkey, conversationKey, senderVerified = true, editAt = 0) {
         if (senderVerified !== true || !originalId || !senderPubkey) return;
         const scopedKey = `${senderPubkey}:${originalId}`;
         if (!this.editedMessages.has(scopedKey)) {
@@ -2380,7 +2399,8 @@ Object.assign(NYM.prototype, {
                 editEventId: null,
                 senderPubkey,
                 senderVerified: true,
-                timestamp: new Date()
+                timestamp: new Date(),
+                editAt: Number(editAt) || 0
             });
         }
 
@@ -2397,6 +2417,7 @@ Object.assign(NYM.prototype, {
         );
         if (!msg) return;
 
+        if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, editAt);
         msg.content = newContent;
         msg.isEdited = true;
         this.persistPMMessages(conversationKey);

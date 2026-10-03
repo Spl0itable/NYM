@@ -447,6 +447,7 @@ Object.assign(NYM.prototype, {
                     }
                 }
             }
+            if (msgPreview && window.NymFormat && typeof window.NymFormat.stripForPreview === 'function') msgPreview = window.NymFormat.stripForPreview(msgPreview);
             if (msgPreview && msgPreview.length > 80) msgPreview = msgPreview.slice(0, 80) + '…';
             const body = msgPreview
                 ? `reacted ${reactionContent} to: "${msgPreview}"`
@@ -866,7 +867,7 @@ ${this._emojiSectionsHtml()}`;
             return;
         }
 
-        const button = document.querySelector('.icon-btn.input-btn[title="Emoji"]');
+        const button = document.getElementById('emojiInputBtn');
         if (button) {
             this.showEnhancedEmojiPickerForInput(button);
         }
@@ -891,14 +892,17 @@ ${this._emojiSectionsHtml()}`;
         }
         modal.style.cssText = css;
         modal.scrollTop = 0;
+        if (typeof this._composerPickerTabs === 'function') this._composerPickerTabs(modal, 'emoji');
 
         document.body.appendChild(modal);
         this.enhancedEmojiModal = modal;
+        if (typeof this._composerPickerOpened === 'function') this._composerPickerOpened(modal, 'emoji');
     },
 
-    closeEnhancedEmojiModal() {
+    closeEnhancedEmojiModal(opts) {
         const wasOpen = !!this.enhancedEmojiModal;
         if (this.enhancedEmojiModal) {
+            this.enhancedEmojiModal.querySelectorAll('.picker-tabs').forEach(el => el.remove());
             this.enhancedEmojiModal.remove();
             this.enhancedEmojiModal = null;
         }
@@ -906,7 +910,8 @@ ${this._emojiSectionsHtml()}`;
         this._activePickerOnSelect = null;
         this._activePickerMessageId = null;
         this._activePickerMode = null;
-        if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
+        if (wasOpen && typeof this._composerPickerClosed === 'function') this._composerPickerClosed('emoji');
+        if (wasOpen && !(opts && opts.keepFocus) && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
     _checkReactionRateLimit(messageId, emoji) {

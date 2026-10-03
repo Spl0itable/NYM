@@ -475,7 +475,9 @@ const CHATTER_MAX_TOKENS = 3;
 const LINKISH = /https?:\/\/|www\.|\.(com|net|org|io|app|xyz|me|to|ly|gg)(\/|\b)|(nostr:)?(npub|note|nevent|naddr|nprofile)1[a-z0-9]{10,}/i;
 const APP_ACTIONS = [
   /^\/me\s+slaps\s+\S+(\s+\S+)?\s+around a bit with a large trout\b/i,
-  /^\/me\s+gives\s+\S+(\s+\S+)?\s+a warm hug\b/i
+  /^\/me\s+gives\s+\S+(\s+\S+)?\s+a warm hug\b/i,
+  /^\*\s*\S[^*]{0,80}?\s+slaps\s+\S[^*]{0,80}?\s+around a bit with a large trout\b[^*]{0,16}\*$/iu,
+  /^\*\s*\S[^*]{0,80}?\s+gives\s+\S[^*]{0,80}?\s+a warm hug\b[^*]{0,16}\*$/iu
 ];
 
 export function isAppAction(content) {
@@ -1229,7 +1231,11 @@ function settle(id, drop) {
     if (drop) {
       if (w.released) {
         if (!w.retracted) { w.retracted = true; state.counters.retracted++; deliver(w, "retract"); }
-      } else { w.dropped = true; state.counters.dropped++; }
+      } else {
+        w.dropped = true;
+        state.counters.dropped++;
+        if (typeof w.discard === "function") { try { w.discard(); } catch (_) { } }
+      }
     } else if (!w.released) {
       w.released = true;
       w.releasedAt = Date.now();
@@ -3757,7 +3763,7 @@ export function spamEngine(env, context) {
     if (!portBusy(port) && port.timer) { clearInterval(port.timer); port.timer = null; }
   };
   const addWaiter = (pend, job) => {
-    const w = { id: job.id, release: job.release, retract: job.retract, released: false, retracted: false, dropped: false, want: null, port, releasedAt: 0 };
+    const w = { id: job.id, release: job.release, retract: job.retract, discard: job.discard, released: false, retracted: false, dropped: false, want: null, port, releasedAt: 0 };
     pend.waiters.push(w);
     port.waiters.add(w);
     ensurePortTimer(port, pulse);
@@ -3770,6 +3776,10 @@ export function spamEngine(env, context) {
       return !!(s && s.enabled);
     },
     settings() { return state.settings; },
+    ready() {
+      if (!usable) return Promise.resolve();
+      return syncedSettings(env).then(() => { }, () => { });
+    },
     badgeGate() {
       if (!usable) return "off";
       const s = settingsSync(env, context);
@@ -3826,6 +3836,7 @@ export function spamEngine(env, context) {
       const queued = Object.assign({}, job, { pubkey, nymKey: nymKey(job.nym), seenAt: now, settings: s, source: "pool", force: false });
       delete queued.release;
       delete queued.retract;
+      delete queued.discard;
       ensureFeatures(queued, now);
       noteTail(queued, now);
       noteNym(queued, now);

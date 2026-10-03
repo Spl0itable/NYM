@@ -91,6 +91,20 @@ class GiftWrapUnwrapped {
   final bool isBitchat;
 
   int? get rumorKind => (rumor['kind'] as num?)?.toInt();
+
+  int? get expiration {
+    final tags = rawWrap?['tags'];
+    if (tags is! List) return null;
+    for (final t in tags) {
+      if (t is List &&
+          t.length > 1 &&
+          t[0] == 'expiration' &&
+          RegExp(r'^\d{1,12}$').hasMatch('${t[1]}')) {
+        return int.parse('${t[1]}');
+      }
+    }
+    return null;
+  }
 }
 
 /// Messaging settings passed in so the service never imports the settings provider.
@@ -181,6 +195,8 @@ class NostrHandlers {
     this.onConnectionChanged,
     this.onGiftWrap,
     this.onEventRetracted,
+    this.onShardLost,
+    this.onShardReconnected,
   });
 
   /// Every inbound event, already signature-checked by the pool.
@@ -190,6 +206,10 @@ class NostrHandlers {
   final void Function(GiftWrapUnwrapped unwrapped)? onGiftWrap;
 
   final void Function(String eventId)? onEventRetracted;
+
+  final void Function(int lastLiveAtMs)? onShardLost;
+
+  final void Function()? onShardReconnected;
 }
 
 /// Owns the relay pool and wires it to the crypto and identity layers.
@@ -278,15 +298,21 @@ class NostrService {
     List<String>? relays,
     PoolTransport? pool,
     bool useProxy = true,
+    bool userDirect = false,
     ApiClient? apiClient,
+    RelayPool Function()? directPoolFactory,
+    RelayPoolProxy Function()? proxyPoolFactory,
   })  : _apiClient = apiClient ?? ApiClient(),
         _relays = relays,
-        // An injected pool disables the proxy-to-direct auto-fallback.
-        _autoFallback = pool == null && useProxy,
+        _autoFallback = (pool == null && useProxy) ||
+            (directPoolFactory != null && proxyPoolFactory != null),
+        _userDirect = userDirect,
+        _directPoolFactory = directPoolFactory,
+        _proxyPoolFactory = proxyPoolFactory,
         signer = signer ??
             (identity.privkey != null ? LocalSigner(identity.privkey!) : null),
         _pool = pool ??
-            (useProxy
+            (useProxy && !userDirect
                 ? RelayPoolProxy(
                     relays: relays ?? RelayConfig.defaultRelays,
                     dmRelays: RelayConfig.defaultRelays,
@@ -298,7 +324,7 @@ class NostrService {
                     verify: _verifyOffThread,
                   )) {
     // Route process-wide /api traffic into our stats in production only, keeping tests isolated.
-    if (_autoFallback) {
+    if (pool == null && useProxy) {
       ApiClient.apiStatsSink = _apiStats;
     }
     // Set here so a pool swapped in by fallback carries the geo gate too.
@@ -346,6 +372,36 @@ class NostrService {
 
   /// True only on the production proxy path: enables auto-fallback and background restore.
   final bool _autoFallback;
+
+  final RelayPool Function()? _directPoolFactory;
+
+  final RelayPoolProxy Function()? _proxyPoolFactory;
+
+  bool _userDirect;
+
+  bool _stopped = false;
+
+  bool get isUserDirect => _userDirect;
+
+  bool get canSwitchTransport => _autoFallback;
+
+  bool get isProxyRetryInFlight => _bgRestoreInFlight;
+
+  RelayPool _newDirectPool() =>
+      _directPoolFactory?.call() ??
+      RelayPool(
+        relays: _relays ?? RelayConfig.defaultRelays,
+        writeOnlyRelays: RelayConfig.writeOnlyRelays,
+        verify: _verifyOffThread,
+      );
+
+  RelayPoolProxy _newProxyPool() =>
+      _proxyPoolFactory?.call() ??
+      RelayPoolProxy(
+        relays: _relays ?? RelayConfig.defaultRelays,
+        dmRelays: RelayConfig.defaultRelays,
+        verify: _verifyOffThread,
+      );
 
   final ApiClient _apiClient;
 
@@ -425,11 +481,12 @@ class NostrService {
     _pqAuthors = _sanitizeVouchAuthors(pqAuthors);
     _wireProxyFallback();
     _wireRetract(_pool);
+    _wireLiveness(_pool);
     _loadQuietList();
     pool.connectAll();
 
     _mainSub = pool.subscribe(_buildCriticalFilters());
-    _eventSub = _mainSub!.events.listen(_routeInbound);
+    _eventSub = _mainSub!.events.listen(_routeMain);
 
     _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       handlers.onConnectionChanged?.call(pool.connectedCount);
@@ -715,11 +772,43 @@ class NostrService {
   void resubscribeMain() {
     if (_handlers == null) return;
     final old = _mainSub;
-    unawaited(_eventSub?.cancel());
-    // close() targets the creating pool, which after a swap is the detached old one.
-    unawaited(old?.close());
-    _mainSub = pool.subscribe(_buildCriticalFilters());
-    _eventSub = _mainSub!.events.listen(_routeInbound);
+    final oldListener = _eventSub;
+    final next = pool.subscribe(_buildCriticalFilters());
+    _mainSub = next;
+    _eventSub = next.events.listen(_routeMain);
+    if (old == null || old.isClosed) {
+      unawaited(oldListener?.cancel());
+      return;
+    }
+    _mainOverlaps++;
+    _retireMain[old] = retireAfterAnswer(old, next, onRetired: () {
+      _retireMain.remove(old);
+      unawaited(oldListener?.cancel());
+      _mainOverlaps--;
+      if (_mainOverlaps <= 0) {
+        _mainOverlaps = 0;
+        _mainOverlapIds.clear();
+      }
+    });
+  }
+
+  int _mainOverlaps = 0;
+
+  final Set<String> _mainOverlapIds = <String>{};
+
+  final Map<Subscription, void Function()> _retireMain = {};
+
+  bool _isRetiringMain(Subscription sub) => _retireMain.containsKey(sub);
+
+  void _retireAllMain() {
+    for (final retire in _retireMain.values.toList()) {
+      retire();
+    }
+  }
+
+  void _routeMain(NostrEvent event) {
+    if (_mainOverlaps > 0 && !_mainOverlapIds.add(event.id)) return;
+    _routeInbound(event);
   }
 
   // Proxy to direct fallback and background restore
@@ -739,16 +828,71 @@ class NostrService {
     }
   }
 
+  void _wireLiveness(PoolTransport p) {
+    if (p is RelayPoolProxy) {
+      p.onShardLost = (at) =>
+          _handlers?.onShardLost?.call(at?.millisecondsSinceEpoch ?? 0);
+      p.onShardReconnected = () => _handlers?.onShardReconnected?.call();
+    }
+  }
+
+  void probePool() {
+    final p = _pool;
+    if (p is RelayPoolProxy) p.probeNow();
+  }
+
+  static const int giftWrapBackdateSec = 172800;
+  static const int giftWrapCatchUpLimit = 500;
+  static const Duration giftWrapCatchUpWindow = Duration(seconds: 10);
+
+  static NostrFilter giftWrapCatchUpFilter(
+          Iterable<String> pubkeys, int floorSec) =>
+      NostrFilter(
+        kinds: [EventKind.giftWrap],
+        since: floorSec - giftWrapBackdateSec,
+        limit: giftWrapCatchUpLimit,
+        tags: {
+          'p': [
+            ...{
+              for (final pk in pubkeys)
+                if (pk.isNotEmpty) pk,
+            },
+          ],
+        },
+      );
+
+  final Set<Subscription> _wrapCatchUpSubs = {};
+
+  Subscription? catchUpGiftWraps(
+    Iterable<String> pubkeys, {
+    required int floorSec,
+    void Function(NostrEvent wrap)? onWrap,
+    Duration window = giftWrapCatchUpWindow,
+  }) {
+    final filter =
+        giftWrapCatchUpFilter([identity.pubkey, ...pubkeys], floorSec);
+    if ((filter.tags['p'] ?? const []).isEmpty) return null;
+    final sub = pool.subscribe([filter]);
+    _wrapCatchUpSubs.add(sub);
+    sub.events.listen((wrap) {
+      if (wrap.kind != EventKind.giftWrap) return;
+      onWrap?.call(wrap);
+      unwrapLiveWrap(wrap);
+    }, onError: (_) {});
+    Timer(window, () {
+      _wrapCatchUpSubs.remove(sub);
+      unawaited(sub.close());
+    });
+    return sub;
+  }
+
   /// Proxy unreachable: swap to direct and start the background restore.
   void _onProxyUnreachable() {
-    if (!_autoFallback || _poolFallbackActive) return;
+    if (!_autoFallback || _poolFallbackActive || _userDirect || _stopped) {
+      return;
+    }
     _poolFallbackActive = true;
-    final direct = RelayPool(
-      relays: _relays ?? RelayConfig.defaultRelays,
-      writeOnlyRelays: RelayConfig.writeOnlyRelays,
-      verify: _verifyOffThread,
-    );
-    unawaited(_swapToDirect(direct));
+    unawaited(_swapToDirect(_newDirectPool()));
   }
 
   /// Replaces the proxy with [direct], replaying live subscriptions onto it, then arms the restore loop.
@@ -771,16 +915,19 @@ class NostrService {
       _handOverHeld(old, direct);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
+        if (_isRetiringMain(entry.sub)) continue;
         direct.replaySubscription(entry.sub, entry.filters);
       }
+      _retireAllMain();
       resubscribeMain();
 
       // Re-establish geo-relay coverage on the new transport.
       applyGeoRelays();
 
       // The mainSub object is unchanged, so _eventSub keeps routing inbound.
-      debugPrint('[NostrService] proxy unreachable; swapped proxy → direct '
-          '(${live.length} subs replayed)');
+      debugPrint('[NostrService] '
+          '${_userDirect ? 'direct chosen' : 'proxy unreachable'}; '
+          'swapped proxy → direct (${live.length} subs replayed)');
 
       _scheduleBgRestore();
       _handlers?.onConnectionChanged?.call(_pool.connectedCount);
@@ -815,8 +962,8 @@ class NostrService {
 
   /// Background restore: first retry after 15s, then `min(15000 * 2^min(n-1,4), 120000)` with 50–100% jitter.
   void _scheduleBgRestore() {
-    if (!_autoFallback || !_poolFallbackActive) return;
-    if (_bgRestoreInFlight) return;
+    if (!_autoFallback || !_poolFallbackActive || _userDirect) return;
+    if (_bgRestoreInFlight || _stopped) return;
     _bgRestoreTimer?.cancel();
     final delay = _bgRestoreAttempts == 0
         ? const Duration(seconds: 15)
@@ -837,23 +984,17 @@ class NostrService {
   /// Probes a fresh proxy; swaps back when it confirms, else its unreachable trigger reschedules.
   void _tryRestoreProxy() {
     _bgRestoreTimer = null;
-    if (!_poolFallbackActive) return;
+    if (!_poolFallbackActive || _userDirect || _stopped) return;
     _bgRestoreAttempts++;
     _bgRestoreInFlight = true;
 
     // Short-lived probe: adopted if it confirms, discarded with backoff if not.
-    late final RelayPoolProxy probe;
-    probe = RelayPoolProxy(
-      relays: _relays ?? RelayConfig.defaultRelays,
-      dmRelays: RelayConfig.defaultRelays,
-      verify: _verifyOffThread,
-      onProxyUnreachable: () {
-        // Probe failed to reach the host: drop it and schedule the next try.
-        _bgRestoreInFlight = false;
-        unawaited(probe.disconnectAll());
-        _scheduleBgRestore();
-      },
-    );
+    final probe = _newProxyPool();
+    probe.onProxyUnreachable = () {
+      _bgRestoreInFlight = false;
+      unawaited(probe.disconnectAll());
+      _scheduleBgRestore();
+    };
     probe.onProxyConnected = () {
       // Probe reached the host: promote it to the live transport.
       if (!_poolFallbackActive) {
@@ -884,11 +1025,14 @@ class NostrService {
       restored.geoOriginAllows = geoOriginAllowsEvent;
       restored.onProxyUnreachable = _onProxyUnreachable; // Future blips.
       _wireRetract(restored);
+      _wireLiveness(restored);
       _handOverHeld(old, restored);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
+        if (_isRetiringMain(entry.sub)) continue;
         restored.replaySubscription(entry.sub, entry.filters);
       }
+      _retireAllMain();
       // Back on the proxy: rebuild the main REQ into its D1 shape.
       resubscribeMain();
       _poolFallbackActive = false;
@@ -903,11 +1047,73 @@ class NostrService {
     }
   }
 
+  @visibleForTesting
+  Future<void> swapToDirectForTest(RelayPool direct) {
+    _poolFallbackActive = true;
+    return _swapToDirect(direct);
+  }
+
+  @visibleForTesting
+  Future<void> adoptRestoredProxyForTest(RelayPoolProxy restored) {
+    _poolFallbackActive = true;
+    return _adoptRestoredProxy(restored);
+  }
+
   void _stopBgRestore() {
     _bgRestoreTimer?.cancel();
     _bgRestoreTimer = null;
     _bgRestoreInFlight = false;
     _bgRestoreAttempts = 0;
+  }
+
+  static Duration userDirectConnectWait = const Duration(seconds: 4);
+
+  bool get isBgRestoreArmed => _bgRestoreTimer != null || _bgRestoreInFlight;
+
+  Future<void> setUserDirect(bool direct) async {
+    if (!_autoFallback || _stopped) return;
+    if (direct) {
+      _userDirect = true;
+      _poolFallbackActive = false;
+      _stopBgRestore();
+      if (_pool is! RelayPoolProxy) {
+        _handlers?.onConnectionChanged?.call(_pool.connectedCount);
+        return;
+      }
+      final next = _newDirectPool();
+      next.connectAll();
+      await _awaitConnected(next, userDirectConnectWait);
+      if (_stopped || !_userDirect || _pool is! RelayPoolProxy) {
+        unawaited(next.disconnectAll());
+        return;
+      }
+      await _swapToDirect(next);
+      return;
+    }
+    _userDirect = false;
+    if (_pool is RelayPoolProxy) {
+      _handlers?.onConnectionChanged?.call(_pool.connectedCount);
+      return;
+    }
+    _poolFallbackActive = true;
+    retryProxyNow();
+  }
+
+  void retryProxyNow() {
+    if (!_autoFallback || _userDirect || _stopped) return;
+    if (!_poolFallbackActive || _bgRestoreInFlight || _swapping) return;
+    _bgRestoreTimer?.cancel();
+    _bgRestoreTimer = null;
+    _tryRestoreProxy();
+  }
+
+  Future<void> _awaitConnected(PoolTransport p, Duration limit) async {
+    final until = DateTime.now().add(limit);
+    while (p.connectedCount == 0 &&
+        !_stopped &&
+        DateTime.now().isBefore(until)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
   }
 
   /// The active channel's typing/read-receipt subscription (kinds 24420/24421).
@@ -1117,6 +1323,18 @@ class NostrService {
     if (handlers?.onGiftWrap == null) return;
     // Already unwrapped this process: skip the costly unwrap.
     if (wrap.id.isNotEmpty && _processedWrapIds.contains(wrap.id)) return;
+    if (wrap.id.isNotEmpty && !_unwrapsInFlight.add(wrap.id)) return;
+    try {
+      await _unwrapAndEmit(handlers!, wrap, fromArchive: fromArchive);
+    } finally {
+      _unwrapsInFlight.remove(wrap.id);
+    }
+  }
+
+  static final Set<String> _unwrapsInFlight = <String>{};
+
+  Future<void> _unwrapAndEmit(NostrHandlers handlers, NostrEvent wrap,
+      {required bool fromArchive}) async {
     final candidates = _candidates(wrap);
 
     // NIP-46: no local identity key, so self-addressed wraps unwrap via the remote `nip44_decrypt`.
@@ -1131,7 +1349,7 @@ class NostrService {
         _remoteUnwrapGate.release();
       }
       if (res != null) {
-        await _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
+        await _emitUnwrapped(handlers, wrap, res.seal, res.rumor,
             isBitchat: false, isPq: res.isPq, fromArchive: fromArchive);
         return;
       }
@@ -1142,7 +1360,7 @@ class NostrService {
     final res = await _cryptoWorker.unwrap(wrap, candidates);
     if (res == null) return;
 
-    await _emitUnwrapped(handlers!, wrap, res.seal, res.rumor,
+    await _emitUnwrapped(handlers, wrap, res.seal, res.rumor,
         fromArchive: fromArchive, isBitchat: res.isBitchat, isPq: res.isPq);
   }
 
@@ -1797,6 +2015,25 @@ class NostrService {
     return wrap != null;
   }
 
+  Future<bool> publishControlRumor({
+    required List<List<String>> tags,
+    required String recipientPubkey,
+    String? encryptToPubkey,
+    int? createdAt,
+  }) async {
+    final rumor = UnsignedEvent(
+      pubkey: identity.pubkey,
+      createdAt: createdAt ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: EventKind.nymReceiptRumor,
+      tags: tags,
+      content: '',
+    );
+    final pq = _pqTarget(recipientPubkey);
+    final wrap = await _wrapAndPublish(rumor, encryptToPubkey ?? recipientPubkey,
+        recipientKemPublicKey: pq.kem, layered: pq.layered);
+    return wrap != null;
+  }
+
   /// Publishes a gift-wrapped kind-69420 typing indicator; [groupId] adds a `g` tag.
   Future<bool> publishTyping({
     required String status, // 'start' | 'stop'
@@ -2007,7 +2244,7 @@ class NostrService {
         'sealJson': sealJson,
         'self': self,
         'outerD': outerD,
-        if (wrapKemPk != null) 'kemPk': wrapKemPk,
+        'kemPk': ?wrapKemPk,
       };
       Map<String, dynamic>? json;
       try {
@@ -2389,6 +2626,8 @@ class NostrService {
       EventMapper.channelMessage(e, selfPubkey: selfPubkey);
 
   Future<void> stop() async {
+    _stopped = true;
+    _retireAllMain();
     _statusTimer?.cancel();
     _quietTimer?.cancel();
     _quietTimer = null;
@@ -2403,6 +2642,10 @@ class NostrService {
     }
     await _eventSub?.cancel();
     await _channelTypingSub?.close();
+    for (final sub in _wrapCatchUpSubs.toList()) {
+      await sub.close();
+    }
+    _wrapCatchUpSubs.clear();
     await _mainSub?.close();
     await pool.disconnectAll();
   }

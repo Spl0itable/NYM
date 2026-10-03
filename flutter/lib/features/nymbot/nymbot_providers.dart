@@ -1231,8 +1231,8 @@ class BotChatController extends StateNotifier<BotChatState> {
         'eventId': wrapId,
         'fresh': fresh,
         if (pro != null) 'proModel': pro.key,
-        if (cmdAlias != null) 'cmdAlias': cmdAlias,
-        if (pqAnnouncement != null) 'pqAnnouncement': pqAnnouncement,
+        'cmdAlias': ?cmdAlias,
+        'pqAnnouncement': ?pqAnnouncement,
       },
     ));
     await run?.done;

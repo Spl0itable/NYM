@@ -25,10 +25,6 @@ android {
         coreLibraryDesugaringEnabled = true
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     signingConfigs {
        release {
            keyAlias keystoreProperties['keyAlias']
@@ -47,7 +43,7 @@ android {
         // unchanged.
         minSdk = 24
         targetSdk = 36
-        versionCode = 360
+        versionCode = 375
         versionName = flutter.versionName
         
         // Support all ABIs - AGP 8.9.1 automatically handles 16 KB alignment
@@ -67,6 +63,12 @@ android {
         jniLibs {
             useLegacyPackaging = false
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

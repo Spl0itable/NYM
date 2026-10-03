@@ -298,9 +298,9 @@ class ShopController extends StateNotifier<ShopState> {
       'action': 'shop-buy-invoice',
       'pubkey': identity.pubkey,
       'itemId': itemId,
-      if (comment != null) 'comment': comment,
+      'comment': ?comment,
       if (isGift) 'recipientPubkey': recipientPubkey,
-      if (zapRequest != null) 'zapRequest': zapRequest,
+      'zapRequest': ?zapRequest,
     };
     final auth = await _auth(
         'shop-buy-invoice', identity, Nip98Auth.payloadHashHex(body));
@@ -340,7 +340,7 @@ class ShopController extends StateNotifier<ShopState> {
         'action': 'shop-check',
         'pubkey': identity.pubkey,
         'invoiceId': invoiceId,
-        if (auth != null) 'auth': auth,
+        'auth': ?auth,
       });
       return data['paid'] == true;
     } catch (_) {
@@ -362,8 +362,8 @@ class ShopController extends StateNotifier<ShopState> {
           'action': 'shop-claim',
           'pubkey': identity.pubkey,
           'invoiceId': invoiceId,
-          if (receipt != null) 'receipt': receipt,
-          if (gifterNym != null) 'gifterNym': gifterNym,
+          'receipt': ?receipt,
+          'gifterNym': ?gifterNym,
         };
         final auth = await _auth(
             'shop-claim', identity, Nip98Auth.payloadHashHex(body));
@@ -462,7 +462,7 @@ class ShopController extends StateNotifier<ShopState> {
       'pubkey': identity.pubkey,
       'itemId': itemId,
       'toPubkey': toPubkey,
-      if (gifterNym != null) 'gifterNym': gifterNym,
+      'gifterNym': ?gifterNym,
     };
     final auth = await _auth(
         'shop-transfer', identity, Nip98Auth.payloadHashHex(body));

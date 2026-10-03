@@ -676,7 +676,8 @@ Object.assign(NYM.prototype, {
             if (fill) fill.style.width = '55%';
             const { url, server } = await this._uploadWithFallback(file, hashHex, abort.signal);
             if (fill) fill.style.width = '100%';
-            this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
+            if (opts.registerFallbacks) this._registerMediaFallbacks(url, hashHex, server);
+            else this._mirrorBlobBackground(hashHex, url, server).catch(() => { });
             return { url, server, hashHex };
         } finally {
             if (this._uploadAbort === abort) this._uploadAbort = null;
@@ -685,8 +686,12 @@ Object.assign(NYM.prototype, {
     },
 
     imetaTagsForContent(content) {
-        if (!this.mediaFallbacks || !this.mediaFallbacks.size || !content) return [];
-        const tags = [];
+        if (!content) return [];
+        const MN = window.NymMediaNotes;
+        const noteTags = MN ? MN.imetaTagsForContent(content, (u) => (this.mediaFallbacks && this.mediaFallbacks.get(u)) || []) : [];
+        if (noteTags.length) content = MN.stripMediaNotes(content);
+        if (!this.mediaFallbacks || !this.mediaFallbacks.size) return noteTags;
+        const tags = noteTags.slice();
         const re = /(https?:\/\/[^\s]+\.(?:jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(?:\?[^\s]*)?)/gi;
         const seen = new Set();
         let m;
@@ -714,7 +719,7 @@ Object.assign(NYM.prototype, {
             for (let i = 1; i < tag.length; i++) {
                 const part = tag[i];
                 if (typeof part !== 'string') continue;
-                if (part.startsWith('url ')) primary = part.slice(4).trim();
+                if (part.startsWith('url ')) primary = part.slice(4).trim().split('#nym:')[0];
                 else if (part.startsWith('fallback ')) fallbacks.push(part.slice(9).trim());
             }
             if (primary && fallbacks.length) {
@@ -1135,6 +1140,12 @@ Object.assign(NYM.prototype, {
 
         if (!this.mediaFallbacks) this.mediaFallbacks = new Map();
 
+        if (!this.inPMMode && typeof this.sendImagesOverMesh === 'function' && typeof this.meshShouldCarry === 'function'
+            && this.meshShouldCarry(this.currentGeohash || this.currentChannel)) {
+            await this.sendImagesOverMesh(files);
+            return;
+        }
+
         const records = typeof this.addComposerAttachments === 'function'
             ? this.addComposerAttachments(files) : [];
         if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
@@ -1158,15 +1169,21 @@ Object.assign(NYM.prototype, {
         if (!rec || !rec.file) return;
         this.updateComposerAttachment(rec.id, { status: 'uploading', error: '' });
         try {
-            const arrayBuffer = await rec.file.arrayBuffer();
+            const upload = typeof this.prepareAttachmentUpload === 'function'
+                ? await this.prepareAttachmentUpload(rec) : rec.file;
+            const arrayBuffer = await upload.arrayBuffer();
             const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
             const hashHex = Array.from(new Uint8Array(hashBuffer))
                 .map(b => b.toString(16).padStart(2, '0')).join('');
-            const { url, server } = await this._uploadWithFallback(rec.file, hashHex, signal);
+            const { url, server } = await this._uploadWithFallback(upload, hashHex, signal);
             this.updateComposerAttachment(rec.id, {
                 status: 'done', url, hashHex, server, error: '',
+                uploadedAs: { hd: !!rec.wantHd, once: !!rec.wantOnce, secret: rec.secret || null, mime: rec.onceMime || '', size: rec.onceSize || 0 },
             });
-            this._registerMediaFallbacks(url, hashHex, server);
+            if (!rec.wantOnce) this._registerMediaFallbacks(url, hashHex, server);
+            if (typeof this.attachmentStale === 'function' && this.attachmentStale(rec)) {
+                this.retryComposerAttachment(rec.id);
+            }
         } catch (error) {
             if (error && error.name === 'AbortError') {
                 if (typeof this.removeComposerAttachment === 'function') {

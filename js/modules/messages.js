@@ -630,6 +630,17 @@ Object.assign(NYM.prototype, {
         );
     },
 
+    _countArrivedUnread(storageKey, message, exists) {
+        if (!message || message.isOwn || exists) return;
+        const lastRead = (this.channelLastRead && this.channelLastRead.get(storageKey)) || 0;
+        if ((message.created_at || 0) <= lastRead) return;
+        if (message.isHistorical) {
+            if (typeof this.refreshUnreadCount === 'function') this.refreshUnreadCount(storageKey);
+            return;
+        }
+        this.updateUnreadCount(storageKey, message.created_at);
+    },
+
     displayMessage(message) {
         if (this.deletedEventIds.has(message.id) ||
             (message.nymMessageId && this.deletedEventIds.has(message.nymMessageId)) ||
@@ -645,11 +656,18 @@ Object.assign(NYM.prototype, {
         const pendingEdit = (message.pubkey && this.editedMessages.get(`${message.pubkey}:${editLookupId}`))
             || this.editedMessages.get(editLookupId);
         if (pendingEdit && pendingEdit.senderPubkey === message.pubkey) {
+            if (typeof this._noteEdit === 'function' && message.content !== pendingEdit.newContent) {
+                this._noteEdit(message, pendingEdit.newContent, pendingEdit.editAt || (pendingEdit.timestamp ? Math.floor(pendingEdit.timestamp.getTime() / 1000) : 0));
+            }
             message.content = pendingEdit.newContent;
             message.isEdited = true;
         }
 
         if (message.blocked || this.blockedUsers.has(message.pubkey)) {
+            return;
+        }
+
+        if (typeof this._ctHidden === 'function' && this._ctHidden(message)) {
             return;
         }
 
@@ -732,16 +750,12 @@ Object.assign(NYM.prototype, {
             if (this._cvActive) {
                 _cvContainer = this._cvListForKey(storageKey);
                 if (!_cvContainer) {
-                    if (!message.isOwn && !exists && !message.isHistorical) {
-                        this.updateUnreadCount(storageKey, message.created_at);
-                    }
+                    this._countArrivedUnread(storageKey, message, exists);
                     return;
                 }
                 const seen = this._cvMarkColumnRead(storageKey);
                 if (!seen) {
-                    if (!message.isOwn && !exists && !message.isHistorical) {
-                        this.updateUnreadCount(storageKey, message.created_at);
-                    }
+                    this._countArrivedUnread(storageKey, message, exists);
                 } else if (!message.isOwn && !message.isHistorical && message.geohash &&
                     message.id && /^[0-9a-f]{64}$/i.test(message.id) &&
                     typeof this.sendChannelReadReceipt === 'function') {
@@ -749,24 +763,18 @@ Object.assign(NYM.prototype, {
                 }
             } else if (this.inPMMode) {
                 // Leave the cached DOM alone; loadChannelMessages appends trailing new messages on switch back.
-                if (!message.isOwn && !exists && !message.isHistorical) {
-                    this.updateUnreadCount(storageKey, message.created_at);
-                }
+                this._countArrivedUnread(storageKey, message, exists);
                 return;
             } else {
                 const currentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
                 if (storageKey !== currentKey) {
                     // Same partial-cache strategy as the PM branch; no invalidation needed.
-                    if (!message.isOwn && !exists && !message.isHistorical) {
-                        this.updateUnreadCount(storageKey, message.created_at);
-                    }
+                    this._countArrivedUnread(storageKey, message, exists);
                     return;
                 }
                 // A collapsed thread reply is off screen, so it must not advance the read watermark.
                 if (document.hidden) {
-                    if (!message.isOwn && !exists && !message.isHistorical) {
-                        this.updateUnreadCount(storageKey, message.created_at);
-                    }
+                    this._countArrivedUnread(storageKey, message, exists);
                 } else if (typeof this._markChannelRead === 'function' && message.created_at &&
                     !(typeof this._threadReplyHidden === 'function' && this._threadReplyHidden(message))) {
                     this._markChannelRead(storageKey, message.created_at);
@@ -887,6 +895,7 @@ Object.assign(NYM.prototype, {
                 classes.push('self');
             } else if (message.isPM) {
                 classes.push('pm');
+                if (typeof this._gtGroupRowMentioned === 'function' && this._gtGroupRowMentioned(message)) classes.push('mentioned');
             } else if (isMentioned) {
                 classes.push('mentioned');
             }
@@ -992,17 +1001,18 @@ Object.assign(NYM.prototype, {
     </div>
 ` : '';
 
-            const preformatted = this._fmtCache && this._fmtCache.get(message.content);
+            const _botAuthored = !!(message.isBot || this.isVerifiedBot(message.pubkey));
+            const preformatted = _botAuthored ? null : (this._fmtCache && this._fmtCache.get(message.content));
             let formattedContent;
             if (preformatted != null) {
                 formattedContent = preformatted;
-            } else if (this._shouldDeferLiveFormat(message)) {
+            } else if (!_botAuthored && this._shouldDeferLiveFormat(message)) {
                 formattedContent = this._placeholderContentHtml(message.content);
                 deferFormat = true;
             } else {
-                formattedContent = this.formatMessageWithQuotes(message.content);
+                formattedContent = this.formatMessageWithQuotes(message.content, 0, _botAuthored);
             }
-            if (message.isBot || this.isVerifiedBot(message.pubkey)) {
+            if (_botAuthored) {
                 // Show Nymbot's canonical command names in this client's localized vocabulary.
                 formattedContent = this.localizeCommandTokensIn(formattedContent);
                 if (message.thinking) {
@@ -1125,8 +1135,10 @@ Object.assign(NYM.prototype, {
                         ${statusHtml}
                     </div>
                 `;
+            } else if (message.meshFile && typeof this._meshFileCardHtml === 'function') {
+                messageContentHtml = this._meshFileCardHtml(message.meshFile);
             } else {
-                messageContentHtml = formattedContent;
+                messageContentHtml = (typeof this._gtCardHtml === 'function' && this._gtCardHtml(message)) || formattedContent;
             }
 
             // Emoji-only: 1-6 emoji with optional whitespace, no other text.
@@ -1138,14 +1150,16 @@ Object.assign(NYM.prototype, {
             const bubbleTimeText = isBubbleLayout ? this._formatRelativeTime(displayTimestamp.getTime()) : bubbleTime;
 
             const isEdited = message.isEdited;
-            const editedBubble = isEdited ? '<span class="edited-indicator" title="This message has been edited">(edited)</span> ' : '';
-            const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited">(edited)</span>' : '';
+            const editedBubble = isEdited ? '<span class="edited-indicator" title="This message has been edited" role="button" tabindex="0" data-action="showEditHistory">(edited)</span> ' : '';
+            const editedIRC = isEdited ? '<span class="edited-indicator edited-indicator-irc" title="This message has been edited" role="button" tabindex="0" data-action="showEditHistory">(edited)</span>' : '';
+            const keptBubble = typeof this._keptBadgeHtml === 'function' ? this._keptBadgeHtml(message, false) : '';
+            const keptIRC = typeof this._keptBadgeHtml === 'function' ? this._keptBadgeHtml(message, true) : '';
 
             messageEl.innerHTML = `
     ${time ? `<span class="message-time clickable-timestamp ${this.settings.timeFormat === '12hr' ? 'time-12hr' : ''}" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${time}${mkLock('crypto-lock-irc')}${mkPqBadge('crypto-lock-irc')}</span>` : ''}
     <span class="message-author ${authorClass} ${userColorClass} ${authorExtraClass}"><span class="bubble-time clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${bubbleTime}</span><span class="author-clickable">${displayAuthor}${verifiedBadge}${supporterBadge}${friendBadge}</span><span class="nym-bracket">&gt;</span></span>
-    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span>${mkLock('crypto-lock-bubble')}${mkPqBadge('crypto-lock-bubble')}</span>${hoverButtons}</span>
-    ${editedIRC}
+    <span class="message-content ${userColorClass}${emojiOnlyClass}">${messageContentHtml}<span class="bubble-time-inner clickable-timestamp" data-full-time="${fullTimestamp}" title="${fullTimestamp}" data-action="showFullTimestamp">${keptBubble}${editedBubble}<span class="bubble-time-text">${bubbleTimeText}</span>${mkLock('crypto-lock-bubble')}${mkPqBadge('crypto-lock-bubble')}</span>${hoverButtons}</span>
+    ${keptIRC}${editedIRC}
     ${deliveryCheckmark}
 `;
 
@@ -1548,6 +1562,7 @@ Object.assign(NYM.prototype, {
         if (!content || content.length < 120) return false;
         if (message.isFileOffer || message.thinking) return false;
         if (content.startsWith('/me ')) return false;
+        if (typeof this._gtCardHtml === 'function' && this._gtCardHtml(message)) return false;
         if (!_RX_FORMAT_TRIGGERS.test(content)) return false;
         return !!this._getFormatWorker();
     },
@@ -1592,8 +1607,8 @@ Object.assign(NYM.prototype, {
         this._finalizeMessageContent(messageEl, message);
     },
 
-    formatMessageWithQuotes(content, depth = 0) {
-        return window.NymFormat.formatWithQuotes(content, this._mainFormatCtx(content), depth);
+    formatMessageWithQuotes(content, depth = 0, commonMark = false) {
+        return window.NymFormat.formatWithQuotes(content, Object.assign(this._mainFormatCtx(content), { commonMark }), depth);
     },
 
     _pubkeyForSuffix(sfx) {
@@ -2050,7 +2065,11 @@ Object.assign(NYM.prototype, {
                 strippedLines.push(line);
             }
         }
-        const strippedText = strippedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        let strippedText = strippedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+        if (window.NymMediaNotes && strippedText.indexOf('#nym:') !== -1) {
+            strippedText = window.NymMediaNotes.previewText(strippedText);
+            text = window.NymMediaNotes.previewText(text);
+        }
         this.pendingQuote = { author, text: strippedText, fullText: text };
         const preview = document.getElementById('quotePreview');
         const authorEl = document.getElementById('quotePreviewAuthor');
@@ -2072,7 +2091,7 @@ Object.assign(NYM.prototype, {
             authorEl.textContent = author;
         }
         // Strip markdown/HTML, keep shortcodes so they can render as images.
-        const cleanText = text.replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
+        const cleanText = this._notifPreviewText(text).replace(/<[^>]*>/g, '').replace(/[*_~`>#]/g, '');
         const truncated = cleanText.length > 120 ? cleanText.substring(0, 120) + '...' : cleanText;
         textEl.innerHTML = this.renderCustomEmojiInEscapedText(this.escapeHtml(truncated));
         preview.style.display = 'flex';
@@ -2181,6 +2200,7 @@ Object.assign(NYM.prototype, {
             this.messages.forEach((msgs) => {
                 const msg = msgs.find(m => m.id === originalEventId);
                 if (msg) {
+                    if (typeof this._noteEdit === 'function') this._noteEdit(msg, newContent, now);
                     msg.content = newContent;
                     msg.isEdited = true;
                 }
@@ -2214,12 +2234,16 @@ Object.assign(NYM.prototype, {
         if (contentEl) {
             const bubbleTimeEl = contentEl.querySelector('.bubble-time-inner');
             const hoverButtonsEl = contentEl.querySelector('.msg-hover-buttons');
-            const formattedContent = this.formatMessageWithQuotes(newContent);
+            const editBotAuthored = !!(msgEl.dataset.pubkey && typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(msgEl.dataset.pubkey));
+            const formattedContent = this.formatMessageWithQuotes(newContent, 0, editBotAuthored);
             if (bubbleTimeEl) {
                 if (!bubbleTimeEl.querySelector('.edited-indicator')) {
                     const bubbleEdited = document.createElement('span');
                     bubbleEdited.className = 'edited-indicator';
                     bubbleEdited.title = 'This message has been edited';
+                    bubbleEdited.dataset.action = 'showEditHistory';
+                    bubbleEdited.setAttribute('role', 'button');
+                    bubbleEdited.tabIndex = 0;
                     bubbleEdited.textContent = '(edited)';
                     bubbleTimeEl.insertBefore(bubbleEdited, bubbleTimeEl.firstChild);
                     bubbleTimeEl.insertBefore(document.createTextNode(' '), bubbleEdited.nextSibling);
@@ -2234,6 +2258,9 @@ Object.assign(NYM.prototype, {
             const ircIndicator = document.createElement('span');
             ircIndicator.className = 'edited-indicator edited-indicator-irc';
             ircIndicator.title = 'This message has been edited';
+            ircIndicator.dataset.action = 'showEditHistory';
+            ircIndicator.setAttribute('role', 'button');
+            ircIndicator.tabIndex = 0;
             ircIndicator.textContent = '(edited)';
             if (contentEl && contentEl.nextSibling) {
                 msgEl.insertBefore(ircIndicator, contentEl.nextSibling);
@@ -2532,9 +2559,19 @@ Object.assign(NYM.prototype, {
 
         const meshOnly = typeof this.meshShouldCarry === 'function' &&
             this.meshShouldCarry(this.currentGeohash || this.currentChannel);
-        if (!this.connected && !meshOnly) {
+        const meshPm = (!this.connected && this.inPMMode && !this.currentGroup && this.currentPM
+            && typeof this.meshPmPeerId === 'function') ? this.meshPmPeerId(this.currentPM) : null;
+        if (!this.connected && !meshOnly && !meshPm) {
             this.displaySystemMessage('Not connected to relay. Please wait...');
             return;
+        }
+        if (!this.pendingEdit && this.inPMMode && this.currentGroup && !content.startsWith('/')
+            && typeof this._gtGroupSendBlocked === 'function') {
+            const blocked = this._gtGroupSendBlocked(content, this.currentGroup);
+            if (blocked) {
+                this.displaySystemMessage(blocked);
+                return;
+            }
         }
         if (typeof this.composerVerifying === 'function' && this.composerVerifying()) {
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
@@ -2597,6 +2634,8 @@ Object.assign(NYM.prototype, {
         } else {
             if (this.inPMMode && this.currentGroup) {
                 await this.sendGroupMessage(content, this.currentGroup, { threadRoot });
+            } else if (this.inPMMode && this.currentPM && meshPm) {
+                await this.sendPMOverMesh(content, this.currentPM, meshPm);
             } else if (this.inPMMode && this.currentPM) {
                 await this.sendPM(content, this.currentPM, { threadRoot });
             } else if (this.currentGeohash) {
@@ -4064,12 +4103,16 @@ Object.assign(NYM.prototype, {
         const currentChannel = this.currentChannel || null;
         const currentGeohash = this.currentGeohash || null;
         const rev = this._formatCtxRev || 0;
+        const locale = (typeof this.getUiLanguage === 'function' && this.getUiLanguage()) || null;
+        const spoilerLabel = typeof this.uiText === 'function' ? this.uiText('Spoiler, tap to reveal') : null;
 
         const cached = this._formatCtxCache;
         if (cached && cached.rev === rev &&
             cached.ctx.proxyBase === proxyBase &&
             cached.ctx.currentChannel === currentChannel &&
-            cached.ctx.currentGeohash === currentGeohash) {
+            cached.ctx.currentGeohash === currentGeohash &&
+            cached.ctx.locale === locale &&
+            cached.ctx.spoilerLabel === spoilerLabel) {
             return cached.ctx;
         }
 
@@ -4079,6 +4122,8 @@ Object.assign(NYM.prototype, {
             currentGeohash,
             customEmojis: (this.customEmojis && this.customEmojis.size) ? Object.fromEntries(this.customEmojis) : null,
             mediaFallbacks: (this.mediaFallbacks && this.mediaFallbacks.size) ? Object.fromEntries(this.mediaFallbacks) : null,
+            locale,
+            spoilerLabel,
         };
         this._formatCtxCache = { rev, ctx };
         return ctx;

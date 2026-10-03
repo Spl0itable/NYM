@@ -36,9 +36,7 @@ const int kGeohashPlaceMaxAttempts = 4;
 const String kGeohashPlacePoison = 'Unknown location';
 
 class GeohashPlaceCache {
-  GeohashPlaceCache({required KeyValueStore kv, required ApiClient api})
-      : _kv = kv,
-        _api = api {
+  GeohashPlaceCache({required this._kv, required this._api}) {
     _load();
   }
 

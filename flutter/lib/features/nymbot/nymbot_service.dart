@@ -92,12 +92,12 @@ class NymbotService {
     final body = <String, dynamic>{
       'command': command,
       'args': args,
-      if (geohash != null) 'geohash': geohash,
-      if (conversation != null) 'conversation': conversation,
-      if (senderNym != null) 'senderNym': senderNym,
-      if (publishedContent != null) 'publishedContent': publishedContent,
-      if (channelMessages != null) 'channelMessages': channelMessages,
-      if (activeUsers != null) 'activeUsers': activeUsers,
+      'geohash': ?geohash,
+      'conversation': ?conversation,
+      'senderNym': ?senderNym,
+      'publishedContent': ?publishedContent,
+      'channelMessages': ?channelMessages,
+      'activeUsers': ?activeUsers,
     };
     final json = await _post(body);
     return _extractEventContent(json);
@@ -129,11 +129,11 @@ class NymbotService {
     final extra = <String, dynamic>{
       'eventId': eventId,
       'fresh': fresh,
-      if (proModel != null) 'proModel': proModel,
+      'proModel': ?proModel,
       // Lets the worker read a command typed in the user's language.
-      if (cmdAlias != null) 'cmdAlias': cmdAlias,
+      'cmdAlias': ?cmdAlias,
       // Our signed nym-pq announcement, so the worker seals its reply post-quantum without a lookup race.
-      if (pqAnnouncement != null) 'pqAnnouncement': pqAnnouncement,
+      'pqAnnouncement': ?pqAnnouncement,
     };
 
     // `pending` means an earlier attempt at this message is still generating; re-ask with the same id rather than paying twice.
@@ -223,9 +223,9 @@ class NymbotService {
       <String, dynamic>{
         'amountSats': amountSats,
         'tier': tier.wire,
-        if (recipientPubkey != null) 'recipientPubkey': recipientPubkey,
-        if (zapRequest != null) 'zapRequest': zapRequest,
-        if (comment != null) 'comment': comment,
+        'recipientPubkey': ?recipientPubkey,
+        'zapRequest': ?zapRequest,
+        'comment': ?comment,
       },
       pubkey: pubkey,
       auth: auth,
@@ -266,7 +266,7 @@ class NymbotService {
       'claim-credits',
       <String, dynamic>{
         'invoiceId': invoiceId,
-        if (receipt != null) 'receipt': receipt,
+        'receipt': ?receipt,
         if (gifterNym != null && gifterNym.isNotEmpty) 'gifterNym': gifterNym,
       },
       pubkey: pubkey,

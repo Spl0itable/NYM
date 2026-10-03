@@ -33,11 +33,10 @@ class DriveRequestException implements Exception {
 
 class DriveBackupClient {
   DriveBackupClient({
-    required DriveAccessToken accessToken,
+    required this._accessToken,
     http.Client? client,
     String Function()? newId,
-  })  : _accessToken = accessToken,
-        _client = client ?? http.Client(),
+  })  : _client = client ?? http.Client(),
         _newId = newId ?? (() => const Uuid().v4());
 
   static const String _host = 'www.googleapis.com';

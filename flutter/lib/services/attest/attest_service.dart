@@ -16,13 +16,12 @@ import 'attest_badge.dart';
 /// Enrolls with `/api/attest` via App Attest or Play Integrity and keeps the returned badge.
 class AttestService {
   AttestService({
-    required KeyValueStore kv,
+    required this._kv,
     http.Client? client,
     MethodChannel? channel,
     String? host,
     String? platform,
-  })  : _kv = kv,
-        _client = client ?? http.Client(),
+  })  : _client = client ?? http.Client(),
         _channel = channel ?? const MethodChannel(channelName),
         _host = host ?? ApiConfig.apiHost,
         _platform = platform ?? Platform.operatingSystem;

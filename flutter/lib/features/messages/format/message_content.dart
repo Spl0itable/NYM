@@ -24,12 +24,16 @@ import '../../../state/nostr_controller.dart';
 import '../../../state/settings_provider.dart';
 import '../../../widgets/chat/messages_list.dart'
     show MessageListScroller, messageListScrollerProvider;
+import '../../../widgets/chat/relative_time_ticker.dart';
 import '../../../widgets/common/nym_avatar.dart';
+import '../../../widgets/nym_icons.dart' show NymSvgIcon;
 import '../../../widgets/context_menu/context_menu_actions.dart';
 import '../../../widgets/context_menu/context_menu_panel.dart';
 import '../../commands/command_handler.dart' show resolveTarget;
+import '../../group_tools/group_tools_ui.dart' show GroupToolIcons, joinCallLinkFlow;
 import '../../groups/group_invite_confirm.dart';
 import '../../i18n/i18n.dart';
+import '../../media_notes/media_note_view.dart' show audioOrMediaNote;
 import '../../nymbot/nymbot_threads.dart' show threadChainFor;
 import '../../shop/cosmetics.dart';
 import '../expanded_messages.dart';
@@ -38,7 +42,7 @@ import '../inline_network_image.dart';
 import '../media_fallbacks.dart';
 import 'link_preview.dart';
 import 'nym_format.dart';
-import 'audio_message.dart';
+import 'discord_timestamp.dart';
 import 'video_message.dart';
 import '../../../core/utils/safe_url.dart';
 
@@ -68,9 +72,15 @@ class MessageContent extends ConsumerWidget {
     this.glyphShadows,
     this.monospace = false,
     this.nostrRefCards = true,
+    this.commonMark = false,
+    this.spoilers,
   });
 
   final String content;
+
+  final bool commonMark;
+
+  final SpoilerRevealController? spoilers;
 
   /// Host message id, so a tapped quote excludes its own message when searching for the source; null without one.
   final String? hostMessageId;
@@ -109,6 +119,7 @@ class MessageContent extends ConsumerWidget {
           view.kind == ViewKind.channel ? view.id.toLowerCase() : null,
       // Live NIP-30 custom emoji so `:shortcode:` renders as images.
       customEmojis: ref.watch(liveCustomEmojiProvider).codeToUrl,
+      commonMark: commonMark,
     );
 
     final blocks = NymFormat.format(content, ctx);
@@ -168,7 +179,7 @@ class MessageContent extends ConsumerWidget {
         if (blocks.isNotEmpty && _blockEdgeMargin(blocks.first) > 0)
           SizedBox(height: _blockEdgeMargin(blocks.first)),
         for (var i = 0; i < blocks.length; i++) ...[
-          if (i > 0) SizedBox(height: _blockGap(blocks[i - 1], blocks[i])),
+          if (i > 0) SizedBox(height: markdownBlockGap(blocks[i - 1], blocks[i])),
           _block(context, c, blocks[i], color, size,
               emojiOnly: emojiOnly,
               onChannelRef: onChannelRef,
@@ -179,7 +190,7 @@ class MessageContent extends ConsumerWidget {
       ],
     );
 
-    return Column(
+    final column = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -200,6 +211,9 @@ class MessageContent extends ConsumerWidget {
           ),
       ],
     );
+    final controller = spoilers;
+    if (controller == null) return column;
+    return SpoilerRevealScope(controller: controller, child: column);
   }
 
   /// Deduplicated bare http(s) links for previews, skipping inline-media URLs.
@@ -218,8 +232,19 @@ class MessageContent extends ConsumerWidget {
             visitInlines(children);
           case StrikeNode(:final children):
             visitInlines(children);
+          case UnderlineNode(:final children):
+            visitInlines(children);
           default:
             break;
+        }
+      }
+    }
+
+    void visitList(ListBlock list) {
+      for (final item in list.items) {
+        visitInlines(item.inlines);
+        for (final child in item.children) {
+          visitList(child);
         }
       }
     }
@@ -230,6 +255,10 @@ class MessageContent extends ConsumerWidget {
           visitInlines(inlines);
         case HeadingBlock(:final inlines):
           visitInlines(inlines);
+        case SubtextBlock(:final inlines):
+          visitInlines(inlines);
+        case ListBlock():
+          visitList(b);
         case QuoteBlock(:final children):
           for (final ch in children) {
             visitBlock(ch);
@@ -313,8 +342,19 @@ class MessageContent extends ConsumerWidget {
             visitInlines(children);
           case StrikeNode(:final children):
             visitInlines(children);
+          case UnderlineNode(:final children):
+            visitInlines(children);
           default:
             break;
+        }
+      }
+    }
+
+    void visitList(ListBlock list) {
+      for (final item in list.items) {
+        visitInlines(item.inlines);
+        for (final child in item.children) {
+          visitList(child);
         }
       }
     }
@@ -325,6 +365,10 @@ class MessageContent extends ConsumerWidget {
           visitInlines(inlines);
         case HeadingBlock(:final inlines):
           visitInlines(inlines);
+        case SubtextBlock(:final inlines):
+          visitInlines(inlines);
+        case ListBlock():
+          visitList(b);
         case QuoteBlock(:final children):
           for (final ch in children) {
             visitBlock(ch);
@@ -358,6 +402,7 @@ class MessageContent extends ConsumerWidget {
           inlines: inlines,
           color: color,
           size: size,
+          blurMedia: blurImages,
           emojiOnly: emojiOnly,
           shadows: glyphShadows,
           monospace: monospace,
@@ -370,7 +415,30 @@ class MessageContent extends ConsumerWidget {
           inlines: inlines,
           color: c.primary,
           size: size * scale,
+          blurMedia: blurImages,
           weight: FontWeight.w700,
+          onChannelRef: onChannelRef,
+          onMentionTap: onMentionTap,
+        );
+      case SubtextBlock(:final inlines):
+        return _RichInline(
+          inlines: inlines,
+          color: c.textDim,
+          size: size * 0.8,
+          blurMedia: blurImages,
+          shadows: glyphShadows,
+          monospace: monospace,
+          onChannelRef: onChannelRef,
+          onMentionTap: onMentionTap,
+        );
+      case ListBlock():
+        return _ListView(
+          block: block,
+          color: color,
+          size: size,
+          blurMedia: blurImages,
+          shadows: glyphShadows,
+          monospace: monospace,
           onChannelRef: onChannelRef,
           onMentionTap: onMentionTap,
         );
@@ -388,8 +456,8 @@ class MessageContent extends ConsumerWidget {
         );
       case MediaBlock(:final items):
         return _MediaGallery(items: items, blur: blurImages);
-      case AudioBlock(:final url, :final fileName):
-        return AudioMessage(url: url, fileName: fileName);
+      case AudioBlock():
+        return audioOrMediaNote(block);
     }
   }
 }
@@ -400,13 +468,18 @@ double _blockMargin(FormatBlock block) => switch (block) {
       AudioBlock() ||
       CodeBlock() ||
       QuoteBlock() ||
+      ListBlock() ||
       HeadingBlock() =>
         10,
-      ParagraphBlock() => 4,
+      ParagraphBlock() || SubtextBlock() => 4,
     };
 
 /// Sibling margins collapse to the larger, so pairs involving a block sit 10px apart.
-double _blockGap(FormatBlock a, FormatBlock b) {
+double markdownBlockGap(FormatBlock a, FormatBlock b) {
+  bool textual(FormatBlock x) => x is ParagraphBlock || x is SubtextBlock;
+  if ((a is SubtextBlock || b is SubtextBlock) && textual(a) && textual(b)) {
+    return 0;
+  }
   final ma = _blockMargin(a);
   final mb = _blockMargin(b);
   return ma > mb ? ma : mb;
@@ -418,9 +491,10 @@ double _blockEdgeMargin(FormatBlock block) => switch (block) {
       AudioBlock() ||
       CodeBlock() ||
       QuoteBlock() ||
+      ListBlock() ||
       HeadingBlock() =>
         10,
-      ParagraphBlock() => 0,
+      ParagraphBlock() || SubtextBlock() => 0,
     };
 
 /// One emoji unit: flag pair, keycap, or pictographic glyph with optional VS, skin tone, ZWJ and tags.
@@ -458,7 +532,7 @@ bool isCustomEmojiOnly(String content, Map<String, String> customEmojis) {
 }
 
 /// Inline nodes as one [Text.rich], with [WidgetSpan]s for chips, emoji and mentions.
-class _RichInline extends StatelessWidget {
+class _RichInline extends StatefulWidget {
   const _RichInline({
     required this.inlines,
     required this.color,
@@ -469,12 +543,15 @@ class _RichInline extends StatelessWidget {
     this.monospace = false,
     this.onChannelRef,
     this.onMentionTap,
+    this.blurMedia = false,
   });
 
   final List<InlineNode> inlines;
   final Color color;
   final double size;
   final FontWeight? weight;
+
+  final bool blurMedia;
 
   /// 1–6 emoji only: enlarge emoji.
   final bool emojiOnly;
@@ -492,25 +569,191 @@ class _RichInline extends StatelessWidget {
   final void Function(MentionNode node)? onMentionTap;
 
   @override
+  State<_RichInline> createState() => _RichInlineState();
+}
+
+class _RichInlineState extends State<_RichInline> {
+  final SpoilerRevealController _local = SpoilerRevealController();
+  SpoilerRevealController? _scope;
+  int _spoilerSeq = 0;
+  final List<Object> _hiddenKeys = [];
+  bool _focused = false;
+  Object? _hoverKey;
+
+  double get size => widget.size;
+  bool get emojiOnly => widget.emojiOnly;
+  void Function(String name, bool isGeohash)? get onChannelRef =>
+      widget.onChannelRef;
+  void Function(MentionNode node)? get onMentionTap => widget.onMentionTap;
+
+  SpoilerRevealController get _reveals => _scope ?? _local;
+
+  void _onRevealsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _local.addListener(_onRevealsChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scope = SpoilerRevealScope.maybeOf(context);
+    if (!identical(scope, _scope)) {
+      _scope?.removeListener(_onRevealsChanged);
+      _scope = scope;
+      _scope?.addListener(_onRevealsChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scope?.removeListener(_onRevealsChanged);
+    _local.removeListener(_onRevealsChanged);
+    _local.dispose();
+    super.dispose();
+  }
+
+  Object _spoilerKey(int index) => (identityHashCode(widget.inlines), index);
+
+  void _revealNext() {
+    if (_hiddenKeys.isEmpty) return;
+    _reveals.reveal(_hiddenKeys.first);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final c = context.nym;
     final base = TextStyle(
-      color: color,
-      fontSize: size,
-      fontWeight: weight,
+      color: widget.color,
+      fontSize: widget.size,
+      fontWeight: widget.weight,
       height: 1.4,
-      shadows: shadows,
+      shadows: widget.shadows,
       // Sans primary sets the line strut; the emoji fallback resolves emoji per glyph. Mono bodies skip it.
-      fontFamily: monospace ? kMonoFont : kSansFont,
-      fontFamilyFallback: monospace ? null : kEmojiFontFallback,
+      fontFamily: widget.monospace ? kMonoFont : kSansFont,
+      fontFamilyFallback: widget.monospace ? null : kEmojiFontFallback,
     );
-    return Text.rich(
+    _spoilerSeq = 0;
+    _hiddenKeys.clear();
+    final text = Text.rich(
       TextSpan(
         children: [
-          for (final n in inlines) _span(context, c, n, base),
+          for (final n in widget.inlines) _span(context, c, n, base),
         ],
       ),
     );
+    if (_hiddenKeys.isEmpty) return text;
+    return FocusableActionDetector(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+      },
+      actions: <Type, Action<Intent>>{
+        ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
+          _revealNext();
+          return null;
+        }),
+      },
+      onShowFocusHighlight: (v) => setState(() => _focused = v),
+      child: DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          border: _focused ? Border.all(color: c.primary, width: 2) : null,
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: text,
+      ),
+    );
+  }
+
+  InlineSpan _hiddenSpoiler(NymColors c, List<InlineNode> children,
+      TextStyle base, Object key, VoidCallback onReveal) {
+    final hovered = _hoverKey == key;
+    final fill = c.isLight
+        ? (hovered ? const Color(0xFF8A8A8A) : const Color(0xFF9A9A9A))
+        : (hovered ? c.textDim.withValues(alpha: 0.85) : c.textDim);
+    final hidden = base.copyWith(
+      color: const Color(0x00000000),
+      backgroundColor: fill,
+      decorationColor: const Color(0x00000000),
+      shadows: const <Shadow>[],
+    );
+    final spans = <InlineSpan>[];
+    var labeled = false;
+    void addText(String text) {
+      if (text.isEmpty) return;
+      spans.add(TextSpan(
+        text: text.replaceAll(_rxHiddenGlyph, '\u2003'),
+        style: hidden,
+        recognizer: _SpoilerTap(onReveal),
+        mouseCursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hoverKey = key),
+        onExit: (_) {
+          if (_hoverKey == key) setState(() => _hoverKey = null);
+        },
+        semanticsLabel: labeled ? '' : tr('Spoiler, tap to reveal'),
+      ));
+      labeled = true;
+    }
+
+    Widget blurred(Widget child) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onReveal,
+          child: ExcludeSemantics(
+            child: IgnorePointer(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: ImageFiltered(
+                  imageFilter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                  child: child,
+                ),
+              ),
+            ),
+          ),
+        );
+
+    void walk(List<InlineNode> nodes) {
+      final buf = StringBuffer();
+      void flushText() {
+        addText(buf.toString());
+        buf.clear();
+      }
+
+      for (final n in nodes) {
+        switch (n) {
+          case InlineGalleryNode(:final items):
+            flushText();
+            spans.add(WidgetSpan(
+                child: blurred(_MediaGallery(items: items))));
+          case AudioInlineNode(:final block):
+            flushText();
+            spans.add(WidgetSpan(
+                child: blurred(
+                    audioOrMediaNote(block))));
+          case BoldNode(:final children):
+          case ItalicNode(:final children):
+          case UnderlineNode(:final children):
+          case StrikeNode(:final children):
+          case SpoilerNode(:final children):
+            flushText();
+            walk(children);
+          case TimestampNode(:final seconds, :final style):
+            buf.write(formatDiscordTimestamp(seconds, style));
+          default:
+            _appendInlineText(buf, n);
+        }
+      }
+      flushText();
+    }
+
+    walk(children);
+    if (spans.isEmpty) addText(' ');
+    return TextSpan(children: spans);
   }
 
   InlineSpan _span(
@@ -548,6 +791,43 @@ class _RichInline extends StatelessWidget {
                 base.merge(TextStyle(
                     decoration: TextDecoration.lineThrough, color: c.textDim))),
         ]);
+      case UnderlineNode(:final children):
+        final underlined = base.merge(TextStyle(
+            decoration: TextDecoration.combine([
+          if (base.decoration != null) base.decoration!,
+          TextDecoration.underline,
+        ])));
+        return TextSpan(children: [
+          for (final ch in children) _span(context, c, ch, underlined),
+        ]);
+      case SpoilerNode(:final children):
+        final key = _spoilerKey(_spoilerSeq++);
+        if (_reveals.isRevealed(key)) {
+          final shown = base.merge(TextStyle(
+              backgroundColor: c.isLight
+                  ? Colors.black.withValues(alpha: 0.06)
+                  : c.text.withValues(alpha: 0.08)));
+          return TextSpan(children: [
+            for (final ch in children) _span(context, c, ch, shown),
+          ]);
+        }
+        _hiddenKeys.add(key);
+        return _hiddenSpoiler(
+            c, children, base, key, () => _reveals.reveal(key));
+      case InlineGalleryNode(:final items):
+        return WidgetSpan(
+          child: _MediaGallery(items: items, blur: widget.blurMedia),
+        );
+      case AudioInlineNode(:final block):
+        return WidgetSpan(
+          child: audioOrMediaNote(block),
+        );
+      case TimestampNode(:final seconds, :final style):
+        return WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: TimestampChip(seconds: seconds, style: style, textStyle: base),
+        );
       case InlineCodeNode(:final code):
         // Inline code as a padded rounded pill in [kMonoFont]; light mode flips the fill.
         return WidgetSpan(
@@ -648,6 +928,12 @@ class _RichInline extends StatelessWidget {
           alignment: PlaceholderAlignment.middle,
           child: _InviteChip(name: name, token: token, size: size),
         );
+      case CallLinkChip(:final name, :final video, :final token):
+        return WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          child: _CallLinkChipView(
+              name: name, video: video, token: token, size: size),
+        );
       case NostrRefNode(:final token, :final raw):
         // Bare hex keeps its own text; 64 hex chars aren't always an event id.
         if (raw) return TextSpan(text: token, style: base);
@@ -666,6 +952,191 @@ class _RichInline extends StatelessWidget {
         // Flattened to blocks before this point.
         return const TextSpan(text: '');
     }
+  }
+}
+
+final RegExp _rxHiddenGlyph = RegExp(
+    r'[\u{1F000}-\u{1FAFF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}\u{20E3}]',
+    unicode: true);
+
+class _SpoilerTap extends TapGestureRecognizer {
+  _SpoilerTap(VoidCallback onReveal) {
+    onTap = onReveal;
+  }
+}
+
+class SpoilerRevealController extends ChangeNotifier {
+  final Set<Object> _revealed = <Object>{};
+
+  bool isRevealed(Object key) => _revealed.contains(key);
+
+  void reveal(Object key) {
+    if (_revealed.add(key)) notifyListeners();
+  }
+}
+
+class SpoilerRevealScope extends InheritedWidget {
+  const SpoilerRevealScope({
+    super.key,
+    required this.controller,
+    required super.child,
+  });
+
+  final SpoilerRevealController controller;
+
+  static SpoilerRevealController? maybeOf(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<SpoilerRevealScope>()
+      ?.controller;
+
+  @override
+  bool updateShouldNotify(SpoilerRevealScope oldWidget) =>
+      !identical(oldWidget.controller, controller);
+}
+
+class TimestampChip extends StatefulWidget {
+  const TimestampChip({
+    super.key,
+    required this.seconds,
+    required this.style,
+    required this.textStyle,
+  });
+
+  final int seconds;
+  final String style;
+  final TextStyle textStyle;
+
+  @override
+  State<TimestampChip> createState() => _TimestampChipState();
+}
+
+class _TimestampChipState extends State<TimestampChip> {
+  final GlobalKey<TooltipState> _tooltip = GlobalKey<TooltipState>();
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    Widget chip() => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 3),
+          decoration: BoxDecoration(
+            color: c.isLight
+                ? Colors.black.withValues(alpha: 0.06)
+                : c.text.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(4),
+            border: _focused ? Border.all(color: c.primary, width: 2) : null,
+          ),
+          child: Text(
+            formatDiscordTimestamp(widget.seconds, widget.style),
+            style: widget.textStyle,
+            softWrap: false,
+          ),
+        );
+    return FocusableActionDetector(
+      onShowFocusHighlight: (v) {
+        setState(() => _focused = v);
+        if (v) _tooltip.currentState?.ensureTooltipVisible();
+      },
+      child: Tooltip(
+        key: _tooltip,
+        message: formatDiscordTimestamp(widget.seconds, 'F'),
+        child: widget.style == 'R'
+            ? ListenableBuilder(
+                listenable: RelativeTimeTicker.instance,
+                builder: (context, _) => chip(),
+              )
+            : chip(),
+      ),
+    );
+  }
+}
+
+class _ListView extends StatelessWidget {
+  const _ListView({
+    required this.block,
+    required this.color,
+    required this.size,
+    this.nested = false,
+    this.shadows,
+    this.monospace = false,
+    this.onChannelRef,
+    this.onMentionTap,
+    this.blurMedia = false,
+  });
+
+  final ListBlock block;
+  final bool blurMedia;
+  final Color color;
+  final double size;
+  final bool nested;
+  final List<Shadow>? shadows;
+  final bool monospace;
+  final void Function(String name, bool isGeohash)? onChannelRef;
+  final void Function(MentionNode node)? onMentionTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final markerStyle = TextStyle(
+      color: color,
+      fontSize: size,
+      height: 1.4,
+      shadows: shadows,
+      fontFamily: monospace ? kMonoFont : kSansFont,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < block.items.length; i++)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: 20),
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Text(
+                    block.ordered
+                        ? '${block.start + i}.'
+                        : (nested ? '\u25E6' : '\u2022'),
+                    textAlign: TextAlign.right,
+                    style: markerStyle,
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _RichInline(
+                      inlines: block.items[i].inlines,
+                      color: color,
+                      size: size,
+                      shadows: shadows,
+                      monospace: monospace,
+                      onChannelRef: onChannelRef,
+                      onMentionTap: onMentionTap,
+                      blurMedia: blurMedia,
+                    ),
+                    for (final child in block.items[i].children)
+                      _ListView(
+                        block: child,
+                        color: color,
+                        size: size,
+                        nested: true,
+                        blurMedia: blurMedia,
+                        shadows: shadows,
+                        monospace: monospace,
+                        onChannelRef: onChannelRef,
+                        onMentionTap: onMentionTap,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
   }
 }
 
@@ -809,6 +1280,45 @@ class _InviteChip extends ConsumerWidget {
             SizedBox(width: size * 0.35),
             Text(
               tr('Join {name}', {'name': name}),
+              style: TextStyle(color: c.secondary, fontSize: size),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CallLinkChipView extends StatelessWidget {
+  const _CallLinkChipView(
+      {required this.name,
+      required this.video,
+      required this.token,
+      required this.size});
+  final String name;
+  final bool video;
+  final String token;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return GestureDetector(
+      key: const ValueKey('gtCallLinkChip'),
+      onTap: () => joinCallLinkFlow(context, token),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(
+          borderRadius: const BorderRadius.all(Radius.circular(12)),
+          border: Border.all(color: c.secondary),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            NymSvgIcon(GroupToolIcons.calls, size: size, color: c.secondary),
+            SizedBox(width: size * 0.35),
+            Text(
+              '${video ? tr('Join video call') : tr('Join voice call')}: $name',
               style: TextStyle(color: c.secondary, fontSize: size),
             ),
           ],
@@ -2032,13 +2542,31 @@ int _quoteTextLength(QuoteBlock block) {
   return n;
 }
 
+Iterable<List<InlineNode>> _listInlines(ListBlock list) sync* {
+  for (final item in list.items) {
+    yield item.inlines;
+    for (final child in item.children) {
+      yield* _listInlines(child);
+    }
+  }
+}
+
 int _blockTextLength(FormatBlock block) {
   switch (block) {
     case ParagraphBlock(:final inlines):
     case HeadingBlock(:final inlines):
+    case SubtextBlock(:final inlines):
       var n = 0;
       for (final node in inlines) {
         n += _inlineTextLength(node);
+      }
+      return n;
+    case ListBlock():
+      var n = 0;
+      for (final inlines in _listInlines(block)) {
+        for (final node in inlines) {
+          n += _inlineTextLength(node);
+        }
       }
       return n;
     case CodeBlock(:final code):
@@ -2058,11 +2586,15 @@ int _inlineTextLength(InlineNode node) {
     case BoldNode(:final children):
     case ItalicNode(:final children):
     case StrikeNode(:final children):
+    case UnderlineNode(:final children):
+    case SpoilerNode(:final children):
       var n = 0;
       for (final ch in children) {
         n += _inlineTextLength(ch);
       }
       return n;
+    case TimestampNode(:final seconds, :final style):
+      return formatDiscordTimestamp(seconds, style).length;
     case InlineCodeNode(:final code):
       return code.length;
     case LinkNode(:final url):
@@ -2104,10 +2636,18 @@ void _appendBlockText(StringBuffer buf, FormatBlock block) {
   switch (block) {
     case ParagraphBlock(:final inlines):
     case HeadingBlock(:final inlines):
+    case SubtextBlock(:final inlines):
       for (final node in inlines) {
         _appendInlineText(buf, node);
       }
       buf.write(' ');
+    case ListBlock():
+      for (final inlines in _listInlines(block)) {
+        for (final node in inlines) {
+          _appendInlineText(buf, node);
+        }
+        buf.write(' ');
+      }
     case CodeBlock(:final code):
       buf
         ..write(code)
@@ -2135,9 +2675,13 @@ void _appendInlineText(StringBuffer buf, InlineNode node) {
     case BoldNode(:final children):
     case ItalicNode(:final children):
     case StrikeNode(:final children):
+    case UnderlineNode(:final children):
+    case SpoilerNode(:final children):
       for (final ch in children) {
         _appendInlineText(buf, ch);
       }
+    case TimestampNode(:final seconds, :final style, :final raw):
+      buf.write(raw.isNotEmpty ? raw : '<t:$seconds:$style>');
     case InlineCodeNode(:final code):
       buf.write(code);
     case LinkNode(:final url):
@@ -2521,6 +3065,10 @@ class _QuoteBox extends ConsumerWidget {
       case HeadingBlock(:final inlines):
         return _RichInline(
             inlines: inlines, color: dim, size: size, weight: FontWeight.w700);
+      case SubtextBlock(:final inlines):
+        return _RichInline(inlines: inlines, color: dim, size: (size - 1) * 0.8);
+      case ListBlock():
+        return _ListView(block: child, color: dim, size: size - 1);
       case CodeBlock(:final code, :final lang):
         return _CodeBox(code: code, lang: lang, size: size - 1);
       case QuoteBlock():
@@ -2533,8 +3081,8 @@ class _QuoteBox extends ConsumerWidget {
         );
       case MediaBlock(:final items):
         return _MediaGallery(items: items);
-      case AudioBlock(:final url, :final fileName):
-        return AudioMessage(url: url, fileName: fileName);
+      case AudioBlock():
+        return audioOrMediaNote(child);
     }
   }
 }
@@ -2771,7 +3319,7 @@ class _FullscreenImageViewer extends StatefulWidget {
       PageRouteBuilder<void>(
         opaque: false,
         // The backdrop is painted in-page because swipe-to-dismiss fades it live.
-        pageBuilder: (_, __, ___) =>
+        pageBuilder: (_, _, _) =>
             _FullscreenImageViewer(urls: urls, initialIndex: index),
       ),
     );
@@ -3036,7 +3584,7 @@ class _FullscreenImageViewerState extends State<_FullscreenImageViewer>
                         httpHeaders: InlineNetworkImage.imageHeadersFor(
                             proxiedMedia(widget.urls[_index])),
                         fit: BoxFit.contain,
-                        errorWidget: (_, __, ___) => const Icon(
+                        errorWidget: (_, _, _) => const Icon(
                             Icons.broken_image,
                             color: Colors.white54,
                             size: 48),
@@ -3410,10 +3958,9 @@ class _MeasuredMaxHeight extends SingleChildRenderObjectWidget {
 
 class _RenderMeasuredMaxHeight extends RenderProxyBox {
   _RenderMeasuredMaxHeight({
-    required double maxHeight,
-    required ValueChanged<double> onMeasured,
-  })  : _maxHeight = maxHeight,
-        _onMeasured = onMeasured;
+    required this._maxHeight,
+    required this._onMeasured,
+  });
 
   double _maxHeight;
   double get maxHeight => _maxHeight;

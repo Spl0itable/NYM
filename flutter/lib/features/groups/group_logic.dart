@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import '../../core/constants/event_kinds.dart';
 import '../../core/crypto/keys.dart';
 import '../../models/group.dart';
+import '../group_tools/group_tools.dart';
 import '../../models/nostr_event.dart';
 import '../pms/pm_logic.dart';
 
@@ -282,7 +283,44 @@ class GroupLogic {
       ['invite_enabled', g.inviteEnabled ? '1' : '0'],
       ['invite_epoch', '${g.inviteEpoch}'],
       ['share_history', g.shareHistory ? '1' : '0'],
+      ...groupToolsMetaTags(g),
     ];
+  }
+
+  static List<List<String>> groupToolsMetaTags(Group g) {
+    final slow = GroupTools.normalizeSlowmode(g.slowmode);
+    return [
+      ['slowmode', '$slow'],
+      ['slowmode_since', '${slow > 0 ? g.slowmodeSince : 0}'],
+      ['join_approval', g.joinApproval ? '1' : '0'],
+    ];
+  }
+
+  static bool applyGroupToolsMeta(
+      Group g, List<List<String>> tags, int metaTs) {
+    var changed = false;
+    final slowRaw = tagValue(tags, 'slowmode');
+    if (slowRaw != null) {
+      final v = GroupTools.normalizeSlowmode(slowRaw);
+      final claimed = int.tryParse(tagValue(tags, 'slowmode_since') ?? '') ?? 0;
+      final since =
+          v > 0 ? ((claimed > 0 && claimed <= metaTs) ? claimed : metaTs) : 0;
+      if (v != GroupTools.normalizeSlowmode(g.slowmode) ||
+          (v > 0 && since != g.slowmodeSince)) {
+        g.slowmode = v;
+        g.slowmodeSince = since;
+        changed = true;
+      }
+    }
+    final ap = tagValue(tags, 'join_approval');
+    if (ap != null) {
+      final v = ap == '1';
+      if (v != g.joinApproval) {
+        g.joinApproval = v;
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   /// Bootstrap `group-invite` rumor; avatar/banner/description only when non-empty, invite-policy tags always.
@@ -350,6 +388,7 @@ class GroupLogic {
       ['invite_enabled', group.inviteEnabled ? '1' : '0'],
       ['invite_epoch', '${group.inviteEpoch}'],
       ['share_history', group.shareHistory ? '1' : '0'],
+      ...groupToolsMetaTags(group),
       ['x', nymMessageId],
     ];
     return UnsignedEvent(
@@ -393,6 +432,7 @@ class GroupLogic {
       ['invite_enabled', group.inviteEnabled ? '1' : '0'],
       ['invite_epoch', '${group.inviteEpoch}'],
       ['share_history', group.shareHistory ? '1' : '0'],
+      ...groupToolsMetaTags(group),
       ['x', nymMessageId],
       ['ephemeral_pk', ephemeralPk],
     ];
@@ -907,6 +947,7 @@ class GroupLogic {
         changed = true;
       }
     }
+    if (applyGroupToolsMeta(g, tags, ts)) changed = true;
     if (changed) {
       g.metaUpdatedAt = ts;
       g.metaUpdatedBy = senderPubkey;

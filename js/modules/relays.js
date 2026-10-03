@@ -9,7 +9,9 @@ const HELD_EVENTS_MAX = 16;
 const HELD_EVENTS_MS = 20000;
 const POOL_QUIET_MS = 60000;
 const POOL_PROBE_TIMEOUT_MS = 10000;
+const POOL_RESUME_FRESH_MS = 5000;
 const POOL_PROBE_BACKOFF_MAX_MS = 10 * 60 * 1000;
+const POOL_CONNECT_TIMEOUT_MS = 12000;
 
 Object.assign(NYM.prototype, {
 
@@ -618,6 +620,7 @@ Object.assign(NYM.prototype, {
 
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') {
+                this._probePoolsNow();
                 const delay = this.isFlutterWebView ? 200 : 500;
                 setTimeout(() => {
                     this.clearRelayBlocksForReconnection();
@@ -674,6 +677,11 @@ Object.assign(NYM.prototype, {
         });
 
         window.addEventListener('freeze', () => this._noteLiveGap());
+        window.addEventListener('resume', () => {
+            this._probePoolsNow();
+            this._catchUpLiveGap();
+        });
+        window.addEventListener('online', () => this._probePoolsNow());
 
         window.addEventListener('focus', () => {
             const delay = this.isFlutterWebView ? 200 : 500;
@@ -1696,6 +1704,11 @@ Object.assign(NYM.prototype, {
             this._connectToRelayPool()
                 .then(() => {
                     this._bgPoolReconnectInFlight = false;
+                    if (this._userDirectMode) {
+                        this._dropPoolSockets();
+                        this.useRelayProxy = false;
+                        return;
+                    }
                     this._bgPoolReconnectAttempts = 0;
                     this._poolFallbackActive = false;
                     console.log('[NYM] Pool mode restored');
@@ -1723,6 +1736,144 @@ Object.assign(NYM.prototype, {
 
         const initialDelay = immediate ? 0 : 15000;
         this._bgPoolReconnectTimer = setTimeout(tryRestore, initialDelay);
+    },
+
+    _readUserDirectPref() {
+        try { return localStorage.getItem('nym_relay_direct_mode') === 'true'; } catch (_) { return false; }
+    },
+
+    _writeUserDirectPref(direct) {
+        try {
+            if (direct) localStorage.setItem('nym_relay_direct_mode', 'true');
+            else localStorage.removeItem('nym_relay_direct_mode');
+        } catch (_) { }
+    },
+
+    _relayDirectAcknowledged() {
+        try { return localStorage.getItem('nym_relay_direct_ack') === 'true'; } catch (_) { return false; }
+    },
+
+    _acknowledgeRelayDirect() {
+        try { localStorage.setItem('nym_relay_direct_ack', 'true'); } catch (_) { }
+    },
+
+    _initRelayTransportMode() {
+        const host = !!this._getApiHost();
+        this._userDirectMode = host && this._readUserDirectPref();
+        this.useRelayProxy = host && !this._userDirectMode;
+    },
+
+    canSwitchRelayTransport() {
+        return !!this._getApiHost();
+    },
+
+    _stopPoolReconnectInBackground() {
+        if (this._bgPoolReconnectTimer) {
+            clearTimeout(this._bgPoolReconnectTimer);
+            this._bgPoolReconnectTimer = null;
+        }
+        this._bgPoolReconnectAttempts = 0;
+    },
+
+    _dropPoolSockets(sockets) {
+        const list = sockets || this.poolSockets.slice();
+        for (const p of list) {
+            p._closing = true;
+            try { if (p.ws) p.ws.close(); } catch (_) { }
+        }
+        this.poolSockets = this.poolSockets.filter(p => !list.includes(p));
+        if (!this.poolSockets.length) {
+            this.poolSocket = null;
+            this.poolConnectedRelays = [];
+            this.poolReady = false;
+            if (this._poolRelayLastSeen) this._poolRelayLastSeen.clear();
+        }
+    },
+
+    async setUserDirectMode(direct) {
+        if (!this.canSwitchRelayTransport()) return;
+        this._writeUserDirectPref(!!direct);
+        if (direct) {
+            this._userDirectMode = true;
+            this._poolFallbackActive = false;
+            this._stopPoolReconnectInBackground();
+            if (this.useRelayProxy) await this._switchPoolToDirect();
+            this.updateConnectionStatus();
+            return;
+        }
+        this._userDirectMode = false;
+        if (this.useRelayProxy) return;
+        this._poolFallbackActive = true;
+        this._schedulePoolReconnectInBackground(true);
+    },
+
+    relayTransportAction() {
+        if (!this.canSwitchRelayTransport()) return null;
+        if (this._userDirectMode) return 'proxy';
+        if (this._poolFallbackActive) return 'retry';
+        return 'direct';
+    },
+
+    relayTransportBusy() {
+        return !!this._relayTransportSwitching || (this._poolFallbackActive === true && this._bgPoolReconnectInFlight === true);
+    },
+
+    async requestRelayTransportToggle() {
+        if (this.relayTransportBusy()) return false;
+        const action = this.relayTransportAction();
+        if (action === 'retry') {
+            this.retryProxyNow();
+            return true;
+        }
+        if (action !== 'direct' && action !== 'proxy') return false;
+        if (action === 'direct' && !this._relayDirectAcknowledged()) {
+            const ui = (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s);
+            const message = ui("Nymchat will disconnect from the relay pool proxy and connect to each relay directly. Relays will see your IP address, and the proxy's spam filtering won't apply. You can switch back anytime from Network Stats.");
+            let ok;
+            if (typeof window.showAppConfirm === 'function') {
+                const res = await window.showAppConfirm(message, { title: ui('Use direct connections?'), okLabel: ui('Use direct') });
+                ok = (res && typeof res === 'object') ? res.confirmed : res;
+            } else {
+                ok = typeof window.confirm === 'function' ? window.confirm(message) : true;
+            }
+            if (!ok) return false;
+            this._acknowledgeRelayDirect();
+        }
+        this._relayTransportSwitching = true;
+        try {
+            await this.setUserDirectMode(action === 'direct');
+        } finally {
+            this._relayTransportSwitching = false;
+        }
+        return true;
+    },
+
+    retryProxyNow() {
+        if (this._userDirectMode || !this._poolFallbackActive || this._bgPoolReconnectInFlight) return;
+        this._schedulePoolReconnectInBackground(true);
+    },
+
+    async _switchPoolToDirect() {
+        if (!this.useRelayProxy) return;
+        this._stopPoolShardHealthCheck();
+        const old = this.poolSockets.slice();
+        const oldWs = new Set(old.map(p => p.ws).filter(Boolean));
+        if (this.poolSocket) oldWs.add(this.poolSocket);
+        for (const p of old) p._draining = true;
+        for (const [url, entry] of [...this.relayPool]) {
+            if (entry && oldWs.has(entry.ws)) this.relayPool.delete(url);
+        }
+        if (this._poolRelayLastSeen) this._poolRelayLastSeen.clear();
+        this._poolReconnecting = false;
+        this._poolReconnectRetries = 0;
+        this.useRelayProxy = false;
+        try { await this.reconnectToBroadcastRelays(); } catch (_) { }
+        this.ensureGeoRelayCoverage();
+        if (this.currentGeohash) this.connectToGeoRelays(this.currentGeohash);
+        this._dropPoolSockets(old);
+        for (const [url, entry] of [...this.relayPool]) {
+            if (entry && oldWs.has(entry.ws)) this.relayPool.delete(url);
+        }
     },
 
     _getProxiedRelayUrl(relayUrl) {
@@ -1903,6 +2054,7 @@ Object.assign(NYM.prototype, {
     // Schedule a pool reconnection with exponential backoff, preventing concurrent attempts.
     _schedulePoolReconnect() {
         if (this._poolReconnecting) return;
+        if (this.initialConnectionInProgress || this._poolConnecting) return;
         if (!this.useRelayProxy) return;
         if (!this._getApiHost()) return;
 
@@ -1933,6 +2085,10 @@ Object.assign(NYM.prototype, {
                     this._poolReconnecting = false;
                     return;
                 }
+                if (this.initialConnectionInProgress || this._poolConnecting) {
+                    this._poolReconnecting = false;
+                    return;
+                }
                 this._connectToRelayPool()
                     .then(() => {
                         this._poolReconnecting = false;
@@ -1941,7 +2097,11 @@ Object.assign(NYM.prototype, {
                         this._poolSubscribe();
                         this.retryPendingDMsOnReconnect();
                     })
-                    .catch(async () => {
+                    .catch(async (err) => {
+                        if (err && err.inProgress) {
+                            attempt(retries);
+                            return;
+                        }
                         if (retries < 1) {
                             attempt(retries + 1);
                         } else {
@@ -1993,10 +2153,16 @@ Object.assign(NYM.prototype, {
 
             const baseDelay = Math.min(3000 * Math.pow(1.7, retries), 60000);
             const delay = Math.floor(baseDelay * (0.7 + Math.random() * 0.3));
-            setTimeout(() => {
+            const fire = () => {
                 const stillDown = this.poolSockets.find(p => p.id === shardId);
                 if (stillDown && stillDown.ws && stillDown.ws.readyState === WebSocket.OPEN) {
                     this._shardReconnecting.delete(shardId);
+                    return;
+                }
+                const pending = this._poolShardConnectPendingMs(stillDown);
+                if (pending > 0) {
+                    this._shardReconnectAt.set(shardId, Date.now());
+                    setTimeout(fire, pending + 250);
                     return;
                 }
                 if (!this.useRelayProxy) {
@@ -2017,10 +2183,16 @@ Object.assign(NYM.prototype, {
                         // The health check stops us if the shard is no longer expected.
                         attempt(retries + 1);
                     });
-            }, delay);
+            };
+            setTimeout(fire, delay);
         };
 
         attempt(0);
+    },
+
+    _poolShardConnectPendingMs(entry) {
+        if (!entry || !entry.ws || entry.ws.readyState !== WebSocket.CONNECTING) return 0;
+        return Math.max(0, POOL_CONNECT_TIMEOUT_MS - (Date.now() - (entry._connectStartedAt || 0)));
     },
 
     _computeExpectedShards() {
@@ -2082,16 +2254,41 @@ Object.assign(NYM.prototype, {
             this._poolProbeFails.set(p.id, (this._poolProbeFails.get(p.id) || 0) + 1);
             return true;
         }
-        if (typeof document !== 'undefined' && document.hidden) return false;
         const fails = this._poolProbeFails.get(p.id) || 0;
         const quiet = Math.min(POOL_QUIET_MS * Math.pow(2, fails), POOL_PROBE_BACKOFF_MAX_MS);
         if (now - Math.max(p._upstreamAt || 0, p._openedAt || 0) < quiet) return false;
+        this._sendPoolProbe(p, now);
+        return false;
+    },
+
+    _sendPoolProbe(p, now) {
         const bytes = new Uint8Array(32);
         crypto.getRandomValues(bytes);
         const probeId = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
         p._probe = { id: 'nym-live-' + probeId.slice(0, 12), at: now };
         this._safeWsSend(p.ws, JSON.stringify(['REQ', p._probe.id, { ids: [probeId], limit: 1 }]), { critical: true });
-        return false;
+    },
+
+    _probePoolsNow() {
+        if (!this.useRelayProxy || !Array.isArray(this.poolSockets)) return;
+        const now = Date.now();
+        let sent = false;
+        for (const p of this.poolSockets) {
+            if (!p || !p.ws || p.ws.readyState !== WebSocket.OPEN) continue;
+            if (p._probe) {
+                sent = true;
+                continue;
+            }
+            if (now - Math.max(p._upstreamAt || 0, p._openedAt || 0) < POOL_RESUME_FRESH_MS) continue;
+            this._sendPoolProbe(p, now);
+            sent = true;
+        }
+        if (!sent) return;
+        if (this._poolProbeCheckTimer) clearTimeout(this._poolProbeCheckTimer);
+        this._poolProbeCheckTimer = setTimeout(() => {
+            this._poolProbeCheckTimer = null;
+            this._ensureAllShardsConnected();
+        }, POOL_PROBE_TIMEOUT_MS + 250);
     },
 
     _settlePoolProbe(p) {
@@ -2117,11 +2314,8 @@ Object.assign(NYM.prototype, {
     },
 
     _connectToRelayPool() {
-        if (this._poolConnecting) {
-            return Promise.reject(new Error('Connection already in progress'));
-        }
-        if (this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.CONNECTING)) {
-            return Promise.reject(new Error('Connection already in progress'));
+        if (this._poolConnecting || this.poolSockets.some(p => p.ws && p.ws.readyState === WebSocket.CONNECTING)) {
+            return Promise.reject(Object.assign(new Error('Connection already in progress'), { inProgress: true }));
         }
         this._poolConnecting = true;
 
@@ -2178,6 +2372,7 @@ Object.assign(NYM.prototype, {
                 if (!this.useRelayProxy) return;
                 const existing = this.poolSockets.find(p => p.id === shard.id);
                 if (existing && existing.ws && existing.ws.readyState === WebSocket.OPEN) return;
+                if (this._poolShardConnectPendingMs(existing) > 0) return;
                 this._connectSinglePoolWorker(shard)
                     .then(() => {
                         this._poolSubscribeOnWorker(shard.id);
@@ -2203,7 +2398,8 @@ Object.assign(NYM.prototype, {
                 relays: shard.relays,
                 dmRelays: shard.dmRelays || [],
                 connectedRelays: [],
-                lastMessage: Date.now()
+                lastMessage: Date.now(),
+                _connectStartedAt: Date.now()
             };
 
             const existingIdx = this.poolSockets.findIndex(p => p.id === shard.id);
@@ -2221,7 +2417,7 @@ Object.assign(NYM.prototype, {
                     try { ws.close(); } catch (_) { }
                     reject(new Error(`Pool worker ${shard.id} connection timeout`));
                 }
-            }, 12000);
+            }, POOL_CONNECT_TIMEOUT_MS);
 
             ws.onopen = () => {
                 clearTimeout(timeout);
@@ -2295,6 +2491,7 @@ Object.assign(NYM.prototype, {
                     }
 
                     if (msgType === 'POOL:STATUS') {
+                        if (poolEntry._draining) return;
                         const status = msg[1];
                         if (!status || typeof status !== 'object' || Array.isArray(status)) return;
                         poolEntry.connectedRelays = Array.isArray(status.connected)
@@ -2780,7 +2977,8 @@ Object.assign(NYM.prototype, {
         if (!this._isAnyPoolOpen()) return;
 
         if (this._lastPoolSubId) {
-            this._poolSend(["CLOSE", this._lastPoolSubId]);
+            if (!this._poolSubsRetiring) this._poolSubsRetiring = new Set();
+            this._poolSubsRetiring.add(this._lastPoolSubId);
         }
         const nowSec = Math.floor(Date.now() / 1000);
         const isReconnect = this._poolHasSubscribed;
@@ -2795,11 +2993,37 @@ Object.assign(NYM.prototype, {
         if (isReconnect) this._applyReconnectSince(filters);
         this._lastPoolFilters = filters;
         this._poolSend(["REQ", subId, ...filters]);
+        this._schedulePoolSubRetire(this._poolSubRetireMaxMs);
 
         this._refreshEphemeralSubscriptions();
 
         this._resubscribeChannels();
         this._catchUpLiveGap();
+    },
+
+    _poolSubRetireGraceMs: 1500,
+    _poolSubRetireMaxMs: 10000,
+
+    _schedulePoolSubRetire(ms) {
+        if (!this._poolSubsRetiring || !this._poolSubsRetiring.size) return;
+        if (this._poolSubRetireTimer) clearTimeout(this._poolSubRetireTimer);
+        this._poolSubRetireTimer = setTimeout(() => {
+            this._poolSubRetireTimer = null;
+            const ids = [...(this._poolSubsRetiring || [])];
+            if (this._poolSubsRetiring) this._poolSubsRetiring.clear();
+            for (const id of ids) {
+                if (id !== this._lastPoolSubId) this._poolSend(["CLOSE", id]);
+            }
+        }, ms);
+    },
+
+    _notePoolSubLive(subId) {
+        const live = this._lastPoolSubId;
+        if (!live || typeof subId !== 'string') return;
+        if (subId !== live && !subId.startsWith(live + '~')) return;
+        if (!this._poolSubsRetiring || !this._poolSubsRetiring.size || this._poolSubRetireLiveFor === live) return;
+        this._poolSubRetireLiveFor = live;
+        this._schedulePoolSubRetire(this._poolSubRetireGraceMs);
     },
 
     _noteLiveGap(lastLiveAt, socketLost) {
@@ -2839,20 +3063,90 @@ Object.assign(NYM.prototype, {
             const from = this._liveGapSettleSince;
             this._liveGapSettleTimer = null;
             this._liveGapSettleSince = 0;
-            if (typeof this.channelRestoreManyFromD1 !== 'function') return;
-            this.channelRestoreManyFromD1(this._liveGapChannelKeys(), { force: true, since: from }).then((ok) => {
-                if (ok && typeof this.recomputeAllUnreadCounts === 'function') this.recomputeAllUnreadCounts();
+            const passes = [];
+            if (typeof this.channelRestoreManyFromD1 === 'function') {
+                passes.push(Promise.resolve()
+                    .then(() => this.channelRestoreManyFromD1(this._liveGapChannelKeys(), { force: true, since: from }))
+                    .then((ok) => !!ok, () => false));
+            }
+            if (typeof this.pmRestoreFromD1 === 'function') {
+                passes.push(Promise.resolve()
+                    .then(() => this.pmRestoreFromD1())
+                    .then(() => true, () => false));
+            }
+            if (!passes.length) return;
+            Promise.all(passes).then((oks) => {
+                if (oks.some(Boolean) && typeof this.recomputeAllUnreadCounts === 'function') this.recomputeAllUnreadCounts();
                 if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
             }, () => { });
         }, this._liveGapSettleMs || 35000);
     },
 
+    _giftWrapBackdateSec: 172800,
+    _giftWrapCatchUpLimit: 500,
+    _giftWrapCatchUpWindowMs: 10000,
+    _giftWrapCatchUpMaxKeys: 1000,
+
+    _giftWrapCatchUpFilter(floorSec) {
+        const eph = typeof this._getAllSelfEphemeralPubkeys === 'function'
+            ? (this._getAllSelfEphemeralPubkeys() || []) : [];
+        const pks = [...new Set([this.pubkey, ...eph].filter(pk => typeof pk === 'string' && pk))]
+            .slice(0, this._giftWrapCatchUpMaxKeys);
+        if (!pks.length) return null;
+        return {
+            kinds: [1059],
+            '#p': pks,
+            since: Math.max(0, floorSec - this._giftWrapBackdateSec),
+            limit: this._giftWrapCatchUpLimit
+        };
+    },
+
+    _catchUpGiftWraps(floorSec) {
+        if (!Number.isFinite(floorSec) || floorSec <= 0) return null;
+        const filter = this._giftWrapCatchUpFilter(floorSec);
+        if (!filter) return null;
+        const subId = 'nym-gap-' + Math.random().toString(36).slice(2, 12);
+        if (!this._subscriptionHandlers) this._subscriptionHandlers = new Map();
+        this._subscriptionHandlers.set(subId, (type, data) => {
+            if (type !== 'EVENT' || !data || data[0] !== subId) return;
+            const ev = data[1];
+            if (ev && ev.kind === 1059 && typeof ev.id === 'string' && ev.id) this._noteGapWrapFloor(ev.id, floorSec);
+        });
+        if (!this._gapWrapSubs) this._gapWrapSubs = new Set();
+        this._gapWrapSubs.add(subId);
+        this.sendRequestToAllRelays(['REQ', subId, filter]);
+        setTimeout(() => {
+            if (this._subscriptionHandlers) this._subscriptionHandlers.delete(subId);
+            if (this._gapWrapSubs) this._gapWrapSubs.delete(subId);
+            try { this.sendRequestToAllRelays(['CLOSE', subId]); } catch (_) { }
+        }, this._giftWrapCatchUpWindowMs);
+        return subId;
+    },
+
+    _noteGapWrapFloor(wrapId, floorSec) {
+        if (!this._gapWrapFloors) this._gapWrapFloors = new Map();
+        const floors = this._gapWrapFloors;
+        floors.delete(wrapId);
+        floors.set(wrapId, floorSec);
+        while (floors.size > 2000) floors.delete(floors.keys().next().value);
+    },
+
+    _gapWrapVerdict(wrapId, rumor) {
+        const floors = this._gapWrapFloors;
+        if (!floors || !wrapId || !floors.has(wrapId)) return null;
+        const floorSec = floors.get(wrapId);
+        floors.delete(wrapId);
+        const ts = rumor && Number.isFinite(rumor.created_at) ? rumor.created_at : 0;
+        return { stale: ts < floorSec, floorSec };
+    },
+
     _catchUpLiveGap() {
         if (!this._liveGapAt || this._liveGapInFlight) return;
-        if (!this._getApiHost || !this._getApiHost()) return;
         if (this.useRelayProxy && !this._isAnyPoolOpen()) return;
         const seqAt = this._liveGapSeq;
         const since = Math.floor(this._liveGapAt / 1000) - 300;
+        this._catchUpGiftWraps(since);
+        if (!this._getApiHost || !this._getApiHost()) return;
         this._liveGapInFlight = true;
         this.backfillFromD1OnReconnect({ force: true, since, socketLost: !!this._liveGapSocketLost, channels: this._liveGapChannelKeys() }).then((ok) => {
             if (!ok) return;
@@ -2969,65 +3263,106 @@ Object.assign(NYM.prototype, {
                 return;
             }
             this._ephSubRefreshPending = false;
-            this._refreshEphemeralSubscriptions();
+            if (!this._ownEphemeralKeysCovered()) this._refreshEphemeralSubscriptions();
             this._ephSubRefreshTimer = setTimeout(run, delayMs);
         };
         run();
+    },
+
+    _closeEphemeralSubs(subIds) {
+        for (const oldSubId of subIds || []) {
+            if (this.useRelayProxy && this._isAnyPoolOpen()) {
+                this._poolSendToRole('critical', ['CLOSE', oldSubId]);
+            } else {
+                const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
+                this.relayPool.forEach(relay => {
+                    if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
+                        this._safeWsSend(relay.ws, closeMsg, { critical: true });
+                    }
+                });
+            }
+        }
+    },
+
+    _ephemeralSubTransportOpen() {
+        if (this.useRelayProxy && this._isAnyPoolOpen()) return true;
+        if (!this.relayPool) return false;
+        for (const [, relay] of this.relayPool) {
+            if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) return true;
+        }
+        return false;
+    },
+
+    _openEphemeralSub() {
+        const superseded = this._ephemeralSubIds || [];
+        this._ephemeralSubIds = [];
+        const ephPks = this._getAllSelfEphemeralPubkeys();
+        if (!ephPks.length) {
+            this._ephSubscribedPks = new Set();
+            return { subId: null, superseded };
+        }
+
+        const subId = Math.random().toString(36).substring(2);
+        this._ephemeralSubIds.push(subId);
+        const filter = { kinds: [1059], "#p": ephPks };
+        if (this._getApiHost && this._getApiHost()) {
+            filter.limit = 1;
+        } else {
+            filter.since = Math.floor(Date.now() / 1000) - 604800;
+            filter.limit = 200 * ephPks.length;
+        }
+        this._lastEphemeralSubId = subId;
+        this._lastEphemeralFilter = filter;
+
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            this._poolSendToRole('critical', ['REQ', subId, filter]);
+        } else {
+            // Sharded; `filter` stays unsharded because the pool path and shard recycles reuse it.
+            this._sendShardedEphemeralReq(subId, ephPks, (keys) => {
+                const f = { kinds: [1059], '#p': keys };
+                if (this._getApiHost && this._getApiHost()) {
+                    f.limit = 1;
+                } else {
+                    f.since = Math.floor(Date.now() / 1000) - 604800;
+                    f.limit = 200 * keys.length;
+                }
+                return f;
+            });
+        }
+        this._ephSubscribedPks = this._ephemeralSubTransportOpen() ? new Set(ephPks) : new Set();
+        return { subId, superseded };
     },
 
     async _refreshEphemeralSubscriptions() {
         if (this._ephRefreshInFlight) return;
         this._ephRefreshInFlight = true;
         try {
-            for (const oldSubId of (this._ephemeralSubIds || [])) {
-                if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                    this._poolSendToRole('critical', ['CLOSE', oldSubId]);
-                } else {
-                    const closeMsg = JSON.stringify(['CLOSE', oldSubId]);
-                    this.relayPool.forEach(relay => {
-                        if (relay.ws && relay.ws.readyState === WebSocket.OPEN) {
-                            this._safeWsSend(relay.ws, closeMsg, { critical: true });
-                        }
-                    });
-                }
-            }
-            this._ephemeralSubIds = [];
-
-            const ephPks = this._getAllSelfEphemeralPubkeys();
-            if (!ephPks.length) return;
-
-            const subId = Math.random().toString(36).substring(2);
-            this._ephemeralSubIds.push(subId);
-            const filter = { kinds: [1059], "#p": ephPks };
-            if (this._getApiHost && this._getApiHost()) {
-                filter.limit = 1;
-            } else {
-                filter.since = Math.floor(Date.now() / 1000) - 604800;
-                filter.limit = 200 * ephPks.length;
-            }
-            this._lastEphemeralSubId = subId;
-            this._lastEphemeralFilter = filter;
-
-            if (this.useRelayProxy && this._isAnyPoolOpen()) {
-                this._poolSendToRole('critical', ['REQ', subId, filter]);
-            } else {
-                // Sharded; `filter` stays unsharded because the pool path and shard recycles reuse it.
-                this._sendShardedEphemeralReq(subId, ephPks, (keys) => {
-                    const f = { kinds: [1059], '#p': keys };
-                    if (this._getApiHost && this._getApiHost()) {
-                        f.limit = 1;
-                    } else {
-                        f.since = Math.floor(Date.now() / 1000) - 604800;
-                        f.limit = 200 * keys.length;
-                    }
-                    return f;
-                });
-            }
-
-            await this._waitForEoseOrTimeout(subId, 5000);
+            const { subId, superseded } = this._openEphemeralSub();
+            if (subId) await this._waitForEoseOrTimeout(subId, 5000);
+            this._closeEphemeralSubs(superseded);
         } finally {
             this._ephRefreshInFlight = false;
         }
+    },
+
+    _ownEphemeralKeysCovered() {
+        const have = this._ephSubscribedPks;
+        const pks = this._getAllSelfEphemeralPubkeys();
+        return !!have && have.size === pks.length && pks.every(pk => have.has(pk));
+    },
+
+    _ensureOwnEphemeralSub() {
+        const pks = this._getAllSelfEphemeralPubkeys();
+        const have = this._ephSubscribedPks;
+        if (!pks.length || (have && pks.every(pk => have.has(pk)))) return false;
+        if (!this._ephemeralSubTransportOpen()) return false;
+        const { subId, superseded } = this._openEphemeralSub();
+        if (!subId) {
+            this._closeEphemeralSubs(superseded);
+            return false;
+        }
+        this._waitForEoseOrTimeout(subId, 5000).then(() => this._closeEphemeralSubs(superseded));
+        return true;
     },
 
     // Coalesced so back-to-back shard reconnects don't re-fire every channel's REQ.
@@ -4144,6 +4479,7 @@ Object.assign(NYM.prototype, {
             }
             case 'EOSE': {
                 const eoseSubId = data[0];
+                this._notePoolSubLive(eoseSubId);
                 if (this._eoseWaiters && this._eoseWaiters.has(eoseSubId)) {
                     const w = this._eoseWaiters.get(eoseSubId);
                     clearTimeout(w.timer);

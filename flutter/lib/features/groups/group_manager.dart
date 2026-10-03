@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../../models/group.dart';
+import '../../models/nostr_event.dart';
 import '../../services/nostr/nostr_service.dart';
 import 'group_logic.dart';
 
@@ -66,8 +67,11 @@ class GroupManager {
     return out;
   }
 
+  void Function()? onSelfKeysChanged;
+
   void _refreshServiceKeys() {
     _service.setEphemeralKeys(allEphemeralSecretKeys());
+    onSelfKeysChanged?.call();
   }
 
   /// Deletes a left group's keys and re-arms unwrap candidates so they stop riding subscriptions and sync.
@@ -366,6 +370,24 @@ class GroupManager {
     return _service.publishGroupMessage(
       rumor: rumor,
       recipients: to,
+      encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
+      kemKeyFor: kemKeyFor,
+      rootSeededFor: rootSeededFor,
+      layeredFor: layeredFor,
+    );
+  }
+
+  Future<bool> sendRumor({
+    required Group group,
+    required String selfPubkey,
+    required UnsignedEvent rumor,
+    required List<String> recipients,
+  }) async {
+    if (!_service.canSign || recipients.isEmpty) return false;
+    final ek = keysFor(group.id);
+    return _service.publishGroupMessage(
+      rumor: rumor,
+      recipients: recipients,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       kemKeyFor: kemKeyFor,
       rootSeededFor: rootSeededFor,

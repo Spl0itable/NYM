@@ -18,6 +18,9 @@ import '../../state/settings_provider.dart';
 import '../emoji/custom_emoji.dart';
 import '../i18n/i18n.dart';
 import '../notifications/notification_sounds.dart';
+import '../group_tools/group_tools.dart';
+import '../group_tools/group_tools_providers.dart';
+import '../chat_lock/chat_lock_providers.dart';
 import 'call_signaling.dart';
 import 'call_state.dart';
 
@@ -48,7 +51,7 @@ class _ActiveCall {
 
   final String callId;
   final CallKind kind;
-  final bool isGroup;
+  bool isGroup;
   final String? groupId;
   List<String> members; // includes self
   MediaStream localStream;
@@ -165,10 +168,20 @@ class CallService {
         body += tr(' in {group}', {'group': g.name});
       }
     }
+    var title = callerNym.isNotEmpty ? callerNym : _nymFor(callerPubkey);
+    try {
+      final lock = _ref.read(chatLockProvider);
+      if (lock.notificationIsLocked(
+          'call', isGroup ? (groupId ?? '') : callerPubkey, callerPubkey)) {
+        final r = lock.redact(title, body, true);
+        title = r.title;
+        body = r.body;
+      }
+    } catch (_) {}
     try {
       _ref.read(notificationHistoryProvider.notifier).record(
             type: 'call',
-            title: callerNym.isNotEmpty ? callerNym : _nymFor(callerPubkey),
+            title: title,
             body: body,
             route: isGroup ? (groupId ?? '') : callerPubkey,
             ts: whenMs,
@@ -240,6 +253,82 @@ class CallService {
       groupId: groupId,
       targets: targets,
     );
+  }
+
+  Future<bool> probeMedia(String kind) async {
+    final stream =
+        await _getLocalMedia(kind == 'video' ? CallKind.video : CallKind.audio);
+    if (stream == null) return false;
+    for (final t in stream.getTracks()) {
+      try {
+        await t.stop();
+      } catch (_) {}
+    }
+    try {
+      await stream.dispose();
+    } catch (_) {}
+    return true;
+  }
+
+  Future<void> admitViaLink(CallLink link, String joiner) async {
+    if (_self.isEmpty) {
+      _self = _ref.read(nostrControllerProvider).identity?.pubkey ?? '';
+    }
+    final ac = _active;
+    if (ac != null) {
+      if (!ac.members.contains(joiner)) ac.members = [...ac.members, joiner];
+      ac.isGroup = true;
+      for (final pk in ac.members.where((pk) => pk != _self && pk != joiner)) {
+        _send(pk, {
+          'type': GroupToolsCallSignals.memberAdd,
+          'callId': ac.callId,
+          'pubkey': joiner,
+        });
+      }
+      _send(joiner, {
+        ...CallSignal.invite(
+          callId: ac.callId,
+          kind: ac.kind,
+          isGroup: true,
+          groupId: null,
+          members: List.of(ac.members),
+        ),
+        'link': link.id,
+      });
+      return;
+    }
+    final kind = link.kind == 'video' ? CallKind.video : CallKind.audio;
+    final stream = await _getLocalMedia(kind);
+    if (stream == null) return;
+    final callId = genCallId();
+    final active = _ActiveCall(
+      callId: callId,
+      kind: kind,
+      isGroup: false,
+      groupId: null,
+      members: [_self, joiner],
+      localStream: stream,
+      status: 'outgoing',
+    );
+    _active = active;
+    await _attachLocalPreview(stream);
+    _send(joiner, {
+      ...CallSignal.invite(
+        callId: callId,
+        kind: kind,
+        isGroup: false,
+        groupId: null,
+        members: List.of(active.members),
+      ),
+      'link': link.id,
+    });
+    _publish(statusText: tr('Connecting…'));
+    active.ringTimeout = Timer(kCallRingTimeout, () {
+      if (_active == active && active.status == 'outgoing') {
+        _send(joiner, CallSignal.cancel(callId));
+        _endCall();
+      }
+    });
   }
 
   /// Accepts the current incoming call.
@@ -687,6 +776,27 @@ class CallService {
     if (data == null) return;
     // Invite freshness comes from the rumor's created_at; the payload has no timestamp.
     final createdAt = (rumor['created_at'] as num?)?.toInt() ?? 0;
+    final type = data['type'];
+    if (type == GroupToolsCallSignals.join ||
+        type == GroupToolsCallSignals.refused) {
+      unawaited(_ref.read(groupToolsProvider).onCallSignal(sender, data,
+          busyFor: (kind) =>
+              _incoming != null ||
+              (_active != null && _active!.kind.wire != kind)));
+      return;
+    }
+    if (type == GroupToolsCallSignals.memberAdd) {
+      final ac = _active;
+      final pk = data['pubkey'];
+      if (ac == null || ac.callId != data['callId']) return;
+      if (!ac.members.contains(sender)) return;
+      if (pk is String &&
+          RegExp(r'^[0-9a-f]{64}$').hasMatch(pk) &&
+          !ac.members.contains(pk)) {
+        ac.members = [...ac.members, pk];
+      }
+      return;
+    }
     switch (data['type']) {
       case 'invite':
         _onInvite(sender, data, createdAt);
@@ -949,11 +1059,15 @@ class CallService {
     final callId = (data['callId'] as String?) ?? '';
     // Skip calls already handled here or elsewhere, stopping relay replays from re-ringing.
     if (_hasSeenCall(callId)) return;
+    final linkJoin = _ref.read(groupToolsProvider).linkJoinMatches(sender, data);
 
     // acceptCalls preference gate.
     final pref = _ref.read(settingsProvider).acceptCalls;
     final friend = _isFriend(sender);
-    if (!shouldRingForInvite(acceptCalls: pref, isFriend: friend)) return;
+    if (!linkJoin &&
+        !shouldRingForInvite(acceptCalls: pref, isFriend: friend)) {
+      return;
+    }
 
     // An invite older than 60s can't be answered: record a missed call (within the TTL) instead of ringing.
     if (createdAtSec > 0) {
@@ -991,9 +1105,9 @@ class CallService {
     final isGroup = data['isGroup'] == true;
     final groupId = data['groupId'] as String?;
     final members = <String>[sender, _self];
-    if (isGroup && groupId != null) {
+    if (isGroup && (groupId != null || linkJoin)) {
       // Only add claimed members the real roster contains, or all when no roster is known.
-      final group = _groupById(groupId);
+      final group = groupId == null ? null : _groupById(groupId);
       final roster =
           (group != null && group.members.isNotEmpty) ? group.members : null;
       final claimed = (data['members'] as List?)?.cast<String>() ?? const [];
@@ -1017,6 +1131,11 @@ class CallService {
       members: members,
     );
     _incoming = inc;
+    if (linkJoin) {
+      _ref.read(groupToolsProvider).consumeLinkJoin();
+      unawaited(answer());
+      return;
+    }
     // Only fresh rings reach here, so no silent call rings.
     _startRingtone();
     inc.timeout = Timer(kCallRingTimeout, () {

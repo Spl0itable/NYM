@@ -491,7 +491,8 @@ class P2PService extends ChangeNotifier {
       final path = '${dir.path}/$filename';
       final file = File(path);
       await file.writeAsBytes(bytes, flush: true);
-      await Share.shareXFiles([XFile(path)], subject: filename);
+      await SharePlus.instance
+          .share(ShareParams(files: [XFile(path)], subject: filename));
     } catch (e) {
       debugPrint('P2P save download failed: $e');
       _system('Downloaded "$filename" but could not open the save dialog');

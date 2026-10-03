@@ -71,7 +71,7 @@ class NotificationService {
     const settings =
         InitializationSettings(android: androidSettings, iOS: iosSettings);
     await _notifications.initialize(
-      settings,
+      settings: settings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
         final payload = response.payload;
         if (payload != null && payload.isNotEmpty) {
@@ -198,14 +198,18 @@ class NotificationService {
     final details =
         NotificationDetails(android: androidDetails, iOS: iosDetails);
 
-    await _notifications.show(notificationId, title, body, details,
+    await _notifications.show(
+        id: notificationId,
+        title: title,
+        body: body,
+        notificationDetails: details,
         payload: payload);
   }
 
   Future<void> cancelConversation(String conversationKey) async {
     if (!isSupported || conversationKey.isEmpty) return;
     try {
-      await _notifications.cancel(conversationKey.hashCode & 0x7fffffff);
+      await _notifications.cancel(id: conversationKey.hashCode & 0x7fffffff);
     } catch (_) {
       // Nothing posted for it, or plugin unavailable.
     }

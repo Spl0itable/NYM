@@ -27,7 +27,10 @@ class EmojiPicker extends ConsumerStatefulWidget {
     required this.onSelect,
     this.onClose,
     this.proxyBase,
+    this.tabs,
   });
+
+  final Widget? tabs;
 
   /// Most-recent-first unicode chars and/or `:code:` tokens.
   final List<String> recents;
@@ -288,6 +291,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
                 mainAxisSize: MainAxisSize.max,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  ?widget.tabs,
                   _header(c),
                   const SizedBox(height: 10),
                   Expanded(

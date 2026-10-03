@@ -55,7 +55,6 @@ List<QuickContextItem> buildQuickContextItems(
     items.add(QuickContextItem(
       label: tr('Zap Bitcoin'),
       svg: ctxActionSvg(CtxAction.zap),
-      color: QuickContextItemColor.lightning,
       onTap: () => _zap(context, ref, message, baseNym),
     ));
   }

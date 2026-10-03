@@ -314,7 +314,7 @@ class _VideoMessageState extends State<VideoMessage> {
       PageRouteBuilder<void>(
         opaque: false,
         barrierColor: Colors.black.withValues(alpha: 0.9),
-        pageBuilder: (_, __, ___) => _FullscreenVideo(controller: controller),
+        pageBuilder: (_, _, _) => _FullscreenVideo(controller: controller),
       ),
     );
   }

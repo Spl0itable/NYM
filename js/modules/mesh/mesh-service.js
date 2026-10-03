@@ -97,6 +97,7 @@
             this.onPublicMessage = opts.onPublicMessage || (() => { });
             this.onPrivateMessage = opts.onPrivateMessage || (() => { });
             this.onReceipt = opts.onReceipt || (() => { });
+            this.onFile = opts.onFile || (() => { });
             this.onPeersChanged = opts.onPeersChanged || (() => { });
             this.onGhostChanged = opts.onGhostChanged || (() => { });
             // The bridge verifies carried events before publishing or displaying: a gateway is a postbox, not an author.
@@ -637,6 +638,7 @@
 
         async _buildPacket(o) {
             const packet = P().makePacket({
+                version: P().versionForPayload(o.payload.length),
                 type: o.type,
                 senderID: this.identity.peerIdBytes,
                 recipientID: o.recipientID || null,
@@ -741,6 +743,65 @@
             return ids[0];
         }
 
+        fileFits(fileName, mimeType, bytes, peerID) {
+            const payload = P().encodeFilePacket({ fileName, mimeType, content: bytes });
+            if (!payload || !this.identity) return false;
+            const body = peerID
+                ? new Uint8Array(P().encodeNoisePayload(P().NoisePayloadType.fileTransfer, payload).length + 20)
+                : payload;
+            const probe = P().makePacket({
+                version: P().versionForPayload(body.length),
+                type: peerID ? P().MsgType.noiseEncrypted : P().MsgType.fileTransfer,
+                senderID: this.identity.peerIdBytes,
+                recipientID: peerID ? P().fromHex(peerID) : P().BROADCAST_RECIPIENT,
+                timestamp: Date.now(),
+                payload: body,
+                signature: peerID ? null : new Uint8Array(64),
+                ttl: P().MeshConst.messageTtl,
+            });
+            return P().fragmentPacket(probe).length > 0;
+        }
+
+        async sendFileBroadcast(fileName, mimeType, bytes) {
+            if (!this.running) throw new Error('mesh not running');
+            const payload = P().encodeFilePacket({ fileName, mimeType, content: bytes });
+            if (!payload) return false;
+            const packet = await this._buildPacket({
+                type: P().MsgType.fileTransfer,
+                payload,
+                recipientID: P().BROADCAST_RECIPIENT,
+                sign: true,
+            });
+            if (!P().fragmentPacket(packet).length) return false;
+            await this._send(packet);
+            return true;
+        }
+
+        async sendFileToPeer(peerID, fileName, mimeType, bytes) {
+            if (!this.running) throw new Error('mesh not running');
+            if (!this.fileFits(fileName, mimeType, bytes, peerID)) return false;
+            const payload = P().encodeFilePacket({ fileName, mimeType, content: bytes });
+            if (!payload) return false;
+            await this._sendOrQueueEncrypted(peerID, P().encodeNoisePayload(P().NoisePayloadType.fileTransfer, payload));
+            return true;
+        }
+
+        _handleFile(packet, senderPeerID, direct) {
+            const file = P().decodeFilePacket(packet.payload);
+            if (!file) return;
+            const peer = this._touchPeer(senderPeerID);
+            this.onFile({
+                senderPeerID,
+                senderNickname: (peer && peer.nickname) || senderPeerID,
+                senderNostrPubkey: peer && peer.nostrPubkey,
+                fileName: file.fileName,
+                mimeType: file.mimeType,
+                bytes: file.content,
+                isDirect: !!direct,
+                timestampMs: packet.timestamp,
+            });
+        }
+
         _chunk(content) {
             const bytes = P().utf8.encode(content);
             const max = P().PM_MAX_CONTENT_BYTES;
@@ -815,6 +876,9 @@
                 case T.announce: await this._handleAnnounce(packet, senderPeerID, rssi); break;
                 case T.message: this._handlePublicMessage(packet, senderPeerID); break;
                 case T.nymChannelMessage: this._handleChannelMessage(packet, senderPeerID); break;
+                case T.fileTransfer:
+                    if (forUs) this._handleFile(packet, senderPeerID, directedToUs);
+                    break;
                 case T.leave: this._removePeer(senderPeerID); break;
                 case T.noiseHandshake: if (forUs) await this._handleHandshake(senderPeerID, packet.payload); break;
                 case T.noiseEncrypted: if (forUs) await this._handleEncrypted(senderPeerID, packet.payload); break;
@@ -1002,6 +1066,20 @@
                 });
                 await this._sendOrQueueEncrypted(senderPeerID,
                     P().encodeNoisePayload(NP.delivered, P().utf8.encode(pm.messageID)));
+            } else if (envelope.type === NP.fileTransfer) {
+                const file = P().decodeFilePacket(envelope.data);
+                if (!file) return;
+                const peer = this._touchPeer(senderPeerID);
+                this.onFile({
+                    senderPeerID,
+                    senderNickname: (peer && peer.nickname) || senderPeerID,
+                    senderNostrPubkey: peer && peer.nostrPubkey,
+                    fileName: file.fileName,
+                    mimeType: file.mimeType,
+                    bytes: file.content,
+                    isDirect: true,
+                    timestampMs: Date.now(),
+                });
             } else if (envelope.type === NP.delivered || envelope.type === NP.readReceipt) {
                 this.onReceipt({
                     fromPeerID: senderPeerID,

@@ -425,6 +425,7 @@
             for (const chip of chips) {
                 const token = chip.dataset.nostrRef;
                 if (!token || seen.has(token)) continue;
+                if (typeof chip.closest === 'function' && chip.closest('.spoiler')) continue;
                 seen.add(token);
                 tokens.push(token);
                 if (tokens.length >= 4) break;

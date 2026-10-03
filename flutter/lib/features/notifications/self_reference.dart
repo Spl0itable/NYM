@@ -1,6 +1,8 @@
 /// Pure checks for whether an inbound message refers to the user, taking [nym] and [suffix] directly.
 library;
 
+import '../../core/utils/nym_utils.dart';
+
 /// True when [content] @-mentions the user outside quoted lines; `@nym#other` (a different suffix) doesn't count.
 bool mentionsSelf({
   required String content,
@@ -58,4 +60,34 @@ bool _isSelfAuthor(String author, {required String nym, required String suffix})
   // The suffix may repeat (`#ab12#ab12`); every segment must be ours.
   final tail = label.substring(hash + 1).split('#');
   return tail.every((s) => s.toLowerCase() == suffix.toLowerCase());
+}
+
+final RegExp _htmlTagRe = RegExp(r'<[^>]*>');
+final RegExp _dupSuffixRe =
+    RegExp(r'@([^@#\s]+)#([0-9a-f]{4})#\2\b', caseSensitive: false);
+
+bool contentMentionsSelf({
+  required String content,
+  required String nym,
+  String? pubkey,
+}) {
+  final cleanNym = stripPubkeySuffix(nym);
+  if (cleanNym.isEmpty || content.isEmpty) return false;
+  final rawSuffix = pubkey != null ? getPubkeySuffix(pubkey) : '';
+  final sfx = rawSuffix == '????' ? '' : RegExp.escape(rawSuffix);
+  final esc = RegExp.escape(cleanNym);
+  var clean = content
+      .replaceAll(_htmlTagRe, '')
+      .replaceAllMapped(_dupSuffixRe, (m) => '@${m[1]}#${m[2]}');
+  final quoteToMe = RegExp('^\\s*>+\\s*@$esc(?:#$sfx)?\\s*:',
+      caseSensitive: false, multiLine: true);
+  if (quoteToMe.hasMatch(clean)) return true;
+  clean = clean
+      .split('\n')
+      .where((line) => !line.trimLeft().startsWith('>'))
+      .join('\n');
+  final tail = sfx.isNotEmpty
+      ? '(?:#$sfx\\b|(?!#[0-9a-f]{4})(?:\\b|\$))'
+      : '(?!#[0-9a-f]{4})(?:\\b|\$)';
+  return RegExp('@$esc$tail', caseSensitive: false).hasMatch(clean);
 }

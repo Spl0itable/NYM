@@ -13,9 +13,11 @@ import 'schnorr.dart';
 final Random _rng = Random.secure();
 
 /// `now - rand*7200` seconds, NIP-59 timestamp backdating.
-int randomNow() {
+int randomNow([int? atSec]) {
   final r = _rng.nextDouble();
-  final now = DateTime.now().millisecondsSinceEpoch / 1000.0;
+  final now = atSec != null && atSec > 0
+      ? atSec.toDouble()
+      : DateTime.now().millisecondsSinceEpoch / 1000.0;
   return (now - r * 7200).round();
 }
 
@@ -46,6 +48,7 @@ NostrEvent nip59Wrap({
   required String recipientPubkey,
   int? expiration,
   List<List<String>> extraTags = const [],
+  int? at,
 }) {
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -55,7 +58,7 @@ NostrEvent nip59Wrap({
   final seal = finalizeEvent(
     UnsignedEvent(
       pubkey: senderPub,
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 13,
       tags: const [],
       content: nip44.encrypt(jsonEncode(rumorMap), ckSeal),
@@ -74,7 +77,7 @@ NostrEvent nip59Wrap({
   return finalizeEvent(
     UnsignedEvent(
       pubkey: getPublicKeyHex(ephSk),
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 1059,
       tags: tags,
       content: nip44.encrypt(jsonEncode(seal.toJson()), ckWrap),
@@ -91,6 +94,7 @@ NostrEvent pqNip59Wrap({
   required Uint8List recipientKemPublicKey,
   int? expiration,
   List<List<String>> extraTags = const [],
+  int? at,
 }) {
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -98,7 +102,7 @@ NostrEvent pqNip59Wrap({
   final seal = finalizeEvent(
     UnsignedEvent(
       pubkey: senderPub,
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 13,
       tags: const [],
       content: pq.pqEncrypt(jsonEncode(rumorMap), senderPrivkey, recipientPubkey,
@@ -116,7 +120,7 @@ NostrEvent pqNip59Wrap({
   return finalizeEvent(
     UnsignedEvent(
       pubkey: getPublicKeyHex(ephSk),
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 1059,
       tags: tags,
       content: pq.pqEncrypt(jsonEncode(seal.toJson()), ephSk, recipientPubkey,
@@ -134,6 +138,7 @@ Future<NostrEvent> pq2Nip59Wrap({
   required Uint8List recipientKemPublicKey,
   int? expiration,
   List<List<String>> extraTags = const [],
+  int? at,
 }) async {
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -141,7 +146,7 @@ Future<NostrEvent> pq2Nip59Wrap({
   final seal = finalizeEvent(
     UnsignedEvent(
       pubkey: senderPub,
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 13,
       tags: const [],
       content: await pq.pq2Encrypt(jsonEncode(rumorMap), senderPrivkey,
@@ -159,7 +164,7 @@ Future<NostrEvent> pq2Nip59Wrap({
   return finalizeEvent(
     UnsignedEvent(
       pubkey: getPublicKeyHex(ephSk),
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 1059,
       tags: tags,
       content: await pq.pq2Encrypt(jsonEncode(seal.toJson()), ephSk,
@@ -267,6 +272,7 @@ Future<NostrEvent> bitchatWrap({
   required Uint8List senderPrivkey,
   required String recipientPubkey,
   int? expiration,
+  int? at,
 }) async {
   final senderPub = getPublicKeyHex(senderPrivkey);
   final rumorMap = _buildRumorMap(rumor, senderPub);
@@ -274,7 +280,7 @@ Future<NostrEvent> bitchatWrap({
   final seal = finalizeEvent(
     UnsignedEvent(
       pubkey: senderPub,
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 13,
       tags: const [],
       content: await bitchat.encryptBitchat(
@@ -291,7 +297,7 @@ Future<NostrEvent> bitchatWrap({
   return finalizeEvent(
     UnsignedEvent(
       pubkey: getPublicKeyHex(ephSk),
-      createdAt: randomNow(),
+      createdAt: randomNow(at),
       kind: 1059,
       tags: tags,
       content: await bitchat.encryptBitchat(

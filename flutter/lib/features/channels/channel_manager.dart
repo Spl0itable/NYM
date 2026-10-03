@@ -58,16 +58,17 @@ class ChannelManager {
     if (aDefault && !bDefault) return -1;
     if (!aDefault && bDefault) return 1;
 
+    final pins = ctx.pinned.toList();
+    final aPin = pins.indexOf(a.key);
+    final bPin = pins.indexOf(b.key);
+    if (aPin >= 0 && bPin >= 0 && aPin != bPin) return aPin - bPin;
+    if (aPin >= 0 && bPin < 0) return -1;
+    if (aPin < 0 && bPin >= 0) return 1;
+
     final aActive = a.key == ctx.activeKey;
     final bActive = b.key == ctx.activeKey;
     if (aActive && !bActive) return -1;
     if (!aActive && bActive) return 1;
-
-    // Pinned float above unpinned but aren't alphabetized within the band.
-    final aPinned = ctx.pinned.contains(a.key);
-    final bPinned = ctx.pinned.contains(b.key);
-    if (aPinned && !bPinned) return -1;
-    if (!aPinned && bPinned) return 1;
 
     // Proximity: only valid-geohash pairs, only when enabled and located.
     final aGeo = a.geohash.isNotEmpty && isValidGeohash(a.geohash);

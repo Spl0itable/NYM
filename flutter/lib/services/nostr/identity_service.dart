@@ -34,14 +34,11 @@ typedef SecretWriter = Future<void> Function(String name, String value);
 /// Boots and persists the identity: reuse the saved session nsec, else generate a keypair and random nym.
 class IdentityService {
   IdentityService({
-    required KeyValueStore kv,
-    required SecureStore secure,
+    required this._kv,
+    required this._secure,
     NymGenerator? nymGenerator,
-    SecretWriter? secretWrite,
-  })  : _kv = kv,
-        _secure = secure,
-        _nymGen = nymGenerator ?? NymGenerator(),
-        _secretWrite = secretWrite;
+    this._secretWrite,
+  })  : _nymGen = nymGenerator ?? NymGenerator();
 
   final KeyValueStore _kv;
   final SecureStore _secure;

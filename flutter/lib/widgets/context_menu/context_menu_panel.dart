@@ -12,6 +12,8 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/chat_tools/chat_tools_providers.dart';
+import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/messages/inline_network_image.dart';
@@ -76,7 +78,7 @@ class ContextMenuPanel extends ConsumerWidget {
       barrierColor: const Color(0x99000000),
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim, _) => const SizedBox.shrink(),
-      transitionBuilder: (ctx, anim, _, __) {
+      transitionBuilder: (ctx, anim, _, _) {
         return Consumer(
           builder: (ctx, ref, _) => Align(
             alignment: Alignment.centerRight,
@@ -144,6 +146,14 @@ class ContextMenuPanel extends ConsumerWidget {
     final controller = ref.read(nostrControllerProvider);
     final target = _enrichTarget(ref);
     final actions = buildContextMenuActions(target);
+    final tools = _chatTools(ref, target);
+    var toolsAt = actions.length;
+    for (var i = 0; i < actions.length; i++) {
+      if (actions[i].index > CtxAction.copyMessage.index) {
+        toolsAt = i;
+        break;
+      }
+    }
     final fullNym = '${target.nym}#${getPubkeySuffix(target.pubkey)}';
     final cosmetics = ref.watch(userCosmeticsProvider(target.pubkey));
     final user = ref.watch(usersProvider)[target.pubkey];
@@ -201,13 +211,25 @@ class ContextMenuPanel extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    for (final a in actions)
-                      _ActionItem(
-                        svg: ctxActionSvg(a),
-                        label: ctxActionLabel(a, target),
-                        color: _colorFor(a, c),
-                        onTap: () => _invoke(context, ref, a, target, fullNym),
-                      ),
+                    for (var i = 0; i <= actions.length; i++) ...[
+                      if (i == toolsAt)
+                        for (final t in tools.actions)
+                          _ActionItem(
+                            key: ValueKey('chat-tool-${t.name}'),
+                            svg: chatToolSvg(t),
+                            label: chatToolLabel(t),
+                            color: c.text,
+                            onTap: () => _invokeTool(context, ref, t, tools),
+                          ),
+                      if (i < actions.length)
+                        _ActionItem(
+                          svg: ctxActionSvg(actions[i]),
+                          label: ctxActionLabel(actions[i], target),
+                          color: _colorFor(actions[i], c),
+                          onTap: () =>
+                              _invoke(context, ref, actions[i], target, fullNym),
+                        ),
+                    ],
                   ],
                 ),
               ),
@@ -475,7 +497,7 @@ class ContextMenuPanel extends ConsumerWidget {
                         memCacheWidth:
                             (480 * MediaQuery.devicePixelRatioOf(context))
                                 .ceil(),
-                        errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                        errorWidget: (_, _, _) => const SizedBox.shrink(),
                       ),
               ),
             ),
@@ -517,8 +539,6 @@ class ContextMenuPanel extends ConsumerWidget {
 
   Color _colorFor(CtxAction a, NymColors c) {
     switch (a) {
-      case CtxAction.zap:
-        return c.lightning;
       case CtxAction.report:
         return c.warning;
       case CtxAction.delete:
@@ -671,6 +691,69 @@ class ContextMenuPanel extends ConsumerWidget {
           action: () => controller.banFromGroup(_groupId(ref), t.pubkey),
         );
         break;
+    }
+  }
+
+  ({List<ChatToolAction> actions, Message? msg, String? key}) _chatTools(
+      WidgetRef ref, CtxTarget target) {
+    final s = ref.read(appStateProvider);
+    ref.watch(chatToolsRevisionProvider);
+    final tools = ref.read(chatToolsProvider);
+    final m = message;
+    ({Message msg, String key})? found;
+    if (m != null && !target.profileOnly) {
+      found = findMessageAnywhere(s, m.nymMessageId ?? m.id) ??
+          findMessageAnywhere(s, m.id);
+    } else if (!target.profileOnly && target.messageId != null) {
+      found = findMessageAnywhere(s, target.messageId!);
+    }
+    final view = s.view;
+    final dmHeader = target.profileOnly &&
+        m == null &&
+        view.kind == ViewKind.pm &&
+        view.id == target.pubkey;
+    final msg = found?.msg;
+    final actions = chatToolActionsFor(
+      message: msg,
+      storageKey: found?.key,
+      self: s.selfPubkey,
+      saved: msg != null && tools.isMessageSaved(msg),
+      kept: msg != null && tools.isMessageKept(msg),
+      keepOffered: msg != null && tools.keepAvailableFor(msg, found!.key),
+      dmHeader: dmHeader,
+    );
+    return (
+      actions: actions,
+      msg: msg,
+      key: dmHeader ? view.storageKey : found?.key,
+    );
+  }
+
+  Future<void> _invokeTool(BuildContext context, WidgetRef ref,
+      ChatToolAction a,
+      ({List<ChatToolAction> actions, Message? msg, String? key}) t) async {
+    final rootContext = Navigator.of(context, rootNavigator: true).context;
+    final read = ProviderScope.containerOf(context).read;
+    onClose();
+    final msg = t.msg;
+    final key = t.key;
+    switch (a) {
+      case ChatToolAction.save:
+      case ChatToolAction.unsave:
+        if (msg != null) ChatToolsActions.toggleSave(read, msg);
+      case ChatToolAction.replyPrivately:
+        if (msg != null) ChatToolsActions.replyPrivately(read, msg);
+      case ChatToolAction.keep:
+      case ChatToolAction.unkeep:
+        if (msg != null) await ChatToolsActions.toggleKeep(read, msg);
+      case ChatToolAction.media:
+        if (key != null && rootContext.mounted) {
+          await ChatMediaPanel.open(rootContext, key);
+        }
+      case ChatToolAction.export:
+        if (key != null && rootContext.mounted) {
+          await ExportChatPanel.open(rootContext, key);
+        }
     }
   }
 
@@ -917,6 +1000,7 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
 
 class _ActionItem extends StatefulWidget {
   const _ActionItem({
+    super.key,
     required this.svg,
     required this.label,
     required this.color,
@@ -1113,7 +1197,7 @@ class _ProfileImageViewer extends StatelessWidget {
       PageRouteBuilder<void>(
         opaque: false,
         barrierColor: Colors.black.withValues(alpha: 0.92),
-        pageBuilder: (_, __, ___) => _ProfileImageViewer(url: url),
+        pageBuilder: (_, _, _) => _ProfileImageViewer(url: url),
       ),
     );
   }
@@ -1139,7 +1223,7 @@ class _ProfileImageViewer extends StatelessWidget {
                   : CachedNetworkImage(
                       imageUrl: url,
                       fit: BoxFit.contain,
-                      errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                      errorWidget: (_, _, _) => const SizedBox.shrink(),
                     ),
             ),
           ),

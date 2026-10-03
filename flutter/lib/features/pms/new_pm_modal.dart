@@ -17,6 +17,7 @@ import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
 import '../groups/group_invite_confirm.dart';
 import '../i18n/i18n.dart';
+import '../chat_lock/chat_lock_providers.dart';
 
 /// A picked recipient: 64-hex pubkey plus display nym.
 class PmRecipient {
@@ -311,6 +312,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final incog = ref.watch(incognitoFieldFlagsProvider);
     final title = _groupMode ? tr('New Group') : tr('New Message');
 
     return Dialog(
@@ -418,7 +420,11 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                           _label(c, tr('Message'), optional: true),
                           const SizedBox(height: 8),
                           TextField(
+                            key: const ValueKey('new-pm-message'),
                             controller: _messageController,
+                            enableIMEPersonalizedLearning: incog.imeLearning,
+                            autocorrect: incog.autocorrect,
+                            enableSuggestions: incog.suggestions,
                             maxLines: 3,
                             style: TextStyle(color: c.inputText, fontSize: 15),
                             decoration: _inputDecoration(

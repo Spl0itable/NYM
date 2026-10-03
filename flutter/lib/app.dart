@@ -7,6 +7,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/nym_theme.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/commands/command_i18n.dart';
+import 'features/chat_lock/chat_lock_providers.dart';
+import 'features/chat_lock/chat_lock_ui.dart';
+import 'features/group_tools/group_tools_providers.dart' show groupToolsContext;
+import 'features/group_tools/group_tools_ui.dart' show joinCallLinkFlow;
 import 'features/groups/group_invite_confirm.dart';
 import 'features/i18n/i18n.dart';
 import 'features/i18n/localization_service.dart';
@@ -75,6 +79,8 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
 
     _startHeartbeat();
 
+    _wireGroupTools();
+    _wireChatLock();
     DeepLinkService? deepLinks;
     try {
       deepLinks = DeepLinkService(NostrControllerDeepLinkTarget(controller,
@@ -131,6 +137,24 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     } catch (e) {
       debugPrint('[Platform] notification tap ignored: $e');
     }
+  }
+
+  void _wireChatLock() {
+    try {
+      final service = ref.read(chatLockProvider);
+      installChatLockPrompter(service, () => _navKey.currentContext);
+      installChatLockGate(ref.read(appStateProvider.notifier), service);
+    } catch (e) {
+      debugPrint('[Platform] chat lock skipped: ${e.runtimeType}');
+    }
+  }
+
+  void _wireGroupTools() {
+    groupToolsContext = () => _navKey.currentContext;
+    callLinkHandler = (token) {
+      final ctx = _navKey.currentContext;
+      if (ctx != null && ctx.mounted) unawaited(joinCallLinkFlow(ctx, token));
+    };
   }
 
   Future<bool> _confirmGroupInvite(GroupInviteToken token) async {
@@ -287,7 +311,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       },
     );
     // Sign-out bumps the boot generation; pop stacked dialogs so the user lands on the fresh gate.
-    ref.listen<int>(bootEpochProvider, (_, __) {
+    ref.listen<int>(bootEpochProvider, (_, _) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _navKey.currentState?.popUntil((r) => r.isFirst);
       });
@@ -311,7 +335,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
             systemNavigationBarIconBrightness:
                 isLight ? Brightness.dark : Brightness.light,
           ),
-          child: child ?? const SizedBox.shrink(),
+          child: PrivacyShield(child: child ?? const SizedBox.shrink()),
         );
       },
       // Keyed on the boot generation so sign-out remounts a pristine gate.

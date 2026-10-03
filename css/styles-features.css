@@ -1911,6 +1911,10 @@ body:not(.chat-bubbles) .message.supporter-style {
     color: var(--warning);
 }
 
+.context-menu-item.report svg {
+    color: var(--warning);
+}
+
 .modal-header h2 {
     margin: 0;
     color: var(--primary);
@@ -2851,14 +2855,6 @@ body:not(.chat-bubbles) .message.supporter-style {
 
 .quick-context-item:active {
     background: rgba(255, 255, 255, 0.12);
-}
-
-.quick-context-item.lightning {
-    color: #f7931a;
-}
-
-.quick-context-item.lightning svg {
-    color: #f7931a;
 }
 
 .quick-context-item.report {
@@ -3890,6 +3886,34 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
     color: var(--primary);
 }
 
+.relay-stats-mode-btn {
+    margin-left: auto;
+    padding: 3px 8px;
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+
+.relay-stats-mode-btn:hover:not(:disabled),
+.relay-stats-mode-btn:focus-visible {
+    color: var(--primary);
+    border-color: var(--primary);
+}
+
+.relay-stats-mode-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.relay-stats-mode-btn[hidden] {
+    display: none;
+}
+
 .relay-stats-mode-hint {
     flex-basis: 100%;
     font-family: var(--font-sans);
@@ -4198,6 +4222,45 @@ body.chat-bubbles .message.supporter-style .read-more-btn {
 .poll-footer:hover {
     background: rgba(255, 255, 255, 0.06);
     color: var(--text);
+}
+
+.poll-footer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.poll-close-btn {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs, 6px);
+    padding: 2px 8px;
+    cursor: pointer;
+}
+
+.poll-close-btn:hover {
+    color: var(--text);
+    border-color: var(--text-dim);
+}
+
+.poll-closed-tag {
+    margin-left: 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-dim);
+}
+
+.poll-container.poll-closed .poll-option {
+    cursor: default;
+}
+
+.poll-container.poll-closed .poll-option:hover {
+    border-color: var(--glass-border);
+    background: transparent;
 }
 
 .poll-voters-modal .reactors-modal-list {

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -13,7 +12,11 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/channels/channel_share.dart' show kNymchatShareHost;
+import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/group_tools/group_tools.dart';
+import '../../features/group_tools/group_tools_providers.dart';
+import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/pms/new_pm_modal.dart' show resolveRecipientPubkey;
 import '../../models/group.dart';
@@ -46,7 +49,7 @@ class GroupContextMenuPanel extends ConsumerStatefulWidget {
       barrierColor: const Color(0x99000000),
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim, _) => const SizedBox.shrink(),
-      transitionBuilder: (ctx, anim, _, __) => Align(
+      transitionBuilder: (ctx, anim, _, _) => Align(
         alignment: Alignment.centerRight,
         child: GroupContextMenuPanel(
           groupId: groupId,
@@ -233,7 +236,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
                 fit: BoxFit.cover,
                 memCacheWidth:
                     (64 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
-                errorWidget: (_, __, ___) => _defaultGroupIcon(c),
+                errorWidget: (_, _, _) => _defaultGroupIcon(c),
               ),
             )
           : _defaultGroupIcon(c),
@@ -249,7 +252,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
               // Group banners are user photos; decode at the menu-width strip.
               memCacheWidth:
                   (480 * MediaQuery.devicePixelRatioOf(context)).ceil(),
-              errorWidget: (_, __, ___) => _defaultBanner(c),
+              errorWidget: (_, _, _) => _defaultBanner(c),
             )
           : _defaultBanner(c),
     );
@@ -360,7 +363,10 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ),
       _CopyInviteRow(
         onTap: () async {
-          await Clipboard.setData(ClipboardData(text: link));
+          await ref.read(groupToolsProvider).ensureSummary(group.id);
+          if (!mounted) return;
+          final fresh = _buildInviteLink(group, self) ?? link;
+          await Clipboard.setData(ClipboardData(text: fresh));
           ref
               .read(appStateProvider.notifier)
               .addSystemMessage(tr('Copied group invite link to clipboard'));
@@ -382,8 +388,14 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       'a': self,
       'e': group.inviteEpoch,
     };
-    final json = jsonEncode(payload);
-    final token = base64Url.encode(utf8.encode(json)).replaceAll('=', '');
+    final summary = ref.read(groupToolsProvider).cachedSummary(group.id);
+    final token = GroupTools.encodeInvite(InvitePayload(
+      g: payload['g'] as String,
+      n: payload['n'] as String,
+      a: self,
+      e: group.inviteEpoch,
+      s: summary,
+    ));
     return '$kNymchatShareHost/#gjoin=$token';
   }
 
@@ -503,6 +515,34 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
       ));
     }
 
+    for (final item in gtGroupMenuItems(ref, group)) {
+      rows.add(_ActionRow(
+        key: ValueKey(item.key),
+        svg: item.svg,
+        label: item.label,
+        trailing: item.trailing,
+        color: item.disabled ? c.textDim : c.text,
+        onTap: () {
+          final rootContext = Navigator.of(context, rootNavigator: true).context;
+          widget.onClose();
+          if (rootContext.mounted) item.onTap(rootContext);
+        },
+      ));
+    }
+
+    rows.add(_ActionRow(
+      svg: ChatToolIcons.media,
+      label: tr('Media, files & links'),
+      color: c.text,
+      onTap: () => _openChatTool(group, media: true),
+    ));
+    rows.add(_ActionRow(
+      svg: ChatToolIcons.exportChat,
+      label: tr('Export chat'),
+      color: c.text,
+      onTap: () => _openChatTool(group, media: false),
+    ));
+
     rows.add(_ActionRow(
       svg: NymIcons.groupLeave,
       label: tr('Leave Group'),
@@ -611,6 +651,18 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final picked = await _AddMembersDialog.show(context, group);
     if (picked == null || picked.isEmpty) return;
     await ref.read(nostrControllerProvider).addGroupMembers(group.id, picked);
+  }
+
+  Future<void> _openChatTool(Group group, {required bool media}) async {
+    final rootContext = Navigator.of(context, rootNavigator: true).context;
+    widget.onClose();
+    final key = 'group-${group.id}';
+    if (!rootContext.mounted) return;
+    if (media) {
+      await ChatMediaPanel.open(rootContext, key);
+    } else {
+      await ExportChatPanel.open(rootContext, key);
+    }
   }
 
   /// Closes the panel first so it isn't left over the departed group.
@@ -735,15 +787,18 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
 
 class _ActionRow extends StatefulWidget {
   const _ActionRow({
+    super.key,
     required this.svg,
     required this.label,
     required this.color,
     required this.onTap,
+    this.trailing,
   });
   final String svg;
   final String label;
   final Color color;
   final VoidCallback onTap;
+  final String? trailing;
 
   @override
   State<_ActionRow> createState() => _ActionRowState();
@@ -789,6 +844,9 @@ class _ActionRowState extends State<_ActionRow> {
                   ),
                 ),
               ),
+              if (widget.trailing != null)
+                Text(widget.trailing!,
+                    style: TextStyle(color: c.textDim, fontSize: 12)),
             ],
           ),
         ),

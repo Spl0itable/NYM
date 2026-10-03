@@ -165,7 +165,8 @@
                 && c.senderVerified === m.senderVerified
                 && c.pqEncrypted === m.pqEncrypted
                 && c.pqRoot === m.pqRoot
-                && c.isHistorical === m.isHistorical) {
+                && c.isHistorical === m.isHistorical
+                && c.slowHeld === m.slowHeld) {
                 return c.ser;
             }
             const ser = {
@@ -207,7 +208,9 @@
                 _anchorAt: m._anchorAt,
                 _anchorMs: m._anchorMs,
                 // NIP-13 target from the sender's nonce tag; dropping it makes reloads report "no proof of work".
-                powTarget: m.powTarget
+                powTarget: m.powTarget,
+                ...(m.expiresAt ? { expiresAt: m.expiresAt } : {}),
+                ...(m.slowHeld ? { slowHeld: true } : {})
             };
             // Non-enumerable so it never leaks into JSON/structured-clone of the live message.
             Object.defineProperty(m, '__serCache', {
@@ -220,7 +223,8 @@
                     senderVerified: m.senderVerified,
                     pqEncrypted: m.pqEncrypted,
                     pqRoot: m.pqRoot,
-                    isHistorical: m.isHistorical
+                    isHistorical: m.isHistorical,
+                    slowHeld: m.slowHeld
                 },
                 writable: true,
                 configurable: true,

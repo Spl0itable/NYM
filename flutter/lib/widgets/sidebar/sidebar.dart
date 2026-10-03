@@ -6,6 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../features/chat_tools/chat_tools_ui.dart';
+import '../../features/composer/composer_model.dart';
+import '../../features/notifications/notifications_panel.dart';
+import '../../features/group_tools/group_tools_ui.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -35,6 +39,11 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
+import '../../features/chat_nav/chat_nav_providers.dart';
+import '../../features/chat_nav/chat_nav_ui.dart';
+import '../../features/chat_lock/chat_lock.dart' show ChatLockStrings;
+import '../../features/chat_lock/chat_lock_providers.dart';
+import '../../features/chat_lock/chat_lock_ui.dart';
 import '../nym_icons.dart';
 import 'channel_list_item.dart';
 import 'pm_context_menu.dart';
@@ -254,18 +263,21 @@ class _SidebarState extends ConsumerState<Sidebar> {
         userLocation: location,
       ),
     );
-    // CSS `order` bands (nymchat, active, pinned, unread, rest) re-sort stably on top of the comparator.
     int orderBand(ChannelEntry ch) {
       if (ch.key == kDefaultChannel) return -4;
-      if (ch.key == activeChannelKey) return -3;
-      if (app.pinnedChannels.contains(ch.key)) return -2;
+      if (app.pinnedChannels.contains(ch.key)) return -3;
+      if (ch.key == activeChannelKey) return -2;
       if ((app.unreadCounts[ch.storageKey] ?? 0) > 0) return -1;
       return 0;
     }
 
+    ref.watch(chatLockRevisionProvider);
+    final chatLock = ref.read(chatLockProvider);
     channels = [
       for (var band = -4; band <= 0; band++)
-        ...channels.where((ch) => orderBand(ch) == band),
+        ...channels.where((ch) =>
+            orderBand(ch) == band &&
+            !chatLock.isConversationLocked(ch.storageKey)),
     ];
     final pinned = app.pinnedChannels;
     final pms = ref.watch(pmListProvider);
@@ -282,10 +294,33 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ref.watch(meshControllerProvider.select((s) => s.meshPmPubkeys));
 
     // Groups and PMs share one list, newest-first by last-message time.
-    final pmEntries = <_PmEntry>[
+    final byTime = <_PmEntry>[
       for (final pm in pms) _PmEntry.pm(pm),
       for (final g in groups) _PmEntry.group(g),
     ]..sort((a, b) => b.lastMessageTime.compareTo(a.lastMessageTime));
+    final entryByKey = <String, _PmEntry>{
+      for (final e in byTime)
+        e.group != null
+            ? 'group-${e.group!.id}'
+            : 'pm-${e.pm!.pubkey.toLowerCase()}': e,
+    };
+    final pmEntries = [
+      for (final k in chatNavPinSort(ref, entryByKey.keys.toList()))
+        if (!chatLock.isConversationLocked(k)) entryByKey[k]!,
+    ];
+    final lockBadges = ref.watch(chatLockBadgesProvider);
+
+    bool secretOpened(String v) {
+      if (!chatLock.matchesSecret(v)) return false;
+      setState(() {
+        _pmSearch = false;
+        _pmTerm = '';
+        _channelSearch = false;
+        _channelTerm = '';
+      });
+      unawaited(openLockedChats(context, ref));
+      return true;
+    }
 
     final notifier = ref.read(appStateProvider.notifier);
 
@@ -392,7 +427,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
               _channelSearch = !_channelSearch;
               if (!_channelSearch) _channelTerm = '';
             }),
-            onSearchChanged: (v) => setState(() => _channelTerm = v),
+            onSearchChanged: (v) {
+              if (secretOpened(v)) return;
+              setState(() => _channelTerm = v);
+            },
             onLongPressTitle: _toggleReorderMode,
             leadingIcon: _MiniIcon(
               key: TutorialTargets.keyFor(TutorialTarget.discoverIcon),
@@ -484,15 +522,30 @@ class _SidebarState extends ConsumerState<Sidebar> {
               _pmSearch = !_pmSearch;
               if (!_pmSearch) _pmTerm = '';
             }),
-            onSearchChanged: (v) => setState(() => _pmTerm = v),
+            onSearchChanged: (v) {
+              if (secretOpened(v)) return;
+              setState(() => _pmTerm = v);
+            },
             onLongPressTitle: _toggleReorderMode,
-            leadingIcon: _MiniIcon(
-              svg: NymIcons.plus,
-              tooltip: tr('New message'),
-              onTap: () {
-                widget.onItemSelected?.call();
-                NewPmModal.open(context);
-              },
+            leadingIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (chatLock.entryShown) ...[
+                  _LockedChatsEntry(
+                    count: lockBadges.shown,
+                    onTap: () => unawaited(openLockedChats(context, ref)),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                _MiniIcon(
+                  svg: NymIcons.plus,
+                  tooltip: tr('New message'),
+                  onTap: () {
+                    widget.onItemSelected?.call();
+                    NewPmModal.open(context);
+                  },
+                ),
+              ],
             ),
             searchHint: tr('Search PMs...'),
             children: [
@@ -1055,7 +1108,6 @@ class _MeshStatusIndicator extends ConsumerWidget {
   }
 }
 
-/// Compact-only Flair/Settings/About/Logout row, carrying the tutorial `mainMenu` key.
 class _SidebarActions extends ConsumerWidget {
   const _SidebarActions({this.onItemSelected});
 
@@ -1064,60 +1116,85 @@ class _SidebarActions extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    return Container(
-      key: TutorialTargets.keyFor(TutorialTarget.mainMenu),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      decoration: BoxDecoration(
-        border: Border(top: BorderSide(color: c.glassBorder)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          _ActionButton(
-            svg: NymIcons.starFlair,
-            label: tr('Flair'),
-            onTap: () {
-              onItemSelected?.call();
-              ShopModal.open(context);
-            },
-          ),
-          const SizedBox(width: 6),
-          _ActionButton(
-            svg: NymIcons.settings,
-            label: tr('Settings'),
-            onTap: () {
-              onItemSelected?.call();
-              SettingsScreen.open(context);
-            },
-          ),
-          const SizedBox(width: 6),
-          _ActionButton(
-            svg: NymIcons.info,
-            label: tr('About'),
-            onTap: () {
-              onItemSelected?.call();
-              AboutScreen.open(context);
-            },
-          ),
-          const SizedBox(width: 6),
-          _ActionButton(
-            svg: NymIcons.logout,
-            label: tr('Logout'),
-            // Close the drawer, then confirm; sign-out bumps the boot generation to remount the first-run gate.
-            onTap: () async {
-              final controller = ref.read(nostrControllerProvider);
-              onItemSelected?.call();
-              final ok = await showAppConfirm(
-                context,
-                tr('Sign out and disconnect from Nymchat?'),
-                okLabel: tr('Sign out'),
-                danger: true,
-              );
-              if (!ok) return;
-              await controller.signOut();
-            },
-          ),
-        ],
+    final unread =
+        ref.watch(notificationHistoryProvider.select((s) => s.unread));
+    final notifEnabled =
+        ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
+    void go(void Function() open) {
+      onItemSelected?.call();
+      open();
+    }
+
+    Widget tile(String id) => switch (id) {
+          'notifications' => _ActionButton(
+              key: const ValueKey('menu-notifications'),
+              svg: NymIcons.bell,
+              label: tr('Notifications'),
+              primary: true,
+              badge: notifEnabled ? unread : 0,
+              onTap: () => go(() => showNotificationsPanel(context)),
+            ),
+          'saved' => _ActionButton(
+              key: const ValueKey('menu-saved'),
+              svg: ChatToolIcons.saved,
+              label: tr('Saved'),
+              primary: true,
+              onTap: () => go(() => SavedMessagesPanel.open(context)),
+            ),
+          'calls' => _ActionButton(
+              key: const ValueKey('gtCallsButton'),
+              svg: GroupToolIcons.calls,
+              label: tr('Calls'),
+              primary: true,
+              onTap: () => go(() => showGtCallLinks(context)),
+            ),
+          'flair' => _ActionButton(
+              key: const ValueKey('menu-flair'),
+              svg: NymIcons.starFlair,
+              label: tr('Flair'),
+              onTap: () => go(() => ShopModal.open(context)),
+            ),
+          'settings' => _ActionButton(
+              key: const ValueKey('menu-settings'),
+              svg: NymIcons.settings,
+              label: tr('Settings'),
+              onTap: () => go(() => SettingsScreen.open(context)),
+            ),
+          _ => _ActionButton(
+              key: const ValueKey('menu-about'),
+              svg: NymIcons.info,
+              label: tr('About'),
+              onTap: () => go(() => AboutScreen.open(context)),
+            ),
+        };
+
+    final rows = mainMenuRows('mobile').grid;
+    return Semantics(
+      label: tr('Main menu'),
+      container: true,
+      child: Container(
+        key: TutorialTargets.keyFor(TutorialTarget.mainMenu),
+        padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: c.glassBorder)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < rows.length; i++) ...[
+              if (i > 0) const SizedBox(height: 6),
+              Row(
+                key: ValueKey('menu-row-$i'),
+                children: [
+                  for (var j = 0; j < rows[i].length; j++) ...[
+                    if (j > 0) const SizedBox(width: 6),
+                    tile(rows[i][j]),
+                  ],
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -1125,14 +1202,19 @@ class _SidebarActions extends ConsumerWidget {
 
 class _ActionButton extends StatefulWidget {
   const _ActionButton({
+    super.key,
     required this.svg,
     required this.label,
     required this.onTap,
+    this.primary = false,
+    this.badge = 0,
   });
 
   final String svg;
   final String label;
   final VoidCallback onTap;
+  final bool primary;
+  final int badge;
 
   @override
   State<_ActionButton> createState() => _ActionButtonState();
@@ -1164,10 +1246,13 @@ class _ActionButtonState extends State<_ActionButton> {
           onTap: widget.onTap,
           borderRadius: NymRadius.rxs,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+            padding: const EdgeInsets.fromLTRB(4, 10, 4, 8),
             decoration: BoxDecoration(
               color: fill,
-              border: Border.all(color: borderColor),
+              border: Border.all(
+                  color: widget.primary && !_hover
+                      ? c.primaryA(0.25)
+                      : borderColor),
               borderRadius: NymRadius.rxs,
               // The hover glow applies in both modes, as the CSS cascade does.
               boxShadow: _hover
@@ -1176,7 +1261,38 @@ class _ActionButtonState extends State<_ActionButton> {
             ),
             child: Column(
               children: [
-                NymSvgIcon(widget.svg, size: 16, color: fg),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    NymSvgIcon(widget.svg, size: 16, color: fg),
+                    if (widget.badge > 0)
+                      Positioned(
+                        top: -6,
+                        left: 10,
+                        child: Container(
+                          key: const ValueKey('menu-notifications-badge'),
+                          constraints:
+                              const BoxConstraints(minWidth: 16, minHeight: 16),
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: c.danger,
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(8)),
+                          ),
+                          child: Text(
+                            widget.badge > 99 ? '99+' : '${widget.badge}',
+                            style: const TextStyle(
+                              color: Color(0xFFFFFFFF),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              height: 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 3),
                 Text(
                   widget.label.toUpperCase(),
@@ -1520,6 +1636,52 @@ class _MiniIconState extends State<_MiniIcon> {
   }
 }
 
+class _LockedChatsEntry extends StatelessWidget {
+  const _LockedChatsEntry({required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return Stack(
+      key: const ValueKey('locked-chats-entry'),
+      clipBehavior: Clip.none,
+      children: [
+        _MiniIcon(
+          svg: ChatLockIcons.lock,
+          tooltip: tr(ChatLockStrings.lockedChats),
+          onTap: onTap,
+        ),
+        if (count > 0)
+          Positioned(
+            top: -6,
+            right: -8,
+            child: IgnorePointer(
+              child: Container(
+                key: const ValueKey('locked-chats-badge'),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: c.primary,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  count > 99 ? '99+' : '$count',
+                  style: TextStyle(
+                    color: c.bg,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _PmEntry {
   _PmEntry.pm(PMConversation this.pm)
       : group = null,
@@ -1575,6 +1737,9 @@ class _GroupListItem extends ConsumerWidget {
 
   void _leaveMenu(BuildContext context, WidgetRef ref, Offset at) {
     showSidebarQuickMenu(context, at, [
+      ...chatNavSidebarItems(ref, 'group-${group.id}'),
+      ...chatLockSidebarItems(ref, 'group-${group.id}'),
+      ...chatToolSidebarItems(context, 'group-${group.id}'),
       SidebarQuickMenuItem(
         label: tr('Leave conversation'),
         svg: NymIcons.logout,
@@ -1602,8 +1767,11 @@ class _GroupListItem extends ConsumerWidget {
     final name = group.name.isEmpty ? tr('Group') : group.name;
     final otherMembers =
         group.members.where((pk) => pk != selfPubkey).toList(growable: false);
+    ref.watch(chatNavRevisionProvider);
+    final pinned = !active &&
+        ref.read(chatNavProvider).pinIndexOfChat('group-${group.id}') >= 0;
 
-    return Padding(
+    final Widget row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: SidebarRowGestures(
         onTap: onTap,
@@ -1625,10 +1793,16 @@ class _GroupListItem extends ConsumerWidget {
                         ? (c.isLight
                             ? Colors.black.withValues(alpha: 0.04)
                             : Colors.white.withValues(alpha: 0.06))
-                        : Colors.transparent,
+                        : pinned
+                            ? const Color(0x1A9696A0)
+                            : Colors.transparent,
                 borderRadius: NymRadius.rxs,
                 border: Border.all(
-                  color: active ? c.primaryA(0.20) : Colors.transparent,
+                  color: active
+                      ? c.primaryA(0.20)
+                      : pinned
+                          ? const Color(0x339696A0)
+                          : Colors.transparent,
                   width: 1,
                 ),
                 boxShadow: active && !c.isLight
@@ -1686,6 +1860,7 @@ class _GroupListItem extends ConsumerWidget {
                       ),
                     ),
                   ),
+                  ChatNavRowBadges(storageKey: 'group-${group.id}'),
                   if (unread > 0) ...[
                     const SizedBox(width: 5),
                     _GroupUnreadPill(count: unread),
@@ -1728,6 +1903,14 @@ class _GroupListItem extends ConsumerWidget {
           ],
         ),
       ),
+    );
+    return PinnedReorder(
+      storageKey: 'group-${group.id}',
+      onHoldMenu: (pos) {
+        _leaveMenu(context, ref, pos);
+        return true;
+      },
+      child: row,
     );
   }
 }

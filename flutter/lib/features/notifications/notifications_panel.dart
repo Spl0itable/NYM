@@ -22,6 +22,8 @@ import '../i18n/i18n.dart';
 import 'notification_route_target.dart';
 import 'notification_routing.dart';
 import '../messages/format/message_content.dart';
+import '../messages/format/nym_format.dart' show NymFormat;
+import '../chat_lock/chat_lock.dart' show ChatLockStrings;
 
 /// Opening doesn't clear the badge; rows are marked viewed once ≥60% visible, with unread state snapshotted before opening.
 Future<void> showNotificationsPanel(BuildContext context) {
@@ -541,8 +543,10 @@ class _NotificationRow extends ConsumerStatefulWidget {
 
   /// Strips quoted lines and collapses whitespace so only the new text shows.
   String _displayBody() {
-    final lines =
-        entry.body.split('\n').where((l) => !l.startsWith('>')).join(' ');
+    final lines = NymFormat.stripForPreview(entry.body)
+        .split('\n')
+        .where((l) => !l.startsWith('>'))
+        .join(' ');
     final collapsed = lines.replaceAll(RegExp(r'\s+'), ' ').trim();
     return collapsed.length > 200 ? collapsed.substring(0, 200) : collapsed;
   }
@@ -561,12 +565,16 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
     // Avatar and author come from the sender pubkey, falling back to the route for older entries.
     final sender = entry.senderPubkey ?? '';
     final route = entry.route ?? '';
-    final pubkey = _isPubkey(sender) ? sender : (_isPubkey(route) ? route : '');
+    final locked = NotificationHistoryNotifier.lockedEntry?.call(entry) ?? false;
+    final pubkey = locked
+        ? ''
+        : (_isPubkey(sender) ? sender : (_isPubkey(route) ? route : ''));
     final hasPubkey = pubkey.isNotEmpty;
-    final label = widget._contextLabel();
+    final label =
+        locked ? tr(ChatLockStrings.lockedChats) : widget._contextLabel();
     final picture =
         hasPubkey ? ref.watch(usersProvider)[pubkey]?.profile?.picture : null;
-    final body = widget._displayBody();
+    final body = locked ? tr(ChatLockStrings.notifBody) : widget._displayBody();
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -616,7 +624,14 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
                     children: [
                       // Brackets show in IRC mode only.
                       _Author(
-                        entry: entry,
+                        entry: locked
+                            ? NotificationEntry(
+                                type: entry.type,
+                                title: tr(ChatLockStrings.notifTitle),
+                                body: body,
+                                ts: entry.ts,
+                              )
+                            : entry,
                         pubkey: pubkey,
                         brackets: !ref.watch(
                             settingsProvider.select((s) => s.useBubbles)),

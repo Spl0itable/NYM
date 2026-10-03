@@ -103,7 +103,7 @@ class PlatformBiometricSecretStore implements BiometricSecretStore {
     try {
       return await _auth.authenticate(
         localizedReason: tr('Unlock your Nymchat identity'),
-        options: const AuthenticationOptions(biometricOnly: true),
+        biometricOnly: true,
       );
     } catch (_) {
       return false;

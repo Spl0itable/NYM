@@ -417,13 +417,12 @@ class PasskeyBackupService {
     List<String>? publishRelays,
     List<String>? queryRelays,
     int Function()? now,
-    Uint8List? Function()? nonce,
+    this._nonce,
   })  : _platform = platform ?? const MethodChannelPasskeyPlatform(),
         _relays = relays ?? const WebSocketPasskeyRelayClient(),
         _publishRelays = publishRelays ?? passkeyPublishRelays(),
         _queryRelays = queryRelays ?? passkeyQueryRelays(),
-        _now = now ?? (() => DateTime.now().millisecondsSinceEpoch ~/ 1000),
-        _nonce = nonce;
+        _now = now ?? (() => DateTime.now().millisecondsSinceEpoch ~/ 1000);
 
   final String rpId;
   final String rpName;

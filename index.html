@@ -501,23 +501,34 @@
                 </button>
             </div>
 
-            <div class="sidebar-actions">
-                <button class="icon-btn" data-action="openShopAndCloseSidebar" title="Flair">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                    <span class="btn-label">Flair</span>
-                </button>
-                <button class="icon-btn" data-action="showSettingsAndCloseSidebar" title="Settings">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                    <span class="btn-label">Settings</span>
-                </button>
-                <button class="icon-btn" data-action="showAboutAndCloseSidebar" title="About">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-                    <span class="btn-label">About</span>
-                </button>
-                <button class="icon-btn" data-action="signOutAndCloseSidebar" title="Logout">
-                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-                    <span class="btn-label">Logout</span>
-                </button>
+            <div class="sidebar-actions" role="group" aria-label="Main menu">
+                <div class="menu-grid">
+                    <button class="icon-btn menu-tile menu-tile-primary" data-menu-item="notifications" data-action="openNotificationsAndCloseSidebar" title="Notifications" id="notificationsBtnMobile">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                        <span class="btn-label">Notifications</span>
+                        <span class="notification-count-badge nm-hidden" id="notifBadgeSidebar">0</span>
+                    </button>
+                    <button class="icon-btn menu-tile menu-tile-primary" data-menu-item="saved" data-action="openSavedAndCloseSidebar" title="Saved messages" id="savedMessagesBtnMobile">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4.5L6 21z"></path></svg>
+                        <span class="btn-label">Saved</span>
+                    </button>
+                    <button class="icon-btn menu-tile menu-tile-primary" data-menu-item="calls" data-action="gtOpenCallLinksAndCloseSidebar" title="Call links" id="callLinksBtnMobile">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14l4-4"></path><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"></path><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"></path></svg>
+                        <span class="btn-label">Calls</span>
+                    </button>
+                    <button class="icon-btn menu-tile" data-menu-item="flair" data-action="openShopAndCloseSidebar" title="Flair">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                        <span class="btn-label">Flair</span>
+                    </button>
+                    <button class="icon-btn menu-tile" data-menu-item="settings" data-action="showSettingsAndCloseSidebar" title="Settings">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                        <span class="btn-label">Settings</span>
+                    </button>
+                    <button class="icon-btn menu-tile" data-menu-item="about" data-action="showAboutAndCloseSidebar" title="About">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                        <span class="btn-label">About</span>
+                    </button>
+                </div>
             </div>
 
             <div class="nav-section" data-section="channels">
@@ -666,7 +677,7 @@
                             </div>
                             <div class="channel-action-buttons">
                                 <button class="favorite-channel-btn" id="favoriteChannelBtn" data-action="toggleFavoriteCurrentChannel"
-                                    title="Favorite channel">
+                                    title="Pin channel">
                                     <svg viewBox="0 0 24 24" width="18" height="18">
                                         <path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z" />
                                     </svg>
@@ -699,30 +710,36 @@
                         </div>
                     </div>
                 </div>
-                <div class="header-actions">
-                    <button class="icon-btn notifications-btn" data-action="openNotificationsModal" title="Notifications">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
-                            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
-                        </svg>
-                        <span class="notification-count-badge nm-hidden" id="notifBadgeDesktop">0</span>
-                    </button>
-                    <button class="icon-btn" data-action="openShop" title="Flair">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                        Flair
-                    </button>
-                    <button class="icon-btn" data-action="showSettings" title="Settings">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                        Settings
-                    </button>
-                    <button class="icon-btn" data-action="showAbout" title="About">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-                        About
-                    </button>
-                    <button class="icon-btn" data-action="signOut" title="Logout">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-                        Logout
-                    </button>
+                <div class="header-actions" role="group" aria-label="Main menu">
+                    <div class="header-actions-row header-actions-primary">
+                        <button class="icon-btn notifications-btn" data-menu-item="notifications" data-action="openNotificationsModal" title="Notifications">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path> <path d="M13.73 21a2 2 0 0 1-3.46 0"></path> </svg>
+                            Notifications
+                            <span class="notification-count-badge nm-hidden" id="notifBadgeDesktop">0</span>
+                        </button>
+                        <button class="icon-btn" data-menu-item="saved" data-action="openSavedMessages" title="Saved messages" id="savedMessagesBtn">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4.5L6 21z"></path></svg>
+                            Saved
+                        </button>
+                        <button class="icon-btn" data-menu-item="calls" data-action="gtOpenCallLinks" title="Call links" id="callLinksBtn">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14l4-4"></path><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"></path><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"></path></svg>
+                            Calls
+                        </button>
+                    </div>
+                    <div class="header-actions-row">
+                        <button class="icon-btn" data-menu-item="flair" data-action="openShop" title="Flair">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                            Flair
+                        </button>
+                        <button class="icon-btn" data-menu-item="settings" data-action="showSettings" title="Settings">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                            Settings
+                        </button>
+                        <button class="icon-btn" data-menu-item="about" data-action="showAbout" title="About">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                            About
+                        </button>
+                    </div>
                 </div>
                 <div class="mobile-header-actions">
                     <button class="mobile-notif-toggle" data-action="openNotificationsModal" title="Notifications">
@@ -793,6 +810,12 @@
             </button>
 
             <div class="input-container">
+                <button class="icon-btn input-btn attach-btn" id="attachBtn" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-controls="attachMenu" aria-expanded="false">
+                    <svg viewBox="0 0 24 24">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </button>
                 <div class="input-wrapper">
                     <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
                     <div class="autocomplete-dropdown" id="channelAutocomplete"></div>
@@ -845,6 +868,14 @@
                         <div class="message-input input-disabled" id="messageInput" role="textbox" aria-multiline="true"
                             contenteditable="false" data-placeholder="Message, / for commands, ? for Nymbot..."></div>
                         <div class="input-inline-actions" id="inputInlineActions">
+                            <button class="format-input-btn emoji-input-btn" id="emojiInputBtn" type="button" data-action="toggleEmojiPicker" title="Emoji and GIFs" aria-label="Emoji and GIFs" aria-haspopup="dialog" aria-expanded="false">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                                    <line x1="9" y1="9" x2="9.01" y2="9"></line>
+                                    <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                                </svg>
+                            </button>
                             <button class="format-input-btn" id="formatInputBtn" title="Formatting" aria-label="Formatting" aria-pressed="false">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="4 7 4 4 20 4 20 7"></polyline>
@@ -864,36 +895,58 @@
                 </div>
                 <div class="input-buttons">
                     <input type="file" class="file-input" id="fileInput" multiple accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime">
-                    <button class="icon-btn input-btn" data-action="selectImage" title="Upload Image/Video">
-                        <svg viewBox="0 0 24 24">
-                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                            <polyline points="21 15 16 10 5 21"></polyline>
-                        </svg>
-                    </button>
                     <input type="file" class="file-input" id="p2pFileInput">
-                    <button class="icon-btn input-btn" data-action="selectP2PFile" title="Share File (P2P)">
+                    <button class="icon-btn input-btn media-voice-btn composer-action" id="voiceRecordBtn" type="button" title="Voice message" aria-label="Voice message">
                         <svg viewBox="0 0 24 24">
-                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
-                            <polyline points="13 2 13 9 20 9"></polyline>
-                            <line x1="12" y1="18" x2="12" y2="12"></line>
-                            <polyline points="9 15 12 12 15 15"></polyline>
+                            <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                            <path d="M5 10a7 7 0 0 0 14 0"></path>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
                         </svg>
                     </button>
-                    <button class="icon-btn input-btn" data-action="toggleEmojiPicker" title="Emoji">
-                        <svg viewBox="0 0 24 24">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
-                            <circle cx="9" cy="9" r="1"></circle>
-                            <circle cx="15" cy="9" r="1"></circle>
-                        </svg>
+                    <div class="send-split composer-action" id="sendSplit">
+                        <button class="send-btn" id="sendBtn" disabled hidden>SEND</button>
+                        <button class="send-menu-btn" id="sendMenuBtn" type="button" hidden title="More send options" aria-haspopup="menu" aria-controls="sendMenu" aria-expanded="false" aria-label="More send options">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="18 15 12 9 6 15"></polyline>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="composer-menu attach-menu" id="attachMenu" role="menu" aria-label="Attach" hidden>
+                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="photo" data-action="selectImage">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">Photo or video</span><span class="composer-menu-reason"></span></span>
                     </button>
-                    <button class="icon-btn input-btn" data-action="toggleGifPicker" title="GIF">
-                        <svg viewBox="0 0 24 24">
-                            <text x="12" y="16" text-anchor="middle" font-size="12" fill="currentColor">GIF</text>
-                        </svg>
+                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="file" data-action="selectP2PFile">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><polyline points="9 15 12 12 15 15"></polyline></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">File</span><span class="composer-menu-reason"></span></span>
                     </button>
-                    <button class="send-btn" id="sendBtn" disabled>SEND</button>
+                    <button type="button" class="composer-menu-item nm-hidden" id="gtLocationBtn" data-attach-item="location" data-action="gtOpenLocation" role="menuitem">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-12a7 7 0 0 0-14 0c0 5.8 7 12 7 12z"></path><circle cx="12" cy="9" r="2.5"></circle></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">Location</span><span class="composer-menu-reason"></span></span>
+                    </button>
+                    <button type="button" class="composer-menu-item media-round-btn" id="videoNoteBtn" data-attach-item="videoNote" role="menuitem">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><rect x="7" y="9" width="7" height="6" rx="1.2"></rect><path d="m14 11.2 3-1.7v5l-3-1.7"></path></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">Video note</span><span class="composer-menu-reason"></span></span>
+                    </button>
+                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="poll" data-action="composerPoll">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><line x1="6" y1="20" x2="6" y2="13"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="18" y1="20" x2="18" y2="9"></line></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">Poll</span><span class="composer-menu-reason"></span></span>
+                    </button>
+                    <button type="button" class="composer-menu-item" role="menuitem" data-attach-item="event" data-action="composerEvent">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">Event</span><span class="composer-menu-reason"></span></span>
+                    </button>
+                </div>
+                <div class="composer-menu send-menu" id="sendMenu" role="menu" aria-label="Send options" hidden>
+                    <button type="button" class="composer-menu-item" role="menuitem" data-send-item="later">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">Send later</span></span>
+                    </button>
+                    <button type="button" class="composer-menu-item" role="menuitem" data-send-item="anon">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
+                        <span class="composer-menu-text"><span class="composer-menu-label">Send anonymously</span></span>
+                    </button>
                 </div>
                 <div class="emoji-picker" id="emojiPicker"></div>
                 <div class="gif-picker" id="gifPicker"></div>
@@ -1140,6 +1193,7 @@
                 <div class="relay-stats-mode" id="rsConnectionMode">
                     <span class="relay-stats-mode-label">Connection</span>
                     <span class="relay-stats-mode-value" id="rsConnectionModeValue">Connecting...</span>
+                    <button type="button" class="relay-stats-mode-btn" id="rsTransportBtn" data-action="toggleRelayTransportFromStats" hidden></button>
                     <span class="relay-stats-mode-hint" id="rsConnectionModeHint"></span>
                 </div>
                 <!-- Summary Cards -->
@@ -1358,6 +1412,10 @@
                 <button class="icon-btn" data-action="closeModal" data-modal-id="nickEditModal">Cancel</button>
                 <button class="send-btn" data-action="changeNick">Change</button>
             </div>
+            <button type="button" class="nick-logout-btn" id="nickLogoutBtn" data-action="signOut" title="Log out">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                <span>Log out</span>
+            </button>
         </div>
     </div>
 
@@ -1766,6 +1824,30 @@
                         <label class="form-label">Identity Encryption</label>
                         <button class="form-select nm-vault-settings-btn" id="vaultSettingsBtn" data-action="openVaultSettings">Encrypt identity (nsec) key on this device…</button>
                         <div class="form-hint">Optionally protect your saved identity's (nsec) private key with a password, PIN, passkey, or biometric (Face/Touch ID) so it can't be read from this device without unlocking. Passkeys (synced or hardware security keys) and biometrics use WebAuthn where supported, with password/PIN as the universal fallback.</div>
+                    </div>
+
+                    <div class="form-group" id="chatLockSettingsGroup">
+                        <label class="form-label">Chat Lock</label>
+                        <button type="button" class="form-select nm-vault-settings-btn" id="chatLockSettingsBtn" data-action="openChatLockSettings">Chat lock settings…</button>
+                        <div class="form-hint">Locked chats leave the main list and open only after Face ID, fingerprint, a passkey or your passcode. Their notifications say only "New message". The list of locked chats syncs to your other devices; each device unlocks on its own.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Screen Security</label>
+                        <select class="form-select" id="screenSecuritySelect" data-on-change="onScreenSecurityChange">
+                            <option value="off" selected>Disabled</option>
+                            <option value="on">Enabled</option>
+                        </select>
+                        <div class="form-hint" id="screenSecurityHint">Blur chats when you switch away from Nymchat. Browsers do not let websites block screenshots or screen recording. Always on inside locked chats and view-once media.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Incognito Keyboard</label>
+                        <select class="form-select" id="incognitoKeyboardSelect" data-on-change="onIncognitoKeyboardChange">
+                            <option value="off" selected>Disabled</option>
+                            <option value="on">Enabled</option>
+                        </select>
+                        <div class="form-hint" id="incognitoKeyboardHint">Turn off autocomplete, autocorrect and spell check in message boxes. The browser can't ask your keyboard app to stop learning; only Android keyboards support that.</div>
                     </div>
 
                     <div class="form-group nm-hidden" id="keyBackupSettingsLink">
@@ -2616,6 +2698,13 @@
     <script defer src="js/modules/users.js"></script>
     <script defer src="js/modules/channels.js"></script>
     <script defer src="js/modules/syntax-highlight.js"></script>
+    <script defer src="js/modules/media-notes.js"></script>
+    <script defer src="js/modules/chat-tools.js"></script>
+    <script defer src="js/modules/group-tools.js"></script>
+    <script defer src="js/modules/dm-polls.js"></script>
+    <script defer src="js/modules/chat-nav.js"></script>
+    <script defer src="js/modules/composer-model.js"></script>
+    <script defer src="js/modules/chat-lock.js"></script>
     <script defer src="js/modules/message-format.js"></script>
     <script defer src="js/modules/mesh/mesh-protocol.js"></script>
     <script defer src="js/modules/mesh/mesh-crypto.js"></script>
@@ -2645,16 +2734,23 @@
     <script defer src="js/modules/calls.js"></script>
     <script defer src="js/modules/translate.js"></script>
     <script defer src="js/modules/rich-compose.js"></script>
+    <script defer src="js/modules/media-ui.js"></script>
+    <script defer src="js/modules/chat-tools-ui.js"></script>
+    <script defer src="js/modules/group-tools-ui.js"></script>
     <script defer src="js/modules/i18n.js"></script>
     <script defer src="js/modules/sidebar-sections.js"></script>
     <script defer src="js/modules/columns.js"></script>
     <script defer src="js/modules/threads.js"></script>
     <script defer src="js/modules/polls.js"></script>
+    <script defer src="js/modules/dm-polls-ui.js"></script>
     <script defer src="js/modules/nostr-cards.js"></script>
     <script defer src="js/geo-decode.js"></script>
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>
     <script defer src="js/modules/settings.js"></script>
+    <script defer src="js/modules/chat-nav-ui.js"></script>
+    <script defer src="js/modules/chat-lock-ui.js"></script>
+    <script defer src="js/modules/composer-ui.js"></script>
     <script defer src="js/modules/key-backup.js"></script>
     <script defer src="js/modules/passkey-backup.js"></script>
     <script defer src="js/modules/build-verify.js"></script>

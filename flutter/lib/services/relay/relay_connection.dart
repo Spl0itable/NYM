@@ -51,13 +51,12 @@ WebSocketChannel defaultRelayChannelFactory(Uri url) =>
 class RelayConnection {
   RelayConnection(
     this.url, {
-    WebSocketChannelFactory channelFactory = defaultRelayChannelFactory,
+    this._channelFactory = defaultRelayChannelFactory,
     Random? random,
     this.publishTimeout = const Duration(seconds: 10),
     Duration? backoffBase,
     Duration? backoffCap,
-  })  : _channelFactory = channelFactory,
-        _rng = random ?? Random(),
+  })  : _rng = random ?? Random(),
         _backoffBase = backoffBase ?? const Duration(milliseconds: 1000),
         _backoffCap = backoffCap ?? const Duration(milliseconds: 30000),
         isAppRelay = url == RelayConfig.appRelay;

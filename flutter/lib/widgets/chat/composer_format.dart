@@ -14,7 +14,7 @@ import '../nym_icons.dart' show NymSvgIcon;
 /// Same key as the PWA so the preference carries over through settings sync.
 const String kFormatToolbarKey = 'nym_format_toolbar';
 
-enum FormatToolKind { wrap, linePrefix, codeBlock }
+enum FormatToolKind { wrap, linePrefix, codeBlock, picker }
 
 class FormatTool {
   const FormatTool({
@@ -25,6 +25,7 @@ class FormatTool {
     this.exclusive = const [],
     this.glyph,
     this.svg,
+    this.shortcut,
   });
 
   final String id;
@@ -40,6 +41,8 @@ class FormatTool {
   final String? glyph;
 
   final String? svg;
+
+  final String? shortcut;
 }
 
 const List<String> _headingPrefixes = ['### ', '## ', '# '];
@@ -50,13 +53,22 @@ const List<FormatTool> kFormatTools = [
       kind: FormatToolKind.wrap,
       token: '**',
       label: 'Bold',
-      glyph: 'B'),
+      glyph: 'B',
+      shortcut: 'b'),
   FormatTool(
       id: 'italic',
       kind: FormatToolKind.wrap,
       token: '*',
       label: 'Italic',
-      glyph: 'I'),
+      glyph: 'I',
+      shortcut: 'i'),
+  FormatTool(
+      id: 'underline',
+      kind: FormatToolKind.wrap,
+      token: '__',
+      label: 'Underline',
+      glyph: 'U',
+      shortcut: 'u'),
   FormatTool(
       id: 'strike',
       kind: FormatToolKind.wrap,
@@ -64,10 +76,22 @@ const List<FormatTool> kFormatTools = [
       label: 'Strikethrough',
       glyph: 'S'),
   FormatTool(
+    id: 'spoiler',
+    kind: FormatToolKind.wrap,
+    token: '||',
+    label: 'Spoiler',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>'
+        '<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>'
+        '<path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>',
+  ),
+  FormatTool(
     id: 'code',
     kind: FormatToolKind.wrap,
     token: '`',
     label: 'Inline code',
+    shortcut: 'e',
     svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
         'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
         '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
@@ -91,6 +115,21 @@ const List<FormatTool> kFormatTools = [
         'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
         '<line x1="4" y1="5" x2="4" y2="19"/><line x1="9" y1="7" x2="20" y2="7"/>'
         '<line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17" x2="16" y2="17"/></svg>',
+  ),
+  FormatTool(
+      id: 'subtext',
+      kind: FormatToolKind.linePrefix,
+      token: '-# ',
+      label: 'Subtext',
+      glyph: '-#'),
+  FormatTool(
+    id: 'timestamp',
+    kind: FormatToolKind.picker,
+    token: '',
+    label: 'Timestamp',
+    svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
   ),
   FormatTool(
       id: 'h1',
@@ -253,7 +292,39 @@ FormatEdit applyFormatTool(FormatEdit input, FormatTool tool) {
       return applyLinePrefix(input, tool.token, exclusive: tool.exclusive);
     case FormatToolKind.codeBlock:
       return applyCodeBlock(input, tool.token);
+    case FormatToolKind.picker:
+      return input;
   }
+}
+
+FormatTool? formatToolForShortcut(String key, {required bool shift}) {
+  final k = key.toLowerCase();
+  if (shift) {
+    return k == 'x' ? kFormatTools.firstWhere((t) => t.id == 'strike') : null;
+  }
+  for (final tool in kFormatTools) {
+    if (tool.shortcut == k) return tool;
+  }
+  return null;
+}
+
+FormatEdit insertTimestampTag(FormatEdit input, int seconds) {
+  final v = input.text;
+  var s = input.start, e = input.end;
+  if (s < 0 || e < 0) {
+    s = v.length;
+    e = v.length;
+  }
+  if (s > e) {
+    final t = s;
+    s = e;
+    e = t;
+  }
+  s = s.clamp(0, v.length);
+  e = e.clamp(s, v.length);
+  final tag = '<t:$seconds:f>';
+  final caret = s + tag.length;
+  return FormatEdit(v.substring(0, s) + tag + v.substring(e), caret, caret);
 }
 
 class ComposerMediaMatch {
@@ -485,7 +556,9 @@ class _FormatToolButtonState extends State<_FormatToolButton> {
                 tool.id == 'italic' ? FontStyle.italic : FontStyle.normal,
             decoration: tool.id == 'strike'
                 ? TextDecoration.lineThrough
-                : TextDecoration.none,
+                : (tool.id == 'underline'
+                    ? TextDecoration.underline
+                    : TextDecoration.none),
             decorationColor: color,
           ),
         );
@@ -544,8 +617,33 @@ class ComposerAttachment {
   ComposerAttachmentStatus status;
   String url;
   String error;
+  Uint8List? compressed;
+  bool compressionTried = false;
+  int? originalSize;
+  int? compressedSize;
+  ComposerUploadVariant? uploadedAs;
 
   bool get isDone => status == ComposerAttachmentStatus.done && url.isNotEmpty;
+}
+
+class ComposerUploadVariant {
+  const ComposerUploadVariant({
+    required this.hd,
+    required this.once,
+    this.onceId = '',
+    this.key = '',
+    this.nonce = '',
+    this.mime = '',
+    this.size = 0,
+  });
+
+  final bool hd;
+  final bool once;
+  final String onceId;
+  final String key;
+  final String nonce;
+  final String mime;
+  final int size;
 }
 
 /// Attachment thumbnails; an uploading tile spins and a failed tile is its own retry button.
@@ -681,7 +779,7 @@ class _MediaThumb extends StatelessWidget {
         // Decode a full-resolution pick at the chip size instead.
         cacheWidth:
             (56 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
-        errorBuilder: (_, __, ___) => _broken(c),
+        errorBuilder: (_, _, _) => _broken(c),
       );
     } else {
       media = Image.network(
@@ -691,7 +789,7 @@ class _MediaThumb extends StatelessWidget {
         fit: BoxFit.cover,
         cacheWidth:
             (56 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
-        errorBuilder: (_, __, ___) => _broken(c),
+        errorBuilder: (_, _, _) => _broken(c),
       );
     }
 

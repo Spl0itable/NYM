@@ -8,10 +8,9 @@ final RegExp kAppleBackupAccountPattern = RegExp(r'^nym_bk_[0-9a-f-]{36}$');
 class AppleKeychainBackupStore {
   AppleKeychainBackupStore({
     FlutterSecureStorage? storage,
-    String? accessGroup,
+    this._accessGroup,
     String Function()? newId,
   })  : _storage = storage ?? const FlutterSecureStorage(),
-        _accessGroup = accessGroup,
         _newId = newId ?? (() => const Uuid().v4());
 
   final FlutterSecureStorage _storage;

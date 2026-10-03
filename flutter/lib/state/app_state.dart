@@ -10,6 +10,7 @@ import '../core/constants/event_kinds.dart';
 import '../core/constants/history_window.dart';
 import '../core/utils/nym_utils.dart';
 import '../features/channels/channel_manager.dart';
+import '../features/chat_tools/chat_tools_service.dart' show chatToolsHidden;
 import '../features/emoji/custom_emoji.dart'
     show
         CustomEmojiPack,
@@ -878,6 +879,13 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Fired after a PM/group message is inserted so the controller can flush its cache.
   void Function(String storageKey)? onPmMessageIngested;
 
+  bool Function(Message m, List<Message> list)? absorbLiveHook;
+
+  void Function(String groupId, List<Message> list, String sender)?
+      slowmodeHook;
+
+  void Function(Message m, String newContent, int editAt)? onBeforeEdit;
+
   /// Fired when a new PM row is created so the critical REQ starts watching the contact's profile.
   void Function(String peerPubkey)? onPMConversationAdded;
 
@@ -904,8 +912,35 @@ class AppStateNotifier extends StateNotifier<AppState> {
     final cur = _channelLastRead[key] ?? 0;
     if (tsSec <= cur) return;
     _channelLastRead[key] = tsSec;
+    _dropReadUnread(key, tsSec);
     onChannelReadChanged?.call();
     onChannelReadMarked?.call(key, tsSec);
+    onNavReadMarked?.call(key, tsSec);
+  }
+
+  void Function(String key, int tsSec)? onNavReadMarked;
+
+  void Function(String fromKey, String toKey, bool columns)? onViewEntering;
+
+  bool Function(ChatView from, ChatView to)? viewGate;
+
+  void _dropReadUnread(String key, int tsSec) {
+    final cur = state.unreadCounts[key] ?? 0;
+    if (cur <= 0) return;
+    final msgs = state.messages[key] ?? const <Message>[];
+    final covered = msgs.any((x) => x.createdAt <= tsSec);
+    if (!covered) return;
+    final left = msgs
+        .where((x) =>
+            x.createdAt > tsSec && !x.isOwn && state.countsTowardUnread(x))
+        .length;
+    if (left >= cur) return;
+    if (left > 0) {
+      state.unreadCounts[key] = left;
+    } else {
+      state.unreadCounts.remove(key);
+    }
+    _scheduleEmit();
   }
 
   void hydrateChannelLastRead(Map<String, int> m) {
@@ -1030,6 +1065,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
   /// Edits that arrived before their original: originalId → editor pubkey → new content (capped).
   final Map<String, Map<String, String>> _pendingEdits =
       <String, Map<String, String>>{};
+
+  final Map<String, int> _pendingEditAt = <String, int>{};
 
   /// PM peers the user closed; their older backlog is ignored.
   final Set<String> _closedPMs = <String>{};
@@ -1538,7 +1575,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // Incoming edits rewrite the original in place; out-of-order edits are buffered.
     final editId = e.tagValue('edit');
     if (editId != null && editId.isNotEmpty) {
-      applyEditOrDefer(editId, e.content, editorPubkey: e.pubkey);
+      applyEditOrDefer(editId, e.content,
+          editorPubkey: e.pubkey, editAt: e.createdAt);
       return;
     }
     // `nymmesh` tag marks a relay replay of a mesh message; registering its id drops whichever copy arrives second.
@@ -2032,7 +2070,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   bool isKnownEventId(String id) => id.isNotEmpty && _seenIds.contains(id);
 
-  bool ingestPMMessage(Message m) {
+  bool ingestPMMessage(Message m, {bool countUnread = true}) {
     final rawPeer = m.conversationPubkey;
     if (rawPeer == null) return false;
     // Canonical lowercase hex: the peer id is matched exactly against lowercase constants.
@@ -2127,6 +2165,10 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (m.replyTo != null && m.anchorAt == null && peer == kNymbotPubkey) {
       anchorBotReply(list, m);
     }
+    if (absorbLiveHook?.call(m, list) == true) {
+      _scheduleEmit();
+      return false;
+    }
     m.seq = _nextIngestSeq();
 
     _insertMessageSorted(key, list, m);
@@ -2165,6 +2207,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     // Seen means the active PM, or a focused, at-bottom, visible column.
     final seenPm = _isConversationSeen(key);
     if (!seenPm &&
+        countUnread &&
         state.countsTowardUnread(m) &&
         _isUnreadByWatermark(peer, m)) {
       state.unreadCounts[peer] = (state.unreadCounts[peer] ?? 0) + 1;
@@ -2184,7 +2227,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   /// Inserts a decrypted group message; returns false on dedup or left group so metadata merges are skipped.
-  bool ingestGroupMessage(Message m) {
+  bool ingestGroupMessage(Message m, {bool countUnread = true}) {
     final gid = m.groupId;
     if (gid == null) return false;
     if (_leftGroups.contains(gid)) return false;
@@ -2198,7 +2241,12 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
     final key = m.conversationKey ?? GroupLogic.groupStorageKey(gid);
     final list = state.messages.putIfAbsent(key, () => <Message>[]);
+    if (absorbLiveHook?.call(m, list) == true) {
+      _scheduleEmit();
+      return false;
+    }
     _insertMessageSorted(key, list, m);
+    slowmodeHook?.call(gid, list, m.pubkey);
 
     final idx = state.groups.indexWhere((g) => g.id == gid);
     if (idx >= 0 && m.timestamp > state.groups[idx].lastMessageTime) {
@@ -2214,6 +2262,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
     }
     final seenGroup = _isConversationSeen(key);
     if (!seenGroup &&
+        countUnread &&
+        !m.slowHeld &&
         state.countsTowardUnread(m) &&
         _isUnreadByWatermark(key, m)) {
       // Keyed by the group's storage key, which the sidebar row reads.
@@ -3100,8 +3150,16 @@ class AppStateNotifier extends StateNotifier<AppState> {
         view.id != view.id.toLowerCase()) {
       view = ChatView.pm(view.id.toLowerCase());
     }
+    final viewGateFn = viewGate;
+    if (viewGateFn != null && !viewGateFn(state.view, view)) return;
     _forceNewColumnHint = forceNewColumn;
     _viewSwitchCount++;
+    final entering = onViewEntering;
+    if (entering != null) {
+      try {
+        entering(state.view.storageKey, view.storageKey, columnsReadGate != null);
+      } catch (_) {}
+    }
     // Clear unread and stamp the watermark on entry; in columns view only when the column read gate passes.
     final gate = columnsReadGate;
     if (gate == null || gate(view.storageKey)) {
@@ -3290,12 +3348,15 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   /// Replaces a stored message's content and flags it edited; no-op if not found.
   bool applyLocalEdit(String messageId, String newContent,
-      {String? authorPubkey}) {
+      {String? authorPubkey, int editAt = 0}) {
     var changed = false;
     for (final list in state.messages.values) {
       for (final m in list) {
         if ((m.id == messageId || m.nymMessageId == messageId) &&
             (authorPubkey == null || m.pubkey == authorPubkey)) {
+          if (m.content != newContent) {
+            onBeforeEdit?.call(m, newContent, editAt);
+          }
           m.content = newContent;
           m.isEdited = true;
           changed = true;
@@ -3308,15 +3369,22 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   /// Applies an incoming edit in place, or buffers it until the original arrives; never append it as a new message.
   void applyEditOrDefer(String originalId, String newContent,
-      {required String editorPubkey, bool verified = true}) {
+      {required String editorPubkey, bool verified = true, int editAt = 0}) {
     if (!verified || originalId.isEmpty || editorPubkey.isEmpty) return;
     if (_hasMessageWithId(originalId)) {
-      applyLocalEdit(originalId, newContent, authorPubkey: editorPubkey);
+      applyLocalEdit(originalId, newContent,
+          authorPubkey: editorPubkey, editAt: editAt);
     } else {
       final byEditor =
           _pendingEdits.putIfAbsent(originalId, () => <String, String>{});
       byEditor.remove(editorPubkey);
       byEditor[editorPubkey] = newContent;
+      _pendingEditAt['$originalId|$editorPubkey'] = editAt > 0
+          ? editAt
+          : DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if (_pendingEditAt.length > 4000) {
+        _pendingEditAt.remove(_pendingEditAt.keys.first);
+      }
       if (byEditor.length > 8) byEditor.remove(byEditor.keys.first);
       // Bound the buffer for originals that never land.
       if (_pendingEdits.length > 2000) {
@@ -3341,7 +3409,9 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (pending == null) return false;
     var applied = false;
     for (final entry in pending.entries) {
-      if (applyLocalEdit(hitKey, entry.value, authorPubkey: entry.key)) {
+      final at = _pendingEditAt.remove('$hitKey|${entry.key}') ?? 0;
+      if (applyLocalEdit(hitKey, entry.value,
+          authorPubkey: entry.key, editAt: at)) {
         applied = true;
       }
     }
@@ -3498,6 +3568,29 @@ class AppStateNotifier extends StateNotifier<AppState> {
   }
 
   /// Removes a message locally, matching event id or nymMessageId.
+  List<String> sweepExpiredMessages(bool Function(Message m) hidden) {
+    final touched = <String>[];
+    state.messages.forEach((key, list) {
+      if (!list.any((m) => m.expiresAt != null)) return;
+      final before = list.length;
+      list.removeWhere((m) {
+        final hit = hidden(m);
+        if (hit) _unindexMessage(m);
+        return hit;
+      });
+      if (list.length != before) touched.add(key);
+    });
+    if (touched.isNotEmpty) {
+      for (final k in touched) {
+        onPmMessageIngested?.call(k);
+      }
+      _scheduleEmit();
+    }
+    return touched;
+  }
+
+  void touch() => _scheduleEmit();
+
   bool removeMessage(String messageId, {String? author, String? storageKey}) {
     var changed = false;
     bool matches(Message m) =>
@@ -4020,6 +4113,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
           final fraction = (windowSec - whole * 3600) / 3600;
           if (fraction > 0) count += (buckets[whole] * fraction).floor();
         }
+        if (count <= 0 && lastRead > 0 && newest > lastRead) count = 1;
         if (count <= 0) return;
         // D1 is a floor: only raise the badge.
         if (count > (state.unreadCounts[storageKey] ?? 0)) {
@@ -4054,10 +4148,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
       String? pubkeyOverride,
       String? authorOverride,
       Map<String, dynamic>? fileOffer,
-      String? threadRoot}) {
+      String? threadRoot,
+      ChatView? viewOverride}) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return null;
-    final view = state.view;
+    final view = viewOverride ?? state.view;
     final list = state.messages.putIfAbsent(view.storageKey, () => <Message>[]);
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final nowSec = nowMs ~/ 1000;
@@ -4087,6 +4182,11 @@ class AppStateNotifier extends StateNotifier<AppState> {
       isFileOffer: fileOffer != null,
       fileOffer: fileOffer,
     );
+    if (view.kind != ViewKind.channel && absorbLiveHook?.call(m, list) == true) {
+      if (nymMessageId != null) _seenNymMessageIds.add(nymMessageId);
+      _scheduleEmit();
+      return m;
+    }
     list.add(m);
     m.optimistic = true;
     // Index PM/group echoes by nymMessageId so ephemeral receipts can find them; channels index via [replaceOptimistic].
@@ -4323,6 +4423,10 @@ List<Message> visibleMessagesFor(AppState s, String storageKey) {
   var visible = canFilter
       ? list.where((m) => !s.isMessageFiltered(m)).toList()
       : [...list];
+  if (visible.any((m) => m.expiresAt != null)) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    visible = visible.where((m) => !chatToolsHidden(m, nowSec)).toList();
+  }
   // Thread replies are hidden from the flat view only when their root is present locally.
   if (appThreadsEnabled && visible.any((m) => m.threadRoot != null)) {
     final rootIds = <String>{
@@ -4549,7 +4653,6 @@ final blockedKeywordsProvider = Provider<Set<String>>((ref) {
 /// The user's geolocation for proximity sorting, or null when unavailable.
 final userLocationProvider = StateProvider<UserLocation?>((ref) => null);
 
-/// Sidebar channel order: PWA visibility rules, activity sort, then bands nymchat > active > pinned > unread > rest.
 final sortedChannelsProvider = Provider<List<ChannelEntry>>((ref) {
   final s = ref.watch(appStateProvider);
   final sortByProximity = ref
@@ -4582,8 +4685,8 @@ final sortedChannelsProvider = Provider<List<ChannelEntry>>((ref) {
   // Stable within each band, like flex `order` ties.
   int orderBand(ChannelEntry ch) {
     if (ch.key == kDefaultChannel) return -4;
-    if (ch.key == activeKey) return -3;
-    if (s.pinnedChannels.contains(ch.key)) return -2;
+    if (s.pinnedChannels.contains(ch.key)) return -3;
+    if (ch.key == activeKey) return -2;
     if ((s.unreadCounts[ch.storageKey] ?? 0) > 0) return -1;
     return 0;
   }
@@ -4959,12 +5062,50 @@ class NotificationHistoryNotifier
   }
 
   /// Unread count: within 24h, not viewed, sender not blocked, observed after the last-read watermark.
+  static bool Function(NotificationEntry e)? lockedEntry;
+
+  void recountUnread() {
+    final unread = _countUnread(state.entries);
+    if (unread != state.unread) state = state.copyWith(unread: unread);
+  }
+
+  void redactWhere(
+      bool Function(NotificationEntry e) test, String title, String body) {
+    var changed = false;
+    final entries = [
+      for (final e in state.entries)
+        if (test(e) && (e.title != title || e.body != body || e.contextLabel != null))
+          (() {
+            changed = true;
+            return NotificationEntry(
+              type: e.type,
+              title: title,
+              body: body,
+              ts: e.ts,
+              receivedAt: e.receivedAt,
+              route: e.route,
+              eventId: e.eventId,
+              senderPubkey: e.senderPubkey,
+              threadRoot: e.threadRoot,
+              viewed: e.viewed,
+            );
+          })()
+        else
+          e,
+    ];
+    if (!changed) return;
+    state = state.copyWith(entries: entries, unread: _countUnread(entries));
+    _persist();
+  }
+
   int _countUnread(List<NotificationEntry> entries) {
     final cutoff = DateTime.now().millisecondsSinceEpoch - _maxAgeMs;
     final lastRead = _channelLastReadSnapshot();
+    final locked = lockedEntry;
     return entries
         .where((e) =>
             !e.viewed &&
+            !(locked != null && locked(e)) &&
             e.ts > cutoff &&
             // Observed at or under the synced watermark means read elsewhere.
             e.receivedAt > _lastReadTimeMs &&
@@ -5016,6 +5157,7 @@ class NotificationHistoryNotifier
     String? contextLabel,
     String? threadRoot,
     int? receivedAtMs,
+    bool exactOnly = false,
   }) {
     // Channel digests never enter the bell history, on any path.
     if (body.contains('10 recent messages:')) return;
@@ -5046,6 +5188,7 @@ class NotificationHistoryNotifier
             contextLabel: contextLabel,
             threadRoot: threadRoot,
             receivedAtMs: observedAt,
+            exactOnly: exactOnly,
           ));
       return;
     }
@@ -5065,6 +5208,7 @@ class NotificationHistoryNotifier
           e.eventId == eventId) {
         return true;
       }
+      if (exactOnly && eventId != null && eventId.isNotEmpty) return false;
       return e.title == title &&
           e.body == body &&
           (e.senderPubkey ?? '') == (senderPubkey ?? '') &&

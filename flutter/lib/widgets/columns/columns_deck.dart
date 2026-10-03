@@ -14,6 +14,9 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/chat_nav/chat_nav_providers.dart';
+import '../../features/chat_nav/chat_nav_service.dart';
+import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/nymbot/nymbot_providers.dart'
     show BotChatController, botChatControllerProvider, mergeBotThreadWithInfo;
@@ -39,6 +42,7 @@ import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
 import '../context_menu/profile_badges.dart';
 import '../nym_icons.dart';
+import '../../features/chat_lock/chat_lock_providers.dart';
 
 class _CvDimens {
   static const double column = 360;
@@ -326,6 +330,8 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       _columns.addAll(
           pmOnly ? saved.where((d) => d.kind != _ColumnKind.channel) : saved);
     }
+    final lock = ref.read(chatLockProvider);
+    _columns.removeWhere((d) => lock.blocks(d.storageKey));
 
     if (_columns.isEmpty) {
       if (!pmOnly) {
@@ -337,12 +343,15 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
         );
         _columns.add(_ColumnDesc.channel(nymchat.channel, nymchat.geohash));
       }
-      if (pms.isNotEmpty) {
+      final openPms =
+          pms.where((p) => !lock.blocks('pm-${p.pubkey.toLowerCase()}')).toList();
+      if (openPms.isNotEmpty) {
         // Already most-recent-first.
-        _columns.add(_ColumnDesc.pm(pms.first.pubkey, nym: pms.first.nym));
+        _columns.add(_ColumnDesc.pm(openPms.first.pubkey, nym: openPms.first.nym));
       }
-      if (groups.isNotEmpty) {
-        final g = [...groups]
+      final openGroups = groups.where((g) => !lock.blocks('group-${g.id}')).toList();
+      if (openGroups.isNotEmpty) {
+        final g = [...openGroups]
           ..sort((a, b) => b.lastMessageTime - a.lastMessageTime);
         _columns.add(_ColumnDesc.group(g.first.id));
       }
@@ -942,7 +951,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       barrierLabel: tr('Columns'),
       barrierColor: Colors.black.withValues(alpha: 0.5),
       transitionDuration: Duration.zero,
-      pageBuilder: (ctx, _, __) => Material(
+      pageBuilder: (ctx, _, _) => Material(
         type: MaterialType.transparency,
         child: _TabsSheet(
           columns: List<_ColumnDesc>.from(_columns),
@@ -1121,6 +1130,12 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final transparentColumns =
         ref.watch(settingsProvider.select((s) => s.columnsWallpaper));
     _seedIfNeeded(channels, pms, groups, pmOnly);
+    ref.listen<int>(chatLockRevisionProvider, (_, _) {
+      final lock = ref.read(chatLockProvider);
+      for (final d in List.of(_columns)) {
+        if (lock.blocks(d.storageKey)) _doRemoveColumn(d);
+      }
+    });
 
     // The deck is the navigation sink in columns mode.
     ref.listen<ChatView>(
@@ -1516,16 +1531,22 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   /// Detects appended messages for autoscroll.
   int _lastMessageCount = 0;
 
+  late final ChatNavListBinding _nav = ChatNavListBinding(ref, _positions);
+  late final ChatNavService _navService;
+  String? _navBreak;
+
   @override
   void initState() {
     super.initState();
     _positions.itemPositions.addListener(_onPositionsChanged);
+    _navService = ref.read(chatNavProvider);
   }
 
   @override
   void didUpdateWidget(covariant _DeckColumn old) {
     super.didUpdateWidget(old);
     if (old.desc.storageKey != widget.desc.storageKey) {
+      _navService.release(old.desc.storageKey);
       // A repurposed column re-renders pinned to the newest message.
       _lastMessageCount = 0;
       _atBottom = true;
@@ -1547,6 +1568,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   @override
   void dispose() {
     _positions.itemPositions.removeListener(_onPositionsChanged);
+    _navService.release(widget.desc.storageKey);
+    _nav.dispose();
     super.dispose();
   }
 
@@ -1554,6 +1577,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   void _onPositionsChanged() {
     final positions = _positions.itemPositions.value;
     if (positions.isEmpty) return;
+    _nav.update();
     ItemPosition? newest;
     for (final p in positions) {
       if (p.index == 0) {
@@ -1604,7 +1628,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
         cached.rev == app.displayRev &&
         cached.count == messages.length &&
         cached.mentionToken == mentionToken &&
-        cached.useBubbles == settings.useBubbles) {
+        cached.useBubbles == settings.useBubbles &&
+        cached.breakBefore == _navBreak) {
       return cached;
     }
     final groups = buildMessageGroups(
@@ -1612,6 +1637,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       reactions: app.reactions,
       useBubbles: settings.useBubbles,
       mentionToken: mentionToken,
+      breakBefore: _navBreak,
     );
     final indexById = <String, int>{};
     final indexByUnit = <String, int>{};
@@ -1630,6 +1656,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       count: messages.length,
       mentionToken: mentionToken,
       useBubbles: settings.useBubbles,
+      breakBefore: _navBreak,
       groups: groups,
       indexById: indexById,
       indexByUnit: indexByUnit,
@@ -1707,6 +1734,10 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
 
   bool _onScroll(ScrollNotification n) {
     _keeper.observe(n);
+    if ((n is ScrollUpdateNotification && n.dragDetails != null) ||
+        n is UserScrollNotification) {
+      _nav.userScrolled();
+    }
     if (n is ScrollEndNotification &&
         _keeper.pending &&
         !_keeper.retargeting) {
@@ -1723,7 +1754,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     final mobile = widget.mobile;
     final settings = ref.watch(settingsProvider);
     ref.listen(appStateProvider.select((s) => s.displayRev),
-        (_, __) => _keepAnchor());
+        (_, _) => _keepAnchor());
     ref.listen(activeThreadProvider, (prev, next) {
       final key = widget.desc.storageKey;
       if (next != null &&
@@ -1817,6 +1848,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                           )
                         : Builder(builder: (context) {
                             // Same MessageGroup path as the single view, so bubble columns get the gliding group avatar.
+                            _navBreak = _nav.prepare(
+                                widget.desc.storageKey, messages);
                             final built =
                                 _groupsFor(app, settings, messages);
                             final groups = built.groups;
@@ -1824,6 +1857,13 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                 messageListScrollerProvider(
                                     widget.desc.storageKey));
                             scroller.bind(_itemScroll, built.indexById);
+                            _nav.bind(built.indexById, groups.length - 1);
+                            _nav.observeLive(messages,
+                                away: !_atBottom ||
+                                    !ref
+                                        .read(appStateProvider.notifier)
+                                        .appVisible);
+                            _nav.afterBuild(scroller);
                             _unitByIndex = built.unitByIndex;
                             final restore = _listBuilt
                                 ? null
@@ -1856,12 +1896,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                       groups[groups.length - 1 - revIndex];
                                   final unitId = built.unitByIndex[revIndex]!;
                                   // Per-row RepaintBoundary, keyed by the group's lead id so appends don't restart snap-in animations.
-                                  return RepaintBoundary(
-                                    key: ValueKey(unitId),
-                                    child: AnchoredUnit(
-                                      id: unitId,
-                                      units: _anchors,
-                                      child: MessageGroup(
+                                  final group = MessageGroup(
                                       entries: entries,
                                       settings: settings,
                                       columnsMode: true,
@@ -1872,7 +1907,24 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                       trailingFor: widget.desc.storageKey == BotChatController.conversationKey
                                           ? (m) => botRunTrailing(m, context.nym)
                                           : null,
-                                    ),
+                                    );
+                                  return RepaintBoundary(
+                                    key: ValueKey(unitId),
+                                    child: AnchoredUnit(
+                                      id: unitId,
+                                      units: _anchors,
+                                      child: _navBreak != null &&
+                                              entries.first.message.id ==
+                                                  _navBreak
+                                          ? Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.stretch,
+                                              children: [
+                                                const ChatNavDivider(),
+                                                group,
+                                              ],
+                                            )
+                                          : group,
                                     ),
                                   );
                                 },
@@ -1886,6 +1938,12 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                       right: 16,
                       bottom: 16,
                       child: _ScrollBottomButton(onTap: _scrollToBottom),
+                    ),
+                  if (messages.isNotEmpty)
+                    Positioned(
+                      right: 14,
+                      bottom: _showScrollButton ? 62 : 16,
+                      child: ChatNavFabs(binding: _nav),
                     ),
                 ],
               ),
@@ -2710,10 +2768,7 @@ class _TabsSheetState extends State<_TabsSheet> {
                         ),
                       );
                     },
-                    // `onReorderItem` is unavailable on the build toolchain's Flutter.
-                    // ignore: deprecated_member_use
-                    onReorder: (oldIndex, newIndex) {
-                      if (newIndex > oldIndex) newIndex -= 1;
+                    onReorderItem: (oldIndex, newIndex) {
                       setState(() {
                         final moved = _local.removeAt(oldIndex);
                         _local.insert(newIndex, moved);
@@ -3044,6 +3099,7 @@ class _ColumnGroups {
     required this.count,
     required this.mentionToken,
     required this.useBubbles,
+    this.breakBefore,
     required this.groups,
     required this.indexById,
     required this.indexByUnit,
@@ -3054,6 +3110,7 @@ class _ColumnGroups {
   final int count;
   final String mentionToken;
   final bool useBubbles;
+  final String? breakBefore;
   final List<List<MessageGroupEntry>> groups;
   final Map<String, int> indexById;
   final Map<String, int> indexByUnit;

@@ -3,6 +3,7 @@
 Object.assign(NYM.prototype, {
 
     async publishPoll(question, options) {
+        if (this.inPMMode && typeof this.publishDmPoll === 'function') return this.publishDmPoll(question, options);
         if (!this.connected || !this.currentGeohash) {
             this.displaySystemMessage('Not connected or no channel selected.');
             return;
@@ -432,9 +433,9 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    showPollVotersModal(pollId, anchorEl, ev) {
+    showPollVotersModal(pollId, anchorEl, ev, override) {
         if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-        const poll = this.polls.get(pollId);
+        const poll = override || this.polls.get(pollId);
         if (!poll || poll.votes.size === 0) return;
 
         this.closePollVotersModal();

@@ -265,6 +265,26 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
   }
 
   Widget _mentionRow(NymColors c, MentionResult m, bool selected) {
+    if (m.isBroadcast) {
+      return _selectable(
+        c,
+        selected: selected,
+        onTap: () => widget.onSelectMention(m),
+        child: Row(
+          key: ValueKey('gtBroadcast-${m.baseNym}'),
+          children: [
+            Text('@${m.baseNym}',
+                style: TextStyle(color: c.primary, fontWeight: FontWeight.bold)),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(m.broadcastHint!,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: c.textDim, fontSize: 12)),
+            ),
+          ],
+        ),
+      );
+    }
     final badges = widget.badgesFor?.call(m.pubkey);
     final cosmetics = widget.cosmeticsFor?.call(m.pubkey);
     // Flair only; the supporter pill never shows in this dropdown.

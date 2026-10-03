@@ -13,6 +13,10 @@ import 'event_details_sheet.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/notifications/self_reference.dart';
+import '../../features/chat_tools/chat_tools_service.dart'
+    show chatToolsKeptLookup;
+import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/commands/command_i18n.dart';
 import '../../features/i18n/i18n.dart';
@@ -51,6 +55,12 @@ import '../context_menu/context_menu_panel.dart';
 import '../context_menu/interaction_hooks.dart';
 import '../context_menu/profile_badges.dart';
 import '../anchored_popup.dart';
+import '../../features/group_tools/group_tools_providers.dart';
+import '../../features/group_tools/group_tools_ui.dart';
+import '../../features/dm_polls/dm_poll_card.dart';
+import '../../features/media_notes/media_note_host.dart';
+import '../../features/media_notes/media_note_view.dart';
+import '../../features/media_notes/media_note_sender.dart';
 
 String formatTime(DateTime t, String timeFormat) {
   final h24 = t.hour;
@@ -285,8 +295,11 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       !widget.message.isHistorical &&
       DateTime.now().difference(widget.message.dateTime).inMilliseconds < 5000;
 
+  final SpoilerRevealController _spoilers = SpoilerRevealController();
+
   @override
   void dispose() {
+    _spoilers.dispose();
     if (_relativeTickerSubscribed) {
       RelativeTimeTicker.instance.removeListener(_onRelativeTick);
       _relativeTickerSubscribed = false;
@@ -340,39 +353,18 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     }
   }
 
-  static final RegExp _htmlTagRe = RegExp(r'<[^>]*>');
-
-  static final RegExp _dupSuffixRe =
-      RegExp(r'@([^@#\s]+)#([0-9a-f]{4})#\2\b', caseSensitive: false);
-
-  /// `.mentioned` highlight: port of the PWA's case-insensitive `isMentioned`; never for self or PM/group rows.
+  /// `.mentioned` highlight: port of the PWA's case-insensitive `isMentioned`; never for self or 1:1 PM rows.
   bool _isMentionedRow() {
-    if (message.isOwn || message.isPM) return false;
+    if (message.isOwn || (message.isPM && !message.isGroup)) return false;
     if (widget.mentioned) return true;
-    final cleanNym = stripPubkeySuffix(ref.read(appStateProvider).selfNym);
-    if (cleanNym.isEmpty) return false;
-    final selfPubkey = ref.read(nostrControllerProvider).identity?.pubkey;
-    final rawSuffix = selfPubkey != null ? getPubkeySuffix(selfPubkey) : '';
-    // `????` means a non-hex tail, so no suffix.
-    final sfx = rawSuffix == '????' ? '' : RegExp.escape(rawSuffix);
-    final esc = RegExp.escape(cleanNym);
-    var clean = message.content
-        .replaceAll(_htmlTagRe, '')
-        .replaceAllMapped(_dupSuffixRe, (m) => '@${m[1]}#${m[2]}');
-    // A `> @me:` quote-reply addressed to us still counts.
-    final quoteToMe = RegExp('^\\s*>+\\s*@$esc(?:#$sfx)?\\s*:',
-        caseSensitive: false, multiLine: true);
-    if (quoteToMe.hasMatch(clean)) return true;
-    // Mentions inside quoted lines don't highlight.
-    clean = clean
-        .split('\n')
-        .where((line) => !line.trimLeft().startsWith('>'))
-        .join('\n');
-    // `@nym` followed by our suffix, or by anything that is not another 4-hex suffix.
-    final tail = sfx.isNotEmpty
-        ? '(?:#$sfx\\b|(?!#[0-9a-f]{4})(?:\\b|\$))'
-        : '(?!#[0-9a-f]{4})(?:\\b|\$)';
-    return RegExp('@$esc$tail', caseSensitive: false).hasMatch(clean);
+    if (message.isGroup && ref.read(groupToolsProvider).mentionsAll(message)) {
+      return true;
+    }
+    return contentMentionsSelf(
+      content: message.content,
+      nym: ref.read(appStateProvider).selfNym,
+      pubkey: ref.read(nostrControllerProvider).identity?.pubkey,
+    );
   }
 
   /// Reply count for a thread root (0 hides the link).
@@ -572,8 +564,27 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     return bitchatUserColor(message.pubkey, isLight: c.isLight);
   }
 
-  /// Body: a P2P file-offer card, a redacted block, or rich content tinted by the active style.
   Widget _bodyContent(
+    BuildContext context,
+    Color color,
+    double fontSize, {
+    MessageStyleDecoration? deco,
+    bool bubble = false,
+  }) {
+    return MediaNoteHost(
+      isOwn: message.isOwn,
+      senderPubkey: message.pubkey,
+      groupId: message.isGroup ? message.groupId : null,
+      messageId: message.id,
+      localPath: message.hasLocalMedia ? message.localMediaPath : null,
+      meshPeerPubkey: message.viaMesh ? message.pubkey : null,
+      child: _bodyContentInner(context, color, fontSize,
+          deco: deco, bubble: bubble),
+    );
+  }
+
+  /// Body: a P2P file-offer card, a redacted block, or rich content tinted by the active style.
+  Widget _bodyContentInner(
     BuildContext context,
     Color color,
     double fontSize, {
@@ -599,6 +610,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     }
     // Locally stored mesh media renders inline in place of the text body.
     if (message.hasLocalMedia) {
+      final note = localMediaNote(message.localMediaName, message.localMediaMime);
+      if (note != null) {
+        return MediaNoteView(note: note, localPath: message.localMediaPath);
+      }
       return _LocalMediaBody(
         path: message.localMediaPath!,
         mime: message.localMediaMime,
@@ -606,6 +621,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         colors: context.nym,
       );
     }
+    if (gtHasCard(message)) return GtMessageCard(message: message);
+    if (dmPollHasCard(message)) return DmPollCard(message: message);
     // Redacted cosmetic: real text for 10s, then a translucent bar.
     final Widget body;
     if (_cosmetics.isRedacted) {
@@ -871,6 +888,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           initialTopic: 'Spam false positive',
           initialMessage: body,
         );
+      case SystemActionKind.retryMediaNote:
+        ref.read(mediaNoteSenderProvider).retry();
     }
   }
 
@@ -1201,7 +1220,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         spacing: 10,
         runSpacing: 10,
         children: [
-          if (timeItem != null) timeItem,
+          ?timeItem,
           authorItem,
           ConstrainedBox(
             constraints: BoxConstraints(
@@ -1219,18 +1238,27 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       children: [
         messageRow,
         // Top-level sibling after the content, so it right-aligns across the whole row.
-        if (message.isEdited)
+        if (message.isEdited ||
+            (message.expiresAt != null &&
+                chatToolsKeptLookup(message.nymMessageId)))
           Align(
             alignment: Alignment.centerRight,
             child: Padding(
               padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                tr('(edited)'),
-                style: TextStyle(
-                  color: c.textDim.withValues(alpha: 0.7),
-                  fontSize: 10,
-                  fontStyle: FontStyle.italic,
-                ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  KeptBadge(message: message),
+                  if (message.isEdited)
+                    EditedLabel(
+                      message: message,
+                      style: TextStyle(
+                        color: c.textDim.withValues(alpha: 0.7),
+                        fontSize: 10,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
@@ -1380,9 +1408,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final timeLine = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (message.expiresAt != null &&
+            chatToolsKeptLookup(message.nymMessageId))
+          KeptBadge(message: message),
         if (message.isEdited)
-          Text(
-            '${tr('(edited)')} ',
+          EditedLabel(
+            message: message,
+            trailingSpace: true,
             style: TextStyle(
                 color: c.textDim.withValues(alpha: 0.7),
                 fontSize: 10,
@@ -2110,13 +2142,16 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (message.id.startsWith(kNymbotWelcomeIdPrefix)) {
       displayContent = localizeBotWelcome(message.id, displayContent);
     }
+    final botAuthored = message.isBot ||
+        ref.read(nostrControllerProvider).isVerifiedBot(message.pubkey);
     // Show bot command names in the vocabulary this device accepts.
-    if (message.isBot ||
-        ref.read(nostrControllerProvider).isVerifiedBot(message.pubkey)) {
+    if (botAuthored) {
       displayContent = localizeCommandTokensIn(displayContent);
     }
     final body = MessageContent(
       content: displayContent,
+      commonMark: botAuthored,
+      spoilers: _spoilers,
       baseColor: deco?.textColorFor(bubble: bubble) ?? color,
       fontSize: fontSize,
       blurImages: blur,
@@ -2138,6 +2173,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         ).createShader(rect),
         child: MessageContent(
           content: displayContent,
+          commonMark: botAuthored,
+          spoilers: _spoilers,
           baseColor: Colors.white,
           fontSize: fontSize,
           blurImages: blur,
@@ -2151,6 +2188,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         children: [
           MessageContent(
             content: displayContent,
+            commonMark: botAuthored,
+            spoilers: _spoilers,
             baseColor: const Color(0x00000000),
             fontSize: fontSize,
             blurImages: false,
@@ -3590,6 +3629,7 @@ List<List<MessageGroupEntry>> buildMessageGroups(
   required Map<String, List<MessageReaction>> reactions,
   required bool useBubbles,
   String mentionToken = '',
+  String? breakBefore,
 }) {
   // Same predicate as messages_list `_groupsWith`.
   bool groupsWith(Message prev, Message cur) =>
@@ -3612,6 +3652,7 @@ List<List<MessageGroupEntry>> buildMessageGroups(
     );
     if (useBubbles &&
         groups.isNotEmpty &&
+        m.id != breakBefore &&
         groupsWith(groups.last.last.message, m)) {
       groups.last.add(entry);
     } else {
@@ -3705,7 +3746,7 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
                   ? _avatarDx
                   : null,
             ),
-            if (widget.trailingFor?.call(entries[i].message) case final t?) t,
+            ?widget.trailingFor?.call(entries[i].message),
           ],
         ];
 
@@ -4489,9 +4530,9 @@ class _LocalMediaBody extends StatelessWidget {
   Future<void> _shareFile() async {
     try {
       final bytes = await _read(path);
-      await Share.shareXFiles(
-        [XFile.fromData(bytes, mimeType: mime, name: name)],
-      );
+      await SharePlus.instance.share(ShareParams(
+        files: [XFile.fromData(bytes, mimeType: mime, name: name)],
+      ));
     } catch (_) {
       // Sharing unavailable (desktop/test).
     }
@@ -4501,7 +4542,7 @@ class _LocalMediaBody extends StatelessWidget {
     Navigator.of(context).push(PageRouteBuilder<void>(
       opaque: false,
       barrierColor: Colors.black87,
-      pageBuilder: (_, __, ___) => _FullscreenImage(
+      pageBuilder: (_, _, _) => _FullscreenImage(
         bytes: bytes,
         onShare: _shareFile,
         colors: colors,

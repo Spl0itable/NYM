@@ -847,6 +847,7 @@ Object.assign(NYM.prototype, {
         for (const link of links) {
             const href = link.getAttribute('href');
             if (!href || seen.has(href)) continue;
+            if (typeof link.closest === 'function' && link.closest('.spoiler')) continue;
             // Skip media URLs (already embedded inline).
             if (/\.(jpg|jpeg|png|gif|webp|mp4|webm|ogg|mov)(\?.*)?$/i.test(href)) continue;
             seen.add(href);
@@ -1157,7 +1158,7 @@ Object.assign(NYM.prototype, {
             if (!e.target.closest('.enhanced-emoji-modal') &&
                 !e.target.closest('.reaction-btn') &&
                 !e.target.closest('.add-reaction-btn') &&
-                !e.target.closest('.icon-btn.input-btn[title="Emoji"]') &&
+                !e.target.closest('#emojiInputBtn') &&
                 !e.target.closest('#ctxReact') &&
                 !e.target.closest('.call-react-more') &&
                 !e.target.closest('#swipeReactEmojiBtn')) {
@@ -1165,7 +1166,7 @@ Object.assign(NYM.prototype, {
             }
 
             if (!e.target.closest('.gif-picker') &&
-                !e.target.closest('.icon-btn[title="GIF"]')) {
+                !e.target.closest('#emojiInputBtn')) {
                 this.closeGifPicker();
             }
 
@@ -1230,7 +1231,9 @@ Object.assign(NYM.prototype, {
         document.getElementById('p2pFileInput').addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
                 const file = e.target.files[0];
-                if (file.name.endsWith('.torrent') || file.type === 'application/x-bittorrent') {
+                if (typeof this.sendFileOverMesh === 'function' && typeof this._mediaRoute === 'function' && this._mediaRoute() === 'mesh') {
+                    this.sendFileOverMesh(file);
+                } else if (file.name.endsWith('.torrent') || file.type === 'application/x-bittorrent') {
                     this.shareP2PFileTorrent(file);
                 } else {
                     this.shareP2PFile(file);
@@ -1993,6 +1996,7 @@ Object.assign(NYM.prototype, {
             wrap.className = 'rich-md rich-md-' + n.type
                 + (shown ? ' rich-md-open' : '')
                 + (n.emptyBody ? ' rich-md-blank' : '');
+            if (n.label) wrap.dataset.label = n.label;
             if (n.open) wrap.appendChild(this._richMarkNode(n.open, shown));
             this._renderRichNodes(n.children || [], text, wrap, sel);
             if (n.close) wrap.appendChild(this._richMarkNode(n.close, shown));
@@ -2292,7 +2296,7 @@ Object.assign(NYM.prototype, {
         if (gifPicker.classList.contains('active')) {
             this.closeGifPicker();
         } else {
-            this.closeEnhancedEmojiModal();
+            this.closeEnhancedEmojiModal({ keepFocus: true });
 
             this.showGifPicker();
         }
@@ -2310,8 +2314,10 @@ Object.assign(NYM.prototype, {
 <div class="gif-attribution">Powered by <a href="https://giphy.com" target="_blank">GIPHY</a></div>
 `;
 
+        if (typeof this._composerPickerTabs === 'function') this._composerPickerTabs(gifPicker, 'gif');
+
         // Reparent to <body> so position:fixed anchors to the viewport.
-        const button = document.querySelector('.icon-btn.input-btn[title="GIF"]');
+        const button = document.getElementById('emojiInputBtn');
         document.body.appendChild(gifPicker);
         gifPicker.style.position = 'fixed';
         if (window.innerWidth <= 768) {
@@ -2329,6 +2335,7 @@ Object.assign(NYM.prototype, {
         }
 
         gifPicker.classList.add('active');
+        if (typeof this._composerPickerOpened === 'function') this._composerPickerOpened(gifPicker, 'gif');
 
         this.loadTrendingGifs();
 
@@ -2477,13 +2484,14 @@ Object.assign(NYM.prototype, {
         this.closeGifPicker();
     },
 
-    closeGifPicker() {
+    closeGifPicker(opts) {
         const gifPicker = document.getElementById('gifPicker');
         const wasOpen = gifPicker.classList.contains('active');
         gifPicker.classList.remove('active');
         gifPicker.innerHTML = '';
         gifPicker.style.cssText = '';
-        if (wasOpen && typeof this._focusMessageInput === 'function') this._focusMessageInput();
+        if (wasOpen && typeof this._composerPickerClosed === 'function') this._composerPickerClosed('gif');
+        if (wasOpen && !(opts && opts.keepFocus) && typeof this._focusMessageInput === 'function') this._focusMessageInput();
     },
 
     toggleSidebar() {

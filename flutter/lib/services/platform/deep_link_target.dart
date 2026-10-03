@@ -5,8 +5,7 @@ import 'deep_links.dart';
 /// Adapts [NostrController] to [DeepLinkTarget]; separate so deep_links.dart never imports the controller.
 class NostrControllerDeepLinkTarget implements DeepLinkTarget {
   NostrControllerDeepLinkTarget(this._controller,
-      {required Future<bool> Function(GroupInviteToken token) confirmInvite})
-      : _confirmInvite = confirmInvite;
+      {required this._confirmInvite});
   final NostrController _controller;
   final Future<bool> Function(GroupInviteToken token) _confirmInvite;
 

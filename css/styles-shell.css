@@ -558,15 +558,22 @@ body.sidebar-reorder-mode .nav-title {
 
 .sidebar-actions {
     display: none;
-    padding: 16px 12px;
+    padding: 16px 12px 10px;
     border-top: 1px solid var(--glass-border);
     gap: 6px;
-    flex-direction: row;
+    flex-direction: column;
+}
+
+.menu-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
 }
 
 .sidebar-actions .icon-btn {
+    position: relative;
     flex: 1;
-    padding: 6px 4px;
+    padding: 10px 4px 8px;
     text-align: center;
     display: inline-flex;
     flex-direction: column;
@@ -771,12 +778,24 @@ body.sidebar-reorder-mode .nav-title {
     border-bottom: none;
 }
 
+.context-menu-item svg {
+    color: var(--text-dim);
+}
+
 .context-menu-item:hover {
     background: rgba(255, 255, 255, 0.08);
     color: var(--primary);
 }
 
 .context-menu-item.danger {
+    color: var(--danger);
+}
+
+.context-menu-item:not(.report):not(.danger):hover svg {
+    color: var(--primary);
+}
+
+.context-menu-item.danger svg {
     color: var(--danger);
 }
 
@@ -963,8 +982,53 @@ body.sidebar-reorder-mode .nav-title {
 
 .header-actions {
     display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+.header-actions-row {
+    display: flex;
+    justify-content: flex-end;
     gap: 5px;
-    flex-wrap: wrap;
+}
+
+.header-actions .icon-btn {
+    padding: 4px 10px;
+    font-size: 11px;
+}
+
+.menu-tile-primary {
+    border-color: rgb(from var(--primary) r g b / 0.25);
+}
+
+.sidebar-actions .notification-count-badge {
+    top: 4px;
+    right: calc(50% - 22px);
+}
+
+.nick-logout-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 40px;
+    margin-top: 12px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    color: var(--danger);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.nick-logout-btn:hover,
+.nick-logout-btn:focus-visible {
+    background: rgb(from var(--danger) r g b / 0.12);
 }
 
 .icon-btn {

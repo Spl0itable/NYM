@@ -9,10 +9,9 @@ class NoiseSession {
   NoiseSession({
     required this.peerID,
     required this.isInitiator,
-    required Uint8List staticPrivate,
-    required Uint8List staticPublic,
-  })  : _staticPrivate = staticPrivate,
-        _staticPublic = staticPublic;
+    required this._staticPrivate,
+    required this._staticPublic,
+  });
 
   final String peerID;
   final bool isInitiator;

@@ -28,6 +28,7 @@ import 'call_providers.dart';
 import 'call_service.dart';
 import 'call_signaling.dart';
 import 'call_state.dart';
+import '../chat_lock/chat_lock_providers.dart';
 
 /// Opens the profile-only user context menu for a nick tapped in the call UI; no-op for self or empty pubkey.
 void showCallUserMenu(BuildContext context, String pubkey, {String? nym}) {
@@ -830,7 +831,7 @@ class _ChatPanel extends ConsumerWidget {
               // The gutter lives on each row so gold rows can pull their left border into it.
               padding: const EdgeInsets.symmetric(vertical: 12),
               itemCount: call.chatLog.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
               itemBuilder: (ctx, i) => _ChatRow(
                 msg: call.chatLog[i],
                 isGroup: call.isGroup,
@@ -1453,6 +1454,7 @@ class _InputRowState extends ConsumerState<_InputRow> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final incog = ref.watch(incognitoFieldFlagsProvider);
     return Stack(
       clipBehavior: Clip.none,
       children: [
@@ -1468,6 +1470,9 @@ class _InputRowState extends ConsumerState<_InputRow> {
                   onKeyEvent: _onMentionKey,
                   child: TextField(
                     controller: widget.controller,
+                    enableIMEPersonalizedLearning: incog.imeLearning,
+                    autocorrect: incog.autocorrect,
+                    enableSuggestions: incog.suggestions,
                     style: TextStyle(color: c.inputText, fontSize: 14),
                     minLines: 1,
                     maxLines: 4,

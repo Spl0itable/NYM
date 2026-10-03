@@ -24,6 +24,8 @@ class SidebarRowGestures extends StatefulWidget {
 
   static const double moveThreshold = 10;
 
+  static bool suppressMenu = false;
+
   @override
   State<SidebarRowGestures> createState() => _SidebarRowGesturesState();
 }
@@ -44,7 +46,7 @@ class _SidebarRowGesturesState extends State<SidebarRowGestures> {
     _cancelTimer();
     _pressTimer = Timer(SidebarRowGestures.holdDuration, () {
       _pressTimer = null;
-      if (!mounted) return;
+      if (!mounted || SidebarRowGestures.suppressMenu) return;
       _fired = widget.onShowMenu(_start);
     });
   }

@@ -74,8 +74,8 @@ class GeohashExplorer extends ConsumerStatefulWidget {
       barrierColor: Colors.transparent,
       barrierDismissible: false,
       transitionDuration: const Duration(milliseconds: 180),
-      pageBuilder: (_, __, ___) => GeohashExplorer(focusGeohash: focusGeohash),
-      transitionsBuilder: (_, animation, __, child) =>
+      pageBuilder: (_, _, _) => GeohashExplorer(focusGeohash: focusGeohash),
+      transitionsBuilder: (_, animation, _, child) =>
           FadeTransition(opacity: animation, child: child),
     );
   }

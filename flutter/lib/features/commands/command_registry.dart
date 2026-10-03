@@ -143,6 +143,15 @@ const List<CommandSpec> kCommandSpecs = [
     formatter: _italicFormatter,
   ),
   CommandSpec(
+    id: 'underline',
+    name: '/underline',
+    desc: 'Underline text (__text__)',
+    category: CommandCategory.formatting,
+    aliases: ['/u'],
+    takesArgs: true,
+    formatter: _underlineFormatter,
+  ),
+  CommandSpec(
     id: 'strike',
     name: '/strike',
     desc: 'Strikethrough text (~~text~~)',
@@ -150,6 +159,29 @@ const List<CommandSpec> kCommandSpecs = [
     aliases: ['/s'],
     takesArgs: true,
     formatter: _strikeFormatter,
+  ),
+  CommandSpec(
+    id: 'spoiler',
+    name: '/spoiler',
+    desc: 'Spoiler text (||text||)',
+    category: CommandCategory.formatting,
+    takesArgs: true,
+    formatter: _spoilerFormatter,
+  ),
+  CommandSpec(
+    id: 'subtext',
+    name: '/subtext',
+    desc: 'Small dimmed text (-# text)',
+    category: CommandCategory.formatting,
+    takesArgs: true,
+    formatter: _subtextFormatter,
+  ),
+  CommandSpec(
+    id: 'timestamp',
+    name: '/timestamp',
+    desc: "Timestamp in each reader's time zone",
+    category: CommandCategory.formatting,
+    takesArgs: true,
   ),
   CommandSpec(
     id: 'code',
@@ -249,7 +281,6 @@ const List<CommandSpec> kCommandSpecs = [
     name: '/poll',
     desc: 'Create poll',
     category: CommandCategory.channels,
-    context: CommandContext.channelOnly,
   ),
   CommandSpec(
     id: 'kick',
@@ -368,7 +399,10 @@ List<BotPaletteCommand> buildBotPaletteRows(String input) {
 String _meFormatter(String args) => '/me $args';
 String _boldFormatter(String args) => '**$args**';
 String _italicFormatter(String args) => '*$args*';
+String _underlineFormatter(String args) => '__${args}__';
 String _strikeFormatter(String args) => '~~$args~~';
+String _spoilerFormatter(String args) => '||$args||';
+String _subtextFormatter(String args) => '-# $args';
 String _codeFormatter(String args) => '```\n$args\n```';
 String _quoteFormatter(String args) => '> $args';
 

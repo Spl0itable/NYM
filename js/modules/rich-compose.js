@@ -10,8 +10,16 @@ const NYM_FORMAT_TOOLS = [
         html: '<span class="ft-glyph ft-italic">I</span>'
     },
     {
+        id: 'underline', wrap: '__', title: 'Underline', key: 'u',
+        html: '<span class="ft-glyph ft-underline">U</span>'
+    },
+    {
         id: 'strike', wrap: '~~', title: 'Strikethrough',
         html: '<span class="ft-glyph ft-strike">S</span>'
+    },
+    {
+        id: 'spoiler', wrap: '||', title: 'Spoiler',
+        html: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'
     },
     {
         id: 'code', wrap: '`', title: 'Inline code', key: 'e',
@@ -24,6 +32,14 @@ const NYM_FORMAT_TOOLS = [
     {
         id: 'quote', prefix: '> ', title: 'Quote',
         html: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="5" x2="4" y2="19"></line><line x1="9" y1="7" x2="20" y2="7"></line><line x1="9" y1="12" x2="20" y2="12"></line><line x1="9" y1="17" x2="16" y2="17"></line></svg>'
+    },
+    {
+        id: 'subtext', prefix: '-# ', title: 'Subtext',
+        html: '<span class="ft-glyph ft-subtext">-#</span>'
+    },
+    {
+        id: 'timestamp', picker: true, title: 'Timestamp',
+        html: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 14"></polyline></svg>'
     },
     {
         id: 'h1', prefix: '# ', exclusive: ['### ', '## ', '# '], title: 'Heading 1',
@@ -51,14 +67,42 @@ const NYM_RICH_LINE_PREFIXES = [
     { type: 'h3', mark: '### ' },
     { type: 'h2', mark: '## ' },
     { type: 'h1', mark: '# ' },
+    { type: 'subtext', mark: '-# ' },
     { type: 'quote', mark: '> ' }
 ];
+
+const NYM_RICH_LIST_RX = /^(\t| {2,})?([-*]|\d{1,9}\.) (?=\S)/;
+
+function nymRichLinePrefix(text, lineStart, lineEnd) {
+    for (const p of NYM_RICH_LINE_PREFIXES) {
+        if (lineEnd - lineStart <= p.mark.length) continue;
+        if (!text.startsWith(p.mark, lineStart)) continue;
+        return { type: p.type, open: p.mark };
+    }
+    const m = NYM_RICH_LIST_RX.exec(text.slice(lineStart, lineEnd));
+    if (!m) return null;
+    const nested = m[1] ? '2' : '';
+    if (m[2] === '-' || m[2] === '*') return { type: 'ulist' + nested, open: m[0] };
+    return { type: 'olist' + nested, open: '', visibleMark: true };
+}
+
+const NYM_RICH_TS_RX = /<t:(-?\d{1,17})(?::([tTdDfFR]))?>/g;
+
+function nymRichTimestampLabel(m) {
+    const F = (typeof window !== 'undefined' && window.NymFormat) || (typeof self !== 'undefined' && self.NymFormat) || null;
+    const sec = Number(m[1]);
+    if (!Number.isSafeInteger(sec) || Math.abs(sec) > 8640000000000) return null;
+    if (!F || typeof F.formatTimestamp !== 'function') return m[0];
+    try { return F.formatTimestamp(sec, m[2] || 'f'); } catch (_) { return null; }
+}
 
 // Ordered by precedence: at the same offset the earlier entry wins, matching the formatter's replace order.
 const NYM_RICH_INLINE = [
     { type: 'code', rx: /`([^`]+?)`/g, open: '`', close: '`', leaf: true },
+    { type: 'timestamp', rx: NYM_RICH_TS_RX, atom: true },
+    { type: 'spoiler', rx: /\|\|([^\s|](?:[^\n]*?[^\s|])??)\|\|/g, open: '||', close: '||' },
     { type: 'bold', rx: /\*\*(.+?)\*\*/g, open: '**', close: '**' },
-    { type: 'bold', rx: /(?<!\w)__(.+?)__(?!\w)/g, open: '__', close: '__' },
+    { type: 'underline', rx: /(?<!\w)__(.+?)__(?!\w)/g, open: '__', close: '__' },
     { type: 'italic', rx: /(?<![:/])\*([^*\s][^*]*)\*/g, open: '*', close: '*' },
     { type: 'italic', rx: /(?<![:/\w])_([^_\s][^_]*)_(?!\w)/g, open: '_', close: '_' },
     { type: 'strike', rx: /~~(.+?)~~/g, open: '~~', close: '~~' }
@@ -68,12 +112,12 @@ const NYM_RICH_INLINE = [
 const NYM_RICH_MAX_DEPTH = 4;
 
 // Matches against the whole draft so lookbehinds still see the real preceding character.
-function nymRichFirstMatch(text, from, to, rx) {
+function nymRichFirstMatch(text, from, to, rx, accept) {
     rx.lastIndex = from;
     let m;
     while ((m = rx.exec(text)) !== null) {
         if (m.index >= to) break;
-        if (m.index + m[0].length <= to) return m;
+        if (m.index + m[0].length <= to && (!accept || accept(m))) return m;
         rx.lastIndex = m.index + 1;
     }
     return null;
@@ -86,7 +130,7 @@ function nymRichParseInline(text, from, to, depth) {
         let best = null, spec = null;
         if (depth < NYM_RICH_MAX_DEPTH) {
             for (const s of NYM_RICH_INLINE) {
-                const m = nymRichFirstMatch(text, pos, to, s.rx);
+                const m = nymRichFirstMatch(text, pos, to, s.rx, s.atom ? (c) => nymRichTimestampLabel(c) != null : null);
                 if (m && (!best || m.index < best.index)) { best = m; spec = s; }
             }
         }
@@ -97,6 +141,15 @@ function nymRichParseInline(text, from, to, depth) {
         if (best.index > pos) out.push({ kind: 'text', start: pos, end: best.index });
         const start = best.index;
         const end = start + best[0].length;
+        if (spec.atom) {
+            out.push({
+                kind: 'inline', type: spec.type, start, end,
+                open: best[0], close: '', reveal: [], children: [],
+                label: nymRichTimestampLabel(best)
+            });
+            pos = end;
+            continue;
+        }
         const innerStart = start + spec.open.length;
         const innerEnd = end - spec.close.length;
         out.push({
@@ -122,18 +175,16 @@ function nymRichParseFlow(text, from, to, out) {
         const lineStart = pos, lineEnd = nl;
         let handled = false;
         if (lineStart === 0 || text[lineStart - 1] === '\n') {
-            for (const p of NYM_RICH_LINE_PREFIXES) {
-                if (lineEnd - lineStart <= p.mark.length) continue;
-                if (!text.startsWith(p.mark, lineStart)) continue;
+            const p = nymRichLinePrefix(text, lineStart, lineEnd);
+            if (p) {
                 out.push({
                     kind: 'line', type: p.type, start: lineStart, end: lineEnd,
-                    open: p.mark, close: '',
+                    open: p.open, close: '',
                     // Block markers never reveal; Backspace at the start of the body removes the prefix (nymRichMarkerDelete).
                     reveal: [],
-                    children: nymRichParseInline(text, lineStart + p.mark.length, lineEnd, 0)
+                    children: nymRichParseInline(text, lineStart + p.open.length, lineEnd, 0)
                 });
                 handled = true;
-                break;
             }
         }
         if (!handled && lineEnd > lineStart) {
@@ -167,6 +218,7 @@ function nymRichMarkerDelete(text, caret, forward) {
 
     for (const n of nodes) {
         if (n.kind === 'line') {
+            if (!n.open) continue;
             const markEnd = n.start + n.open.length;
             const hit = forward ? caret === n.start : caret === markEnd;
             if (hit) return { text: cut([[n.start, markEnd]]), caret: n.start };
@@ -297,11 +349,85 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         if (!tool || !input || input.disabled) return;
 
+        if (tool.picker) { this.openTimestampPicker(); return; }
         if (tool.wrap) this._wrapInputSelection(input, tool.wrap, tool.wrap);
         else if (tool.block) this._toggleInputCodeBlock(input, tool.block);
         else if (tool.prefix != null) this._toggleInputLinePrefix(input, tool.prefix, tool.exclusive);
 
         // Same signal a keystroke sends, keeping dependent UI in step.
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+    },
+
+    openTimestampPicker() {
+        const input = document.getElementById('messageInput');
+        const panels = document.getElementById('composerPanels');
+        if (!input || !panels || input.disabled) return;
+        const ui = (t) => (typeof this.uiText === 'function' ? this.uiText(t) : t);
+        let picker = document.getElementById('timestampPicker');
+        if (!picker) {
+            picker = document.createElement('div');
+            picker.id = 'timestampPicker';
+            picker.className = 'ts-picker nm-hidden';
+            picker.setAttribute('role', 'dialog');
+            picker.innerHTML = `<label class="ts-picker-label"><span class="ts-picker-title"></span>`
+                + `<input type="datetime-local" class="ts-picker-input" step="60"></label>`
+                + `<button type="button" class="ts-picker-insert"></button>`
+                + `<button type="button" class="ts-picker-cancel"></button>`;
+            const toolbar = document.getElementById('formatToolbar');
+            panels.insertBefore(picker, toolbar || null);
+            picker.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') { e.preventDefault(); this.closeTimestampPicker(); }
+                else if (e.key === 'Enter') { e.preventDefault(); this._insertPickedTimestamp(); }
+            });
+            picker.querySelector('.ts-picker-insert').addEventListener('click', () => this._insertPickedTimestamp());
+            picker.querySelector('.ts-picker-cancel').addEventListener('click', () => this.closeTimestampPicker());
+        }
+        picker.setAttribute('aria-label', ui('Insert a timestamp'));
+        picker.querySelector('.ts-picker-title').textContent = ui('Date and time');
+        picker.querySelector('.ts-picker-insert').textContent = ui('Insert');
+        picker.querySelector('.ts-picker-cancel').textContent = ui('Cancel');
+        const field = picker.querySelector('.ts-picker-input');
+        const now = new Date();
+        now.setSeconds(0, 0);
+        const pad = (n) => String(n).padStart(2, '0');
+        field.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+        this._tsPickerSel = { start: input.selectionStart, end: input.selectionEnd };
+        picker.classList.remove('nm-hidden');
+        this._refreshComposerOffsets();
+        field.focus();
+    },
+
+    closeTimestampPicker() {
+        const picker = document.getElementById('timestampPicker');
+        if (!picker || picker.classList.contains('nm-hidden')) return;
+        picker.classList.add('nm-hidden');
+        this._refreshComposerOffsets();
+        const input = document.getElementById('messageInput');
+        if (input && !input.disabled) input.focus();
+    },
+
+    _insertPickedTimestamp() {
+        const picker = document.getElementById('timestampPicker');
+        const field = picker && picker.querySelector('.ts-picker-input');
+        const ms = field && field.value ? new Date(field.value).getTime() : NaN;
+        if (!Number.isFinite(ms)) return;
+        this.insertTimestampTag(Math.floor(ms / 1000), this._tsPickerSel);
+        this.closeTimestampPicker();
+    },
+
+    insertTimestampTag(seconds, sel) {
+        const input = document.getElementById('messageInput');
+        if (!input || input.disabled || !Number.isSafeInteger(seconds)) return;
+        const tag = `<t:${seconds}:f>`;
+        const v = input.value || '';
+        let s = sel && Number.isInteger(sel.start) ? sel.start : v.length;
+        let e = sel && Number.isInteger(sel.end) ? sel.end : s;
+        if (s > e) { const t = s; s = e; e = t; }
+        s = Math.max(0, Math.min(s, v.length));
+        e = Math.max(s, Math.min(e, v.length));
+        input.value = v.slice(0, s) + tag + v.slice(e);
+        input.setSelectionRange(s + tag.length, s + tag.length);
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.focus();
     },
@@ -506,11 +632,13 @@ Object.assign(NYM.prototype, {
     composerAttachmentUrls() {
         return (this._composerAttachments || [])
             .filter(a => a.status === 'done' && a.url)
-            .map(a => a.url);
+            .map(a => (typeof this.attachmentContentFor === 'function' ? this.attachmentContentFor(a) : a.url))
+            .filter(Boolean);
     },
 
     composerHasPendingUploads() {
-        return (this._composerAttachments || []).some(a => a.status === 'uploading');
+        return (this._composerAttachments || []).some(a => a.status === 'uploading'
+            || (typeof this.attachmentStale === 'function' && this.attachmentStale(a)));
     },
 
     clearComposerAttachments() {
@@ -528,6 +656,7 @@ Object.assign(NYM.prototype, {
         const strip = document.getElementById('mediaPreviewStrip');
         const input = document.getElementById('messageInput');
         if (!strip || !input) return;
+        if (typeof this._renderMediaOptions === 'function') this._renderMediaOptions();
 
         const matches = this._composerMediaMatches(input.value || '');
         const attachments = this._composerAttachments || [];

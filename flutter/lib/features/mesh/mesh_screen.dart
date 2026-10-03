@@ -11,6 +11,7 @@ import '../../services/mesh/transport/mesh_transport.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_switch.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import 'mesh_bridge.dart' show kMeshNearbyChannel;
@@ -466,14 +467,8 @@ class _StatusBar extends ConsumerWidget {
                   Text(tr('Enable'), style: TextStyle(color: colors.primary)),
             ),
           GhostModeButton(colors: colors),
-          Switch(
+          NymSwitch(
             value: enabled,
-            // `activeColor` is deprecated and `activeThumbColor` missing on the oldest SDK, so use a resolver.
-            thumbColor: WidgetStateProperty.resolveWith(
-              (states) => states.contains(WidgetState.selected)
-                  ? colors.primary
-                  : null,
-            ),
             onChanged: (v) =>
                 ref.read(settingsProvider.notifier).setMeshEnabled(v),
           ),
@@ -572,7 +567,7 @@ class _PeersList extends ConsumerWidget {
       ..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
     return ListView.separated(
       itemCount: peers.length,
-      separatorBuilder: (_, __) => Divider(height: 1, color: colors.border),
+      separatorBuilder: (_, _) => Divider(height: 1, color: colors.border),
       itemBuilder: (_, i) {
         final peer = peers[i];
         final seed = peer.nostrPubkey ?? peer.peerID;

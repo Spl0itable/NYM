@@ -11,6 +11,8 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/nym_avatar.dart';
 import '../context_menu/profile_badges.dart';
+import '../../features/chat_nav/chat_nav_providers.dart';
+import '../../features/chat_nav/chat_nav_ui.dart';
 import '../nym_icons.dart';
 import 'pm_context_menu.dart';
 import 'sidebar_row_gestures.dart';
@@ -50,8 +52,11 @@ class PMListItem extends ConsumerWidget {
     final isSupport = ref.watch(pmSupportPeersProvider).contains(pubkey);
     final base = pickDisplayNym(appState.users[pubkey]?.nym, nym);
     final suffix = getPubkeySuffix(pubkey);
+    ref.watch(chatNavRevisionProvider);
+    final pinned = !active &&
+        ref.read(chatNavProvider).pinIndexOfChat('pm-${pubkey.toLowerCase()}') >= 0;
 
-    return Padding(
+    final Widget row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: SidebarRowGestures(
         onTap: onTap,
@@ -74,10 +79,16 @@ class PMListItem extends ConsumerWidget {
                         ? (c.isLight
                             ? Colors.black.withValues(alpha: 0.04)
                             : Colors.white.withValues(alpha: 0.06))
-                        : Colors.transparent,
+                        : pinned
+                            ? const Color(0x1A9696A0)
+                            : Colors.transparent,
                 borderRadius: NymRadius.rxs,
                 border: Border.all(
-                  color: active ? c.primaryA(0.20) : Colors.transparent,
+                  color: active
+                      ? c.primaryA(0.20)
+                      : pinned
+                          ? const Color(0x339696A0)
+                          : Colors.transparent,
                   width: 1,
                 ),
                 boxShadow: active && !c.isLight
@@ -156,6 +167,9 @@ class PMListItem extends ConsumerWidget {
                       ),
                     ),
                   ),
+                  if (pubkey.isNotEmpty)
+                    ChatNavRowBadges(
+                        storageKey: 'pm-${pubkey.toLowerCase()}'),
                   if (unread > 0) ...[
                     const SizedBox(width: 5),
                     _UnreadPill(count: unread),
@@ -199,6 +213,15 @@ class PMListItem extends ConsumerWidget {
           ],
         ),
       ),
+    );
+    return PinnedReorder(
+      storageKey: 'pm-${pubkey.toLowerCase()}',
+      onHoldMenu: (pos) {
+        if (pubkey.isEmpty) return false;
+        showPmContextMenu(context, ref, pubkey, pos);
+        return true;
+      },
+      child: row,
     );
   }
 }

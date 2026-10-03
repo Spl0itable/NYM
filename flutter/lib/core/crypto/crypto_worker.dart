@@ -60,7 +60,7 @@ Map<String, dynamic> _encodeWrapJob({
       'rumor': rumor.toJson(),
       'sk': keys.bytesToHex(senderPrivkey),
       'rcpt': recipientPubkey,
-      if (expiration != null) 'exp': expiration,
+      'exp': ?expiration,
       // Per-recipient payload format, so one fan-out can mix both.
       if (layered) 'l2': 1,
       // Present only when the recipient announced an ML-KEM key; selects the hybrid wrap per job.

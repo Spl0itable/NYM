@@ -221,16 +221,12 @@ class Nip46ConnectResult {
 
 class Nip46Service implements Nip46Signer {
   Nip46Service({
-    required Nip46KeyValueStore kv,
-    required Nip46SecureStore secure,
+    required this._kv,
+    required this._secure,
     Nip46SocketFactory? socketFactory,
     PoolTransport? Function()? poolProvider,
-    Duration requestTimeout = kNip46RequestTimeout,
-  })  : _kv = kv,
-        _secure = secure,
-        // An injected factory wins; otherwise pool-backed when it covers the relay.
-        _socketFactory = socketFactory ?? _makeDefaultFactory(poolProvider),
-        _requestTimeout = requestTimeout;
+    this._requestTimeout = kNip46RequestTimeout,
+  })  : _socketFactory = socketFactory ?? _makeDefaultFactory(poolProvider);
 
   final Nip46KeyValueStore _kv;
   final Nip46SecureStore _secure;

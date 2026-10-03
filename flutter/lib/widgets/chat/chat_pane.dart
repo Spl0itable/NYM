@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../features/group_tools/group_tools_ui.dart';
+import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -30,7 +32,6 @@ import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
-import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import '../context_menu/context_menu_actions.dart' show CtxTarget;
@@ -42,6 +43,7 @@ import '../../features/threads/thread_view.dart' show ThreadView;
 import '../columns/columns_deck.dart';
 import 'message_row.dart' show formatRelativeTime;
 import 'composer.dart';
+import '../../features/composer/composer_model.dart';
 import 'messages_list.dart';
 
 /// Call-start hook; [peer] is the PM peer pubkey, or '' for a channel/group.
@@ -77,7 +79,7 @@ class ChatPane extends ConsumerWidget {
     // Capture the container, not `ref`, so the 3s-deferred emoji prefetch can't touch a disposed ref.
     final container = ProviderScope.containerOf(context, listen: false);
     ref.listen(liveCustomEmojiProvider,
-        (_, __) => scheduleCustomEmojiPrefetch(container));
+        (_, _) => scheduleCustomEmojiPrefetch(container));
     kickCustomEmojiPrefetch(container);
 
     // The Nymbot PM always opens the paid bot surface; detection uses the bot pubkey constant, not an async list.
@@ -367,6 +369,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _titleLine(c, app, view, title, titleSize),
+                      if (view.kind == ViewKind.group)
+                        GtDescriptionLine(groupId: view.id),
                       _locationLine(c, app, view),
                       if (metaText.isNotEmpty)
                         Row(
@@ -869,8 +873,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         _ActionBtn(
           svg: isPinned ? NymIcons.starFilled : NymIcons.starOutline,
           tooltip: isDefault
-              ? tr('#nymchat is always favorited')
-              : (isPinned ? tr('Unfavorite channel') : tr('Favorite channel')),
+              ? tr('#nymchat is always at the top')
+              : (isPinned ? tr('Unpin channel') : tr('Pin channel')),
           activeColor: isPinned ? const Color(0xFFF5C518) : null,
           disabled: isDefault,
           onTap: isDefault ? null : () => controller.togglePin(channelKey),
@@ -931,58 +935,69 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     // The badge is hidden while notifications are disabled.
     final notifEnabled =
         ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
+    Widget pill(String id) => switch (id) {
+          'notifications' => _HeaderPill(
+              key: const ValueKey('menu-notifications'),
+              svg: NymIcons.bell,
+              label: tr('Notifications'),
+              badge: notifEnabled ? unread : 0,
+              onTap: _openNotifications,
+            ),
+          'saved' => _HeaderPill(
+              key: const ValueKey('menu-saved'),
+              svg: ChatToolIcons.saved,
+              label: tr('Saved'),
+              onTap: () => SavedMessagesPanel.open(context),
+            ),
+          'calls' => _HeaderPill(
+              key: const ValueKey('menu-calls'),
+              svg: GroupToolIcons.calls,
+              label: tr('Calls'),
+              onTap: () => showGtCallLinks(context),
+            ),
+          'flair' => _HeaderPill(
+              key: const ValueKey('menu-flair'),
+              svg: NymIcons.starFlair,
+              label: tr('Flair'),
+              onTap: () => ShopModal.open(context),
+            ),
+          'settings' => _HeaderPill(
+              key: const ValueKey('menu-settings'),
+              svg: NymIcons.settings,
+              label: tr('Settings'),
+              onTap: () => SettingsScreen.open(context),
+            ),
+          _ => _HeaderPill(
+              key: const ValueKey('menu-about'),
+              svg: NymIcons.info,
+              label: tr('About'),
+              onTap: () => AboutScreen.open(context),
+            ),
+        };
+    final rows = mainMenuRows('desktop').grid;
     return KeyedSubtree(
       key: TutorialTargets.keyFor(TutorialTarget.mainMenu),
-      child: Wrap(
-        spacing: 5,
-        runSpacing: 5,
-        alignment: WrapAlignment.end,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          // The notifications button is icon-only (16px bell plus badge).
-          _HeaderPill(
-            svg: NymIcons.bell,
-            label: tr('Notifications'),
-            iconOnly: true,
-            iconSize: 16,
-            badge: notifEnabled ? unread : 0,
-            onTap: _openNotifications,
-          ),
-          _HeaderPill(
-            svg: NymIcons.starFlair,
-            label: tr('Flair'),
-            onTap: () => ShopModal.open(context),
-          ),
-          _HeaderPill(
-            svg: NymIcons.settings,
-            label: tr('Settings'),
-            onTap: () => SettingsScreen.open(context),
-          ),
-          _HeaderPill(
-            svg: NymIcons.info,
-            label: tr('About'),
-            onTap: () => AboutScreen.open(context),
-          ),
-          _HeaderPill(
-            svg: NymIcons.logout,
-            label: tr('Logout'),
-            // Sign-out clears the identity and bumps the boot generation so the first-run gate remounts.
-            onTap: _confirmSignOut,
-          ),
-        ],
+      child: Semantics(
+        label: tr('Main menu'),
+        container: true,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            for (var i = 0; i < rows.length; i++) ...[
+              if (i > 0) const SizedBox(height: 4),
+              Wrap(
+                key: ValueKey('menu-row-$i'),
+                spacing: 5,
+                runSpacing: 4,
+                alignment: WrapAlignment.end,
+                children: [for (final id in rows[i]) pill(id)],
+              ),
+            ],
+          ],
+        ),
       ),
     );
-  }
-
-  Future<void> _confirmSignOut() async {
-    final ok = await showAppConfirm(
-      context,
-      tr('Sign out and disconnect from Nymchat?'),
-      okLabel: tr('Sign out'),
-      danger: true,
-    );
-    if (!ok) return;
-    await ref.read(nostrControllerProvider).signOut();
   }
 
   /// No bulk mark-viewed on open: a synced flip would silence other devices before items are seen.
@@ -1245,19 +1260,16 @@ _IconBtnStyle _iconBtnStyle(NymColors c, bool hover) {
 /// `.icon-btn` text pill; [iconOnly] drops the label, which then only feeds the tooltip.
 class _HeaderPill extends StatefulWidget {
   const _HeaderPill({
+    super.key,
     required this.svg,
     required this.label,
     required this.onTap,
     this.badge = 0,
-    this.iconOnly = false,
-    this.iconSize = 14,
   });
   final String svg;
   final String label;
   final VoidCallback onTap;
   final int badge;
-  final bool iconOnly;
-  final double iconSize;
 
   @override
   State<_HeaderPill> createState() => _HeaderPillState();
@@ -1274,7 +1286,7 @@ class _HeaderPillState extends State<_HeaderPill> {
     final pill = AnimatedContainer(
       duration: NymMotion.transition,
       curve: NymMotion.curve,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: style.fill,
         borderRadius: NymRadius.rxs,
@@ -1286,19 +1298,17 @@ class _HeaderPillState extends State<_HeaderPill> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          NymSvgIcon(widget.svg, size: widget.iconSize, color: fg),
-          if (!widget.iconOnly) ...[
-            const SizedBox(width: 5),
-            Text(
-              widget.label.toUpperCase(),
-              style: TextStyle(
-                color: fg,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.8,
-              ),
+          NymSvgIcon(widget.svg, size: 14, color: fg),
+          const SizedBox(width: 5),
+          Text(
+            widget.label.toUpperCase(),
+            style: TextStyle(
+              color: fg,
+              fontSize: 11,
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.8,
             ),
-          ],
+          ),
         ],
       ),
     );

@@ -10,6 +10,11 @@ import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/keys.dart' as keys;
 import '../../core/crypto/nym_sync_builder.dart';
 import '../../models/settings.dart';
+import '../../features/chat_tools/chat_tools.dart'
+    show ChatToolsKeys, trimSavedPayload;
+import '../../features/chat_nav/chat_nav.dart' show ChatNavKeys, trimPinnedPayload;
+import '../../features/chat_lock/chat_lock.dart'
+    show ChatLockKeys, trimLockedPayload;
 import '../../features/groups/group_logic.dart'
     show kPmDepositQueueMax, kPmDepositFlushMs, kPmDepositFlushJitterMs,
         kPmDepositBacklogMs, kPmDepositBatchMin, kPmDepositBatchMax;
@@ -22,19 +27,26 @@ import '../storage/key_value_store.dart';
 import 'api_client.dart';
 import 'api_config.dart';
 
+const int kPmDepositRetryBaseMs = 2000;
+
+const int kPmDepositRetryMaxMs = 120000;
+
+const int kPmDepositMaxAttempts = 5;
+
 /// Cross-device `/api/storage` sync (settings, profile mirror, PM archive); every call is lazy and best-effort.
 class StorageSync {
   StorageSync({
-    required ApiClient api,
-    required EventSigner signer,
+    required this._api,
+    required this._signer,
     required String pubkey,
     required bool durableIdentity,
-    KeyValueStore? kv,
-  })  : _api = api,
-        _signer = signer,
-        _pubkey = pubkey.toLowerCase(),
+    this._kv,
+    DateTime Function()? now,
+  })  : _pubkey = pubkey.toLowerCase(),
         _durable = durableIdentity,
-        _kv = kv;
+        _now = now ?? DateTime.now;
+
+  final DateTime Function() _now;
 
   final ApiClient _api;
   final EventSigner _signer;
@@ -881,6 +893,72 @@ class StorageSync {
     return '${d.year}$mm';
   }
 
+  Future<bool> savedSyncSet(Map<String, dynamic> saved) async {
+    const dTag = ChatToolsKeys.savedDTag;
+    final payload = <String, dynamic>{'savedMessages': saved};
+    try {
+      final changed =
+          await _publishCategoryWrap(payload, dTag, trim: trimSavedPayload);
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const ['saved']);
+        } catch (_) {}
+        return true;
+      }
+      return _publishedSectionJson[dTag] ==
+          jsonEncode(_mergeUnknownSectionKeys(dTag, payload));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> pinnedSyncSet(Map<String, dynamic> pinned) async {
+    const dTag = ChatNavKeys.pinnedDTag;
+    final payload = <String, dynamic>{'pinnedChats': pinned};
+    try {
+      final changed =
+          await _publishCategoryWrap(payload, dTag, trim: trimPinnedPayload);
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const ['pinned']);
+        } catch (_) {}
+        return true;
+      }
+      return _publishedSectionJson[dTag] ==
+          jsonEncode(_mergeUnknownSectionKeys(dTag, payload));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> lockedSyncSet(Map<String, dynamic> locked) async {
+    const dTag = ChatLockKeys.lockedDTag;
+    final payload = <String, dynamic>{'lockedChats': locked};
+    try {
+      final changed =
+          await _publishCategoryWrap(payload, dTag, trim: trimLockedPayload);
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const ['locked']);
+        } catch (_) {}
+        return true;
+      }
+      return _publishedSectionJson[dTag] ==
+          jsonEncode(_mergeUnknownSectionKeys(dTag, payload));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>> scheduleAction(
+      String action, Map<String, dynamic> body) {
+    return _signedWrite(<String, dynamic>{
+      ...body,
+      'action': action,
+      'pubkey': _pubkey,
+    });
+  }
+
   Future<void> botAnonSyncSet(Map<String, dynamic> payload) async {
     try {
       await _publishCategoryWrap({'botAnon': payload}, 'nymchat-botanon');
@@ -1208,6 +1286,9 @@ class StorageSync {
     // Per-group categories, applied additively regardless of the core ts gate.
     Map<String, dynamic>? groupConversations;
     Map<String, dynamic>? botAnon;
+    Map<String, dynamic>? savedMessages;
+    Map<String, dynamic>? pinnedChats;
+    Map<String, dynamic>? lockedChats;
     final groupEphemeralKeys = <String, dynamic>{};
     final groupMessageHistory = <String, List<dynamic>>{};
     for (final d in decoded) {
@@ -1232,6 +1313,15 @@ class StorageSync {
           ek.forEach(
               (gid, entry) => groupEphemeralKeys[gid.toString()] = entry);
         }
+      } else if (c == ChatToolsKeys.savedDTag) {
+        final saved = d.payload['savedMessages'];
+        if (saved is Map) savedMessages = saved.cast<String, dynamic>();
+      } else if (c == ChatNavKeys.pinnedDTag) {
+        final pinned = d.payload['pinnedChats'];
+        if (pinned is Map) pinnedChats = pinned.cast<String, dynamic>();
+      } else if (c == ChatLockKeys.lockedDTag) {
+        final locked = d.payload['lockedChats'];
+        if (locked is Map) lockedChats = locked.cast<String, dynamic>();
       } else if (c == 'nymchat-botanon') {
         final anon = d.payload['botAnon'];
         if (anon is Map) botAnon = anon.cast<String, dynamic>();
@@ -1263,7 +1353,10 @@ class StorageSync {
     final hasGroupData = groupConversations != null ||
         groupEphemeralKeys.isNotEmpty ||
         groupMessageHistory.isNotEmpty ||
-        botAnon != null;
+        botAnon != null ||
+        savedMessages != null ||
+        pinnedChats != null ||
+        lockedChats != null;
     if (toApply.isEmpty) {
       // Non-core payloads alone are still worth returning.
       return (notificationsPayload == null &&
@@ -1279,6 +1372,9 @@ class StorageSync {
               groupEphemeralKeys: groupEphemeralKeys,
               groupMessageHistory: groupMessageHistory,
               botAnon: botAnon,
+              savedMessages: savedMessages,
+              pinnedChats: pinnedChats,
+              lockedChats: lockedChats,
             );
     }
 
@@ -1297,6 +1393,9 @@ class StorageSync {
       groupEphemeralKeys: groupEphemeralKeys,
       groupMessageHistory: groupMessageHistory,
       botAnon: botAnon,
+      savedMessages: savedMessages,
+      pinnedChats: pinnedChats,
+      lockedChats: lockedChats,
     );
   }
 
@@ -1482,6 +1581,9 @@ class StorageSync {
   Timer? _depositTimer;
   int depositDropped = 0;
   int depositFailed = 0;
+  final Expando<int> _depositAttempts = Expando<int>();
+  int _depositFailStreak = 0;
+  DateTime? _depositRetryAt;
 
   /// Uploads wraps p-tagged to us into our D1 inbox (`pm-put`); no-op for ephemeral identities. Returns the count sent.
   Future<int> pmPut(List<Map<String, dynamic>> wraps) async {
@@ -1524,14 +1626,18 @@ class StorageSync {
     }
     _trim(_depositedIds);
     if (batch.isEmpty) return 0;
+    final sent = batch.take(100).toList();
     try {
       await _signedWrite({
         'action': 'pm-deposit',
         'pubkey': _pubkey,
-        'events': batch.take(100).toList(),
+        'events': sent,
       });
+      _depositFailStreak = 0;
       return batch.length;
-    } catch (_) {
+    } catch (e) {
+      _requeueDeposits(sent, e);
+      _armDepositRetry();
       return 0;
     }
   }
@@ -1561,9 +1667,67 @@ class StorageSync {
       kPmDepositBatchMin +
       _depositRandom.nextInt(kPmDepositBatchMax - kPmDepositBatchMin + 1);
 
+  Duration _depositRetryWait() {
+    final at = _depositRetryAt;
+    if (at == null) return Duration.zero;
+    final wait = at.difference(_now());
+    return wait.isNegative ? Duration.zero : wait;
+  }
+
+  bool _depositRetryable(Object err) {
+    if (err is! ApiException) return true;
+    final status = err.statusCode;
+    if (status == 0) return true;
+    return status == 408 || status == 429 || status >= 500;
+  }
+
+  Duration _depositRetryDelay(Object err, int streak) {
+    final exp = streak < 1 ? 0 : (streak > 17 ? 16 : streak - 1);
+    final backoff = min(kPmDepositRetryMaxMs, kPmDepositRetryBaseMs << exp);
+    final told = err is ApiException ? err.retryAfter : null;
+    final toldMs =
+        told == null ? 0 : min(kPmDepositRetryMaxMs, told.inMilliseconds);
+    return Duration(
+        milliseconds: max(backoff, toldMs) +
+            _depositRandom.nextInt(kPmDepositRetryBaseMs ~/ 2 + 1));
+  }
+
+  void _requeueDeposits(List<Map<String, dynamic>> batch, Object err) {
+    final retryable = _depositRetryable(err);
+    final keep = <Map<String, dynamic>>[];
+    for (final ev in batch) {
+      final n = (_depositAttempts[ev] ?? 1) + 1;
+      if (retryable && n <= kPmDepositMaxAttempts) {
+        _depositAttempts[ev] = n;
+        keep.add(ev);
+      }
+    }
+    depositFailed += batch.length - keep.length;
+    if (keep.isEmpty) return;
+    _depositFailStreak++;
+    _depositRetryAt = _now().add(_depositRetryDelay(err, _depositFailStreak));
+    _depositQueue.insertAll(0, keep);
+    while (_depositQueue.length > kPmDepositQueueMax) {
+      _depositQueue.removeAt(_depositRandom.nextInt(_depositQueue.length));
+      depositDropped++;
+    }
+  }
+
+  void _armDepositRetry() {
+    if (_depositQueue.isEmpty) return;
+    final backlog = _depositDelay(true);
+    final wait = _depositRetryWait();
+    _depositTimer ??=
+        Timer(wait > backlog ? wait : backlog, () => _flushDeposits());
+  }
+
   Future<void> _flushDeposits({bool rearm = true}) async {
     _depositTimer = null;
     if (_depositQueue.isEmpty) return;
+    if (_depositRetryWait() > Duration.zero) {
+      if (rearm) _armDepositRetry();
+      return;
+    }
     _depositQueue.shuffle(_depositRandom);
     final size = _depositBatchSize();
     final n = size < _depositQueue.length ? size : _depositQueue.length;
@@ -1575,20 +1739,20 @@ class StorageSync {
         'pubkey': _pubkey,
         'events': batch,
       });
-    } catch (_) {
-      depositFailed++;
+      _depositFailStreak = 0;
+    } catch (e) {
+      _requeueDeposits(batch, e);
     }
-    if (rearm && _depositQueue.isNotEmpty) {
-      _depositTimer ??= Timer(_depositDelay(true), () => _flushDeposits());
-    }
+    if (rearm) _armDepositRetry();
   }
 
   Future<void> flushDeposits() async {
     _depositTimer?.cancel();
     _depositTimer = null;
-    while (_depositQueue.isNotEmpty) {
+    while (_depositQueue.isNotEmpty && _depositRetryWait() == Duration.zero) {
       await _flushDeposits(rearm: false);
     }
+    _armDepositRetry();
   }
 
   /// Deletes wraps from our D1 inbox in 200-id chunks; returns rows removed; no-op for ephemeral identities.
@@ -1681,6 +1845,8 @@ class StorageSync {
   }
 
   /// Loads the next older page; empty when there is no more history.
+  bool get pmArchiveHasOlder => !_pmNoMore && _pmOldestTs != null;
+
   Future<List<Map<String, dynamic>>> pmLoadOlderFromD1() async {
     if (_pmNoMore || _pmOldestTs == null) return const [];
     return pmGet(before: _pmOldestTs!, limit: 200);
@@ -2288,6 +2454,9 @@ class SettingsLoadResult {
     this.groupEphemeralKeys = const {},
     this.groupMessageHistory = const {},
     this.botAnon,
+    this.savedMessages,
+    this.pinnedChats,
+    this.lockedChats,
   });
   final Map<String, dynamic> payload;
   final int newestTs;
@@ -2302,6 +2471,12 @@ class SettingsLoadResult {
   final Map<String, List<dynamic>> groupMessageHistory;
 
   final Map<String, dynamic>? botAnon;
+
+  final Map<String, dynamic>? savedMessages;
+
+  final Map<String, dynamic>? pinnedChats;
+
+  final Map<String, dynamic>? lockedChats;
 
   /// Decrypted `nymchat-notifications` payload, merged additively regardless of the ts gate.
   final Map<String, dynamic>? notificationsPayload;

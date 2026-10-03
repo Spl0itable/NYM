@@ -60,6 +60,8 @@ class StorageKeys {
   static const wallpaperType = 'nym_wallpaper_type';
   static const wallpaperCustomUrl = 'nym_wallpaper_custom_url';
   static const lowDataMode = 'nym_low_data_mode';
+  static const relayDirectMode = 'nym_relay_direct_mode';
+  static const relayDirectAck = 'nym_relay_direct_ack';
 
   /// Unix seconds of the last iOS background catch-up; only newer events notify, and absent means none.
   static const backgroundCatchUpTs = 'nym_background_catchup_ts';

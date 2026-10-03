@@ -4,9 +4,43 @@ import 'dart:collection';
 import 'dart:convert';
 
 import '../../../models/channel.dart' show isValidGeohash;
+import '../../group_tools/group_tools.dart' show GroupTools;
+import '../../media_notes/media_notes.dart';
+import '../../i18n/i18n.dart';
+import 'discord_timestamp.dart';
 
 /// Characters that can trigger formatting; without any, the fast path applies.
-final RegExp _rxTriggers = RegExp(r'[^\x20-\x7E\n]|[*_~`#>@:;/\\&<>"]');
+final RegExp _rxTriggers = RegExp(r'[^\x20-\x7E\n]|[*_~`#>@:;/\\&<>"|]');
+
+final RegExp _rxBlockTrigger =
+    RegExp(r'^[ \t]*(?:[-*]|\d{1,9}\.) \S', multiLine: true);
+
+const String kSpoilerMask = '\u2592\u2592\u2592\u2592';
+
+const String kSpoilerLabel = 'Spoiler, tap to reveal';
+
+const int kMaxTimestampSeconds = 8640000000000;
+
+final RegExp _rxSpoiler = RegExp(r'\|\|([^\s|](?:[^\n]*?[^\s|])??)\|\|');
+
+final RegExp _rxTimestamp = RegExp(r'<t:(-?\d{1,17})(?::([tTdDfFR]))?>');
+final RegExp _rxMediaNote = RegExp(
+    r'((?:View-once (?:photo|video|voice message): )?)(https?://[^\s#<>"]+|nymlocal:[A-Za-z0-9]{1,40})#(nym:[A-Za-z0-9=;:./_+-]+)');
+
+final RegExp _rxListLine = RegExp(r'^(\t| {2,})?([-*]|\d{1,9}\.) (\S.*)$');
+
+final RegExp _rxSubtextLine = RegExp(r'^-# (\S.*)$');
+
+final RegExp _rxCodeSpans = RegExp(r'```[\s\S]*?```|```[\s\S]*$|`[^`\n]+?`');
+
+final RegExp _rxEmphasisSentinel = RegExp('[\uFDE0-\uFDEF]');
+
+int? parseTimestampSeconds(String raw) {
+  if (!RegExp(r'^-?\d{1,17}$').hasMatch(raw)) return null;
+  final n = int.tryParse(raw);
+  if (n == null || n.abs() > kMaxTimestampSeconds) return null;
+  return n;
+}
 
 /// NIP-19 entities are alphanumeric and trip no trigger, so check them separately.
 final RegExp _rxNostrTrigger = RegExp(
@@ -21,6 +55,7 @@ class FormatContext {
     this.customEmojis = const {},
     this.proxyBase,
     this.knownChannels = const {},
+    this.commonMark = false,
   });
 
   /// Active named channel (lowercase); a matching `#ref` renders active.
@@ -38,6 +73,8 @@ class FormatContext {
   /// Currently informational only.
   final Set<String> knownChannels;
 
+  final bool commonMark;
+
   static const empty = FormatContext();
 }
 
@@ -48,7 +85,8 @@ class _ParseCacheKey {
         currentGeohash = c.currentGeohash,
         proxyBase = c.proxyBase,
         customEmojis = c.customEmojis,
-        knownChannels = c.knownChannels;
+        knownChannels = c.knownChannels,
+        commonMark = c.commonMark;
 
   final String content;
   final String? currentChannel;
@@ -56,6 +94,7 @@ class _ParseCacheKey {
   final String? proxyBase;
   final Map<String, String> customEmojis;
   final Set<String> knownChannels;
+  final bool commonMark;
 
   @override
   bool operator ==(Object other) =>
@@ -65,7 +104,8 @@ class _ParseCacheKey {
       other.currentGeohash == currentGeohash &&
       other.proxyBase == proxyBase &&
       identical(other.customEmojis, customEmojis) &&
-      identical(other.knownChannels, knownChannels);
+      identical(other.knownChannels, knownChannels) &&
+      other.commonMark == commonMark;
 
   @override
   int get hashCode => Object.hash(
@@ -75,6 +115,7 @@ class _ParseCacheKey {
         proxyBase,
         identityHashCode(customEmojis),
         identityHashCode(knownChannels),
+        commonMark,
       );
 }
 
@@ -112,6 +153,28 @@ class HeadingBlock extends FormatBlock {
   final List<InlineNode> inlines;
 }
 
+class SubtextBlock extends FormatBlock {
+  const SubtextBlock(this.inlines);
+  final List<InlineNode> inlines;
+}
+
+class ListBlock extends FormatBlock {
+  const ListBlock({
+    required this.ordered,
+    required this.start,
+    required this.items,
+  });
+  final bool ordered;
+  final int start;
+  final List<ListItemNode> items;
+}
+
+class ListItemNode {
+  const ListItemNode({required this.inlines, this.children = const []});
+  final List<InlineNode> inlines;
+  final List<ListBlock> children;
+}
+
 /// Adjacent media items collapsed into a gallery.
 class MediaBlock extends FormatBlock {
   const MediaBlock(this.items);
@@ -120,7 +183,9 @@ class MediaBlock extends FormatBlock {
 
 /// A playable audio link; never joins a gallery, where a seek bar can't be scrubbed.
 class AudioBlock extends FormatBlock {
-  const AudioBlock({required this.url, required this.fileName});
+  const AudioBlock({required this.url, required this.fileName, this.note});
+
+  final MediaNote? note;
 
   /// Playback/download URL, already proxied when a proxyBase was supplied.
   final String url;
@@ -162,6 +227,29 @@ class ItalicNode extends InlineNode {
 class StrikeNode extends InlineNode {
   const StrikeNode(this.children);
   final List<InlineNode> children;
+}
+
+class UnderlineNode extends InlineNode {
+  const UnderlineNode(this.children);
+  final List<InlineNode> children;
+}
+
+class SpoilerNode extends InlineNode {
+  const SpoilerNode(this.children);
+  final List<InlineNode> children;
+}
+
+class InlineGalleryNode extends InlineNode {
+  const InlineGalleryNode(this.items);
+  final List<MediaItem> items;
+}
+
+class TimestampNode extends InlineNode {
+  const TimestampNode(
+      {required this.seconds, required this.style, this.raw = ''});
+  final int seconds;
+  final String style;
+  final String raw;
 }
 
 class InlineCodeNode extends InlineNode {
@@ -238,6 +326,14 @@ class NostrRefNode extends InlineNode {
 class GroupInviteChip extends InlineNode {
   const GroupInviteChip({required this.name, required this.token});
   final String name;
+  final String token;
+}
+
+class CallLinkChip extends InlineNode {
+  const CallLinkChip(
+      {required this.name, required this.video, required this.token});
+  final String name;
+  final bool video;
   final String token;
 }
 
@@ -343,6 +439,76 @@ class NymFormat {
         .replaceAll(RegExp(r'^[ \t]*(?:>[ \t]*)*\[gc:[A-Za-z0-9+/=]+\]'), '');
   }
 
+  static String _mapOutsideCode(String text, String Function(String) fn) {
+    final out = StringBuffer();
+    var last = 0;
+    for (final m in _rxCodeSpans.allMatches(text)) {
+      out
+        ..write(fn(text.substring(last, m.start)))
+        ..write(m[0]);
+      last = m.end;
+    }
+    out.write(fn(text.substring(last)));
+    return out.toString();
+  }
+
+  static String maskSpoilers(String text) {
+    if (!text.contains('||')) return text;
+    return _mapOutsideCode(
+        text, (part) => part.replaceAll(_rxSpoiler, kSpoilerMask));
+  }
+
+  static String stripForPreview(String text, {String? locale, DateTime? now}) {
+    if (text.isEmpty) return text;
+    if (text.contains('#nym:')) text = previewText(text, tr);
+    return _mapOutsideCode(
+        text,
+        (part) => part
+                .replaceAll(_rxSpoiler, kSpoilerMask)
+                .replaceAllMapped(_rxTimestamp, (m) {
+              final seconds = parseTimestampSeconds(m[1]!);
+              if (seconds == null) return m[0]!;
+              return formatDiscordTimestamp(seconds, m[2] ?? 'f',
+                  locale: locale, now: now);
+            }).replaceAllMapped(
+                    RegExp(r'(^|\n)-# (?=\S)'), (m) => m[1]!));
+  }
+
+  static ({int seconds, String style, String tag})? parseTimestampInput(
+      String input) {
+    final parts =
+        input.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return null;
+    var style = 'f';
+    if (parts.length > 1 && RegExp(r'^[tTdDfFR]$').hasMatch(parts.last)) {
+      style = parts.removeLast();
+    }
+    final raw = parts.join(' ');
+    int? seconds;
+    if (RegExp(r'^-?\d{1,17}$').hasMatch(raw)) {
+      seconds = int.tryParse(raw);
+    } else {
+      final m = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$')
+          .firstMatch(raw);
+      if (m == null) return null;
+      final y = int.parse(m[1]!);
+      final mo = int.parse(m[2]!);
+      final d = int.parse(m[3]!);
+      final h = m[4] == null ? 0 : int.parse(m[4]!);
+      final mi = m[5] == null ? 0 : int.parse(m[5]!);
+      if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) {
+        return null;
+      }
+      final date = DateTime(y, mo, d, h, mi);
+      if (date.year != y || date.month != mo || date.day != d) return null;
+      seconds = (date.millisecondsSinceEpoch / 1000).floor();
+    }
+    if (seconds == null || parseTimestampSeconds('$seconds') == null) {
+      return null;
+    }
+    return (seconds: seconds, style: style, tag: '<t:$seconds:$style>');
+  }
+
   /// Bounded LRU of parse results; parsing is pure and expensive, and rows re-format on every rebuild.
   static final LinkedHashMap<_ParseCacheKey, List<FormatBlock>> _parseCache =
       LinkedHashMap<_ParseCacheKey, List<FormatBlock>>();
@@ -373,7 +539,9 @@ class NymFormat {
     content = stripGameTokens(content);
 
     // Fast path when nothing can trigger formatting.
-    if (!_rxTriggers.hasMatch(content) && !_rxNostrTrigger.hasMatch(content)) {
+    if (!_rxTriggers.hasMatch(content) &&
+        !_rxNostrTrigger.hasMatch(content) &&
+        !_rxBlockTrigger.hasMatch(content)) {
       return _plainParagraphs(content);
     }
 
@@ -445,11 +613,15 @@ class NymFormat {
             .join('\n')
             .replaceFirst(RegExp(r'^\n+'), '')
             .replaceFirst(RegExp(r'\n+$'), '');
-        if (text.isNotEmpty) out.addAll(_formatInlineBlocks(text, ctx));
+        if (text.isNotEmpty) {
+          out.addAll(_formatInlineBlocks(text, ctx, inQuote: depth > 0));
+        }
       }
     }
 
-    if (out.isEmpty) return _formatInlineBlocks(content, ctx);
+    if (out.isEmpty) {
+      return _formatInlineBlocks(content, ctx, inQuote: depth > 0);
+    }
     return out;
   }
 
@@ -465,11 +637,14 @@ class NymFormat {
 
   // Inline passes over a token list of raw text and resolved nodes, so later passes never re-scan resolved content.
 
-  static List<FormatBlock> _formatInlineBlocks(String text, FormatContext ctx) {
+  static List<FormatBlock> _formatInlineBlocks(String text, FormatContext ctx,
+      {bool inQuote = false}) {
     // Extract code first so its contents are shielded.
     final codeBlocks = <CodeBlock>[];
     final inlineCode = <String>[];
-    var s = text;
+    final stamps = <TimestampNode>[];
+    final notes = <MediaNote>[];
+    var s = text.replaceAll(_rxEmphasisSentinel, '\uFFFD');
 
     s = s.replaceAllMapped(RegExp(r'```([\s\S]*?)```'), (m) {
       final idx = codeBlocks.length;
@@ -487,39 +662,92 @@ class NymFormat {
       inlineCode.add(m[1] ?? '');
       return 'C$idx';
     });
+    if (s.contains('#nym:')) {
+      s = s.replaceAllMapped(_rxMediaNote, (m) {
+        final note = parseMediaUrl('${m[2]}#${m[3]}');
+        if (note == null) return m[0]!;
+        final idx = notes.length;
+        notes.add(note);
+        return '\x01M$idx\x01';
+      });
+    }
+    s = s.replaceAllMapped(_rxTimestamp, (m) {
+      final seconds = parseTimestampSeconds(m[1]!);
+      if (seconds == null) return m[0]!;
+      final idx = stamps.length;
+      stamps.add(
+          TimestampNode(seconds: seconds, style: m[2] ?? 'f', raw: m[0]!));
+      return 'T$idx';
+    });
 
     // Code placeholder lines become code blocks, `#` lines headings, the rest paragraphs.
     final blocks = <FormatBlock>[];
     final lines = s.split('\n');
     final paraBuf = <String>[];
 
+    final listBuf = <_ListLine>[];
+
+    List<InlineNode> inline(String t) =>
+        _collapseMedia(_parseInline(t, ctx, codeBlocks, inlineCode, stamps, notes));
+
     void flushPara() {
       if (paraBuf.isEmpty) return;
       final joined = paraBuf.join('\n');
       paraBuf.clear();
-      blocks.addAll(_inlineToBlocks(joined, ctx, codeBlocks, inlineCode));
+      blocks.addAll(
+          _inlineToBlocks(joined, ctx, codeBlocks, inlineCode, stamps, notes));
+    }
+
+    void flushList() {
+      if (listBuf.isEmpty) return;
+      blocks.addAll(_buildLists(listBuf, inline));
+      listBuf.clear();
     }
 
     for (final line in lines) {
       final fenceOnly = RegExp(r'^F(\d+)$').firstMatch(line.trim());
       if (fenceOnly != null) {
         flushPara();
+        flushList();
         blocks.add(codeBlocks[int.parse(fenceOnly[1]!)]);
         continue;
       }
       final heading = RegExp(r'^(#{1,3}) (.+)$').firstMatch(line);
       if (heading != null) {
         flushPara();
+        flushList();
         final level = heading[1]!.length;
         blocks.add(HeadingBlock(
           level: level,
-          inlines: _parseInline(heading[2]!, ctx, codeBlocks, inlineCode),
+          inlines: inline(heading[2]!),
         ));
         continue;
       }
+      final subtext = inQuote ? null : _rxSubtextLine.firstMatch(line);
+      if (subtext != null) {
+        flushPara();
+        flushList();
+        blocks.add(SubtextBlock(inline(subtext[1]!)));
+        continue;
+      }
+      final item = _rxListLine.firstMatch(line);
+      if (item != null) {
+        flushPara();
+        final marker = item[2]!;
+        final ordered = marker != '-' && marker != '*';
+        listBuf.add(_ListLine(
+          level: listBuf.isEmpty || item[1] == null ? 0 : 1,
+          ordered: ordered,
+          number: ordered ? int.parse(marker.substring(0, marker.length - 1)) : 1,
+          text: item[3]!,
+        ));
+        continue;
+      }
+      flushList();
       paraBuf.add(line);
     }
     flushPara();
+    flushList();
 
     if (blocks.isEmpty) {
       blocks.add(const ParagraphBlock([TextSpanNode('')]));
@@ -547,8 +775,11 @@ class NymFormat {
     FormatContext ctx,
     List<CodeBlock> codeBlocks,
     List<String> inlineCode,
+    List<TimestampNode> stamps,
+    List<MediaNote> notes,
   ) {
-    final inlines = _parseInline(text, ctx, codeBlocks, inlineCode);
+    final inlines =
+        _parseInline(text, ctx, codeBlocks, inlineCode, stamps, notes);
 
     // Adjacent media (whitespace between) collapse into one gallery.
     final blocks = <FormatBlock>[];
@@ -571,12 +802,12 @@ class NymFormat {
     }
 
     for (final node in inlines) {
-      if (node is _AudioInline) {
+      if (node is AudioInlineNode) {
         // Its own block, never folded into a gallery.
         flushMedia();
         flushInlines();
         blocks.add(node.block);
-      } else if (node is _MediaInline) {
+      } else if (node is MediaInlineNode) {
         flushInlines();
         mediaRun.add(node.item);
       } else if (node is TextSpanNode && node.text.trim().isEmpty) {
@@ -600,51 +831,284 @@ class NymFormat {
     return blocks;
   }
 
+  static List<ListBlock> _buildLists(
+      List<_ListLine> lines, List<InlineNode> Function(String) inline) {
+    final top = <_ListTree>[];
+    for (final line in lines) {
+      if (line.level == 1 && top.isNotEmpty) {
+        top.last.children.add(_ListTree(line));
+      } else {
+        top.add(_ListTree(line));
+      }
+    }
+    return _listSeq(top, inline);
+  }
+
+  static List<ListBlock> _listSeq(
+      List<_ListTree> nodes, List<InlineNode> Function(String) inline) {
+    final out = <ListBlock>[];
+    var i = 0;
+    while (i < nodes.length) {
+      final head = nodes[i].line;
+      final items = <ListItemNode>[];
+      while (i < nodes.length && nodes[i].line.ordered == head.ordered) {
+        final node = nodes[i++];
+        items.add(ListItemNode(
+          inlines: inline(node.line.text),
+          children: node.children.isEmpty
+              ? const <ListBlock>[]
+              : _listSeq(node.children, inline),
+        ));
+      }
+      out.add(ListBlock(
+          ordered: head.ordered,
+          start: head.ordered ? head.number : 1,
+          items: items));
+    }
+    return out;
+  }
+
+  static const String _openSpoiler = '\uFDE0';
+  static const String _openBold = '\uFDE1';
+  static const String _openUnderline = '\uFDE2';
+  static const String _openItalic = '\uFDE3';
+  static const String _openStrike = '\uFDE4';
+  static const int _closeOffset = 8;
+
+  static bool _isOpenSentinel(int unit) => unit >= 0xFDE0 && unit <= 0xFDE4;
+  static bool _isCloseSentinel(int unit) => unit >= 0xFDE8 && unit <= 0xFDEC;
+
+  static String _closeOf(String open) =>
+      String.fromCharCode(open.codeUnitAt(0) + _closeOffset);
+
+  static bool _sentinelsBalanced(String inner) {
+    final stack = <int>[];
+    for (final unit in inner.codeUnits) {
+      if (_isOpenSentinel(unit)) {
+        stack.add(unit);
+      } else if (_isCloseSentinel(unit)) {
+        if (stack.isEmpty || stack.removeLast() + _closeOffset != unit) {
+          return false;
+        }
+      }
+    }
+    return stack.isEmpty;
+  }
+
+  static String _wrapBalanced(String s, RegExp rx, String open) {
+    final close = _closeOf(open);
+    final out = StringBuffer();
+    var last = 0;
+    var pos = 0;
+    while (pos <= s.length) {
+      final it = rx.allMatches(s, pos).iterator;
+      if (!it.moveNext()) break;
+      final m = it.current;
+      final inner = m[1]!;
+      if (!_sentinelsBalanced(inner)) {
+        pos = m.start + 1;
+        continue;
+      }
+      out
+        ..write(s.substring(last, m.start))
+        ..write(open)
+        ..write(inner)
+        ..write(close);
+      last = m.end;
+      pos = m.end;
+    }
+    out.write(s.substring(last));
+    return out.toString();
+  }
+
+  static String _markEmphasis(String text, bool commonMark) {
+    var s = _wrapBalanced(text, _rxSpoiler, _openSpoiler);
+    s = _wrapBalanced(s, RegExp(r'\*\*(.+?)\*\*'), _openBold);
+    s = _wrapBalanced(s, RegExp(r'(?<!\w)__(.+?)__(?!\w)'),
+        commonMark ? _openBold : _openUnderline);
+    s = _wrapBalanced(s, RegExp(r'(?<![:/])\*([^*\s][^*]*)\*'), _openItalic);
+    s = _wrapBalanced(
+        s, RegExp(r'(?<![:/\w])_([^_\s][^_]*)_(?!\w)'), _openItalic);
+    s = _wrapBalanced(s, RegExp(r'~~(.+?)~~'), _openStrike);
+    return s;
+  }
+
   static List<InlineNode> _parseInline(
     String text,
     FormatContext ctx,
     List<CodeBlock> codeBlocks,
     List<String> inlineCode,
+    List<TimestampNode> stamps,
+    List<MediaNote> notes,
   ) {
+    final marked = _markEmphasis(text, ctx.commonMark);
+    var i = 0;
+    List<InlineNode> parse(int? closeUnit) {
+      final out = <InlineNode>[];
+      final buf = StringBuffer();
+      var leafStart = i;
+      void flush() {
+        if (buf.isEmpty) return;
+        final top = closeUnit == null;
+        out.addAll(_parseLeaf(
+            buf.toString(), ctx, codeBlocks, inlineCode, stamps, notes,
+            blockStart: top && leafStart == 0,
+            blockEnd: top && i >= marked.length));
+        buf.clear();
+      }
+
+      while (i < marked.length) {
+        final unit = marked.codeUnitAt(i);
+        if (buf.isEmpty) leafStart = i;
+        if (_isOpenSentinel(unit)) {
+          flush();
+          i++;
+          final kids = _collapseMedia(parse(unit + _closeOffset));
+          out.add(switch (String.fromCharCode(unit)) {
+            _openSpoiler => SpoilerNode(kids),
+            _openBold => BoldNode(kids),
+            _openUnderline => UnderlineNode(kids),
+            _openItalic => ItalicNode(kids),
+            _ => StrikeNode(kids),
+          });
+          continue;
+        }
+        if (_isCloseSentinel(unit)) {
+          i++;
+          if (unit == closeUnit) {
+            flush();
+            return out;
+          }
+          continue;
+        }
+        buf.writeCharCode(unit);
+        i++;
+      }
+      flush();
+      return out;
+    }
+
+    return parse(null);
+  }
+
+  static List<InlineNode> _collapseMedia(List<InlineNode> nodes) {
+    if (!nodes.any((n) => n is MediaInlineNode)) return nodes;
+    final out = <InlineNode>[];
+    var run = <MediaItem>[];
+    var gap = <InlineNode>[];
+    void flushRun() {
+      if (run.isEmpty) return;
+      out.add(InlineGalleryNode(List.of(run)));
+      run = [];
+    }
+
+    for (final n in nodes) {
+      if (n is MediaInlineNode) {
+        if (run.isEmpty) out.addAll(gap);
+        gap = [];
+        run.add(n.item);
+      } else if (run.isNotEmpty &&
+          n is TextSpanNode &&
+          RegExp(r'^[ \t\r\n]*$').hasMatch(n.text)) {
+        gap.add(n);
+      } else {
+        flushRun();
+        out.addAll(gap);
+        gap = [];
+        out.add(n);
+      }
+    }
+    flushRun();
+    out.addAll(gap);
+    return out;
+  }
+
+  static List<_Tok> _mergeRaw(List<_Tok> tokens) {
+    final flat = <_Tok>[];
+    void add(_Tok t) {
+      if (t is _MultiTok) {
+        for (final p in t.parts) {
+          add(p);
+        }
+        return;
+      }
+      if (t is _RawTok && flat.isNotEmpty && flat.last is _RawTok) {
+        flat.add(_RawTok((flat.removeLast() as _RawTok).text + t.text));
+        return;
+      }
+      flat.add(t);
+    }
+
+    for (final t in tokens) {
+      add(t);
+    }
+    return flat;
+  }
+
+  static List<_Tok> _splitBounded(
+    List<_Tok> tokens,
+    RegExp re,
+    _Tok Function(Match) build, {
+    required bool blockStart,
+    required bool blockEnd,
+  }) {
+    final merged = _mergeRaw(tokens);
+    final out = <_Tok>[];
+    for (var k = 0; k < merged.length; k++) {
+      final t = merged[k];
+      if (t is! _RawTok) {
+        out.add(t);
+        continue;
+      }
+      final pre = k == 0 && blockStart ? '' : '\u0002';
+      final post = k == merged.length - 1 && blockEnd ? '' : '\u0002';
+      final text = '$pre${t.text}$post';
+      final limit = text.length - post.length;
+      var last = pre.length;
+      for (final m in re.allMatches(text)) {
+        if (m.start > last) out.add(_RawTok(text.substring(last, m.start)));
+        out.add(build(m));
+        last = m.end;
+      }
+      if (last < limit) out.add(_RawTok(text.substring(last, limit)));
+    }
+    return out;
+  }
+
+  static List<InlineNode> _parseLeaf(
+    String text,
+    FormatContext ctx,
+    List<CodeBlock> codeBlocks,
+    List<String> inlineCode,
+    List<TimestampNode> stamps,
+    List<MediaNote> notes, {
+    bool blockStart = true,
+    bool blockEnd = true,
+  }) {
     var tokens = <_Tok>[_RawTok(text)];
 
     // Fenced placeholders are block-level, but handle inline ones.
     tokens = _splitByRegex(tokens, RegExp(r'C(\d+)'),
         (m) => _NodeTok(InlineCodeNode(inlineCode[int.parse(m[1]!)])));
 
-    // Bold/italic/strike, recursive on inner content.
-    tokens = _splitByRegex(
-        tokens,
-        RegExp(r'\*\*(.+?)\*\*'),
-        (m) => _NodeTok(
-            BoldNode(_parseInline(m[1]!, ctx, codeBlocks, inlineCode))));
-    tokens = _splitByRegex(
-        tokens,
-        RegExp(r'(?<!\w)__(.+?)__(?!\w)'),
-        (m) => _NodeTok(
-            BoldNode(_parseInline(m[1]!, ctx, codeBlocks, inlineCode))));
-    tokens = _splitByRegex(
-        tokens,
-        RegExp(r'(?<![:/])\*([^*\s][^*]*)\*'),
-        (m) => _NodeTok(
-            ItalicNode(_parseInline(m[1]!, ctx, codeBlocks, inlineCode))));
-    tokens = _splitByRegex(
-        tokens,
-        RegExp(r'(?<![:/\w])_([^_\s][^_]*)_(?!\w)'),
-        (m) => _NodeTok(
-            ItalicNode(_parseInline(m[1]!, ctx, codeBlocks, inlineCode))));
-    tokens = _splitByRegex(
-        tokens,
-        RegExp(r'~~(.+?)~~'),
-        (m) => _NodeTok(
-            StrikeNode(_parseInline(m[1]!, ctx, codeBlocks, inlineCode))));
+    tokens = _splitByRegex(tokens, RegExp(r'T(\d+)'),
+        (m) => _NodeTok(stamps[int.parse(m[1]!)]));
+
+    tokens = _splitByRegex(tokens, RegExp('\x01M(\\d+)\x01'), (m) {
+      final note = notes[int.parse(m[1]!)];
+      return _NodeTok(AudioInlineNode(AudioBlock(
+        url: note.url,
+        fileName: '',
+        note: note,
+      )));
+    });
 
     // Audio first, since the video pass would claim .ogg/.webm.
     tokens = _splitByRegex(
         tokens,
         RegExp(r'(https?://[^\s]+\.(mp3|m4a|aac|wav|flac|opus|oga)(\?[^\s]*)?)',
             caseSensitive: false),
-        (m) => _NodeTok(_AudioInline(AudioBlock(
+        (m) => _NodeTok(AudioInlineNode(AudioBlock(
               url: _proxied(m[1]!, ctx.proxyBase),
               fileName: _urlFileName(m[1]!),
             ))));
@@ -653,13 +1117,13 @@ class NymFormat {
         tokens,
         RegExp(r'(https?://[^\s]+\.(mp4|webm|ogg|mov)(\?[^\s]*)?)',
             caseSensitive: false),
-        (m) => _NodeTok(_MediaInline(
+        (m) => _NodeTok(MediaInlineNode(
             MediaItem(url: _proxied(m[1]!, ctx.proxyBase), isVideo: true))));
     tokens = _splitByRegex(
         tokens,
         RegExp(r'(https?://[^\s]+\.(jpg|jpeg|png|gif|webp)(\?[^\s]*)?)',
             caseSensitive: false),
-        (m) => _NodeTok(_MediaInline(
+        (m) => _NodeTok(MediaInlineNode(
             MediaItem(url: _proxied(m[1]!, ctx.proxyBase), isVideo: false))));
 
     tokens = _splitByRegex(
@@ -667,6 +1131,17 @@ class NymFormat {
         RegExp(r'https?://web\.nymchat\.app/#([egc]):([^\s<>"]+)',
             caseSensitive: false), (m) {
       return _NodeTok(ChannelLinkChip(ref: '${m[1]}:${m[2]}', label: m[0]!));
+    });
+
+    tokens = _splitByRegex(
+        tokens, RegExp(r'https?://[^\s<>"]*#call=([A-Za-z0-9_-]+)'), (m) {
+      final token = m[1]!;
+      final link = GroupTools.parseCallLinkInput(token);
+      if (link == null) return _RawTok(m[0]!);
+      return _NodeTok(CallLinkChip(
+          name: link.name.isEmpty ? 'call' : link.name,
+          video: link.kind == 'video',
+          token: token));
     });
 
     tokens = _splitByRegex(
@@ -705,9 +1180,10 @@ class NymFormat {
     tokens = _splitByRegex(tokens, RegExp(r'@([^@\s][^@\s]*)'),
         (m) => _NodeTok(MentionNode(base: m[0]!)));
 
-    tokens = _splitByRegex(tokens,
+    tokens = _splitBounded(tokens,
         RegExp(r'(^|\s)#([a-z0-9_-]+)(?=\s|$|[.,!?])', caseSensitive: false),
-        (m) {
+        blockStart: blockStart,
+        blockEnd: blockEnd, (m) {
       final lead = m[1] ?? '';
       final name = m[2]!.toLowerCase();
       final isGeo = isValidGeohash(name);
@@ -735,7 +1211,7 @@ class NymFormat {
     });
 
     // ASCII smileys bounded by start or whitespace on both sides.
-    tokens = _applyAsciiSmileys(tokens);
+    tokens = _applyAsciiSmileys(tokens, blockStart, blockEnd);
 
     // Regional-indicator pairs, keycaps, then pictographic runs; subdivision-flag tag sequences aren't matched.
     tokens = _splitByRegex(
@@ -771,7 +1247,8 @@ class NymFormat {
     return nodes;
   }
 
-  static List<_Tok> _applyAsciiSmileys(List<_Tok> tokens) {
+  static List<_Tok> _applyAsciiSmileys(
+      List<_Tok> tokens, bool blockStart, bool blockEnd) {
     const map = <String, String>{
       ':)': '😊',
       ':-)': '😊',
@@ -789,7 +1266,8 @@ class NymFormat {
     };
     final re = RegExp(
         r'(^|\s)(:\)|:-\)|:\(|:-\(|:D|:P|;\)|;-\)|:o|:O|:\||<3|/\\)(?=$|\s)');
-    return _splitByRegex(tokens, re, (m) {
+    return _splitBounded(tokens, re,
+        blockStart: blockStart, blockEnd: blockEnd, (m) {
       final lead = m[1] ?? '';
       final sym = m[2]!;
       final emoji = map[sym] ?? map[sym.toLowerCase()] ?? sym;
@@ -903,12 +1381,31 @@ class _MultiTok extends _Tok {
 }
 
 /// Carries a media item until [_inlineToBlocks] flattens it into a block.
-class _AudioInline extends InlineNode {
-  const _AudioInline(this.block);
+class AudioInlineNode extends InlineNode {
+  const AudioInlineNode(this.block);
   final AudioBlock block;
 }
 
-class _MediaInline extends InlineNode {
-  const _MediaInline(this.item);
+class _ListLine {
+  const _ListLine({
+    required this.level,
+    required this.ordered,
+    required this.number,
+    required this.text,
+  });
+  final int level;
+  final bool ordered;
+  final int number;
+  final String text;
+}
+
+class _ListTree {
+  _ListTree(this.line);
+  final _ListLine line;
+  final List<_ListTree> children = [];
+}
+
+class MediaInlineNode extends InlineNode {
+  const MediaInlineNode(this.item);
   final MediaItem item;
 }

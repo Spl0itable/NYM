@@ -31,7 +31,12 @@ class MentionResult {
     required this.suffix,
     required this.status,
     this.avatarUrl,
+    this.broadcastHint,
   });
+
+  final String? broadcastHint;
+
+  bool get isBroadcast => broadcastHint != null;
 
   final String pubkey;
   final String nym;
@@ -43,7 +48,7 @@ class MentionResult {
   final String? avatarUrl;
 
   /// Inserted text `@base#suffix ` with a trailing space.
-  String get insertText => '@$baseNym#$suffix ';
+  String get insertText => isBroadcast ? '@$baseNym ' : '@$baseNym#$suffix ';
 }
 
 /// Filters by `base#suffix`, excludes [blocked], and orders members then others by online/away/offline, then name.

@@ -50,6 +50,37 @@ String generateSubId([Random? rng]) {
   return sb.toString();
 }
 
+const Duration kSubRetireGrace = Duration(milliseconds: 1500);
+
+const Duration kSubRetireCap = Duration(seconds: 10);
+
+void Function() retireAfterAnswer(
+  Subscription old,
+  Subscription next, {
+  Duration grace = kSubRetireGrace,
+  Duration cap = kSubRetireCap,
+  void Function()? onRetired,
+}) {
+  var done = false;
+  Timer? graceTimer;
+  Timer? capTimer;
+  void retire() {
+    if (done) return;
+    done = true;
+    graceTimer?.cancel();
+    capTimer?.cancel();
+    unawaited(old.close());
+    onRetired?.call();
+  }
+
+  capTimer = Timer(cap, retire);
+  unawaited(next.firstEose.then((_) {
+    if (done) return;
+    graceTimer = Timer(grace, retire);
+  }));
+  return retire;
+}
+
 /// Injected async signature verifier; defaults to accept-all so this layer needs no crypto.
 typedef EventVerifier = Future<bool> Function(NostrEvent event);
 
@@ -96,12 +127,10 @@ class Subscription {
     this._transport,
     this._verify,
     this._relayCount, {
-    required double eoseQuorum,
-    required Duration eoseTimeout,
-    void Function(NostrEvent event)? onRejected,
-  })  : _eoseQuorum = eoseQuorum,
-        _eoseTimeout = eoseTimeout,
-        _onRejected = onRejected;
+    required this._eoseQuorum,
+    required this._eoseTimeout,
+    this._onRejected,
+  });
 
   /// Transport-agnostic constructor used by both pool transports.
   factory Subscription.forTransport(
@@ -124,7 +153,7 @@ class Subscription {
       );
 
   final String subId;
-  final PoolTransport _transport;
+  PoolTransport _transport;
   final EventVerifier _verify;
   final int _relayCount;
   final double _eoseQuorum;
@@ -136,6 +165,7 @@ class Subscription {
   final StreamController<NostrEvent> _events =
       StreamController<NostrEvent>.broadcast();
   final Completer<void> _eose = Completer<void>();
+  final Completer<void> _firstEose = Completer<void>();
   final Set<String> _eosedRelays = <String>{};
   Timer? _eoseTimer;
   bool _closed = false;
@@ -147,10 +177,16 @@ class Subscription {
 
   Future<void> get eose => _eose.future;
 
+  Future<void> get firstEose => _firstEose.future;
+
   /// True once closed; cached subscriptions must be re-created, not reused.
   bool get isClosed => _closed;
 
   void _start() => startEose();
+
+  void adoptTransport(PoolTransport transport) {
+    _transport = transport;
+  }
 
   /// Arms the EOSE timeout; public so the proxy transport can drive it.
   void startEose() {
@@ -177,7 +213,10 @@ class Subscription {
 
   void onEose(String relayUrl, {bool closed = false}) {
     if (_closed) return;
-    if (!closed) _answered = true;
+    if (!closed) {
+      _answered = true;
+      if (!_firstEose.isCompleted) _firstEose.complete();
+    }
     _eosedRelays.add(relayUrl);
     final needed = max(1, (_relayCount * _eoseQuorum).ceil());
     if (_eosedRelays.length >= needed) {
@@ -198,6 +237,7 @@ class Subscription {
     _eoseTimer = null;
     _transport.closeSubscription(this);
     if (!_eose.isCompleted) _eose.complete();
+    if (!_firstEose.isCompleted) _firstEose.complete();
     await _events.close();
   }
 }
@@ -445,6 +485,8 @@ class RelayPool implements PoolTransport {
 
   /// Adopts [sub] from a previous pool and re-issues its REQ; its dedup suppresses repeats.
   void replaySubscription(Subscription sub, List<NostrFilter> filters) {
+    if (sub.isClosed) return;
+    sub.adoptTransport(this);
     final id = sub.subId;
     _subscriptions[id] = sub;
     _activeFilters[id] = filters;

@@ -220,6 +220,63 @@ function clientIpKey(request) {
   return ip;
 }
 
+function sanitizeChannelKey(name) {
+  if (typeof name !== 'string') return '';
+  if (/\s/.test(name)) return '';
+  return name.toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
+}
+
+const RX_GEOHASH_KEY = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
+
+function channelKeyFor(kind, getTag) {
+  if (kind === 20000) {
+    const key = sanitizeChannelKey(getTag('g'));
+    return RX_GEOHASH_KEY.test(key) ? key : '';
+  }
+  if (kind === 23333) {
+    const key = sanitizeChannelKey(getTag('d'));
+    return key && !RX_GEOHASH_KEY.test(key) ? key : '';
+  }
+  const g = getTag('g');
+  if (g) {
+    const key = sanitizeChannelKey(g);
+    return RX_GEOHASH_KEY.test(key) ? key : '';
+  }
+  return sanitizeChannelKey(getTag('d'));
+}
+
+function evTagReader(ev) {
+  const tags = ev && Array.isArray(ev.tags) ? ev.tags : [];
+  return (n) => {
+    const t = tags.find((x) => Array.isArray(x) && x[0] === n && typeof x[1] === 'string');
+    return t ? t[1] : null;
+  };
+}
+
+function spamEngineJob(ev, kind, sig) {
+  const getTag = evTagReader(ev);
+  const nymTag = getTag('n');
+  let mentions = 0;
+  for (const t of ev.tags) if (t[0] === 'p' && mentions < 64) mentions++;
+  return {
+    id: ev.id,
+    kind,
+    pubkey: ev.pubkey,
+    content: ev.content,
+    verified: true,
+    pow: validatedPowBits(ev),
+    nym: nymTag ? nymTag.replace(/#[a-fA-F0-9]{4}$/, '') : '',
+    badgeTag: getTag('nymattest') || '',
+    reply: ev.tags.some((t) => t[0] === 'e'),
+    quote: ev.tags.some((t) => t[0] === 'nymquote'),
+    mentions,
+    channel: channelKeyFor(kind, getTag),
+    createdAt: ev.created_at * 1000,
+    localScore: sig.score,
+    copies: sig.copies
+  };
+}
+
 const POOL_CONNECTS_PER_IP_MIN = 120;
 const POOL_EVENTS_PER_IP_MIN = 1200;
 const POOL_IP_CHARGE_BATCH = 20;
@@ -227,7 +284,7 @@ const POOL_IP_CHARGE_BATCH = 20;
 export {
   isPrivateRelayHost, POOL_MAX_UPSTREAMS, canonicalRelayUrl, TokenBucket, eventFrameCanonical,
   canonicalEventFrame, reframeRelayMessage, verifySignedEvent, verifiedEventJson, validatedPowBits,
-  archiveRateOk, clientIpKey
+  archiveRateOk, clientIpKey, channelKeyFor, evTagReader, spamEngineJob
 };
 
 export async function onRequest(context) {
@@ -750,38 +807,14 @@ export async function onRequest(context) {
     return raw.substring(start, end + 1);
   }
 
-  function sanitizeChannelKey(name) {
-    if (typeof name !== 'string') return '';
-    if (/\s/.test(name)) return '';
-    return name.toLowerCase().replace(/[^\p{L}\p{N}_\-.]/gu, '').slice(0, 80);
-  }
-
   const isArchivableChannelKind = (k) => k === 20000 || k === 23333 || k === 7 || k === 30078;
   const ARCHIVE_RECORD_TOPICS = new Set(['nym-poll', 'nym-poll-vote', 'nym-vouches', 'nym-pq']);
-  const RX_GEOHASH_KEY = /^[0-9bcdefghjkmnpqrstuvwxyz]{1,12}$/;
 
   // 'g' for geohash (20000), 'd' for named (23333), either for reactions (7) and polls (30078).
   function channelFromTags(getTag, kind) {
     if (kind === 20000) return getTag('g');
     if (kind === 23333) return getTag('d');
     return getTag('g') || getTag('d');
-  }
-
-  function channelKeyFor(kind, getTag) {
-    if (kind === 20000) {
-      const key = sanitizeChannelKey(getTag('g'));
-      return RX_GEOHASH_KEY.test(key) ? key : '';
-    }
-    if (kind === 23333) {
-      const key = sanitizeChannelKey(getTag('d'));
-      return key && !RX_GEOHASH_KEY.test(key) ? key : '';
-    }
-    const g = getTag('g');
-    if (g) {
-      const key = sanitizeChannelKey(g);
-      return RX_GEOHASH_KEY.test(key) ? key : '';
-    }
-    return sanitizeChannelKey(getTag('d'));
   }
 
   function archiveChannelOf(kind, getTag) {
@@ -793,14 +826,6 @@ export async function onRequest(context) {
   function archiveJsonMax(kind, getTag) {
     if (kind === 30078 && getTag('t') === 'nym-vouches') return VOUCH_JSON_MAX;
     return ARCHIVE_JSON_MAX[kind] || CHANNEL_EVENT_MAX;
-  }
-
-  function evTagReader(ev) {
-    const tags = ev && Array.isArray(ev.tags) ? ev.tags : [];
-    return (n) => {
-      const t = tags.find((x) => Array.isArray(x) && x[0] === n && typeof x[1] === 'string');
-      return t ? t[1] : null;
-    };
   }
 
   // Caps relay notes per event so a widely relayed event doesn't cost one frame per relay.
@@ -1544,29 +1569,10 @@ export async function onRequest(context) {
     if (!ev || ev.id !== eventId || typeof ev.content !== 'string') return 'drop';
     if (!ev.content) return 'pass';
     const sig = lastSignals || { score: 0, copies: 0 };
-    const getTag = evTagReader(ev);
-    const nymTag = getTag('n');
-    let mentions = 0;
-    for (const t of ev.tags) if (t[0] === 'p' && mentions < 64) mentions++;
-    return spam.inspect({
+    return spam.inspect(Object.assign({
       release: () => trySendToClient(raw.slice(0, -1) + relayTail),
-      retract: () => trySendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam'])),
-      id: eventId,
-      kind,
-      pubkey: ev.pubkey,
-      content: ev.content,
-      verified: true,
-      pow: validatedPowBits(ev),
-      nym: nymTag ? nymTag.replace(/#[a-fA-F0-9]{4}$/, '') : '',
-      badgeTag: getTag('nymattest') || '',
-      reply: ev.tags.some((t) => t[0] === 'e'),
-      quote: ev.tags.some((t) => t[0] === 'nymquote'),
-      mentions,
-      channel: channelKeyFor(kind, getTag),
-      createdAt: ev.created_at * 1000,
-      localScore: sig.score,
-      copies: sig.copies
-    });
+      retract: () => trySendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam']))
+    }, spamEngineJob(ev, kind, sig)));
   }
 
   function queueConnection(relayUrl, type) {

@@ -43,10 +43,9 @@ class NymColors extends ThemeExtension<NymColors> {
     required this.glassBorder,
     required this.brightness,
     this.solidUi = false,
-    Color? bubbleSelfBg,
-    Color? bubbleOtherBg,
-  })  : _bubbleSelfBg = bubbleSelfBg,
-        _bubbleOtherBg = bubbleOtherBg;
+    this._bubbleSelfBg,
+    this._bubbleOtherBg,
+  });
 
   final Color primary; // accent / brand
   final Color secondary; // links, author names

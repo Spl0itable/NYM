@@ -1,5 +1,5 @@
 // NOTE: Plugin versions are declared once in settings.gradle via the plugins {}
-// DSL (AGP 8.11.1 / Kotlin 2.2.20). A legacy `buildscript { classpath ... }`
+// DSL. A legacy `buildscript { classpath ... }`
 // block used to live here pinning AGP 8.7.3, which silently won and made the
 // effective toolchain older than declared — AGP 8.7 has no built-in support for
 // compileSdk 36 (Android 16). It has been removed intentionally; do not re-add.

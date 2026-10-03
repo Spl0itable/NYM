@@ -225,8 +225,9 @@ body.light-mode .verified-badge::before {
         right: auto;
         padding: 10px;
         padding-bottom: max(10px, env(safe-area-inset-bottom));
-        flex-direction: column;
-        gap: 10px;
+        flex-direction: row;
+        align-items: flex-end;
+        gap: 6px;
         background: var(--glass-bg);
         border-top: 1px solid var(--glass-border);
         z-index: 500;
@@ -319,28 +320,22 @@ body.light-mode .verified-badge::before {
     }
 
     .input-wrapper {
-        width: 100%;
+        flex: 1;
+        width: auto;
     }
 
     .input-buttons {
-        width: 100%;
+        flex: 0 0 auto;
         display: flex;
-        justify-content: space-between;
-        gap: 10px;
-        max-height: 50px;
-        overflow: hidden;
-        transition: max-height 0.25s ease, opacity 0.25s ease, margin-top 0.25s ease;
-        opacity: 1;
+        gap: 6px;
     }
 
-
     .icon-btn.input-btn {
-        flex: 1;
+        flex: 0 0 auto;
     }
 
     .send-btn {
-        flex: 2;
-        padding: 10px;
+        padding: 10px 14px;
         font-size: 11px;
     }
 
@@ -476,26 +471,18 @@ body.light-mode .verified-badge::before {
     }
 
     .input-container {
-        flex-direction: column;
-        gap: 10px;
+        flex-direction: row;
+        align-items: flex-end;
+        gap: 8px;
     }
 
     .input-wrapper {
-        width: 100%;
+        flex: 1;
+        width: auto;
     }
 
     .input-buttons {
-        width: 100%;
-        justify-content: space-between;
-        gap: 10px;
-    }
-
-    .icon-btn.input-btn {
-        flex: 1;
-    }
-
-    .send-btn {
-        flex: 2;
+        flex: 0 0 auto;
     }
 }
 
@@ -693,6 +680,24 @@ body.light-mode {
 
 body.light-mode .message-content code {
     background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .message-content .spoiler.spoiler-revealed,
+body.light-mode .message-content .nm-ts,
+body.light-mode div.message-input .rich-md-timestamp::after {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .message-content .spoiler:not(.spoiler-revealed) {
+    background: #9a9a9a;
+}
+
+body.light-mode .message-content .spoiler:not(.spoiler-revealed):hover {
+    background: #8a8a8a;
+}
+
+body.light-mode div.message-input .rich-md-spoiler {
+    background: rgba(0, 0, 0, 0.12);
 }
 
 body.light-mode .message-content pre {

@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../../models/group.dart';
-import '../../widgets/common/app_dialog.dart';
+import '../group_tools/group_tools_ui.dart';
 import '../i18n/i18n.dart';
 
 String groupInviteDisplayName(GroupInviteToken token) {
@@ -24,10 +24,5 @@ String groupInviteConfirmMessage(GroupInviteToken token) {
 
 Future<bool> confirmGroupInviteJoin(
     BuildContext context, GroupInviteToken token) {
-  return showAppConfirm(
-    context,
-    groupInviteConfirmMessage(token),
-    title: tr('Join Group'),
-    okLabel: tr('Join'),
-  );
+  return showGtInvitePreview(context, token.toPayload());
 }

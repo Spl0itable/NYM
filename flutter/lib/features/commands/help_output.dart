@@ -33,7 +33,7 @@ String get kHelpTitle => tr('Available commands');
 
 /// The five footer lines, separated by blank lines.
 List<String> get kHelpFooterLines => [
-      tr('Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, > quote'),
+      tr('Markdown supported: **bold**, *italic*, __underline__, ~~strikethrough~~, ||spoiler||, `code`, > quote, -# subtext, - list, 1. list, <t:unix:f> timestamp'),
       tr('Type : to quickly pick an emoji'),
       tr('Type \\ to pick a kaomoji like ¯\\_(ツ)_/¯'),
       tr('Nyms are shown as name#xxxx where xxxx is the last 4 characters of their '

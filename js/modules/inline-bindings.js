@@ -105,6 +105,62 @@ window.nymHapticTap = function (ms) {
 };
 
 (function () {
+    function hiddenSpoilerFrom(target) {
+        var el = target && target.nodeType === 1 ? target : (target && target.parentElement);
+        if (!el || typeof el.closest !== 'function') return null;
+        var sp = el.closest('.spoiler');
+        if (!sp || sp.classList.contains('spoiler-revealed')) return null;
+        return sp;
+    }
+
+    function reveal(e, sp) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof e.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+        if (window.NymFormat && typeof window.NymFormat.revealSpoiler === 'function') {
+            window.NymFormat.revealSpoiler(sp);
+        }
+    }
+
+    document.addEventListener('click', function (e) {
+        var sp = hiddenSpoilerFrom(e.target);
+        if (sp) { reveal(e, sp); return; }
+        var el = e.target && e.target.nodeType === 1 ? e.target : null;
+        var ts = el && typeof el.closest === 'function' ? el.closest('time.nm-ts') : null;
+        document.querySelectorAll('time.nm-ts.nm-ts-open').forEach(function (open) {
+            if (open !== ts) open.classList.remove('nm-ts-open');
+        });
+        if (ts) ts.classList.toggle('nm-ts-open');
+    }, true);
+
+    ['mousedown', 'pointerdown', 'touchstart', 'contextmenu', 'dblclick'].forEach(function (type) {
+        document.addEventListener(type, function (e) {
+            var sp = hiddenSpoilerFrom(e.target);
+            if (!sp || e.target === sp) return;
+            e.stopPropagation();
+        }, true);
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        var t = e.target;
+        if (!t || !t.classList || !t.classList.contains('spoiler') || t.classList.contains('spoiler-revealed')) return;
+        reveal(e, t);
+    }, true);
+
+    function tick() {
+        if (document.hidden || !window.NymFormat) return;
+        try {
+            if (typeof window.NymFormat.refreshTimestamps === 'function') window.NymFormat.refreshTimestamps(document);
+            if (typeof window.NymFormat.refreshComposerTimestamps === 'function') window.NymFormat.refreshComposerTimestamps(document);
+            if (typeof window.NymFormat.refreshSpoilerLabels === 'function') window.NymFormat.refreshSpoilerLabels(document);
+        } catch (_) { }
+    }
+    setInterval(tick, 30000);
+    document.addEventListener('visibilitychange', tick);
+})();
+
+(function () {
     'use strict';
 
     var ACTIONS = (window.NYM_ACTIONS = window.NYM_ACTIONS || {});
@@ -191,6 +247,7 @@ window.nymHapticTap = function (ms) {
 
         'closeSidebar':               function () { nym().closeSidebar(); },
         'openNotificationsModal':     function () { nym().openNotificationsModal(); },
+        'openNotificationsAndCloseSidebar': function () { nym().openNotificationsModal(); nym().closeSidebar(); },
         'closeNotificationsModal':    function () { nym().closeNotificationsModal(); },
         'markAllNotificationsRead':   function () { nym().markAllNotificationsRead(); },
         'toggleSidebar':              function () { window.toggleSidebar(); },
@@ -200,7 +257,6 @@ window.nymHapticTap = function (ms) {
         'openShopAndCloseSidebar':    function () { nym().openShop(); nym().closeSidebar(); },
         'showSettingsAndCloseSidebar':function () { window.showSettings(); nym().closeSidebar(); },
         'showAboutAndCloseSidebar':   function () { window.showAbout(); nym().closeSidebar(); },
-        'signOutAndCloseSidebar':     function () { window.signOut(); nym().closeSidebar(); },
         'showSettings':               function () { window.showSettings(); },
         'filterSettingsFromInput':    function (_e, t) { window.filterSettings(t.value); },
         'toggleSettingsSection':      function (_e, t) {
@@ -371,6 +427,7 @@ window.nymHapticTap = function (ms) {
         'commitTextSize':             function (_e, t) { window.commitTextSize(t.value); },
         'resetTextSize':              function () { window.resetTextSize(); },
         'toggleLowDataModeFromStats': function (e) { window.toggleLowDataModeFromStats(e); },
+        'toggleRelayTransportFromStats': function () { window.toggleRelayTransportFromStats(); },
         'onTransparencyChange':       function (_e, t) { window.onTransparencyChange(t.value); },
         'onColumnsWallpaperChange':   function (_e, t) { window.onColumnsWallpaperChange(t.value); },
         'addBlockedKeyword':          function () { nym().addBlockedKeyword(); },

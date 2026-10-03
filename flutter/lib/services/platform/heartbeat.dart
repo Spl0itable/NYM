@@ -14,7 +14,7 @@ import 'background_refresh.dart';
 
 class HeartbeatService {
   HeartbeatService({
-    required KeyValueStore kv,
+    required this._kv,
     MethodChannel? channel,
     http.Client? client,
     bool? supported,
@@ -26,8 +26,7 @@ class HeartbeatService {
     this.maxAttempts = 6,
     this.relaunchBase = const Duration(minutes: 1),
     this.maxRelaunchDelay = const Duration(hours: 1),
-  })  : _kv = kv,
-        _channel = channel ?? const MethodChannel(channelName),
+  })  : _channel = channel ?? const MethodChannel(channelName),
         _client = client ?? http.Client(),
         _supported = supported ?? isSupported,
         _env = env ?? defaultEnv,

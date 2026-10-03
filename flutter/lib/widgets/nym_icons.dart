@@ -152,6 +152,22 @@ class NymIcons {
       '<line x1="12" y1="18" x2="12" y2="12"/>'
       '<polyline points="9 15 12 12 15 15"/></svg>';
 
+  static const String composerMic =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<rect x="9" y="2" width="6" height="12" rx="3"/>'
+      '<path d="M5 10a7 7 0 0 0 14 0"/>'
+      '<line x1="12" y1="17" x2="12" y2="21"/>'
+      '</svg>';
+
+  static const String composerVideoNote =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<circle cx="12" cy="12" r="9.5"/>'
+      '<rect x="7" y="9" width="7" height="6" rx="1.2"/>'
+      '<path d="m14 11.2 3-1.7v5l-3-1.7"/>'
+      '</svg>';
+
   static const String composerEmoji =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
       'stroke-linecap="round" stroke-linejoin="round">'

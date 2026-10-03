@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../features/chat_tools/chat_tools_ui.dart';
+import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/pms/pm_logic.dart';
 import '../../models/channel.dart';
@@ -11,6 +13,8 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../common/app_dialog.dart';
+import '../../features/chat_nav/chat_nav_ui.dart';
+import '../../features/chat_lock/chat_lock_ui.dart';
 import '../nym_icons.dart';
 import '../anchored_popup.dart';
 
@@ -26,6 +30,35 @@ class SidebarQuickMenuItem {
   final String svg;
   final VoidCallback onSelected;
   final bool danger;
+}
+
+List<SidebarQuickMenuItem> chatToolSidebarItems(
+    BuildContext context, String storageKey) {
+  final rootContext = Navigator.of(context, rootNavigator: true).context;
+  return [
+    SidebarQuickMenuItem(
+      label: tr('Media, files & links'),
+      svg: ChatToolIcons.media,
+      onSelected: () {
+        if (rootContext.mounted) ChatMediaPanel.open(rootContext, storageKey);
+      },
+    ),
+    SidebarQuickMenuItem(
+      label: tr('Export chat'),
+      svg: ChatToolIcons.exportChat,
+      onSelected: () {
+        if (rootContext.mounted) ExportChatPanel.open(rootContext, storageKey);
+      },
+    ),
+    for (final item in gtSidebarItems(storageKey))
+      SidebarQuickMenuItem(
+        label: item.label,
+        svg: item.svg,
+        onSelected: () {
+          if (rootContext.mounted) item.onTap(rootContext);
+        },
+      ),
+  ];
 }
 
 /// Shows the sidebar `.quick-context-menu` at [globalPosition] with a haptic tap on open.
@@ -272,6 +305,9 @@ Future<void> showPmContextMenu(
   final isBlocked = ref.read(appStateProvider).blockedUsers.contains(pubkey);
 
   final items = <SidebarQuickMenuItem>[
+    ...chatNavSidebarItems(ref, 'pm-${pubkey.toLowerCase()}'),
+    ...chatLockSidebarItems(ref, 'pm-${pubkey.toLowerCase()}'),
+    ...chatToolSidebarItems(context, PmLogic.pmStorageKey(pubkey)),
     SidebarQuickMenuItem(
       label: isBlocked ? tr('Unblock user') : tr('Block user'),
       svg: NymIcons.sidebarBlock,

@@ -1,3 +1,5 @@
+import '../features/group_tools/group_tools.dart';
+
 /// Group control-event types carried in a group rumor's `['type', …]` tag.
 class GroupControlType {
   GroupControlType._();
@@ -81,7 +83,12 @@ class Group {
     List<ModLogEntry>? modLog,
     Map<String, int>? modTsByTarget,
     List<String>? modSeenIds,
-  })  : members = members ?? <String>[],
+    this.slowmode = 0,
+    this.slowmodeSince = 0,
+    this.joinApproval = false,
+    List<JoinRequest>? joinRequests,
+  })  : joinRequests = joinRequests ?? <JoinRequest>[],
+        members = members ?? <String>[],
         mods = mods ?? <String>[],
         admins = admins ?? <String>[],
         banned = banned ?? <String>[],
@@ -127,6 +134,11 @@ class Group {
   /// Recently applied moderation event ids (x tag / wrap id) for replay dedup.
   final List<String> modSeenIds;
 
+  int slowmode;
+  int slowmodeSince;
+  bool joinApproval;
+  List<JoinRequest> joinRequests;
+
   bool isOwner(String pubkey) => createdBy == pubkey;
   bool isMod(String pubkey) => mods.contains(pubkey);
   bool canModerate(String pubkey) => isOwner(pubkey) || isMod(pubkey);
@@ -159,6 +171,11 @@ class Group {
         'modTsByTarget': modTsByTarget,
         'modSeenIds': modSeenIds,
         'modLog': modLog.map((e) => e.toJson()).toList(),
+        if (slowmode > 0) 'slowmode': slowmode,
+        if (slowmode > 0) 'slowmodeSince': slowmodeSince,
+        if (joinApproval) 'joinApproval': true,
+        if (joinRequests.isNotEmpty)
+          'joinRequests': joinRequests.map((r) => r.toJson()).toList(),
       };
 
   factory Group.fromJson(Map<String, dynamic> j) => Group(
@@ -203,6 +220,13 @@ class Group {
             .map(
                 (e) => ModLogEntry.fromJson((e as Map).cast<String, dynamic>()))
             .toList(),
+        slowmode: GroupTools.normalizeSlowmode(j['slowmode']),
+        slowmodeSince: (j['slowmodeSince'] as num?)?.toInt() ?? 0,
+        joinApproval: j['joinApproval'] == true,
+        joinRequests: [
+          for (final r in (j['joinRequests'] as List?) ?? const [])
+            if (JoinRequest.fromJson(r) != null) JoinRequest.fromJson(r)!,
+        ],
       );
 }
 
@@ -214,7 +238,13 @@ class GroupInviteToken {
     required this.approver,
     required this.epoch,
     required this.name,
+    this.summary,
   });
+
+  final InviteSignedSummary? summary;
+
+  InvitePayload toPayload() =>
+      InvitePayload(g: groupId, n: name, a: approver, e: epoch, s: summary);
 
   final int v;
   final String groupId; // 'g'

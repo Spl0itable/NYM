@@ -98,7 +98,7 @@ Object.assign(NYM.prototype, {
                         if (p.raw) {
                             p.resolve({ status, data });
                         } else if (status >= 400 || (data && data.error)) {
-                            try { p.reject(new Error((data && data.error) || `Request failed (${status})`)); } catch (_) { }
+                            try { p.reject(this._apiRequestError(status, data, null)); } catch (_) { }
                         } else {
                             p.resolve(data);
                         }
@@ -190,6 +190,23 @@ Object.assign(NYM.prototype, {
         return { status: resp.status, data: data || {} };
     },
 
+    _apiRequestError(status, data, headers) {
+        const err = new Error((data && data.error) || `Request failed (${status})`);
+        err.status = status;
+        let after = data && Number(data.retryAfter);
+        const header = headers && typeof headers.get === 'function' ? headers.get('Retry-After') : null;
+        if (header != null && header !== '') {
+            const secs = Number(header);
+            if (Number.isFinite(secs)) after = secs;
+            else {
+                const at = Date.parse(header);
+                if (Number.isFinite(at)) after = Math.max(0, (at - Date.now()) / 1000);
+            }
+        }
+        if (Number.isFinite(after) && after >= 0) err.retryAfterMs = Math.round(after * 1000);
+        return err;
+    },
+
     async _storageApiRequest(action, extra, withAuth = true) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
@@ -198,7 +215,9 @@ Object.assign(NYM.prototype, {
             try {
                 await this._ensureApiSocket();
                 return await this._apiSocketSend(action, extra);
-            } catch (_) { /* fall back to HTTP */ }
+            } catch (e) {
+                if (e && e.status === 429) throw e;
+            }
         }
         const body = Object.assign({ action }, extra || {});
         if (withAuth) {
@@ -213,7 +232,7 @@ Object.assign(NYM.prototype, {
         });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || (data && data.error)) {
-            throw new Error((data && data.error) || `Request failed (${resp.status})`);
+            throw this._apiRequestError(resp.status, data, resp.headers);
         }
         return data || {};
     },

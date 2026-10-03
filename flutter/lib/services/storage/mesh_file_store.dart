@@ -7,10 +7,9 @@ import 'at_rest_cipher.dart';
 
 class MeshFileStore {
   MeshFileStore({
-    AtRestCipher? cipher,
+    this._cipher,
     Future<Directory> Function()? baseDirectory,
-  })  : _cipher = cipher,
-        _baseDirectory = baseDirectory ?? getApplicationDocumentsDirectory;
+  })  : _baseDirectory = baseDirectory ?? getApplicationDocumentsDirectory;
 
   static MeshFileStore instance = MeshFileStore();
 

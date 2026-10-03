@@ -5,6 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../dm_polls/dm_polls_providers.dart';
 import '../i18n/i18n.dart';
 
 /// Poll form is valid with a non-empty question and at least 2 non-empty options.
@@ -14,7 +15,6 @@ bool pollFormValid(String question, List<String> options) {
   return filled >= 2;
 }
 
-/// Create Poll modal: question plus 2–6 option rows (first two fixed); channel-only.
 class PollCreateModal extends ConsumerStatefulWidget {
   const PollCreateModal({super.key});
 
@@ -78,7 +78,12 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
         .where((o) => o.isNotEmpty)
         .toList();
     setState(() => _submitting = true);
-    await ref.read(nostrControllerProvider).publishPoll(question, options);
+    final view = ref.read(currentViewProvider);
+    if (view.kind == ViewKind.channel) {
+      await ref.read(nostrControllerProvider).publishPoll(question, options);
+    } else {
+      await ref.read(dmPollsProvider).publish(view, question, options);
+    }
     if (mounted) Navigator.of(context).maybePop();
   }
 
@@ -329,9 +334,11 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
   }
 }
 
-/// Poll creation is channel-only.
-bool pollCreationAllowed(WidgetRef ref) =>
-    ref.read(currentViewProvider).kind == ViewKind.channel;
+bool pollCreationAllowed(WidgetRef ref) {
+  final view = ref.read(currentViewProvider);
+  return view.kind == ViewKind.channel ||
+      ref.read(dmPollsProvider).refusal(view).isEmpty;
+}
 
 class _FormInput extends StatefulWidget {
   const _FormInput({

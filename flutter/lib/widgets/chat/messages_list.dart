@@ -7,6 +7,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/polls/poll_card.dart';
 import '../../features/reactions/reaction_picker.dart';
@@ -125,6 +126,10 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   bool _showScrollButton = false;
 
+  late final ChatNavListBinding _nav =
+      ChatNavListBinding(ref, _positionsListener);
+  String? _navBreak;
+
   /// Taken once from the scroller on the first build after a thread handed the list back.
   ({int index, double alignment})? _restore;
   bool _restoreDone = false;
@@ -177,6 +182,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   @override
   void dispose() {
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
+    _nav.dispose();
     super.dispose();
   }
 
@@ -236,6 +242,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       ref.read(reactionsProvider),
       settings.useBubbles,
       '@${_baseNym(app.selfNym)}',
+      _navBreak,
     );
     final positions = _positionsListener.itemPositions.value;
     ItemPosition? newest;
@@ -263,15 +270,17 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     List<Poll> polls,
     Map<String, List<MessageReaction>> reactions,
     bool useBubbles,
-    String mentionToken,
-  ) {
+    String mentionToken, [
+    String? breakBefore,
+  ]) {
     final cached = _units;
     if (cached != null &&
         identical(cached.messages, messages) &&
         identical(cached.polls, polls) &&
         identical(cached.reactions, reactions) &&
         cached.useBubbles == useBubbles &&
-        cached.mentionToken == mentionToken) {
+        cached.mentionToken == mentionToken &&
+        cached.breakBefore == breakBefore) {
       return cached;
     }
 
@@ -300,6 +309,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       final last = units.isNotEmpty ? units.last : null;
       if (useBubbles &&
           last is _GroupUnit &&
+          entry.message.id != breakBefore &&
           _groupsWith(last.entries.last.message, entry.message)) {
         last.entries.add(entry);
       } else {
@@ -332,6 +342,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       reactions: reactions,
       useBubbles: useBubbles,
       mentionToken: mentionToken,
+      breakBefore: breakBefore,
       units: units,
       indexById: indexById,
       indexByUnit: indexByUnit,
@@ -343,6 +354,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   void _onPositionsChanged() {
     final positions = _positionsListener.itemPositions.value;
     if (positions.isEmpty) return;
+    _nav.update();
     ItemPosition? newest;
     for (final p in positions) {
       if (p.index == 0) {
@@ -381,8 +393,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final messages = ref.watch(messagesForCurrentViewProvider);
     final reactions = ref.watch(reactionsProvider);
     final polls = ref.watch(pollsForCurrentViewProvider);
-    ref.listen(messagesForCurrentViewProvider, (_, __) => _keepAnchor());
-    ref.listen(pollsForCurrentViewProvider, (_, __) => _keepAnchor());
+    ref.listen(messagesForCurrentViewProvider, (_, _) => _keepAnchor());
+    ref.listen(pollsForCurrentViewProvider, (_, _) => _keepAnchor());
 
     // Different views share no keys, so keeping the cache across a switch would only leak.
     if (_unitCacheViewKey != view.storageKey) {
@@ -427,10 +439,15 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       );
     }
 
+    _navBreak = _nav.prepare(view.storageKey, messages);
     final built = _unitsFor(messages, polls, reactions, settings.useBubbles,
-        '@${_baseNym(selfNym)}');
+        '@${_baseNym(selfNym)}', _navBreak);
     final units = built.units;
     final indexById = built.indexById;
+    _nav.bind(indexById, units.length - 1);
+    _nav.observeLive(messages,
+        away: _showScrollButton ||
+            !ref.read(appStateProvider.notifier).appVisible);
     final scroller = ref.read(messageListScrollerProvider(view.storageKey));
     scroller.bind(_itemScrollController, indexById);
     _idByIndex = {for (final e in indexById.entries) e.value: e.key};
@@ -455,6 +472,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       );
     }
     _restore = null;
+    _nav.afterBuild(scroller);
 
     // ScrollablePositionedList can reach off-screen lazy items; it lacks keyboardDismissBehavior, so unfocus on drag.
     return NotificationListener<ScrollNotification>(
@@ -512,6 +530,15 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                                   group.entries, settings, child);
                             }
                           }
+                          final Widget body = unit is _GroupUnit &&
+                                  _navBreak != null &&
+                                  unit.entries.first.message.id == _navBreak
+                              ? Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [const ChatNavDivider(), child],
+                                )
+                              : child;
                           // 3px list gap from the top edge; RepaintBoundary keeps each row's repaints from re-rasterizing the whole list.
                           return RepaintBoundary(
                             key: unitKey,
@@ -521,7 +548,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                               child: AnchoredUnit(
                                 id: unitId,
                                 units: _anchors,
-                                child: child,
+                                child: body,
                               ),
                             ),
                           );
@@ -535,6 +562,11 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         bottom: 16,
                         child: _ScrollToBottomButton(onTap: _scrollToBottom),
                       ),
+                    Positioned(
+                      right: 22,
+                      bottom: _showScrollButton ? 66 : 16,
+                      child: ChatNavFabs(binding: _nav),
+                    ),
                   ],
                 );
               }),
@@ -556,6 +588,10 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   bool _onScroll(ScrollNotification n) {
     _keeper.observe(n);
+    if ((n is ScrollUpdateNotification && n.dragDetails != null) ||
+        n is UserScrollNotification) {
+      _nav.userScrolled();
+    }
     if (n is ScrollUpdateNotification) _dismissKeyboardOnDrag(n);
     if (n is ScrollEndNotification && _keeper.pending && !_keeper.retargeting) {
       _keeper.pending = false;
@@ -725,6 +761,7 @@ class _UnitsBuild {
     required this.reactions,
     required this.useBubbles,
     required this.mentionToken,
+    this.breakBefore,
     required this.units,
     required this.indexById,
     required this.indexByUnit,
@@ -736,6 +773,7 @@ class _UnitsBuild {
   final Map<String, List<MessageReaction>> reactions;
   final bool useBubbles;
   final String mentionToken;
+  final String? breakBefore;
   final List<_RenderUnit> units;
   final Map<String, int> indexById;
   final Map<String, int> indexByUnit;

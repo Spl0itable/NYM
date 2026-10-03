@@ -1,10 +1,11 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 3.75.545+360
+version: 3.75.545+375
 
 environment:
-  sdk: ^3.6.0
+  sdk: ^3.13.0
+  flutter: ">=3.47.1"
 
 dependencies:
   flutter:
@@ -29,7 +30,7 @@ dependencies:
   ffi: ^2.1.0
   pointycastle: ^3.9.1
   cryptography: ^2.7.0
-  elliptic: ^0.3.11
+  elliptic: ^0.4.0
   convert: ^3.1.1
   crypto: ^3.0.5
   bech32: ^0.2.2
@@ -39,33 +40,36 @@ dependencies:
   http: ^1.0.0
 
   # Storage
-  shared_preferences: ^2.3.2
-  sqflite_sqlcipher: ^3.1.0
-  path_provider: ^2.0.0
+  shared_preferences: ^2.5.5
+  sqflite_sqlcipher: ^3.4.1
+  path_provider: ^2.1.6
   path: ^1.9.0
   flutter_secure_storage: ^9.2.2
 
   # Media / files
   gal: ^2.0.0
-  image_picker: '>=1.1.2'
-  file_picker: ^8.1.2
-  file_selector: ^1.0.0
+  image_picker: ^1.2.3
+  file_picker: ^11.0.3
+  file_selector: ^1.1.0
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
-  share_plus: ^10.0.2
+  share_plus: ^12.0.2
   url_launcher: any
   # Inline video playback for video messages / galleries (PWA <video>).
-  video_player: ^2.9.1
+  video_player: ^2.14.0
+  record: ^7.1.1
+  camera: ^0.12.1
+  image: ^4.10.1
 
   # Realtime media
   flutter_webrtc: ^0.12.5+hotfix.1
 
   # Notifications
-  flutter_local_notifications: ^18.0.0
-  permission_handler: ^11.3.1
+  flutter_local_notifications: ^22.3.1
+  permission_handler: ^12.0.1
   # Foreground playback of the synthesized notification tones (notifications.js
   # Web Audio equivalent — we feed it the rendered WAV bytes).
-  audioplayers: ^6.0.0
+  audioplayers: ^6.8.1
 
   # QR (generation only — the PWA has no camera QR-scanning, so the
   # mobile_scanner plugin was unused; it was also the sole driver of the iOS
@@ -75,28 +79,28 @@ dependencies:
   # Geolocation — the GPS source for proximity channel sort (the PWA's
   # `navigator.geolocation.getCurrentPosition`, app.js:3917). permission_handler
   # already gates the grant; geolocator fetches the actual coordinates.
-  geolocator: ^13.0.0
+  geolocator: ^14.0.2
 
   # Auth / biometrics
-  local_auth: ^2.3.0
+  local_auth: ^3.0.2
   google_sign_in: ^7.2.0
-  sign_in_with_apple: ^7.0.1
+  sign_in_with_apple: ^8.2.0
 
   # UI helpers
-  flutter_svg: ^2.0.10+1
-  app_links: ^6.0.0
-  emoji_picker_flutter: ^3.1.0
+  flutter_svg: ^2.3.0
+  app_links: ^7.2.1
+  emoji_picker_flutter: ^4.5.4
   visibility_detector: ^0.4.0+2
   # Scroll-to-index for the message list (jump-to-quoted-message), since a plain
   # ListView can't land on an off-screen, lazily-built item.
   scrollable_positioned_list: ^0.3.8
 
   # Utils
-  intl: ^0.19.0
+  intl: ^0.20.3
   collection: ^1.18.0
   uuid: ^4.5.1
 
-  bluetooth_low_energy: ^6.1.0
+  bluetooth_low_energy: ^6.2.1
 
 dev_dependencies:
   flutter_test:
@@ -107,7 +111,7 @@ dev_dependencies:
   riverpod_generator: ^2.4.0
   build_runner: ^2.4.13
   riverpod_lint: ^2.3.13
-  sqflite_common_ffi: ^2.3.0
+  sqflite_common_ffi: '>=2.3.7+1 <2.4.0'
   # Imported directly by wallpaper_cache_test's fake path provider. They arrive
   # transitively via path_provider, but a direct import needs a direct
   # dependency (`depend_on_referenced_packages`) or the version it compiles

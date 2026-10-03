@@ -9,6 +9,7 @@ import '../../features/channels/channel_context_menu.dart';
 import '../../features/channels/geohash_place_cache.dart';
 import '../../features/settings/settings_helpers.dart';
 import '../../models/channel.dart';
+import '../../features/chat_nav/chat_nav_ui.dart';
 import '../nym_icons.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
@@ -90,7 +91,7 @@ class ChannelListItem extends ConsumerWidget {
       ],
     );
 
-    return Padding(
+    final Widget row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: SidebarRowGestures(
         onTap: onTap,
@@ -127,6 +128,7 @@ class ChannelListItem extends ConsumerWidget {
                           ? nameBlock
                           : Tooltip(message: location, child: nameBlock),
                     ),
+                    ChatNavRowBadges(storageKey: entry.storageKey),
                     // The unread pill is the only channel badge in the PWA; geohash vs named is shown by the name.
                     if (unread > 0) ...[
                       const SizedBox(width: 5),
@@ -178,6 +180,12 @@ class ChannelListItem extends ConsumerWidget {
           );
         },
       ),
+    );
+    return PinnedReorder(
+      storageKey: entry.storageKey,
+      onHoldMenu: (pos) =>
+          maybeShowChannelContextMenu(context, ref, entry, pos),
+      child: row,
     );
   }
 }

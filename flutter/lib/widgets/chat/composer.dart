@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
@@ -21,19 +22,34 @@ import '../../features/mesh/mesh_controller.dart';
 import '../../features/autocomplete/autocomplete_queries.dart';
 import '../../features/autocomplete/autocomplete_triggers.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/group_tools/group_tools_service.dart' show GtChat;
+import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/commands/command_handler.dart';
 import '../../features/commands/command_i18n.dart';
 import '../../features/commands/command_palette.dart';
 import '../../features/commands/command_registry.dart';
+import '../../features/composer/composer_menus.dart';
+import '../../features/composer/composer_model.dart';
+import '../../features/dm_polls/dm_polls_providers.dart';
+import '../../features/dm_polls/dm_polls_service.dart' show DmPollsService;
 import '../../features/emoji/custom_emoji.dart';
 import '../../features/emoji/emoji_data.dart';
 import '../../features/emoji/emoji_picker.dart';
 import '../../features/emoji/gif_picker.dart';
 import '../../features/groups/group_logic.dart';
+import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/dev_nsec_modal.dart';
+import '../../features/media_notes/media_note_sender.dart';
+import '../../features/media_notes/media_notes.dart';
+import '../../features/media_notes/media_options_bar.dart';
+import '../../features/media_notes/once_crypto.dart';
+import '../../features/media_notes/photo_compress.dart';
+import '../../features/media_notes/video_note_recorder.dart';
+import '../../features/media_notes/voice_record_bar.dart';
+import '../../features/media_notes/voice_recorder.dart';
 import '../../features/messages/format/message_content.dart'
-    show InlineEmojiText, openFullscreenMedia, proxiedMedia;
+    show InlineEmojiText, TimestampChip, openFullscreenMedia, proxiedMedia;
 import '../../features/messages/format/nym_format.dart' show NymFormat;
 import '../../features/messages/inline_network_image.dart';
 import '../../features/nymbot/nymbot_models.dart';
@@ -42,6 +58,7 @@ import '../../features/shop/cosmetics.dart';
 import '../../features/translate/translate_languages.dart';
 import '../../features/translate/translate_service.dart';
 import '../../features/zaps/zap_modal.dart';
+import '../../models/user.dart' show UserStatus;
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
@@ -49,6 +66,7 @@ import '../context_menu/interaction_hooks.dart';
 import 'composer_format.dart';
 import 'composer_markdown.dart';
 import 'message_row.dart' show GroupInfoMember, encodeGroupInfoSystemMessage;
+import '../../features/chat_lock/chat_lock_providers.dart';
 
 /// Session-wide per-conversation drafts, kept outside the widget because the bot chat swaps [Composer] out.
 class ComposerDrafts {
@@ -97,9 +115,10 @@ class _ComposerState extends ConsumerState<Composer> {
 
   // Only one picker popover is open at a time.
   final _emojiPortal = OverlayPortalController();
-  final _gifPortal = OverlayPortalController();
   final _emojiAnchor = LayerLink();
-  final _gifAnchor = LayerLink();
+  String _pickerTab = 'emoji';
+  final GlobalKey _attachKey = GlobalKey();
+  final GlobalKey _sendSplitKey = GlobalKey();
 
   SharedPreferences? _prefs;
   List<String> _recents = const [];
@@ -162,11 +181,171 @@ class _ComposerState extends ConsumerState<Composer> {
   int _attachmentSeq = 0;
 
   /// Only finished uploads contribute, so a half-finished batch never sends a broken link.
-  List<String> get attachmentUrls =>
-      [for (final a in _attachments) if (a.isDone) a.url];
+  List<String> get attachmentUrls => [
+        for (final a in _attachments)
+          if (a.isDone && _attachmentContent(a).isNotEmpty) _attachmentContent(a)
+      ];
 
-  bool get hasPendingUploads =>
-      _attachments.any((a) => a.status == ComposerAttachmentStatus.uploading);
+  bool get hasPendingUploads => _attachments.any((a) =>
+      a.status == ComposerAttachmentStatus.uploading || _attachmentStale(a));
+
+  bool _composerHd = false;
+  bool _composerOnce = false;
+  VoiceRecordingController? _voice;
+  ChatView? _voiceTarget;
+  String _voiceRoute = 'online';
+
+  String _currentMediaRoute(ChatView view) {
+    final online = ref.read(appStateProvider).connectedRelays > 0 ||
+        ref.read(nostrControllerProvider).isLive;
+    return mediaRouteFor(
+        ref.read(meshControllerProvider.notifier).bridge, online, view);
+  }
+
+  MediaFeatureState _mediaFeature(String feature) {
+    final view = ref.read(appStateProvider).view;
+    return mediaFeatureWith(feature, view, _currentMediaRoute(view));
+  }
+
+  bool get _wantOnce =>
+      _composerOnce && _mediaFeature('once').level != MediaFeatureLevel.off;
+
+  String _attachmentContent(ComposerAttachment a) {
+    final v = a.uploadedAs;
+    if (v == null || !v.once) return a.url;
+    final kind = a.isVideo ? 'video' : 'photo';
+    final full = attachDescriptor(
+        a.url,
+        MediaNote(
+          kind: kind,
+          mime: v.mime,
+          size: v.size,
+          once: true,
+          onceId: v.onceId,
+          key: v.key,
+          nonce: v.nonce,
+        ));
+    return full.isEmpty ? '' : onceContent(kind, full);
+  }
+
+  bool _attachmentStale(ComposerAttachment a) {
+    final v = a.uploadedAs;
+    if (a.status != ComposerAttachmentStatus.done || v == null) return false;
+    final hdMatters = !a.isVideo && a.compressed != null;
+    return v.once != _wantOnce || (hdMatters && v.hd != _composerHd);
+  }
+
+  void _reuploadStale() {
+    for (final a in List.of(_attachments)) {
+      if (_attachmentStale(a)) _retryAttachment(a);
+    }
+  }
+
+  void _toggleComposerHd() {
+    setState(() => _composerHd = !_composerHd);
+    _reuploadStale();
+  }
+
+  void _toggleComposerOnce() {
+    final st = _mediaFeature('once');
+    if (st.level == MediaFeatureLevel.off) {
+      _onSystemMessage(tr(st.reason));
+      return;
+    }
+    setState(() => _composerOnce = !_composerOnce);
+    _reuploadStale();
+  }
+
+  Future<bool> _startVoice() async {
+    if (_voice != null) return true;
+    final st = _mediaFeature('voice');
+    if (st.level == MediaFeatureLevel.off) {
+      _onSystemMessage(tr(st.reason));
+      return false;
+    }
+    final view = ref.read(appStateProvider).view;
+    final rec = VoiceRecordingController(
+      backend: ref.read(voiceRecorderBackendProvider)(),
+      tempPath: ref.read(voiceTempPathProvider),
+      maxSeconds: st.maxSeconds ?? MediaNoteLimits.voiceMaxSeconds,
+      warnReason: st.level == MediaFeatureLevel.warn ? st.reason : '',
+    );
+    setState(() {
+      _voice = rec;
+      _voiceTarget = view;
+      _voiceRoute = _currentMediaRoute(view);
+    });
+    final r = await rec.start();
+    if (r != VoiceStartResult.started) {
+      if (mounted && _voice == rec) setState(() => _voice = null);
+      rec.dispose();
+      _onSystemMessage(r == VoiceStartResult.denied
+          ? tr("Microphone access was denied, so voice messages can't be recorded.")
+          : tr(MediaNoteReasons.voiceNoMic));
+      return false;
+    }
+    return true;
+  }
+
+  void _lockVoice() => _voice?.lock();
+
+  Future<void> _stopVoice(bool send) async {
+    final rec = _voice;
+    if (rec == null) return;
+    final target = _voiceTarget ?? ref.read(appStateProvider).view;
+    final route = _voiceRoute;
+    final recorded = await rec.stop(send: send);
+    if (mounted && _voice == rec) setState(() => _voice = null);
+    rec.dispose();
+    if (!send) return;
+    if (recorded == null) {
+      _onSystemMessage(
+          tr('Hold to record, release to send. Tap to record hands-free.'));
+      return;
+    }
+    final bytes = await File(recorded.path).readAsBytes();
+    try {
+      File(recorded.path).deleteSync();
+    } catch (_) {}
+    final desc = MediaNote(
+      kind: 'voice',
+      mime: recorded.mime,
+      duration: recorded.duration,
+      size: bytes.length,
+      waveform: computeWaveform(recorded.samples),
+    );
+    await ref
+        .read(mediaNoteSenderProvider)
+        .send(desc, bytes, target, route: route, once: recorded.once);
+  }
+
+  Future<void> _openVideoNote() async {
+    final st = _mediaFeature('round');
+    if (st.level == MediaFeatureLevel.off) {
+      _onSystemMessage(tr(st.reason));
+      return;
+    }
+    final view = ref.read(appStateProvider).view;
+    final route = _currentMediaRoute(view);
+    final onceAllowed = _mediaFeature('once').level != MediaFeatureLevel.off;
+    final note = await showVideoNoteRecorder(context,
+        onceAllowed: onceAllowed,
+        maxSeconds: st.maxSeconds ?? MediaNoteLimits.roundMaxSeconds);
+    if (note == null || !mounted) return;
+    final bytes = await File(note.path).readAsBytes();
+    try {
+      File(note.path).deleteSync();
+    } catch (_) {}
+    final desc = MediaNote(
+      kind: 'round',
+      mime: note.mime,
+      duration: note.duration,
+      size: bytes.length,
+    );
+    await ref
+        .read(mediaNoteSenderProvider)
+        .send(desc, bytes, view, route: route, once: note.once);
+  }
 
   List<String> _translateFavorites = const [];
 
@@ -232,6 +411,11 @@ class _ComposerState extends ConsumerState<Composer> {
   void dispose() {
     // Stash the unsent input before unmounting; the PWA's single input never unmounts.
     _saveCurrentDraft();
+    final voice = _voice;
+    _voice = null;
+    if (voice != null) {
+      unawaited(voice.stop(send: false).whenComplete(voice.dispose));
+    }
     _focus.removeListener(_onFocusChanged);
     _controller.dispose();
     _focus.dispose();
@@ -261,7 +445,7 @@ class _ComposerState extends ConsumerState<Composer> {
         _pendingQuote = (
           author: fullNym,
           text: _strippedQuoteText(content),
-          fullText: content,
+          fullText: content.contains('#nym:') ? previewText(content) : content,
         );
       case InsertTextAction(:final text):
         final existing = _controller.text;
@@ -294,12 +478,14 @@ class _ComposerState extends ConsumerState<Composer> {
       }
       if (depth < 1) kept.add(line);
     }
-    return kept.join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+    final joined =
+        kept.join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+    return joined.contains('#nym:') ? previewText(joined) : joined;
   }
 
   /// Elides the game-state token first so a quote chip never shows a raw `[gc:…]` blob; capped at 120.
   static String _quotePreviewText(String text) {
-    final clean = NymFormat.stripGameTokens(text)
+    final clean = NymFormat.stripForPreview(NymFormat.stripGameTokens(text))
         .replaceAll(RegExp(r'<[^>]*>'), '')
         .replaceAll(RegExp(r'[*_~`>#]'), '');
     return clean.length > 120 ? '${clean.substring(0, 120)}...' : clean;
@@ -353,9 +539,7 @@ class _ComposerState extends ConsumerState<Composer> {
   CommandHooks _buildCommandHooks() {
     final controller = ref.read(nostrControllerProvider);
     return CommandHooks(
-      openPoll: () {
-        if (mounted) PollCreateModal.open(context);
-      },
+      openPoll: _openPoll,
       openPm: (pubkey, nym) => controller.startPM(pubkey, nym: nym),
       // Fresh LN-address resolve via the controller so an un-ingested profile can still be zapped.
       openZap: (pubkey, nym) async {
@@ -403,6 +587,7 @@ class _ComposerState extends ConsumerState<Composer> {
       transferOwner: (pubkey) =>
           _withCurrentGroup((gid) => controller.transferOwner(gid, pubkey)),
       openDevNsecChallenge: () => unawaited(_runDevNsecChallenge()),
+      openTimestampPicker: () => unawaited(_pickTimestamp()),
     );
   }
 
@@ -589,32 +774,25 @@ class _ComposerState extends ConsumerState<Composer> {
     _focus.requestFocus();
   }
 
-  void _hideEmojiPicker() => _hidePickerAndRefocus(_emojiPortal);
-
-  void _hideGifPicker() => _hidePickerAndRefocus(_gifPortal);
+  void _hideEmojiPicker() {
+    _hidePickerAndRefocus(_emojiPortal);
+    if (mounted) setState(() {});
+  }
 
   Future<void> _toggleEmojiPicker() async {
     if (_emojiPortal.isShowing) {
       _hideEmojiPicker();
       return;
     }
-    _gifPortal.hide();
     await _ensurePrefs();
     if (!mounted) return;
-    setState(() {});
+    setState(() => _pickerTab = 'emoji');
     _emojiPortal.show();
   }
 
-  Future<void> _toggleGifPicker() async {
-    if (_gifPortal.isShowing) {
-      _hideGifPicker();
-      return;
-    }
-    _emojiPortal.hide();
-    await _ensurePrefs();
-    if (!mounted) return;
-    setState(() {});
-    _gifPortal.show();
+  void _switchPickerTab(String tab) {
+    if (tab == _pickerTab) return;
+    setState(() => _pickerTab = tab);
   }
 
   Future<void> _onEmojiSelected(String emoji) async {
@@ -628,7 +806,7 @@ class _ComposerState extends ConsumerState<Composer> {
 
   void _onGifSelected(String url) {
     _insertAtCaret(url);
-    _gifPortal.hide();
+    _emojiPortal.hide();
   }
 
   /// Recomputes the trigger and dropdown contents on every input change.
@@ -750,7 +928,20 @@ class _ComposerState extends ConsumerState<Composer> {
           currentChannelKey: currentKey,
           priority: priority,
         );
-        return AutocompleteView.mentions(results);
+        final broadcast = [
+          for (final w in gtBroadcastSuggestions(ref, trigger.query))
+            MentionResult(
+              pubkey: '',
+              nym: w,
+              baseNym: w,
+              suffix: '',
+              status: UserStatus.offline,
+              broadcastHint: w == 'here'
+                  ? tr('Notify everyone in this group')
+                  : tr('Notify all members'),
+            ),
+        ];
+        return AutocompleteView.mentions([...broadcast, ...results]);
       case TriggerKind.channel:
         final counts = <String, int>{};
         state.messages.forEach((key, msgs) {
@@ -808,6 +999,10 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// Inserts a mention as one sentinel chip that expands to `@base#suffix` on the wire.
   void _selectMention(MentionResult m) {
+    if (m.isBroadcast) {
+      _replaceTriggerToken(m.insertText);
+      return;
+    }
     final fullNym = '${m.baseNym}#${m.suffix}';
     final ch = _controller.mentionSentinel(fullNym: fullNym, pubkey: m.pubkey);
     _replaceTriggerToken(ch != null ? '$ch ' : m.insertText);
@@ -898,6 +1093,7 @@ class _ComposerState extends ConsumerState<Composer> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
+    if (_handleFormatShortcut(event)) return KeyEventResult.handled;
     if (!_overlayActive) {
       // Enter sends; Shift+Enter, or Enter in the popout editor, inserts a newline.
       final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
@@ -982,6 +1178,11 @@ class _ComposerState extends ConsumerState<Composer> {
 
     // The PWA allows sending a bare quote.
     if (typed.trim().isEmpty && urls.isEmpty && _pendingQuote == null) return;
+    final blocked = controller.groupSendBlockReason(typed);
+    if (blocked != null) {
+      _onSystemMessage(blocked);
+      return;
+    }
 
     var composed = typed;
     if (urls.isNotEmpty) {
@@ -1079,6 +1280,45 @@ class _ComposerState extends ConsumerState<Composer> {
     _focus.requestFocus();
   }
 
+  void _openSendLater() {
+    if (_pendingEdit != null) return;
+    if (hasPendingUploads) {
+      _onSystemMessage(
+          tr('Still uploading — send again once the attachments finish.'));
+      return;
+    }
+    final urls = attachmentUrls;
+    var composed = _draftText();
+    if (urls.isNotEmpty) {
+      final needsSpace = composed.isNotEmpty && !composed.endsWith(' ');
+      composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
+    }
+    final quote = _pendingQuote;
+    final content = _composeOutgoing(composed);
+    _pendingQuote = quote;
+    final view = _chatView();
+    final thread = ref.read(activeThreadProvider);
+    final threadRoot =
+        thread != null && thread.view == view ? thread.rootId : null;
+    unawaited(SendLaterSheet.open(
+      context,
+      storageKey: view.storageKey,
+      draft: content,
+      threadRoot: threadRoot,
+      onScheduled: () {
+        if (!mounted) return;
+        _pushSentHistory(content);
+        _controller.clear();
+        _attachments.clear();
+        _pendingQuote = null;
+        _popout = false;
+        _syncPopoutPortal();
+        _hideOverlay();
+        setState(() {});
+      },
+    ));
+  }
+
   /// Durable Nostr-login identities only; watches `selfPubkey` to track login/logout transitions.
   bool get _anonEligible {
     ref.watch(appStateProvider.select((s) => s.selfPubkey));
@@ -1097,6 +1337,42 @@ class _ComposerState extends ConsumerState<Composer> {
     setState(() => _attachments.clear());
   }
 
+  Future<({Uint8List bytes, String type, ComposerUploadVariant variant})>
+      _prepareUpload(ComposerAttachment a, Uint8List original) async {
+    a.originalSize = original.length;
+    if (!a.isVideo && !a.compressionTried) {
+      a.compressionTried = true;
+      a.compressed = await compressPhoto(original, a.contentType);
+    }
+    a.compressedSize = a.compressed?.length ?? original.length;
+    final hd = _composerHd;
+    final useCompressed = !a.isVideo && !hd && a.compressed != null;
+    final body = useCompressed ? a.compressed! : original;
+    final mime = useCompressed ? 'image/jpeg' : baseMime(a.contentType);
+    if (!_wantOnce) {
+      return (
+        bytes: body,
+        type: useCompressed ? 'image/jpeg' : a.contentType,
+        variant: ComposerUploadVariant(hd: hd, once: false),
+      );
+    }
+    final secret = newOnceSecret();
+    final ct = await encryptOnce(body, secret.key, secret.nonce);
+    return (
+      bytes: ct,
+      type: 'application/octet-stream',
+      variant: ComposerUploadVariant(
+        hd: hd,
+        once: true,
+        onceId: secret.onceId,
+        key: secret.key,
+        nonce: secret.nonce,
+        mime: mime,
+        size: body.length,
+      ),
+    );
+  }
+
   /// Never throws: a failure marks only that tile retryable.
   Future<void> _uploadAttachment(ComposerAttachment a) async {
     final bytes = a.bytes;
@@ -1108,10 +1384,14 @@ class _ComposerState extends ConsumerState<Composer> {
       });
     }
     String? url;
+    ComposerUploadVariant? variant;
     try {
+      final prepared = await _prepareUpload(a, bytes);
+      variant = prepared.variant;
+      if (mounted) setState(() {});
       url = await ref
           .read(nostrControllerProvider)
-          .uploadImage(bytes, contentType: a.contentType);
+          .uploadImage(prepared.bytes, contentType: prepared.type);
     } catch (e) {
       url = null;
       a.error = e.toString();
@@ -1127,11 +1407,13 @@ class _ComposerState extends ConsumerState<Composer> {
         a.status = ComposerAttachmentStatus.done;
         a.url = url;
         a.error = '';
+        a.uploadedAs = variant;
         // Reuse the uploaded bytes so the thumbnail doesn't flicker or re-fetch.
         if (!a.isVideo) _localMediaPreviews[url] = bytes;
         _uploadedMedia[url] = a.isVideo;
       }
     });
+    if (_attachmentStale(a)) _retryAttachment(a);
   }
 
   Future<void> _retryAttachment(ComposerAttachment a) async {
@@ -1160,13 +1442,27 @@ class _ComposerState extends ConsumerState<Composer> {
     final view = ref.read(appStateProvider).view;
     if (meshBridge != null && meshBridge.shouldSendOverMesh(view)) {
       for (final f in picked) {
+        Uint8List bytes;
         try {
-          final bytes = await f.readAsBytes();
-          if (bytes.isEmpty || bytes.length > 10 * 1024 * 1024) continue;
-          await meshBridge.sendFileFromComposer(
-              view, f.name, f.mimeType ?? _guessImageMime(f.name), bytes);
+          bytes = await f.readAsBytes();
         } catch (_) {
-          // Skip an unreadable pick.
+          continue;
+        }
+        if (bytes.isEmpty) continue;
+        final mime = f.mimeType ?? _guessImageMime(f.name);
+        if (!_composerHd && compressibleImageMime(mime)) {
+          final small = await compressPhoto(bytes, mime,
+              maxDimension: MediaNoteLimits.meshPhotoMaxDimension,
+              quality: MediaNoteLimits.meshPhotoQuality);
+          if (small != null) bytes = small;
+        }
+        final sendMime =
+            compressibleImageMime(mime) && !_composerHd ? 'image/jpeg' : mime;
+        final ok = meshSizeCheck(bytes.length).ok &&
+            await meshBridge.sendFileFromComposer(view, f.name, sendMime, bytes);
+        if (!ok) {
+          _onSystemMessage(tr(MediaNoteReasons.meshTooLarge,
+              {'size': formatBytes(bytes.length)}));
         }
       }
       return;
@@ -1213,7 +1509,7 @@ class _ComposerState extends ConsumerState<Composer> {
   Future<void> _pickAndShareFile() async {
     FilePickerResult? result;
     try {
-      result = await FilePicker.platform.pickFiles(withData: true);
+      result = await FilePicker.pickFiles(withData: true);
     } catch (_) {
       return;
     }
@@ -1228,12 +1524,13 @@ class _ComposerState extends ConsumerState<Composer> {
     final meshBridge = ref.read(meshControllerProvider.notifier).bridge;
     final view = ref.read(appStateProvider).view;
     if (meshBridge != null && meshBridge.shouldSendOverMesh(view)) {
-      if (bytes.length > 10 * 1024 * 1024) {
-        _onSystemMessage(tr('Files must be under 50MB.'));
-        return;
+      final ok = meshSizeCheck(bytes.length).ok &&
+          await meshBridge.sendFileFromComposer(
+              view, file.name, _guessImageMime(file.name), bytes);
+      if (!ok) {
+        _onSystemMessage(tr(MediaNoteReasons.meshTooLarge,
+            {'size': formatBytes(bytes.length)}));
       }
-      await meshBridge.sendFileFromComposer(
-          view, file.name, _guessImageMime(file.name), bytes);
       return;
     }
     await ref.read(nostrControllerProvider).shareP2PFile(
@@ -1275,7 +1572,9 @@ class _ComposerState extends ConsumerState<Composer> {
     });
     ref.listen(pendingEditProvider, (_, edit) {
       if (edit == null) return;
-      _applyEdit(edit);
+      if (!DmPollsService.blocksEdit(_chatView(), edit.content)) {
+        _applyEdit(edit);
+      }
       ref.read(pendingEditProvider.notifier).consume();
     });
     ref.listen(currentViewProvider, (prev, next) {
@@ -1285,9 +1584,9 @@ class _ComposerState extends ConsumerState<Composer> {
 
     final input = _inputWithChips(context, sendEnabled);
     // `compact` spans <=1024, so the phone padding keys off the real 768px width.
-    final phone =
-        MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint;
-    final toolbar = _toolbar(context, sendEnabled, phone);
+    final width = MediaQuery.of(context).size.width;
+    final phone = width <= NymDimens.mobileBreakpoint;
+    final gap = phone ? 6.0 : (width <= NymDimens.tabletBreakpoint ? 8.0 : 10.0);
 
     return Container(
       decoration: BoxDecoration(
@@ -1303,23 +1602,23 @@ class _ComposerState extends ConsumerState<Composer> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: [
-            widget.compact
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      input,
-                      const SizedBox(height: 10),
-                      toolbar,
-                    ],
-                  )
-                : Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Expanded(child: input),
-                      const SizedBox(width: 10),
-                      toolbar,
-                    ],
-                  ),
+            ScheduledBar(
+                storageKey: ref.watch(
+                    currentViewProvider.select((v) => v.storageKey))),
+            OverlayPortal(
+              controller: _emojiPortal,
+              overlayChildBuilder: _pickerOverlay,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _attachButton(),
+                  SizedBox(width: gap),
+                  Expanded(child: input),
+                  SizedBox(width: gap),
+                  _primaryButton(sendEnabled, phone),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -1347,7 +1646,58 @@ class _ComposerState extends ConsumerState<Composer> {
           alignment: Alignment.bottomLeft,
           child: panels ?? const SizedBox(height: 0, width: double.infinity),
         ),
-        _input(context, inputEnabled),
+        ValueListenableBuilder<String?>(
+          valueListenable: ref.read(mediaNoteSenderProvider).sending,
+          builder: (context, label, _) => label == null
+              ? const SizedBox.shrink()
+              : Padding(
+                  key: const ValueKey('noteSending'),
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      Text(label,
+                          style: TextStyle(
+                              color: context.nym.textDim, fontSize: 12)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: LinearProgressIndicator(
+                          minHeight: 3,
+                          color: context.nym.primary,
+                          backgroundColor: context.nym.glassBorder,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+        const GtSlowmodeBar(),
+        Stack(
+          clipBehavior: Clip.none,
+          children: [
+            _input(context, inputEnabled),
+            if (_voice != null)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: VoiceRecordBar(
+                  controller: _voice!,
+                  onCancel: () => _stopVoice(false),
+                  onSend: () => _stopVoice(true),
+                  onToggleOnce: () {
+                    final st = _mediaFeature('once');
+                    if (st.level == MediaFeatureLevel.off) {
+                      _onSystemMessage(tr(st.reason));
+                      return;
+                    }
+                    _voice?.toggleOnce();
+                  },
+                  onceAllowed:
+                      _mediaFeature('once').level != MediaFeatureLevel.off,
+                ),
+              ),
+          ],
+        ),
       ],
     );
   }
@@ -1435,8 +1785,8 @@ class _ComposerState extends ConsumerState<Composer> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (chipBlock != null) chipBlock,
-                if (panels != null) panels,
+                ?chipBlock,
+                ?panels,
                 // Wraps only the field so the offset measures its growth past the base row.
                 SizedBox(key: _popoutFieldKey, child: field),
               ],
@@ -1590,11 +1940,15 @@ class _ComposerState extends ConsumerState<Composer> {
       borderSide: BorderSide(color: _popout ? c.primaryA(0.30) : c.glassBorder),
     );
     // Custom emoji render inline via single PUA sentinel chars painted as images; see [EmojiSentinelController].
+    final incog = ref.watch(incognitoFieldFlagsProvider);
     final field = TextField(
       // Reparent rather than remount across the popout flip, or the keyboard closes.
       key: _fieldKey,
       controller: _controller,
       focusNode: _focus,
+      enableIMEPersonalizedLearning: incog.imeLearning,
+      autocorrect: incog.autocorrect,
+      enableSuggestions: incog.suggestions,
       // Taps outside both the field and its dropdown close the dropdown.
       groupId: _acGroupId,
       onTapOutside: (_) {
@@ -1644,8 +1998,7 @@ class _ComposerState extends ConsumerState<Composer> {
             fontSize: fontSize),
         filled: true,
         fillColor: fill,
-        // Reserves room for the inline action row: 38px for the format toggle, 66px with translate.
-        contentPadding: EdgeInsets.fromLTRB(16, 10, hasText ? 66 : 38, 10),
+        contentPadding: EdgeInsets.fromLTRB(16, 10, hasText ? 94 : 66, 10),
         border: border,
         enabledBorder: border,
         focusedBorder: OutlineInputBorder(
@@ -1665,6 +2018,16 @@ class _ComposerState extends ConsumerState<Composer> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              CompositedTransformTarget(
+                link: _emojiAnchor,
+                child: EmojiInputButton(
+                  key: const ValueKey('emojiInputBtn'),
+                  enabled: inputEnabled,
+                  open: _emojiPortal.isShowing,
+                  onTap: _toggleEmojiPicker,
+                ),
+              ),
+              const SizedBox(width: 2),
               FormatInputButton(
                 active: _formatToolbarOpen,
                 enabled: inputEnabled,
@@ -1733,7 +2096,55 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   /// Operates on the raw text: each emoji is one sentinel char, so selection offsets line up.
+  Future<void> _pickTimestamp() async {
+    final sel = _controller.selection;
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: now,
+      firstDate: DateTime(1970),
+      lastDate: DateTime(now.year + 100),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(now),
+    );
+    if (time == null || !mounted) return;
+    final picked =
+        DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    final text = _controller.text;
+    final out = insertTimestampTag(
+        FormatEdit(text, sel.start, sel.end),
+        (picked.millisecondsSinceEpoch / 1000).floor());
+    _controller.value = TextEditingValue(
+      text: out.text,
+      selection: TextSelection.collapsed(offset: out.start),
+    );
+    _onInputChanged();
+    _focus.requestFocus();
+  }
+
+  bool _handleFormatShortcut(KeyEvent event) {
+    final keyboard = HardwareKeyboard.instance;
+    if (!(keyboard.isControlPressed || keyboard.isMetaPressed) ||
+        keyboard.isAltPressed) {
+      return false;
+    }
+    final label = event.logicalKey.keyLabel;
+    if (label.length != 1) return false;
+    final tool =
+        formatToolForShortcut(label, shift: keyboard.isShiftPressed);
+    if (tool == null) return false;
+    _applyFormatTool(tool);
+    return true;
+  }
+
   void _applyFormatTool(FormatTool tool) {
+    if (tool.kind == FormatToolKind.picker) {
+      unawaited(_pickTimestamp());
+      return;
+    }
     final sel = _controller.selection;
     final text = _controller.text;
     // A never-focused field reports -1; treat it as the end of the draft.
@@ -1768,6 +2179,21 @@ class _ComposerState extends ConsumerState<Composer> {
     // Each layer squares its top corners when any layer is stacked above it.
     final chipShowing = _pendingEdit != null || _pendingQuote != null;
     final stripShowing = matches.isNotEmpty || _attachments.isNotEmpty;
+
+    if (_attachments.isEmpty) {
+      _composerHd = false;
+      _composerOnce = false;
+    } else {
+      panels.add(MediaOptionsBar(
+        attachments: _attachments,
+        hd: _composerHd,
+        once: _composerOnce,
+        hdState: _mediaFeature('hd'),
+        onceState: _mediaFeature('once'),
+        onToggleHd: _toggleComposerHd,
+        onToggleOnce: _toggleComposerOnce,
+      ));
+    }
 
     // The strip goes first so each preview sits above its own progress.
     if (stripShowing) {
@@ -1825,7 +2251,6 @@ class _ComposerState extends ConsumerState<Composer> {
     }
     if (_controller.text.trim().isEmpty || _translating) return;
     _emojiPortal.hide();
-    _gifPortal.hide();
     // Re-read favorites on every open so changes from elsewhere aren't stale.
     final prefs = await _ensurePrefs();
     if (!mounted) return;
@@ -2001,106 +2426,181 @@ class _ComposerState extends ConsumerState<Composer> {
     }
   }
 
-  Widget _toolbar(BuildContext context, bool sendEnabled, bool phone) {
-    final buttons = <Widget>[
-      _IconBtn(
-        svg: NymIcons.composerImage,
-        tooltip: tr('Upload Image/Video'),
-        expand: widget.compact,
-        // Inert until relays connect.
-        enabled: sendEnabled,
-        onTap: hasPendingUploads ? null : _pickAndUploadImage,
-      ),
-      _IconBtn(
-        svg: NymIcons.composerFile,
-        tooltip: tr('Share File (P2P)'),
-        expand: widget.compact,
-        enabled: sendEnabled,
-        onTap: _pickAndShareFile,
-      ),
-      _emojiButton(context, sendEnabled),
-      _gifButton(context, sendEnabled),
-      // Exactly five buttons like the PWA; bot access is via `?`/@Nymbot in the input.
-      _SendButton(
-        enabled: sendEnabled,
-        onTap: _send,
-        // Anon send only for durable Nostr-login identities.
-        onAnon: _anonEligible ? _sendAnon : null,
-        expand: widget.compact,
-        phone: phone,
-      ),
-    ];
+  Widget _attachButton() {
+    return _IconBtn(
+      key: _attachKey,
+      svg: ComposerIcons.plus,
+      tooltip: tr('Attach'),
+      onTap: () => unawaited(_openAttachMenu()),
+    );
+  }
 
-    if (widget.compact) {
-      return Row(
-        children: [
-          for (var i = 0; i < buttons.length; i++) ...[
-            Expanded(flex: i == buttons.length - 1 ? 2 : 1, child: buttons[i]),
-            if (i != buttons.length - 1) const SizedBox(width: 10),
-          ],
-        ],
-      );
+  List<AttachItem> _attachModel() {
+    final view = _chatView();
+    final round = _mediaFeature('round');
+    return attachItems(
+      surface: mediaSurface(view),
+      route: _currentMediaRoute(view),
+      round: RoundState(round.state, round.reason),
+      bot: _isBotDm(view),
+    );
+  }
+
+  Future<void> _openAttachMenu() async {
+    if (_emojiPortal.isShowing) _hideEmojiPicker();
+    final items = _attachModel();
+    final id = await showComposerMenu(
+      context,
+      kind: 'attach',
+      label: tr('Attach'),
+      entries: [for (final it in items) ComposerMenuEntry.attach(it)],
+      anchor: globalRectOf(_attachKey),
+    );
+    if (id == null || !mounted) return;
+    final fresh = _attachModel();
+    final item = fresh.where((i) => i.id == id).firstOrNull;
+    if (item == null) return;
+    if (!item.enabled) {
+      if (item.detail.isNotEmpty) _onSystemMessage(tr(item.detail));
+      return;
     }
+    _runAttach(id);
+  }
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var i = 0; i < buttons.length; i++) ...[
-          buttons[i],
-          if (i != buttons.length - 1) const SizedBox(width: 5),
-        ],
+  bool _isBotDm(ChatView view) =>
+      view.kind == ViewKind.pm &&
+      ref.read(nostrControllerProvider).isVerifiedBot(view.id);
+
+  void _openPoll() {
+    if (!mounted) return;
+    final view = _chatView();
+    final refused = ref.read(dmPollsProvider).refusal(view);
+    if (refused.isNotEmpty) {
+      _onSystemMessage(refused);
+      return;
+    }
+    if (pollAllowedOn(mediaSurface(view), bot: _isBotDm(view))) {
+      PollCreateModal.open(context);
+    }
+  }
+
+  bool get _canUpload =>
+      ref.read(appStateProvider).connectedRelays > 0 ||
+      ref.read(nostrControllerProvider).isLive;
+
+  void _runAttach(String id) {
+    final view = _chatView();
+    final route = _currentMediaRoute(view);
+    switch (id) {
+      case 'photo':
+        if (hasPendingUploads) return;
+        if (!_canUpload && route != 'mesh') {
+          _onSystemMessage(tr(MediaNoteReasons.hdOffline));
+          return;
+        }
+        unawaited(_pickAndUploadImage());
+      case 'file':
+        if (!_canUpload && route != 'mesh') {
+          _onSystemMessage(tr(MediaNoteReasons.hdOffline));
+          return;
+        }
+        unawaited(_pickAndShareFile());
+      case 'location':
+        if (view.kind == ViewKind.channel) return;
+        showGtShareLocation(context,
+            view.kind == ViewKind.group ? GtChat.group(view.id) : GtChat.dm(view.id));
+      case 'videoNote':
+        unawaited(_openVideoNote());
+      case 'poll':
+        _openPoll();
+      case 'event':
+        if (view.kind == ViewKind.group) {
+          unawaited(showGtCreateEvent(context, view.id));
+        }
+    }
+  }
+
+  Future<void> _openSendMenu() async {
+    final id = await showComposerMenu(
+      context,
+      kind: 'send',
+      label: tr('Send options'),
+      entries: [
+        for (final it in sendMenuItems(canAnon: _anonEligible))
+          ComposerMenuEntry.send(it),
       ],
+      anchor: globalRectOf(_sendSplitKey),
+    );
+    if (id == null || !mounted) return;
+    if (id == 'later') _openSendLater();
+    if (id == 'anon' && _anonEligible) _sendAnon();
+  }
+
+  Widget _primaryButton(bool sendEnabled, bool phone) {
+    final action = primaryAction(
+      text: _controller.text,
+      attachments: _attachments.length,
+      editing: _pendingEdit != null,
+      recording: _voice != null,
+    );
+    if (action == 'mic') return _micButton();
+    return _SendButton(
+      key: _sendSplitKey,
+      enabled: sendEnabled,
+      onTap: _send,
+      onMenu: () => unawaited(_openSendMenu()),
+      phone: phone,
     );
   }
 
-  Widget _emojiButton(BuildContext context, bool enabled) {
-    return CompositedTransformTarget(
+  ChatView _chatView() => ref.read(appStateProvider).view;
+
+  String _mediaTooltip(String label, MediaFeatureState st) =>
+      st.reason.isEmpty ? tr(label) : '${tr(label)} — ${tr(st.reason)}';
+
+  Widget _micButton() {
+    final st = _mediaFeature('voice');
+    return VoiceMicGesture(
+      key: const ValueKey('voiceRecordBtn'),
+      recording: () => _voice != null,
+      onStart: _startVoice,
+      onLock: _lockVoice,
+      onCancel: () => _stopVoice(false),
+      onRelease: () => _stopVoice(true),
+      onDrag: (dx) => _voice?.drag(dx),
+      child: _IconBtn(
+        svg: NymIcons.composerMic,
+        tooltip: _mediaTooltip('Voice message', st),
+        enabled: st.level != MediaFeatureLevel.off,
+        active: _voice != null,
+        warn: st.level == MediaFeatureLevel.warn,
+        onTap: () {},
+      ),
+    );
+  }
+
+  Widget _pickerOverlay(BuildContext context) {
+    final tabs = PickerTabs(active: _pickerTab, onSelect: _switchPickerTab);
+    final gif = _pickerTab == 'gif' && _prefs != null;
+    return _popover(
       link: _emojiAnchor,
-      child: OverlayPortal(
-        controller: _emojiPortal,
-        overlayChildBuilder: (context) => _popover(
-          link: _emojiAnchor,
-          onDismiss: _hideEmojiPicker,
-          child: EmojiPicker(
-            recents: _recents,
-            onSelect: _onEmojiSelected,
-            onClose: _hideEmojiPicker,
-          ),
-        ),
-        child: _IconBtn(
-          svg: NymIcons.composerEmoji,
-          tooltip: tr('Emoji'),
-          expand: widget.compact,
-          enabled: enabled,
-          onTap: _toggleEmojiPicker,
-        ),
-      ),
-    );
-  }
-
-  Widget _gifButton(BuildContext context, bool enabled) {
-    return CompositedTransformTarget(
-      link: _gifAnchor,
-      child: OverlayPortal(
-        controller: _gifPortal,
-        overlayChildBuilder: (context) => _popover(
-          link: _gifAnchor,
-          onDismiss: _hideGifPicker,
-          phoneWidthFactor: 0.9,
-          child: GifPicker(
-            favoritesStore: FavoriteGifsStore(_prefs!),
-            onSelect: _onGifSelected,
-            onClose: _hideGifPicker,
-          ),
-        ),
-        child: _IconBtn(
-          label: 'GIF',
-          tooltip: 'GIF',
-          expand: widget.compact,
-          enabled: enabled,
-          onTap: _toggleGifPicker,
-        ),
-      ),
+      onDismiss: _hideEmojiPicker,
+      phoneWidthFactor: gif ? 0.9 : null,
+      child: gif
+          ? GifPicker(
+              key: const ValueKey('gifPicker'),
+              favoritesStore: FavoriteGifsStore(_prefs!),
+              onSelect: _onGifSelected,
+              onClose: _hideEmojiPicker,
+              tabs: tabs,
+            )
+          : EmojiPicker(
+              key: const ValueKey('emojiPicker'),
+              recents: _recents,
+              onSelect: _onEmojiSelected,
+              onClose: _hideEmojiPicker,
+              tabs: tabs,
+            ),
     );
   }
 
@@ -2165,20 +2665,20 @@ class _ComposerState extends ConsumerState<Composer> {
 
 class _IconBtn extends StatefulWidget {
   const _IconBtn({
-    this.svg,
-    this.label,
+    super.key,
+    required this.svg,
     required this.tooltip,
-    this.expand = false,
     this.enabled = true,
     this.onTap,
-  }) : assert(svg != null || label != null, 'provide an svg or a label');
+    this.active = false,
+    this.warn = false,
+  });
 
-  final String? svg;
+  final bool active;
+  final bool warn;
 
-  /// The PWA's GIF button is literal text, which flutter_svg can't render.
-  final String? label;
+  final String svg;
   final String tooltip;
-  final bool expand;
 
   /// False dims and disables the button; the composer gates it on relay connection.
   final bool enabled;
@@ -2199,19 +2699,18 @@ class _IconBtnState extends State<_IconBtn> {
     // Same `.icon-btn` chrome as the header pills; SVG strokes stay `--text` at rest even in light mode.
     final Color fill;
     final Color borderColor;
-    final Color labelColor;
     if (c.isLight) {
       fill = hovered
           ? Colors.black.withValues(alpha: 0.06)
           : Colors.black.withValues(alpha: 0.03);
       borderColor = hovered ? c.primary : Colors.black.withValues(alpha: 0.1);
-      labelColor = c.primary;
     } else {
       fill = hovered ? c.primaryA(0.12) : Colors.white.withValues(alpha: 0.05);
       borderColor = hovered ? c.primaryA(0.30) : c.glassBorder;
-      labelColor = hovered ? c.primary : c.text;
     }
-    final glyphColor = hovered ? c.primary : c.text;
+    final glyphColor = widget.active
+        ? c.danger
+        : (widget.warn ? c.warning : (hovered ? c.primary : c.text));
     final btn = Tooltip(
       message: widget.tooltip,
       child: MouseRegion(
@@ -2224,7 +2723,7 @@ class _IconBtnState extends State<_IconBtn> {
           decoration: BoxDecoration(
             color: fill,
             borderRadius: NymRadius.rsm,
-            border: Border.all(color: borderColor),
+            border: Border.all(color: widget.active ? c.danger : borderColor),
             boxShadow: hovered
                 ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
                 : null,
@@ -2240,46 +2739,33 @@ class _IconBtnState extends State<_IconBtn> {
                 constraints: const BoxConstraints(minWidth: 42),
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 alignment: Alignment.center,
-                child: widget.label != null
-                    ? Text(
-                        widget.label!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.5,
-                          color: labelColor,
-                        ),
-                      )
-                    : NymSvgIcon(
-                        widget.svg!,
-                        size: 18,
-                        color: glyphColor,
-                      ),
+                child: NymSvgIcon(
+                  widget.svg,
+                  size: 18,
+                  color: glyphColor,
+                ),
               ),
             ),
           ),
         ),
       ),
     );
-    return enabled ? btn : Opacity(opacity: 0.35, child: btn);
+    if (enabled) return btn;
+    return Opacity(opacity: 0.35, child: btn);
   }
 }
 
-/// SEND button; with [onAnon], a 2s hold fires the pseudonymous send and suppresses the trailing tap.
 class _SendButton extends StatefulWidget {
   const _SendButton({
+    super.key,
     required this.enabled,
     required this.onTap,
-    this.onAnon,
-    this.expand = false,
+    required this.onMenu,
     this.phone = false,
   });
   final bool enabled;
   final VoidCallback onTap;
-
-  /// Null means no anon affordance; a tap still sends.
-  final VoidCallback? onAnon;
-  final bool expand;
+  final VoidCallback onMenu;
 
   final bool phone;
 
@@ -2289,58 +2775,43 @@ class _SendButton extends StatefulWidget {
 
 class _SendButtonState extends State<_SendButton> {
   bool _hover = false;
+  bool _chevronHover = false;
 
   Timer? _holdTimer;
-  Timer? _preGlowTimer;
-  Timer? _revertTimer;
-  bool _anonFired = false;
-  bool _preGlow = false;
+  bool _menuFired = false;
   DateTime _suppressClickUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void dispose() {
     _holdTimer?.cancel();
-    _preGlowTimer?.cancel();
-    _revertTimer?.cancel();
     super.dispose();
   }
 
-  void _startHold() {
-    if (widget.onAnon == null || !widget.enabled) return;
-    if (_holdTimer != null) return;
-    _anonFired = false;
-    _preGlowTimer = Timer(const Duration(milliseconds: 700), () {
-      if (_holdTimer != null && mounted) setState(() => _preGlow = true);
-    });
-    _holdTimer = Timer(const Duration(seconds: 2), () {
+  void _openMenu() {
+    _menuFired = true;
+    _suppressClickUntil = DateTime.now().add(const Duration(milliseconds: 800));
+    HapticFeedback.mediumImpact();
+    widget.onMenu();
+  }
+
+  void _startHold(PointerDownEvent e) {
+    if (!widget.enabled || _holdTimer != null) return;
+    if (e.kind == PointerDeviceKind.mouse && e.buttons != kPrimaryMouseButton) {
+      return;
+    }
+    _menuFired = false;
+    _holdTimer = Timer(const Duration(milliseconds: 500), () {
       _holdTimer = null;
-      _preGlowTimer?.cancel();
       if (!mounted) return;
-      _anonFired = true;
-      _suppressClickUntil =
-          DateTime.now().add(const Duration(milliseconds: 800));
-      // A solid 30ms pulse like other long-presses, so mediumImpact.
-      HapticFeedback.mediumImpact();
-      setState(() => _preGlow = true);
-      widget.onAnon!.call();
-      _revertTimer = Timer(const Duration(seconds: 1), () {
-        if (!mounted) return;
-        setState(() {
-          _anonFired = false;
-          _preGlow = false;
-        });
-      });
+      _openMenu();
     });
   }
 
   void _cancelHold() {
     _holdTimer?.cancel();
     _holdTimer = null;
-    _preGlowTimer?.cancel();
-    if (!_anonFired && mounted && _preGlow) setState(() => _preGlow = false);
   }
 
-  /// Dragging a pressed mouse off the button cancels the hold; touch never cancels, like the PWA.
   void _maybeCancelOnExit(PointerMoveEvent e) {
     if (e.kind != PointerDeviceKind.mouse || _holdTimer == null) return;
     final box = context.findRenderObject() as RenderBox?;
@@ -2351,34 +2822,49 @@ class _SendButtonState extends State<_SendButton> {
   }
 
   void _handleTap() {
-    // Suppress the tap that follows a fired long-press.
-    if (_anonFired || DateTime.now().isBefore(_suppressClickUntil)) return;
+    if (_menuFired || DateTime.now().isBefore(_suppressClickUntil)) {
+      _menuFired = false;
+      return;
+    }
     if (widget.enabled) widget.onTap();
+  }
+
+  KeyEventResult _onKey(FocusNode _, KeyEvent e) {
+    if (e is! KeyDownEvent || !widget.enabled) return KeyEventResult.ignored;
+    final key = e.logicalKey == LogicalKeyboardKey.contextMenu
+        ? 'ContextMenu'
+        : (e.logicalKey == LogicalKeyboardKey.f10 ? 'F10' : '');
+    if (!isMenuKey(key, shift: HardwareKeyboard.instance.isShiftPressed)) {
+      return KeyEventResult.ignored;
+    }
+    widget.onMenu();
+    return KeyEventResult.handled;
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
     final hovering = _hover && widget.enabled;
-    final List<BoxShadow>? glow = _preGlow
-        ? [
-            BoxShadow(
-                color: c.primaryA(_anonFired ? 0.4 : 0.2),
-                blurRadius: _anonFired ? 15 : 10),
-          ]
-        : (hovering
-            ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
-            : null);
-    return Opacity(
-      opacity: widget.enabled ? 1 : 0.35,
-      child: MouseRegion(
-        cursor: widget.enabled
-            ? SystemMouseCursors.click
-            : SystemMouseCursors.forbidden,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
+    final List<BoxShadow>? glow = hovering
+        ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
+        : null;
+    const left = BorderRadius.horizontal(left: Radius.circular(NymRadius.sm));
+    const right = BorderRadius.horizontal(right: Radius.circular(NymRadius.sm));
+    final send = MouseRegion(
+      cursor: widget.enabled
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.forbidden,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        onSecondaryTapUp: widget.enabled
+            ? (_) {
+                _cancelHold();
+                _openMenu();
+              }
+            : null,
         child: Listener(
-          onPointerDown: (_) => _startHold(),
+          onPointerDown: _startHold,
           onPointerMove: _maybeCancelOnExit,
           onPointerUp: (_) => _cancelHold(),
           onPointerCancel: (_) => _cancelHold(),
@@ -2387,28 +2873,33 @@ class _SendButtonState extends State<_SendButton> {
             curve: NymMotion.curve,
             decoration: BoxDecoration(
               color: c.primaryA(hovering ? 0.18 : 0.10),
-              borderRadius: NymRadius.rsm,
+              borderRadius: left,
               border: Border.all(color: c.primaryA(0.30)),
               boxShadow: glow,
             ),
             child: Material(
               type: MaterialType.transparency,
-              borderRadius: NymRadius.rsm,
-              child: InkWell(
-                onTap: widget.enabled ? _handleTap : null,
-                borderRadius: NymRadius.rsm,
-                child: Container(
-                  height: 42,
-                  padding:
-                      EdgeInsets.symmetric(horizontal: widget.phone ? 10 : 22),
-                  alignment: Alignment.center,
-                  child: Text(
-                    _anonFired ? tr('ANON') : tr('SEND'),
-                    style: TextStyle(
-                      color: c.primary,
-                      fontSize: widget.phone ? 11 : 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
+              borderRadius: left,
+              child: Focus(
+                onKeyEvent: _onKey,
+                skipTraversal: true,
+                child: InkWell(
+                  key: const ValueKey('composer-send'),
+                  onTap: widget.enabled ? _handleTap : null,
+                  borderRadius: left,
+                  child: Container(
+                    height: 42,
+                    padding: EdgeInsets.symmetric(
+                        horizontal: widget.phone ? 14 : 22),
+                    alignment: Alignment.center,
+                    child: Text(
+                      tr('SEND'),
+                      style: TextStyle(
+                        color: c.primary,
+                        fontSize: widget.phone ? 11 : 12,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.5,
+                      ),
                     ),
                   ),
                 ),
@@ -2416,6 +2907,48 @@ class _SendButtonState extends State<_SendButton> {
             ),
           ),
         ),
+      ),
+    );
+    final chevron = Tooltip(
+      message: tr('More send options'),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _chevronHover = true),
+        onExit: (_) => setState(() => _chevronHover = false),
+        child: Container(
+          decoration: BoxDecoration(
+            color: c.primaryA(_chevronHover && widget.enabled ? 0.18 : 0.10),
+            borderRadius: right,
+            border: Border(
+              top: BorderSide(color: c.primaryA(0.30)),
+              right: BorderSide(color: c.primaryA(0.30)),
+              bottom: BorderSide(color: c.primaryA(0.30)),
+            ),
+          ),
+          child: Material(
+            type: MaterialType.transparency,
+            borderRadius: right,
+            child: InkWell(
+              key: const ValueKey('sendMenuBtn'),
+              onTap: widget.enabled ? widget.onMenu : null,
+              borderRadius: right,
+              child: SizedBox(
+                width: 24,
+                height: 42,
+                child: Center(
+                  child: NymSvgIcon(ComposerIcons.chevronUp,
+                      size: 14, color: c.primary),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    return Opacity(
+      opacity: widget.enabled ? 1 : 0.35,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [send, chevron],
       ),
     );
   }
@@ -3120,7 +3653,33 @@ class EmojiSentinelController extends TextEditingController {
       final inner = richRunStyle(style, run.type, colors);
       final mark = richMarkStyle(inner, fieldStyle, revealed, colors,
           keepSpace: run.emptyBody);
-      if (run.open.isNotEmpty) {
+      if (run.type == 'timestamp') {
+        final seconds = int.tryParse(
+            RegExp(r'^<t:(-?\d+)').firstMatch(run.open)?.group(1) ?? '');
+        final styleLetter =
+            RegExp(r':([tTdDfFR])>$').firstMatch(run.open)?.group(1) ?? 'f';
+        if (seconds != null) {
+          out.add(WidgetSpan(
+            alignment: PlaceholderAlignment.baseline,
+            baseline: TextBaseline.alphabetic,
+            child: TimestampChip(
+                seconds: seconds, style: styleLetter, textStyle: style),
+          ));
+          out.add(TextSpan(text: run.open.substring(1), style: mark));
+          continue;
+        }
+      }
+      if (run.type == 'ulist' || run.type == 'ulist2') {
+        final markerAt = run.open.indexOf(RegExp(r'[-*]'));
+        out.add(TextSpan(text: run.open.substring(0, markerAt), style: style));
+        out.add(WidgetSpan(
+          alignment: PlaceholderAlignment.baseline,
+          baseline: TextBaseline.alphabetic,
+          child: Text(run.type == 'ulist2' ? '\u25E6' : '\u2022',
+              style: style.copyWith(color: colors.textDim)),
+        ));
+        out.add(TextSpan(text: run.open.substring(markerAt + 1), style: style));
+      } else if (run.open.isNotEmpty) {
         out.add(TextSpan(text: run.open, style: mark));
       }
       _emitRuns(

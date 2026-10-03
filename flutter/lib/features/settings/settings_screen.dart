@@ -40,6 +40,11 @@ import '../i18n/language_select.dart';
 import '../messages/format/message_content.dart' show InlineEmojiText;
 import '../identity/modal_chrome.dart';
 import '../identity/vault_settings_modal.dart';
+import '../chat_lock/chat_lock.dart'
+    show ChatLockStrings, incognitoSupport, screenSecurityHint;
+import '../chat_lock/chat_lock_providers.dart';
+import '../chat_lock/chat_lock_ui.dart' show ChatLockSettingsModal;
+import '../chat_lock/screen_privacy.dart' show chatLockPlatform;
 import '../identity/key_backup/key_backup_actions.dart';
 import '../identity/key_backup/key_backup_store.dart';
 import '../identity/nick_edit_modal.dart';
@@ -888,7 +893,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final notifier = ref.read(appStateProvider.notifier);
     // Unpin every channel now; #nymchat is never in the set.
     for (final key in ref.read(appStateProvider).pinnedChannels.toList()) {
-      notifier.togglePin(key);
+      ref.read(nostrControllerProvider).togglePin(key);
     }
     for (final pk in ref.read(appStateProvider).blockedUsers.toList()) {
       notifier.removeBlockedUser(pk);
@@ -1328,6 +1333,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
+      ..._chatLockGroups(),
       if (canBackUpKey)
         _GroupSpec(
           text: '${tr('Cloud Key Backup')} $backupHint',
@@ -2768,6 +2774,65 @@ class _SectionSpec {
 }
 
 /// One searchable form group; [text] is its full rendered text.
+extension _ChatLockSettings on _SettingsScreenState {
+  List<_GroupSpec> _chatLockGroups() {
+    ref.watch(chatLockRevisionProvider);
+    final lock = ref.read(chatLockProvider);
+    final platform = chatLockPlatform();
+    final onOff = <({String value, String label})>[
+      (value: 'off', label: tr(ChatLockStrings.disabled)),
+      (value: 'on', label: tr(ChatLockStrings.enabled)),
+    ];
+    final screenHint = tr(screenSecurityHint(platform));
+    final incog = incognitoSupport(platform);
+    final incogHint = tr(incog.hint);
+    return [
+      _GroupSpec(
+        text: '${tr(ChatLockStrings.settingsTitle)} '
+            '${tr(ChatLockStrings.settingsButton)} '
+            '${tr(ChatLockStrings.settingsHint)}',
+        child: FormGroup(
+          label: tr(ChatLockStrings.settingsTitle),
+          hint: tr(ChatLockStrings.settingsHint),
+          child: NymOutlineButton(
+            key: const Key('chatLockSettingsButton'),
+            label: tr(ChatLockStrings.settingsButton),
+            onPressed: () => ChatLockSettingsModal.open(context),
+          ),
+        ),
+      ),
+      _GroupSpec(
+        text: '${tr(ChatLockStrings.screenSecurity)} ${_SettingsScreenState._optText(onOff)} $screenHint',
+        child: FormGroup(
+          label: tr(ChatLockStrings.screenSecurity),
+          hint: screenHint,
+          child: FormSelect<String>(
+            key: const Key('screenSecuritySelect'),
+            value: lock.screenSecurity ? 'on' : 'off',
+            items: onOff,
+            onChanged: (v) => lock.screenSecurity = v == 'on',
+          ),
+        ),
+      ),
+      _GroupSpec(
+        text: '${tr(ChatLockStrings.incognitoKeyboard)} ${_SettingsScreenState._optText(onOff)} $incogHint',
+        child: FormGroup(
+          label: tr(ChatLockStrings.incognitoKeyboard),
+          hint: incogHint,
+          child: FormSelect<String>(
+            key: const Key('incognitoKeyboardSelect'),
+            value: incog.available && lock.incognitoKeyboard ? 'on' : 'off',
+            items: onOff,
+            disabled: !incog.available,
+            tooltip: incogHint,
+            onChanged: (v) => lock.incognitoKeyboard = v == 'on',
+          ),
+        ),
+      ),
+    ];
+  }
+}
+
 class _GroupSpec {
   const _GroupSpec({required this.text, required this.child});
   final String text;
@@ -2930,7 +2995,7 @@ class _WallpaperPicker extends StatelessWidget {
                 ? Image.network(
                     proxiedAvatarUrl(path) ?? path,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
+                    errorBuilder: (_, _, _) =>
                         NymSvgIcon(NymIcons.upload, size: 20, color: c.textDim),
                   )
                 : Image.file(File(path), fit: BoxFit.cover),

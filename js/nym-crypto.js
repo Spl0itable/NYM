@@ -170,21 +170,21 @@
     }
 
     // The seal's inner NIP-44 is the only part a signer must perform; the wrap uses an ephemeral key.
-    function pq2Nip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs, extraTags) {
+    function pq2Nip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs, extraTags, atSec) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
         rumor.id = T.getEventHash(rumor);
         const seal = T.finalizeEvent({
             kind: 13,
             content: pq2Encrypt(JSON.stringify(rumor), sk, recipientPub, recipientKemPk),
-            created_at: randomNow(),
+            created_at: randomNow(atSec),
             tags: []
         }, sk);
         const ephSk = T.generateSecretKey();
         const wrap = {
             kind: 1059,
             content: pq2Encrypt(JSON.stringify(seal), ephSk, recipientPub, recipientKemPk),
-            created_at: randomNow(),
+            created_at: randomNow(atSec),
             tags: [['p', recipientPub]],
             pubkey: T.getPublicKey(ephSk)
         };
@@ -386,9 +386,10 @@
     }
 
     // ±2h NIP-59 timestamp jitter from a CSPRNG so observers can't predict or strip it.
-    function randomNow() {
+    function randomNow(atSec) {
         const r = crypto.getRandomValues(new Uint32Array(1))[0] / 4294967296;
-        return Math.round(Date.now() / 1000 - r * 7200);
+        const base = Number(atSec) > 0 ? Number(atSec) : Date.now() / 1000;
+        return Math.round(base - r * 7200);
     }
 
     // Bitchat: HKDF(33-byte compressed shared point, empty salt, "nip44-v2") + XChaCha20-Poly1305
@@ -406,45 +407,45 @@
         return 'v2:' + b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     }
 
-    function bitchatWrap(event, sk, recipientPub) {
+    function bitchatWrap(event, sk, recipientPub, atSec) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
         rumor.id = T.getEventHash(rumor);
-        const seal = T.finalizeEvent({ kind: 13, content: encryptBitchat(JSON.stringify(rumor), sk, recipientPub), created_at: randomNow(), tags: [] }, sk);
+        const seal = T.finalizeEvent({ kind: 13, content: encryptBitchat(JSON.stringify(rumor), sk, recipientPub), created_at: randomNow(atSec), tags: [] }, sk);
         const ephSk = T.generateSecretKey();
-        const wrap = { kind: 1059, content: encryptBitchat(JSON.stringify(seal), ephSk, recipientPub), created_at: randomNow(), tags: [['p', recipientPub]], pubkey: T.getPublicKey(ephSk) };
+        const wrap = { kind: 1059, content: encryptBitchat(JSON.stringify(seal), ephSk, recipientPub), created_at: randomNow(atSec), tags: [['p', recipientPub]], pubkey: T.getPublicKey(ephSk) };
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    function nip59Wrap(event, sk, recipientPub, expirationTs, extraTags) {
+    function nip59Wrap(event, sk, recipientPub, expirationTs, extraTags, atSec) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
         rumor.id = T.getEventHash(rumor);
         const ckSeal = T.nip44.getConversationKey(sk, recipientPub);
-        const seal = T.finalizeEvent({ kind: 13, content: T.nip44.encrypt(JSON.stringify(rumor), ckSeal), created_at: randomNow(), tags: [] }, sk);
+        const seal = T.finalizeEvent({ kind: 13, content: T.nip44.encrypt(JSON.stringify(rumor), ckSeal), created_at: randomNow(atSec), tags: [] }, sk);
         const ephSk = T.generateSecretKey();
         const ckWrap = T.nip44.getConversationKey(ephSk, recipientPub);
-        const wrap = { kind: 1059, content: T.nip44.encrypt(JSON.stringify(seal), ckWrap), created_at: randomNow(), tags: [['p', recipientPub]], pubkey: T.getPublicKey(ephSk) };
+        const wrap = { kind: 1059, content: T.nip44.encrypt(JSON.stringify(seal), ckWrap), created_at: randomNow(atSec), tags: [['p', recipientPub]], pubkey: T.getPublicKey(ephSk) };
         if (Array.isArray(extraTags)) for (const t of extraTags) wrap.tags.push(t);
         if (expirationTs) wrap.tags.push(['expiration', String(expirationTs)]);
         return T.finalizeEvent(wrap, ephSk);
     }
 
-    function pqNip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs, extraTags) {
+    function pqNip59Wrap(event, sk, recipientPub, recipientKemPk, expirationTs, extraTags, atSec) {
         const T = NT();
         const rumor = { created_at: Math.floor(Date.now() / 1000), content: '', tags: [], ...event, pubkey: T.getPublicKey(sk) };
         rumor.id = T.getEventHash(rumor);
         const seal = T.finalizeEvent({
             kind: 13,
             content: pqEncrypt(JSON.stringify(rumor), sk, recipientPub, recipientKemPk),
-            created_at: randomNow(),
+            created_at: randomNow(atSec),
             tags: []
         }, sk);
         const ephSk = T.generateSecretKey();
         const wrap = {
             kind: 1059,
             content: pqEncrypt(JSON.stringify(seal), ephSk, recipientPub, recipientKemPk),
-            created_at: randomNow(),
+            created_at: randomNow(atSec),
             tags: [['p', recipientPub]],
             pubkey: T.getPublicKey(ephSk)
         };

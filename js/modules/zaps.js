@@ -1384,6 +1384,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        if (msgPreview && window.NymFormat && typeof window.NymFormat.stripForPreview === 'function') msgPreview = window.NymFormat.stripForPreview(msgPreview);
         if (msgPreview && msgPreview.length > 80) msgPreview = msgPreview.slice(0, 80) + '…';
         const sats = this.abbreviateNumber ? this.abbreviateNumber(amount) : String(amount);
         const body = msgPreview

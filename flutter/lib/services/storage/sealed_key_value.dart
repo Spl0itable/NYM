@@ -13,9 +13,8 @@ class SealedRead {
 }
 
 class SealedKeyValue {
-  SealedKeyValue(this.kv, {AtRestCipher? cipher, bool Function()? blocked})
-      : _cipher = cipher,
-        _blocked = blocked ?? _never;
+  SealedKeyValue(this.kv, {this._cipher, bool Function()? blocked})
+      : _blocked = blocked ?? _never;
 
   static bool _never() => false;
 

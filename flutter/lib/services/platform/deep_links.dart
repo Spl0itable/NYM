@@ -5,6 +5,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../models/channel.dart';
+import '../../features/group_tools/group_tools.dart';
 import '../../models/group.dart';
 
 /// Deep-link routing mirroring the PWA's URL-fragment routing (`#gjoin=`, `#<e|g|c>:<id>`, `#<channel>`).
@@ -24,7 +25,11 @@ enum NymLinkKind {
 
   /// `#gjoin=<token>` invite with the raw token and its parsed payload.
   groupInvite,
+
+  callLink,
 }
+
+void Function(String token)? callLinkHandler;
 
 @immutable
 class NymLink {
@@ -47,6 +52,9 @@ class NymLink {
         refPrefix: prefix,
         channel: channel,
       );
+
+  factory NymLink.callLink(String token) =>
+      NymLink._(kind: NymLinkKind.callLink, inviteToken: token);
 
   factory NymLink.groupInvite(String token, GroupInviteToken? invite) =>
       NymLink._(
@@ -130,6 +138,7 @@ GroupInviteToken? parseGroupInvite(String tokenOrInput) {
           ? (obj['e'] as num).toInt()
           : int.tryParse('${obj['e']}') ?? 0,
       name: (obj['n'] ?? '').toString(),
+      summary: GroupTools.parseInviteInput(token)?.s,
     );
   } catch (_) {
     return null;
@@ -151,6 +160,14 @@ NymLink? parseNymLink(String url) {
 
   final fragment = uri.fragment;
   if (fragment.isEmpty) return null;
+
+  final call = RegExp(r'^call=([A-Za-z0-9_-]+)').firstMatch(fragment);
+  if (call != null) {
+    final token = call.group(1)!;
+    return GroupTools.parseCallLinkInput(token) == null
+        ? null
+        : NymLink.callLink(token);
+  }
 
   // 1) Group invite: case-sensitive token, matched first.
   final invite = RegExp(r'^gjoin=([A-Za-z0-9_-]+)').firstMatch(fragment);
@@ -212,6 +229,11 @@ bool dispatchNymLink(NymLink link, DeepLinkTarget target) {
       final invite = link.invite;
       if (invite == null) return false;
       unawaited(confirmAndJoinGroupInvite(target, invite));
+      return true;
+    case NymLinkKind.callLink:
+      final handler = callLinkHandler;
+      if (handler == null) return false;
+      handler(link.inviteToken);
       return true;
   }
 }

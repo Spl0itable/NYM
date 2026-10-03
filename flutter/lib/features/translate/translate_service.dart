@@ -5,7 +5,7 @@ import '../../services/api/api_client.dart';
 
 /// Message translation via our own proxy only; emoji, mentions and URLs pass through untouched.
 class TranslateService {
-  TranslateService({ApiClient? api}) : _api = api;
+  TranslateService({this._api});
   final ApiClient? _api;
 
   /// One emoji unit: flag pair, keycap, or pictographic glyph with optional VS, skin tone, ZWJ and tags.

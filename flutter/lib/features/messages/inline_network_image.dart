@@ -218,8 +218,8 @@ class InlineNetworkImage extends StatefulWidget {
     }
 
     listener = ImageStreamListener(
-      (_, __) => done(),
-      onError: (_, __) => done(),
+      (_, _) => done(),
+      onError: (_, _) => done(),
     );
     stream.addListener(listener);
     await completer.future;
@@ -347,7 +347,7 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
         fit: widget.fit,
         cacheWidth: cacheWidth,
         gaplessPlayback: true,
-        errorBuilder: (ctx, _, __) => _fallback(ctx),
+        errorBuilder: (ctx, _, _) => _fallback(ctx),
       );
     }
     final url = _effectiveUrl;
@@ -402,7 +402,7 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
               // Decode at display size; applies per frame for animated images.
               cacheWidth: cacheWidth,
               gaplessPlayback: true,
-              errorBuilder: (ctx, _, __) => _fallback(ctx),
+              errorBuilder: (ctx, _, _) => _fallback(ctx),
             );
           }
           return _fallback(ctx);
@@ -434,8 +434,8 @@ class _InlineNetworkImageState extends State<InlineNetworkImage> {
       // The disk cache still stores the original bytes.
       memCacheWidth: cacheWidth,
       placeholder:
-          widget.placeholder == null ? null : (_, __) => widget.placeholder!,
-      errorWidget: (ctx, _, __) => _fallback(ctx),
+          widget.placeholder == null ? null : (_, _) => widget.placeholder!,
+      errorWidget: (ctx, _, _) => _fallback(ctx),
     );
   }
 }

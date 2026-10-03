@@ -127,19 +127,13 @@ Uri meshProfileImageUri(String url) => Uri.parse(proxiedAvatarUrl(url) ?? url);
 /// Owns the [MeshService] lifecycle and the [MeshBridge], powering the radio from the `meshEnabled` setting.
 class MeshController extends StateNotifier<MeshUiState> {
   MeshController({
-    required Ref ref,
-    required String Function() nickname,
-    String? Function()? nostrPubkey,
-    String? Function(String messageHex)? signSchnorr,
-    String? Function(String pubkey)? avatarUrlOf,
-    String? Function(String pubkey)? bannerUrlOf,
-  })  : _ref = ref,
-        _nickname = nickname,
-        _nostrPubkey = nostrPubkey,
-        _signSchnorr = signSchnorr,
-        _avatarUrlOf = avatarUrlOf,
-        _bannerUrlOf = bannerUrlOf,
-        super(const MeshUiState());
+    required this._ref,
+    required this._nickname,
+    this._nostrPubkey,
+    this._signSchnorr,
+    this._avatarUrlOf,
+    this._bannerUrlOf,
+  })  : super(const MeshUiState());
 
   final Ref _ref;
   final String Function() _nickname;

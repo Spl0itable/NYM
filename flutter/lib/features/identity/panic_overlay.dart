@@ -43,7 +43,7 @@ class PanicOverlay extends StatefulWidget {
         opaque: true,
         barrierDismissible: false,
         transitionDuration: Duration.zero,
-        pageBuilder: (_, __, ___) =>
+        pageBuilder: (_, _, _) =>
             PanicOverlay(wipe: wipe, onComplete: onComplete),
       ),
     );

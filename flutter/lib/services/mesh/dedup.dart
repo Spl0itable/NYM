@@ -8,10 +8,9 @@ import 'mesh_constants.dart';
 /// Bounded, expiring seen-set (bitchat: 1000 entries, 5 minutes) that stops the flood mesh from looping.
 class SeenPackets {
   SeenPackets({
-    int capacity = MeshConstants.seenPacketCapacity,
-    Duration ttl = MeshConstants.seenPacketTtl,
-  })  : _capacity = capacity,
-        _ttl = ttl;
+    this._capacity = MeshConstants.seenPacketCapacity,
+    this._ttl = MeshConstants.seenPacketTtl,
+  });
 
   final int _capacity;
   final Duration _ttl;

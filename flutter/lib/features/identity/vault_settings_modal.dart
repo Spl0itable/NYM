@@ -167,9 +167,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
         ModalChrome.focusRing(
           c,
           child: DropdownButtonFormField<String>(
-            // `value` over `initialValue`: the build toolchain's Flutter lacks the latter.
-            // ignore: deprecated_member_use
-            value: _method,
+            initialValue: _method,
             dropdownColor: c.bgTertiary,
             style: TextStyle(color: c.text, fontSize: 14),
             decoration: _decoration(c, ''),

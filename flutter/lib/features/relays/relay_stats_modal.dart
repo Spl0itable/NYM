@@ -14,6 +14,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../services/platform/background_connectivity.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../i18n/i18n.dart';
 
@@ -50,6 +51,47 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     setState(() => _expandedRow = _expandedRow == key ? null : key);
   }
 
+  bool _switching = false;
+
+  Future<void> _useDirect() async {
+    if (_switching) return;
+    final nostr = ref.read(nostrControllerProvider);
+    if (!nostr.relayDirectAcknowledged) {
+      final ok = await showAppConfirm(
+        context,
+        tr('Nymchat will disconnect from the relay pool proxy and connect to '
+            'each relay directly. Relays will see your IP address, and the '
+            "proxy's spam filtering won't apply. You can switch back anytime "
+            'from Network Stats.'),
+        title: tr('Use direct connections?'),
+        okLabel: tr('Use direct'),
+      );
+      if (!ok) return;
+      nostr.acknowledgeRelayDirect();
+    }
+    await _runSwitch(() => nostr.setUserDirectMode(true));
+  }
+
+  Future<void> _useProxy() async {
+    if (_switching) return;
+    final nostr = ref.read(nostrControllerProvider);
+    if (nostr.isUserDirectMode) {
+      await _runSwitch(() => nostr.setUserDirectMode(false));
+    } else {
+      nostr.retryProxyNow();
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _runSwitch(Future<void> Function() action) async {
+    setState(() => _switching = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _switching = false);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -79,8 +121,9 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     // url -> connected; empty before boot, showing the "No relays connected" state.
     final relayStatus = ref.read(nostrControllerProvider).relayConnectionStatus;
     final proxyMode = ref.watch(appStateProvider.select((s) => s.proxyMode));
-    final fallbackActive =
-        ref.read(nostrControllerProvider).isProxyFallbackActive;
+    final nostr = ref.read(nostrControllerProvider);
+    final fallbackActive = nostr.isProxyFallbackActive;
+    final userDirect = nostr.isUserDirectMode;
 
     return Center(
       child: Material(
@@ -153,6 +196,13 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                               connected: connected,
                               proxyMode: proxyMode,
                               fallbackActive: fallbackActive,
+                              userDirect: userDirect,
+                              canSwitch: nostr.canSwitchRelayTransport,
+                              switching: _switching ||
+                                  (fallbackActive &&
+                                      nostr.isProxyRetryInFlight),
+                              onUseDirect: _useDirect,
+                              onUseProxy: _useProxy,
                             ),
                             const SizedBox(height: 12),
                             _Cards(connected: connected, stats: stats),
@@ -227,11 +277,21 @@ class _ConnectionModeLine extends StatelessWidget {
     required this.connected,
     required this.proxyMode,
     required this.fallbackActive,
+    this.userDirect = false,
+    this.canSwitch = false,
+    this.switching = false,
+    this.onUseDirect,
+    this.onUseProxy,
   });
 
   final int connected;
   final bool proxyMode;
   final bool fallbackActive;
+  final bool userDirect;
+  final bool canSwitch;
+  final bool switching;
+  final VoidCallback? onUseDirect;
+  final VoidCallback? onUseProxy;
 
   @override
   Widget build(BuildContext context) {
@@ -242,6 +302,10 @@ class _ConnectionModeLine extends StatelessWidget {
       value = tr('Proxy');
       hint = tr('Relay pool proxy: one multiplexed connection, relays only '
           'see the proxy, spam filtering applies.');
+    } else if (userDirect) {
+      value = tr('Direct');
+      hint = tr('Direct relay connections, chosen by you: relays see your IP '
+          "address and the proxy's spam filtering doesn't apply.");
     } else if (connected > 0 || fallbackActive) {
       value = tr('Direct');
       hint = fallbackActive
@@ -253,6 +317,32 @@ class _ConnectionModeLine extends StatelessWidget {
     } else {
       value = tr('Connecting...');
       hint = '';
+    }
+    final Widget? action;
+    if (!canSwitch) {
+      action = null;
+    } else if (userDirect && !proxyMode) {
+      action = _ModeButton(
+        key: const ValueKey('relay-mode-use-proxy'),
+        label: tr('Use proxy'),
+        tooltip: tr('Reconnect through the relay pool proxy'),
+        onTap: switching ? null : onUseProxy,
+      );
+    } else if (fallbackActive && !proxyMode) {
+      action = _ModeButton(
+        key: const ValueKey('relay-mode-use-proxy'),
+        label: tr('Use proxy'),
+        tooltip: tr('Try reconnecting to the proxy now'),
+        onTap: switching ? null : onUseProxy,
+      );
+    } else {
+      action = _ModeButton(
+        key: const ValueKey('relay-mode-use-direct'),
+        label: tr('Use direct'),
+        tooltip:
+            tr('Disconnect from the proxy and connect to relays directly'),
+        onTap: switching ? null : onUseDirect,
+      );
     }
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
@@ -286,6 +376,10 @@ class _ConnectionModeLine extends StatelessWidget {
                   fontFamily: 'monospace',
                 ),
               ),
+              if (action != null) ...[
+                const Spacer(),
+                action,
+              ],
             ],
           ),
           if (hint.isNotEmpty) ...[
@@ -296,6 +390,76 @@ class _ConnectionModeLine extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _ModeButton extends StatefulWidget {
+  const _ModeButton({
+    super.key,
+    required this.label,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final String label;
+  final String tooltip;
+  final VoidCallback? onTap;
+
+  @override
+  State<_ModeButton> createState() => _ModeButtonState();
+}
+
+class _ModeButtonState extends State<_ModeButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final enabled = widget.onTap != null;
+    final hovered = _hover && enabled;
+    return Tooltip(
+      message: widget.tooltip,
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        label: widget.tooltip,
+        excludeSemantics: true,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: Opacity(
+              opacity: enabled ? 1 : 0.5,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  borderRadius: NymRadius.rsm,
+                  color: hovered
+                      ? c.primary.withValues(alpha: 0.12)
+                      : Colors.white.withValues(alpha: 0.05),
+                  border: Border.all(
+                    color: hovered
+                        ? c.primary.withValues(alpha: 0.4)
+                        : c.glassBorder,
+                  ),
+                ),
+                child: Text(
+                  widget.label,
+                  style: TextStyle(
+                    color: hovered ? c.primary : c.text,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

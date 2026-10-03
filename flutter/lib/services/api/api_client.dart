@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show HttpDate;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
@@ -237,17 +238,13 @@ class ApiSocketResult {
 /// Persistent multiplexed `/api` socket for D1 storage ops; failures trip a cooldown and fall back to HTTP.
 class ApiSocket {
   ApiSocket({
-    required Uri url,
-    ApiSocketFactory factory = defaultApiSocketFactory,
-    Duration connectTimeout = const Duration(seconds: 12),
-    Duration requestTimeout = const Duration(seconds: 45),
-    Duration failureCooldown = const Duration(seconds: 5),
+    required this._url,
+    this._factory = defaultApiSocketFactory,
+    this._connectTimeout = const Duration(seconds: 12),
+    this._requestTimeout = const Duration(seconds: 45),
+    this._failureCooldown = const Duration(seconds: 5),
     this.onTraffic,
-  })  : _url = url,
-        _factory = factory,
-        _connectTimeout = connectTimeout,
-        _requestTimeout = requestTimeout,
-        _failureCooldown = failureCooldown;
+  });
 
   final Uri _url;
   final ApiSocketFactory _factory;
@@ -376,8 +373,12 @@ class ApiSocket {
           : <String, dynamic>{};
       // A stream request answered by an error RES must reject so the caller retries over HTTP.
       if (p.stream && (status >= 400 || data['error'] != null)) {
-        p.completeError(ApiException(p.action, status,
-            data['error']?.toString() ?? 'Request failed ($status)'));
+        p.completeError(ApiException(
+            p.action,
+            status,
+            data['error']?.toString() ?? 'Request failed ($status)',
+            '',
+            retryAfterFrom(null, data['retryAfter'])));
         return;
       }
       p.complete(ApiSocketResult(
@@ -502,12 +503,11 @@ class ApiClient {
   ApiClient({
     http.Client? client,
     String? baseUrl,
-    String giphyApiKey = kApiGiphyApiKey,
+    this._giphyApiKey = kApiGiphyApiKey,
     ApiSocket? apiSocket,
     ApiSocketFactory? apiSocketFactory,
   })  : _client = client ?? http.Client(),
         _baseUrl = baseUrl ?? ApiConfig.proxyBaseUrl(),
-        _giphyApiKey = giphyApiKey,
         _injectedSocket = apiSocket,
         _socketFactory = apiSocketFactory,
         // Off until [activateApiSocket] or an injected socket, so plain clients stay HTTP-only for tests.
@@ -600,6 +600,15 @@ class ApiClient {
             e.key: e.value,
       };
       final result = await socket.request(action, extra, stream: stream);
+      if (!stream && result.status == 429) {
+        throw ApiException(
+          action,
+          429,
+          result.data['error']?.toString() ?? 'Request failed (429)',
+          result.data['code']?.toString() ?? '',
+          retryAfterFrom(null, result.data['retryAfter']),
+        );
+      }
       // An error frame also falls back to HTTP, whose response is authoritative.
       if (!stream &&
           (result.status < 200 ||
@@ -608,6 +617,9 @@ class ApiClient {
         return null;
       }
       return result;
+    } on ApiException catch (e) {
+      if (!stream && e.statusCode == 429) rethrow;
+      return null;
     } catch (_) {
       return null; // Fall back to HTTP.
     }
@@ -723,7 +735,7 @@ class ApiClient {
 
   Map<String, String> _headers([Map<String, String>? extra]) => {
         ...ApiConfig.defaultHeaders,
-        if (extra != null) ...extra,
+        ...?extra,
       };
 
   /// Response body decoded as UTF-8, since package:http defaults charset-less responses to Latin-1.
@@ -908,7 +920,7 @@ class ApiClient {
     try {
       res = await run(
         Uri.parse(jsonProxyUrl(targetUrl)),
-        _headers({if (contentType != null) 'Content-Type': contentType}),
+        _headers({'Content-Type': ?contentType}),
       );
     } catch (e) {
       if (proxyUnreachable(e)) return direct();
@@ -1044,6 +1056,8 @@ class ApiClient {
         (body['action'] ?? 'storage').toString(),
         res.statusCode,
         decoded['error']?.toString() ?? _utf8Body(res),
+        decoded['code']?.toString() ?? '',
+        retryAfterFrom(_header(res, 'retry-after'), decoded['retryAfter']),
       );
     }
     return decoded;
@@ -1075,6 +1089,8 @@ class ApiClient {
         (body['action'] ?? 'storage').toString(),
         res.statusCode,
         decoded['error']?.toString() ?? _utf8Body(res),
+        '',
+        retryAfterFrom(_header(res, 'retry-after'), decoded['retryAfter']),
       );
     }
     final items = <dynamic>[];
@@ -1137,10 +1153,36 @@ class StorageStream {
 
 /// Thrown on a non-success backend response.
 class ApiException implements Exception {
-  ApiException(this.action, this.statusCode, this.body);
+  ApiException(this.action, this.statusCode, this.body,
+      [this.code = '', this.retryAfter]);
   final String action;
   final int statusCode;
   final String body;
+  final String code;
+  final Duration? retryAfter;
   @override
   String toString() => 'ApiException($action: HTTP $statusCode)';
+}
+
+Duration? retryAfterFrom(String? header, Object? bodyValue, [DateTime? now]) {
+  final h = header?.trim() ?? '';
+  if (h.isNotEmpty) {
+    final secs = num.tryParse(h);
+    if (secs != null && secs.isFinite && secs >= 0) {
+      return Duration(milliseconds: (secs * 1000).round());
+    }
+    if (secs == null) {
+      try {
+        final ms = HttpDate.parse(h)
+            .difference(now ?? DateTime.now())
+            .inMilliseconds;
+        return Duration(milliseconds: ms < 0 ? 0 : ms);
+      } catch (_) {}
+    }
+  }
+  final v = bodyValue is num
+      ? bodyValue
+      : (bodyValue is String ? num.tryParse(bodyValue.trim()) : null);
+  if (v == null || !v.isFinite || v < 0) return null;
+  return Duration(milliseconds: (v * 1000).round());
 }

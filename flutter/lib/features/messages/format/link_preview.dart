@@ -161,7 +161,7 @@ class _Card extends StatelessWidget {
                                 MediaQuery.devicePixelRatioOf(context) *
                                 1.5)
                             .ceil(),
-                        errorWidget: (_, __, ___) => const SizedBox.shrink(),
+                        errorWidget: (_, _, _) => const SizedBox.shrink(),
                       ),
                     ),
                   Flexible(
@@ -239,7 +239,7 @@ class _Card extends StatelessWidget {
               fit: BoxFit.cover,
               memCacheWidth:
                   (14 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
-              errorWidget: (_, __, ___) => const SizedBox.shrink(),
+              errorWidget: (_, _, _) => const SizedBox.shrink(),
             ),
           ),
           const SizedBox(width: 4),

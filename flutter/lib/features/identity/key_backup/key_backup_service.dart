@@ -36,10 +36,9 @@ class KeyBackupSession {
   KeyBackupSession({
     required this.store,
     required this.accountId,
-    required BackupKeyDeriver deriver,
-    Uint8List? Function()? nonce,
-  })  : _deriver = deriver,
-        _nonce = nonce;
+    required this._deriver,
+    this._nonce,
+  });
 
   final KeyBackupStore store;
   final String accountId;

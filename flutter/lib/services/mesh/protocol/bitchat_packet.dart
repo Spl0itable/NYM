@@ -357,3 +357,5 @@ class _ByteReader {
     return Uint8List.fromList(out);
   }
 }
+
+int packetVersionForPayload(int length) => length > 0xFFFF ? 2 : 1;

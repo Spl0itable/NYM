@@ -39,14 +39,11 @@ import 'transport/mesh_transport.dart';
 class MeshService {
   MeshService({
     required this.identity,
-    required MeshTransport transport,
-    required String Function() nicknameProvider,
-    Uint8List? Function()? nostrLinkProvider,
-    Future<MeshProfile?> Function(MeshProfileRequest request)? profileProvider,
-  })  : _transport = transport,
-        _nicknameProvider = nicknameProvider,
-        _nostrLinkProvider = nostrLinkProvider,
-        _profileProvider = profileProvider;
+    required this._transport,
+    required this._nicknameProvider,
+    this._nostrLinkProvider,
+    this._profileProvider,
+  });
 
   final NoiseIdentity identity;
   final MeshTransport _transport;
@@ -401,24 +398,48 @@ class MeshService {
     return firstId ?? '';
   }
 
+  bool fileFits(String fileName, String mimeType, Uint8List bytes,
+      {String? peerID}) {
+    final encoded = BitchatFilePacket(
+            fileName: fileName, mimeType: mimeType, content: bytes)
+        .encode();
+    if (encoded == null) return false;
+    final bodyLength = peerID == null ? encoded.length : encoded.length + 21;
+    final probe = BitchatPacket(
+      version: packetVersionForPayload(bodyLength),
+      type: peerID == null
+          ? MeshMessageType.fileTransfer
+          : MeshMessageType.noiseEncrypted,
+      senderID: Uint8List(8),
+      recipientID: peerID == null ? kBroadcastRecipient : Uint8List(8),
+      timestamp: DateTime.now().millisecondsSinceEpoch,
+      payload: Uint8List(bodyLength),
+      signature: peerID == null ? Uint8List(64) : null,
+      ttl: MeshConstants.messageTtl,
+    );
+    return PacketFragmenter.fragment(probe).isNotEmpty;
+  }
+
   /// Sends [bytes] to [peerID] as a Noise-sealed, fragmented DM attachment.
-  Future<void> sendFileToPeer(
+  Future<bool> sendFileToPeer(
     String peerID,
     String fileName,
     String mimeType,
     Uint8List bytes,
   ) async {
+    if (!fileFits(fileName, mimeType, bytes, peerID: peerID)) return false;
     final file = BitchatFilePacket(
         fileName: fileName, mimeType: mimeType, content: bytes);
     final encoded = file.encode();
-    if (encoded == null) return;
+    if (encoded == null) return false;
     final plaintext =
         NoisePayload(NoisePayloadType.fileTransfer, encoded).encode();
     await _sendOrQueueEncrypted(peerID, plaintext);
+    return true;
   }
 
   /// Broadcasts [bytes] as a fragmented FILE_TRANSFER packet.
-  Future<void> sendFileBroadcast(
+  Future<bool> sendFileBroadcast(
     String fileName,
     String mimeType,
     Uint8List bytes,
@@ -426,14 +447,17 @@ class MeshService {
     final file = BitchatFilePacket(
         fileName: fileName, mimeType: mimeType, content: bytes);
     final encoded = file.encode();
-    if (encoded == null) return;
-    await _sendPacket(await _buildPacket(
+    if (encoded == null) return false;
+    final packet = await _buildPacket(
       type: MeshMessageType.fileTransfer,
       payload: encoded,
       // bitchat drops unsigned raw file transfers, so broadcasts must be signed.
       recipientID: kBroadcastRecipient,
       sign: true,
-    ));
+    );
+    if (PacketFragmenter.fragment(packet).isEmpty) return false;
+    await _sendPacket(packet);
+    return true;
   }
 
   Future<void> sendReadReceipt(String peerID, String messageId) async {
@@ -1530,6 +1554,7 @@ class MeshService {
     int? ttl,
   }) async {
     final packet = BitchatPacket(
+      version: packetVersionForPayload(payload.length),
       type: type,
       senderID: identity.peerIdBytes,
       recipientID: recipientID,

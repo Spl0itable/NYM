@@ -366,9 +366,41 @@ class _ShardSocket {
     required this.onMessage,
     required this.onConnected,
     required this.onClosed,
+    this.onLost,
     this.confirmTimeout = const Duration(seconds: 12),
     DateTime Function()? now,
   }) : _now = now ?? DateTime.now;
+
+  final void Function(_ShardSocket sock, DateTime? lastLiveAt)? onLost;
+
+  DateTime? openedAt;
+
+  DateTime? upstreamAt;
+
+  DateTime? healthyAt;
+
+  ({String id, DateTime at})? probe;
+
+  DateTime? _lostAtOverride;
+
+  DateTime get lastActiveAt {
+    final opened = openedAt;
+    final up = upstreamAt;
+    if (up == null) return opened ?? _now();
+    if (opened == null) return up;
+    return up.isAfter(opened) ? up : opened;
+  }
+
+  void recycle({DateTime? lastLiveAt}) {
+    if (_closedByUser || !_open) return;
+    _lostAtOverride = lastLiveAt;
+    _sub?.cancel();
+    _sub = null;
+    try {
+      _channel?.sink.close();
+    } catch (_) {}
+    _onDone();
+  }
 
   RelayShard shard;
   final DateTime Function() _now;
@@ -415,6 +447,11 @@ class _ShardSocket {
     _open = false;
     _settled = false;
     _frameSinceConnect = false;
+    openedAt = _now();
+    upstreamAt = null;
+    healthyAt = null;
+    probe = null;
+    _lostAtOverride = null;
     try {
       final ch = channelFactory(Uri.parse(url));
       _channel = ch;
@@ -471,7 +508,13 @@ class _ShardSocket {
       confirmed = true;
       failuresBeforeConfirm = 0;
     }
-    if (msg is PoolStatus) connectedRelays = msg.connected;
+    if (msg is PoolStatus) {
+      connectedRelays = msg.connected;
+      if (msg.connected.isNotEmpty) healthyAt = _now();
+    }
+    if (msg is PoolEvent || msg is PoolEose || msg is PoolOk) {
+      upstreamAt = _now();
+    }
     onMessage(this, msg);
   }
 
@@ -479,6 +522,10 @@ class _ShardSocket {
     if (_settled) return;
     _settled = true;
     _open = false;
+    final wasLive = _frameSinceConnect;
+    final lastLiveAt = _lostAtOverride ?? upstreamAt ?? openedAt;
+    _lostAtOverride = null;
+    probe = null;
     // A close before confirming is an outright connect failure; count the streak.
     if (!confirmed) failuresBeforeConfirm++;
     if (!_frameSinceConnect) {
@@ -488,6 +535,7 @@ class _ShardSocket {
     connectedRelays = const [];
     _cleanup();
     onClosed(this);
+    if (wasLive && !_closedByUser) onLost?.call(this, lastLiveAt);
     if (_closedByUser) return;
     _scheduleReconnect();
   }
@@ -555,6 +603,8 @@ class RelayPoolProxy implements PoolTransport {
     Random? random,
     this.onProxyUnreachable,
     this.onProxyConnected,
+    this.onShardLost,
+    this.onShardReconnected,
     this.maxPreConnectFailures = 2,
     this.confirmTimeout = const Duration(seconds: 12),
     this.postConfirmGrace = const Duration(seconds: 30),
@@ -595,6 +645,134 @@ class RelayPoolProxy implements PoolTransport {
   void Function()? onProxyConnected;
 
   void Function(String eventId)? onEventRetracted;
+
+  void Function(DateTime? lastLiveAt)? onShardLost;
+
+  void Function()? onShardReconnected;
+
+  static const Duration probeQuiet = Duration(seconds: 60);
+  static const Duration probeTimeout = Duration(seconds: 10);
+  static const Duration probeBackoffMax = Duration(minutes: 10);
+  static const Duration healthInterval = Duration(seconds: 15);
+  static const Duration zombieAfter = Duration(seconds: 45);
+  static const Duration resumeFresh = Duration(seconds: 5);
+  static const Duration probeCheckDelay = Duration(milliseconds: 10250);
+
+  static Duration probeQuietFor(int fails) {
+    final ms = probeQuiet.inMilliseconds * pow(2, min(fails, 16)).toInt();
+    return ms >= probeBackoffMax.inMilliseconds
+        ? probeBackoffMax
+        : Duration(milliseconds: ms);
+  }
+
+  final Map<String, int> _probeFails = {};
+
+  final Set<String> _lostShards = {};
+
+  Timer? _healthTimer;
+
+  Timer? _probeCheckTimer;
+
+  void _startHealthCheck() {
+    if (_healthTimer != null) return;
+    _healthTimer = Timer.periodic(healthInterval, (_) => _checkShardHealth());
+  }
+
+  void _stopLiveness() {
+    _healthTimer?.cancel();
+    _healthTimer = null;
+    _probeCheckTimer?.cancel();
+    _probeCheckTimer = null;
+  }
+
+  void _checkShardHealth() {
+    if (_disposed) return;
+    final now = _now();
+    for (final sock in _sockets.toList()) {
+      if (!sock.isOpen || sock.shard.relays.isEmpty) continue;
+      if (sock.connectedRelays.isNotEmpty) {
+        sock.healthyAt = now;
+      } else {
+        final healthyAt = sock.healthyAt;
+        if (healthyAt != null && now.difference(healthyAt) > zombieAfter) {
+          sock.recycle(lastLiveAt: healthyAt);
+          continue;
+        }
+      }
+      if (_shardDeaf(sock, now)) sock.recycle();
+    }
+  }
+
+  bool _shardDeaf(_ShardSocket sock, DateTime now) {
+    final probe = sock.probe;
+    final id = sock.shard.id;
+    if (probe != null) {
+      if (now.difference(probe.at) < probeTimeout) return false;
+      sock.probe = null;
+      _probeFails[id] = (_probeFails[id] ?? 0) + 1;
+      return true;
+    }
+    final quiet = probeQuietFor(_probeFails[id] ?? 0);
+    if (now.difference(sock.lastActiveAt) < quiet) return false;
+    _sendProbe(sock, now);
+    return false;
+  }
+
+  void _sendProbe(_ShardSocket sock, DateTime now) {
+    final hex = StringBuffer();
+    for (var i = 0; i < 32; i++) {
+      hex.write(_rng.nextInt(256).toRadixString(16).padLeft(2, '0'));
+    }
+    final target = hex.toString();
+    final id = 'nym-live-${target.substring(0, 12)}';
+    sock.probe = (id: id, at: now);
+    sock.send(jsonEncode(<dynamic>[
+      'REQ',
+      id,
+      {
+        'ids': [target],
+        'limit': 1,
+      },
+    ]));
+  }
+
+  void probeNow() {
+    if (_disposed) return;
+    final now = _now();
+    var sent = false;
+    for (final sock in _sockets) {
+      if (!sock.isOpen) continue;
+      if (sock.probe != null) {
+        sent = true;
+        continue;
+      }
+      if (now.difference(sock.lastActiveAt) < resumeFresh) continue;
+      _sendProbe(sock, now);
+      sent = true;
+    }
+    if (!sent) return;
+    _probeCheckTimer?.cancel();
+    _probeCheckTimer = Timer(probeCheckDelay, () {
+      _probeCheckTimer = null;
+      _checkShardHealth();
+    });
+  }
+
+  bool _settleProbe(_ShardSocket sock, String subId) {
+    final probe = sock.probe;
+    if (probe == null || probe.id != subId) return false;
+    sock.probe = null;
+    sock.upstreamAt = _now();
+    _probeFails.remove(sock.shard.id);
+    sock.send(PoolFrame.close(subId));
+    return true;
+  }
+
+  void _onShardLost(_ShardSocket sock, DateTime? lastLiveAt) {
+    if (_disposed) return;
+    _lostShards.add(sock.shard.id);
+    onShardLost?.call(lastLiveAt);
+  }
 
   /// Pre-confirm failures that trip [onProxyUnreachable] (PWA threshold: 2).
   final int maxPreConnectFailures;
@@ -701,6 +879,7 @@ class RelayPoolProxy implements PoolTransport {
   @override
   void connectAll() {
     _startSampler();
+    _startHealthCheck();
     if (_sockets.isNotEmpty) {
       for (final s in _sockets) {
         s.connect();
@@ -723,6 +902,7 @@ class RelayPoolProxy implements PoolTransport {
         onMessage: _onShardMessage,
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
+        onLost: _onShardLost,
         confirmTimeout: confirmTimeout,
         now: _now,
       );
@@ -814,6 +994,7 @@ class RelayPoolProxy implements PoolTransport {
     _disposed = true;
     _held.dropAll();
     _stopSampler();
+    _stopLiveness();
     final subs = _subscriptions.values.toList();
     for (final s in subs) {
       await s.close();
@@ -831,6 +1012,7 @@ class RelayPoolProxy implements PoolTransport {
   Future<void> disconnectSocketsOnly() async {
     _disposed = true;
     _stopSampler();
+    _stopLiveness();
     _subscriptions.clear();
     _activeFilters.clear();
     _reqSentAt.clear();
@@ -854,6 +1036,8 @@ class RelayPoolProxy implements PoolTransport {
 
   /// Adopts [sub] from a previous pool and re-broadcasts its REQ; its dedup suppresses repeats.
   void replaySubscription(Subscription sub, List<NostrFilter> filters) {
+    if (sub.isClosed) return;
+    sub.adoptTransport(this);
     final id = sub.subId;
     _subscriptions[id] = sub;
     _activeFilters[id] = filters;
@@ -932,6 +1116,9 @@ class RelayPoolProxy implements PoolTransport {
         onMessage: _onShardMessage,
         onConnected: _onShardConnected,
         onClosed: _onShardClosed,
+        onLost: _onShardLost,
+        confirmTimeout: confirmTimeout,
+        now: _now,
       );
       _sockets.add(sock);
       sock.connect();
@@ -1091,6 +1278,11 @@ class RelayPoolProxy implements PoolTransport {
       final cb = onProxyConnected;
       if (cb != null && !_disposed) cb();
     }
+    if (_lostShards.remove(sock.shard.id) && !_disposed) {
+      onShardReconnected?.call();
+    }
+    if (msg is PoolEose && _settleProbe(sock, msg.subId)) return;
+    if (msg is PoolClosed && _settleProbe(sock, msg.subId)) return;
     switch (msg) {
       case PoolEvent(:final subId, :final event, :final sourceRelay):
         if (RelayConfig.isAppRelayOnly(

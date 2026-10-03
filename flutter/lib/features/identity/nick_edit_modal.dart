@@ -201,6 +201,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                           ),
                         ),
                         _actions(c),
+                        _logoutRow(c),
                       ],
                     ),
                   ),
@@ -868,7 +869,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       children: [
         ValueListenableBuilder<TextEditingValue>(
           valueListenable: _pqRootLink,
-          builder: (_, value, __) => value.text.trim().isEmpty
+          builder: (_, value, _) => value.text.trim().isEmpty
               ? const SizedBox.shrink()
               : const SecretGuard(),
         ),
@@ -1060,6 +1061,55 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 : null,
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _logout() async {
+    final controller = ref.read(nostrControllerProvider);
+    final ok = await showAppConfirm(
+      context,
+      tr('Sign out and disconnect from Nymchat?'),
+      okLabel: tr('Sign out'),
+      danger: true,
+    );
+    if (!ok) return;
+    if (mounted) Navigator.of(context).pop();
+    await controller.signOut();
+  }
+
+  Widget _logoutRow(NymColors c) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          key: const ValueKey('nickLogoutBtn'),
+          onTap: _logout,
+          borderRadius: NymRadius.rxs,
+          hoverColor: c.danger.withValues(alpha: 0.12),
+          focusColor: c.danger.withValues(alpha: 0.12),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 40),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            alignment: Alignment.center,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                NymSvgIcon(NymIcons.logout, size: 16, color: c.danger),
+                const SizedBox(width: 8),
+                Text(
+                  tr('Log out'),
+                  style: TextStyle(
+                    color: c.danger,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -19,6 +19,11 @@ import '../../services/mesh/protocol/mesh_profile.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../state/settings_provider.dart';
 import '../identity/panic_wipe.dart';
+import '../chat_tools/chat_tools.dart' show meshKeepId, parseMeshKeepId;
+import '../chat_tools/chat_tools_providers.dart';
+import '../media_notes/media_note_stores.dart';
+import '../media_notes/media_notes.dart';
+import '../i18n/i18n.dart';
 import 'ghost_mode.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -49,14 +54,11 @@ String meshStablePubkeyForPeerId(String peerID) => _hex(NoiseCrypto.sha256(
 
 class MeshBridge {
   MeshBridge({
-    required Ref ref,
-    required MeshService service,
-    required String Function() selfNym,
-    AtRestCipher? cipher,
-  })  : _ref = ref,
-        _service = service,
-        _selfNym = selfNym,
-        _cipher = cipher;
+    required this._ref,
+    required this._service,
+    required this._selfNym,
+    this._cipher,
+  });
 
   final Ref _ref;
   final AtRestCipher? _cipher;
@@ -117,6 +119,9 @@ class MeshBridge {
 
   /// Conversations that must never traverse Nostr; persisted beyond the ghost epoch and restarts.
   final Set<String> _ghostPinnedPms = {};
+
+  bool isMeshOnlyPubkey(String pubkey) =>
+      _meshOnlyPmPubkeys.contains(pubkey.toLowerCase());
 
   bool isGhostPinned(String pubkey) =>
       _ghostPinnedPms.contains(pubkey.toLowerCase());
@@ -478,6 +483,23 @@ class MeshBridge {
   }
 
   void _onReceipt(MeshReceipt receipt) {
+    if (parseMeshKeepId(receipt.messageId) != null) {
+      if (receipt.isRead) {
+        _ref.read(chatToolsProvider).handleMeshKeep(
+            receipt.messageId, _pubkeyForPeerId(receipt.fromPeerID));
+      }
+      return;
+    }
+    final onceId = parseMeshOnceReceiptId(receipt.messageId);
+    if (onceId.isNotEmpty) {
+      if (receipt.isRead &&
+          _ref
+              .read(onceStoreProvider)
+              .markRemoteOpened(onceId, 'mesh:${receipt.fromPeerID}')) {
+        _ref.read(onceRevisionProvider.notifier).state++;
+      }
+      return;
+    }
     _app.applyReceipt(ReceiptInfo(
       messageId: receipt.messageId,
       receiptType: receipt.isRead ? 'read' : 'delivered',
@@ -570,10 +592,13 @@ class MeshBridge {
         ..localMediaMime = event.mimeType
         ..localMediaName = event.fileName;
       _app.ingestPMMessage(m);
+      final note = parseMeshFileName(event.fileName, event.mimeType);
       _notifyPm(
           pubkey: pubkey,
           nym: nym,
-          body: event.isImage ? '📷 Photo' : '📎 ${event.fileName}',
+          body: note != null
+              ? plainLabel(note, tr)
+              : (event.isImage ? '📷 Photo' : '📎 ${event.fileName}'),
           ts: m.timestamp);
     } else {
       final channelName = (event.channel == null || event.channel!.isEmpty)
@@ -862,17 +887,43 @@ class MeshBridge {
     return fallback;
   }
 
-  Future<void> sendFileFromComposer(
+  Future<bool> sendKeep(String pubkey, String nid, bool kept) async {
+    final peerId = peerIdForPubkey(pubkey);
+    if (peerId == null) return false;
+    await _service.sendReadReceipt(peerId, meshKeepId(nid, kept));
+    return true;
+  }
+
+  Future<void> sendOnceOpened(String senderPubkey, String onceId) async {
+    final peerId = peerIdForPubkey(senderPubkey);
+    if (peerId == null) return;
+    await _service.sendReadReceipt(peerId, meshOnceReceiptId(onceId));
+  }
+
+  bool fileFits(ChatView view, String fileName, String mimeType, Uint8List bytes) {
+    if (view.kind == ViewKind.pm) {
+      final peerId = peerIdForPubkey(view.id);
+      return _service.fileFits(fileName, mimeType, bytes, peerID: peerId ?? '00');
+    }
+    return _service.fileFits(fileName, mimeType, bytes);
+  }
+
+  Future<bool> sendFileFromComposer(
     ChatView view,
     String fileName,
     String mimeTypeIn,
     Uint8List bytes,
   ) async {
     final mimeType = _sniffMime(bytes, mimeTypeIn);
+    if (!meshSizeCheck(bytes.length).ok || !fileFits(view, fileName, mimeType, bytes)) {
+      return false;
+    }
     final path = await _saveFile(fileName, bytes);
     if (view.kind == ViewKind.channel) {
       final name = view.id.toLowerCase();
-      await _service.sendFileBroadcast(fileName, mimeType, bytes);
+      if (!await _service.sendFileBroadcast(fileName, mimeType, bytes)) {
+        return false;
+      }
       final m = Message(
         id: 'file-${DateTime.now().microsecondsSinceEpoch}',
         author: _selfNym(),
@@ -892,8 +943,9 @@ class MeshBridge {
       _app.ingestMeshChannelMessage(m, channelKey: '#$name');
     } else if (view.kind == ViewKind.pm) {
       final peerId = peerIdForPubkey(view.id);
-      if (peerId != null) {
-        await _service.sendFileToPeer(peerId, fileName, mimeType, bytes);
+      if (peerId != null &&
+          !await _service.sendFileToPeer(peerId, fileName, mimeType, bytes)) {
+        return false;
       }
       final m = _pmMessage(
         id: 'file-${DateTime.now().microsecondsSinceEpoch}',
@@ -908,6 +960,7 @@ class MeshBridge {
         ..localMediaName = fileName;
       _app.ingestPMMessage(m);
     }
+    return true;
   }
 
   void _notifyPm({

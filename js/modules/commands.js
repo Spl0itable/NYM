@@ -281,8 +281,13 @@ Object.assign(NYM.prototype, {
             '/b':             { aliasOf: '/bold',                       fn: (args) => this.cmdBold(args) },
             '/italic':        { desc: 'Italic text (*text*)',           cat: 'formatting', aliases: ['/i'], fn: (args) => this.cmdItalic(args) },
             '/i':             { aliasOf: '/italic',                     fn: (args) => this.cmdItalic(args) },
+            '/underline':     { desc: 'Underline text (__text__)',      cat: 'formatting', aliases: ['/u'], fn: (args) => this.cmdUnderline(args) },
+            '/u':             { aliasOf: '/underline',                  fn: (args) => this.cmdUnderline(args) },
             '/strike':        { desc: 'Strikethrough text (~~text~~)',  cat: 'formatting', aliases: ['/s'], fn: (args) => this.cmdStrike(args) },
             '/s':             { aliasOf: '/strike',                     fn: (args) => this.cmdStrike(args) },
+            '/spoiler':       { desc: 'Spoiler text (||text||)',        cat: 'formatting', fn: (args) => this.cmdSpoiler(args) },
+            '/subtext':       { desc: 'Small dimmed text (-# text)',    cat: 'formatting', fn: (args) => this.cmdSubtext(args) },
+            '/timestamp':     { desc: 'Timestamp in each reader\'s time zone',  cat: 'formatting', fn: (args) => this.cmdTimestamp(args) },
             '/code':          { desc: 'Code block (`code`)',            cat: 'formatting', aliases: ['/c'], fn: (args) => this.cmdCode(args) },
             '/c':             { aliasOf: '/code',                       fn: (args) => this.cmdCode(args) },
             '/quote':         { desc: 'Quote text (> quote)',           cat: 'formatting', aliases: ['/q'], fn: (args) => this.cmdQuote(args) },
@@ -488,7 +493,7 @@ Object.assign(NYM.prototype, {
             .join('');
 
         const footer = [
-            'Markdown supported: **bold**, *italic*, ~~strikethrough~~, `code`, > quote',
+            'Markdown supported: **bold**, *italic*, __underline__, ~~strikethrough~~, ||spoiler||, `code`, > quote, -# subtext, - list, 1. list, <t:unix:f> timestamp',
             'Type : to quickly pick an emoji',
             'Type \\ to pick a kaomoji like ¯\\_(ツ)_/¯',
             'Nyms are shown as name#xxxx where xxxx is the last 4 characters of their pubkey',
@@ -1233,6 +1238,39 @@ Object.assign(NYM.prototype, {
         catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
     },
 
+    async cmdUnderline(args) {
+        if (!args) { this.displaySystemMessage('Usage: /underline text'); return; }
+        try { await this._sendToCurrentTarget(`__${args}__`); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+    },
+
+    async cmdSpoiler(args) {
+        if (!args) { this.displaySystemMessage('Usage: /spoiler text'); return; }
+        try { await this._sendToCurrentTarget(`||${args}||`); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+    },
+
+    async cmdSubtext(args) {
+        if (!args) { this.displaySystemMessage('Usage: /subtext text'); return; }
+        try { await this._sendToCurrentTarget(`-# ${args}`); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+    },
+
+    async cmdTimestamp(args) {
+        if (!args || !args.trim()) {
+            if (typeof this.openTimestampPicker === 'function') this.openTimestampPicker();
+            return;
+        }
+        const parsed = window.NymFormat && typeof window.NymFormat.parseTimestampInput === 'function'
+            ? window.NymFormat.parseTimestampInput(args) : null;
+        if (!parsed) {
+            this.displaySystemMessage('Usage: /timestamp YYYY-MM-DD HH:MM [t|T|d|D|f|F|R], or /timestamp with no arguments to pick a date');
+            return;
+        }
+        try { await this._sendToCurrentTarget(parsed.tag); }
+        catch (error) { this.displaySystemMessage('Failed to send message: ' + error.message); }
+    },
+
     async cmdCode(args) {
         if (!args) { this.displaySystemMessage('Usage: /code text'); return; }
         try { await this._sendToCurrentTarget(`\`\`\`\n${args}\n\`\`\``); }
@@ -1323,8 +1361,9 @@ Object.assign(NYM.prototype, {
     },
 
     cmdPoll() {
-        if (this.inPMMode) {
-            this.displaySystemMessage('Polls can only be created in channels, not in private messages.');
+        const refusal = typeof this._dpRefusal === 'function' ? this._dpRefusal() : '';
+        if (refusal) {
+            this.displaySystemMessage(refusal);
             return;
         }
         document.getElementById('pollQuestion').value = '';

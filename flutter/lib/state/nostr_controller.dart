@@ -33,11 +33,19 @@ import '../features/commands/command_handler.dart';
 import '../features/commands/command_i18n.dart';
 import '../features/commands/command_registry.dart';
 import '../features/emoji/custom_emoji.dart';
+import '../features/dm_polls/dm_polls_providers.dart';
 import '../features/groups/group_logic.dart';
+import '../features/group_tools/group_tools.dart';
+import '../features/group_tools/group_tools_providers.dart';
 import '../features/groups/group_manager.dart';
+import '../features/groups/own_ephemeral_subscription.dart';
 import '../features/i18n/i18n.dart';
 import '../features/i18n/localization_service.dart';
+import '../features/messages/format/nym_format.dart' show NymFormat;
 import '../features/messages/trust_graph.dart';
+import '../features/messages/media_fallbacks.dart';
+import '../features/media_notes/media_note_stores.dart';
+import '../features/media_notes/media_notes.dart' as media_notes;
 import '../features/notifications/background_catch_up.dart';
 import '../features/notifications/live_gap.dart';
 import '../features/notifications/notification_routing.dart';
@@ -73,6 +81,13 @@ import '../models/poll.dart';
 import '../models/settings.dart';
 import '../models/user.dart';
 import '../features/identity/dev_nsec_modal.dart' show isReservedNick;
+import '../features/chat_tools/chat_tools.dart' as chat_tools;
+import '../features/chat_tools/chat_tools_providers.dart';
+import '../features/chat_tools/chat_tools_service.dart';
+import '../features/chat_nav/chat_nav.dart';
+import '../features/chat_nav/chat_nav_service.dart';
+import '../features/chat_nav/chat_nav_providers.dart';
+import '../features/chat_lock/chat_lock_providers.dart';
 import '../features/identity/nip46_service.dart';
 import '../features/identity/panic_wipe.dart';
 import '../features/identity/vault_settings_modal.dart'
@@ -311,6 +326,39 @@ class NostrController {
 
   bool get isProxyFallbackActive => _service?.isFallbackActive ?? false;
 
+  bool get isUserDirectMode =>
+      _service?.isUserDirect ??
+      _ref.read(keyValueStoreProvider).getBool(StorageKeys.relayDirectMode);
+
+  bool get canSwitchRelayTransport => _service?.canSwitchTransport ?? false;
+
+  bool get isProxyRetryInFlight => _service?.isProxyRetryInFlight ?? false;
+
+  bool get relayDirectAcknowledged =>
+      _ref.read(keyValueStoreProvider).getBool(StorageKeys.relayDirectAck);
+
+  void acknowledgeRelayDirect() {
+    unawaited(_ref
+        .read(keyValueStoreProvider)
+        .setBool(StorageKeys.relayDirectAck, true));
+  }
+
+  Future<void> setUserDirectMode(bool direct) async {
+    final kv = _ref.read(keyValueStoreProvider);
+    if (direct) {
+      await kv.setBool(StorageKeys.relayDirectMode, true);
+    } else {
+      await kv.remove(StorageKeys.relayDirectMode);
+    }
+    final svc = _service;
+    if (svc == null) return;
+    await svc.setUserDirect(direct);
+    _ref.read(appStateProvider.notifier).setProxyMode(svc.isProxyMode);
+    _refreshEphemeralSubscriptions();
+  }
+
+  void retryProxyNow() => _service?.retryProxyNow();
+
   /// Surfaces command feedback in the active conversation; defaults to a debug print.
   void Function(String text)? _systemMessageSink;
 
@@ -456,7 +504,13 @@ class NostrController {
       // Mirror a cached own name onto the identity before the first presence broadcast.
       _syncSelfNymFromProfile();
 
-      final service = NostrService(identity: identity, signer: signer);
+      final service = NostrService(
+        identity: identity,
+        signer: signer,
+        userDirect: _ref
+            .read(keyValueStoreProvider)
+            .getBool(StorageKeys.relayDirectMode),
+      );
       _service = service;
       service.pqPeerKey = _pqLayeredPeerKey;
       service.pqSelfKey = pqSelfKey;
@@ -469,7 +523,8 @@ class NostrController {
         service.attestBadge = attest.badge;
       }
       unawaited(_ensureAttestBadge());
-      _groups = GroupManager(service);
+      _groups = GroupManager(service)
+        ..onSelfKeysChanged = _ensureOwnEphemeralSub;
       // Restore groups and ephemeral keys before network I/O so an offline launch can still decrypt group wraps.
       await _hydrateGroupStore();
       final restoredView = bootView.apply();
@@ -486,6 +541,8 @@ class NostrController {
           onConnectionChanged: _onConnectionChanged,
           onGiftWrap: _onGiftWrap,
           onEventRetracted: _onEventRetracted,
+          onShardLost: _onShardLost,
+          onShardReconnected: _onShardReconnected,
         ),
         channelMode: !_ref.read(settingsProvider).groupChatPMOnlyMode,
         vouchAuthors: bootState.nymchatPubkeys,
@@ -582,6 +639,14 @@ class NostrController {
     _ref.read(appStateProvider.notifier).retractMessage(eventId);
   }
 
+  void _onShardLost(int lastLiveAtMs) {
+    _liveGap.note(lastLiveAtMs: lastLiveAtMs);
+  }
+
+  void _onShardReconnected() {
+    if (_liveGap.pending) unawaited(_catchUpLiveGap());
+  }
+
   void _onConnectionChanged(int count) {
     final wasOffline = _ref.read(appStateProvider).connectedRelays == 0;
     _ref.read(appStateProvider.notifier).setConnectedRelays(count);
@@ -601,6 +666,7 @@ class NostrController {
       _retryPendingDmsOnReconnect();
       // Publish what the mesh carried while offline.
       unawaited(flushMeshOutbox());
+      _chatNavReconnect();
       // Driven by the connection edge, not the backfill, so failures there can't skip it.
       schedulePqAnnouncement();
     }
@@ -655,6 +721,7 @@ class NostrController {
   int _liveGapSinceSec = 0;
 
   Future<void> _catchUpLiveGap() => _liveGap.run((sinceSec) async {
+        _catchUpGiftWraps(sinceSec);
         if (_storageSync == null) return false;
         _lastD1BackfillAt = 0;
         _lastActivityDiscoveryAt = 0;
@@ -667,6 +734,40 @@ class NostrController {
         }
         return true;
       });
+
+  final Map<String, int> _gapWrapFloors = <String, int>{};
+
+  void _catchUpGiftWraps(int floorSec) {
+    final service = _service;
+    if (service == null) return;
+    final groups = _groups;
+    service.catchUpGiftWraps(
+      [
+        ...?groups?.allEphemeralPubkeys(),
+        ..._ref.read(ghostModeProvider).pubkeys,
+        ..._anonBotPubkeys(),
+      ],
+      floorSec: floorSec,
+      onWrap: (wrap) {
+        if (wrap.id.isEmpty) return;
+        _gapWrapFloors.remove(wrap.id);
+        _gapWrapFloors[wrap.id] = floorSec;
+        while (_gapWrapFloors.length > 2000) {
+          _gapWrapFloors.remove(_gapWrapFloors.keys.first);
+        }
+      },
+    );
+  }
+
+  ({bool stale, int? cutoffMs}) _gapWrapVerdict(GiftWrapUnwrapped u) {
+    final floorSec = _gapWrapFloors.remove(u.wrapId);
+    if (floorSec == null) return (stale: false, cutoffMs: null);
+    final ts = (u.rumor['created_at'] as num?)?.toInt() ?? 0;
+    if (!gapWrapIsFresh(rumorCreatedAtSec: ts, floorSec: floorSec)) {
+      return (stale: true, cutoffMs: null);
+    }
+    return (stale: false, cutoffMs: floorSec * 1000 - 1);
+  }
 
   /// Re-pulls the full D1 backlog on reconnect/resume, since relay REQs only carry new events; throttled and idempotent.
   Future<void> _backfillFromD1OnReconnect() async {
@@ -929,6 +1030,8 @@ class NostrController {
   /// Tears down the live session without touching persisted state, [AppState] or `_started`; panic passes `flush: false`.
   Future<void> _teardownLiveSession({bool flush = true}) async {
     _flushTimer?.cancel();
+    _chatToolsTimer?.cancel();
+    _chatToolsTimer = null;
     // Drop buffered live events; they'd be re-fetched on the next connect.
     _liveInboundTimer?.cancel();
     _liveInboundTimer = null;
@@ -1031,9 +1134,12 @@ class NostrController {
     _ref.read(appStateProvider.notifier).onPMConversationAdded = null;
     _ref.read(appStateProvider.notifier).onGroupStoreChanged = null;
     _ref.read(appStateProvider.notifier).onChannelReadMarked = null;
+    _ref.read(appStateProvider.notifier).onViewEntering = null;
+    _ref.read(appStateProvider.notifier).onNavReadMarked = null;
+    _chatNavTimer?.cancel();
+    _chatNavTimer = null;
     // The ephemeral gift-wrap REQ captured the old service.
-    _ephemeralSub?.close();
-    _ephemeralSub = null;
+    _ownEph.close();
     // These bindings captured the old identity/service.
     final shop = _ref.read(shopControllerProvider.notifier);
     shop.onActiveItemsPublished = null;
@@ -1564,9 +1670,12 @@ class NostrController {
   }
 
   /// PM/group notification: always recorded to history; only the loud alert depends on age.
-  void _maybeNotifyMessage(Message m, {required bool isGroup}) {
+  void _maybeNotifyMessage(Message m,
+      {required bool isGroup, int? alertCutoffMs}) {
     final appState = _ref.read(appStateProvider);
-    final mention = _refersToSelf(m.content);
+    if (m.slowHeld) return;
+    final mention = _refersToSelf(m.content) ||
+        (isGroup && _ref.read(groupToolsProvider).mentionsAll(m));
     final key = m.conversationKey ??
         (isGroup
             ? GroupLogic.groupStorageKey(m.groupId ?? '')
@@ -1596,11 +1705,17 @@ class NostrController {
     );
     if (!record) return;
     // Loud alert only when fresh; a background catch-up is handled inside [_silentForAlert].
-    final treatAsHistorical = _silentForAlert(
-      m.timestamp,
-      historical: m.isHistorical,
-      liveWindowMs: 30000,
-    );
+    final treatAsHistorical = alertCutoffMs != null
+        ? silentForAlert(
+            tsMs: m.timestamp,
+            nowMs: DateTime.now().millisecondsSinceEpoch,
+            catchUpCutoffMs: alertCutoffMs,
+          )
+        : _silentForAlert(
+            m.timestamp,
+            historical: m.isHistorical,
+            liveWindowMs: 30000,
+          );
     _dispatchNotification(
       // Title is the bare author; the group name goes in the context label.
       title: m.author,
@@ -1694,10 +1809,24 @@ class NostrController {
           DateTime.now().millisecondsSinceEpoch - 24 * 60 * 60 * 1000;
       if (tsMs < cutoff24hMs) return;
     }
+    var shownTitle = title;
+    var shownBody = NymFormat.stripForPreview(body);
+    var shownLabel = contextLabel;
+    var lockedChat = false;
+    try {
+      final lock = _ref.read(chatLockProvider);
+      lockedChat = lock.notificationIsLocked(historyType, tapRoute, senderPubkey);
+      if (lockedChat) {
+        final r = lock.redact(title, shownBody, true);
+        shownTitle = r.title;
+        shownBody = r.body;
+        shownLabel = null;
+      }
+    } catch (_) {}
     if (!silent) {
       unawaited(_ref.read(notificationsServiceProvider).notify(
-            title: title,
-            body: body,
+            title: shownTitle,
+            body: shownBody,
             notifyFriendsOnly: _notifyFriendsOnly,
             groupNotifyMentionsOnly: _groupNotifyMentionsOnly,
             threadNotifyMentionsOnly: _threadNotifyMentionsOnly,
@@ -1723,14 +1852,15 @@ class NostrController {
     try {
       _ref.read(notificationHistoryProvider.notifier).record(
             type: historyType,
-            title: title,
-            body: body,
+            title: shownTitle,
+            body: shownBody,
             route: route ?? senderPubkey,
             ts: tsMs,
             eventId: eventId,
             senderPubkey: senderPubkey,
-            contextLabel: contextLabel,
+            contextLabel: shownLabel,
             threadRoot: threadRoot,
+            exactOnly: lockedChat,
           );
     } catch (_) {
       // History store may be unavailable in teardown; alerting still happened.
@@ -1828,6 +1958,7 @@ class NostrController {
       }
       if (preview != null) break;
     }
+    if (preview != null) preview = NymFormat.stripForPreview(preview);
     if (preview != null && preview.length > 80) {
       preview = '${preview.substring(0, 80)}…';
     }
@@ -1892,6 +2023,7 @@ class NostrController {
       }
       if (preview != null) break;
     }
+    if (preview != null) preview = NymFormat.stripForPreview(preview);
     if (preview != null && preview.length > 80) {
       preview = '${preview.substring(0, 80)}…';
     }
@@ -2176,6 +2308,7 @@ class NostrController {
     final rumor = u.rumor;
     final kind = u.rumorKind;
     final self = _service?.selfPubkey ?? '';
+    final gap = _gapWrapVerdict(u);
 
     // Track the peer's PM format so replies go out in one they can decrypt.
     final sender = rumor['pubkey'] as String?;
@@ -2199,7 +2332,7 @@ class NostrController {
       case EventKind.dmRumor: // 14 — PM or group message
         // Archive durable DM wraps to D1; receipts, typing, signaling, presence and settings wraps are not archived.
         _archiveGiftWrap(u);
-        _onRumorMessage(u, appState, self);
+        _onRumorMessage(u, appState, self, gap: gap);
       case EventKind.nymReceiptRumor: // 69420 — receipt or typing
         if (u.senderVerified) _onReceiptOrTyping(rumor, appState);
       case EventKind.reaction: // 7 — gift-wrapped reaction
@@ -2477,7 +2610,8 @@ class NostrController {
   }
 
   void _onRumorMessage(
-      GiftWrapUnwrapped u, AppStateNotifier appState, String self) {
+      GiftWrapUnwrapped u, AppStateNotifier appState, String self,
+      {({bool stale, int? cutoffMs}) gap = (stale: false, cutoffMs: null)}) {
     final rumor = u.rumor;
     final tags = _tags(rumor);
     final groupId = _tagValue(tags, 'g');
@@ -2502,6 +2636,13 @@ class NostrController {
       }
     }
 
+    if (type != null &&
+        _ref
+            .read(dmPollsProvider)
+            .handleControl(rumor, senderPubkey, groupId, u.senderVerified)) {
+      return;
+    }
+
     if (groupId != null && type != null && type != GroupControlType.message) {
       if (!u.senderVerified) return;
       if (nonMember && !GroupLogic.acceptsFromNonMember(type)) return;
@@ -2515,15 +2656,21 @@ class NostrController {
       if (!u.senderVerified || nonMember) return;
       final content = rumor['content'] as String? ?? '';
       appState.applyEditOrDefer(editId, content,
-          editorPubkey: senderPubkey, verified: u.senderVerified);
+          editorPubkey: senderPubkey,
+          verified: u.senderVerified,
+          editAt: (rumor['created_at'] as num?)?.toInt() ?? 0);
       return;
     }
+
+    final gapStale = gap.stale;
+    final gapCutoffMs = gap.cutoffMs;
 
     if (groupId != null) {
       if (!u.senderVerified || nonMember) return;
       final m = _mapGroupMessage(rumor, u, self, groupId);
       if (m == null) return;
-      final landed = appState.ingestGroupMessage(m);
+      if (gapStale) m.isHistorical = true;
+      final landed = appState.ingestGroupMessage(m, countUnread: !gapStale);
       if (landed) {
         // Every group message re-asserts name and roster so renames reach members who missed the control event.
         appState.mergeGroupFromMessage(
@@ -2553,7 +2700,9 @@ class NostrController {
           );
         }
       }
-      _maybeNotifyMessage(m, isGroup: true);
+      if (!gapStale) {
+        _maybeNotifyMessage(m, isGroup: true, alertCutoffMs: gapCutoffMs);
+      }
       _maybeBackfillProfiles(m.pubkey);
       // Best-effort delivery receipt to the sender.
       if (!m.isOwn && m.nymMessageId != null) {
@@ -2590,6 +2739,7 @@ class NostrController {
       pqRootFor: (peer) => pqSealRootVerdict(peer) == true,
     );
     if (m == null) return;
+    m.expiresAt = u.expiration;
     if (anonAuthor) m.pubkey = self;
     // Our own archived copy says nothing about the recipient's encryption, so ask the recipient's verdict instead.
     if (m.isOwn) {
@@ -2633,8 +2783,11 @@ class NostrController {
       m.isBot = true;
     }
     if (appState.holdForeignBotThread(m)) return;
-    final landed = appState.ingestPMMessage(m);
-    if (landed) _maybeNotifyMessage(m, isGroup: false);
+    if (gapStale) m.isHistorical = true;
+    final landed = appState.ingestPMMessage(m, countUnread: !gapStale);
+    if (landed && !gapStale) {
+      _maybeNotifyMessage(m, isGroup: false, alertCutoffMs: gapCutoffMs);
+    }
     _maybeBackfillProfiles(m.pubkey);
     // Delivery receipt back to the sender (not for our own self-copy).
     if (!m.isOwn && m.nymMessageId != null && !anonSuppressSendTo(m.pubkey)) {
@@ -2693,6 +2846,7 @@ class NostrController {
       pqEncrypted: u.isPq,
       pqRoot: u.isPq && pqSealRootVerdict(senderPubkey) == true,
       deliveryStatus: isOwn ? DeliveryStatus.sent : DeliveryStatus.delivered,
+      expiresAt: u.expiration,
     );
   }
 
@@ -2709,6 +2863,11 @@ class NostrController {
     _maybeBackfillProfiles(senderPubkey);
     for (final t in tags) {
       if (t.length > 1 && t[0] == 'p') _maybeBackfillProfiles(t[1]);
+    }
+    if (GroupToolsTypes.all.contains(type)) {
+      unawaited(_ref.read(groupToolsProvider).handleControl(type, tags,
+          groupId, senderPubkey, (rumor['created_at'] as num?)?.toInt() ?? 0));
+      return;
     }
     // The sender's key was already recorded; a resync request gets a rate-limited reply, never a bubble.
     if (type == GroupControlType.keyResync) {
@@ -2729,6 +2888,12 @@ class NostrController {
     }
 
     final inviteTs = (rumor['created_at'] as num?)?.toInt() ?? 0;
+    final joiningViaInvite =
+        _ref.read(groupToolsProvider).isPendingJoin(groupId);
+    if (type == GroupControlType.invite ||
+        type == GroupControlType.addMember) {
+      _ref.read(groupToolsProvider).clearPendingJoin(groupId);
+    }
     if (type == GroupControlType.invite) {
       // Clear the left mark first, only if this invite is newer than our leave.
       if (!appState.clearLeftGroup(groupId, createdAtSec: inviteTs)) return;
@@ -2802,6 +2967,11 @@ class NostrController {
         shareHistory: _tagValue(tags, 'share_history') == '1',
         lastMessageTime: DateTime.now().millisecondsSinceEpoch,
       ));
+      final createdGroup = appState.groupById(groupId);
+      if (createdGroup != null &&
+          GroupLogic.applyGroupToolsMeta(createdGroup, tags, inviteTs)) {
+        appState.upsertGroup(createdGroup);
+      }
       _processPendingGroupHistory(groupId);
       unawaited(announceGroupEphemeralKey(groupId));
       if (_notificationsEnabled &&
@@ -2888,8 +3058,17 @@ class NostrController {
       if (identity == null) return;
       // Never act on our own request echoing back.
       if (senderPubkey == identity.pubkey) return;
-      if (!GroupLogic.canAddMembers(group, identity.pubkey)) return;
       final reqEpoch = int.tryParse(_tagValue(tags, 'invite_epoch') ?? '') ?? 0;
+      if (group.joinApproval) {
+        unawaited(_ref.read(groupToolsProvider).handleJoinRequest(
+            group,
+            senderPubkey,
+            reqEpoch,
+            (rumor['created_at'] as num?)?.toInt() ?? 0,
+            GroupLogic.canAddMembers(group, identity.pubkey)));
+        return;
+      }
+      if (!GroupLogic.canAddMembers(group, identity.pubkey)) return;
       if (reqEpoch != group.inviteEpoch) return;
       if (group.members.contains(senderPubkey)) return;
       if (group.banned.contains(senderPubkey)) return;
@@ -2951,7 +3130,7 @@ class NostrController {
         }
         if (existing == null) {
           if (claimedOwner != null &&
-              claimedOwner == senderPubkey &&
+              (claimedOwner == senderPubkey || joiningViaInvite) &&
               (genesis != true || claimedOwner == genesisOwner)) {
             final allowInv = _tagValue(tags, 'allow_invites');
             final inviteEnabledTag = _tagValue(tags, 'invite_enabled');
@@ -2978,6 +3157,11 @@ class NostrController {
                   ? inviteTs * 1000
                   : DateTime.now().millisecondsSinceEpoch,
             ));
+            final created = appState.groupById(groupId);
+            if (created != null &&
+                GroupLogic.applyGroupToolsMeta(created, tags, inviteTs)) {
+              appState.upsertGroup(created);
+            }
           }
         } else {
           // Backfill a known shell group's owner and appearance; safe since we're already in it.
@@ -3173,6 +3357,12 @@ class NostrController {
 
   void _onReceiptOrTyping(
       Map<String, dynamic> rumor, AppStateNotifier appState) {
+    if (_onOnceOpenedReceipt(rumor)) return;
+    if (_ref
+        .read(chatToolsProvider)
+        .handleKeepRumor(rumor, rumor['pubkey'] as String? ?? '')) {
+      return;
+    }
     if (PmLogic.isTyping(rumor)) {
       final info = PmLogic.parseTyping(rumor);
       if (info == null || info.pubkey == null) return;
@@ -3558,9 +3748,7 @@ class NostrController {
         content: content,
         nym: anonNym,
         geohash: isGeo ? view.id : null,
-        emojiTags: _ref
-            .read(liveCustomEmojiProvider.notifier)
-            .emojiTagsForContent(content),
+        emojiTags: _contentTags(content),
         // The service clamps this up to the Nymchat floor.
         powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
         signerOverride: ephemeralSigner,
@@ -4883,6 +5071,31 @@ class NostrController {
     _storageSync?.setPqSelfKeys(candidates);
   }
 
+  PqPmPlan _pmPlanFor(Identity identity, String recipientPubkey) {
+    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final pqOn = PqPolicy.enabled(privkey: identity.privkey, mode: _pqMode);
+    PqPmPlan plan;
+    try {
+      plan = PqPmPlan.decide(
+        recipientKemKey:
+            _pqRegistry.keyFor(recipientPubkey, nowSec: nowSec, enabled: pqOn),
+        knownBitchat: _bitchatUsers.contains(recipientPubkey),
+        knownNym: _nymUsers.contains(recipientPubkey),
+        provenNymchat:
+            _pqRegistry.isKnownNymchatClient(recipientPubkey, nowSec: nowSec),
+        recipientAcceptsLayered: _pqRegistry.acceptsLayered(recipientPubkey,
+            nowSec: nowSec, enabled: pqOn),
+        bitchatSeenAtSec: _bitchatSeenAt[recipientPubkey] ?? 0,
+        announcedAtSec:
+            _pqRegistry.announcedAtFor(recipientPubkey, nowSec: nowSec),
+      );
+    } catch (e) {
+      debugPrint('[PQ] send plan failed, falling back to dual-send: $e');
+      plan = const PqPmPlan(kemPublicKey: null, bitchat: true, nym: true);
+    }
+    return plan;
+  }
+
   /// Publishes a PM in the formats the peer understands: Bitchat, NIP-17, or both when unknown; self-copy is NIP-17.
   Future<void> _publishDualPm({
     required UnsignedEvent rumor,
@@ -4898,30 +5111,7 @@ class NostrController {
       await ensurePqAnnouncement(recipientPubkey);
     } catch (_) {}
 
-    // Which transports this recipient gets; see PqPmPlan.decide.
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final pqOn = PqPolicy.enabled(privkey: identity.privkey, mode: _pqMode);
-    // Format choice must never break delivery; on error fall back to both formats, no PQ.
-    PqPmPlan plan;
-    try {
-      plan = PqPmPlan.decide(
-        recipientKemKey:
-            _pqRegistry.keyFor(recipientPubkey, nowSec: nowSec, enabled: pqOn),
-        knownBitchat: _bitchatUsers.contains(recipientPubkey),
-        knownNym: _nymUsers.contains(recipientPubkey),
-        provenNymchat:
-            _pqRegistry.isKnownNymchatClient(recipientPubkey, nowSec: nowSec),
-        recipientAcceptsLayered: _pqRegistry.acceptsLayered(recipientPubkey,
-            nowSec: nowSec, enabled: pqOn),
-        // The two dated facts the plan weighs against each other.
-        bitchatSeenAtSec: _bitchatSeenAt[recipientPubkey] ?? 0,
-        announcedAtSec:
-            _pqRegistry.announcedAtFor(recipientPubkey, nowSec: nowSec),
-      );
-    } catch (e) {
-      debugPrint('[PQ] send plan failed, falling back to dual-send: $e');
-      plan = const PqPmPlan(kemPublicKey: null, bitchat: true, nym: true);
-    }
+    final plan = _pmPlanFor(identity, recipientPubkey);
 
     // One rumor per chunk: Bitchat drops TLV values over 255 bytes.
     final bitchatRumors = <UnsignedEvent>[];
@@ -5104,8 +5294,65 @@ class NostrController {
     }
   }
 
+  List<List<String>> _contentTags(String content) => [
+        ..._ref.read(liveCustomEmojiProvider.notifier).emojiTagsForContent(content),
+        ...media_notes.imetaTagsForContent(
+            content, _ref.read(mediaFallbacksProvider).fallbacksFor),
+      ];
+
+  Future<void> sendViewOnceOpened({
+    required String onceId,
+    required String senderPubkey,
+    String? groupId,
+  }) async {
+    final identity = _identity;
+    final service = _service;
+    if (identity == null || service == null || senderPubkey.isEmpty) return;
+    final ek = groupId == null ? null : _groups?.keysFor(groupId);
+    await service.publishReceipt(
+      messageIds: [onceId],
+      receiptType: media_notes.MediaNoteKeys.receiptOpened,
+      recipientPubkey: senderPubkey,
+      encryptToPubkey: ek?.encryptionPubkeyFor(senderPubkey, identity.pubkey),
+    );
+    if (senderPubkey != identity.pubkey) {
+      await service.publishReceipt(
+        messageIds: [onceId],
+        receiptType: media_notes.MediaNoteKeys.receiptOpened,
+        recipientPubkey: identity.pubkey,
+      );
+    }
+  }
+
+  bool _onOnceOpenedReceipt(Map<String, dynamic> rumor) {
+    final tags = _tags(rumor);
+    if (_tagValue(tags, 'receipt') != media_notes.MediaNoteKeys.receiptOpened) {
+      return false;
+    }
+    final from = rumor['pubkey'] as String? ?? '';
+    if (from.isEmpty) return true;
+    final self = _identity?.pubkey;
+    final store = _ref.read(onceStoreProvider);
+    var changed = false;
+    for (final t in tags) {
+      if (t.length < 2 || t[0] != 'x') continue;
+      if (!RegExp(r'^[0-9a-f]{16}$').hasMatch(t[1])) continue;
+      final hit = from == self
+          ? store.markOpened(t[1])
+          : store.markRemoteOpened(t[1], from);
+      changed = changed || hit;
+    }
+    if (changed) _ref.read(onceRevisionProvider.notifier).state++;
+    return true;
+  }
+
   /// Publishes [content] to the active conversation without command interception (e.g. `/me` output).
-  Future<void> _sendMessageContent(String content, {String? threadRoot}) async {
+  Future<void> sendMediaNoteContent(ChatView view, String content,
+          {String? threadRoot}) =>
+      _sendMessageContent(content, threadRoot: threadRoot, viewOverride: view);
+
+  Future<void> _sendMessageContent(String content,
+      {String? threadRoot, ChatView? viewOverride}) async {
     final trimmed = content.trim();
     if (trimmed.isEmpty) return;
     // Every send marks us active and throttle-broadcasts presence.
@@ -5114,7 +5361,7 @@ class NostrController {
     final state = _ref.read(appStateProvider);
     final service = _service;
     final identity = _identity;
-    final view = state.view;
+    final view = viewOverride ?? state.view;
     _markDirty(view.storageKey);
 
     // In a thread view, reply into the thread only if its root belongs to this conversation.
@@ -5134,7 +5381,8 @@ class NostrController {
 
     if (view.kind == ViewKind.channel) {
       // Optimistic local echo with a temp `_optim_*` id.
-      final echo = appState.sendLocal(trimmed, threadRoot: threadRoot);
+      final echo = appState.sendLocal(trimmed,
+          threadRoot: threadRoot, viewOverride: view);
       if (service == null || identity == null) return;
       final isGeo = state.channels
           .any((c) => c.key == view.id.toLowerCase() && c.isGeohash);
@@ -5145,9 +5393,7 @@ class NostrController {
           content: trimmed,
           nym: identity.nym,
           geohash: isGeo ? view.id : null,
-          emojiTags: _ref
-              .read(liveCustomEmojiProvider.notifier)
-              .emojiTagsForContent(trimmed),
+          emojiTags: _contentTags(trimmed),
           // Clamped up to the Nymchat floor by the service.
           powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
           threadRoot: threadRoot,
@@ -5187,7 +5433,11 @@ class NostrController {
       }
       final nymMessageId = PmLogic.generateSharedEventId();
       final echo = appState.sendLocal(trimmed,
-          nymMessageId: nymMessageId, threadRoot: threadRoot);
+          nymMessageId: nymMessageId,
+          threadRoot: threadRoot,
+          viewOverride: view);
+      echo?.expiresAt = _msgSettings
+          .expirationFor(DateTime.now().millisecondsSinceEpoch ~/ 1000);
       if (service == null || identity == null) return;
       final base = PmLogic.buildPmRumor(
         selfPubkey: identity.pubkey,
@@ -5201,9 +5451,7 @@ class NostrController {
         ],
       );
       // Append NIP-30 declarations for known custom shortcodes in the body.
-      final emojiTags = _ref
-          .read(liveCustomEmojiProvider.notifier)
-          .emojiTagsForContent(trimmed);
+      final emojiTags = _contentTags(trimmed);
       final rumor = emojiTags.isEmpty
           ? base
           : UnsignedEvent(
@@ -5237,7 +5485,13 @@ class NostrController {
     if (view.kind == ViewKind.group) {
       final group = appState.groupById(view.id);
       if (service == null || identity == null || group == null) {
-        appState.sendLocal(trimmed);
+        appState.sendLocal(trimmed, viewOverride: view);
+        return;
+      }
+      final blocked =
+          _ref.read(groupToolsProvider).sendBlockedReason(group.id, trimmed);
+      if (blocked != null) {
+        _emitSystemMessage(blocked);
         return;
       }
       // Build and send first so we know the shared id, then echo with it.
@@ -5247,8 +5501,12 @@ class NostrController {
       // After a self-key rotation: persist, re-REQ the ephemeral sub, and sync so other devices can decrypt.
       _afterSelfKeyRotation();
       final nymMessageId = GroupLogic.generateGroupId();
-      appState.sendLocal(trimmed,
-          nymMessageId: nymMessageId, threadRoot: threadRoot);
+      final groupEcho = appState.sendLocal(trimmed,
+          nymMessageId: nymMessageId,
+          threadRoot: threadRoot,
+          viewOverride: view);
+      groupEcho?.expiresAt = _msgSettings
+          .expirationFor(DateTime.now().millisecondsSinceEpoch ~/ 1000);
       final rumor = GroupLogic.buildGroupMessageRumor(
         group: group,
         selfPubkey: identity.pubkey,
@@ -5259,9 +5517,7 @@ class NostrController {
         extraTags: [
           if (threadRoot != null && threadRoot.isNotEmpty)
             ['nymthread', threadRoot],
-          ..._ref
-              .read(liveCustomEmojiProvider.notifier)
-              .emojiTagsForContent(trimmed),
+          ..._contentTags(trimmed),
           ...GroupLogic.groupMetaPiggybackTags(group, identity.pubkey),
         ],
       );
@@ -5638,11 +5894,19 @@ class NostrController {
       ],
       content: 'requested to join via invite link',
     );
+    final pending =
+        _ref.read(groupToolsProvider).rememberPendingJoin(token.toPayload());
     try {
       await service.publishGiftWrappedRumor(
         rumor: rumor,
         recipients: [token.approver],
       );
+      if (pending.approval) {
+        _emitSystemMessage(tr(
+            'Join request sent for "{name}". Waiting for approval from an admin.',
+            {'name': name}));
+        return;
+      }
       _emitSystemMessage(tr(
           'Join request sent for "{name}". You\'ll be added once a member is online.',
           {'name': name}));
@@ -6750,9 +7014,7 @@ class NostrController {
         unawaited(sync.channelDelete(channelName, signed.toJson()));
       }
       // Gate on the same archive-allowed check used when archiving.
-      if (kind == '${EventKind.giftWrap}' &&
-          sync.durableIdentity &&
-          _ref.read(settingsProvider).cachePMs) {
+      if (kind == '${EventKind.giftWrap}' && sync.durableIdentity) {
         unawaited(sync.pmDelete([messageId]));
       }
     }
@@ -7662,10 +7924,23 @@ class NostrController {
   }
 
   bool togglePin(String key) {
-    final pinned = _ref.read(appStateProvider.notifier).togglePin(key);
-    _persistSet(
-        StorageKeys.pinnedChannels, _ref.read(appStateProvider).pinnedChannels);
-    return pinned;
+    final nav = _ref.read(chatNavProvider);
+    final pk = pinKey('channel', key);
+    if (pk.isEmpty) return false;
+    nav.togglePin(pk);
+    return nav.isChatPinned(pk);
+  }
+
+  void applyPinnedChannels(List<String> channels, bool persist) {
+    final appState = _ref.read(appStateProvider);
+    final before = appState.pinnedChannels.toList().join('\n');
+    _ref.read(appStateProvider.notifier).hydrateChannelState(
+          pinned: channels.toSet(),
+          replace: true,
+        );
+    if (before == channels.join('\n')) return;
+    _persistSet(StorageKeys.pinnedChannels, channels.toSet());
+    if (persist) syncSettings();
   }
 
   bool hideChannel(String key) {
@@ -7788,7 +8063,7 @@ class NostrController {
 
   void _wireAutoMute(AppStateNotifier appState) {
     appState.hydrateAutoMuted(_readAutoMuted());
-    appState.onAutoMuted = (_, __) => _persistAutoMuted();
+    appState.onAutoMuted = (_, _) => _persistAutoMuted();
   }
 
   Map<String, int> _readAutoMuted() {
@@ -8640,6 +8915,10 @@ class NostrController {
     // Persist inbound and engine-injected PM/group messages on insert, including the Nymbot thread.
     _ref.read(appStateProvider.notifier).onPmMessageIngested = _markDirty;
 
+    _startChatTools();
+    _startGroupTools();
+    _startChatNav();
+
     // Persist closed PMs so deletions survive relaunch.
     _ref.read(appStateProvider.notifier).onClosedPmsChanged = _persistClosedPMs;
     // Persist the watermark and schedule the read-state sync so reads clear badges on other devices.
@@ -8771,6 +9050,7 @@ class NostrController {
 
   /// On foreground: top up the open view from D1, re-check shop purchases, and clear the focused column's unread.
   void onAppResumed() {
+    _service?.probePool();
     _appInForeground = true;
     _onViewOpened(_ref.read(appStateProvider).view);
     // Re-pull the full D1 backlog on every resume, even if the socket never dropped; throttled and idempotent.
@@ -9299,6 +9579,24 @@ class NostrController {
       }
       // Apply per-group categories before the gate so a fresh device restores groups, keys and backlog.
       _applyGroupSync(result);
+      final saved = result.savedMessages;
+      if (saved != null) {
+        try {
+          _ref.read(chatToolsProvider).applyRemoteSaved(saved);
+        } catch (_) {}
+      }
+      final pinnedChats = result.pinnedChats;
+      if (pinnedChats != null) {
+        try {
+          _ref.read(chatNavProvider).applyRemotePinned(pinnedChats);
+        } catch (_) {}
+      }
+      final lockedChats = result.lockedChats;
+      if (lockedChats != null) {
+        try {
+          _ref.read(chatLockProvider).applyRemote(lockedChats);
+        } catch (_) {}
+      }
       // Core sections apply unconditionally to heal local drift.
       if (result.payload.isNotEmpty) {
         _applySyncedSettingsAdditive(result.payload);
@@ -9403,7 +9701,10 @@ class NostrController {
   }
 
   /// Live 1059 REQ over our ephemeral pubkeys, since the main filter only has `#p:[self]`; reopened on key changes.
-  Subscription? _ephemeralSub;
+  late final OwnEphemeralSubscription _ownEph = OwnEphemeralSubscription(
+    subscribe: _openOwnEphemeralSub,
+    pubkeys: _ownEphemeralPubkeys,
+  );
 
   /// Re-registers the ephemeral key set and reopens its REQ; used by Ghost Mode after rotation.
   void refreshEphemeralSubscriptions() => _refreshEphemeralSubscriptions();
@@ -9487,19 +9788,25 @@ class NostrController {
   }
 
   void _refreshEphemeralSubscriptions() {
-    final service = _service;
-    final groups = _groups;
-    if (service == null || groups == null) return;
+    if (_service == null || _groups == null) return;
     _applyEphemeralKeys();
-    _ephemeralSub?.close();
-    _ephemeralSub = null;
-    final pks = [
-      ...groups.allEphemeralPubkeys(),
-      ..._ref.read(ghostModeProvider).pubkeys,
-      ..._anonBotPubkeys(),
-    ];
-    if (pks.isEmpty) return;
-    // Proxy mode is real-time only (D1 supplies history); direct mode adds a 7-day backlog. Gate on the live proxy signal.
+    _ownEph.refresh();
+  }
+
+  void _ensureOwnEphemeralSub() {
+    if (_service == null || _groups == null) return;
+    _applyEphemeralKeys();
+    _ownEph.ensure();
+  }
+
+  List<String> _ownEphemeralPubkeys() => [
+        ...?_groups?.allEphemeralPubkeys(),
+        ..._ref.read(ghostModeProvider).pubkeys,
+        ..._anonBotPubkeys(),
+      ];
+
+  Subscription _openOwnEphemeralSub(List<String> pks) {
+    final service = _service!;
     final d1Mode = service.isProxyMode;
     final sub = service.subscribeEphemeral(
       pks,
@@ -9508,9 +9815,8 @@ class NostrController {
           ? null
           : DateTime.now().millisecondsSinceEpoch ~/ 1000 - 604800,
     );
-    // Route through the live unwrap path so group messages get archived, notified and shown in real time.
     sub.events.listen(service.unwrapLiveWrap, onError: (_) {});
-    _ephemeralSub = sub;
+    return sub;
   }
 
   /// The idempotent, additive half of the settings apply, shared by boot, live wraps and offer accepts.
@@ -9546,6 +9852,24 @@ class NostrController {
     _mergeLeftGroupsFromSync(s['leftGroups'], s['leftGroupTimes']);
     // Per-conversation read watermarks.
     _applyChannelLastRead(s['channelLastRead']);
+    final saved = s['savedMessages'];
+    if (saved is Map) {
+      try {
+        _ref.read(chatToolsProvider).applyRemoteSaved(saved);
+      } catch (_) {}
+    }
+    final pinnedChats = s['pinnedChats'];
+    if (pinnedChats is Map) {
+      try {
+        _ref.read(chatNavProvider).applyRemotePinned(pinnedChats);
+      } catch (_) {}
+    }
+    final lockedChats = s['lockedChats'];
+    if (lockedChats is Map) {
+      try {
+        _ref.read(chatLockProvider).applyRemote(lockedChats);
+      } catch (_) {}
+    }
     // Per-group categories.
     Map<String, List<dynamic>>? history;
     final rawHistory = s['groupMessageHistory'];
@@ -10159,6 +10483,9 @@ class NostrController {
         if (pinnedSet != null) {
           _persistSet(StorageKeys.pinnedChannels,
               _ref.read(appStateProvider).pinnedChannels);
+          try {
+            _ref.read(chatNavProvider).afterLegacyChange();
+          } catch (_) {}
         }
         if (hiddenSet != null) {
           _persistSet(StorageKeys.hiddenChannels,
@@ -10294,6 +10621,501 @@ class NostrController {
     final sec =
         int.tryParse(kv.getString(StorageKeys.lastSettingsSyncTs) ?? '0') ?? 0;
     return sec * 1000;
+  }
+
+  Timer? _chatToolsTimer;
+
+  void _startGroupTools() {
+    final gt = _ref.read(groupToolsProvider);
+    final app = _ref.read(appStateProvider.notifier);
+    app.absorbLiveHook = gt.absorbLive;
+    app.slowmodeHook = (gid, list, sender) {
+      gt.applySlowmode(gid, list, sender);
+    };
+    gt.armReminders();
+    unawaited(gt.resumeLive());
+  }
+
+  String? groupSendBlockReason(String content) {
+    final view = _ref.read(appStateProvider).view;
+    if (view.kind != ViewKind.group) return null;
+    if (isCommandLine(content.trim())) return null;
+    return _ref.read(groupToolsProvider).sendBlockedReason(view.id, content);
+  }
+
+  Future<bool> gtSendGroupControl(Group g, String type,
+      List<List<String>> extraTags, List<String> recipients,
+      {String content = ''}) async {
+    final identity = _identity;
+    final groups = _groups;
+    if (identity == null || groups == null || recipients.isEmpty) return false;
+    return groups.sendControl(
+      group: g,
+      selfPubkey: identity.pubkey,
+      type: type,
+      extraTags: extraTags,
+      recipients: recipients,
+      content: content,
+    );
+  }
+
+  Future<bool> gtSendDirect(
+      String to, List<List<String>> tags, String content) async {
+    final identity = _identity;
+    final service = _service;
+    if (identity == null || service == null || !service.canSign) return false;
+    final rumor = UnsignedEvent(
+      pubkey: identity.pubkey,
+      createdAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      kind: EventKind.dmRumor,
+      tags: [
+        ['p', to],
+        ...tags,
+      ],
+      content: content,
+    );
+    try {
+      return await service.publishGiftWrappedRumor(
+          rumor: rumor, recipients: [to]);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> dpSendControl(
+      UnsignedEvent rumor, List<String> recipients, String? groupId) async {
+    final identity = _identity;
+    final service = _service;
+    if (identity == null || service == null || !service.canSign) return false;
+    try {
+      if (groupId != null) {
+        final groups = _groups;
+        final g = _ref.read(appStateProvider.notifier).groupById(groupId);
+        if (groups == null || g == null) return false;
+        return await groups.sendRumor(
+          group: g,
+          selfPubkey: identity.pubkey,
+          rumor: rumor,
+          recipients: recipients,
+        );
+      }
+      return await service.publishGiftWrappedRumor(
+          rumor: rumor, recipients: recipients);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> gtBroadcastMetadata(Group g) async {
+    final identity = _identity;
+    final groups = _groups;
+    if (identity == null || groups == null) return false;
+    return groups.sendMetadata(
+        group: g, selfPubkey: identity.pubkey, settings: _msgSettings);
+  }
+
+  Future<bool> gtSendGroupContent(String groupId, String content) async {
+    final reason =
+        _ref.read(groupToolsProvider).sendBlockedReason(groupId, content);
+    if (reason != null) {
+      _emitSystemMessage(reason);
+      return false;
+    }
+    await _sendMessageContent(content, viewOverride: ChatView.group(groupId));
+    return true;
+  }
+
+  Future<bool> gtSendPmContent(String pubkey, String content) async {
+    await _sendMessageContent(content, viewOverride: ChatView.pm(pubkey));
+    return true;
+  }
+
+  Future<bool> gtSendMeshPm(String pubkey, String content) async {
+    final bridge = _ref.read(meshControllerProvider.notifier).bridge;
+    if (bridge == null) return false;
+    await bridge.sendFromComposer(ChatView.pm(pubkey), content);
+    return true;
+  }
+
+  void gtNotify(
+      {required String title,
+      required String body,
+      required String route,
+      required String type}) {
+    _dispatchNotification(
+      title: title,
+      body: body,
+      senderPubkey: type == 'call' ? route : '',
+      isFriend: false,
+      isMention: false,
+      isGroup: type == 'group',
+      historyType: type,
+      route: route,
+      eventId: 'gt-${DateTime.now().microsecondsSinceEpoch}',
+      tsMs: DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  String gtNym(String pubkey) {
+    final raw = pubkey == _identity?.pubkey ? _identity!.nym : _nymFor(pubkey);
+    return raw.replaceFirst(RegExp(r'(#[0-9a-fA-F]{4})+$'), '');
+  }
+
+  Future<Map<String, dynamic>?> gtSign(Map<String, dynamic> template) async {
+    final signer = _signer;
+    if (signer == null) return null;
+    try {
+      final ev = await signer.sign(UnsignedEvent(
+        pubkey: template['pubkey'] as String,
+        createdAt: template['created_at'] as int,
+        kind: template['kind'] as int,
+        tags: [
+          for (final t in template['tags'] as List)
+            [for (final x in t as List) x.toString()]
+        ],
+        content: template['content'] as String,
+      ));
+      return ev.toJson();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Timer? _chatNavTimer;
+
+  void _startChatNav() {
+    final nav = _ref.read(chatNavProvider);
+    final notifier = _ref.read(appStateProvider.notifier);
+    notifier.onViewEntering = (from, to, columns) {
+      if (!columns && from.isNotEmpty && from != to) nav.release(from);
+      nav.capture(to);
+    };
+    notifier.onNavReadMarked = nav.pruneRemoteRead;
+    nav.afterLegacyChange();
+    _chatNavTimer?.cancel();
+    _chatNavTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (nav.pinPending) unawaited(nav.syncPins());
+    });
+    Timer(const Duration(seconds: 4), () {
+      if (_started) unawaited(nav.refreshScheduled());
+    });
+  }
+
+  void _chatNavReconnect() {
+    try {
+      final nav = _ref.read(chatNavProvider);
+      if (nav.pinPending) unawaited(nav.syncPins());
+      unawaited(nav.refreshScheduled());
+    } catch (_) {}
+  }
+
+  void _startChatTools() {
+    final tools = _ref.read(chatToolsProvider);
+    _ref.read(appStateProvider.notifier).onBeforeEdit =
+        (m, next, at) => tools.noteEdit(m, next, at);
+    _chatToolsTimer?.cancel();
+    _chatToolsTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _ref
+          .read(appStateProvider.notifier)
+          .sweepExpiredMessages((m) => chatToolsHidden(m));
+      if (tools.savedPending) unawaited(tools.syncSaved());
+      unawaited(tools.flushKeepOutbox());
+    });
+  }
+
+  bool get savesHydrated => _settingsHydrated;
+
+  bool get savedSyncAllowed {
+    if (_identity?.loginMethod == null) {
+      final mode = _ref.read(settingsProvider.notifier).keypairMode;
+      if (mode == 'random' || mode == 'hardcore') return false;
+    }
+    return true;
+  }
+
+  Future<bool> publishSavedMessages(Map<String, dynamic> saved) async {
+    final sync = _storageSync;
+    if (sync == null) return false;
+    return sync.savedSyncSet(saved);
+  }
+
+  Future<bool> publishPinnedChats(Map<String, dynamic> pinned) async {
+    final sync = _storageSync;
+    if (sync == null) return false;
+    return sync.pinnedSyncSet(pinned);
+  }
+
+  Future<bool> publishLockedChats(Map<String, dynamic> locked) async {
+    final sync = _storageSync;
+    if (sync == null) return false;
+    return sync.lockedSyncSet(locked);
+  }
+
+  Future<Map<String, dynamic>> scheduleApi(
+      String action, Map<String, dynamic> body) async {
+    final sync = _storageSync;
+    if (sync == null) {
+      throw ScheduleApiError(tr(ChatNavStrings.serverBlocked));
+    }
+    try {
+      return await sync.scheduleAction(action, body);
+    } on ApiException catch (e) {
+      throw ScheduleApiError(e.body, code: e.code, status: e.statusCode);
+    }
+  }
+
+  ChatView? chatViewForKey(String key) {
+    if (key.startsWith('pm-')) return ChatView.pm(key.substring(3));
+    if (key.startsWith('group-')) return ChatView.group(key.substring(6));
+    if (key.startsWith('#')) return ChatView.channel(key.substring(1));
+    return key.isEmpty ? null : ChatView.channel(key);
+  }
+
+  ChatNavBlockContext scheduleBlockContext(String key) {
+    final view = chatViewForKey(key);
+    final bridge = _ref.read(meshControllerProvider.notifier).bridge;
+    final meshOnly =
+        view != null && bridge != null && bridge.shouldSendOverMesh(view);
+    return ChatNavBlockContext(
+      meshOnly: meshOnly,
+      server: _storageSync != null && _identity != null,
+      online: _ref.read(appStateProvider).connectedRelays > 0,
+      localKey: _identity?.privkey != null,
+    );
+  }
+
+  Future<String?> encryptScheduleNote(String json) async {
+    final service = _service;
+    final identity = _identity;
+    final sig = service?.signer;
+    if (sig == null || identity == null) return null;
+    return sig.nip44Encrypt(identity.pubkey, json);
+  }
+
+  Future<String?> decryptScheduleNote(String blob) async {
+    final service = _service;
+    final identity = _identity;
+    final sig = service?.signer;
+    if (sig == null || identity == null) return null;
+    return sig.nip44Decrypt(identity.pubkey, blob);
+  }
+
+  Future<bool> sendScheduledText(String key, String text) async {
+    final view = chatViewForKey(key);
+    if (view == null) return false;
+    await _sendMessageContent(text, viewOverride: view);
+    return true;
+  }
+
+  Future<NostrEvent> _scheduledWrap(
+    UnsignedEvent rumor,
+    Uint8List sk,
+    String to,
+    Uint8List? kem,
+    bool layered,
+    int? expiration,
+    List<List<String>> extraTags,
+    int at,
+  ) async {
+    if (kem == null) {
+      return giftwrap.nip59Wrap(
+          rumor: rumor,
+          senderPrivkey: sk,
+          recipientPubkey: to,
+          expiration: expiration,
+          extraTags: extraTags,
+          at: at);
+    }
+    if (layered) {
+      return giftwrap.pq2Nip59Wrap(
+          rumor: rumor,
+          senderPrivkey: sk,
+          recipientPubkey: to,
+          recipientKemPublicKey: kem,
+          expiration: expiration,
+          extraTags: extraTags,
+          at: at);
+    }
+    return giftwrap.pqNip59Wrap(
+        rumor: rumor,
+        senderPrivkey: sk,
+        recipientPubkey: to,
+        recipientKemPublicKey: kem,
+        expiration: expiration,
+        extraTags: extraTags,
+        at: at);
+  }
+
+  Future<ScheduleBuild> buildScheduledEvents(
+      String key, String text, int at, String? threadRoot) async {
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) throw StateError('session');
+    final atMs = at * 1000;
+    final expiration = _msgSettings.expirationFor(at);
+    if (key.startsWith('pm-') || key.startsWith('group-')) {
+      final sk = identity.privkey;
+      if (sk == null) throw StateError('signer');
+      final events = <Map<String, dynamic>>[];
+      if (key.startsWith('pm-')) {
+        final peer = key.substring(3).toLowerCase();
+        try {
+          await ensurePqAnnouncement(peer);
+        } catch (_) {}
+        final plan = _pmPlanFor(identity, peer);
+        final base = PmLogic.buildPmRumor(
+          selfPubkey: identity.pubkey,
+          recipientPubkey: peer,
+          content: text,
+          nymMessageId: PmLogic.generateSharedEventId(),
+          nowSec: at,
+          nowMs: atMs,
+          extraTags: [
+            if (threadRoot != null && threadRoot.isNotEmpty)
+              ['nymthread', threadRoot],
+            ..._contentTags(text),
+          ],
+        );
+        final support = pmSupportTokenFor(peer);
+        final rumor = PmLogic.withSupportToken(base, support);
+        final wrapTags = PmLogic.supportWrapTags(support);
+        if (plan.bitchat) {
+          for (final chunk in bitchat.chunkBitchatContent(text)) {
+            final encoded = bitchat.encodeBitchatMessage(
+                chunk, identity.pubkey,
+                recipientPubkey: peer);
+            final w = await giftwrap.bitchatWrap(
+              rumor: UnsignedEvent(
+                pubkey: identity.pubkey,
+                createdAt: at,
+                kind: EventKind.dmRumor,
+                tags: const [],
+                content: encoded.content,
+              ),
+              senderPrivkey: sk,
+              recipientPubkey: peer,
+              at: at,
+            );
+            events.add({'e': w.toJson(), 'r': 'pub'});
+          }
+        }
+        if (plan.nym) {
+          final w = await _scheduledWrap(rumor, sk, peer, plan.kemPublicKey,
+              plan.layered, expiration, wrapTags, at);
+          events.add({'e': w.toJson(), 'r': 'dep'});
+        }
+        final selfKem = pqSelfKey();
+        final selfWrap = await _scheduledWrap(rumor, sk, identity.pubkey,
+            selfKem, selfKem != null && pqSelfUsesLayered(), expiration,
+            wrapTags, at);
+        events.add({'e': selfWrap.toJson(), 'r': 'self'});
+      } else {
+        final gid = key.substring(6);
+        final group = _ref.read(appStateProvider.notifier).groupById(gid);
+        if (group == null) throw StateError('group');
+        final rumor = UnsignedEvent(
+          pubkey: identity.pubkey,
+          createdAt: at,
+          kind: EventKind.dmRumor,
+          tags: [
+            ['g', gid],
+            ...groupSubjectTags(group.name),
+            ['x', GroupLogic.generateGroupId()],
+            ['ms', '$atMs'],
+            ..._contentTags(text),
+            if (threadRoot != null && threadRoot.isNotEmpty)
+              ['nymthread', threadRoot],
+          ],
+          content: text,
+        );
+        final members = <String>{...group.members, identity.pubkey};
+        for (final pk in members) {
+          final self = pk == identity.pubkey;
+          final kem = self ? pqSelfKey() : _pqGroupKeyFor(pk);
+          final layered = kem != null &&
+              (self ? pqSelfUsesLayered() : _pqGroupLayeredFor(pk));
+          final w = await _scheduledWrap(
+              rumor, sk, pk, kem, layered, expiration, const [], at);
+          events.add({'e': w.toJson(), 'r': self ? 'self' : 'dep'});
+        }
+      }
+      return (
+        events: events,
+        relays: scheduleRelays(RelayConfig.defaultRelays),
+      );
+    }
+    final channelKey = key.startsWith('#') ? key.substring(1) : key;
+    final isGeo = _ref
+        .read(appStateProvider)
+        .channels
+        .any((c) => c.key == channelKey.toLowerCase() && c.isGeohash);
+    await _awaitAttestBadge();
+    final signed = await service.publishChannelMessage(
+      buildOnly: true,
+      channelKey: channelKey,
+      content: text,
+      nym: identity.nym,
+      geohash: isGeo ? channelKey : null,
+      emojiTags: _contentTags(text),
+      powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
+      threadRoot: threadRoot,
+      createdAtSec: at,
+    );
+    if (signed == null) throw StateError('sign');
+    final relays = <String>[
+      if (isGeo) ...service.closestGeoRelays(channelKey).map((r) => r.url),
+      ...RelayConfig.defaultRelays,
+    ];
+    return (
+      events: [
+        {'e': signed.toJson(), 'r': 'pub'}
+      ],
+      relays: scheduleRelays(relays),
+    );
+  }
+
+  Future<bool> publishKeepControl(
+      String storageKey, String nid, bool kept, int at) async {
+    final service = _service;
+    final identity = _identity;
+    final online = _ref.read(appStateProvider).connectedRelays > 0;
+    if (storageKey.startsWith('group-')) {
+      final groupId = storageKey.substring(6);
+      final group = _ref.read(appStateProvider.notifier).groupById(groupId);
+      if (!online || service == null || identity == null || group == null) {
+        return false;
+      }
+      final ek = _groups?.keysFor(groupId);
+      var any = false;
+      for (final pk in group.members) {
+        final ok = await service.publishControlRumor(
+          tags: chat_tools.keepTags([nid], kept, null, groupId),
+          recipientPubkey: pk,
+          encryptToPubkey: ek?.encryptionPubkeyFor(pk, identity.pubkey),
+          createdAt: at,
+        );
+        any = any || ok;
+      }
+      return any;
+    }
+    if (!storageKey.startsWith('pm-')) return false;
+    final peer = storageKey.substring(3);
+    final bridge = _ref.read(meshControllerProvider.notifier).bridge;
+    if (bridge != null &&
+        (bridge.isMeshOnlyPubkey(peer) || bridge.isGhostPinned(peer))) {
+      return bridge.sendKeep(peer, nid, kept);
+    }
+    if (!online || service == null || identity == null) return false;
+    var any = false;
+    for (final to in {peer, identity.pubkey}) {
+      final ok = await service.publishControlRumor(
+        tags: chat_tools.keepTags([nid], kept, to, null),
+        recipientPubkey: to,
+        createdAt: at,
+      );
+      any = any || ok;
+    }
+    return any;
   }
 
   /// True once the boot restore settles; saves are deferred until then so defaults can't clobber whole D1 rows.
@@ -10543,10 +11365,8 @@ class NostrController {
     }
   }
 
-  /// Restores the PM gift-wrap backlog from D1 for a durable identity (gated by `cachePMs`).
   Future<void> _restorePmArchive(StorageSync sync) async {
     if (!sync.durableIdentity) return;
-    if (!_ref.read(settingsProvider).cachePMs) return;
     try {
       final wraps = await sync.pmRestoreFromD1();
       for (final w in wraps) {
@@ -10557,11 +11377,20 @@ class NostrController {
     }
   }
 
+  bool canLoadOlderArchive(String storageKey) {
+    if (!storageKey.startsWith('pm-') && !storageKey.startsWith('group-')) {
+      return false;
+    }
+    final sync = _storageSync;
+    return sync != null && sync.durableIdentity && sync.pmArchiveHasOlder;
+  }
+
+  Future<int> loadOlderArchive(String storageKey) => loadOlderPmArchive();
+
   /// Loads the next older page of archived PMs; returns the number of wraps replayed.
   Future<int> loadOlderPmArchive() async {
     final sync = _storageSync;
     if (sync == null || !sync.durableIdentity) return 0;
-    if (!_ref.read(settingsProvider).cachePMs) return 0;
     try {
       final wraps = await sync.pmLoadOlderFromD1();
       for (final w in wraps) {
@@ -10588,7 +11417,6 @@ class NostrController {
   void _archiveSentWrap(NostrEvent wrap) {
     final sync = _storageSync;
     if (sync == null || !sync.durableIdentity) return;
-    if (!_ref.read(settingsProvider).cachePMs) return;
     final raw = wrap.toJson();
     unawaited(sync.pmPut([raw]));
     sync.enqueueDeposit(raw);
@@ -10611,7 +11439,6 @@ class NostrController {
     if (u.fromArchive) return;
     final sync = _storageSync;
     if (sync == null || !sync.durableIdentity) return;
-    if (!_ref.read(settingsProvider).cachePMs) return;
     final raw = u.rawWrap;
     if (raw == null) return;
     // Never archive wraps to Ghost Mode keys; the authed upload would link the ghost key to this account.
@@ -11171,12 +11998,12 @@ class NostrController {
         'args': parsed.args,
         'geohash': channelKey,
         'conversation': conversation,
-        if (senderNym != null) 'senderNym': senderNym,
+        'senderNym': ?senderNym,
         'publishedContent': rawText,
         'channelMessages': channelMessages,
         'activeUsers': activeUsers,
         // The worker marks the reply with this NIP-10 root so it lands in the thread.
-        if (threadRoot != null) 'threadRoot': threadRoot,
+        'threadRoot': ?threadRoot,
         'lang': LocalizationService.instance.language,
       });
       final event = data['event'];
@@ -11379,7 +12206,6 @@ class NostrController {
   Future<void> purgeBotPmArchive(List<String> wrapIds) async {
     final sync = _storageSync;
     if (sync == null || !sync.durableIdentity) return;
-    if (!_ref.read(settingsProvider).cachePMs) return;
     await sync.pmDelete(wrapIds);
   }
 

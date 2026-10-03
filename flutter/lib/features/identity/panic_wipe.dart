@@ -114,14 +114,11 @@ String _junk(Random rng) {
 /// Emergency wipe of prefs, secure storage and the sqflite cache DB; the caller handles restart-to-first-run.
 class PanicWipe {
   PanicWipe({
-    required PanicPrefsStore prefs,
-    required PanicSecureStore secure,
-    required PanicCacheStore cache,
-    PanicFileStore? files,
-  })  : _prefs = prefs,
-        _secure = secure,
-        _cache = cache,
-        _files = files;
+    required this._prefs,
+    required this._secure,
+    required this._cache,
+    this._files,
+  });
 
   factory PanicWipe.production({
     SecureStore? secure,

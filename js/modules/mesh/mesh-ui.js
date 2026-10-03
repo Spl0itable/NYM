@@ -62,7 +62,8 @@
                 },
                 onPublicMessage: (m) => this._onMeshPublicMessage(m),
                 onPrivateMessage: (m) => this._onMeshPrivateMessage(m),
-                onReceipt: () => { },
+                onReceipt: (r) => { if (typeof this.onMeshReceipt === 'function') this.onMeshReceipt(r); },
+                onFile: (f) => { if (typeof this.onMeshFile === 'function') this.onMeshFile(f); },
                 onPeersChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
                 onGhostChanged: () => { this._renderMeshPanel(); this._renderMeshStatusRow(); },
             });
@@ -228,6 +229,7 @@
                 isOwn: false,
                 isMesh: true,
                 isPM: false,
+                meshFile: m.meshFile || null,
             });
         },
 
@@ -241,6 +243,7 @@
                 this._onMeshPublicMessage({
                     senderPeerID: m.senderPeerID,
                     senderNickname: m.senderNickname,
+                    meshFile: m.meshFile || null,
                     content: '(direct over mesh) ' + m.content,
                     timestampMs: ms,
                     channel: MESH_CHANNEL,
@@ -265,10 +268,12 @@
                 conversationKey,
                 conversationPubkey: pubkey,
                 senderVerified: true,
+                meshFile: m.meshFile || null,
             };
 
             let list = this.pmMessages.get(conversationKey) || [];
             if (list.some(x => x.id === msg.id)) return;
+            if (typeof this._gtAbsorbLive === 'function' && this._gtAbsorbLive(msg, list)) return;
             list.push(msg);
             list.sort((a, b) => this._compareMessages(a, b));
             if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);

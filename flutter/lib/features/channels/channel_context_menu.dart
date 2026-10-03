@@ -12,6 +12,8 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
+import '../chat_nav/chat_nav_ui.dart';
+import '../chat_lock/chat_lock_ui.dart';
 import '../i18n/i18n.dart';
 import '../settings/settings_screen.dart';
 
@@ -39,7 +41,6 @@ List<ChannelMenuAction> buildChannelMenuActions(
   final state = ref.read(appStateProvider);
   final key = entry.key;
   final isDefault = key == kDefaultChannel;
-  final isPinned = state.pinnedChannels.contains(key);
   final isHidden = state.hiddenChannels.contains(key);
 
   if (isDefault) {
@@ -57,11 +58,10 @@ List<ChannelMenuAction> buildChannelMenuActions(
   }
 
   return <ChannelMenuAction>[
-    ChannelMenuAction(
-      label: isPinned ? tr('Unfavorite channel') : tr('Favorite channel'),
-      svg: NymIcons.sidebarFavorite,
-      onSelected: () => controller.togglePin(key),
-    ),
+    for (final p in chatNavSidebarItems(ref, entry.storageKey))
+      ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
+    for (final p in chatLockSidebarItems(ref, entry.storageKey))
+      ChannelMenuAction(label: p.label, svg: p.svg, onSelected: p.onSelected),
     ChannelMenuAction(
       label: isHidden ? tr('Unhide channel') : tr('Hide channel'),
       svg: NymIcons.sidebarHide,
@@ -110,7 +110,7 @@ bool maybeShowChannelContextMenu(
 ) {
   final actions = buildChannelMenuActions(context, ref, entry);
   if (actions.isEmpty) return false;
-  unawaited(showSidebarQuickMenu(context, globalPosition, [
+  final items = [
     for (final a in actions)
       SidebarQuickMenuItem(
         label: a.label,
@@ -118,7 +118,11 @@ bool maybeShowChannelContextMenu(
         danger: a.danger,
         onSelected: a.onSelected,
       ),
-  ]));
+  ];
+  final at = items.indexWhere((i) => i.danger);
+  items.insertAll(at < 0 ? items.length : at,
+      chatToolSidebarItems(context, entry.storageKey));
+  unawaited(showSidebarQuickMenu(context, globalPosition, items));
   return true;
 }
 

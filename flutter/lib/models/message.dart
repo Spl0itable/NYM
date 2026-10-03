@@ -32,7 +32,7 @@ DeliveryStatus deliveryStatusFromString(String? s) {
 }
 
 /// Discriminator for an inline action button on a system row.
-enum SystemActionKind { reportSpamFalsePositive }
+enum SystemActionKind { reportSpamFalsePositive, retryMediaNote }
 
 class SystemAction {
   const SystemAction({
@@ -97,6 +97,8 @@ class Message {
     this.blocked = false,
     this.kind = MessageKind.normal,
     this.systemAction,
+    this.expiresAt,
+    this.slowHeld = false,
     Map<String, String>? readers,
   })  : timestamp = timestamp ?? createdAt * 1000,
         readers = readers ?? <String, String>{};
@@ -196,6 +198,12 @@ class Message {
   /// Optional session-local action button for a system row.
   SystemAction? systemAction;
 
+  int? expiresAt;
+
+  bool slowHeld;
+
+  bool heldShown = false;
+
   /// Read-receipt readers of own channel/group messages: pubkey to nym.
   final Map<String, String> readers;
 
@@ -246,6 +254,8 @@ class Message {
         'thinking': thinking,
         'kind': kind.name,
         if (powTarget != null) 'powTarget': powTarget,
+        if (expiresAt != null) 'expiresAt': expiresAt,
+        if (slowHeld) 'slowHeld': true,
       };
 
   /// Centered system pill like `displaySystemMessage`; [action] selects the italic action variant.
@@ -328,6 +338,8 @@ class Message {
       thinking: j['thinking'] as String?,
       kind: messageKindFromString(j['kind'] as String?),
       powTarget: (j['powTarget'] as num?)?.toInt(),
+      expiresAt: (j['expiresAt'] as num?)?.toInt(),
+      slowHeld: j['slowHeld'] == true,
     );
   }
 }

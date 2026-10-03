@@ -115,7 +115,10 @@ class GifPicker extends ConsumerStatefulWidget {
     required this.onSelect,
     this.onClose,
     this.proxyBase,
+    this.tabs,
   });
+
+  final Widget? tabs;
 
   final FavoriteGifsStore favoritesStore;
   final ValueChanged<String> onSelect;
@@ -288,6 +291,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            ?widget.tabs,
             _header(c),
             const SizedBox(height: 10),
             Flexible(child: _results(c)),

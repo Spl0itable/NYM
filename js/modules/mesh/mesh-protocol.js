@@ -172,6 +172,8 @@
         };
     }
 
+    const versionForPayload = (n) => (n > 0xFFFF ? 2 : 1);
+
     const isBroadcast = (p) => !p.recipientID || bytesEqual(p.recipientID, BROADCAST_RECIPIENT);
 
     function encodePacket(packet, padding) {
@@ -603,10 +605,62 @@
         return { messageID, content };
     }
 
+    const FILE_TLV_NAME = 0x01, FILE_TLV_SIZE = 0x02, FILE_TLV_MIME = 0x03, FILE_TLV_CONTENT = 0x04;
+
+    function encodeFilePacket(f) {
+        const name = utf8.encode(String(f.fileName || ''));
+        const mime = utf8.encode(String(f.mimeType || ''));
+        const content = f.content;
+        if (name.length > 0xFFFF || mime.length > 0xFFFF || !content) return null;
+        const w = new Writer(name.length + mime.length + content.length + 20);
+        w.u8(FILE_TLV_NAME); w.u16(name.length); w.bytes(name);
+        w.u8(FILE_TLV_SIZE); w.u16(4); w.u32(content.length);
+        w.u8(FILE_TLV_MIME); w.u16(mime.length); w.bytes(mime);
+        w.u8(FILE_TLV_CONTENT); w.u32(content.length); w.bytes(content);
+        return w.toBytes();
+    }
+
+    function decodeFilePacket(data) {
+        let offset = 0, fileName = null, mimeType = null;
+        const chunks = [];
+        let sawContent = false;
+        const read = (n) => {
+            if (offset + n > data.length) return null;
+            let v = 0;
+            for (let i = 0; i < n; i++) v = (v * 256) + data[offset++];
+            return v;
+        };
+        while (offset < data.length) {
+            const type = data[offset++];
+            let len;
+            if (type === FILE_TLV_CONTENT) {
+                const snap = offset;
+                const canonical = read(4);
+                if (canonical !== null && offset + canonical <= data.length) len = canonical;
+                else { offset = snap; len = read(2); }
+            } else {
+                len = read(2);
+            }
+            if (len === null || offset + len > data.length) return null;
+            const value = data.slice(offset, offset + len);
+            offset += len;
+            if (type === FILE_TLV_NAME) fileName = utf8d.decode(value);
+            else if (type === FILE_TLV_MIME) mimeType = utf8d.decode(value);
+            else if (type === FILE_TLV_CONTENT) { chunks.push(value); sawContent = true; }
+        }
+        if (!sawContent) return null;
+        let total = 0;
+        for (const c of chunks) total += c.length;
+        const content = new Uint8Array(total);
+        let pos = 0;
+        for (const c of chunks) { content.set(c, pos); pos += c.length; }
+        return { fileName: fileName || 'file', mimeType: mimeType || 'application/octet-stream', content };
+    }
+
     G.NymMeshProtocol = {
         MeshConst, MsgType, NoisePayloadType, BROADCAST_RECIPIENT,
         toHex, fromHex, bytesEqual, utf8, utf8d, Writer, Reader,
-        MessagePadding, makePacket, isBroadcast, encodePacket, decodePacket, decodePacketAsync,
+        MessagePadding, makePacket, versionForPayload, isBroadcast, encodePacket, decodePacket, decodePacketAsync,
         inflateRaw, packetSigningBytes,
         encodeAnnouncement, decodeAnnouncement,
         encodeBitchatMessage, decodeBitchatMessage,
@@ -614,5 +668,6 @@
         SeenPackets,
         encodeNoisePayload, decodeNoisePayload,
         encodePrivateMessage, decodePrivateMessage, PM_MAX_CONTENT_BYTES,
+        encodeFilePacket, decodeFilePacket,
     };
 })();

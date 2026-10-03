@@ -54,6 +54,8 @@ Object.assign(NYM.prototype, {
             this.setupTranslateInput();
             this.setupFormatToolbar();
             this.setupComposerMediaPreviews();
+            if (typeof this.setupMediaNotesUI === 'function') this.setupMediaNotesUI();
+            if (typeof this.setupComposerControls === 'function') this.setupComposerControls();
             this.syncComposerInlineActions();
             this.populateTranslateLanguageSelect();
             this.populateUiLanguageSelect();
@@ -72,6 +74,9 @@ Object.assign(NYM.prototype, {
             this.loadPinnedChannels();
             this.loadHiddenChannels();
             this.loadWallpaper();
+            if (typeof this._awaitReadState === 'function' && typeof this._getApiHost === 'function' && this._getApiHost()) {
+                this._awaitReadState(20000);
+            }
             if (typeof this._hydrateUnreadCounts === 'function') this._hydrateUnreadCounts();
             if (typeof this.initMeshUI === 'function') this.initMeshUI();
             // Returning to the app is when to retry place names that failed earlier, including abandoned ones.

@@ -40,8 +40,8 @@ class QuickContextItem {
   final QuickContextItemColor color;
 }
 
-/// Color variants: lightning #f7931a, report `--warning`, danger.
-enum QuickContextItemColor { normal, lightning, report, danger }
+/// Color variants: report `--warning`, danger.
+enum QuickContextItemColor { normal, report, danger }
 
 /// Long-press quick-context card shown below the quick-react pill.
 class QuickContextMenu extends StatelessWidget {
@@ -98,10 +98,6 @@ class _QuickContextRowState extends State<_QuickContextRow> {
     final Color fg;
     final Color iconColor;
     switch (widget.item.color) {
-      case QuickContextItemColor.lightning:
-        fg = const Color(0xFFF7931A);
-        iconColor = const Color(0xFFF7931A);
-        break;
       case QuickContextItemColor.report:
         fg = c.warning;
         iconColor = c.warning;

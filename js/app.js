@@ -553,7 +553,7 @@ class NYM {
 
     constructor() {
         this.relayPool = new Map();
-        this.useRelayProxy = !!this._getApiHost();
+        this._initRelayTransportMode();
         this.poolSockets = [];
         this.poolSocket = null;
         this.poolConnectedRelays = [];
@@ -6005,9 +6005,11 @@ const SETTINGS_LOAD_MAX_RETRIES = 4;
 
 async function settingsLoad(attempt = 0) {
     let status = 'failed';
+    if (nym && attempt === 0 && typeof nym._awaitReadState === 'function') nym._awaitReadState(12000);
     if (nym && typeof nym.settingsLoadFromD1 === 'function') {
         try { status = await nym.settingsLoadFromD1(); } catch (_) { status = 'failed'; }
     }
+    if (nym && typeof nym._markReadStateKnown === 'function') nym._markReadStateKnown();
     if (status !== 'loaded') nostrSettingsLoad();
 
     // Under the relay proxy D1 is the only source, so retry rather than let defaults overwrite unread rows.
@@ -6249,13 +6251,18 @@ async function applyNostrSettingsAdditive(s) {
     if (s.channelLastRead && typeof s.channelLastRead === 'object') {
         if (!nym.channelLastRead) nym.channelLastRead = new Map();
         let lrChanged = false;
+        const lrAdvanced = [];
         for (const [ch, v] of Object.entries(s.channelLastRead)) {
             if (typeof v !== 'number' || v <= 0) continue;
             const cur = nym.channelLastRead.get(ch) || 0;
-            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; }
+            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; lrAdvanced.push([ch, v]); }
+        }
+        if (lrAdvanced.length && typeof nym._cnPruneRemoteRead === 'function') {
+            try { nym._cnPruneRemoteRead(lrAdvanced); } catch (_) { }
         }
         if (lrChanged && typeof nym._persistUnreadCounts === 'function') {
             nym._persistUnreadCounts(true);
+            if (typeof nym._seedUnreadFromD1Activity === 'function') nym._seedUnreadFromD1Activity();
             if (typeof nym.recomputeAllUnreadCounts === 'function') nym.recomputeAllUnreadCounts();
         }
     }
@@ -6359,6 +6366,18 @@ async function applyNostrSettingsAdditive(s) {
             nym._botAnonOn = s.botAnonEnabled;
             localStorage.setItem('nym_botanon_enabled', s.botAnonEnabled ? 'true' : 'false');
         } catch (_) { }
+    }
+
+    if (s.savedMessages && typeof s.savedMessages === 'object' && typeof nym.applySyncedSaved === 'function') {
+        try { nym.applySyncedSaved(s.savedMessages); } catch (_) { }
+    }
+
+    if (s.pinnedChats && typeof s.pinnedChats === 'object' && typeof nym.applySyncedPinned === 'function') {
+        try { nym.applySyncedPinned(s.pinnedChats); } catch (_) { }
+    }
+
+    if (s.lockedChats && typeof s.lockedChats === 'object' && typeof nym.applySyncedLocked === 'function') {
+        try { nym.applySyncedLocked(s.lockedChats); } catch (_) { }
     }
 
     // Always merge so no device's keys are dropped when events arrive out of order.
@@ -6709,6 +6728,9 @@ async function applyNostrSettings(s) {
     if (Array.isArray(s.pinnedChannels)) {
         nym.pinnedChannels = new Set(s.pinnedChannels);
         localStorage.setItem('nym_pinned_channels', JSON.stringify(s.pinnedChannels));
+        if (typeof nym._pinAfterLegacyChange === 'function') {
+            try { nym._pinAfterLegacyChange(); } catch (_) { }
+        }
     }
 
     if (Array.isArray(s.blockedChannels)) {
@@ -6914,13 +6936,18 @@ async function applyNostrSettings(s) {
     if (s.channelLastRead && typeof s.channelLastRead === 'object') {
         if (!nym.channelLastRead) nym.channelLastRead = new Map();
         let lrChanged = false;
+        const lrAdvanced = [];
         for (const [ch, v] of Object.entries(s.channelLastRead)) {
             if (typeof v !== 'number' || v <= 0) continue;
             const cur = nym.channelLastRead.get(ch) || 0;
-            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; }
+            if (v > cur) { nym.channelLastRead.set(ch, v); lrChanged = true; lrAdvanced.push([ch, v]); }
+        }
+        if (lrAdvanced.length && typeof nym._cnPruneRemoteRead === 'function') {
+            try { nym._cnPruneRemoteRead(lrAdvanced); } catch (_) { }
         }
         if (lrChanged && typeof nym._persistUnreadCounts === 'function') {
             nym._persistUnreadCounts(true);
+            if (typeof nym._seedUnreadFromD1Activity === 'function') nym._seedUnreadFromD1Activity();
             if (typeof nym.recomputeAllUnreadCounts === 'function') nym.recomputeAllUnreadCounts();
         }
     }
@@ -7516,6 +7543,12 @@ window.updateSetupInviteBanner = updateSetupInviteBanner;
 
 // Invite links opened while loaded only change the hash, so route them live here too.
 window.addEventListener('hashchange', () => {
+    const call = window.location.hash.match(/^#call=([A-Za-z0-9_-]+)/);
+    if (call) {
+        window.pendingCallLink = call[1];
+        if (window.nym && nym.pubkey && typeof nym.handleCallLinkFromUrl === 'function') routeToUrlChannel();
+        return;
+    }
     const m = window.location.hash.match(/^#gjoin=([A-Za-z0-9_-]+)/);
     if (!m) return;
     window.pendingGroupInvite = m[1];
@@ -7531,6 +7564,11 @@ function parseUrlChannel() {
     const hash = window.location.hash;
     if (hash && hash.length > 1) {
         // Group invite tokens are case-sensitive base64url; never lowercase.
+        const callMatch = hash.match(/^#call=([A-Za-z0-9_-]+)/);
+        if (callMatch) {
+            window.pendingCallLink = callMatch[1];
+            return;
+        }
         const inviteMatch = hash.match(/^#gjoin=([A-Za-z0-9_-]+)/);
         if (inviteMatch) {
             window.pendingGroupInvite = inviteMatch[1];
@@ -7545,6 +7583,13 @@ function parseUrlChannel() {
 }
 
 async function routeToUrlChannel() {
+    if (window.pendingCallLink) {
+        const callToken = window.pendingCallLink;
+        delete window.pendingCallLink;
+        history.replaceState(null, null, window.location.pathname);
+        try { await nym.handleCallLinkFromUrl(callToken); } catch (e) { console.warn('[CallLink]', e); }
+        return;
+    }
     let pendingInvite = window.pendingGroupInvite;
     if (!pendingInvite) {
         try { pendingInvite = localStorage.getItem('nym_pending_group_invite'); } catch (e) { }
@@ -7611,6 +7656,45 @@ function toggleLowDataModeFromStats(e) {
 }
 
 window.toggleLowDataModeFromStats = toggleLowDataModeFromStats;
+
+async function toggleRelayTransportFromStats() {
+    if (typeof nym === 'undefined' || typeof nym.requestRelayTransportToggle !== 'function') return;
+    const pending = nym.requestRelayTransportToggle();
+    renderRelayTransportButton();
+    try { await pending; } catch (_) { }
+    renderRelayStats();
+}
+
+window.toggleRelayTransportFromStats = toggleRelayTransportFromStats;
+
+function renderRelayTransportButton() {
+    const btn = document.getElementById('rsTransportBtn');
+    if (!btn || typeof nym === 'undefined') return;
+    const action = typeof nym.relayTransportAction === 'function' ? nym.relayTransportAction() : null;
+    if (!action) {
+        btn.hidden = true;
+        return;
+    }
+    const ui = (s) => (typeof nym.uiText === 'function' ? nym.uiText(s) : s);
+    let label;
+    let tip;
+    if (action === 'direct') {
+        label = ui('Use direct');
+        tip = ui('Disconnect from the proxy and connect to relays directly');
+    } else if (action === 'proxy') {
+        label = ui('Use proxy');
+        tip = ui('Reconnect through the relay pool proxy');
+    } else {
+        label = ui('Use proxy');
+        tip = ui('Try reconnecting to the proxy now');
+    }
+    btn.hidden = false;
+    if (btn.textContent !== label) btn.textContent = label;
+    if (btn.title !== tip) btn.title = tip;
+    if (btn.getAttribute('aria-label') !== tip) btn.setAttribute('aria-label', tip);
+    btn.dataset.transport = action;
+    btn.disabled = typeof nym.relayTransportBusy === 'function' && nym.relayTransportBusy();
+}
 
 function closeRelayStatsModal() {
     stopRelayStatsLoop();
@@ -7722,6 +7806,11 @@ function renderRelayStats() {
         if (proxyMode) {
             modeText = 'Proxy';
             hint = 'Relay pool proxy: one multiplexed connection, relays only see the proxy, spam filtering applies.';
+        } else if (nym._userDirectMode) {
+            modeText = 'Direct';
+            hint = typeof nym.uiText === 'function'
+                ? nym.uiText("Direct relay connections, chosen by you: relays see your IP address and the proxy's spam filtering doesn't apply.")
+                : "Direct relay connections, chosen by you: relays see your IP address and the proxy's spam filtering doesn't apply.";
         } else if (connected > 0 || !nym.useRelayProxy) {
             modeText = 'Direct';
             hint = nym._poolFallbackActive
@@ -7734,6 +7823,7 @@ function renderRelayStats() {
         if (modeEl.textContent !== modeText) modeEl.textContent = modeText;
         if (modeHint && modeHint.textContent !== hint) modeHint.textContent = hint;
     }
+    renderRelayTransportButton();
 
     const elConn = document.getElementById('rsConnected');
     const elLat = document.getElementById('rsLatency');

@@ -2,6 +2,11 @@ import 'dart:async';
 
 const int kLiveGapMarginSec = 300;
 
+const int kLiveGapMaxLookbackMs = 86400000;
+
+bool gapWrapIsFresh({required int rumorCreatedAtSec, required int floorSec}) =>
+    rumorCreatedAtSec >= floorSec;
+
 class LiveGap {
   int _startMs = 0;
   int _seq = 0;
@@ -9,10 +14,15 @@ class LiveGap {
 
   bool get pending => _startMs > 0;
 
-  void note({int? nowMs}) {
-    if (_startMs == 0) {
-      _startMs = nowMs ?? DateTime.now().millisecondsSinceEpoch;
-    }
+  int get startMs => _startMs;
+
+  void note({int? nowMs, int? lastLiveAtMs}) {
+    final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+    final live = lastLiveAtMs ?? 0;
+    final at = live > 0 && live < now
+        ? (live > now - kLiveGapMaxLookbackMs ? live : now - kLiveGapMaxLookbackMs)
+        : now;
+    if (_startMs == 0 || at < _startMs) _startMs = at;
     _seq++;
   }
 

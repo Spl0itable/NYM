@@ -13,6 +13,7 @@ function _clampNotifTs(timestamp, observedAt) {
 Object.assign(NYM.prototype, {
 
     showNotification(title, body, channelInfo = null, timestamp = null) {
+        body = this._notifPreviewText(body);
         if (!this.notificationsEnabled) return;
 
         const baseTitle = this.parseNymFromDisplay(title);
@@ -28,6 +29,12 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
             titleToShow = `${baseTitle}#${suffix}`;
         }
+        const lockedChat = typeof this._clNotifLocked === 'function' && this._clNotifLocked(channelInfo);
+        if (lockedChat) {
+            const redacted = this._clRedactText();
+            titleToShow = redacted.title;
+            body = redacted.body;
+        }
 
         // Received time is both the viewed-cutoff and the stable clamp ceiling (see _clampNotifTs).
         const receivedAt = Date.now();
@@ -37,6 +44,7 @@ Object.assign(NYM.prototype, {
         // Live and replay paths can both call this for the same event.
         const isDupe = this.notificationHistory.some(n => {
             if (eventId && n.eventId && n.eventId === eventId) return true;
+            if (lockedChat && eventId) return false;
             if (n.title === titleToShow && n.body === body
                 && n.senderPubkey === (channelInfo?.pubkey || '')
                 && Math.abs((n.timestamp || 0) - ts) < 60000) return true;
@@ -53,10 +61,11 @@ Object.assign(NYM.prototype, {
             channelInfo: channelInfo,
             timestamp: ts,
             receivedAt,
-            senderNym: baseTitle,
+            senderNym: lockedChat ? '' : baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined
         };
+        if (lockedChat) entry.locked = true;
         const previouslySeen = this._isNotificationSeen(entry);
         entry.viewed = previouslySeen
             || receivedAt <= (this.notificationLastReadTime || 0)
@@ -119,6 +128,7 @@ Object.assign(NYM.prototype, {
     },
 
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
+        body = this._notifPreviewText(body);
         if (!this.notificationsEnabled) return;
 
         const baseTitle = this.parseNymFromDisplay(title);
@@ -134,6 +144,12 @@ Object.assign(NYM.prototype, {
             const suffix = this.getPubkeySuffix(channelInfo.pubkey);
             titleToShow = `${baseTitle}#${suffix}`;
         }
+        const lockedChat = typeof this._clNotifLocked === 'function' && this._clNotifLocked(channelInfo);
+        if (lockedChat) {
+            const redacted = this._clRedactText();
+            titleToShow = redacted.title;
+            body = redacted.body;
+        }
         const receivedAt = Date.now();
         const ts = _clampNotifTs(timestamp, receivedAt);
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
@@ -141,6 +157,7 @@ Object.assign(NYM.prototype, {
         const eventId = channelInfo?.eventId || '';
         const isDupe = this.notificationHistory.some(n => {
             if (eventId && n.eventId && n.eventId === eventId) return true;
+            if (lockedChat && eventId) return false;
             if (n.title === titleToShow && n.body === body
                 && n.senderPubkey === (channelInfo?.pubkey || '')
                 && Math.abs((n.timestamp || 0) - ts) < 60000) return true;
@@ -153,10 +170,11 @@ Object.assign(NYM.prototype, {
             channelInfo: channelInfo,
             timestamp: ts,
             receivedAt,
-            senderNym: baseTitle,
+            senderNym: lockedChat ? '' : baseTitle,
             senderPubkey: channelInfo?.pubkey || '',
             eventId: eventId || undefined
         };
+        if (lockedChat) entry.locked = true;
         entry.viewed = this._isNotificationSeen(entry)
             || receivedAt <= (this.notificationLastReadTime || 0)
             || this._notificationAlreadySeen(channelInfo, ts);
@@ -208,7 +226,7 @@ Object.assign(NYM.prototype, {
             }
         }
         if (!content) return null;
-        let preview = content.split('\n').filter(l => !l.startsWith('>')).join(' ').trim();
+        let preview = this._notifPreviewText(content.split('\n').filter(l => !l.startsWith('>')).join(' ').trim());
         if (!preview) return null;
         if (preview.length > 80) preview = preview.slice(0, 80) + '…';
         return `⚡ zapped ${sats} sats to: "${preview}"`;
@@ -438,6 +456,7 @@ Object.assign(NYM.prototype, {
     },
 
     _applyAppBadge() {
+        if (this._readStateKnown === false) return;
         let count = 0;
         try { count = this._appBadgeCount(); } catch (_) { return; }
         if (count === this._appBadgeShown) return;
@@ -456,9 +475,10 @@ Object.assign(NYM.prototype, {
     _doUpdateNotificationBadge() {
         const desktopBadge = document.getElementById('notifBadgeDesktop');
         const mobileBadge = document.getElementById('notifBadgeMobile');
+        const sidebarBadge = document.getElementById('notifBadgeSidebar');
 
         if (!this.notificationsEnabled) {
-            [desktopBadge, mobileBadge].forEach(badge => {
+            [desktopBadge, mobileBadge, sidebarBadge].forEach(badge => {
                 if (badge) badge.classList.add('nm-hidden');
             });
             return;
@@ -466,7 +486,7 @@ Object.assign(NYM.prototype, {
 
         const unreadCount = this._unreadNotifications().length;
 
-        [desktopBadge, mobileBadge].forEach(badge => {
+        [desktopBadge, mobileBadge, sidebarBadge].forEach(badge => {
             if (!badge) return;
             if (unreadCount > 0) {
                 badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
@@ -531,10 +551,13 @@ Object.assign(NYM.prototype, {
                     hour12: this.settings.timeFormat === '12hr'
                 });
 
-                const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
+                const hiddenChat = typeof this._clNotifHidden === 'function' && this._clNotifHidden(n);
+                const pubkey = hiddenChat ? '' : (n.senderPubkey || n.channelInfo?.pubkey || '');
                 let avatarHtml = '';
                 let authorHtml = '';
-                if (pubkey) {
+                if (hiddenChat) {
+                    authorHtml = `<span class="notification-item-author">${this.escapeHtml(this._clRedactText().title)}</span>`;
+                } else if (pubkey) {
                     const avatarSrc = this.getAvatarUrl(pubkey);
                     const safePk = this._safePubkey(pubkey);
                     avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
@@ -550,7 +573,9 @@ Object.assign(NYM.prototype, {
                 }
 
                 let contextHtml = '';
-                if (n.channelInfo) {
+                if (hiddenChat) {
+                    contextHtml = `<span class="notification-item-context">${this.escapeHtml(this._cl(window.NymChatLock.STRINGS.lockedChats))}</span>`;
+                } else if (n.channelInfo) {
                     const inThread = !!n.channelInfo.inThread;
                     if (n.channelInfo.type === 'geohash') {
                         const where = `#${this.escapeHtml(n.channelInfo.geohash)}`;
@@ -575,14 +600,14 @@ Object.assign(NYM.prototype, {
                     }
                 }
 
-                let rawBody = n.body || '';
+                let rawBody = hiddenChat ? this._clRedactText().body : (n.body || '');
 
-                if (n.channelInfo && n.channelInfo.zapMessageId) {
+                if (!hiddenChat && n.channelInfo && n.channelInfo.zapMessageId) {
                     const enriched = this._enrichZapBody(n.channelInfo.zapMessageId, n.channelInfo.zapSats);
                     if (enriched) rawBody = enriched;
                 }
 
-                const newMessageLines = rawBody.split('\n').filter(line => !line.startsWith('>'));
+                const newMessageLines = this._notifPreviewText(rawBody).split('\n').filter(line => !line.startsWith('>'));
                 const displayBody = newMessageLines.join(' ').replace(/\s+/g, ' ').trim().slice(0, 200);
 
                 item.innerHTML = `

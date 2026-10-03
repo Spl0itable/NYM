@@ -80,34 +80,64 @@ const List<(String, String)> _linePrefixes = [
   ('h3', '### '),
   ('h2', '## '),
   ('h1', '# '),
+  ('subtext', '-# '),
   ('quote', '> '),
 ];
+
+final RegExp _rxListPrefix = RegExp(r'^(\t| {2,})?([-*]|\d{1,9}\.) (?=\S)');
+
+(String, String)? _linePrefixAt(String text, int lineStart, int lineEnd) {
+  for (final (type, mark) in _linePrefixes) {
+    if (lineEnd - lineStart <= mark.length) continue;
+    if (!text.startsWith(mark, lineStart)) continue;
+    return (type, mark);
+  }
+  final m = _rxListPrefix.firstMatch(text.substring(lineStart, lineEnd));
+  if (m == null) return null;
+  final nested = m[1] != null ? '2' : '';
+  if (m[2] == '-' || m[2] == '*') return ('ulist$nested', m[0]!);
+  return ('olist$nested', '');
+}
+
+final RegExp _rxComposerTimestamp = RegExp(r'<t:(-?\d{1,17})(?::([tTdDfFR]))?>');
+
+bool _validTimestamp(Match m) {
+  final n = int.tryParse(m[1]!);
+  return n != null && n.abs() <= 8640000000000;
+}
 
 /// Ordered by precedence, matching the renderer's sequential replace order.
 final List<_InlineSpec> _inlineSpecs = [
   _InlineSpec('code', RegExp(r'`([^`]+?)`'), '`', '`', leaf: true),
+  _InlineSpec('timestamp', _rxComposerTimestamp, '', '',
+      atom: true, accept: _validTimestamp),
+  _InlineSpec('spoiler', RegExp(r'\|\|([^\s|](?:[^\n]*?[^\s|])??)\|\|'), '||', '||'),
   _InlineSpec('bold', RegExp(r'\*\*(.+?)\*\*'), '**', '**'),
-  _InlineSpec('bold', RegExp(r'(?<!\w)__(.+?)__(?!\w)'), '__', '__'),
+  _InlineSpec('underline', RegExp(r'(?<!\w)__(.+?)__(?!\w)'), '__', '__'),
   _InlineSpec('italic', RegExp(r'(?<![:/])\*([^*\s][^*]*)\*'), '*', '*'),
   _InlineSpec('italic', RegExp(r'(?<![:/\w])_([^_\s][^_]*)_(?!\w)'), '_', '_'),
   _InlineSpec('strike', RegExp(r'~~(.+?)~~'), '~~', '~~'),
 ];
 
 class _InlineSpec {
-  _InlineSpec(this.type, this.rx, this.open, this.close, {this.leaf = false});
+  _InlineSpec(this.type, this.rx, this.open, this.close,
+      {this.leaf = false, this.atom = false, this.accept});
   final String type;
   final RegExp rx;
   final String open;
   final String close;
 
   final bool leaf;
+  final bool atom;
+  final bool Function(Match)? accept;
 }
 
 /// Deeper nesting is left as plain text; bounds per-keystroke work.
 const int _maxDepth = 4;
 
 /// Matches against the whole draft so the lookbehinds still see the real preceding character.
-Match? _firstMatch(RegExp rx, String text, int from, int to) {
+Match? _firstMatch(RegExp rx, String text, int from, int to,
+    [bool Function(Match)? accept]) {
   var pos = from;
   while (pos < to) {
     Match? m;
@@ -116,7 +146,7 @@ Match? _firstMatch(RegExp rx, String text, int from, int to) {
       break;
     }
     if (m == null || m.start >= to) return null;
-    if (m.end <= to) return m;
+    if (m.end <= to && (accept == null || accept(m))) return m;
     pos = m.start + 1;
   }
   return null;
@@ -130,7 +160,7 @@ List<RichRun> _parseInline(String text, int from, int to, int depth) {
     _InlineSpec? spec;
     if (depth < _maxDepth) {
       for (final s in _inlineSpecs) {
-        final m = _firstMatch(s.rx, text, pos, to);
+        final m = _firstMatch(s.rx, text, pos, to, s.accept);
         if (m != null && (best == null || m.start < best.start)) {
           best = m;
           spec = s;
@@ -144,6 +174,18 @@ List<RichRun> _parseInline(String text, int from, int to, int depth) {
     if (best.start > pos) out.add(RichRun.text(pos, best.start));
     final start = best.start;
     final end = best.end;
+    if (spec.atom) {
+      out.add(RichRun(
+        kind: RichRunKind.inline,
+        type: spec.type,
+        start: start,
+        end: end,
+        open: best[0]!,
+        reveal: const [],
+      ));
+      pos = end;
+      continue;
+    }
     final innerStart = start + spec.open.length;
     final innerEnd = end - spec.close.length;
     out.add(RichRun(
@@ -174,9 +216,9 @@ void _parseFlow(String text, int from, int to, List<RichRun> out) {
     final lineStart = pos, lineEnd = nl;
     var handled = false;
     if (lineStart == 0 || text[lineStart - 1] == '\n') {
-      for (final (type, mark) in _linePrefixes) {
-        if (lineEnd - lineStart <= mark.length) continue;
-        if (!text.startsWith(mark, lineStart)) continue;
+      final prefix = _linePrefixAt(text, lineStart, lineEnd);
+      if (prefix != null) {
+        final (type, mark) = prefix;
         out.add(RichRun(
           kind: RichRunKind.line,
           type: type,
@@ -187,7 +229,6 @@ void _parseFlow(String text, int from, int to, List<RichRun> out) {
           children: _parseInline(text, lineStart + mark.length, lineEnd, 0),
         ));
         handled = true;
-        break;
       }
     }
     if (!handled && lineEnd > lineStart) {
@@ -259,6 +300,7 @@ TextEditingValue? richMarkerDelete(String text, int caret,
 
   for (final n in nodes) {
     if (n.kind == RichRunKind.line) {
+      if (n.open.isEmpty) continue;
       final markEnd = n.start + n.open.length;
       final hit = forward ? caret == n.start : caret == markEnd;
       if (hit) {
@@ -327,6 +369,16 @@ TextStyle richRunStyle(TextStyle base, String type, NymColors c) {
       return base.copyWith(fontStyle: FontStyle.italic);
     case 'strike':
       return base.copyWith(decoration: TextDecoration.lineThrough);
+    case 'underline':
+      return base.copyWith(decoration: TextDecoration.underline);
+    case 'spoiler':
+      return base.copyWith(
+        backgroundColor: c.isLight
+            ? const Color(0x1F000000)
+            : c.textDim.withValues(alpha: 0.3),
+      );
+    case 'subtext':
+      return base.copyWith(fontSize: size * 0.8, color: c.textDim);
     case 'code':
     case 'codeblock':
       return base.copyWith(

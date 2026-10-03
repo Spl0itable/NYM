@@ -300,10 +300,11 @@ Object.assign(NYM.prototype, {
 
     _onCallInvite(sender, data, event) {
         if (this._hasSeenCall(data.callId)) return;
+        const linkJoin = typeof this._gtLinkJoinMatches === 'function' && this._gtLinkJoinMatches(sender, data);
 
         const pref = (this.settings && this.settings.acceptCalls) || 'enabled';
-        if (pref === 'disabled') return;
-        if (pref === 'friends' && !this.isFriend(sender)) return;
+        if (pref === 'disabled' && !linkJoin) return;
+        if (pref === 'friends' && !this.isFriend(sender) && !linkJoin) return;
         if (this.blockedUsers && this.blockedUsers.has(sender)) return;
 
         // Stale invites within the seen-call window are logged as missed calls rather than dropped.
@@ -327,8 +328,8 @@ Object.assign(NYM.prototype, {
         const isGroup = !!data.isGroup;
         const groupId = data.groupId || null;
         const members = [sender, this.pubkey];
-        if (isGroup && groupId) {
-            const g = this.groupConversations && this.groupConversations.get(groupId);
+        if (isGroup && (groupId || linkJoin)) {
+            const g = groupId && this.groupConversations && this.groupConversations.get(groupId);
             const roster = (g && Array.isArray(g.members) && g.members.length) ? g.members : null;
             const claimed = Array.isArray(data.members) ? data.members : [];
             claimed.forEach(pk => {
@@ -350,6 +351,11 @@ Object.assign(NYM.prototype, {
             acceptedPeers: new Set(),
             timeout: null
         };
+        if (linkJoin) {
+            this._gtLinkJoin = null;
+            this.acceptCall();
+            return;
+        }
         this._showIncomingCallUI();
         this._startRingtone();
         this.incomingCall.timeout = setTimeout(() => {

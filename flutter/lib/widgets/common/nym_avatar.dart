@@ -68,7 +68,7 @@ class _NymAvatarState extends State<NymAvatar> {
     // A mesh-transferred avatar wins so Bluetooth-only peers still show their real picture.
     return ValueListenableBuilder<int>(
       valueListenable: MeshAvatarRegistry.instance.revision,
-      builder: (context, _, __) {
+      builder: (context, _, _) {
         final meshBytes = MeshAvatarRegistry.instance.bytesFor(widget.seed);
         if (meshBytes != null) {
           return ClipOval(
@@ -83,7 +83,7 @@ class _NymAvatarState extends State<NymAvatar> {
                       MediaQuery.devicePixelRatioOf(context) *
                       1.5)
                   .ceil(),
-              errorBuilder: (_, __, ___) => _identicon(context),
+              errorBuilder: (_, _, _) => _identicon(context),
             ),
           );
         }

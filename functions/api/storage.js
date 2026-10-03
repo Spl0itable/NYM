@@ -56,6 +56,7 @@ import { isNymchatClient } from "./_client.js";
 import { isPrivateUrl, ssrfSafeFetch, readBounded } from "./proxy.js";
 import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
 import { hiddenEventIdsSince, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
+import { handleScheduleAction } from "./_schedule.js";
 
 function shopKnown(id) {
   return typeof id === "string" && Object.prototype.hasOwnProperty.call(SHOP_CATALOG, id);
@@ -1051,7 +1052,11 @@ async function handlePmAction(context, body) {
     var depUnits = Math.max(1, depEvents.length);
     if (!(await cacheRateTake("pm-deposit", userPubkey, depUnits, PM_DEPOSIT_RATE, STORAGE_RATE_WINDOW_MS)) ||
       !(await cacheRateTake("pm-deposit-ip", requestIp(context), depUnits, PM_DEPOSIT_IP_RATE, STORAGE_RATE_WINDOW_MS))) {
-      return json({ error: "Too many messages deposited. Try again in a minute." }, 429);
+      var depRetry = Math.max(1, Math.ceil((STORAGE_RATE_WINDOW_MS - (Date.now() % STORAGE_RATE_WINDOW_MS)) / 1000));
+      return new Response(JSON.stringify({ error: "Too many messages deposited. Try again in a minute.", retryAfter: depRetry }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": String(depRetry), ...CLIENT_CORS_HEADERS }
+      });
     }
     var depNow = Date.now();
     var depCeil = Math.floor(depNow / 1000);
@@ -1871,6 +1876,17 @@ async function routeStorageAction(context, body) {
   if (body && typeof body.action === "string" && body.action.indexOf("zap-") === 0) {
     try {
       return await handleZapAction(context, body);
+    } catch (e) {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("schedule-") === 0) {
+    try {
+      return await handleScheduleAction(context, body, clientAuthOk);
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {

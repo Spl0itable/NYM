@@ -216,7 +216,7 @@ class _PollCardState extends ConsumerState<PollCard> {
           ),
           for (var i = 0; i < poll.options.length; i++) ...[
             if (i > 0) const SizedBox(height: 8),
-            _PollOption(
+            PollOptionTile(
               poll: poll,
               option: poll.options[i],
               total: total,
@@ -229,7 +229,7 @@ class _PollCardState extends ConsumerState<PollCard> {
           ],
           Padding(
             padding: const EdgeInsets.only(top: 12),
-            child: _PollFooter(
+            child: PollVotesFooter(
               total: total,
               onTap: (rect) => _showVoters(context, rect),
             ),
@@ -689,8 +689,9 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
 }
 
 /// Option row: bar animating to `pct%` over 400ms, text and `NN%`, and up to 8 voter avatars; hover beats the selected fill.
-class _PollOption extends StatefulWidget {
-  const _PollOption({
+class PollOptionTile extends StatefulWidget {
+  const PollOptionTile({
+    super.key,
     required this.poll,
     required this.option,
     required this.total,
@@ -707,10 +708,10 @@ class _PollOption extends StatefulWidget {
   final VoidCallback? onTap;
 
   @override
-  State<_PollOption> createState() => _PollOptionState();
+  State<PollOptionTile> createState() => _PollOptionState();
 }
 
-class _PollOptionState extends State<_PollOption> {
+class _PollOptionState extends State<PollOptionTile> {
   bool _hover = false;
 
   @override
@@ -869,16 +870,17 @@ class _VoterStack extends StatelessWidget {
 }
 
 /// Raw "N vote(s)" count (no abbreviation) that becomes a pill on hover; tapping opens the voters list.
-class _PollFooter extends StatefulWidget {
-  const _PollFooter({required this.total, required this.onTap});
+class PollVotesFooter extends StatefulWidget {
+  const PollVotesFooter(
+      {super.key, required this.total, required this.onTap});
   final int total;
   final ValueChanged<Rect> onTap;
 
   @override
-  State<_PollFooter> createState() => _PollFooterState();
+  State<PollVotesFooter> createState() => _PollFooterState();
 }
 
-class _PollFooterState extends State<_PollFooter> {
+class _PollFooterState extends State<PollVotesFooter> {
   bool _hover = false;
 
   void _handleTap() {

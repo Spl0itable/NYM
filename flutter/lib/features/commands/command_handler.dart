@@ -3,6 +3,7 @@
 import '../../core/utils/nym_utils.dart';
 import '../../models/user.dart';
 import '../i18n/i18n.dart';
+import '../messages/format/nym_format.dart' show NymFormat;
 import 'action_rate_limit.dart';
 import 'command_i18n.dart';
 import 'command_registry.dart';
@@ -57,6 +58,7 @@ class CommandHooks {
     this.removeAdmin,
     this.transferOwner,
     this.openDevNsecChallenge,
+    this.openTimestampPicker,
   });
 
   final void Function()? openPoll;
@@ -91,6 +93,8 @@ class CommandHooks {
 
   /// `/nick <reserved>`: the hook owns verification and the outcome; unset, the reserved gate aborts as canceled.
   final void Function()? openDevNsecChallenge;
+
+  final void Function()? openTimestampPicker;
 }
 
 /// Resolves `@nym`, `nym#xxxx` or 64-hex to a pubkey and display nym, or null.
@@ -173,9 +177,6 @@ class CommandDispatcher {
     switch (spec.id) {
       case 'who':
         return tr('/who only works in public channels.');
-      case 'poll':
-        return tr(
-            'Polls can only be created in channels, not in private messages.');
       case 'groupinfo':
       case 'kick':
       case 'ban':
@@ -241,7 +242,10 @@ class CommandDispatcher {
             (mention) => '/me gives $mention a warm hug 🫂');
       case 'bold':
       case 'italic':
+      case 'underline':
       case 'strike':
+      case 'spoiler':
+      case 'subtext':
       case 'code':
       case 'quote':
         if (args.isEmpty) {
@@ -249,6 +253,18 @@ class CommandDispatcher {
           return;
         }
         engine.sendToCurrentTarget(spec.formatter!(args));
+      case 'timestamp':
+        if (args.trim().isEmpty) {
+          hooks.openTimestampPicker?.call();
+          return;
+        }
+        final parsed = NymFormat.parseTimestampInput(args);
+        if (parsed == null) {
+          engine.systemMessage(tr(
+              'Usage: /timestamp YYYY-MM-DD HH:MM [t|T|d|D|f|F|R], or /timestamp with no arguments to pick a date'));
+          return;
+        }
+        engine.sendToCurrentTarget(parsed.tag);
       case 'brb':
         if (args.isEmpty) {
           engine.systemMessage(

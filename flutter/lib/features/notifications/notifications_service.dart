@@ -9,6 +9,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/notification_service.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
+import '../chat_lock/chat_lock_providers.dart';
+import '../dm_polls/dm_polls.dart' show DmPolls, dmPollPreview;
+import '../group_tools/group_tools.dart' show GroupTools;
+import '../i18n/i18n.dart';
+import '../messages/format/nym_format.dart' show NymFormat;
 import 'notification_sounds.dart';
 
 /// Plays a rendered WAV tone; tests inject a no-op so no plugin is touched.
@@ -90,7 +95,11 @@ class NotifyContext {
 
 /// Notification text with quoted lines dropped, so the reply is shown; a quote-only message keeps its content.
 String notificationBodyFor(String content) {
-  final body = content
+  final text =
+      content.contains(DmPolls.prefix) ? dmPollPreview(content, tr) : content;
+  final pv = GroupTools.previewText(text);
+  if (pv == 'Location' || pv == 'Live location') return tr(pv);
+  final body = pv
       .split('\n')
       .where((l) => !l.trimLeft().startsWith('>'))
       .join('\n')
@@ -184,9 +193,8 @@ class NotificationsService {
   NotificationsService(
     this._ref, {
     NotificationService? local,
-    TonePlayer? player,
-  })  : _local = local ?? NotificationService(),
-        _player = player;
+    this._player,
+  })  : _local = local ?? NotificationService();
 
   final Ref _ref;
   final NotificationService _local;
@@ -256,12 +264,35 @@ class NotificationsService {
       // Group mentions-only: only mentions notify.
       return;
     }
-    if (_isReplayedOrSeen(title: title, body: body, context: context)) return;
+    var shownTitle = title;
+    var shownBody = body;
+    var redacted = false;
+    final ck = context.conversationKey ?? '';
+    final sep = ck.indexOf(':');
+    if (sep > 0) {
+      try {
+        final lock = _ref.read(chatLockProvider);
+        if (lock.notificationIsLocked(
+            ck.substring(0, sep), ck.substring(sep + 1), context.senderPubkey)) {
+          final r = lock.redact(title, body, true);
+          shownTitle = r.title;
+          shownBody = r.body;
+          redacted = true;
+        }
+      } catch (_) {}
+    }
+    if (_isReplayedOrSeen(
+        title: shownTitle,
+        body: shownBody,
+        context: context,
+        exactOnly: redacted)) {
+      return;
+    }
 
     // Post the OS notification first and don't await the tone, which may never start in the background.
     await _local.showNotification(
-      title: title,
-      body: body,
+      title: shownTitle,
+      body: NymFormat.stripForPreview(shownBody),
       payload: context.payload,
       conversationKey: context.conversationKey,
       kind: context.kind,
@@ -276,6 +307,7 @@ class NotificationsService {
     required String title,
     required String body,
     required NotifyContext context,
+    bool exactOnly = false,
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final rawTs = context.timestampMs ?? 0;
@@ -289,6 +321,7 @@ class NotificationsService {
         _ref.read(notificationHistoryProvider.notifier).entriesForAlertDedup;
     final isDupe = history.any((e) {
       if (eventId.isNotEmpty && e.eventId == eventId) return true;
+      if (exactOnly && eventId.isNotEmpty) return false;
       return e.title == title &&
           e.body == body &&
           (e.senderPubkey ?? '') == sender &&
