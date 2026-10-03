@@ -18,6 +18,7 @@ import '../../features/chat_lock/chat_lock.dart'
 import '../../features/groups/group_logic.dart'
     show kPmDepositQueueMax, kPmDepositFlushMs, kPmDepositFlushJitterMs,
         kPmDepositBacklogMs, kPmDepositBatchMin, kPmDepositBatchMax;
+import '../../features/groups/wrap_outbox.dart';
 import '../../core/crypto/pq.dart' as pq;
 import '../../features/identity/pq_registry.dart'
     show pqRootCandidates, pqSelfCandidates;
@@ -32,6 +33,27 @@ const int kPmDepositRetryBaseMs = 2000;
 const int kPmDepositRetryMaxMs = 120000;
 
 const int kPmDepositMaxAttempts = 5;
+
+const int kPmDepositMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
+
+const int kPmDepositPersistMs = 300;
+
+const String kPmDepositStoreKey = 'pmDepositQueue';
+
+class _Deposit {
+  _Deposit(this.wrap, this.tier, this.seq, this.at, this.tries);
+
+  final Map<String, dynamic> wrap;
+  final int tier;
+  final int seq;
+  final int at;
+  int tries;
+
+  String get id => wrap['id'] as String;
+
+  Map<String, dynamic> toJson() =>
+      {'ev': wrap, 'tier': tier, 'seq': seq, 'at': at, 'tries': tries};
+}
 
 /// Cross-device `/api/storage` sync (settings, profile mirror, PM archive); every call is lazy and best-effort.
 class StorageSync {
@@ -1576,14 +1598,29 @@ class StorageSync {
   /// Wrap ids uploaded this session, capped like the PWA (6000, trimmed to 4000).
   final Set<String> _archivedIds = {};
   final Set<String> _depositedIds = {};
-  final List<Map<String, dynamic>> _depositQueue = [];
-  final Random _depositRandom = Random();
+  final List<_Deposit> _depositQueue = [];
+  List<_Deposit>? _depositInflight;
+  final Random _depositRandom = Random.secure();
   Timer? _depositTimer;
+  Timer? _depositPersistTimer;
   int depositDropped = 0;
   int depositFailed = 0;
-  final Expando<int> _depositAttempts = Expando<int>();
   int _depositFailStreak = 0;
+  int _depositSeq = 0;
   DateTime? _depositRetryAt;
+  WrapBucket? _depositBucket;
+  Future<void> Function(Map<String, dynamic> state)? _depositSave;
+  Future<Map<String, dynamic>> Function()? _depositLoad;
+
+  int get depositPending => _depositQueue.length;
+
+  void setDepositStore({
+    required Future<void> Function(Map<String, dynamic> state) save,
+    required Future<Map<String, dynamic>> Function() load,
+  }) {
+    _depositSave = save;
+    _depositLoad = load;
+  }
 
   /// Uploads wraps p-tagged to us into our D1 inbox (`pm-put`); no-op for ephemeral identities. Returns the count sent.
   Future<int> pmPut(List<Map<String, dynamic>> wraps) async {
@@ -1612,9 +1649,10 @@ class StorageSync {
   }
 
   /// Deposits a wrap into the recipient's D1 inbox (`pm-deposit`); skips self and ephemeral. Returns the count sent.
-  Future<int> pmDeposit(List<Map<String, dynamic>> wraps) async {
+  Future<int> pmDeposit(List<Map<String, dynamic>> wraps,
+      {int tier = WrapTier.critical}) async {
     if (!_durable) return 0;
-    final batch = <Map<String, dynamic>>[];
+    final batch = <_Deposit>[];
     for (final w in wraps) {
       final id = w['id'];
       if (id is! String || id.isEmpty) continue;
@@ -1622,18 +1660,24 @@ class StorageSync {
       if (recipient == null || recipient == _pubkey) continue;
       if (_depositedIds.contains(id)) continue;
       _depositedIds.add(id);
-      batch.add(w);
+      batch.add(_Deposit(w, tier, ++_depositSeq, _nowMs(), 0));
     }
     _trim(_depositedIds);
     if (batch.isEmpty) return 0;
     final sent = batch.take(100).toList();
+    _depositQueue.addAll(batch.skip(100));
+    _depositBucket = wrapBucketTake(
+            _depositBucket, _nowMs(), sent.length, kDepositWrapBucket,
+            force: true)
+        .state;
     try {
       await _signedWrite({
         'action': 'pm-deposit',
         'pubkey': _pubkey,
-        'events': sent,
+        'events': [for (final e in sent) e.wrap],
       });
       _depositFailStreak = 0;
+      _armDepositRetry();
       return batch.length;
     } catch (e) {
       _requeueDeposits(sent, e);
@@ -1642,7 +1686,9 @@ class StorageSync {
     }
   }
 
-  void enqueueDeposit(Map<String, dynamic> wrap) {
+  int _nowMs() => _now().millisecondsSinceEpoch;
+
+  void enqueueDeposit(Map<String, dynamic> wrap, {int tier = WrapTier.critical}) {
     if (!_durable) return;
     final id = wrap['id'];
     if (id is! String || id.isEmpty) return;
@@ -1651,12 +1697,88 @@ class StorageSync {
     if (_depositedIds.contains(id)) return;
     _depositedIds.add(id);
     _trim(_depositedIds);
-    _depositQueue.add(wrap);
-    while (_depositQueue.length > kPmDepositQueueMax) {
-      _depositQueue.removeAt(_depositRandom.nextInt(_depositQueue.length));
-      depositDropped++;
-    }
+    final t = tier == 0 || tier == 1 || tier == 2 ? tier : WrapTier.normal;
+    _depositQueue.add(_Deposit(wrap, t, ++_depositSeq, _nowMs(), 0));
+    _enforceDepositCap();
+    _persistDepositsSoon();
     _depositTimer ??= Timer(_depositDelay(false), () => _flushDeposits());
+  }
+
+  void _enforceDepositCap() {
+    if (_depositQueue.length <= kPmDepositQueueMax) return;
+    final gone = wrapQueueEvict([
+      for (final e in _depositQueue) WrapQueueEntry(e.id, e.tier, e.seq)
+    ], kPmDepositQueueMax)
+        .evicted
+        .toSet();
+    _depositQueue.removeWhere((e) => gone.contains(e.id));
+    depositDropped += gone.length;
+  }
+
+  void _persistDepositsSoon() {
+    if (_depositSave == null || _depositPersistTimer != null) return;
+    _depositPersistTimer =
+        Timer(const Duration(milliseconds: kPmDepositPersistMs), () {
+      _depositPersistTimer = null;
+      unawaited(_persistDeposits());
+    });
+  }
+
+  Future<void> _persistDeposits() async {
+    final save = _depositSave;
+    if (save == null) return;
+    final entries = [
+      ...?_depositInflight,
+      ..._depositQueue,
+    ];
+    try {
+      await save(entries.isEmpty
+          ? <String, dynamic>{}
+          : {
+              'pubkey': _pubkey,
+              'entries': [for (final e in entries) e.toJson()],
+            });
+    } catch (_) {
+      return;
+    }
+  }
+
+  Future<int> restoreDeposits() async {
+    final load = _depositLoad;
+    if (!_durable || load == null) return 0;
+    Map<String, dynamic> state;
+    try {
+      state = await load();
+    } catch (_) {
+      return 0;
+    }
+    if (state['pubkey'] != _pubkey) return 0;
+    final raw = state['entries'];
+    if (raw is! List) return 0;
+    final now = _nowMs();
+    final have = {for (final e in _depositQueue) e.id};
+    var added = 0;
+    for (final r in raw) {
+      if (r is! Map) continue;
+      final ev = r['ev'];
+      if (ev is! Map) continue;
+      final wrap = ev.cast<String, dynamic>();
+      final id = wrap['id'];
+      if (id is! String || id.isEmpty || have.contains(id)) continue;
+      final at = (r['at'] as num?)?.toInt() ?? now;
+      if (now - at > kPmDepositMaxAgeMs) continue;
+      final tier = (r['tier'] as num?)?.toInt() ?? WrapTier.normal;
+      final seq = (r['seq'] as num?)?.toInt() ?? 0;
+      have.add(id);
+      _depositedIds.add(id);
+      if (seq > _depositSeq) _depositSeq = seq;
+      _depositQueue.add(_Deposit(wrap, tier == 0 || tier == 1 || tier == 2 ? tier : WrapTier.normal, seq, at, (r['tries'] as num?)?.toInt() ?? 0));
+      added++;
+    }
+    if (added == 0) return 0;
+    _enforceDepositCap();
+    _depositTimer ??= Timer(_depositDelay(true), () => _flushDeposits());
+    return added;
   }
 
   Duration _depositDelay(bool backlog) => Duration(
@@ -1692,55 +1814,90 @@ class StorageSync {
             _depositRandom.nextInt(kPmDepositRetryBaseMs ~/ 2 + 1));
   }
 
-  void _requeueDeposits(List<Map<String, dynamic>> batch, Object err) {
+  void _requeueDeposits(List<_Deposit> batch, Object err) {
     final retryable = _depositRetryable(err);
-    final keep = <Map<String, dynamic>>[];
-    for (final ev in batch) {
-      final n = (_depositAttempts[ev] ?? 1) + 1;
-      if (retryable && n <= kPmDepositMaxAttempts) {
-        _depositAttempts[ev] = n;
-        keep.add(ev);
-      }
+    final status = err is ApiException ? err.statusCode : 0;
+    final counts = status != 0 && status != 429;
+    final keep = <_Deposit>[];
+    for (final e in batch) {
+      if (!retryable) continue;
+      if (counts) e.tries++;
+      if (counts && e.tries >= kPmDepositMaxAttempts) continue;
+      keep.add(e);
     }
     depositFailed += batch.length - keep.length;
-    if (keep.isEmpty) return;
-    _depositFailStreak++;
-    _depositRetryAt = _now().add(_depositRetryDelay(err, _depositFailStreak));
-    _depositQueue.insertAll(0, keep);
-    while (_depositQueue.length > kPmDepositQueueMax) {
-      _depositQueue.removeAt(_depositRandom.nextInt(_depositQueue.length));
-      depositDropped++;
+    if (status == 429) _depositBucket = WrapBucket(0, _nowMs());
+    if (keep.isNotEmpty) {
+      _depositFailStreak++;
+      _depositRetryAt = _now().add(_depositRetryDelay(err, _depositFailStreak));
+      _depositQueue.addAll(keep);
+      _enforceDepositCap();
     }
+    _persistDepositsSoon();
+  }
+
+  Duration _depositPaceWait() {
+    final avail = wrapBucketAvailable(_depositBucket, _nowMs(), kDepositWrapBucket);
+    if (avail >= 1) return Duration.zero;
+    final r = wrapBucketTake(_depositBucket, _nowMs(), 1, kDepositWrapBucket);
+    return Duration(milliseconds: r.waitMs);
   }
 
   void _armDepositRetry() {
     if (_depositQueue.isEmpty) return;
     final backlog = _depositDelay(true);
-    final wait = _depositRetryWait();
+    var wait = _depositRetryWait();
+    final pace = _depositPaceWait();
+    if (pace > wait) wait = pace;
     _depositTimer ??=
         Timer(wait > backlog ? wait : backlog, () => _flushDeposits());
   }
 
   Future<void> _flushDeposits({bool rearm = true}) async {
     _depositTimer = null;
+    final now = _nowMs();
+    final before = _depositQueue.length;
+    _depositQueue.removeWhere((e) => now - e.at > kPmDepositMaxAgeMs);
+    if (_depositQueue.length != before) {
+      depositFailed += before - _depositQueue.length;
+      _persistDepositsSoon();
+    }
     if (_depositQueue.isEmpty) return;
     if (_depositRetryWait() > Duration.zero) {
       if (rearm) _armDepositRetry();
       return;
     }
-    _depositQueue.shuffle(_depositRandom);
-    final size = _depositBatchSize();
-    final n = size < _depositQueue.length ? size : _depositQueue.length;
-    final batch = _depositQueue.sublist(0, n);
-    _depositQueue.removeRange(0, n);
+    final avail =
+        wrapBucketAvailable(_depositBucket, now, kDepositWrapBucket);
+    if (avail < 1) {
+      if (rearm) _armDepositRetry();
+      return;
+    }
+    var n = _depositBatchSize();
+    if (n > _depositQueue.length) n = _depositQueue.length;
+    if (n > avail) n = avail;
+    _depositBucket =
+        wrapBucketTake(_depositBucket, now, n, kDepositWrapBucket).state;
+    final byId = {for (final e in _depositQueue) e.id: e};
+    final order = wrapTierOrder(
+      [for (final e in _depositQueue) WrapQueueEntry(e.id, e.tier, e.seq)],
+      [for (var i = 0; i < _depositQueue.length; i++) _depositRandom.nextInt(0x40000000)],
+    );
+    final batch = [for (final id in order.take(n)) byId[id]!];
+    final sending = batch.toSet();
+    _depositQueue.removeWhere(sending.contains);
+    _depositInflight = batch;
     try {
       await _signedWrite({
         'action': 'pm-deposit',
         'pubkey': _pubkey,
-        'events': batch,
+        'events': [for (final e in batch) e.wrap],
       });
+      _depositInflight = null;
       _depositFailStreak = 0;
+      _persistDepositsSoon();
     } catch (e) {
+      _depositInflight = null;
       _requeueDeposits(batch, e);
     }
     if (rearm) _armDepositRetry();
@@ -1749,7 +1906,9 @@ class StorageSync {
   Future<void> flushDeposits() async {
     _depositTimer?.cancel();
     _depositTimer = null;
-    while (_depositQueue.isNotEmpty && _depositRetryWait() == Duration.zero) {
+    while (_depositQueue.isNotEmpty &&
+        _depositRetryWait() == Duration.zero &&
+        _depositPaceWait() == Duration.zero) {
       await _flushDeposits(rearm: false);
     }
     _armDepositRetry();

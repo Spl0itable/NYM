@@ -1300,7 +1300,7 @@ Object.assign(NYM.prototype, {
         };
 
         const wrapped = await this.bitchatWrapEventAsync(rumor, this.privkey, recipientPubkey, null);
-        this.sendDMToRelays(['EVENT', wrapped]);
+        this.sendDMToRelays(['EVENT', wrapped], { tier: 2 });
     },
 
     // NIP-17 rumor of custom kind 69420 (not 14, so other clients show no blank DMs) with x and receipt tags.
@@ -1335,7 +1335,7 @@ Object.assign(NYM.prototype, {
 
         if (this.privkey) {
             const wrapped = await this._pmSignalWrapAsync(rumor, recipientPubkey);
-            this.sendDMToRelays(['EVENT', wrapped]);
+            this.sendDMToRelays(['EVENT', wrapped], { tier: 2 });
         } else {
             await this._sendGiftWrapsAsync([recipientPubkey], rumor, null);
         }

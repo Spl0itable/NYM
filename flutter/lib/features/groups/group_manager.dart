@@ -20,6 +20,18 @@ class GroupManager {
   /// Whether a member accepts the layered format; unset keeps the combined format.
   bool Function(String memberPubkey)? layeredFor;
 
+  void Function(NostrEvent wrap)? onWrap;
+
+  void Function(NostrEvent wrap)? _depositFor(UnsignedEvent rumor) {
+    if (rumor.kind != 14 && rumor.kind != 7) return null;
+    for (final t in rumor.tags) {
+      if (t.length > 1 && t[0] == 'type' && t[1] == 'group-metadata') {
+        return null;
+      }
+    }
+    return onWrap;
+  }
+
   /// Per-message post-quantum coverage; a message counts as protected only if every member got a PQ wrap.
   final Map<String, ({int pq, int total})> _pqCoverage = {};
 
@@ -98,6 +110,14 @@ class GroupManager {
   int _selfPkCount(GroupEphemeralKeys ek) =>
       (ek.selfCurrent != null ? 1 : 0) + ek.selfPrev.length;
 
+  bool isOwnEphemeralPk(String groupId, String? pk) {
+    if (pk == null || pk.isEmpty) return false;
+    final ek = _keys[groupId];
+    if (ek == null) return false;
+    if (ek.selfCurrent?.pk == pk) return true;
+    return ek.selfPrev.any((k) => k.pk == pk);
+  }
+
   /// Records a member's advertised ephemeral pubkey, guarding against out-of-order updates.
   void recordMemberKey(
       String groupId, String memberPubkey, String ephemeralPk, int messageTs) {
@@ -151,6 +171,7 @@ class GroupManager {
     // The first invite uses real pubkeys; no member keys exist yet.
     await _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: members,
       encryptTo: (pk) => pk,
       settings: settings,
@@ -185,6 +206,7 @@ class GroupManager {
     );
     final ok = await _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: group.members,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
@@ -215,6 +237,7 @@ class GroupManager {
     );
     return _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: others,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
@@ -246,6 +269,7 @@ class GroupManager {
     );
     return _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: others,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
@@ -262,6 +286,7 @@ class GroupManager {
     required String content,
     MessagingSettings settings = const MessagingSettings(),
     int? nowSec,
+    List<String> newMembers = const [],
   }) async {
     if (!_service.canSign) return false;
     final ek = keysFor(group.id);
@@ -277,8 +302,10 @@ class GroupManager {
     );
     return _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: group.members,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
+      newMembers: newMembers,
       settings: settings,
       kemKeyFor: kemKeyFor,
       rootSeededFor: rootSeededFor,
@@ -310,6 +337,7 @@ class GroupManager {
     );
     return _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: others,
       encryptTo: (pk) => pk,
       settings: settings,
@@ -342,6 +370,7 @@ class GroupManager {
     );
     return _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: [requesterPubkey],
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       settings: settings,
@@ -374,6 +403,7 @@ class GroupManager {
     final to = recipients ?? group.members;
     return _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: to,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       kemKeyFor: kemKeyFor,
@@ -392,6 +422,7 @@ class GroupManager {
     final ek = keysFor(group.id);
     return _service.publishGroupMessage(
       rumor: rumor,
+      onWrap: _depositFor(rumor),
       recipients: recipients,
       encryptTo: (pk) => ek.encryptionPubkeyFor(pk, selfPubkey),
       kemKeyFor: kemKeyFor,

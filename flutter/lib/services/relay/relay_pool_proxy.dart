@@ -301,6 +301,10 @@ class PoolEvent extends PoolMessage {
   final String? sourceRelay;
 }
 
+bool isRateLimitRejection(String reason) =>
+    RegExp(r'rate-?limit|too many|slow down', caseSensitive: false)
+        .hasMatch(reason);
+
 class PoolOk extends PoolMessage {
   const PoolOk(this.id, this.accepted, this.message, [this.relayUrl]);
   final String id;
@@ -646,6 +650,10 @@ class RelayPoolProxy implements PoolTransport {
 
   void Function(String eventId)? onEventRetracted;
 
+  void Function(int units)? onPublishCharge;
+
+  void Function(String eventId)? onPublishRateLimited;
+
   void Function(DateTime? lastLiveAt)? onShardLost;
 
   void Function()? onShardReconnected;
@@ -956,6 +964,7 @@ class RelayPoolProxy implements PoolTransport {
     if (_mustHold) return _held.hold((via) => via.publish(event));
     // Remember the kind so an attributed OK rejection can blacklist it.
     _trackSentEventKind(event);
+    onPublishCharge?.call(1);
     return _broadcast(PoolFrame.event(event));
   }
 
@@ -973,6 +982,7 @@ class RelayPoolProxy implements PoolTransport {
     if (_mustHold) {
       return _held.hold((via) => via.publishGeo(event, closestRelayUrls));
     }
+    onPublishCharge?.call(1);
     if (closestRelayUrls.isEmpty) {
       return _broadcast(PoolFrame.event(event));
     }
@@ -1328,7 +1338,10 @@ class RelayPoolProxy implements PoolTransport {
           _stampShardLatency(id, sock.shard.id);
           _subscriptions[id]?.onEose(sock.shard.id, closed: true);
         }
-      case PoolOk(:final id, :final message, :final relayUrl):
+      case PoolOk(:final id, :final accepted, :final message, :final relayUrl):
+        if (!accepted && isRateLimitRejection(message)) {
+          onPublishRateLimited?.call(id);
+        }
         // Proxy publish() doesn't await OKs; a kind-flavored reason feeds the blacklist regardless of accepted.
         if (_isUnsupportedKind(message)) {
           _recordEventKindRejection(relayUrl, id);

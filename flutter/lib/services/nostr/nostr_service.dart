@@ -17,12 +17,14 @@ import '../../core/crypto/keys.dart' as keys;
 import '../../core/crypto/nym_sync_builder.dart';
 import '../../core/crypto/pow.dart';
 import '../../core/crypto/pq.dart' as pq;
+import '../../features/groups/wrap_outbox.dart';
 import '../../features/identity/pq_registry.dart';
 import '../../features/messages/trust_graph.dart';
 import '../../models/channel.dart' as ch;
 import '../../models/nostr_event.dart';
 import '../api/api_client.dart';
 import '../api/api_config.dart';
+import '../relay/dm_outbox.dart';
 import '../relay/relay_message.dart';
 import 'event_provenance.dart';
 import '../relay/relay_pool.dart';
@@ -409,6 +411,46 @@ class NostrService {
   /// The current pool after any swap.
   PoolTransport get pool => _quietHeld ? _QuietPool(_pool) : _pool;
 
+  late final DmOutbox _dmOutbox = DmOutbox(send: (e) => pool.publishDm(e));
+
+  final LinkedHashMap<String, int> _sentTiers = LinkedHashMap();
+
+  int get pendingDmCount => _dmOutbox.length;
+
+  int sentWrapTier(String wrapId) => _sentTiers[wrapId] ?? WrapTier.critical;
+
+  void publishDmQueued(NostrEvent event, {int tier = WrapTier.critical}) {
+    _sentTiers.remove(event.id);
+    _sentTiers[event.id] = tier;
+    while (_sentTiers.length > 4000) {
+      _sentTiers.remove(_sentTiers.keys.first);
+    }
+    _dmOutbox.push(event, tier: tier);
+  }
+
+  static int rumorTier(UnsignedEvent rumor, int fanout, {bool toNew = false}) {
+    String? type;
+    var resyncReq = false;
+    for (final t in rumor.tags) {
+      if (t.length < 2) continue;
+      if (t[0] == 'type' && type == null) type = t[1];
+      if (t[0] == 'resync_req' && t[1] == '1') resyncReq = true;
+    }
+    return wrapTier(
+        kind: rumor.kind,
+        type: type,
+        resyncReq: resyncReq,
+        fanout: fanout,
+        toNew: toNew);
+  }
+
+  void _wireOutbox(PoolTransport p) {
+    if (p is RelayPoolProxy) {
+      p.onPublishCharge = _dmOutbox.charge;
+      p.onPublishRateLimited = (id) => _dmOutbox.refused(id);
+    }
+  }
+
   Set<String> _quiet = const <String>{};
   bool _quietHeld = false;
   Timer? _quietTimer;
@@ -483,6 +525,7 @@ class NostrService {
     _wireProxyFallback();
     _wireRetract(_pool);
     _wireLiveness(_pool);
+    _wireOutbox(_pool);
     _loadQuietList();
     pool.connectAll();
 
@@ -1027,6 +1070,7 @@ class NostrService {
       restored.onProxyUnreachable = _onProxyUnreachable; // Future blips.
       _wireRetract(restored);
       _wireLiveness(restored);
+      _wireOutbox(restored);
       _handOverHeld(old, restored);
       for (final entry in live.values) {
         if (identical(entry.sub, _mainSub)) continue;
@@ -1827,6 +1871,7 @@ class NostrService {
         expiration: expiration,
         recipientKemPublicKey: pq.kem,
         layered: pq.layered,
+        tier: rumorTier(rumor, recipients.length),
       );
       if (wrap != null) onWrap?.call(wrap);
       any = any || wrap != null;
@@ -1894,6 +1939,7 @@ class NostrService {
     Uint8List? recipientKemPublicKey,
     bool layered = false,
     List<List<String>> extraTags = const [],
+    int? tier,
   }) async {
     final wrap = await _buildWrap(rumor, recipientPubkey,
         expiration: expiration,
@@ -1902,7 +1948,7 @@ class NostrService {
         extraTags: extraTags);
     if (wrap == null) return null;
     // Gift wraps publish via DM_EVENT so the proxy prioritizes default relays.
-    await pool.publishDm(wrap);
+    publishDmQueued(wrap, tier: tier ?? rumorTier(rumor, 1));
     return wrap;
   }
 
@@ -1928,7 +1974,7 @@ class NostrService {
     if (bitchatRumors.isNotEmpty && recipientPubkey != identity.pubkey) {
       for (final r in bitchatRumors) {
         final bwrap = await _buildBitchatWrap(r, recipientPubkey);
-        if (bwrap != null) await pool.publishDm(bwrap);
+        if (bwrap != null) publishDmQueued(bwrap, tier: rumorTier(r, 1));
       }
     }
 
@@ -1964,9 +2010,23 @@ class NostrService {
     bool Function(String memberPubkey)? rootSeededFor,
     bool Function(String memberPubkey)? layeredFor,
     void Function(int pqCount, int total, int rootCount)? onCoverage,
+    Iterable<String> newMembers = const [],
   }) async {
     final sig = signer;
     if (sig == null) return false;
+    final fresh = {
+      for (final pk in newMembers)
+        if (recipients.contains(pk)) pk
+    };
+    if (fresh.isNotEmpty) {
+      recipients = [
+        ...recipients.where(fresh.contains),
+        ...recipients.where((pk) => !fresh.contains(pk)),
+      ];
+    }
+    final fanout = recipients.length;
+    int tierFor(String pk) =>
+        rumorTier(rumor, fanout, toNew: fresh.contains(pk));
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final expiration = settings.expirationFor(nowSec);
     final memberKem = kemKeyFor;
@@ -2007,9 +2067,11 @@ class NostrService {
         recipientKemPks: kemByTarget.isEmpty ? null : kemByTarget,
         layeredPubkeys: layeredTargets.isEmpty ? null : layeredTargets,
       );
-      for (final wrap in wraps) {
+      for (var i = 0; i < wraps.length; i++) {
+        final wrap = wraps[i];
         if (wrap != null) {
-          await pool.publishDm(wrap);
+          publishDmQueued(wrap,
+              tier: tierFor(i < recipients.length ? recipients[i] : ''));
           onWrap?.call(wrap);
         }
       }
@@ -2029,7 +2091,8 @@ class NostrService {
       final wrap = await _wrapAndPublish(rumor, encryptTo(pk),
           expiration: expiration,
           recipientKemPublicKey: kem,
-          layered: kem != null && layeredOf(pk));
+          layered: kem != null && layeredOf(pk),
+          tier: tierFor(pk));
       if (wrap != null) onWrap?.call(wrap);
     }
     onCoverage?.call(remotePq, recipients.length, remoteRoot);
@@ -2324,7 +2387,7 @@ class NostrService {
             : await compute(buildNymSyncWrapIsolate, job);
         if (json == null) return null;
         final wrapped = NostrEvent.fromJson(json);
-        await pool.publishDm(wrapped);
+        publishDmQueued(wrapped, tier: WrapTier.normal);
         return wrapped;
       } catch (_) {
         // Isolate failure: build inline below instead.
@@ -2340,7 +2403,7 @@ class NostrService {
         selfKem.kemPk,
       );
       if (wrapped != null) {
-        await pool.publishDm(wrapped);
+        publishDmQueued(wrapped, tier: WrapTier.normal);
         return wrapped;
       }
       // An oversized hybrid falls back to classical rather than going unpublished.
@@ -2351,7 +2414,7 @@ class NostrService {
       null, // Classical wrap layer.
     );
     if (wrapped == null) return null;
-    await pool.publishDm(wrapped);
+    publishDmQueued(wrapped, tier: WrapTier.normal);
     return wrapped;
   }
 
@@ -2676,6 +2739,7 @@ class NostrService {
 
   Future<void> stop() async {
     _stopped = true;
+    _dmOutbox.dispose();
     _retireAllMain();
     _statusTimer?.cancel();
     _quietTimer?.cancel();

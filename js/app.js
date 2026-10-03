@@ -5985,6 +5985,9 @@ function applyNostrLogin(pubkey, secretKey, method) {
     if (typeof nym.pmRestoreFromD1 === 'function') {
         nym.pmRestoreFromD1().catch(() => { });
     }
+    if (typeof nym._restorePMDepositQueue === 'function') {
+        nym._restorePMDepositQueue().catch(() => { });
+    }
     // Group messages are wrapped to our per-group ephemeral keys, so pull those D1 inboxes too.
     if (typeof nym._recoverEphemeralHistory === 'function' &&
         typeof nym._getAllSelfEphemeralPubkeys === 'function') {

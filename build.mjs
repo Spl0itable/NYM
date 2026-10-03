@@ -234,6 +234,7 @@ async function run() {
     'js/modules/pq.js',
     'js/modules/persistence.js', 'js/modules/key-vault.js', 'js/modules/panic.js',
     'js/modules/attest.js', 'js/modules/filter-packs.js', 'js/modules/event-details.js',
+    'js/modules/wrap-outbox.js',
     'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/users.js',
     'js/modules/channels.js', 'js/modules/syntax-highlight.js', 'js/modules/messages.js',
     'js/modules/pms.js', 'js/modules/groups.js', 'js/modules/ui-context.js',

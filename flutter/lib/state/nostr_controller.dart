@@ -41,6 +41,7 @@ import '../features/group_tools/group_tools.dart';
 import '../features/group_tools/group_tools_providers.dart';
 import '../features/groups/group_manager.dart';
 import '../features/groups/own_ephemeral_subscription.dart';
+import '../features/groups/wrap_outbox.dart';
 import '../features/i18n/i18n.dart';
 import '../features/i18n/localization_service.dart';
 import '../features/messages/format/nym_format.dart' show NymFormat;
@@ -599,7 +600,8 @@ class NostrController {
       }
       unawaited(_ensureAttestBadge());
       _groups = GroupManager(service)
-        ..onSelfKeysChanged = _ensureOwnEphemeralSub;
+        ..onSelfKeysChanged = _ensureOwnEphemeralSub
+        ..onWrap = _archiveSentWrap;
       // Restore groups and ephemeral keys before network I/O so an offline launch can still decrypt group wraps.
       await _hydrateGroupStore();
       final restoredView = bootView.apply();
@@ -3070,7 +3072,12 @@ class NostrController {
               members: members, membersAt: _joinAt(inviteTs));
         }
         _processPendingGroupHistory(groupId);
-        unawaited(announceGroupEphemeralKey(groupId));
+        if (!(senderPubkey == self &&
+            (_groups?.isOwnEphemeralPk(
+                    groupId, _tagValue(tags, 'ephemeral_pk')) ??
+                false))) {
+          unawaited(announceGroupEphemeralKey(groupId));
+        }
         return;
       }
       final invited = Group(
@@ -3342,7 +3349,13 @@ class NostrController {
     // A shared-history blob can arrive before the group exists; apply any stashed one now.
     if (type == GroupControlType.addMember) {
       _processPendingGroupHistory(groupId);
-      unawaited(announceGroupEphemeralKey(groupId));
+      final self = _service?.selfPubkey ?? _identity?.pubkey ?? '';
+      if (!(senderPubkey == self &&
+          (_groups?.isOwnEphemeralPk(
+                  groupId, _tagValue(tags, 'ephemeral_pk')) ??
+              false))) {
+        unawaited(announceGroupEphemeralKey(groupId));
+      }
     }
   }
 
@@ -6950,6 +6963,7 @@ class NostrController {
         content: content,
         settings: _msgSettings,
         nowSec: nowSec,
+        newMembers: added,
       );
     }
     if (group.shareHistory && groups != null) {
@@ -9131,6 +9145,18 @@ class NostrController {
     api.activateApiSocket();
     // The bot ledger shares the same authed `/api` socket.
     _ref.read(nymbotServiceProvider).setApiSocketRequest(api.botSocketRequest);
+    sync.setDepositStore(
+      save: (state) async {
+        final cache = _cache;
+        if (cache == null || !cache.isOpen) return;
+        await cache.saveMetaMap(kPmDepositStoreKey, state);
+      },
+      load: () async {
+        final cache = _cache;
+        if (cache == null || !cache.isOpen) return <String, dynamic>{};
+        return cache.loadMetaMap(kPmDepositStoreKey);
+      },
+    );
     _storageSync = sync;
     // Every synced category is written to D1 and also pushed live to our other devices as a gift wrap.
     sync.setSyncWrapPublisher((payload, dTag) async {
@@ -9156,7 +9182,7 @@ class NostrController {
     shop.giftEventPublisher = (giftEvent) {
       try {
         final ev = NostrEvent.fromJson(giftEvent);
-        unawaited(_service?.pool.publishDm(ev) ?? Future<int>.value(0));
+        _service?.publishDmQueued(ev);
       } catch (_) {
         // Malformed gift event — dropped.
       }
@@ -9637,6 +9663,7 @@ class NostrController {
     // Needs a settled settings read to tell "no record" from "could not look".
     await _ensurePqRoot();
     await _restorePmArchive(sync);
+    unawaited(sync.restoreDeposits());
     // Profile zap receipts are keyed on the recipient pubkey.
     final selfPk = _identity?.pubkey;
     if (selfPk != null && _zapArchive != null) {
@@ -11724,7 +11751,8 @@ class NostrController {
     if (sync == null || !sync.durableIdentity) return;
     final raw = wrap.toJson();
     unawaited(sync.pmPut([raw]));
-    sync.enqueueDeposit(raw);
+    sync.enqueueDeposit(raw,
+        tier: _service?.sentWrapTier(wrap.id) ?? WrapTier.critical);
   }
 
   /// The wrap's single `p` recipient, or null.
@@ -11755,7 +11783,7 @@ class NostrController {
     if (self == null) return;
     // Addressed to us → our inbox; to someone else → deposit into theirs.
     unawaited(sync.pmPut([raw]));
-    sync.enqueueDeposit(raw);
+    sync.enqueueDeposit(raw, tier: WrapTier.normal);
   }
 
   /// Caps a channel list to the runtime limit before saving.

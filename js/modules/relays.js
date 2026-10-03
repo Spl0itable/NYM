@@ -2783,6 +2783,7 @@ Object.assign(NYM.prototype, {
         }
         const msg = typeof data === 'string' ? data : JSON.stringify(data);
         const critical = Array.isArray(data) && (data[0] === 'EVENT' || data[0] === 'DM_EVENT' || data[0] === 'GEO_EVENT' || data[0] === 'CLOSE');
+        if (Array.isArray(data) && (data[0] === 'EVENT' || data[0] === 'GEO_EVENT')) this._dmOutboxCharge(1);
         for (const p of this.poolSockets) {
             this._safeWsSend(p.ws, msg, { critical });
         }
@@ -3890,9 +3891,122 @@ Object.assign(NYM.prototype, {
             if (h.kind === 'dm') this.sendDMToRelays(h.message);
             else this.broadcastEvent(h.message);
         }
+        this._dmOutboxDrain();
     },
 
-    sendDMToRelays(message) {
+    sendDMToRelays(message, opts) {
+        const ev = Array.isArray(message) && message[0] === 'EVENT' ? message[1] : null;
+        if (!ev || typeof ev.id !== 'string' || !ev.id) return this._sendDMNow(message);
+        const tier = opts && Number.isInteger(opts.tier) ? opts.tier : 0;
+        this._dmOutboxPush(message, tier, 0);
+        return this._dmOutboxDrain();
+    },
+
+    _dmOutboxW() {
+        return (typeof self !== 'undefined' && self.NymWrapOutbox) || (typeof window !== 'undefined' && window.NymWrapOutbox) || null;
+    },
+
+    _dmOutboxPush(message, tier, tries) {
+        if (!this._dmOutbox) this._dmOutbox = [[], [], []];
+        if (!this._dmOutboxIds) this._dmOutboxIds = new Set();
+        const id = message[1].id;
+        if (this._dmOutboxIds.has(id)) return;
+        const t = tier === 0 || tier === 1 || tier === 2 ? tier : 1;
+        this._dmOutboxSeq = (this._dmOutboxSeq || 0) + 1;
+        const entry = { id, tier: t, seq: this._dmOutboxSeq, message, tries: tries || 0 };
+        if (tries) this._dmOutbox[t].unshift(entry);
+        else this._dmOutbox[t].push(entry);
+        this._dmOutboxIds.add(id);
+        const cap = this.DM_OUTBOX_MAX || 2000;
+        const all = this._dmOutbox[0].length + this._dmOutbox[1].length + this._dmOutbox[2].length;
+        const W = this._dmOutboxW();
+        if (all <= cap || !W) return;
+        const flat = [].concat(this._dmOutbox[0], this._dmOutbox[1], this._dmOutbox[2]);
+        const gone = new Set(W.queueEvict(flat, cap).evicted);
+        for (let i = 0; i < 3; i++) this._dmOutbox[i] = this._dmOutbox[i].filter(e => !gone.has(e.id));
+        gone.forEach(x => this._dmOutboxIds.delete(x));
+        this._dmOutboxDropped = (this._dmOutboxDropped || 0) + gone.size;
+        if (!this._dmOutboxDropWarnTs || Date.now() - this._dmOutboxDropWarnTs > 30000) {
+            this._dmOutboxDropWarnTs = Date.now();
+            console.warn('[Relay] DM outbox full; dropped', this._dmOutboxDropped, 'wraps');
+        }
+    },
+
+    _dmOutboxSize() {
+        const q = this._dmOutbox;
+        return q ? q[0].length + q[1].length + q[2].length : 0;
+    },
+
+    _dmOutboxCharge(units) {
+        const W = this._dmOutboxW();
+        if (!W) return;
+        this._dmOutboxBucket = W.bucketTake(this._dmOutboxBucket, Date.now(), units, this.DM_OUTBOX_BUCKET || W.RELAY_BUCKET, true).state;
+    },
+
+    _dmOutboxArm(ms) {
+        if (this._dmOutboxTimer) return;
+        this._dmOutboxTimer = setTimeout(() => {
+            this._dmOutboxTimer = null;
+            this._dmOutboxDrain();
+        }, Math.max(50, ms));
+    },
+
+    _dmOutboxDrain() {
+        if (!this._dmOutboxSize()) return 0;
+        if (!this._anyRelayOpen()) {
+            this._dmOutboxArm(1000);
+            return 0;
+        }
+        const W = this._dmOutboxW();
+        let sent = 0;
+        while (this._dmOutboxSize()) {
+            if (W) {
+                const r = W.bucketTake(this._dmOutboxBucket, Date.now(), 1, this.DM_OUTBOX_BUCKET || W.RELAY_BUCKET);
+                this._dmOutboxBucket = r.state;
+                if (!r.ok) {
+                    this._dmOutboxArm(r.waitMs);
+                    break;
+                }
+            }
+            const q = this._dmOutbox[0].length ? this._dmOutbox[0] : (this._dmOutbox[1].length ? this._dmOutbox[1] : this._dmOutbox[2]);
+            const entry = q.shift();
+            this._dmOutboxIds.delete(entry.id);
+            this._dmOutboxTrackInflight(entry);
+            sent = this._sendDMNow(entry.message);
+        }
+        return sent;
+    },
+
+    _dmOutboxTrackInflight(entry) {
+        if (!this._dmInflight) this._dmInflight = new Map();
+        const now = Date.now();
+        this._dmInflight.delete(entry.id);
+        this._dmInflight.set(entry.id, { message: entry.message, tier: entry.tier, tries: entry.tries, at: now });
+        for (const [id, v] of this._dmInflight) {
+            if (now - v.at <= 120000 && this._dmInflight.size <= 4000) break;
+            this._dmInflight.delete(id);
+        }
+    },
+
+    _dmOutboxRefused(eventId) {
+        const v = this._dmInflight && this._dmInflight.get(eventId);
+        if (!v) return false;
+        this._dmInflight.delete(eventId);
+        const W = this._dmOutboxW();
+        if (W) {
+            const st = W.bucketTake(this._dmOutboxBucket, Date.now(), 0, this.DM_OUTBOX_BUCKET || W.RELAY_BUCKET).state;
+            this._dmOutboxBucket = { tokens: Math.min(st.tokens, 0), at: st.at };
+        }
+        if (v.tries + 1 > (this.DM_OUTBOX_MAX_TRIES || 8)) {
+            this._dmOutboxFailed = (this._dmOutboxFailed || 0) + 1;
+            return false;
+        }
+        this._dmOutboxPush(v.message, v.tier, v.tries + 1);
+        this._dmOutboxDrain();
+        return true;
+    },
+
+    _sendDMNow(message) {
         if (!this._anyRelayOpen()) {
             this._holdEvent('dm', message);
             return 0;
@@ -4464,7 +4578,8 @@ Object.assign(NYM.prototype, {
                         // NIP-01 mute: relay accepted but no subscribers
                     } else if (/event[\s_-]?too[\s_-]?large|\btoo[\s_-]large\b|\bsize[\s_]*\d+.*max[\s_]*\d+|created_at\b.*\b(too|in)\b.*(early|late|future|past)|timestamp.*too/i.test(r)) {
                         // Per-event problem, not the relay's fault
-                    } else if (/rate-?limit|too many|concurrent/i.test(r)) {
+                    } else if (/rate-?limit|too many|concurrent|slow down/i.test(r)) {
+                        if (hasEventId) this._dmOutboxRefused(okEventId);
                         this._noteRateLimit(attributedRelay);
                         this._recordRelayError(attributedRelay, reason);
                     } else if (/error|invalid/i.test(r)) {

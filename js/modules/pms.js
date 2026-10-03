@@ -1635,7 +1635,7 @@ Object.assign(NYM.prototype, {
     },
 
     // Deposited into the recipient's D1 inbox so they can restore it even if offline when sent.
-    _depositPMEvent(event) {
+    _depositPMEvent(event, tier) {
         if (!event || typeof event.id !== 'string') return;
         if (!this._pmArchiveAllowed()) return;
         const pTag = (event.tags || []).find(t =>
@@ -1648,21 +1648,92 @@ Object.assign(NYM.prototype, {
             this._pmDepositedIds = new Set(Array.from(this._pmDepositedIds).slice(-4000));
         }
         if (!this._pmDepositQueue) this._pmDepositQueue = [];
-        this._pmDepositQueue.push(event);
-        const depositCap = this.MAX_PM_DEPOSIT_QUEUE || 600;
-        while (this._pmDepositQueue.length > depositCap) {
-            this._pmDepositQueue.splice(this._pmSecureRandomInt(this._pmDepositQueue.length), 1);
-            this._pmDepositDropped = (this._pmDepositDropped || 0) + 1;
-            if (!this._pmDepositDropWarnTs || Date.now() - this._pmDepositDropWarnTs > 30000) {
-                this._pmDepositDropWarnTs = Date.now();
-                console.warn('[PM] deposit queue full; dropped', this._pmDepositDropped, 'wraps');
-            }
-        }
+        const t = tier === 0 || tier === 1 || tier === 2 ? tier : 0;
+        this._pmDepositSeq = (this._pmDepositSeq || 0) + 1;
+        this._pmDepositQueue.push({ ev: event, tier: t, seq: this._pmDepositSeq, at: Date.now(), tries: 0, pk: this.pubkey });
+        this._pmDepositEnforceCap();
+        this._pmDepositPersistSoon();
         if (this._pmDepositFlushTimer) return;
         this._pmDepositFlushTimer = setTimeout(() => {
             this._pmDepositFlushTimer = null;
             this._flushPMDeposit();
         }, this._pmDepositDelay(false));
+    },
+
+    _pmDepositW() {
+        return (typeof self !== 'undefined' && self.NymWrapOutbox) || (typeof window !== 'undefined' && window.NymWrapOutbox) || null;
+    },
+
+    _pmDepositEnforceCap() {
+        const q = this._pmDepositQueue;
+        const cap = this.MAX_PM_DEPOSIT_QUEUE || 600;
+        if (!q || q.length <= cap) return;
+        const W = this._pmDepositW();
+        let gone;
+        if (W) {
+            gone = new Set(W.queueEvict(q.map(e => ({ id: e.ev.id, tier: e.tier, seq: e.seq })), cap).evicted);
+        } else {
+            gone = new Set(q.slice(0, q.length - cap).map(e => e.ev.id));
+        }
+        this._pmDepositQueue = q.filter(e => !gone.has(e.ev.id));
+        this._pmDepositDropped = (this._pmDepositDropped || 0) + gone.size;
+        if (!this._pmDepositDropWarnTs || Date.now() - this._pmDepositDropWarnTs > 30000) {
+            this._pmDepositDropWarnTs = Date.now();
+            console.warn('[PM] deposit queue full; dropped', this._pmDepositDropped, 'wraps');
+        }
+    },
+
+    _pmDepositPersistSoon() {
+        if (this._pmDepositPersistTimer) return;
+        this._pmDepositPersistTimer = setTimeout(() => {
+            this._pmDepositPersistTimer = null;
+            this._pmDepositPersist();
+        }, this.PM_DEPOSIT_PERSIST_MS || 300);
+    },
+
+    async _pmDepositPersist() {
+        if (typeof this._cachePut !== 'function' || !this.pubkey) return;
+        const entries = (this._pmDepositInflight || []).concat(this._pmDepositQueue || [])
+            .filter(e => e.pk === this.pubkey)
+            .map(e => ({ ev: e.ev, tier: e.tier, seq: e.seq, at: e.at, tries: e.tries }));
+        try {
+            if (entries.length) await this._cachePut('meta', { key: 'pmDepositQueue', pubkey: this.pubkey, entries });
+            else if (typeof this._cacheDelete === 'function') await this._cacheDelete('meta', 'pmDepositQueue');
+        } catch (_) { }
+    },
+
+    async _restorePMDepositQueue() {
+        if (!this._pmArchiveAllowed() || typeof this._cacheGetAll !== 'function') return 0;
+        let row = null;
+        try {
+            const meta = await this._cacheGetAll('meta');
+            row = (meta || []).find(m => m && m.key === 'pmDepositQueue') || null;
+        } catch (_) { row = null; }
+        if (!row || row.pubkey !== this.pubkey || !Array.isArray(row.entries)) return 0;
+        const maxAge = this.PM_DEPOSIT_MAX_AGE_MS || 7 * 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        if (!this._pmDepositQueue) this._pmDepositQueue = [];
+        if (!this._pmDepositedIds) this._pmDepositedIds = new Set();
+        const have = new Set(this._pmDepositQueue.map(e => e.ev.id));
+        let added = 0;
+        for (const e of row.entries) {
+            if (!e || !e.ev || typeof e.ev.id !== 'string' || have.has(e.ev.id)) continue;
+            if (!(now - (Number(e.at) || 0) <= maxAge)) continue;
+            have.add(e.ev.id);
+            this._pmDepositedIds.add(e.ev.id);
+            this._pmDepositSeq = Math.max(this._pmDepositSeq || 0, Number(e.seq) || 0);
+            this._pmDepositQueue.push({ ev: e.ev, tier: e.tier === 0 || e.tier === 1 || e.tier === 2 ? e.tier : 1, seq: Number(e.seq) || 0, at: Number(e.at) || now, tries: Number(e.tries) || 0, pk: this.pubkey });
+            added++;
+        }
+        if (!added) return 0;
+        this._pmDepositEnforceCap();
+        if (!this._pmDepositFlushTimer) {
+            this._pmDepositFlushTimer = setTimeout(() => {
+                this._pmDepositFlushTimer = null;
+                this._flushPMDeposit();
+            }, this._pmDepositDelay(true));
+        }
+        return added;
     },
 
     _pmSecureRandomInt(n) {
@@ -1689,14 +1760,13 @@ Object.assign(NYM.prototype, {
         return min + this._pmSecureRandomInt(max - min + 1);
     },
 
-    _shufflePmDepositQueue() {
+    _pmDepositOrder() {
         const q = this._pmDepositQueue;
-        for (let i = q.length - 1; i > 0; i--) {
-            const j = this._pmSecureRandomInt(i + 1);
-            const tmp = q[i];
-            q[i] = q[j];
-            q[j] = tmp;
-        }
+        const W = this._pmDepositW();
+        if (!W) return q.slice();
+        const rand = q.map(() => this._pmSecureRandomInt(0x40000000));
+        const byId = new Map(q.map(e => [e.ev.id, e]));
+        return W.tierOrder(q.map(e => ({ id: e.ev.id, tier: e.tier, seq: e.seq })), rand).map(id => byId.get(id));
     },
 
     _pmDepositRetryable(err) {
@@ -1714,60 +1784,88 @@ Object.assign(NYM.prototype, {
     },
 
     _requeuePMDeposit(batch, err) {
-        if (!this._pmDepositAttempts) this._pmDepositAttempts = new WeakMap();
         const maxAttempts = this.PM_DEPOSIT_MAX_ATTEMPTS || 5;
         const retryable = this._pmDepositRetryable(err);
+        const status = err && Number(err.status);
+        const counts = !!status && status !== 429;
         const keep = [];
-        for (const ev of batch) {
-            const n = (this._pmDepositAttempts.get(ev) || 1) + 1;
-            if (retryable && n <= maxAttempts) {
-                this._pmDepositAttempts.set(ev, n);
-                keep.push(ev);
-            }
+        for (const e of batch) {
+            if (!retryable) continue;
+            if (counts) e.tries = (e.tries || 0) + 1;
+            if (counts && e.tries >= maxAttempts) continue;
+            keep.push(e);
         }
         const lost = batch.length - keep.length;
         if (lost) {
             this._pmDepositFailed = (this._pmDepositFailed || 0) + lost;
             console.warn('[PM] deposit failed; gave up on', lost, 'wraps', err && err.message);
         }
-        if (!keep.length) return;
-        this._pmDepositFailStreak = (this._pmDepositFailStreak || 0) + 1;
-        this._pmDepositRetryAt = Date.now() + this._pmDepositRetryDelay(err, this._pmDepositFailStreak);
-        this._pmDepositQueue.unshift(...keep);
-        const depositCap = this.MAX_PM_DEPOSIT_QUEUE || 600;
-        while (this._pmDepositQueue.length > depositCap) {
-            this._pmDepositQueue.splice(this._pmSecureRandomInt(this._pmDepositQueue.length), 1);
-            this._pmDepositDropped = (this._pmDepositDropped || 0) + 1;
+        if (status === 429) {
+            const W = this._pmDepositW();
+            if (W) this._pmDepositBucket = { tokens: 0, at: Date.now() };
         }
+        if (keep.length) {
+            this._pmDepositFailStreak = (this._pmDepositFailStreak || 0) + 1;
+            this._pmDepositRetryAt = Date.now() + this._pmDepositRetryDelay(err, this._pmDepositFailStreak);
+            this._pmDepositQueue.push(...keep);
+            this._pmDepositEnforceCap();
+        }
+        this._pmDepositPersistSoon();
     },
 
     async _flushPMDeposit() {
         if (!this._pmDepositQueue || this._pmDepositQueue.length === 0) return;
-        const wait = (this._pmDepositRetryAt || 0) - Date.now();
-        if (wait > 0) {
-            if (!this._pmDepositFlushTimer) {
-                this._pmDepositFlushTimer = setTimeout(() => {
-                    this._pmDepositFlushTimer = null;
-                    this._flushPMDeposit();
-                }, wait);
-            }
-            return;
+        const maxAge = this.PM_DEPOSIT_MAX_AGE_MS || 7 * 24 * 60 * 60 * 1000;
+        const now = Date.now();
+        const fresh = this._pmDepositQueue.filter(e => e.pk === this.pubkey && now - (e.at || now) <= maxAge);
+        if (fresh.length !== this._pmDepositQueue.length) {
+            this._pmDepositFailed = (this._pmDepositFailed || 0) + this._pmDepositQueue.length - fresh.length;
+            this._pmDepositQueue = fresh;
+            this._pmDepositPersistSoon();
+            if (!fresh.length) return;
         }
-        this._shufflePmDepositQueue();
-        const batch = this._pmDepositQueue.splice(0, this._pmDepositBatchSize());
-        try {
-            await this._storageApiRequest('pm-deposit', { events: batch });
-            this._pmDepositFailStreak = 0;
-        } catch (err) {
-            this._requeuePMDeposit(batch, err);
-        }
-        const retryWait = (this._pmDepositRetryAt || 0) - Date.now();
-        if (this._pmDepositQueue.length > 0 && !this._pmDepositFlushTimer) {
+        const rearm = (ms) => {
+            if (this._pmDepositFlushTimer) return;
             this._pmDepositFlushTimer = setTimeout(() => {
                 this._pmDepositFlushTimer = null;
                 this._flushPMDeposit();
-            }, Math.max(this._pmDepositDelay(true), retryWait));
+            }, ms);
+        };
+        const wait = (this._pmDepositRetryAt || 0) - now;
+        if (wait > 0) {
+            rearm(wait);
+            return;
         }
+        const W = this._pmDepositW();
+        let size = Math.min(this._pmDepositBatchSize(), this._pmDepositQueue.length);
+        if (W) {
+            const cfg = this.PM_DEPOSIT_BUCKET || W.DEPOSIT_BUCKET;
+            const avail = W.bucketAvailable(this._pmDepositBucket, now, cfg);
+            if (avail < 1) {
+                const r = W.bucketTake(this._pmDepositBucket, now, 1, cfg);
+                this._pmDepositBucket = r.state;
+                rearm(Math.max(this._pmDepositDelay(true), r.waitMs));
+                return;
+            }
+            size = Math.min(size, avail);
+            this._pmDepositBucket = W.bucketTake(this._pmDepositBucket, now, size, cfg).state;
+        }
+        const order = this._pmDepositOrder();
+        const batch = order.slice(0, size);
+        const sending = new Set(batch);
+        this._pmDepositQueue = this._pmDepositQueue.filter(e => !sending.has(e));
+        this._pmDepositInflight = batch;
+        try {
+            await this._storageApiRequest('pm-deposit', { events: batch.map(e => e.ev) });
+            this._pmDepositInflight = null;
+            this._pmDepositFailStreak = 0;
+            this._pmDepositPersistSoon();
+        } catch (err) {
+            this._pmDepositInflight = null;
+            this._requeuePMDeposit(batch, err);
+        }
+        const retryWait = (this._pmDepositRetryAt || 0) - Date.now();
+        if (this._pmDepositQueue.length > 0) rearm(Math.max(this._pmDepositDelay(true), retryWait));
     },
 
     _yieldToIdle() {

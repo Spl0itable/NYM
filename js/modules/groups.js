@@ -53,6 +53,15 @@ Object.assign(NYM.prototype, {
         return ek.self.current;
     },
 
+    _isOwnGroupEphemeralPk(groupId, pk) {
+        if (!pk) return false;
+        const ek = this._getGroupEphemeralKeys(groupId);
+        const self = ek && ek.self;
+        if (!self) return false;
+        if (self.current && self.current.pk === pk) return true;
+        return Array.isArray(self.prev) && self.prev.some(k => k && k.pk === pk);
+    },
+
     _rotateSelfEphemeralKey(groupId) {
         const NT = window.NostrTools;
         const ek = this._getGroupEphemeralKeys(groupId);
@@ -1345,7 +1354,7 @@ Object.assign(NYM.prototype, {
             if (grp && inviteAvatar && !grp.avatar) grp.avatar = inviteAvatar;
             if (grp && inviteBanner && !grp.banner) grp.banner = inviteBanner;
             if (grp && inviteDesc && !grp.description) grp.description = inviteDesc;
-            const inviteNotStale = !!grp && !((grp.metaUpdatedAt || 0) > Math.floor(rumor.created_at || 0));
+            const inviteNotStale = !!grp && !(isOwn && existingInviteGroup) && !((grp.metaUpdatedAt || 0) > Math.floor(rumor.created_at || 0));
             if (inviteNotStale && inviteAllowInvites !== undefined) grp.allowMemberInvites = inviteAllowInvites;
             if (inviteNotStale && inviteEnabled !== undefined) grp.inviteEnabled = inviteEnabled;
             if (inviteNotStale && inviteEpoch !== undefined) grp.inviteEpoch = inviteEpoch;
@@ -1357,8 +1366,10 @@ Object.assign(NYM.prototype, {
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
                 this._processPendingGroupHistory(groupId);
-            this._announceGroupEphemeralKey(groupId).catch(() => { });
-                this._announceGroupEphemeralKey(groupId).catch(() => { });
+                const invitePk = ((rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ephemeral_pk') || [])[1] || null;
+                if (!(isOwn && this._isOwnGroupEphemeralPk(groupId, invitePk))) {
+                    this._announceGroupEphemeralKey(groupId).catch(() => { });
+                }
             }
 
             if (!isOwn && !this.blockedUsers.has(senderPubkey)) {
@@ -1927,8 +1938,7 @@ Object.assign(NYM.prototype, {
         const expirationTs = (this.settings?.dmForwardSecrecyEnabled && this.settings?.dmTTLSeconds > 0)
             ? now + this.settings.dmTTLSeconds : null;
 
-        // First invite always uses real pubkeys (no ephemeral keys established yet).
-        await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs);
+        await this._sendGiftWrapsAsync(allMembers, rumor, expirationTs, null, { deposit: true });
         this._saveEphemeralKeys();
 
         this.addGroupConversation(groupId, name, allMembers, Date.now(), { createdBy: this.pubkey, avatar: groupAvatar, banner: groupBanner, description: groupDescription, allowMemberInvites, inviteEnabled, inviteEpoch });
@@ -2023,7 +2033,7 @@ Object.assign(NYM.prototype, {
             ? now + this.settings.dmTTLSeconds : null;
 
         // The new member has no ephemeral key yet, so their wrap uses the real pubkey.
-        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
+        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { newMember: newMemberPubkey });
         this._saveEphemeralKeys();
 
         if (group.shareHistory === true) {
@@ -2411,7 +2421,17 @@ Object.assign(NYM.prototype, {
         // Archive-only self copy so group messages also hydrate from D1.
         if (groupId) this._archiveGroupRumorSelf(rumor, expirationTs);
 
-        const depositToD1 = !!groupId && this._isArchivableGroupRumor(rumor);
+        const depositToD1 = (!!groupId || opts.deposit === true) && this._isArchivableGroupRumor(rumor);
+        const W = (typeof window !== 'undefined' && window.NymWrapOutbox) || null;
+        const rumorType = ((rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type') || [])[1] || null;
+        const resyncReq = (rumor.tags || []).some(t => Array.isArray(t) && t[0] === 'resync_req' && t[1] === '1');
+        const tierFor = (pubkey) => (W ? W.wrapTier({
+            kind: rumor.kind, type: rumorType, resyncReq, fanout: members.length,
+            toNew: !!opts.newMember && pubkey === opts.newMember
+        }) : 0);
+        if (opts.newMember && members.includes(opts.newMember)) {
+            members = [opts.newMember].concat(members.filter(pk => pk !== opts.newMember));
+        }
 
         // Offload each wrap to the crypto worker pool so large groups don't block the UI thread.
         if (this.privkey) {
@@ -2433,9 +2453,10 @@ Object.assign(NYM.prototype, {
                         pqCount++;
                         if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
                     }
-                    this.sendDMToRelays(['EVENT', wrapped]);
+                    const tier = tierFor(pubkey);
+                    this.sendDMToRelays(['EVENT', wrapped], { tier });
                     this._recordGiftWrapId(sharedId, wrapped.id);
-                    if (depositToD1) this._depositPMEvent(wrapped);
+                    if (depositToD1) this._depositPMEvent(wrapped, tier);
                     if (this.activeCosmetics?.has('cosmetic-redacted')) {
                         setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
                     }
@@ -2498,9 +2519,10 @@ Object.assign(NYM.prototype, {
                 if (expirationTs) wrapUnsigned.tags.push(['expiration', String(expirationTs)]);
 
                 const wrapped = NT.finalizeEvent(wrapUnsigned, ephSk);
-                this.sendDMToRelays(['EVENT', wrapped]);
+                const tier = tierFor(pubkey);
+                this.sendDMToRelays(['EVENT', wrapped], { tier });
                 this._recordGiftWrapId(sharedId, wrapped.id);
-                if (depositToD1) this._depositPMEvent(wrapped);
+                if (depositToD1) this._depositPMEvent(wrapped, tier);
 
                 if (this.activeCosmetics?.has('cosmetic-redacted')) {
                     setTimeout(() => { this.publishDeletionEvent(wrapped.id, 1059); }, 600000);
