@@ -1083,10 +1083,27 @@ Object.assign(NYM.prototype, {
             try {
                 const d = await this._storageApiRequest('filter-get', {}, false);
                 this._quiet = new Set([].concat(d.p || [], d.e || []));
+                this._dropQuietFromView();
             } catch (_) { }
         };
         load();
         if (!this._quietTimer) this._quietTimer = setInterval(load, 600000);
+    },
+
+    _quietMessage(m) {
+        const q = this._quiet;
+        if (!q || !q.size || !m || m.isOwn) return false;
+        return q.has(m.pubkey) || q.has(m.id);
+    },
+
+    _dropQuietFromView() {
+        const q = this._quiet;
+        if (!q || !q.size || typeof document === 'undefined') return;
+        document.querySelectorAll('.message[data-message-id]').forEach((el) => {
+            const d = el.dataset || {};
+            if (d.pubkey === this.pubkey) return;
+            if (q.has(d.messageId) || q.has(d.pubkey)) el.remove();
+        });
     },
 
     _quietHit(ev) {

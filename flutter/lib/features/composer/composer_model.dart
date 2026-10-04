@@ -7,6 +7,7 @@ class ComposerStrings {
       "Polls need the internet. They can't be created over the Bluetooth mesh.";
   static const String sendLater = 'Send later';
   static const String sendAnon = 'Send anonymously';
+  static const String sentAnon = 'Sent anonymously';
 
   static Map<String, String> toJson() => {
         'meshOff': meshOff,
@@ -14,6 +15,7 @@ class ComposerStrings {
         'pollMesh': pollMesh,
         'sendLater': sendLater,
         'sendAnon': sendAnon,
+        'sentAnon': sentAnon,
       };
 
   static const List<String> ui = [
@@ -155,6 +157,14 @@ class SendMenuItem {
 
   Map<String, String> toJson() => {'id': id, 'label': label};
 }
+
+bool canSendAnon({
+  bool loggedIn = false,
+  String surface = 'channel',
+  bool editing = false,
+  bool mesh = false,
+}) =>
+    loggedIn && surface == 'channel' && !editing && !mesh;
 
 List<SendMenuItem> sendMenuItems({bool canAnon = false}) => [
       const SendMenuItem('later', ComposerStrings.sendLater),

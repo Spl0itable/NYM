@@ -169,7 +169,7 @@ class _ComposerState extends ConsumerState<Composer> {
   String _translateQuery = '';
   bool _translating = false;
 
-  bool _formatToolbarOpen = false;
+  final _toolbarEmojiKey = GlobalKey();
 
   /// Uploaded bytes by hosted URL, so thumbnails need no re-download.
   final Map<String, Uint8List> _localMediaPreviews = {};
@@ -414,7 +414,7 @@ class _ComposerState extends ConsumerState<Composer> {
       _overlayActive ||
       _pendingEdit != null ||
       _pendingQuote != null ||
-      _formatToolbarOpen ||
+      _pillWanted ||
       _attachments.isNotEmpty ||
       composerMediaMatches(_controller.text, knownMedia: _uploadedMedia)
           .isNotEmpty;
@@ -727,11 +727,6 @@ class _ComposerState extends ConsumerState<Composer> {
     _prefs = prefs;
     _recents = EmojiRecentsStore(prefs).load();
     _translateFavorites = _loadTranslateFavorites(prefs);
-    // Same key the PWA uses.
-    final toolbar = prefs.getBool(kFormatToolbarKey) ?? false;
-    if (mounted && toolbar != _formatToolbarOpen) {
-      setState(() => _formatToolbarOpen = toolbar);
-    }
     return prefs;
   }
 
@@ -924,9 +919,7 @@ class _ComposerState extends ConsumerState<Composer> {
     // Not laid out yet: keep the current state.
     if (box == null || !box.hasSize || box.size.width <= 0) return _popout;
     final fontSize = _inputFontSize();
-    // With text, the right inset is the translate-button reserve.
-    final hasText = text.trim().isNotEmpty;
-    final contentWidth = box.size.width - 16 - (hasText ? 38 : 16) - 2;
+    final contentWidth = box.size.width - 16 - 16 - 2;
     if (contentWidth <= 0) return _popout;
     final painter = TextPainter(
       text: TextSpan(text: text, style: TextStyle(fontSize: fontSize)),
@@ -1285,16 +1278,9 @@ class _ComposerState extends ConsumerState<Composer> {
     return content;
   }
 
-  /// Long-press send: publishes under a fresh ephemeral keypair so the message is unlinkable to the nym.
   void _sendAnon() {
-    // Expand sentinels before the wire.
+    if (!_anonEligible) return;
     final typed = _draftText();
-    // An in-progress edit falls back to a normal send so it is never silently dropped.
-    if (_pendingEdit != null) {
-      _send();
-      return;
-    }
-    // An anon send also clears the tiles, so it must carry their URLs.
     if (hasPendingUploads) {
       _onSystemMessage(
           tr('Still uploading — send again once the attachments finish.'));
@@ -1309,7 +1295,11 @@ class _ComposerState extends ConsumerState<Composer> {
       composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
     }
     final content = _composeOutgoing(composed);
-    controller.sendCurrentPseudonymous(content);
+    unawaited(controller.sendCurrentPseudonymous(content).then((sent) {
+      if (!sent) return;
+      HapticFeedback.lightImpact();
+      showToast(tr(ComposerStrings.sentAnon));
+    }));
     _pushSentHistory(content);
     _controller.clear();
     _attachments.clear();
@@ -1359,10 +1349,17 @@ class _ComposerState extends ConsumerState<Composer> {
     ));
   }
 
-  /// Durable Nostr-login identities only; watches `selfPubkey` to track login/logout transitions.
   bool get _anonEligible {
-    ref.watch(appStateProvider.select((s) => s.selfPubkey));
-    return ref.read(nostrControllerProvider).identity?.loginMethod != null;
+    final view = _chatView();
+    final mesh =
+        ref.read(meshControllerProvider.notifier).bridge?.shouldSendOverMesh(view) ??
+            false;
+    return canSendAnon(
+      loggedIn: ref.read(nostrControllerProvider).identity?.loginMethod != null,
+      surface: mediaSurface(view),
+      editing: _pendingEdit != null,
+      mesh: view.kind == ViewKind.channel && mesh,
+    );
   }
 
   /// The underlying upload isn't cancellable, so a cancelled result is discarded when it resolves.
@@ -1622,11 +1619,14 @@ class _ComposerState extends ConsumerState<Composer> {
       _onViewSwitched(next);
     });
 
-    final input = _inputWithChips(context, sendEnabled);
     // `compact` spans <=1024, so the phone padding keys off the real 768px width.
     final width = MediaQuery.of(context).size.width;
     final phone = width <= NymDimens.mobileBreakpoint;
     final gap = phone ? 6.0 : (width <= NymDimens.tabletBreakpoint ? 8.0 : 10.0);
+    _rowSendEnabled = sendEnabled;
+    _rowPhone = phone;
+    _rowGap = gap;
+    final wantPill = _pillWanted;
 
     return Container(
       decoration: BoxDecoration(
@@ -1648,15 +1648,28 @@ class _ComposerState extends ConsumerState<Composer> {
             OverlayPortal(
               controller: _emojiPortal,
               overlayChildBuilder: _pickerOverlay,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _attachButton(),
-                  SizedBox(width: gap),
-                  Expanded(child: input),
-                  SizedBox(width: gap),
-                  _primaryButton(sendEnabled, phone),
-                ],
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(end: wantPill ? 1 : 0),
+                duration: MediaQuery.of(context).disableAnimations
+                    ? Duration.zero
+                    : _pillDuration,
+                curve: Curves.easeOut,
+                builder: (context, t, _) {
+                  _pillT = t;
+                  _pillOn = wantPill || t > 0;
+                  final input = _inputWithChips(context, sendEnabled);
+                  const none = SizedBox.shrink();
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      _pillOn ? none : _attachButton(),
+                      _pillOn ? none : SizedBox(width: gap),
+                      Expanded(child: input),
+                      _pillOn ? none : SizedBox(width: gap),
+                      _pillOn ? none : _primaryButton(sendEnabled, phone),
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -1674,18 +1687,18 @@ class _ComposerState extends ConsumerState<Composer> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
-        AnimatedSize(
+        _pillInset(AnimatedSize(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           alignment: Alignment.bottomLeft,
           child: block ?? const SizedBox(height: 0, width: double.infinity),
-        ),
-        AnimatedSize(
+        )),
+        _pillInset(AnimatedSize(
           duration: const Duration(milliseconds: 200),
           curve: Curves.easeOut,
           alignment: Alignment.bottomLeft,
           child: panels ?? const SizedBox(height: 0, width: double.infinity),
-        ),
+        )),
         ValueListenableBuilder<String?>(
           valueListenable: ref.read(mediaNoteSenderProvider).sending,
           builder: (context, label, _) => label == null
@@ -1760,20 +1773,133 @@ class _ComposerState extends ConsumerState<Composer> {
               )
             : null);
     if (chip == null) return null;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+    return _shifted(_panelLayers + 1, Padding(
+      padding: EdgeInsets.only(bottom: _pillWanted ? 0 : 8),
       // Keyed on chip kind so a kind change replays the slide-in.
       child: _ChipSlideIn(
         key: ValueKey(_pendingEdit != null ? 'edit' : 'quote'),
         // Measures the chip alone; the 8px gap is added in the offset.
         child: KeyedSubtree(key: _chipKey, child: chip),
       ),
+    ));
+  }
+
+  int get _panelLayers {
+    final uploads = _attachments.any((a) => !a.hosted) ? 1 : 0;
+    final strip = (_attachments.isNotEmpty ||
+            composerMediaMatches(_controller.text, knownMedia: _uploadedMedia)
+                .isNotEmpty)
+        ? 1
+        : 0;
+    return uploads + strip + (_pillWanted ? 1 : 0);
+  }
+
+  Widget _pillInset(Widget child) {
+    if (!_pillOn || _pillT >= 1) return child;
+    final keep = 1 - _pillT;
+    final send = _liveBox(_sendSplitKey);
+    final primaryW = (send != null && send.hasSize) ? send.size.width : 42.0;
+    return Padding(
+      padding: EdgeInsets.only(
+        left: (42 + _rowGap) * keep,
+        right: (primaryW + _rowGap) * keep,
+      ),
+      child: child,
     );
+  }
+
+  double _acOffsetNow() {
+    final overhang = _popout
+        ? math.max(0.0, _boxHeight(_popoutFieldKey) - _composerRowBase)
+        : 0.0;
+    final chipH = _boxHeight(_chipKey);
+    final panelsH = _boxHeight(_panelsKey);
+    if (!_pillWanted) return overhang + panelsH + (chipH > 0 ? chipH + 8 : 0);
+    final layers = (panelsH > 0 ? _panelLayers : 0) + (chipH > 0 ? 1 : 0);
+    return overhang + panelsH + chipH - layers - 9;
   }
 
 
   /// In-flow height reserved while the popout floats (single text row plus padding).
   static const double _composerRowBase = 42;
+
+  static const Duration _pillDuration = Duration(milliseconds: 180);
+
+  bool _rowSendEnabled = false;
+  bool _rowPhone = false;
+  double _rowGap = 10;
+  double _pillT = 0;
+  bool _pillOn = false;
+
+  bool get _pillWanted =>
+      primaryAction(
+        text: _controller.text,
+        attachments: _attachments.length,
+        editing: _pendingEdit != null,
+        recording: _voice != null,
+      ) ==
+      'send';
+
+  @visibleForTesting
+  bool get pillOn => _pillOn;
+
+  double _stackShift(int layersBelow) => _pillWanted ? layersBelow.toDouble() : 0;
+
+  Widget _shifted(int layersBelow, Widget child) {
+    final dy = _stackShift(layersBelow);
+    if (dy == 0) return child;
+    return Transform.translate(offset: Offset(0, dy), child: child);
+  }
+
+  Widget _pillShell(BuildContext context, double topRadius, Widget field) {
+    final c = context.nym;
+    final t = _pillT;
+    final focused = _focus.hasFocus;
+    final radius = BorderRadius.vertical(
+      top: Radius.circular(topRadius),
+      bottom: const Radius.circular(NymRadius.md),
+    );
+    final flatFill = c.isLight
+        ? Colors.black.withValues(alpha: focused ? 0.02 : 0.04)
+        : Colors.white.withValues(alpha: focused ? 0.07 : 0.05);
+    final fill = _popout ? c.bgTertiary : flatFill;
+    final side = (_popout || focused) ? c.primaryA(0.30) : c.glassBorder;
+    final box = Container(
+      key: const ValueKey('composerPill'),
+      decoration: BoxDecoration(
+        color: fill.withValues(alpha: fill.a * t),
+        borderRadius: radius,
+        boxShadow: _popout
+            ? [
+                BoxShadow(
+                    color: const Color(0x80000000).withValues(alpha: 0.5 * t),
+                    blurRadius: 32,
+                    offset: const Offset(0, 8)),
+              ]
+            : null,
+      ),
+      foregroundDecoration: BoxDecoration(
+        borderRadius: radius,
+        border: Border.all(color: side.withValues(alpha: side.a * t)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          _attachButton(bare: t),
+          SizedBox(width: _rowGap),
+          Expanded(child: field),
+          SizedBox(width: _rowGap),
+          _primaryButton(_rowSendEnabled, _rowPhone, inset: 4 * t, bare: t),
+        ],
+      ),
+    );
+    return CssFocusRing(
+      show: focused && !_popout && t >= 0.5,
+      color: c.primaryA(0.06),
+      radius: radius,
+      child: box,
+    );
+  }
 
   /// When popped out, the field floats in a portal over the messages while the slot keeps the base row height.
   Widget _input(BuildContext context, bool inputEnabled) {
@@ -1785,8 +1911,10 @@ class _ComposerState extends ConsumerState<Composer> {
             ? Duration.zero
             : NymMotion.transition,
         curve: NymMotion.curve,
-        builder: (context, topRadius, _) =>
-            _textField(context, inputEnabled, topRadius),
+        builder: (context, topRadius, _) => _pillOn
+            ? _pillShell(
+                context, topRadius, _textField(context, inputEnabled, topRadius))
+            : _textField(context, inputEnabled, topRadius),
       ),
     );
     // Nested portals paint above the popout; translate must live in the main tree or it never builds in popout.
@@ -1873,13 +2001,7 @@ class _ComposerState extends ConsumerState<Composer> {
                     _replaceTriggerToken(kaomojiInsertText(k)),
               );
     // Lift the dropdown by the popout overhang and chip height, or it paints under the field or over the chip.
-    final overhang = _popout
-        ? math.max(0.0, _boxHeight(_popoutFieldKey) - _composerRowBase)
-        : 0.0;
-    final chipH = _boxHeight(_chipKey);
-    // The panel stack sits outside the `_acAnchor` target, so its height must be added too.
-    final panelsH = _boxHeight(_panelsKey);
-    final acOffset = overhang + panelsH + (chipH > 0 ? chipH + 8 : 0);
+    final acOffset = _acOffsetNow();
     _acOffsetUsed = acOffset;
     _settleOverlayOffset();
     return CompositedTransformFollower(
@@ -1908,12 +2030,23 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// Measured via [_inputKey], since the overlay context is full-screen.
   double _anchorWidth(BuildContext context) {
-    final box = _inputKey.currentContext?.findRenderObject() as RenderBox?;
+    final box = _liveBox(_inputKey);
     return box?.size.width ?? MediaQuery.sizeOf(context).width;
   }
 
+  RenderBox? _liveBox(GlobalKey key) {
+    final ctx = key.currentContext;
+    if (ctx == null) return null;
+    try {
+      final r = ctx.findRenderObject();
+      return r is RenderBox && r.attached ? r : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   double _boxHeight(GlobalKey key) {
-    final box = key.currentContext?.findRenderObject() as RenderBox?;
+    final box = _liveBox(key);
     return (box != null && box.hasSize) ? box.size.height : 0;
   }
 
@@ -1924,12 +2057,7 @@ class _ComposerState extends ConsumerState<Composer> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _offsetSettleQueued = false;
       if (!mounted || !_acPortal.isShowing) return;
-      final overhang = _popout
-          ? math.max(0.0, _boxHeight(_popoutFieldKey) - _composerRowBase)
-          : 0.0;
-      final chipH = _boxHeight(_chipKey);
-      final settled =
-          overhang + _boxHeight(_panelsKey) + (chipH > 0 ? chipH + 8 : 0);
+      final settled = _acOffsetNow();
       if ((settled - _acOffsetUsed).abs() > 0.5) setState(() {});
     });
   }
@@ -1950,11 +2078,9 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  /// The message input with its inline translate/format buttons; tall drafts get the popout treatment.
   Widget _textField(
       BuildContext context, bool inputEnabled, double topRadius) {
     final c = context.nym;
-    final hasText = _controller.text.trim().isNotEmpty;
     final focused = _focus.hasFocus;
     // Watch so a text-size change re-renders the field live.
     ref.watch(settingsProvider.select((s) => s.textSize));
@@ -1981,14 +2107,17 @@ class _ComposerState extends ConsumerState<Composer> {
     final flatFill = c.isLight
         ? Colors.black.withValues(alpha: focused ? 0.02 : 0.04)
         : Colors.white.withValues(alpha: focused ? 0.07 : 0.05);
-    final fill = _popout ? c.bgTertiary : flatFill;
+    final keep = _pillOn ? 1 - _pillT : 1.0;
+    Color fade(Color x) => x.withValues(alpha: x.a * keep);
+    final fill = fade(_popout ? c.bgTertiary : flatFill);
     final radius = BorderRadius.vertical(
       top: Radius.circular(topRadius),
       bottom: const Radius.circular(NymRadius.md),
     );
     final border = _FieldBorder(
       borderRadius: radius,
-      borderSide: BorderSide(color: _popout ? c.primaryA(0.30) : c.glassBorder),
+      borderSide:
+          BorderSide(color: fade(_popout ? c.primaryA(0.30) : c.glassBorder)),
     );
     // Custom emoji render inline via single PUA sentinel chars painted as images; see [EmojiSentinelController].
     final incog = ref.watch(incognitoFieldFlagsProvider);
@@ -2049,12 +2178,12 @@ class _ComposerState extends ConsumerState<Composer> {
             fontSize: fontSize),
         filled: true,
         fillColor: fill,
-        contentPadding: EdgeInsets.fromLTRB(16, 10, hasText ? 94 : 66, 10),
+        contentPadding: EdgeInsets.fromLTRB(16, 10, _pillWanted ? 16 : 38, 10),
         border: border,
         enabledBorder: border,
         focusedBorder: _FieldBorder(
           borderRadius: radius,
-          borderSide: BorderSide(color: c.primaryA(0.30)),
+          borderSide: BorderSide(color: fade(c.primaryA(0.30))),
         ),
       ),
     );
@@ -2062,33 +2191,20 @@ class _ComposerState extends ConsumerState<Composer> {
     Widget stack = Stack(
       children: [
         field,
-        // The translate button joins the row only when the field has text.
-        Positioned(
-          right: 8,
-          bottom: 10,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CompositedTransformTarget(
-                link: _emojiAnchor,
-                child: EmojiInputButton(
-                  key: const ValueKey('emojiInputBtn'),
-                  enabled: inputEnabled,
-                  open: _emojiPortal.isShowing,
-                  onTap: _toggleEmojiPicker,
-                ),
-              ),
-              const SizedBox(width: 2),
-              FormatInputButton(
-                active: _formatToolbarOpen,
+        if (!_pillWanted)
+          Positioned(
+            right: 8,
+            bottom: 10,
+            child: CompositedTransformTarget(
+              link: _emojiAnchor,
+              child: EmojiInputButton(
+                key: const ValueKey('emojiInputBtn'),
                 enabled: inputEnabled,
-                onTap: _toggleFormatToolbar,
+                open: _emojiPortal.isShowing,
+                onTap: _toggleEmojiPicker,
               ),
-              if (hasText) const SizedBox(width: 2),
-              if (hasText) _translateButton(context),
-            ],
+            ),
           ),
-        ),
       ],
     );
     if (!inputEnabled) {
@@ -2101,7 +2217,7 @@ class _ComposerState extends ConsumerState<Composer> {
     if (!_popout) {
       // Always rendered, toggling only `show`, so focusing never re-parents the TextField and drops the keyboard.
       return CssFocusRing(
-        show: focused,
+        show: focused && keep > 0.5,
         color: c.primaryA(0.06),
         radius: radius,
         child: stack,
@@ -2109,11 +2225,13 @@ class _ComposerState extends ConsumerState<Composer> {
     }
     return Container(
       constraints: BoxConstraints(maxHeight: popoutMaxHeight),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         borderRadius: NymRadius.rmd,
         boxShadow: [
           BoxShadow(
-              color: Color(0x80000000), blurRadius: 32, offset: Offset(0, 8)),
+              color: const Color(0x80000000).withValues(alpha: 0.5 * keep),
+              blurRadius: 32,
+              offset: const Offset(0, 8)),
         ],
       ),
       child: Scrollbar(
@@ -2124,10 +2242,10 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  /// Hosts the [_translateAnchor] leader for the dropdown portal in [_input].
   Widget _translateButton(BuildContext context) {
     final hasText = _controller.text.trim().isNotEmpty;
     return CompositedTransformTarget(
+      key: const ValueKey('translateInputBtn'),
       link: _translateAnchor,
       child: _TranslateInputButton(
         enabled: hasText && !_translating,
@@ -2137,13 +2255,19 @@ class _ComposerState extends ConsumerState<Composer> {
     );
   }
 
-  /// Remembered so the toolbar stays on between sessions.
-  Future<void> _toggleFormatToolbar() async {
-    // Resolve prefs before flipping, or first-tap hydration snaps the toolbar shut again.
-    final prefs = await _ensurePrefs();
-    if (!mounted) return;
-    setState(() => _formatToolbarOpen = !_formatToolbarOpen);
-    await prefs.setBool(kFormatToolbarKey, _formatToolbarOpen);
+  Widget _toolbarEmojiButton() {
+    return CompositedTransformTarget(
+      key: _toolbarEmojiKey,
+      link: _emojiAnchor,
+      child: FormatToolbarIconButton(
+        key: const ValueKey('formatEmojiBtn'),
+        svg: NymIcons.composerEmoji,
+        tooltip: 'Emoji and GIFs',
+        enabled: _rowSendEnabled,
+        active: _emojiPortal.isShowing,
+        onTap: _toggleEmojiPicker,
+      ),
+    );
   }
 
   /// Operates on the raw text: each emoji is one sentinel char, so selection offsets line up.
@@ -2271,10 +2395,16 @@ class _ComposerState extends ConsumerState<Composer> {
       ));
     }
 
-    if (_formatToolbarOpen) {
-      panels.add(FormatToolbar(
-        onTool: _applyFormatTool,
-        squareTop: _overlayActive || chipShowing || stripShowing,
+    if (_pillWanted) {
+      panels.add(_ToolbarEntrance(
+        child: FormatToolbar(
+          onTool: _applyFormatTool,
+          squareTop: _overlayActive || chipShowing || stripShowing,
+          leading: [
+            _toolbarEmojiButton(),
+            _translateButton(context),
+          ],
+        ),
       ));
     }
 
@@ -2287,9 +2417,13 @@ class _ComposerState extends ConsumerState<Composer> {
         mainAxisSize: MainAxisSize.min,
         children: [
           for (var i = 0; i < panels.length; i++)
-            Padding(
-              padding: EdgeInsets.only(bottom: i == panels.length - 1 ? 8 : 4),
-              child: panels[i],
+            _shifted(
+              panels.length - i,
+              Padding(
+                padding: EdgeInsets.only(
+                    bottom: _pillWanted ? 0 : (i == panels.length - 1 ? 8 : 4)),
+                child: panels[i],
+              ),
             ),
         ],
       ),
@@ -2337,12 +2471,12 @@ class _ComposerState extends ConsumerState<Composer> {
         ),
         CompositedTransformFollower(
           link: _translateAnchor,
-          targetAnchor: Alignment.topRight,
-          followerAnchor: Alignment.bottomRight,
-          offset: const Offset(0, -4),
+          targetAnchor: Alignment.topLeft,
+          followerAnchor: Alignment.bottomLeft,
+          offset: const Offset(0, -9),
           showWhenUnlinked: false,
           child: Align(
-            alignment: Alignment.bottomRight,
+            alignment: Alignment.bottomLeft,
             child: Material(
               type: MaterialType.transparency,
               child: Container(
@@ -2478,11 +2612,12 @@ class _ComposerState extends ConsumerState<Composer> {
     }
   }
 
-  Widget _attachButton() {
+  Widget _attachButton({double bare = 0}) {
     return _IconBtn(
       key: _attachKey,
       svg: ComposerIcons.plus,
       tooltip: tr('Attach'),
+      bare: bare,
       onTap: () => unawaited(_openAttachMenu()),
     );
   }
@@ -2588,20 +2723,22 @@ class _ComposerState extends ConsumerState<Composer> {
     if (id == 'anon' && _anonEligible) _sendAnon();
   }
 
-  Widget _primaryButton(bool sendEnabled, bool phone) {
+  Widget _primaryButton(bool sendEnabled, bool phone,
+      {double inset = 0, double bare = 0}) {
     final action = primaryAction(
       text: _controller.text,
       attachments: _attachments.length,
       editing: _pendingEdit != null,
       recording: _voice != null,
     );
-    if (action == 'mic') return _micButton();
+    if (action == 'mic') return _micButton(bare: bare);
     return _SendButton(
       key: _sendSplitKey,
       enabled: sendEnabled,
       onTap: _send,
       onMenu: () => unawaited(_openSendMenu()),
       phone: phone,
+      inset: inset,
     );
   }
 
@@ -2610,7 +2747,7 @@ class _ComposerState extends ConsumerState<Composer> {
   String _mediaTooltip(String label, MediaFeatureState st) =>
       st.reason.isEmpty ? tr(label) : '${tr(label)} — ${tr(st.reason)}';
 
-  Widget _micButton() {
+  Widget _micButton({double bare = 0}) {
     final st = _mediaFeature('voice');
     return VoiceMicGesture(
       key: const ValueKey('voiceRecordBtn'),
@@ -2626,6 +2763,7 @@ class _ComposerState extends ConsumerState<Composer> {
         enabled: st.level != MediaFeatureLevel.off,
         active: _voice != null,
         warn: st.level == MediaFeatureLevel.warn,
+        bare: bare,
         onTap: () {},
       ),
     );
@@ -2667,6 +2805,11 @@ class _ComposerState extends ConsumerState<Composer> {
     // Phones center the picker above the input bar instead of anchoring to the button.
     final isPhone = media.size.width <= NymDimens.mobileBreakpoint;
     final picker = Material(type: MaterialType.transparency, child: child);
+    final inBar = _pillWanted ? globalRectOf(_toolbarEmojiKey) : null;
+    final phoneBottom = inBar == null
+        ? 60 + media.viewInsets.bottom
+        : math.max(60 + media.viewInsets.bottom,
+            media.size.height - inBar.top + 8);
     return Stack(
       children: [
         Positioned.fill(
@@ -2680,7 +2823,7 @@ class _ComposerState extends ConsumerState<Composer> {
             left: 0,
             right: 0,
             // Lifted above the keyboard when open.
-            bottom: 60 + media.viewInsets.bottom,
+            bottom: phoneBottom,
             child: Align(
               alignment: Alignment.bottomCenter,
               child: phoneWidthFactor != null
@@ -2701,12 +2844,15 @@ class _ComposerState extends ConsumerState<Composer> {
         else
           CompositedTransformFollower(
             link: link,
-            targetAnchor: Alignment.topRight,
-            followerAnchor: Alignment.bottomRight,
-            offset: const Offset(0, -8),
+            targetAnchor:
+                inBar != null ? Alignment.topLeft : Alignment.topRight,
+            followerAnchor:
+                inBar != null ? Alignment.bottomLeft : Alignment.bottomRight,
+            offset: Offset(0, inBar != null ? -10 : -8),
             showWhenUnlinked: false,
             child: Align(
-              alignment: Alignment.bottomRight,
+              alignment:
+                  inBar != null ? Alignment.bottomLeft : Alignment.bottomRight,
               child: picker,
             ),
           ),
@@ -2724,10 +2870,12 @@ class _IconBtn extends StatefulWidget {
     this.onTap,
     this.active = false,
     this.warn = false,
+    this.bare = 0,
   });
 
   final bool active;
   final bool warn;
+  final double bare;
 
   final String svg;
   final String tooltip;
@@ -2760,9 +2908,14 @@ class _IconBtnState extends State<_IconBtn> {
       fill = hovered ? c.primaryA(0.12) : Colors.white.withValues(alpha: 0.05);
       borderColor = hovered ? c.primaryA(0.30) : c.glassBorder;
     }
+    final keep = 1 - widget.bare.clamp(0.0, 1.0);
     final glyphColor = widget.active
         ? c.danger
         : (widget.warn ? c.warning : (hovered ? c.primary : c.text));
+    final shownFill = fill.withValues(alpha: fill.a * keep);
+    final shownBorder = widget.active
+        ? c.danger
+        : borderColor.withValues(alpha: borderColor.a * keep);
     final btn = Tooltip(
       message: widget.tooltip,
       child: MouseRegion(
@@ -2773,10 +2926,10 @@ class _IconBtnState extends State<_IconBtn> {
           duration: NymMotion.transition,
           curve: NymMotion.curve,
           decoration: BoxDecoration(
-            color: fill,
+            color: shownFill,
             borderRadius: NymRadius.rsm,
-            border: Border.all(color: widget.active ? c.danger : borderColor),
-            boxShadow: hovered
+            border: Border.all(color: shownBorder),
+            boxShadow: hovered && keep > 0.5
                 ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
                 : null,
           ),
@@ -2814,12 +2967,14 @@ class _SendButton extends StatefulWidget {
     required this.onTap,
     required this.onMenu,
     this.phone = false,
+    this.inset = 0,
   });
   final bool enabled;
   final VoidCallback onTap;
   final VoidCallback onMenu;
 
   final bool phone;
+  final double inset;
 
   @override
   State<_SendButton> createState() => _SendButtonState();
@@ -2939,18 +3094,18 @@ class _SendButtonState extends State<_SendButton> {
                   key: const ValueKey('composer-send'),
                   onTap: widget.enabled ? _handleTap : null,
                   borderRadius: left,
-                  child: Container(
-                    height: 42,
-                    padding: EdgeInsets.symmetric(
-                        horizontal: widget.phone ? 14 : 22),
-                    alignment: Alignment.center,
-                    child: Text(
-                      tr('SEND'),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: widget.phone ? 11 : 12,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.5,
+                  child: Tooltip(
+                    message: tr('Send'),
+                    child: Semantics(
+                      button: true,
+                      label: tr('Send'),
+                      excludeSemantics: true,
+                      child: Container(
+                        height: 42 - 2 * widget.inset,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        alignment: Alignment.center,
+                        child: NymSvgIcon(ComposerIcons.paperPlane,
+                            size: 18, color: c.primary),
                       ),
                     ),
                   ),
@@ -2985,7 +3140,7 @@ class _SendButtonState extends State<_SendButton> {
               borderRadius: right,
               child: SizedBox(
                 width: 24,
-                height: 42,
+                height: 42 - 2 * widget.inset,
                 child: Center(
                   child: NymSvgIcon(ComposerIcons.chevronUp,
                       size: 14, color: c.primary),
@@ -2996,11 +3151,14 @@ class _SendButtonState extends State<_SendButton> {
         ),
       ),
     );
-    return Opacity(
-      opacity: widget.enabled ? 1 : 0.35,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [send, chevron],
+    return Padding(
+      padding: EdgeInsets.fromLTRB(0, widget.inset, widget.inset, widget.inset),
+      child: Opacity(
+        opacity: widget.enabled ? 1 : 0.35,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [send, chevron],
+        ),
       ),
     );
   }
@@ -3349,8 +3507,7 @@ class _TranslateInputButtonState extends State<_TranslateInputButton>
   Widget build(BuildContext context) {
     final c = context.nym;
     // The rest dim is folded into the glyph color, since an [Opacity] wrapper costs a saveLayer per frame.
-    final restAlpha =
-        widget.translating ? 1.0 : (widget.enabled ? (_hover ? 1.0 : 0.6) : 0.4);
+    final restAlpha = widget.translating || widget.enabled ? 1.0 : 0.4;
     final base = _hover && widget.enabled ? c.primary : c.textDim;
     final color = base.withValues(alpha: base.a * restAlpha);
     Widget glyph = NymSvgIcon(NymIcons.translate, size: 16, color: color);
@@ -3374,7 +3531,7 @@ class _TranslateInputButtonState extends State<_TranslateInputButton>
             // Opaque is load-bearing: nothing else here hit-tests, so taps fell through.
             behavior: HitTestBehavior.opaque,
             child: Container(
-              width: 26,
+              width: 28,
               height: 26,
               alignment: Alignment.center,
               decoration: BoxDecoration(
@@ -3874,6 +4031,31 @@ class _InputMentionChip extends ConsumerWidget {
           supporterHeight: size,
         ),
       ],
+    );
+  }
+}
+
+class _ToolbarEntrance extends StatelessWidget {
+  const _ToolbarEntrance({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: MediaQuery.of(context).disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 180),
+      curve: Curves.ease,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.translate(
+          offset: Offset(0, 6 * (1 - t)),
+          child: child,
+        ),
+      ),
+      child: child,
     );
   }
 }

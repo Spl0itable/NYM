@@ -643,7 +643,11 @@ Object.assign(NYM.prototype, {
             signal
         });
         if (!resp.ok) {
-            const err = new Error(`HTTP ${resp.status}`);
+            const MN = window.NymMediaNotes;
+            const reason = (resp.headers && resp.headers.get('X-Reason')) || '';
+            let body = '';
+            try { body = await resp.text(); } catch (_) { }
+            const err = new Error(MN ? MN.blossomFailureText(resp.status, reason, body) : `HTTP ${resp.status}`);
             err.status = resp.status;
             throw err;
         }
@@ -653,7 +657,8 @@ Object.assign(NYM.prototype, {
     },
 
     async _uploadWithFallback(file, hashHex, signal) {
-        let lastErr = null;
+        const MN = window.NymMediaNotes;
+        const failures = [];
         if (!this._blossomRejects) this._blossomRejects = new Set();
         const type = this._blossomType(file);
         const candidates = BLOSSOM_SERVERS.filter(s => !this._blossomRejects.has(s + ' ' + type));
@@ -664,11 +669,15 @@ Object.assign(NYM.prototype, {
                 return { url, server };
             } catch (e) {
                 if (e && e.name === 'AbortError') throw e;
-                if (e && e.status === 415) this._blossomRejects.add(server + ' ' + type);
-                lastErr = e;
+                const text = (e && e.message) || 'failed';
+                const rejects = MN ? MN.blossomRejectsType(e && e.status, text) : (e && e.status === 415);
+                if (rejects) this._blossomRejects.add(server + ' ' + type);
+                failures.push(server.replace(/^https?:\/\//, '') + ' (' + type + '): ' + text);
             }
         }
-        throw lastErr || new Error('All Blossom servers failed');
+        const err = new Error(failures.length ? failures.join('; ') : 'All Blossom servers failed');
+        err.failures = failures;
+        throw err;
     },
 
     async _uploadFileWithProgress(file, labelText, opts = {}) {

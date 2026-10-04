@@ -429,7 +429,7 @@ Object.assign(NYM.prototype, {
             }
 
             // Automatic heuristics run only in direct mode; the relay-pool proxy already filters.
-            const clientGates = this._clientGatesActive();
+            const clientGates = this._clientGatesActive() || !!(this._archiveEvents && this._archiveEvents.has(event));
             if (clientGates && event.pubkey !== this.pubkey && !this.isFriend?.(event.pubkey) &&
                 this.isGibberishNym(nym)) {
                 return;

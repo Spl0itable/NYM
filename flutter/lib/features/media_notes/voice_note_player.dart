@@ -32,7 +32,9 @@ List<int> voiceBarLevels(MediaNote note) => note.waveform.isNotEmpty
 bool canPlayVoiceMime(String mime, TargetPlatform platform) {
   final m = baseMime(mime);
   final apple = platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
-  if (apple && (m == 'audio/webm' || m == 'audio/ogg')) return false;
+  if (apple && (m == 'audio/webm' || m == 'video/webm' || m == 'audio/ogg')) {
+    return false;
+  }
   return true;
 }
 

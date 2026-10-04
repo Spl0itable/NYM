@@ -1203,10 +1203,11 @@
             try {
                 let blob = n.blob;
                 if (!blob || !blob.size) throw new Error(this._mt('the recording is empty'));
-                if (n.route !== 'mesh' && !M.isPortableVoiceMime(n.recordedMime || blob.type, n.requestedMime)) {
+                const inVideo = M.noteUploadTypes('voice', blob.type).length > 1;
+                if (n.route !== 'mesh' && !inVideo && !M.isPortableVoiceMime(n.recordedMime || blob.type, n.requestedMime)) {
                     try { blob = (await this._portableVoiceBlob(blob, n.duration)) || blob; } catch (_) { }
                 }
-                const mime = M.baseMime(blob.type) || 'audio/webm';
+                const mime = M.voiceDescriptorMime(blob.type) || 'audio/webm';
                 const waveform = this._voiceWaveform(n.samples);
                 const bytes = new Uint8Array(await blob.arrayBuffer());
                 const desc = { kind: 'voice', mime, duration: n.duration, size: bytes.length, waveform };
@@ -1231,8 +1232,19 @@
                     secret = M.newOnceSecret();
                     body = await M.encryptOnce(bytes, secret.key, secret.nonce);
                 }
-                const file = new Blob([body], { type: once ? 'application/octet-stream' : desc.mime });
-                const { url } = await this._uploadNoteBlob(file, label);
+                const types = once ? ['application/octet-stream'] : M.noteUploadTypes(desc.kind, desc.mime);
+                let url = '';
+                const errs = [];
+                for (const type of (types.length ? types : [desc.mime])) {
+                    try {
+                        url = (await this._uploadNoteBlob(new Blob([body], { type }), label)).url;
+                        break;
+                    } catch (e) {
+                        if (e && e.name === 'AbortError') throw e;
+                        errs.push((e && e.message) || 'upload failed');
+                    }
+                }
+                if (!url) throw new Error(errs.join('; ') || 'upload failed');
                 const full = M.attachDescriptor(url, Object.assign({}, desc, once ? Object.assign({ once: true }, secret) : {}));
                 if (!full) throw new Error('descriptor');
                 const content = once ? M.onceContent(desc.kind, full) : full;

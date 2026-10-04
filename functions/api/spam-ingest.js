@@ -74,8 +74,10 @@ export async function onRequestPost(context) {
   const spam = spamEngine(env, ctx);
   await spam.ready();
   if (!spam.active()) {
+    const off = !!spam.settings();
     spam.close();
-    return json({ drop: [], held: 0, timedOut: 0, invalid: 0 });
+    if (!off) return json({ error: 'spam engine unavailable' }, 503);
+    return json({ drop: [], pending: [], held: 0, timedOut: 0, invalid: 0, off: true });
   }
   try { spam.tick(); } catch { }
 
@@ -83,6 +85,7 @@ export async function onRequestPost(context) {
   const holdMs = Math.max(0, Number(settings.holdMs) || 0);
   const deadline = start + INGEST_DEADLINE_MS;
   const drop = new Set();
+  const unjudged = new Set();
   const seen = new Set();
   const waits = [];
   const backgroundWaits = [];
@@ -99,28 +102,37 @@ export async function onRequestPost(context) {
     const outcome = new Promise((r) => { resolve = r; });
     backgroundWaits.push(outcome);
     let verdict;
+    const id = ev.id;
+    const inspected = Object.assign({
+      release: () => { resolve(spam.isPending(id) ? 'unjudged' : 'ok'); return true; },
+      retract: () => { resolve('spam'); return true; },
+      discard: () => resolve('spam')
+    }, job);
     try {
-      verdict = spam.inspect(Object.assign({
-        release: () => { resolve('ok'); return true; },
-        retract: () => { resolve('spam'); return true; },
-        discard: () => resolve('spam')
-      }, job));
+      verdict = spam.inspect(inspected);
     } catch {
-      verdict = 'pass';
+      verdict = 'error';
     }
-    if (verdict === 'drop') { drop.add(ev.id); resolve('spam'); continue; }
+    if (verdict === 'drop') { drop.add(id); resolve('spam'); continue; }
+    if (verdict === 'error' || (verdict === 'pass' && inspected.unjudged)) { unjudged.add(id); resolve('unjudged'); continue; }
     if (verdict !== 'hold') { resolve('ok'); continue; }
     held++;
     const limit = Math.min(deadline, Date.now() + holdMs + INGEST_HOLD_SLACK_MS);
     waits.push(new Promise((done) => {
-      const timer = setTimeout(() => { timedOut++; done(); }, Math.max(0, limit - Date.now()));
-      outcome.then((v) => { clearTimeout(timer); if (v === 'spam') drop.add(ev.id); done(); });
+      const timer = setTimeout(() => { timedOut++; unjudged.add(id); done(); }, Math.max(0, limit - Date.now()));
+      outcome.then((v) => {
+        clearTimeout(timer);
+        if (v === 'spam') drop.add(id);
+        else if (v === 'unjudged') unjudged.add(id);
+        done();
+      });
     }));
   }
 
   await Promise.all(waits);
+  for (const id of drop) unjudged.delete(id);
 
-  const result = { drop: Array.from(drop), held, timedOut, invalid };
+  const result = { drop: Array.from(drop), pending: Array.from(unjudged), held, timedOut, invalid };
   const bg = drain(spam, pending, backgroundWaits, Date.now() + INGEST_DRAIN_MS).finally(() => { try { spam.close(); } catch { } });
   if (context && typeof context.waitUntil === 'function') { try { context.waitUntil(bg); } catch { } }
   return json(result);

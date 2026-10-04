@@ -276,14 +276,18 @@
             if (on === !!this._composerVerifying) return;
             this._composerVerifying = on;
             if (on) {
-                btn.dataset.attestPrevLabel = btn.textContent;
-                btn.textContent = 'VERIFYING...';
+                btn.dataset.attestPrevLabel = btn.getAttribute('aria-label') || 'Send';
+                btn.setAttribute('aria-label', 'VERIFYING...');
+                btn.setAttribute('title', 'VERIFYING...');
                 btn.classList.add('send-btn-verifying');
                 btn.setAttribute('aria-busy', 'true');
                 input.dataset.attestPrevPlaceholder = input.getAttribute('data-placeholder') || '';
                 input.setAttribute('data-placeholder', 'Verifying your session...');
             } else {
-                if (btn.dataset.attestPrevLabel) btn.textContent = btn.dataset.attestPrevLabel;
+                if (btn.dataset.attestPrevLabel) {
+                    btn.setAttribute('aria-label', btn.dataset.attestPrevLabel);
+                    btn.setAttribute('title', btn.dataset.attestPrevLabel);
+                }
                 btn.classList.remove('send-btn-verifying');
                 btn.removeAttribute('aria-busy');
                 if (this.connected) btn.disabled = false;
@@ -322,7 +326,8 @@
             };
             const btn = typeof document !== 'undefined' ? document.getElementById('sendBtn') : null;
             if (btn) {
-                btn.textContent = 'SENDING...';
+                btn.setAttribute('aria-label', 'SENDING...');
+                btn.setAttribute('title', 'SENDING...');
                 if (typeof this.i18nApplyNow === 'function') {
                     try { this.i18nApplyNow(btn); } catch (_) { }
                 }

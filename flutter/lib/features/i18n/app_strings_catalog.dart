@@ -1898,6 +1898,7 @@ const List<String> kAppStringsCatalog = <String>[
   '1 scheduled message',
   '{n} scheduled messages',
   'Send anonymously',
+  'Sent anonymously',
   'Lock chat',
   'Remove chat lock',
   'Locked chats',

@@ -55,7 +55,7 @@ import {
 import { isNymchatClient } from "./_client.js";
 import { isPrivateUrl, ssrfSafeFetch, readBounded } from "./proxy.js";
 import { filterSet, rowHit, pubkeyHit, listPayload } from "./_filters.js";
-import { hiddenEventIdsSince, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
+import { hiddenAmong, spamEngine, badgeGateRefuses, badgeTierFor, readSpamSettings } from "./_spam.js";
 import { handleScheduleAction } from "./_schedule.js";
 
 function shopKnown(id) {
@@ -1165,9 +1165,15 @@ async function handleChannelAction(context, body) {
     var outEvents = [];
     var idList = (idRows && idRows.results) || [];
     var gateE = await filterSet(env);
+    var hiddenE = await hiddenAmong(env, [], 0, idList.map(function (r) { return r.id; }));
+    if (!hiddenE.ok) return json({ error: "Spam check unavailable. Try again shortly." }, 503);
+    var badgeE = await badgeGateMode(env);
+    var engineE = badgeE !== "off" ? spamEngine(env, null) : null;
     for (var ri = 0; ri < idList.length; ri++) {
       var row = idList[ri];
       if (rowHit(gateE, row)) continue;
+      if (hiddenE.hidden.has(row.id)) continue;
+      if (engineE && archivedBadgeRefused(env, row, badgeE, engineE)) continue;
       var parsed = null;
       try { parsed = JSON.parse(row.json); } catch (e) { parsed = null; }
       if (!parsed || parsed.id !== row.id) continue;
@@ -1202,8 +1208,9 @@ async function handleChannelAction(context, body) {
     var editAll = [origRow].concat(editRows.filter(function (r) { return r.id !== origRow.id; }));
     var gateX = await filterSet(env);
     if (gateX.n) editAll = editAll.filter(function (r) { return !rowHit(gateX, r); });
-    var hiddenX = await hiddenEventIdsSince(env, [origRow.channel], editFloor * 1000 - HIDDEN_LOOKBACK_MS);
-    if (hiddenX.size) editAll = editAll.filter(function (r) { return !hiddenX.has(r.id); });
+    var hiddenX = await hiddenAmong(env, [origRow.channel], editFloor * 1000 - HIDDEN_LOOKBACK_MS, editAll.map(function (r) { return r.id; }));
+    if (!hiddenX.ok) return json({ error: "Spam check unavailable. Try again shortly." }, 503);
+    if (hiddenX.hidden.size) editAll = editAll.filter(function (r) { return !hiddenX.hidden.has(r.id); });
     var badgeX = await badgeGateMode(env);
     if (badgeX !== "off") {
       var engineX = spamEngine(env, null);
@@ -1266,13 +1273,15 @@ async function handleChannelAction(context, body) {
         ? " AND pubkey IN (" + reqAuthors.map(function () { return "?"; }).join(",") + ")"
         : "";
       rows = (await replica(env.DB_CHANNELS).prepare(
-        "SELECT id, kind, json, stored_at FROM events WHERE channel IN (" + cph + ")"
+        "SELECT id, kind, pubkey, json, stored_at FROM events WHERE channel IN (" + cph + ")"
         + authorClause + " AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC LIMIT ?"
       ).bind(...reqChannels, ...reqAuthors, floorSec, Math.floor(Date.now() / 1000) + CHANNEL_FUTURE_SKEW_S, isSingle ? 500 : 1500).all()).results || [];
     } catch (e) { rows = []; }
     var gateC = await filterSet(env);
     if (gateC.n) rows = rows.filter(function (r) { return !rowHit(gateC, r); });
-    var hiddenIds = await hiddenEventIdsSince(env, reqChannels, floorSec * 1000 - HIDDEN_LOOKBACK_MS);
+    var hiddenCheck = await hiddenAmong(env, reqChannels, floorSec * 1000 - HIDDEN_LOOKBACK_MS, rows.map(function (r) { return r.id; }));
+    if (!hiddenCheck.ok) return json({ error: "Spam check unavailable. Try again shortly." }, 503);
+    var hiddenIds = hiddenCheck.hidden;
     if (hiddenIds.size) {
       var leaked = [];
       rows = rows.filter(function (r) {

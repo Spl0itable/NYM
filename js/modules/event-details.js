@@ -181,10 +181,6 @@
                 ? this._findMessageById(eventId) : null;
             const msg = found && found.msg;
 
-            const h1 = document.createElement('div');
-            h1.className = 'event-detail-section';
-            h1.textContent = 'Event';
-            frag.appendChild(h1);
             frag.appendChild(this._edRow('ID', eventId, { mono: true }));
 
             if (msg) {
@@ -251,11 +247,6 @@
 
             const ev = rec.event;
             const json = JSON.stringify(ev, null, 2);
-
-            const h1 = document.createElement('div');
-            h1.className = 'event-detail-section';
-            h1.textContent = 'Event';
-            frag.appendChild(h1);
 
             frag.appendChild(this._edRow('ID', ev.id, { mono: true }));
             frag.appendChild(this._edRow('Public key', ev.pubkey || '', { mono: true }));

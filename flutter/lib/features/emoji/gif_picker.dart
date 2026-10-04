@@ -19,6 +19,7 @@ import '../../state/settings_provider.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
+import '../messages/inline_network_image.dart' show InlineNetworkImage;
 import 'modal_close_chip.dart';
 
 /// Requests go through the backend proxy, which attaches the key, so the user's IP never reaches Giphy.
@@ -49,7 +50,9 @@ class GiphyService {
 
   Future<Uint8List?> bytes(String url) async {
     try {
-      final res = await http.get(Uri.parse(proxiedMedia(url)));
+      final proxied = proxiedMedia(url);
+      final res = await http.get(Uri.parse(proxied),
+          headers: InlineNetworkImage.imageHeadersFor(proxied));
       if (res.statusCode != 200 || res.bodyBytes.isEmpty) return null;
       return res.bodyBytes;
     } catch (_) {
@@ -72,6 +75,15 @@ class GiphyService {
     }
     return out;
   }
+}
+
+ImageProvider gifPreviewImage(String url, {int? maxWidth}) {
+  final proxied = proxiedMedia(url);
+  return CachedNetworkImageProvider(
+    proxied,
+    headers: InlineNetworkImage.imageHeadersFor(proxied),
+    maxWidth: maxWidth,
+  );
 }
 
 /// Overridable in tests; network is only touched once the picker mounts.
@@ -560,8 +572,8 @@ class _GifTileState extends State<_GifTile> {
                       color: Colors.white.withValues(alpha: 0.03),
                       child: PausableAnimatedImage(
                         // Proxied so the user's IP never reaches the CDN; decode is capped to the cell and playback pauses offscreen.
-                        image: CachedNetworkImageProvider(
-                          proxiedMedia(widget.gif.url),
+                        image: gifPreviewImage(
+                          widget.gif.url,
                           maxWidth:
                               (240 * MediaQuery.devicePixelRatioOf(context))
                                   .ceil(),

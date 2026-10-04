@@ -579,9 +579,11 @@ Object.assign(NYM.prototype, {
             e.stopPropagation();
             const willOpen = !dropdown.classList.contains('active');
             dropdown.classList.toggle('active');
+            btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
             if (willOpen) {
                 searchInput.value = '';
                 this._renderTranslateDropdownList();
+                this._placeTranslateDropdown(btn, dropdown);
             }
         });
 
@@ -606,6 +608,7 @@ Object.assign(NYM.prototype, {
             const item = e.target.closest('.translate-dropdown-item');
             if (item) {
                 dropdown.classList.remove('active');
+                btn.setAttribute('aria-expanded', 'false');
                 this.translateInputText(item.dataset.lang);
             }
         });
@@ -615,6 +618,19 @@ Object.assign(NYM.prototype, {
                 dropdown.classList.remove('active');
             }
         });
+    },
+
+    _placeTranslateDropdown(btn, dropdown) {
+        const row = dropdown.offsetParent;
+        if (!row) return;
+        const rr = row.getBoundingClientRect();
+        const br = btn.getBoundingClientRect();
+        const top = (btn.closest('.format-toolbar') || btn).getBoundingClientRect().top;
+        const w = dropdown.offsetWidth || 230;
+        const left = Math.max(8 - rr.left, Math.min(br.left - rr.left, window.innerWidth - 8 - w - rr.left));
+        dropdown.style.right = 'auto';
+        dropdown.style.left = Math.round(left) + 'px';
+        dropdown.style.bottom = Math.ceil(rr.bottom - top + 4) + 'px';
     },
 
     // The first-contact PM is translated on render into the app language (not the translate language).
@@ -727,13 +743,11 @@ Object.assign(NYM.prototype, {
         const btn = document.getElementById('translateInputBtn');
         if (!btn || !input) return;
         const hasText = input.value.trim().length > 0;
-        btn.style.display = hasText ? 'flex' : 'none';
-        // Shares an inline action row with the formatting toggle (rich-compose.js).
-        if (typeof this.syncComposerInlineActions === 'function') this.syncComposerInlineActions();
-        else input.style.paddingRight = hasText ? '38px' : '';
+        btn.disabled = !hasText;
         if (!hasText) {
             const dropdown = document.getElementById('translateInputDropdown');
             if (dropdown) dropdown.classList.remove('active');
+            btn.setAttribute('aria-expanded', 'false');
         }
     },
 

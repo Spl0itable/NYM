@@ -314,6 +314,11 @@ function blossomResponseHeaders(resp) {
   headers.set('Content-Type', essence === 'application/json' ? 'application/json' : 'text/plain; charset=utf-8');
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('Content-Security-Policy', "sandbox; default-src 'none'");
+  const reason = (resp.headers.get('x-reason') || '').replace(/[\r\n]+/g, ' ').slice(0, 300);
+  if (reason) {
+    headers.set('X-Reason', reason);
+    headers.set('Access-Control-Expose-Headers', 'X-Reason');
+  }
   return headers;
 }
 

@@ -1090,6 +1090,7 @@ const state = {
   settingsCheckAt: 0,
   settingsVersion: null,
   seen: new Map(),
+  unjudged: new Map(),
   exact: new Map(),
   muted: new Map(),
   hidden: new Set(),
@@ -1166,7 +1167,7 @@ const IO_ROOT = {};
 
 export function _resetSpamState() {
   state.settings = null; state.settingsAt = 0; state.settingsLoading = null; state.settingsLoadingAt = 0; state.settingsRetryAt = 0; state.settingsCheckAt = 0; state.settingsVersion = null;
-  state.seen.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear(); state.dropped.clear();
+  state.seen.clear(); state.unjudged.clear(); state.exact.clear(); state.muted.clear(); state.hidden.clear(); state.dropped.clear();
   state.restored.clear(); state.restoredValue = null;
   for (const pend of state.pending.values()) if (pend.timer) clearTimeout(pend.timer);
   state.pending.clear(); state.pendingBy.clear();
@@ -1493,11 +1494,16 @@ const HIDDEN_SINCE_MAX = 5000;
 const HIDDEN_SINCE_BUCKET_MS = 30000;
 
 export async function hiddenEventIds(env, ids) {
+  return (await hiddenByIds(env, ids)).hidden;
+}
+
+async function hiddenByIds(env, ids) {
   const out = new Set();
+  let ok = true;
   const list = Array.from(new Set((ids || []).filter((id) => typeof id === "string" && id)));
   for (const id of list) if (state.hidden.has(id)) out.add(id);
   const db = env && env.DB_NOPE;
-  if (!hasD1(db) || !list.length) return withoutRestored(out);
+  if (!hasD1(db) || !list.length) return { hidden: withoutRestored(out), ok };
   await syncedSettings(env);
   const r = replica(spamDb(env));
   for (let i = 0; i < list.length; i += HIDDEN_LOOKUP_CHUNK) {
@@ -1509,19 +1515,24 @@ export async function hiddenEventIds(env, ids) {
     } catch (e) {
       if (isTimeout(e)) rs = null;
       else {
-        try { rs = await timed(r.prepare("SELECT id FROM spam_events WHERE id IN (" + ph + ") AND action LIKE '%event-hidden%'").bind(...chunk).all(), D1_READ_TIMEOUT_MS, "hidden read"); } catch (_) { rs = null; }
+        try { rs = await timed(r.prepare("SELECT id FROM spam_events WHERE id IN (" + ph + ") AND action LIKE '%event-hidden%'").bind(...chunk).all(), D1_READ_TIMEOUT_MS, "hidden read"); } catch (e2) { rs = missingTable(e) && missingTable(e2) ? { results: [] } : null; }
       }
     }
+    if (!rs) ok = false;
     for (const row of (rs && rs.results) || []) out.add(row.id);
   }
-  return withoutRestored(out);
+  return { hidden: withoutRestored(out), ok };
 }
 
 export async function hiddenEventIdsSince(env, channels, sinceMs) {
+  return (await hiddenSince(env, channels, sinceMs)).hidden;
+}
+
+async function hiddenSince(env, channels, sinceMs) {
   const out = new Set();
   const db = env && env.DB_NOPE;
   const list = Array.isArray(channels) ? Array.from(new Set(channels.filter((c) => typeof c === "string" && c))).slice(0, 50).sort() : [];
-  if (!hasD1(db) || !list.length) return out;
+  if (!hasD1(db) || !list.length) return { hidden: out, ok: true, full: false };
   await syncedSettings(env);
   const bucket = Math.floor((Number(sinceMs) || 0) / HIDDEN_SINCE_BUCKET_MS);
   const from = bucket * HIDDEN_SINCE_BUCKET_MS;
@@ -1529,7 +1540,7 @@ export async function hiddenEventIdsSince(env, channels, sinceMs) {
   const hit = await cacheGet(null, key);
   if (Array.isArray(hit)) {
     for (const id of hit) if (typeof id === "string") out.add(id);
-    return withoutRestored(out);
+    return { hidden: withoutRestored(out), ok: true, full: hit.length >= HIDDEN_SINCE_MAX };
   }
   const r = replica(spamDb(env));
   const ph = list.map(() => "?").join(", ");
@@ -1538,15 +1549,32 @@ export async function hiddenEventIdsSince(env, channels, sinceMs) {
     rs = await timed(r.prepare("SELECT id FROM spam_hidden WHERE channel IN (" + ph + ") AND seen_at > ? ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
       .bind(...list, from).all(), D1_READ_TIMEOUT_MS, "hidden read");
   } catch (e) {
-    if (isTimeout(e)) return out;
+    if (isTimeout(e)) return { hidden: out, ok: false, full: false };
     try {
       rs = await timed(r.prepare("SELECT id FROM spam_events WHERE channel IN (" + ph + ") AND seen_at > ? AND action LIKE '%event-hidden%' ORDER BY seen_at DESC LIMIT " + HIDDEN_SINCE_MAX)
         .bind(...list, from).all(), D1_READ_TIMEOUT_MS, "hidden read");
-    } catch (_) { return out; }
+    } catch (e2) { return { hidden: out, ok: missingTable(e) && missingTable(e2), full: false }; }
   }
   for (const row of (rs && rs.results) || []) out.add(row.id);
   await cachePut(null, key, Array.from(out), HIDDEN_SINCE_CACHE_S);
-  return withoutRestored(out);
+  return { hidden: withoutRestored(out), ok: true, full: out.size >= HIDDEN_SINCE_MAX };
+}
+
+function missingTable(e) {
+  return /no such table/i.test(String(e && e.message || e));
+}
+
+export async function hiddenAmong(env, channels, sinceMs, ids) {
+  const list = Array.from(new Set((ids || []).filter((id) => typeof id === "string" && id)));
+  if (!list.length) return { hidden: new Set(), ok: true };
+  const since = Array.isArray(channels) && channels.length ? await hiddenSince(env, channels, sinceMs) : { hidden: new Set(), ok: false, full: false };
+  const hidden = new Set();
+  for (const id of list) if (since.hidden.has(id) || state.hidden.has(id)) hidden.add(id);
+  if (since.ok && !since.full) return { hidden: withoutRestored(hidden), ok: true };
+  const rest = list.filter((id) => !hidden.has(id));
+  const byId = await hiddenByIds(env, rest);
+  for (const id of byId.hidden) hidden.add(id);
+  return { hidden: withoutRestored(hidden), ok: byId.ok };
 }
 
 export function spamDb(env) {
@@ -1740,6 +1768,13 @@ function trimMap(map, max) {
   if (map.size <= max) return;
   let n = map.size - max;
   for (const k of map.keys()) { if (n-- <= 0) break; map.delete(k); }
+}
+
+function markUnjudged(job) {
+  state.unjudged.set(job.id, 1);
+  trimMap(state.unjudged, SEEN_MAX);
+  job.unjudged = true;
+  return "pass";
 }
 
 function noteSeen(id) {
@@ -4060,6 +4095,7 @@ export function spamEngine(env, context) {
       keepAlive(context, noteStatus(env));
     },
     isHidden(id) { return state.hidden.has(id); },
+    isPending(id) { return state.pending.has(id); },
     flush() {
       if (!state.wbuf.length && !state.flushRun) return Promise.resolve();
       return maybeFlush(env, context, true) || Promise.resolve();
@@ -4116,6 +4152,7 @@ export function spamEngine(env, context) {
       if (isCoolingDown(now)) {
         state.counters.skippedCooldown++;
         if (s.autoEnforce && locallySuspicious(job, null)) { state.counters.overBudgetDropped++; return "drop"; }
+        job.unjudged = true;
         return "pass";
       }
       const pend = state.pending.get(job.id);
@@ -4124,15 +4161,19 @@ export function spamEngine(env, context) {
         if (pend.released) { w.released = true; w.releasedAt = now; deliver(w, "release"); }
         return "hold";
       }
-      if (!noteSeen(job.id)) return "pass";
-      noteVelocity(pubkey, now);
+      const fresh = noteSeen(job.id);
+      if (!fresh && !state.unjudged.has(job.id)) return "pass";
+      if (fresh) noteVelocity(pubkey, now);
       const queued = Object.assign({}, job, { pubkey, nymKey: nymKey(job.nym), seenAt: now, settings: s, source: "pool", force: false });
       delete queued.release;
       delete queued.retract;
       delete queued.discard;
+      delete queued.unjudged;
       ensureFeatures(queued, now);
-      noteTail(queued, now);
-      noteNym(queued, now);
+      if (fresh) {
+        noteTail(queued, now);
+        noteNym(queued, now);
+      }
       if (s.autoEnforce) {
         const fast = fastVerdict(queued, now, s);
         if (fast) {
@@ -4151,11 +4192,12 @@ export function spamEngine(env, context) {
           return "drop";
         }
       }
-      if (state.stalled) return "pass";
+      if (state.stalled) return markUnjudged(job);
       if (state.queue.length >= EVIDENCE_QUEUE_MAX && !evictReleased()) {
         state.counters.overflow++;
-        return "pass";
+        return markUnjudged(job);
       }
+      state.unjudged.delete(job.id);
       if (!state.inflight.size && !state.queue.length && !state.modelWaiters.length) state.lastProgressAt = now;
       state.queue.push(queued);
       state.counters.queued++;

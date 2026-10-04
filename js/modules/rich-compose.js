@@ -276,31 +276,27 @@ Object.assign(NYM.prototype, {
     },
 
     setupFormatToolbar() {
-        const btn = document.getElementById('formatInputBtn');
         const toolbar = document.getElementById('formatToolbar');
         const input = document.getElementById('messageInput');
-        if (!btn || !toolbar || !input) return;
+        if (!toolbar || !input) return;
 
-        toolbar.innerHTML = NYM_FORMAT_TOOLS.map(t =>
+        toolbar.querySelectorAll('.format-tool[data-format-tool]').forEach((el) => el.remove());
+        toolbar.insertAdjacentHTML('beforeend', NYM_FORMAT_TOOLS.map(t =>
             `<button type="button" class="format-tool" data-format-tool="${t.id}" title="${this.escapeHtml(t.title)}" aria-label="${this.escapeHtml(t.title)}">${t.html}</button>`
-        ).join('');
+        ).join(''));
 
-        // mousedown (not click) so the contenteditable selection is still intact when the tool runs.
         toolbar.addEventListener('mousedown', (e) => {
             const tool = e.target.closest('.format-tool');
             if (!tool) return;
             e.preventDefault();
+            if (!tool.dataset.formatTool) return;
             e.stopPropagation();
             this.applyInputFormat(tool.dataset.formatTool);
         });
-        toolbar.addEventListener('click', (e) => e.preventDefault());
-
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.toggleFormatToolbar();
+        toolbar.addEventListener('click', (e) => {
+            if (e.target.closest('[data-format-tool]')) e.preventDefault();
         });
 
-        // Otherwise contenteditable applies the browser's own bold/italic and injects foreign HTML.
         input.addEventListener('keydown', (e) => {
             if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
             const key = (e.key || '').toLowerCase();
@@ -316,31 +312,22 @@ Object.assign(NYM.prototype, {
             this.applyInputFormat(tool.id);
         });
 
-        this.formatToolbarOpen = false;
-        try {
-            this.formatToolbarOpen = localStorage.getItem('nym_format_toolbar') === 'true';
-        } catch (_) { }
         this._applyFormatToolbarState();
-    },
-
-    toggleFormatToolbar() {
-        this.formatToolbarOpen = !this.formatToolbarOpen;
-        try { localStorage.setItem('nym_format_toolbar', String(this.formatToolbarOpen)); } catch (_) { }
-        this._applyFormatToolbarState();
-        if (this.formatToolbarOpen) {
-            const input = document.getElementById('messageInput');
-            if (input && !input.disabled) input.focus();
-        }
     },
 
     _applyFormatToolbarState() {
-        const btn = document.getElementById('formatInputBtn');
         const toolbar = document.getElementById('formatToolbar');
-        if (!btn || !toolbar) return;
-        const open = !!this.formatToolbarOpen;
-        toolbar.classList.toggle('nm-hidden', !open);
-        btn.classList.toggle('active', open);
-        btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+        if (!toolbar) return;
+        const box = toolbar.closest('.input-container');
+        const open = !!(box && box.classList.contains('composer-pill'));
+        if (toolbar.classList.contains('nm-hidden') !== !open) {
+            toolbar.classList.toggle('nm-hidden', !open);
+            if (!open) {
+                const dropdown = document.getElementById('translateInputDropdown');
+                if (dropdown) dropdown.classList.remove('active');
+            }
+        }
+        if (typeof this.syncComposerInlineActions === 'function') this.syncComposerInlineActions();
         this._refreshComposerOffsets();
     },
 
@@ -518,14 +505,12 @@ Object.assign(NYM.prototype, {
         el.setSelectionRange(span.start, span.start + out.length);
     },
 
-    // Reserve right padding for the visible inline buttons so text never runs underneath them.
     syncComposerInlineActions() {
         const input = document.getElementById('messageInput');
         const row = document.getElementById('inputInlineActions');
         if (!input || !row) return;
-        const visible = Array.from(row.children)
+        const visible = getComputedStyle(row).display === 'none' ? 0 : Array.from(row.children)
             .filter(b => getComputedStyle(b).display !== 'none').length;
-        // 8px gutter + 26px per button + 2px gaps + 4px breathing room.
         input.style.paddingRight = visible
             ? (8 + visible * 26 + (visible - 1) * 2 + 4) + 'px'
             : '';

@@ -173,7 +173,7 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
 
   Widget _body(NymColors c) {
     final ev = _event;
-    final rows = <Widget>[_section(c, tr('Event')), _row(c, tr('ID'), widget.eventId, mono: true)];
+    final rows = <Widget>[_row(c, tr('ID'), widget.eventId, mono: true)];
 
     final pk = ev?.pubkey ?? widget.pubkey;
     if (pk != null && pk.isNotEmpty) {

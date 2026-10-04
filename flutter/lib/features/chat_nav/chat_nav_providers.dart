@@ -40,6 +40,7 @@ final chatNavRevisionProvider = StateProvider<int>((ref) => 0);
 final chatNavProvider = Provider<ChatNavService>((ref) {
   final kv = ref.watch(keyValueStoreProvider);
   var bump = false;
+  var disposed = false;
   final service = ChatNavService(
     KeyValueChatToolsPrefs(kv),
     ChatNavHooks(
@@ -90,12 +91,16 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
         bump = true;
         Future.microtask(() {
           bump = false;
+          if (disposed) return;
           ref.read(chatNavRevisionProvider.notifier).state++;
         });
       },
     ),
     tr: (s) => tr(s),
   );
-  ref.onDispose(service.dispose);
+  ref.onDispose(() {
+    disposed = true;
+    service.dispose();
+  });
   return service;
 });

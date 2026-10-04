@@ -39,6 +39,12 @@
     const RX_IN_TEXT = /(https?:\/\/[^\s#<>"]+)#(nym:[A-Za-z0-9=;:.\/_+-]+)/g;
     const RX_LOCAL_IN_TEXT = /nymlocal:([A-Za-z0-9]{1,40})#(nym:[A-Za-z0-9=;:.\/_+-]+)/g;
     const KIND_PREFIX = { voice: 'audio/', round: 'video/', photo: 'image/', video: 'video/' };
+    const VOICE_VIDEO_CONTAINERS = ['video/mp4', 'video/webm'];
+    const VOICE_CONTAINER = Object.freeze({
+        'audio/mp4': 'mp4', 'audio/x-m4a': 'mp4', 'video/mp4': 'mp4',
+        'audio/webm': 'webm', 'video/webm': 'webm',
+    });
+    const RX_TYPE_REJECT = /pay|paid|subscri|premium|whitelist|allowlist|not allowed|unsupported|file type|mime/i;
     const PORTABLE_VOICE_RATE = 16000;
     const PORTABLE_AUDIO = ['audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav'];
     const VOICE_CONVERT = Object.freeze({
@@ -111,9 +117,14 @@
         return (levels || []).map(v => Math.round(Math.max(0, Math.min(63, v)) * 100 / 63));
     }
 
+    function mimeFitsKind(kind, mime) {
+        if (mime.indexOf(KIND_PREFIX[kind]) === 0) return true;
+        return kind === 'voice' && VOICE_VIDEO_CONTAINERS.indexOf(mime) >= 0;
+    }
+
     function encodeDescriptor(d) {
         if (!d || KINDS.indexOf(d.kind) < 0 || !RX_MIME.test(d.mime || '')) return '';
-        if (d.mime.indexOf(KIND_PREFIX[d.kind]) !== 0) return '';
+        if (!mimeFitsKind(d.kind, d.mime)) return '';
         const parts = ['v=1', 'k=' + d.kind, 'm=' + d.mime];
         if (d.duration != null && isFinite(d.duration)) parts.push('d=' + formatDurationValue(d.duration));
         if (d.size != null && isFinite(d.size) && d.size >= 0) parts.push('s=' + Math.floor(d.size));
@@ -147,7 +158,7 @@
         const kind = map.k;
         if (KINDS.indexOf(kind) < 0) return null;
         const mime = map.m || '';
-        if (!RX_MIME.test(mime) || mime.indexOf(KIND_PREFIX[kind]) !== 0) return null;
+        if (!RX_MIME.test(mime) || !mimeFitsKind(kind, mime)) return null;
         const out = { kind, mime, duration: null, size: null, waveform: [], once: false, onceId: '', key: '', nonce: '' };
         if (map.d != null) {
             if (!RX_DURATION.test(map.d)) return null;
@@ -347,6 +358,42 @@
         return !/opus|vorbis|flac/.test(codecs);
     }
 
+    function voiceDescriptorMime(recorded) {
+        const base = baseMime(recorded);
+        const c = VOICE_CONTAINER[base];
+        return c ? 'audio/' + c : base;
+    }
+
+    function noteUploadTypes(kind, mime) {
+        const base = baseMime(mime);
+        if (!base) return [];
+        if (kind !== 'voice') return [base];
+        const c = VOICE_CONTAINER[base];
+        return c ? ['video/' + c, 'audio/' + c] : [base];
+    }
+
+    function blossomFailureText(status, reason, body) {
+        let why = String(reason || '').trim();
+        const raw = String(body || '').trim();
+        if (!why && raw) {
+            let parsed = null;
+            try { parsed = JSON.parse(raw); } catch (_) { }
+            if (parsed && typeof parsed === 'object') why = String(parsed.message || parsed.error || parsed.reason || '').trim();
+            else if (raw.indexOf('<') < 0) why = raw;
+        }
+        why = why.replace(/\s+/g, ' ').slice(0, 160);
+        return 'HTTP ' + status + (why ? ': ' + why : '');
+    }
+
+    function blossomRejectsType(status, text) {
+        const s = Number(status);
+        if (s === 402 || s === 415) return true;
+        if (s !== 401 && s !== 403) return false;
+        const t = String(text || '');
+        const i = t.indexOf(': ');
+        return RX_TYPE_REJECT.test(i >= 0 ? t.slice(i + 2) : '');
+    }
+
     function encodeWav(samples, sampleRate) {
         const src = samples || [];
         const n = src.length;
@@ -456,7 +503,7 @@
         const kind = map.k;
         if (KINDS.indexOf(kind) < 0) return null;
         const m = baseMime(mime);
-        if (!RX_MIME.test(m) || m.indexOf(KIND_PREFIX[kind]) !== 0) return null;
+        if (!RX_MIME.test(m) || !mimeFitsKind(kind, m)) return null;
         const out = { kind, mime: m, duration: null, waveform: [], once: false, onceId: '' };
         if (map.d != null) {
             if (!/^\d{1,5}$/.test(map.d)) return null;
@@ -667,7 +714,7 @@
         encodeDescriptor, attachDescriptor, parseDescriptor, parseMediaUrl, findMediaNotes,
         imetaTagsForContent, stripMediaNotes, previewText, plainLabel, onceLabel, onceContent,
         formatClock, formatBytes, nextSpeed, parseSpeed, speedLabel, scaledDimensions,
-        extForMime, baseMime, mimeCodecs, isPortableVoiceMime, encodeWav, PORTABLE_VOICE_RATE,
+        extForMime, baseMime, mimeCodecs, isPortableVoiceMime, voiceDescriptorMime, noteUploadTypes, blossomFailureText, blossomRejectsType, encodeWav, PORTABLE_VOICE_RATE,
         VOICE_CONVERT, checkPortableVoice, MODEL_DOWNLOAD, modelDownloadStage, voiceProbeSignal, voiceProbeMatches, meshFileName, parseMeshFileName, meshOnceReceiptId, parseMeshOnceReceiptId,
         featureState, meshSizeCheck, preferredMime,
         hexToBytes, bytesToHex, randomHex, newOnceSecret, encryptOnce, decryptOnce,

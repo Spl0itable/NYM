@@ -35,6 +35,7 @@ import '../commands/command_palette.dart'
         CommandPalette,
         PaletteRow;
 import '../commands/command_registry.dart' show CommandSpec;
+import '../composer/composer_menus.dart';
 import '../emoji/emoji_data.dart';
 import '../emoji/emoji_picker.dart';
 import '../emoji/gif_picker.dart';
@@ -2304,9 +2305,7 @@ class _BotSendButtonState extends State<_BotSendButton> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             height: 42,
-            padding: widget.phone
-                ? const EdgeInsets.all(10)
-                : const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             alignment: Alignment.center,
             decoration: BoxDecoration(
               color: c.primaryA(hovered ? 0.18 : 0.10),
@@ -2316,13 +2315,14 @@ class _BotSendButtonState extends State<_BotSendButton> {
                   ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
                   : null,
             ),
-            child: Text(
-              tr('SEND'),
-              style: TextStyle(
-                color: c.primary,
-                fontSize: widget.phone ? 11 : 12,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 1.5,
+            child: Tooltip(
+              message: tr('Send'),
+              child: Semantics(
+                button: true,
+                label: tr('Send'),
+                excludeSemantics: true,
+                child: NymSvgIcon(ComposerIcons.paperPlane,
+                    size: 18, color: c.primary),
               ),
             ),
           ),

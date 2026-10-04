@@ -867,10 +867,16 @@ ${this._emojiSectionsHtml()}`;
             return;
         }
 
-        const button = document.getElementById('emojiInputBtn');
+        const button = typeof this._composerEmojiButton === 'function' ? this._composerEmojiButton() : document.getElementById('emojiInputBtn');
         if (button) {
             this.showEnhancedEmojiPickerForInput(button);
         }
+    },
+
+    _composerPickerBottom(button) {
+        if (!button || button.id !== 'formatEmojiBtn') return 60;
+        const rect = button.getBoundingClientRect();
+        return Math.max(60, Math.round(window.innerHeight - rect.top + 8));
     },
 
     showEnhancedEmojiPickerForInput(button) {
@@ -884,7 +890,10 @@ ${this._emojiSectionsHtml()}`;
         const rect = button.getBoundingClientRect();
         let css;
         if (window.innerWidth <= 768) {
-            css = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);right:auto;max-width:90%;';
+            css = `position:fixed;bottom:${this._composerPickerBottom(button)}px;left:50%;transform:translateX(-50%);right:auto;max-width:90%;`;
+        } else if (button.id === 'formatEmojiBtn') {
+            const bottom = (window.innerHeight - rect.top + 10);
+            css = `position:fixed;bottom:${bottom}px;left:${Math.max(10, Math.round(rect.left))}px;right:auto;`;
         } else {
             const bottom = (window.innerHeight - rect.top + 10);
             const right = Math.min(window.innerWidth - rect.right + 50, 10);

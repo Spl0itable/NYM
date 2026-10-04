@@ -78,6 +78,8 @@ import {
   CLIENT_CORS_HEADERS,
 } from "./_shared.js";
 import { isNymchatClient, isStandaloneNymbot } from "./_client.js";
+import { hiddenAmong } from "./_spam.js";
+import { filterSet, rowHit } from "./_filters.js";
 import { runMaxRuns, runLabel, runProgressLine, runHistoryPlan, runTurnsRecent, runTurnAdd, runResultPut,
   runResultGet, runGet, runCountLive, runStart, runBeat, runEnd, runCancelFlag, runCanceled, runLive, runListRecent,
   runSteerAdd, runSteerList, runSteerMark, runSteerMiss, runSteerStatus, runSweep, RUN_FREE, RUN_CEILING, RUN_LIVE_MS, RUN_PARKED_MS, RUN_WAITING_MS,
@@ -8366,9 +8368,14 @@ async function fetchChannelEventsFromD1(context, kinds, since, limit, channel) {
     if (channel) { where.push("channel = ?"); binds.push(String(channel).toLowerCase()); }
     binds.push(limit || 1000);
     var rows = (await replica(env.DB_CHANNELS).prepare(
-      "SELECT json, stored_at FROM events WHERE " + where.join(" AND ") +
+      "SELECT id, pubkey, json, stored_at FROM events WHERE " + where.join(" AND ") +
       " ORDER BY " + EFFECTIVE_MS_SQL + " DESC LIMIT ?"
     ).bind(...binds).all()).results || [];
+    var gate = await filterSet(env);
+    if (gate.n) rows = rows.filter(function (r) { return !rowHit(gate, r); });
+    var hidden = await hiddenAmong(env, channel ? [String(channel).toLowerCase()] : [], since * 1000 - 3600000, rows.map(function (r) { return r.id; }));
+    if (!hidden.ok) return null;
+    if (hidden.hidden.size) rows = rows.filter(function (r) { return !hidden.hidden.has(r.id); });
     var events = [];
     for (var i = 0; i < rows.length; i++) {
       try {

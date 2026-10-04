@@ -7,6 +7,7 @@
         pollMesh: "Polls need the internet. They can't be created over the Bluetooth mesh.",
         sendLater: 'Send later',
         sendAnon: 'Send anonymously',
+        sentAnon: 'Sent anonymously',
     });
 
     const ATTACH_ORDER = Object.freeze(['photo', 'file', 'location', 'videoNote', 'poll', 'event']);
@@ -50,6 +51,11 @@
         return String(s.text || '').trim() ? 'send' : 'mic';
     }
 
+    function canSendAnon(ctx) {
+        const c = ctx || {};
+        return !!c.loggedIn && (c.surface || 'channel') === 'channel' && !c.editing && !c.mesh;
+    }
+
     function sendMenuItems(ctx) {
         const c = ctx || {};
         const out = [{ id: 'later', label: STRINGS.sendLater }];
@@ -83,6 +89,6 @@
 
     G.NymComposer = {
         STRINGS, ATTACH_ORDER, SHEET_MAX_WIDTH, MAIN_MENU,
-        attachItems, primaryAction, sendMenuItems, presentation, menuStep, isMenuKey, mainMenuRows,
+        attachItems, primaryAction, canSendAnon, sendMenuItems, presentation, menuStep, isMenuKey, mainMenuRows,
     };
 })();

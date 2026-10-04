@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math' as math;
 
 class MediaNoteLimits {
@@ -146,6 +147,64 @@ const Map<String, String> _kindPrefix = {
   'video': 'video/',
 };
 
+const List<String> _voiceVideoContainers = ['video/mp4', 'video/webm'];
+const Map<String, String> _voiceContainer = {
+  'audio/mp4': 'mp4',
+  'audio/x-m4a': 'mp4',
+  'video/mp4': 'mp4',
+  'audio/webm': 'webm',
+  'video/webm': 'webm',
+};
+final RegExp _rxTypeReject = RegExp(
+    r'pay|paid|subscri|premium|whitelist|allowlist|not allowed|unsupported|file type|mime',
+    caseSensitive: false);
+
+bool _mimeFitsKind(String kind, String mime) {
+  if (mime.startsWith(_kindPrefix[kind]!)) return true;
+  return kind == 'voice' && _voiceVideoContainers.contains(mime);
+}
+
+String voiceDescriptorMime(String? recorded) {
+  final base = baseMime(recorded);
+  final c = _voiceContainer[base];
+  return c == null ? base : 'audio/$c';
+}
+
+List<String> noteUploadTypes(String kind, String? mime) {
+  final base = baseMime(mime);
+  if (base.isEmpty) return const [];
+  if (kind != 'voice') return [base];
+  final c = _voiceContainer[base];
+  return c == null ? [base] : ['video/$c', 'audio/$c'];
+}
+
+String blossomFailureText(int status, String? reason, String? body) {
+  var why = (reason ?? '').trim();
+  final raw = (body ?? '').trim();
+  if (why.isEmpty && raw.isNotEmpty) {
+    Object? parsed;
+    try {
+      parsed = jsonDecode(raw);
+    } catch (_) {}
+    if (parsed is Map) {
+      final v = parsed['message'] ?? parsed['error'] ?? parsed['reason'];
+      why = (v == null ? '' : '$v').trim();
+    } else if (parsed is! List && !raw.contains('<')) {
+      why = raw;
+    }
+  }
+  why = why.replaceAll(RegExp(r'\s+'), ' ');
+  if (why.length > 160) why = why.substring(0, 160);
+  return 'HTTP $status${why.isEmpty ? '' : ': $why'}';
+}
+
+bool blossomRejectsType(int? status, String text) {
+  if (status == 402 || status == 415) return true;
+  if (status != 401 && status != 403) return false;
+  final i = text.indexOf(': ');
+  return _rxTypeReject.hasMatch(i >= 0 ? text.substring(i + 2) : '');
+}
+
 class MediaNote {
   MediaNote({
     required this.kind,
@@ -277,7 +336,7 @@ List<int> waveformToImeta(List<int> levels) =>
 
 String encodeDescriptor(MediaNote d) {
   if (!_kinds.contains(d.kind) || !_rxMime.hasMatch(d.mime)) return '';
-  if (!d.mime.startsWith(_kindPrefix[d.kind]!)) return '';
+  if (!_mimeFitsKind(d.kind, d.mime)) return '';
   final parts = <String>['v=1', 'k=${d.kind}', 'm=${d.mime}'];
   final dur = d.duration;
   if (dur != null && dur.isFinite) parts.add('d=${formatDurationValue(dur)}');
@@ -315,7 +374,7 @@ MediaNote? parseDescriptor(String frag) {
   final kind = map['k'];
   if (kind == null || !_kinds.contains(kind)) return null;
   final mime = map['m'] ?? '';
-  if (!_rxMime.hasMatch(mime) || !mime.startsWith(_kindPrefix[kind]!)) {
+  if (!_rxMime.hasMatch(mime) || !_mimeFitsKind(kind, mime)) {
     return null;
   }
   double? duration;
@@ -582,7 +641,7 @@ MediaNote? parseMeshFileName(String name, String? mime) {
   final kind = map['k'];
   if (kind == null || !_kinds.contains(kind)) return null;
   final m = baseMime(mime);
-  if (!_rxMime.hasMatch(m) || !m.startsWith(_kindPrefix[kind]!)) return null;
+  if (!_rxMime.hasMatch(m) || !_mimeFitsKind(kind, m)) return null;
   double? duration;
   var waveform = <int>[];
   var once = false;

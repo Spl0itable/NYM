@@ -3,6 +3,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/api/api_client.dart' show ApiException;
+import '../media_notes/media_notes.dart' show blossomFailureText, blossomRejectsType;
 
 /// http(s) URLs ending in an image/video extension, with an optional query string.
 final RegExp _rxImetaMediaUrl = RegExp(
@@ -85,6 +86,7 @@ String blossomContentType(String? type) {
 
 class BlossomUploader {
   final Set<String> _rejects = {};
+  String lastFailure = '';
 
   Future<({String url, String server})?> upload(
     List<String> servers,
@@ -93,14 +95,25 @@ class BlossomUploader {
   ) async {
     final type = blossomContentType(contentType);
     final open = servers.where((s) => !_rejects.contains('$s $type')).toList();
+    final failures = <String>[];
     for (final server in open.isEmpty ? servers : open) {
+      final host = server.replaceFirst(RegExp(r'^https?://'), '');
       try {
         final url = await put(server, type);
-        if (url != null && url.isNotEmpty) return (url: url, server: server);
+        if (url != null && url.isNotEmpty) {
+          lastFailure = '';
+          return (url: url, server: server);
+        }
+        failures.add('$host ($type): no URL in response');
       } on ApiException catch (e) {
-        if (e.statusCode == 415) _rejects.add('$server $type');
-      } catch (_) {}
+        final text = blossomFailureText(e.statusCode, '', e.body);
+        if (blossomRejectsType(e.statusCode, text)) _rejects.add('$server $type');
+        failures.add('$host ($type): $text');
+      } catch (e) {
+        failures.add('$host ($type): $e');
+      }
     }
+    lastFailure = failures.join('; ');
     return null;
   }
 }

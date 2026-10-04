@@ -9,10 +9,9 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/messages/format/message_content.dart' show proxiedMedia;
+import '../../features/messages/inline_network_image.dart'
+    show InlineNetworkImage;
 import '../nym_icons.dart' show NymSvgIcon;
-
-/// Same key as the PWA so the preference carries over through settings sync.
-const String kFormatToolbarKey = 'nym_format_toolbar';
 
 enum FormatToolKind { wrap, linePrefix, codeBlock, picker }
 
@@ -389,33 +388,42 @@ FormatEdit removeComposerMedia(String value, int index,
   return FormatEdit(out, start, start);
 }
 
-class FormatInputButton extends StatefulWidget {
-  const FormatInputButton({
+class FormatToolbarIconButton extends StatefulWidget {
+  const FormatToolbarIconButton({
     super.key,
-    required this.active,
-    required this.enabled,
+    required this.svg,
+    required this.tooltip,
     required this.onTap,
+    this.enabled = true,
+    this.active = false,
   });
 
-  final bool active;
-  final bool enabled;
+  final String svg;
+  final String tooltip;
   final VoidCallback onTap;
+  final bool enabled;
+  final bool active;
 
   @override
-  State<FormatInputButton> createState() => _FormatInputButtonState();
+  State<FormatToolbarIconButton> createState() =>
+      _FormatToolbarIconButtonState();
 }
 
-class _FormatInputButtonState extends State<FormatInputButton> {
+class _FormatToolbarIconButtonState extends State<FormatToolbarIconButton> {
   bool _hover = false;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final lit = widget.active || (_hover && widget.enabled);
-    return Opacity(
-      opacity: widget.enabled ? (lit ? 1.0 : 0.6) : 0.4,
-      child: Tooltip(
-        message: tr('Formatting'),
+    final lit = widget.enabled && (widget.active || _hover);
+    final base = lit ? c.primary : c.textDim;
+    final color = widget.enabled ? base : base.withValues(alpha: base.a * 0.4);
+    return Tooltip(
+      message: tr(widget.tooltip),
+      child: Semantics(
+        button: true,
+        enabled: widget.enabled,
+        expanded: widget.active,
         child: MouseRegion(
           cursor: widget.enabled
               ? SystemMouseCursors.click
@@ -426,21 +434,18 @@ class _FormatInputButtonState extends State<FormatInputButton> {
             onTap: widget.enabled ? widget.onTap : null,
             behavior: HitTestBehavior.opaque,
             child: Container(
-              width: 26,
+              width: 28,
               height: 26,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: widget.active
-                    ? c.primaryA(0.15)
-                    : (_hover && widget.enabled
-                        ? (c.isLight
-                            ? Colors.black.withValues(alpha: 0.06)
-                            : Colors.white.withValues(alpha: 0.08))
-                        : null),
+                color: _hover && widget.enabled
+                    ? (c.isLight
+                        ? Colors.black.withValues(alpha: 0.06)
+                        : Colors.white.withValues(alpha: 0.08))
+                    : null,
                 borderRadius: BorderRadius.circular(4),
               ),
-              child: Icon(Icons.text_fields,
-                  size: 17, color: lit ? c.primary : c.textDim),
+              child: NymSvgIcon(widget.svg, size: 16, color: color),
             ),
           ),
         ),
@@ -450,9 +455,16 @@ class _FormatInputButtonState extends State<FormatInputButton> {
 }
 
 class FormatToolbar extends StatelessWidget {
-  const FormatToolbar({super.key, required this.onTool, this.squareTop = false});
+  const FormatToolbar({
+    super.key,
+    required this.onTool,
+    this.squareTop = false,
+    this.leading = const [],
+  });
 
   final void Function(FormatTool tool) onTool;
+
+  final List<Widget> leading;
 
   /// True while a popup is stacked directly above, squaring the touching top corners.
   final bool squareTop;
@@ -493,6 +505,17 @@ class FormatToolbar extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ...leading,
+            if (leading.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Container(
+                  key: const ValueKey('formatToolSep'),
+                  width: 1,
+                  height: 18,
+                  color: c.glassBorder,
+                ),
+              ),
             for (final tool in kFormatTools)
               _FormatToolButton(tool: tool, onTap: () => onTool(tool)),
           ],
@@ -722,6 +745,8 @@ class ComposerMediaStrip extends StatelessWidget {
                   status: attachments[i].status,
                   error: attachments[i].error,
                   label: attachments[i].label,
+                  gif: attachments[i].hosted &&
+                      attachments[i].contentType == 'image/gif',
                   onRemove: onRemoveAttachment == null
                       ? null
                       : () => onRemoveAttachment!(attachments[i]),
@@ -746,9 +771,11 @@ class _MediaThumb extends StatelessWidget {
     this.status = ComposerAttachmentStatus.done,
     this.error = '',
     this.label = '',
+    this.gif = false,
   });
 
   final String label;
+  final bool gif;
   final String url;
   final Uint8List? bytes;
   final bool isVideo;
@@ -789,14 +816,16 @@ class _MediaThumb extends StatelessWidget {
         errorBuilder: (_, _, _) => _broken(c),
       );
     } else {
+      final proxied = proxiedMedia(url);
       media = Image.network(
-        proxiedMedia(url),
+        proxied,
+        headers: InlineNetworkImage.imageHeadersFor(proxied),
         width: 56,
         height: 56,
         fit: BoxFit.cover,
         cacheWidth:
             (56 * MediaQuery.devicePixelRatioOf(context) * 1.5).ceil(),
-        errorBuilder: (_, _, _) => _broken(c),
+        errorBuilder: (_, _, _) => gif ? _gifPlaceholder(c) : _broken(c),
       );
     }
 
@@ -884,6 +913,20 @@ class _MediaThumb extends StatelessWidget {
         color: c.bgTertiary,
         alignment: Alignment.center,
         child: Icon(Icons.broken_image_outlined, size: 18, color: c.textDim),
+      );
+
+  Widget _gifPlaceholder(NymColors c) => Container(
+        color: c.bgTertiary,
+        alignment: Alignment.center,
+        child: Text(
+          tr('GIF'),
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5,
+            color: c.textDim,
+          ),
+        ),
       );
 }
 

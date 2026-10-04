@@ -2775,12 +2775,14 @@ Object.assign(NYM.prototype, {
 
     async sendMessagePseudonymous() {
         const input = document.getElementById('messageInput');
+        if (!input) return false;
+        if (typeof this._composerCanSendAnon === 'function' ? !this._composerCanSendAnon() : (!this.nostrLoginMethod || this.inPMMode || this.pendingEdit)) return false;
         let content = input.value.trim();
 
         if (typeof this.composerHasPendingUploads === 'function'
             && this.composerHasPendingUploads()) {
             this.displaySystemMessage('Still uploading — send again once the attachments finish.');
-            return;
+            return false;
         }
         const attachmentUrls = typeof this.composerAttachmentUrls === 'function'
             ? this.composerAttachmentUrls() : [];
@@ -2788,55 +2790,37 @@ Object.assign(NYM.prototype, {
             content = (content ? content + ' ' : '') + attachmentUrls.join(' ');
         }
 
-        if (!content && !this.pendingQuote) return;
+        if (!content && !this.pendingQuote) return false;
 
         if (!this.connected) {
             this.displaySystemMessage('Not connected to relay. Please wait...');
-            return;
+            return false;
         }
 
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
-        const quoteData = savedQuote;
-        const rawInput = content;
-
         const threadRoot = (typeof this._threadRootForSend === 'function')
             ? this._threadRootForSend() : null;
-        // A plain reply in a Nymbot thread continues that conversation; captured while the bot is still last speaker.
-        const threadBotQuote = (!savedQuote && threadRoot && !this.inPMMode &&
-            typeof this._threadBotQuoteContext === 'function')
-            ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
-            : null;
 
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
             const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
                 (textLines.length > 1 ? '\n' + textLines.slice(1).map(line => `> ${line}`).join('\n') : '');
             content = content ? `${quoteLine}\n\n${content}` : quoteLine;
-            this.clearQuoteReply();
         }
 
-        this.commandHistory.push(content);
-        this.historyIndex = this.commandHistory.length;
-
+        let sent = false;
         if (content.startsWith('/')) {
             this.handleCommand(content);
+        } else if (this.currentGeohash) {
+            sent = await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, savedQuote, threadRoot);
+            if (!sent) return false;
         } else {
-            if (this.inPMMode && this.currentGroup) {
-                // Group messages always use the logged-in key.
-                await this.sendGroupMessage(content, this.currentGroup, { threadRoot });
-            } else if (this.inPMMode && this.currentPM) {
-                await this.sendPM(content, this.currentPM, { threadRoot });
-            } else if (this.currentGeohash) {
-                await this.publishMessagePseudonymous(content, this.currentGeohash, this.currentGeohash, quoteData, threadRoot);
-                const isBotCmd = rawInput.startsWith('?') || /@nymbot(?:#[a-f0-9]{4})?(?:\s|$)/i.test(rawInput);
-                const botQuote = savedQuote || threadBotQuote;
-                const isNymbotReply = botQuote && /^nymbot(?:#[a-f0-9]{4})?$/i.test(botQuote.author);
-                if (isBotCmd || isNymbotReply) {
-                    this._handleBotCommand(rawInput, this.currentGeohash, botQuote, content, threadRoot);
-                }
-            }
+            return false;
         }
 
+        if (this.pendingQuote) this.clearQuoteReply();
+        this.commandHistory.push(content);
+        this.historyIndex = this.commandHistory.length;
         input.value = '';
         if (typeof this.clearComposerAttachments === 'function') this.clearComposerAttachments();
         this.autoResizeTextarea(input);
@@ -2846,6 +2830,14 @@ Object.assign(NYM.prototype, {
         this.sendTypingStop();
         this.sendChannelTypingStop();
         input.focus();
+        if (sent) {
+            if (window.nymHapticTap) window.nymHapticTap();
+            if (typeof this.showToast === 'function') {
+                const label = window.NymComposer ? window.NymComposer.STRINGS.sentAnon : 'Sent anonymously';
+                this.showToast(typeof this.uiText === 'function' ? this.uiText(label) : label);
+            }
+        }
+        return sent;
     },
 
     hideMessagesFromBlockedUser(pubkey) {
@@ -3373,6 +3365,7 @@ Object.assign(NYM.prototype, {
                 return false;
             }
             if (!msg.isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
+            if (typeof this._quietMessage === 'function' && this._quietMessage(msg)) return false;
             if (!msg.isOwn && this.hasBlockedKeyword(msg.content, msg.author, msg.pubkey)) return false;
             if (clientGates && !msg.isOwn && this.isSpamMessage(msg.content)) return false;
             if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;

@@ -872,7 +872,9 @@ class ApiClient {
     );
     _trackApiData('upload', sent: bytes.length, recv: _bodyLen(res.bodyBytes));
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw ApiException('upload', res.statusCode, _utf8Body(res));
+      final reason = (res.headers['x-reason'] ?? '').trim();
+      throw ApiException(
+          'upload', res.statusCode, reason.isNotEmpty ? reason : _utf8Body(res));
     }
     return jsonDecode(_utf8Body(res)) as Map<String, dynamic>;
   }

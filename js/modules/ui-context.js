@@ -1314,7 +1314,7 @@ Object.assign(NYM.prototype, {
             if (!e.target.closest('.enhanced-emoji-modal') &&
                 !e.target.closest('.reaction-btn') &&
                 !e.target.closest('.add-reaction-btn') &&
-                !e.target.closest('#emojiInputBtn') &&
+                !e.target.closest('#emojiInputBtn, #formatEmojiBtn') &&
                 !e.target.closest('#ctxReact') &&
                 !e.target.closest('.call-react-more') &&
                 !e.target.closest('#swipeReactEmojiBtn')) {
@@ -1322,7 +1322,7 @@ Object.assign(NYM.prototype, {
             }
 
             if (!e.target.closest('.gif-picker') &&
-                !e.target.closest('#emojiInputBtn')) {
+                !e.target.closest('#emojiInputBtn, #formatEmojiBtn')) {
                 this.closeGifPicker();
             }
 
@@ -1398,68 +1398,8 @@ Object.assign(NYM.prototype, {
             }
         });
 
-        // Long-press Send (2s) for pseudonymous send (Nostr login users only).
         const sendBtn = document.getElementById('sendBtn');
-        let sendLongPressTimer = null;
-        let sendLongPressFired = false;
-        let sendSuppressClickUntil = 0;
-
-        const startSendLongPress = (e) => {
-            if (e && e.type === 'mousedown' && e.button !== 0) return;
-            if (sendLongPressTimer) return;
-            sendLongPressFired = false;
-            sendLongPressTimer = setTimeout(() => {
-                sendLongPressTimer = null;
-                if (this.nostrLoginMethod) {
-                    sendLongPressFired = true;
-                    sendSuppressClickUntil = Date.now() + 800;
-                    window.nymHapticTap && window.nymHapticTap();
-                    sendBtn.style.boxShadow = '0 0 15px rgb(from var(--primary) r g b / 0.4)';
-                    sendBtn.textContent = 'ANON';
-                    this.sendMessagePseudonymous();
-                    setTimeout(() => {
-                        sendBtn.textContent = 'SEND';
-                        sendBtn.style.boxShadow = '';
-                        sendLongPressFired = false;
-                    }, 1000);
-                }
-            }, 2000);
-            if (this.nostrLoginMethod) {
-                setTimeout(() => {
-                    if (sendLongPressTimer) {
-                        sendBtn.style.transition = 'box-shadow 0.3s ease';
-                        sendBtn.style.boxShadow = '0 0 10px rgb(from var(--primary) r g b / 0.2)';
-                    }
-                }, 700);
-            }
-        };
-
-        const cancelSendLongPress = (e) => {
-            if (sendLongPressTimer) {
-                clearTimeout(sendLongPressTimer);
-                sendLongPressTimer = null;
-                sendBtn.style.boxShadow = '';
-            }
-            if (sendLongPressFired && e && e.cancelable) {
-                e.preventDefault();
-                e.stopPropagation();
-            }
-        };
-
-        sendBtn.addEventListener('click', (e) => {
-            if (sendLongPressFired || Date.now() < sendSuppressClickUntil) {
-                e.preventDefault();
-                e.stopPropagation();
-                return;
-            }
-            sendMessage();
-        });
-        sendBtn.addEventListener('mousedown', startSendLongPress);
-        sendBtn.addEventListener('touchstart', startSendLongPress, { passive: false });
-        sendBtn.addEventListener('mouseup', cancelSendLongPress);
-        sendBtn.addEventListener('mouseleave', cancelSendLongPress);
-        sendBtn.addEventListener('touchend', cancelSendLongPress);
-        sendBtn.addEventListener('touchcancel', cancelSendLongPress);
+        sendBtn.addEventListener('click', () => sendMessage());
         sendBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
 
         // Bound to .main-content to cover single view and every column; modals live outside it.
@@ -1976,19 +1916,21 @@ Object.assign(NYM.prototype, {
         const overhang = expanded ? Math.max(0, input.offsetHeight - base) : 0;
         wrapper.style.setProperty('--popout-overhang', overhang + 'px');
         // The toolbar/attachment stack sits between the field and the chips, so `bottom:100%` anchors must clear it.
+        const gap = container && container.classList.contains('composer-pill') ? -1 : 8;
         const panels = document.getElementById('composerPanels');
-        const panelsH = (panels && panels.offsetHeight > 0) ? panels.offsetHeight + 8 : 0;
+        const panelsH = (panels && panels.offsetHeight > 0) ? panels.offsetHeight + gap : 0;
         wrapper.style.setProperty('--composer-panels-h', panelsH + 'px');
         // The upload panel sits in the same stack, so it clears the panels and is cleared by what's above.
         const up = document.getElementById('uploadProgress');
-        const uploadH = (up && up.offsetHeight > 0) ? up.offsetHeight + 8 : 0;
+        const uploadH = (up && up.offsetHeight > 0) ? up.offsetHeight + gap : 0;
         wrapper.style.setProperty('--composer-upload-h', uploadH + 'px');
         const ep = document.getElementById('editPreview');
         const qp = document.getElementById('quotePreview');
         const preview = (ep && ep.offsetHeight > 0) ? ep : ((qp && qp.offsetHeight > 0) ? qp : null);
         const previewH = preview ? preview.offsetHeight : 0;
+        wrapper.classList.toggle('composer-has-chip', !!preview);
         wrapper.style.setProperty('--ac-offset',
-            (overhang + panelsH + uploadH + (previewH ? previewH + 8 : 0)) + 'px');
+            (overhang + panelsH + uploadH + (previewH ? previewH + gap : 0)) + 'px');
     },
 
     _renderContextMenuPubkey(pubkey) {
@@ -2487,15 +2429,21 @@ Object.assign(NYM.prototype, {
         if (typeof this._composerPickerTabs === 'function') this._composerPickerTabs(gifPicker, 'gif');
 
         // Reparent to <body> so position:fixed anchors to the viewport.
-        const button = document.getElementById('emojiInputBtn');
+        const button = typeof this._composerEmojiButton === 'function' ? this._composerEmojiButton() : document.getElementById('emojiInputBtn');
         document.body.appendChild(gifPicker);
         gifPicker.style.position = 'fixed';
         if (window.innerWidth <= 768) {
-            gifPicker.style.bottom = '60px';
+            gifPicker.style.bottom = this._composerPickerBottom(button) + 'px';
             gifPicker.style.left = '50%';
             gifPicker.style.transform = 'translateX(-50%)';
             gifPicker.style.right = 'auto';
             gifPicker.style.maxWidth = '90%';
+        } else if (button && button.id === 'formatEmojiBtn') {
+            const rect = button.getBoundingClientRect();
+            gifPicker.style.bottom = (window.innerHeight - rect.top + 10) + 'px';
+            gifPicker.style.left = Math.max(10, Math.round(rect.left)) + 'px';
+            gifPicker.style.right = 'auto';
+            gifPicker.style.transform = '';
         } else if (button) {
             const rect = button.getBoundingClientRect();
             gifPicker.style.bottom = (window.innerHeight - rect.top + 10) + 'px';

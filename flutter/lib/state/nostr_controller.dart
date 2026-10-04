@@ -45,6 +45,7 @@ import '../features/groups/wrap_outbox.dart';
 import '../features/i18n/i18n.dart';
 import '../features/i18n/localization_service.dart';
 import '../features/messages/format/nym_format.dart' show NymFormat;
+import '../features/messages/archive_gate.dart';
 import '../features/messages/trust_graph.dart';
 import '../features/messages/media_fallbacks.dart';
 import '../features/media_notes/media_note_stores.dart';
@@ -3856,32 +3857,31 @@ class NostrController {
   final Random _anonRng = Random();
 
   /// Sends to the active channel under a fresh ephemeral key and anon nym; PM/group views use the real key.
-  Future<void> sendCurrentPseudonymous(String text) async {
+  Future<bool> sendCurrentPseudonymous(String text) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty) return;
+    if (trimmed.isEmpty) return false;
     if (isCommandLine(trimmed)) {
       _dispatcher.handle(trimmed);
-      return;
-    }
-    if (shouldRouteToBot(trimmed)) {
-      await routeToBot(trimmed);
-      return;
+      return false;
     }
     final view = _ref.read(appStateProvider).view;
-    if (view.kind != ViewKind.channel) {
-      await _sendMessageContent(trimmed);
-      return;
-    }
-    await _sendChannelPseudonymous(trimmed);
+    if (view.kind != ViewKind.channel) return false;
+    return _sendChannelPseudonymous(trimmed);
   }
 
   /// Publishes one pseudonymous channel message; never records presence, which would link it to the user.
-  Future<void> _sendChannelPseudonymous(String content) async {
+  Future<bool> _sendChannelPseudonymous(String content) async {
     final appState = _ref.read(appStateProvider.notifier);
     final state = _ref.read(appStateProvider);
     final service = _service;
     final view = state.view;
     _markDirty(view.storageKey);
+
+    String? threadRoot;
+    final at = _ref.read(activeThreadProvider);
+    if (at != null && at.view == view && appThreadsEnabled) {
+      threadRoot = at.rootId;
+    }
 
     final ephemeralSigner = LocalSigner(keys.generatePrivateKey());
     final anonNym = _generateAnonNym();
@@ -3890,8 +3890,9 @@ class NostrController {
       content,
       pubkeyOverride: ephemeralSigner.pubkey,
       authorOverride: anonNym,
+      threadRoot: threadRoot,
     );
-    if (service == null) return;
+    if (service == null) return false;
     final isGeo = state.channels
         .any((c) => c.key == view.id.toLowerCase() && c.isGeohash);
     try {
@@ -3904,6 +3905,7 @@ class NostrController {
         // The service clamps this up to the Nymchat floor.
         powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
         signerOverride: ephemeralSigner,
+        threadRoot: threadRoot,
       );
       if (signed != null && echo != null) {
         appState.replaceOptimistic(
@@ -3914,8 +3916,10 @@ class NostrController {
           powTarget: EventMapper.powTargetOf(signed),
         );
       }
+      return signed != null;
     } catch (_) {
       if (echo != null) appState.markOptimisticFailed(echo.id);
+      return false;
     }
   }
 
@@ -9579,7 +9583,12 @@ class NostrController {
         const Duration(seconds: 10),
         onTimeout: () => const <Map<String, dynamic>>[],
       );
-      final restored = await verifiedRows(events, _verifyArchived);
+      final selfPk = _identity?.pubkey;
+      final restored = (await verifiedRows(events, _verifyArchived))
+          .where((ev) => !archivedSpam(ev, selfPk,
+              enabled: appSpamFilterEnabled,
+              aggressive: appSpamFilterAggressive))
+          .toList();
       final appState = _ref.read(appStateProvider.notifier);
       // One emit for the whole archive page.
       appState.runBatched(() {
@@ -11871,7 +11880,11 @@ class NostrController {
         final url = data['url'];
         return url is String ? url : null;
       });
-      if (done == null) return null;
+      if (done == null) {
+        lastUploadFailure = _blossomUploader.lastFailure;
+        return null;
+      }
+      lastUploadFailure = '';
       onProgress?.call(1.0);
       final fallbacks = _ref.read(mediaFallbacksProvider);
       fallbacks.recordPredictedMirrors(done.url, [
@@ -11887,6 +11900,7 @@ class NostrController {
   }
 
   final BlossomUploader _blossomUploader = BlossomUploader();
+  String lastUploadFailure = '';
 
   /// Mirrors a blob to the other Blossom servers via the proxy with the same upload auth; best-effort.
   Future<List<String>> _mirrorBlobBackground(

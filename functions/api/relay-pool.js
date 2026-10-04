@@ -976,6 +976,12 @@ export async function onRequest(context) {
     const json = JSON.stringify(ev);
     if (json.length > archiveJsonMax(ev.kind, getTag)) return;
     if (outboundChannelRefused(ev)) return;
+    if ((ev.kind === 20000 || ev.kind === 23333) && ev.content && spam.active() && !spam.isExempt(ev.pubkey)) return;
+    commitOutgoingArchive(ev, channel);
+  }
+
+  function commitOutgoingArchive(ev, channel) {
+    if (!archiveEnabled || archiveBuf.has(ev.id) || archiveVetoed.has(ev.id)) return;
     if (isAppRelayOnlyEvent(ev)) {
       if (pendingAppArchive.size >= PENDING_APP_ARCHIVE_MAX) {
         pendingAppArchive.delete(pendingAppArchive.keys().next().value);
@@ -985,7 +991,7 @@ export async function onRequest(context) {
     }
     if (!archiveRateOk(ev.pubkey, ev.kind, ev.id)) return;
     if (bufferArchive(channel, ev.id, ev.kind, ev.pubkey,
-      typeof ev.created_at === 'number' ? ev.created_at : 0, json)) {
+      typeof ev.created_at === 'number' ? ev.created_at : 0, JSON.stringify(ev))) {
       outboundArchived.set(ev.id, ev.pubkey);
       if (outboundArchived.size > OUTBOUND_ARCHIVED_MAX) outboundArchived.delete(outboundArchived.keys().next().value);
     }
@@ -1028,7 +1034,7 @@ export async function onRequest(context) {
     for (let i = 0; i < buffered.length; i += ARCHIVE_BATCH) {
       const slice = [];
       for (const b of buffered.slice(i, i + ARCHIVE_BATCH)) {
-        if (spam.isHidden(b.id) || archiveVetoed.has(b.id)) continue;
+        if (spam.isHidden(b.id) || archiveVetoed.has(b.id) || (b.pubkey && spam.isMuted(b.pubkey))) continue;
         const row = archiveRowFrom(b, nowSec);
         if (row) slice.push(row);
       }
@@ -1570,10 +1576,18 @@ export async function onRequest(context) {
     if (!ev || ev.id !== eventId || typeof ev.content !== 'string') return 'drop';
     if (!ev.content) return 'pass';
     const sig = lastSignals || { score: 0, copies: 0 };
-    return spam.inspect(Object.assign({
-      release: () => trySendToClient(raw.slice(0, -1) + relayTail),
-      retract: () => trySendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam']))
-    }, spamEngineJob(ev, kind, sig)));
+    const job = Object.assign({
+      release: () => {
+        if (archiveEnabled && !spam.isPending(eventId)) archiveInboundEvent(raw, kind, eventId);
+        return trySendToClient(raw.slice(0, -1) + relayTail);
+      },
+      retract: () => {
+        vetoArchive(eventId);
+        return trySendToClient(JSON.stringify(['POOL:RETRACT', eventId, 'spam']));
+      }
+    }, spamEngineJob(ev, kind, sig));
+    const verdict = spam.inspect(job);
+    return verdict === 'pass' && job.unjudged ? 'unjudged' : verdict;
   }
 
   function queueConnection(relayUrl, type) {
@@ -1847,7 +1861,7 @@ export async function onRequest(context) {
           }
           info.eventCount++;
           if (archiveEnabled) {
-            if (isArchivableChannelKind(evKind)) archiveInboundEvent(raw, evKind, eventId);
+            if (isArchivableChannelKind(evKind)) { if (spamVerdict === 'pass') archiveInboundEvent(raw, evKind, eventId); }
             else if (isArchivableEmojiKind(evKind)) archiveInboundEmoji(raw, evKind);
             else if (evKind === 5) deleteArchivedFromDeletion(raw);
           }

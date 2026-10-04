@@ -865,7 +865,15 @@
                     </div>
                     <div class="composer-panels" id="composerPanels" data-composer-dock>
                         <div class="media-preview-strip nm-hidden" id="mediaPreviewStrip" data-sig=""></div>
-                        <div class="format-toolbar nm-hidden" id="formatToolbar" role="toolbar" aria-label="Message formatting"></div>
+                        <div class="format-toolbar nm-hidden" id="formatToolbar" role="toolbar" aria-label="Message formatting">
+                            <button class="format-tool emoji-input-btn" id="formatEmojiBtn" type="button" data-action="toggleEmojiPicker" title="Emoji and GIFs" aria-label="Emoji and GIFs" aria-haspopup="dialog" aria-expanded="false">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
+                            </button>
+                            <button class="format-tool translate-input-btn" id="translateInputBtn" type="button" title="Translate text" aria-label="Translate text" aria-haspopup="listbox" aria-controls="translateInputDropdown" aria-expanded="false">
+                                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>
+                            </button>
+                            <span class="format-tool-sep" aria-hidden="true"></span>
+                        </div>
                     </div>
                     <div class="message-input-row">
                         <div class="message-input input-disabled" id="messageInput" role="textbox" aria-multiline="true"
@@ -877,18 +885,6 @@
                                     <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
                                     <line x1="9" y1="9" x2="9.01" y2="9"></line>
                                     <line x1="15" y1="9" x2="15.01" y2="9"></line>
-                                </svg>
-                            </button>
-                            <button class="format-input-btn" id="formatInputBtn" title="Formatting" aria-label="Formatting" aria-pressed="false">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="4 7 4 4 20 4 20 7"></polyline>
-                                    <line x1="9" y1="20" x2="15" y2="20"></line>
-                                    <line x1="12" y1="4" x2="12" y2="20"></line>
-                                </svg>
-                            </button>
-                            <button class="translate-input-btn nm-hidden" id="translateInputBtn" title="Translate text">
-                                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                                    <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
                                 </svg>
                             </button>
                         </div>
@@ -907,7 +903,7 @@
                         </svg>
                     </button>
                     <div class="send-split composer-action" id="sendSplit">
-                        <button class="send-btn" id="sendBtn" disabled hidden>SEND</button>
+                        <button class="send-btn" id="sendBtn" title="Send" aria-label="Send" disabled hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></button>
                         <button class="send-menu-btn" id="sendMenuBtn" type="button" hidden title="More send options" aria-haspopup="menu" aria-controls="sendMenu" aria-expanded="false" aria-label="More send options">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="18 15 12 9 6 15"></polyline>

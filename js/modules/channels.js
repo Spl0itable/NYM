@@ -1467,7 +1467,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 try { await this._preformatBatch(batch.map(ev => ev && ev.content)); } catch (_) { }
             }
             for (const ev of batch) {
+                if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
                 if (await this._verifyRelayEventAsync(ev)) {
+                    if (!this._archiveEvents) this._archiveEvents = new WeakSet();
+                    if (ev && typeof ev === 'object') this._archiveEvents.add(ev);
                     if (typeof this.recordEventProvenanceSource === 'function') {
                         this.recordEventProvenanceSource(ev, 'NYMCHAT ARCHIVE');
                     }

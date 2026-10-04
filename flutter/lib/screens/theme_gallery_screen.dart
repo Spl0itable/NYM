@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/nym_colors.dart';
 import '../core/theme/nym_metrics.dart';
+import '../features/composer/composer_menus.dart';
 import '../features/i18n/i18n.dart';
 import '../models/settings.dart';
 import '../state/settings_provider.dart';
+import '../widgets/nym_icons.dart';
 
 /// Design-system preview screen for switching themes and color modes.
 class ThemeGalleryScreen extends ConsumerWidget {
@@ -313,18 +315,16 @@ class ThemeGalleryScreen extends ConsumerWidget {
   }
 
   Widget _sendBtn(NymColors c) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
           color: c.primaryA(0.10),
           borderRadius: NymRadius.rsm,
           border: Border.all(color: c.primaryA(0.30)),
         ),
-        child: Text(tr('SEND'),
-            style: TextStyle(
-                color: c.primary,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 1.5)),
+        child: Semantics(
+          label: tr('Send'),
+          child: NymSvgIcon(ComposerIcons.paperPlane, size: 18, color: c.primary),
+        ),
       );
 
   Widget _iconBtn(NymColors c, String label) => Container(

@@ -74,8 +74,15 @@ class MediaNoteSender {
   }) : readFile = readFile ?? ((path) => File(path).readAsBytes());
 
   factory MediaNoteSender.live(Ref ref) => MediaNoteSender(
-        upload: (bytes, type) =>
-            ref.read(nostrControllerProvider).uploadImage(bytes, contentType: type),
+        upload: (bytes, type) async {
+          final c = ref.read(nostrControllerProvider);
+          final url = await c.uploadImage(bytes, contentType: type);
+          if (url == null || url.isEmpty) {
+            final why = c.lastUploadFailure;
+            throw StateError(why.isEmpty ? 'upload failed' : why);
+          }
+          return url;
+        },
         sendContent: (view, content) =>
             ref.read(nostrControllerProvider).sendMediaNoteContent(view, content),
         sendMesh: (view, name, mime, bytes) async {
@@ -173,13 +180,28 @@ class MediaNoteSender {
       }
       sending.value =
           tr(desc.kind == 'round' ? kSendingVideoNote : kSendingVoice);
-      final String? url;
+      final types = once
+          ? const ['application/octet-stream']
+          : noteUploadTypes(desc.kind, desc.mime);
+      String? url;
+      final errors = <String>[];
       try {
-        url = await upload(body, once ? 'application/octet-stream' : desc.mime);
+        for (final type in types.isEmpty ? [desc.mime] : types) {
+          try {
+            url = await upload(body, type);
+          } catch (e) {
+            errors.add(_short(e, 400));
+            continue;
+          }
+          if (url != null && url.isNotEmpty) break;
+          errors.add('upload failed');
+        }
       } finally {
         sending.value = null;
       }
-      if (url == null || url.isEmpty) throw StateError('upload failed');
+      if (url == null || url.isEmpty) {
+        throw StateError(errors.isEmpty ? 'upload failed' : errors.join('; '));
+      }
       final note = MediaNote(
         kind: desc.kind,
         mime: desc.mime,
@@ -197,7 +219,7 @@ class MediaNoteSender {
       return true;
     } catch (e) {
       failed = PendingMediaNote(desc: desc, bytes: bytes, target: target, once: once);
-      notice(tr("Couldn't send: {error}", {'error': _short(e)}), retry: true);
+      notice(tr("Couldn't send: {error}", {'error': _short(e, 600)}), retry: true);
       return false;
     }
   }
@@ -237,9 +259,9 @@ class MediaNoteSender {
     return err == null;
   }
 
-  static String _short(Object e) {
+  static String _short(Object e, [int max = 120]) {
     final s = e is StateError ? e.message : e.toString();
-    return s.length > 120 ? s.substring(0, 120) : s;
+    return s.length > max ? s.substring(0, max) : s;
   }
 }
 

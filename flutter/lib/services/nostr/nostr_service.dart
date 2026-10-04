@@ -19,6 +19,7 @@ import '../../core/crypto/pow.dart';
 import '../../core/crypto/pq.dart' as pq;
 import '../../features/groups/wrap_outbox.dart';
 import '../../features/identity/pq_registry.dart';
+import '../../features/messages/server_quiet.dart';
 import '../../features/messages/trust_graph.dart';
 import '../../models/channel.dart' as ch;
 import '../../models/nostr_event.dart';
@@ -465,6 +466,7 @@ class NostrService {
           if (v is List) next.addAll(v.whereType<String>());
         }
         _quiet = next;
+        ServerQuiet.keys = next;
         _quietHeld = next.contains(identity.pubkey);
       } catch (_) {}
     }

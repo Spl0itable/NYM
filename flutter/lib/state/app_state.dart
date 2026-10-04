@@ -25,6 +25,7 @@ import '../features/emoji/emoji_data.dart';
 import '../features/emoji/emoji_prefetch.dart' show scheduleCustomEmojiPrefetch;
 import '../features/groups/group_logic.dart';
 import '../features/i18n/i18n.dart';
+import '../features/messages/server_quiet.dart';
 import '../features/messages/spam_filter.dart';
 import '../features/nymbot/bot_runs.dart' show anchorBotReply;
 import '../features/messages/trust_graph.dart';
@@ -367,6 +368,7 @@ class AppState {
     if (hasBlockedKeyword(m.content, m.author, m.pubkey)) return true;
     // Mesh peers are deliberately paired, so automatic spam gates don't apply; explicit blocks still do.
     if (m.viaMesh) return false;
+    if (!m.isOwn && ServerQuiet.hides(m.pubkey, m.id)) return true;
     // Own heuristic spam is surfaced as a self-only notice instead.
     if (clientGatesActive &&
         !m.isOwn &&

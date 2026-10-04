@@ -1547,7 +1547,7 @@
         _slSendMenu(x, y) {
             if (typeof this.openComposerSendMenu === 'function') { this.openComposerSendMenu(); return; }
             const items = [{ label: this._cn(N().STRINGS.sendLater), svg: ICONS.clock, action: () => this.openSendLater() }];
-            if (this.nostrLoginMethod && typeof this.sendMessagePseudonymous === 'function') {
+            if (typeof this._composerCanSendAnon === 'function' && this._composerCanSendAnon()) {
                 items.push({ label: this._cn('Send anonymously'), svg: ICONS.anon, action: () => this.sendMessagePseudonymous() });
             }
             if (typeof this._showSidebarActionMenu === 'function') this._showSidebarActionMenu(items, x, y);

@@ -28,8 +28,20 @@
             return C().attachItems({ surface, route: this._composerRoute(), round, bot });
         },
 
+        _composerCanSendAnon() {
+            const surface = this._composerSurface();
+            const mesh = surface === 'channel' && typeof this.meshShouldCarry === 'function'
+                && !!this.meshShouldCarry(this.currentGeohash || this.currentChannel);
+            return C().canSendAnon({
+                loggedIn: !!this.nostrLoginMethod && typeof this.sendMessagePseudonymous === 'function',
+                surface,
+                editing: !!this.pendingEdit,
+                mesh,
+            });
+        },
+
         _composerSendModel() {
-            return C().sendMenuItems({ canAnon: !!this.nostrLoginMethod && typeof this.sendMessagePseudonymous === 'function' });
+            return C().sendMenuItems({ canAnon: this._composerCanSendAnon() });
         },
 
         _composerText() {
@@ -61,6 +73,28 @@
                 const input = document.getElementById('messageInput');
                 if (input) input.focus();
             }
+            this._syncComposerPill(showSend);
+        },
+
+        _syncComposerPill(on) {
+            const input = document.getElementById('messageInput');
+            const box = input && input.closest('.input-container');
+            const wrap = input && input.closest('.input-wrapper');
+            if (!box || !wrap) return;
+            if (typeof on === 'boolean' && box.classList.contains('composer-pill') !== on) {
+                box.classList.toggle('composer-pill', on);
+                if (typeof this._applyFormatToolbarState === 'function') this._applyFormatToolbarState();
+                else if (typeof this._refreshComposerOffsets === 'function') this._refreshComposerOffsets();
+            }
+            const w = wrap.getBoundingClientRect();
+            if (!w.width) return;
+            const edges = [box.querySelector(':scope > .attach-btn'), box.querySelector(':scope > .input-buttons')]
+                .filter((el) => el && el.offsetWidth > 0)
+                .map((el) => el.getBoundingClientRect());
+            const l = Math.round(Math.max(0, w.left - Math.min(w.left, ...edges.map((r) => r.left)))) + 'px';
+            const r = Math.round(Math.max(0, Math.max(w.right, ...edges.map((e) => e.right)) - w.right)) + 'px';
+            if (wrap.style.getPropertyValue('--pill-l') !== l) wrap.style.setProperty('--pill-l', l);
+            if (wrap.style.getPropertyValue('--pill-r') !== r) wrap.style.setProperty('--pill-r', r);
         },
 
         _composerScheduleRefresh() {
@@ -250,6 +284,13 @@
             container.insertBefore(bar, container.firstChild);
         },
 
+        _composerEmojiButton() {
+            const bar = document.getElementById('formatToolbar');
+            const inBar = document.getElementById('formatEmojiBtn');
+            if (bar && inBar && !bar.classList.contains('nm-hidden') && inBar.offsetWidth > 0) return inBar;
+            return document.getElementById('emojiInputBtn');
+        },
+
         _composerSwitchPicker(to) {
             const gif = document.getElementById('gifPicker');
             const gifOpen = !!(gif && gif.classList.contains('active'));
@@ -262,7 +303,7 @@
             }
             if (!gifOpen && this.enhancedEmojiModal) { this._composerFocusTab(this.enhancedEmojiModal, 'emoji'); return; }
             this.closeGifPicker({ keepFocus: true });
-            const btn = document.getElementById('emojiInputBtn');
+            const btn = this._composerEmojiButton();
             if (btn) this.showEnhancedEmojiPickerForInput(btn);
         },
 
@@ -273,7 +314,7 @@
 
         _composerPickerOpened(container, kind) {
             if (this._composerMenuOpen) this.closeComposerMenu();
-            const btn = document.getElementById('emojiInputBtn');
+            const btn = this._composerEmojiButton();
             if (btn) btn.setAttribute('aria-expanded', 'true');
             if (this._pickerFocusTab) this._composerFocusTab(container, kind);
             this._pickerFocusTab = false;
@@ -282,8 +323,10 @@
         _composerPickerClosed() {
             const gif = document.getElementById('gifPicker');
             if (this.enhancedEmojiModal || (gif && gif.classList.contains('active'))) return;
-            const btn = document.getElementById('emojiInputBtn');
-            if (btn) btn.setAttribute('aria-expanded', 'false');
+            ['emojiInputBtn', 'formatEmojiBtn'].forEach((id) => {
+                const btn = document.getElementById(id);
+                if (btn) btn.setAttribute('aria-expanded', 'false');
+            });
         },
 
         _composerInputPickerOpen() {
@@ -336,8 +379,10 @@
                 });
             }
 
-            const emoji = document.getElementById('emojiInputBtn');
-            if (emoji) emoji.addEventListener('click', (e) => { this._pickerFocusTab = e.detail === 0; });
+            ['emojiInputBtn', 'formatEmojiBtn'].forEach((id) => {
+                const emoji = document.getElementById(id);
+                if (emoji) emoji.addEventListener('click', (e) => { this._pickerFocusTab = e.detail === 0; });
+            });
 
             document.addEventListener('pointerdown', (e) => {
                 const kind = this._composerMenuOpen;
@@ -368,7 +413,7 @@
                 e.stopPropagation();
                 if (picker === 'gif') this.closeGifPicker({ keepFocus: true });
                 else this.closeEnhancedEmojiModal({ keepFocus: true });
-                const btn = document.getElementById('emojiInputBtn');
+                const btn = this._composerEmojiButton();
                 if (btn) btn.focus();
             }, true);
 
@@ -381,6 +426,13 @@
                 new MutationObserver(() => this._composerScheduleRefresh()).observe(container, {
                     subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'],
                 });
+            }
+            const wrap = input && input.closest('.input-wrapper');
+            if (wrap && typeof ResizeObserver === 'function') {
+                const ro = new ResizeObserver(() => this._syncComposerPill());
+                ro.observe(wrap);
+                const buttons = container && container.querySelector(':scope > .input-buttons');
+                if (buttons) ro.observe(buttons);
             }
             this.refreshComposerPrimary();
         },
