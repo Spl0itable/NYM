@@ -1308,6 +1308,17 @@ body.light-mode .nym-display:hover {
     background: rgba(0, 0, 0, 0.07);
 }
 
+body.light-mode .acct-switch-btn {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+body.light-mode .acct-switch-btn:hover,
+body.light-mode .acct-switch-btn:focus-visible {
+    background: rgba(0, 0, 0, 0.07);
+    border-color: rgb(from var(--primary) r g b / 0.3);
+}
+
 @media (hover: hover) {
     body.light-mode .user-item:hover {
         background: rgba(0, 0, 0, 0.04);

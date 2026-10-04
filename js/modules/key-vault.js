@@ -376,8 +376,9 @@ Object.assign(NYM.prototype, {
     this._forgetIdentityNow();
   },
 
-  _forgetIdentityNow() {
+  async _forgetIdentityNow() {
     this.resetVault();
+    try { if (typeof this.acctForget === 'function' && await this.acctForget()) return; } catch (e) {}
     for (const name of [
       'nym_nostr_login_method', 'nym_nostr_login_pubkey', 'nym_nostr_login_npub',
       'nym_random_keypair_per_session', 'nym_auto_ephemeral', 'nym_auto_ephemeral_nick',
@@ -426,6 +427,7 @@ Object.assign(NYM.prototype, {
         '<button id="nymVaultReset" class="icon-btn">Forget identity</button>' +
         '<button id="nymVaultGo" class="send-btn">Unlock</button>' +
         '</div>';
+      this._vaultWordmark(o);
       const go = async () => {
         const pw = webauthn ? '' : (o.box.querySelector('#nymVaultPw').value || '');
         o.close();
@@ -434,7 +436,7 @@ Object.assign(NYM.prototype, {
       o.box.querySelector('#nymVaultGo').onclick = go;
       o.box.querySelector('#nymVaultReset').onclick = async () => {
         o.close();
-        const ok = await this._vaultConfirm('This permanently deletes the encrypted identity on this device and starts a fresh one. Continue?', { title: 'Forget identity', danger: true, okLabel: 'Forget' });
+        const ok = await this._vaultConfirm(this._vaultForgetMessage(), { title: 'Forget identity', danger: true, okLabel: 'Forget' });
         if (ok) resolve(null);
         else this._vaultPromptModal().then(resolve);
       };
@@ -442,6 +444,13 @@ Object.assign(NYM.prototype, {
       if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === 'Enter') go(); }; }
       // We don't auto-fire the system authenticator sheet.
     });
+  },
+
+  _vaultForgetMessage() {
+    const t = typeof this.acctForgetTarget === 'function' ? this.acctForgetTarget() : null;
+    if (!t) return 'This permanently deletes the encrypted identity on this device and starts a fresh one. Continue?';
+    if (t.to) return this._ac('This permanently deletes {nym} and its data on this device, and you will switch to {next}. Continue?', { nym: t.from, next: t.to });
+    return this._ac('This permanently deletes {nym} and its data on this device, and you will return to the welcome screen. Continue?', { nym: t.from });
   },
 
   _vaultErrorModal(msg) {
@@ -455,6 +464,7 @@ Object.assign(NYM.prototype, {
         '<button id="nymVErRetry" class="send-btn">Try again</button>' +
         '</div>';
       o.box.querySelector('p').textContent = msg;
+      this._vaultWordmark(o);
       o.box.querySelector('#nymVErRetry').onclick = () => { o.close(); resolve('retry'); };
       o.box.querySelector('#nymVErReset').onclick = () => { o.close(); resolve('reset'); };
     });
@@ -497,6 +507,24 @@ Object.assign(NYM.prototype, {
   },
   _vaultAlert(msg, opts) {
     return (typeof window.showAppAlert === 'function') ? window.showAppAlert(msg, opts) : Promise.resolve(alert(msg));
+  },
+
+  _vaultWordmark(o) {
+    try {
+      const src = document.querySelector('pre.logo-ascii');
+      const mark = document.createElement('pre');
+      mark.className = 'logo-ascii nm-vault-wordmark';
+      mark.setAttribute('role', 'img');
+      mark.setAttribute('aria-label', 'Nymchat');
+      mark.textContent = src ? src.textContent : 'Nymchat';
+      o.box.insertBefore(mark, o.box.firstChild);
+      if (typeof this.bindPanicHold === 'function') {
+        this.bindPanicHold(mark, () => {
+          o.close();
+          this.panicWipe();
+        });
+      }
+    } catch (e) {}
   },
 
   _vaultOverlay() {

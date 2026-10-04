@@ -2696,7 +2696,9 @@ var AUTH_PAYLOAD_REQUIRED = {
   "transfer-credits": 1,
   "shop-transfer": 1,
   "voucher-issue": 1,
-  "gift-create": 1
+  "gift-create": 1,
+  "panic-mark": 1,
+  "panic-clear": 1
 };
 
 function verifyClientAuth(auth, expectedPubkey, binding) {

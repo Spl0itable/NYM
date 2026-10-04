@@ -2,11 +2,18 @@
 
 Object.assign(NYM.prototype, {
 
+  _PANIC_PURGE_MS: 3000,
+
   _PANIC_HOLD_MS: 2000,   // press-and-hold the "Your Nym" section this long to wipe
 
   // Click opens the nick editor; press-and-hold triggers the emergency wipe.
   bindNymPanicGesture() {
     const el = document.querySelector('.nym-display');
+    if (!el || el._panicBound) return;
+    this.bindPanicHold(el, () => this.panicWipe());
+  },
+
+  bindPanicHold(el, fire) {
     if (!el || el._panicBound) return;
     el._panicBound = true;
     let timer = null;
@@ -19,7 +26,7 @@ Object.assign(NYM.prototype, {
         timer = null;
         this._panicFired = true;
         if (window.nymHapticTap) window.nymHapticTap();
-        this.panicWipe();
+        fire();
       }, this._PANIC_HOLD_MS);
     };
     el.addEventListener('mousedown', start);
@@ -30,7 +37,6 @@ Object.assign(NYM.prototype, {
     el.addEventListener('touchmove', cancel, { passive: true });
     el.addEventListener('touchcancel', cancel);
     el.addEventListener('contextmenu', (e) => { e.preventDefault(); });
-    // Capture phase: swallow the post-hold click before the delegated editNick handler opens the editor.
     el.addEventListener('click', (e) => {
       if (this._panicFired) { this._panicFired = false; e.stopPropagation(); e.preventDefault(); }
     }, true);
@@ -51,9 +57,11 @@ Object.assign(NYM.prototype, {
   // Signed while the key is still here, sent keepalive so the reload can't cancel it; skipped for signer logins.
   async purgeServerRecords(app) {
     try {
-      if (!this.pubkey || !this.privkey) return false;
+      if (!this.pubkey) return false;
+      if (!this.privkey && this.nostrLoginMethod !== 'extension' && this.nostrLoginMethod !== 'nip46') return false;
       const apiHost = this._getApiHost && this._getApiHost();
       if (!apiHost) return false;
+      await this._panicSignalActive();
       const body = JSON.stringify({
         action: 'account-purge',
         app: app || 'nymchat',
@@ -70,9 +78,111 @@ Object.assign(NYM.prototype, {
     } catch (e) { return false; }
   },
 
-  async panicWipe() {
+  async _panicSignalActive() {
+    try {
+      if (typeof this.remotePanicSignal !== 'function' || !this.remotePanicEnabled()) return;
+      const pubkey = this.pubkey;
+      const secret = this.privkey;
+      const sign = secret
+        ? (ev) => Promise.resolve(window.NostrTools.finalizeEvent(ev, secret))
+        : (ev) => this.signEvent(ev);
+      await this.remotePanicSignal(sign, pubkey, { enabled: true, secret: secret || null });
+    } catch (e) {}
+  },
+
+  async _panicSignalOther(a, sign) {
+    try {
+      if (typeof this.remotePanicSignal !== 'function') return;
+      const A = window.NymAccounts;
+      let on = null;
+      try { on = await A.stashKey(a.id, 'nym_remote_panic'); } catch (e) { on = null; }
+      if (on !== '1') return;
+      await this.remotePanicSignal(sign, a.pubkey, { enabled: true });
+    } catch (e) {}
+  },
+
+  _panicText(text, vars) {
+    let out = typeof this.uiText === 'function' ? this.uiText(text) : text;
+    if (vars) for (const k of Object.keys(vars)) out = out.split('{' + k + '}').join(String(vars[k]));
+    return out;
+  },
+
+  _panicPurgeBody(app, pubkey, auth) {
+    return JSON.stringify({ action: 'account-purge', app: app || 'nymchat', pubkey, auth });
+  },
+
+  _panicPurgeSend(body) {
+    const apiHost = this._getApiHost && this._getApiHost();
+    if (!apiHost) return Promise.resolve(false);
+    return this._edgeFetch(`https://${apiHost}/api/storage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true
+    }).then(() => true, () => false);
+  },
+
+  _panicAuthTemplate(pubkey) {
+    const apiHost = this._getApiHost && this._getApiHost();
+    const tags = [['domain', 'nymbot-pm'], ['method', 'POST']];
+    if (apiHost) tags.push(['u', `https://${apiHost}/api/storage`]);
+    tags.push(['action', 'account-purge']);
+    return { kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: 'nymbot-pm-auth', pubkey };
+  },
+
+  async _panicOtherSigner(a) {
+    const A = window.NymAccounts;
+    const names = a.method === 'nsec' ? ['nym_nostr_login_nsec'] : (a.method === 'ephemeral' ? ['nym_session_nsec', 'nym_dev_nsec'] : []);
+    for (const n of names) {
+      let v = null;
+      try { v = await A.stashKey(a.id, n); } catch (e) { v = null; }
+      if (!v || String(v).startsWith('enc:v1:')) continue;
+      try {
+        const sk = this.decodeNsec(v);
+        if (window.NostrTools.getPublicKey(sk) !== a.pubkey) continue;
+        return (ev) => Promise.resolve(window.NostrTools.finalizeEvent(ev, sk));
+      } catch (e) {}
+    }
+    if (a.method === 'extension' && window.nostr && window.nostr.getPublicKey && window.nostr.signEvent) {
+      try {
+        const live = await Promise.race([window.nostr.getPublicKey(), new Promise((r) => setTimeout(() => r(null), 800))]);
+        if (live === a.pubkey) return (ev) => window.nostr.signEvent(ev);
+      } catch (e) {}
+    }
+    return null;
+  },
+
+  async _panicPurgeAll(app, out) {
+    const jobs = [];
+    let skipped = 0;
+    const A = window.NymAccounts;
+    let others = [];
+    try { if (A && typeof A.read === 'function') others = A.read().accounts.filter((a) => a.pubkey && a.pubkey !== this.pubkey); } catch (e) { others = []; }
+    if (this.pubkey) {
+      const live = !!this.privkey || this.nostrLoginMethod === 'extension' || this.nostrLoginMethod === 'nip46';
+      if (live) jobs.push(this.purgeServerRecords(app).then((ok) => { if (!ok) skipped++; }));
+      else skipped++;
+    }
+    const signers = await Promise.all(others.map((a) => this._panicOtherSigner(a).catch(() => null)));
+    others.forEach((a, i) => {
+      const sign = signers[i];
+      if (!sign) { skipped++; return; }
+      jobs.push(Promise.resolve().then(async () => {
+        await this._panicSignalOther(a, sign);
+        const auth = await sign(this._panicAuthTemplate(a.pubkey));
+        if (!auth || auth.pubkey !== a.pubkey) throw new Error('signer');
+        return this._panicPurgeSend(this._panicPurgeBody(app, a.pubkey, auth));
+      }).then((ok) => { if (!ok) skipped++; }, () => { skipped++; }));
+    });
+    out.skipped = skipped;
+    await Promise.all(jobs);
+    out.skipped = skipped;
+  },
+
+  async panicWipe(opts) {
     if (this._panicking) return;
     this._panicking = true;
+    const localOnly = !!(opts && opts.localOnly);
     const startedAt = Date.now();
     const accountDbs = [];
     try {
@@ -84,11 +194,19 @@ Object.assign(NYM.prototype, {
     const ui = this._panicShowOverlay();
 
     // Bounded: a wipe that waits on the network is a wipe that did not happen.
-    const purged = Promise.race([
-      this.purgeServerRecords('nymchat'),
-      new Promise((done) => setTimeout(done, 2500))
+    const purge = { skipped: null };
+    const purged = localOnly ? Promise.resolve() : Promise.race([
+      this._panicPurgeAll('nymchat', purge),
+      new Promise((done) => setTimeout(done, this._PANIC_PURGE_MS))
     ]);
     try { await purged; } catch (e) { }
+    if (purge.skipped) {
+      try {
+        ui.setStatus(purge.skipped === 1
+          ? this._panicText("Server records for 1 identity couldn't be removed")
+          : this._panicText("Server records for {n} identities couldn't be removed", { n: purge.skipped }));
+      } catch (e) {}
+    }
 
     try { this._cacheDisabled = true; } catch (e) {}
     for (const t of ['_trimTimer', '_dedupPersistTimer', '_poolStatePersistTimer', '_pendingPersistTimer']) {
@@ -122,7 +240,16 @@ Object.assign(NYM.prototype, {
 
     try { ui.setStatus('Shredding local databases…'); } catch (e) {}
     try {
-      const names = new Set(['nym-cache'].concat(accountDbs));
+      const open = this._cacheDbPromise;
+      this._cacheOpen = () => Promise.reject(new Error('wiped'));
+      this._cacheDbPromise = null;
+      if (open) {
+        const db = await Promise.race([open, new Promise((r) => setTimeout(() => r(null), 500))]);
+        if (db && db.close) db.close();
+      }
+    } catch (e) {}
+    try {
+      const names = new Set(['nym-cache', 'nym-accounts'].concat(accountDbs));
       try {
         if (indexedDB.databases) {
           const dbs = (await indexedDB.databases()) || [];

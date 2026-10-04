@@ -480,11 +480,6 @@
           \######  |                                                     
            \______/                                                      
 </pre>
-                <div class="nym-row">
-                <button type="button" class="acct-switch-btn" id="acctSwitchBtn" data-action="openAccountSwitcher" title="Switch account" aria-label="Switch account">
-                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="10" r="3"></circle><path d="M7.5 18a5 5 0 0 1 9 0"></path><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path><polyline points="21 3 21 8 16 8"></polyline><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path><polyline points="3 21 3 16 8 16"></polyline></svg>
-                    <span class="acct-switch-dot nm-hidden" id="acctSwitchDot"></span>
-                </button>
                 <div class="nym-display" data-action="editNick">
                     <div class="nym-label">Your Nym (click to edit)</div>
                     <div class="nym-identity is-loading">
@@ -496,7 +491,11 @@
                         <span class="nym-sk-name" aria-hidden="true"></span>
                     </div>
                 </div>
-                </div>
+                <button type="button" class="acct-switch-btn" id="acctSwitchBtn" data-action="openAccountSwitcher" title="Manage Identities" aria-label="Manage Identities">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="10" r="3"></circle><path d="M7.5 18a5 5 0 0 1 9 0"></path><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path><polyline points="21 3 21 8 16 8"></polyline><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path><polyline points="3 21 3 16 8 16"></polyline></svg>
+                    <span class="acct-switch-label">Manage Identities</span>
+                    <span class="acct-switch-dot nm-hidden" id="acctSwitchDot"></span>
+                </button>
                 <div class="status-indicator nm-pointer" data-action="openRelayStats" title="View network stats">
                     <span class="status-dot" id="statusDot"></span>
                     <span id="connectionStatus">Disconnected</span>
@@ -1430,18 +1429,18 @@
     <div class="modal acct-modal" id="accountSwitcherModal">
         <div class="modal-content acct-modal-content">
             <button class="modal-close" data-action="closeModal" data-modal-id="accountSwitcherModal">&#x2715;</button>
-            <div class="modal-header">Accounts</div>
+            <div class="modal-header">Identities</div>
             <div class="modal-body">
                 <div class="acct-list" id="acctList"></div>
                 <div class="form-hint" id="acctCapHint"></div>
             </div>
             <div class="modal-actions acct-actions">
-                <button type="button" class="icon-btn acct-danger" id="acctLogoutAllBtn" data-action="acctLogoutAll">Log out of all</button>
-                <button type="button" class="send-btn" id="acctAddBtn" data-action="acctAdd">Add account</button>
+                <button type="button" class="icon-btn acct-danger" id="acctLogoutAllBtn" data-action="acctLogoutAll">Log out of all identities</button>
+                <button type="button" class="send-btn" id="acctAddBtn" data-action="acctAdd">Add identity</button>
             </div>
         </div>
     </div>
-    <div class="acct-switch-overlay" id="acctSwitchOverlay" aria-live="polite"><span class="loader"></span><span>Switching account…</span></div>
+    <div class="acct-switch-overlay" id="acctSwitchOverlay" aria-live="polite"><span class="loader"></span><span>Switching identity…</span></div>
 
     <!-- Initial Setup Modal -->
     <div class="modal" id="setupModal">
@@ -1465,8 +1464,8 @@
             <div class="modal-body">
                 <div class="setup-invite-banner nm-hidden" id="setupInviteBanner"></div>
                 <div class="setup-account-back nm-hidden" id="setupAccountBack">
-                    <span>Adding another account</span>
-                    <button type="button" class="icon-btn" id="setupAccountBackBtn" data-action="acctCancelAdd"><span id="setupAccountBackLabel">Back to my accounts</span></button>
+                    <span>Adding another identity</span>
+                    <button type="button" class="icon-btn" id="setupAccountBackBtn" data-action="acctCancelAdd"><span id="setupAccountBackLabel">Back to my identities</span></button>
                 </div>
                 <div class="setup-tabs" id="setupTabs">
                     <button type="button" class="setup-tab active" data-action="switchSetupTab" data-setup-tab="signup">Sign up</button>
@@ -1851,13 +1850,22 @@
                     <div class="form-group">
                         <label class="form-label">Identity Encryption</label>
                         <button class="form-select nm-vault-settings-btn" id="vaultSettingsBtn" data-action="openVaultSettings">Encrypt identity (nsec) key on this device…</button>
-                        <div class="form-hint">Optionally protect your saved identity's (nsec) private key with a password, PIN, passkey, or biometric (Face/Touch ID) so it can't be read from this device without unlocking. Passkeys (synced or hardware security keys) and biometrics use WebAuthn where supported, with password/PIN as the universal fallback.</div>
+                        <div class="form-hint">Optionally protect your saved identity's (nsec) private key with a password, PIN, passkey, or biometric (Face/Touch ID) so it can't be read from this device without unlocking. Passkeys (synced or hardware security keys) and biometrics use WebAuthn where supported, with password/PIN as the universal fallback. On the unlock screen, holding the Nymchat wordmark for 2 seconds engages Panic Mode and wipes this device without unlocking.</div>
                     </div>
 
                     <div class="form-group" id="chatLockSettingsGroup">
                         <label class="form-label">Chat Lock</label>
                         <button type="button" class="form-select nm-vault-settings-btn" id="chatLockSettingsBtn" data-action="openChatLockSettings">Chat lock settings…</button>
                         <div class="form-hint">Locked chats leave the main list and open only after Face ID, fingerprint, a passkey or your passcode. Their notifications say only "New message". The list of locked chats syncs to your other devices; each device unlocks on its own.</div>
+                    </div>
+
+                    <div class="form-group" id="remotePanicGroup">
+                        <label class="form-label">Panic wipe also erases my other devices</label>
+                        <select class="form-select" id="remotePanicSelect" data-on-change="onRemotePanicChange">
+                            <option value="off" selected>Disabled</option>
+                            <option value="on">Enabled</option>
+                        </select>
+                        <div class="form-hint">When you hold "Your Nym" or the wordmark on the unlock screen for 2 seconds, every other device signed in as this identity also wipes this identity the next time it connects. Other identities on those devices are not touched. An encrypted identity that is still locked when you panic from the unlock screen can't send this signal.</div>
                     </div>
 
                     <div class="form-group">
@@ -2728,6 +2736,8 @@
     <script defer src="js/modules/persistence.js"></script>
     <script defer src="js/modules/key-vault.js"></script>
     <script defer src="js/modules/panic.js"></script>
+    <script defer src="js/modules/remote-panic.js"></script>
+    <script defer src="js/modules/remote-panic-ui.js"></script>
     <script defer src="js/modules/attest.js"></script>
     <script defer src="js/modules/filter-packs.js"></script>
     <script defer src="js/modules/event-details.js"></script>

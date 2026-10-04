@@ -4,6 +4,14 @@ import 'dart:collection';
 import '../../features/groups/wrap_outbox.dart';
 import '../../models/nostr_event.dart';
 
+class UnsentEvent {
+  const UnsentEvent(this.event, {required this.tier, required this.dm});
+
+  final NostrEvent event;
+  final int tier;
+  final bool dm;
+}
+
 class _DmEntry {
   _DmEntry(this.event, this.tier, this.seq, this.tries);
 
@@ -43,6 +51,31 @@ class DmOutbox {
   int failed = 0;
 
   int get length => _q[0].length + _q[1].length + _q[2].length;
+
+  int get unsentCount {
+    _prune(_nowMs());
+    final ids = {..._ids, ..._inflight.keys};
+    return ids.length;
+  }
+
+  List<(NostrEvent, int)> unsent() {
+    _prune(_nowMs());
+    final seen = <String>{};
+    final out = <(NostrEvent, int)>[];
+    for (final v in _inflight.values) {
+      if (seen.add(v.$1.event.id)) out.add((v.$1.event, v.$1.tier));
+    }
+    for (final q in _q) {
+      for (final e in q) {
+        if (seen.add(e.event.id)) out.add((e.event, e.tier));
+      }
+    }
+    return out;
+  }
+
+  void confirm(String eventId) {
+    _inflight.remove(eventId);
+  }
 
   int _nowMs() => _now().millisecondsSinceEpoch;
 
@@ -129,6 +162,10 @@ class DmOutbox {
     final now = _nowMs();
     _inflight.remove(entry.event.id);
     _inflight[entry.event.id] = (entry, now);
+    _prune(now);
+  }
+
+  void _prune(int now) {
     while (_inflight.isNotEmpty) {
       final first = _inflight.entries.first;
       if (now - first.value.$2 <= 120000 && _inflight.length <= 4000) break;

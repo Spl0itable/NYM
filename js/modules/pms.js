@@ -969,6 +969,11 @@ Object.assign(NYM.prototype, {
                     return;
                 }
 
+                if (isOwn && dTag === 'nym-panic') {
+                    if (typeof this.onRemotePanicRumor === 'function') this.onRemotePanicRumor(rumor);
+                    return;
+                }
+
                 if (isOwn) {
                     // Cross-device ping with no settings content: pull the authoritative values from D1.
                     if (dTag === 'nymchat-sync-ping') {
@@ -1283,7 +1288,7 @@ Object.assign(NYM.prototype, {
             let tsSec = originalTsSec;
 
             // Guard against clock skew: no future messages.
-            tsSec = Math.min(tsSec, nowSec);
+            if (tsSec > nowSec) tsSec = Math.min(nowSec, Math.floor(this._stableClampMs(event.id, tsSec * 1000) / 1000));
 
             const parsed = parseBitchatMessage(rumor.content);
 
@@ -4369,7 +4374,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         }
     },
 
-    getFilteredPMMessages(conversationKey) {
+    getFilteredPMMessages(conversationKey, subset) {
         const pmMessages = this.pmMessages.get(conversationKey) || [];
 
         // With threads enabled, replies are hidden from the flat view when the root exists locally.
@@ -4384,7 +4389,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             }
         }
 
-        return pmMessages.filter(msg => {
+        return (Array.isArray(subset) ? subset : pmMessages).filter(msg => {
             if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
             if (this._botThreadForeign(msg, pmMessages)) return false;
             if (this.deletedEventIds.has(msg.id)) return false;

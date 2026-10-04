@@ -143,6 +143,7 @@ class StorageSync {
       'showStatus',
       'powDifficulty',
       'encryptAtRestPreferred',
+      'remotePanic',
     ],
     'messaging': [
       'groupChatPMOnlyMode',
@@ -287,6 +288,7 @@ class StorageSync {
       // keypairMode is device-local and never synced; only the non-sensitive at-rest hint is.
       flat['encryptAtRestPreferred'] =
           kv.getBool(StorageKeys.encryptAtRestPref);
+      flat['remotePanic'] = kv.getBool(StorageKeys.remotePanic);
       flat['translateFavoriteLanguages'] =
           _kvJsonList(kv, StorageKeys.translateFavorites);
       flat['emojiPackFavorites'] =
@@ -1223,6 +1225,34 @@ class StorageSync {
       final res = await _api.storageAction(<String, dynamic>{
         ...body,
         'auth': auth,
+      });
+      return res['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>?> panicCheck() async {
+    try {
+      if (_pubkey.isEmpty) return null;
+      final res = await _api.storageAction({
+        'action': 'panic-check',
+        'pubkey': _pubkey,
+        'auth': await _auth('panic-check'),
+      });
+      final mark = res['mark'];
+      return mark is Map ? Map<String, dynamic>.from(mark) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> panicClear() async {
+    try {
+      if (_pubkey.isEmpty) return false;
+      final res = await _signedWrite(<String, dynamic>{
+        'action': 'panic-clear',
+        'pubkey': _pubkey,
       });
       return res['ok'] == true;
     } catch (_) {

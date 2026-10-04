@@ -339,8 +339,8 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       setState(() {
         _loggingIn = false;
         _loginError = e is AccountAlreadySaved
-            ? tr('This key is also saved as {nym}. Switch to it from the '
-                'account switcher.', {'nym': e.nym})
+            ? tr('This key is also saved as {nym}. Switch to it from '
+                'Manage Identities.', {'nym': e.nym})
             : tr('Invalid nsec key. Please check and try again.');
       });
       return;

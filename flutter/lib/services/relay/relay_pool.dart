@@ -499,6 +499,8 @@ class RelayPool implements PoolTransport {
 
   void handOverHeld(PoolTransport next) => _held.flush(next);
 
+  List<NostrEvent> get heldEvents => _held.events;
+
   /// Closes sockets but keeps [Subscription]s alive for the direct/proxy swap.
   Future<void> disconnectSocketsOnly() async {
     _stopSampler();
@@ -523,7 +525,7 @@ class RelayPool implements PoolTransport {
   @override
   Future<int> publish(NostrEvent event) async {
     if (!_disposed && connectedCount == 0) {
-      return _held.hold((via) => via.publish(event));
+      return _held.hold((via) => via.publish(event), event: event);
     }
     final futures = <Future<OkMessage>>[];
     for (final entry in _connections.entries) {

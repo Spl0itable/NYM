@@ -654,6 +654,8 @@ class RelayPoolProxy implements PoolTransport {
 
   void Function(String eventId)? onPublishRateLimited;
 
+  void Function(String eventId)? onPublishAccepted;
+
   void Function(DateTime? lastLiveAt)? onShardLost;
 
   void Function()? onShardReconnected;
@@ -961,7 +963,7 @@ class RelayPoolProxy implements PoolTransport {
   /// Broadcasts `["EVENT",e]` to every shard; returns sockets written, since OKs arrive async.
   @override
   Future<int> publish(NostrEvent event) async {
-    if (_mustHold) return _held.hold((via) => via.publish(event));
+    if (_mustHold) return _held.hold((via) => via.publish(event), event: event);
     // Remember the kind so an attributed OK rejection can blacklist it.
     _trackSentEventKind(event);
     onPublishCharge?.call(1);
@@ -980,7 +982,8 @@ class RelayPoolProxy implements PoolTransport {
   Future<int> publishGeo(
       NostrEvent event, List<String> closestRelayUrls) async {
     if (_mustHold) {
-      return _held.hold((via) => via.publishGeo(event, closestRelayUrls));
+      return _held.hold((via) => via.publishGeo(event, closestRelayUrls),
+          event: event);
     }
     onPublishCharge?.call(1);
     if (closestRelayUrls.isEmpty) {
@@ -990,6 +993,8 @@ class RelayPoolProxy implements PoolTransport {
   }
 
   bool get _mustHold => !_disposed && !_sockets.any((s) => s.isOpen);
+
+  List<NostrEvent> get heldEvents => _held.events;
 
   int _broadcast(String frame) {
     var n = 0;
@@ -1339,7 +1344,9 @@ class RelayPoolProxy implements PoolTransport {
           _subscriptions[id]?.onEose(sock.shard.id, closed: true);
         }
       case PoolOk(:final id, :final accepted, :final message, :final relayUrl):
-        if (!accepted && isRateLimitRejection(message)) {
+        if (accepted) {
+          onPublishAccepted?.call(id);
+        } else if (isRateLimitRejection(message)) {
           onPublishRateLimited?.call(id);
         }
         // Proxy publish() doesn't await OKs; a kind-flavored reason feeds the blacklist regardless of accepted.

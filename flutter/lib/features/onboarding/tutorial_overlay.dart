@@ -107,7 +107,9 @@ const List<TutorialStep> kTutorialSteps = [
         '2 seconds will engage Panic Mode, which will encrypt all data with '
         'multiple throwaway Nyms, overwrite all data with junk, and logout '
         'immediately to make it difficult for anyone to access the data if you '
-        'need to quickly hide and protect yourself.',
+        'need to quickly hide and protect yourself. If your identity is '
+        'encrypted, holding the Nymchat wordmark on the unlock screen for 2 '
+        'seconds does the same before you unlock.',
     target: TutorialTarget.nymDisplay,
     sidebar: TutorialSidebarAction.open,
   ),

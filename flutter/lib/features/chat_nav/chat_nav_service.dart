@@ -10,20 +10,20 @@ class ChatNavEntry {
   ChatNavEntry({
     required this.key,
     required this.lastRead,
-    required this.badge,
     required this.openedAt,
     required this.openedMs,
-  });
+    required this.mark,
+  }) : base = mark.at;
 
   final String key;
   final int lastRead;
-  final int badge;
   final int openedAt;
   final int openedMs;
+  final int base;
+  SeenMark mark;
   FirstUnread? info;
   bool landed = false;
   bool scrolled = false;
-  late Map<String, dynamic> jump = jumpEmpty(lastRead, openedAt);
 }
 
 class ScheduleResult {
@@ -155,12 +155,13 @@ class ChatNavService {
     if (key.isEmpty) return null;
     final have = _entries[key];
     if (have != null) return have;
+    final lastRead = hooks.lastRead?.call(key) ?? 0;
     final e = ChatNavEntry(
       key: key,
-      lastRead: hooks.lastRead?.call(key) ?? 0,
-      badge: hooks.badge?.call(key) ?? 0,
+      lastRead: lastRead,
       openedAt: _nowSec,
       openedMs: _nowMs,
+      mark: markMax(storedMark(key), markFloor(lastRead)),
     );
     _entries[key] = e;
     _scanOnOpen(e);
@@ -168,12 +169,18 @@ class ChatNavService {
   }
 
   void release(String key) {
-    if (_entries.remove(key) != null) _changed();
+    final e = _entries.remove(key);
+    if (e == null) return;
+    try {
+      _saveMark(key, e.mark);
+      flushMarks();
+    } on StateError catch (_) {}
+    _changed();
   }
 
   ChatNavRow _row(Message m, {bool mention = false}) => ChatNavRow(
         id: m.id,
-        at: m.createdAt,
+        at: effAt(m),
         own: m.isOwn || (m.pubkey.isNotEmpty && m.pubkey == hooks.selfPubkey()),
         sys: m.pubkey.isEmpty || m.isSystemRow,
         mention: mention,
@@ -186,26 +193,162 @@ class ChatNavService {
 
   List<Message> _store(String key) => hooks.storeList?.call(key) ?? const [];
 
+  String get _firstSeenKey => 'nym_seen_first:${hooks.selfPubkey()}';
+
+  Map<String, int>? _firstSeenCache;
+  String? _firstSeenPk;
+
+  Map<String, int> get _firstSeen {
+    final pk = hooks.selfPubkey();
+    if (_firstSeenCache != null && _firstSeenPk == pk) return _firstSeenCache!;
+    final out = <String, int>{};
+    try {
+      final raw = _prefs.read(_firstSeenKey);
+      final m = raw == null || raw.isEmpty ? null : jsonDecode(raw);
+      if (m is Map) {
+        m.forEach((k, v) {
+          if (k is String && v is num && v > 0) out[k] = v.toInt();
+        });
+      }
+    } catch (_) {}
+    _firstSeenPk = pk;
+    return _firstSeenCache = out;
+  }
+
+  int effAt(Message m) {
+    final seen = _firstSeen[m.id];
+    if (seen != null) return effectiveAt(m.createdAt, seen);
+    if (m.createdAt <= _nowSec) return m.createdAt;
+    final map = _firstSeen;
+    while (map.length >= 500) {
+      map.remove(map.keys.first);
+    }
+    map[m.id] = _nowSec;
+    _markDirty = true;
+    return effectiveAt(m.createdAt, _nowSec);
+  }
+
+  String get _markKey => '${ChatNavKeys.seenMarks}:${hooks.selfPubkey()}';
+
+  Map<String, Map<String, Object>>? _markCache;
+  String? _markPk;
+  bool _markDirty = false;
+  int _markWritten = 0;
+
+  Map<String, Map<String, Object>> _marks() {
+    final pk = hooks.selfPubkey();
+    if (_markCache != null && _markPk == pk) return _markCache!;
+    Map<String, Map<String, Object>> m;
+    try {
+      final raw = _prefs.read(_markKey);
+      m = raw == null || raw.isEmpty ? {} : markStoreNorm(jsonDecode(raw));
+    } catch (_) {
+      m = {};
+    }
+    _markPk = pk;
+    return _markCache = m;
+  }
+
+  SeenMark storedMark(String key) => markNorm(_marks()[key]);
+
+  void _saveMark(String key, SeenMark mark) {
+    if (key.isEmpty || !(mark.at > 0)) return;
+    final store = _marks();
+    final prev = markNorm(store[key]);
+    if (prev.at == mark.at && prev.ids.length == mark.ids.length) return;
+    store[key] = {'at': mark.at, 'ids': [...mark.ids], 't': _nowMs};
+    _markDirty = true;
+    if (_nowMs - _markWritten >= 2000) flushMarks();
+  }
+
+  void flushMarks() {
+    if (!_markDirty) return;
+    _markDirty = false;
+    _markWritten = _nowMs;
+    _prefs.write(_markKey, jsonEncode(markStoreNorm(_marks())));
+    _prefs.write(_firstSeenKey, jsonEncode(_firstSeen));
+  }
+
+  SeenMark? markFor(String key) => _entries[key]?.mark;
+
+  List<String> unseenFor(String key, [List<Message>? list]) {
+    final e = _entries[key];
+    if (e == null || !(e.mark.at > 0)) return const [];
+    final src = list ?? _store(key);
+    final tail = <ChatNavRow>[];
+    for (var i = src.length - 1; i >= 0; i--) {
+      final m = src[i];
+      if (m.createdAt >= e.mark.at) tail.add(_row(m));
+    }
+    if (tail.isEmpty) return const [];
+    return unseenRows(tail.reversed.toList(), e.mark);
+  }
+
+  int jumpCountFor(String key, [List<Message>? list]) =>
+      unseenFor(key, list).length;
+
+  String? jumpTargetFor(String key, [List<Message>? list]) {
+    final u = unseenFor(key, list);
+    return u.isEmpty ? null : u.first;
+  }
+
+  String jumpTextFor(String key, [List<Message>? list]) =>
+      jumpText(jumpCountFor(key, list), _tr);
+
+  bool advance(String key, num at, Iterable<String> ids) {
+    final e = _entries[key];
+    if (e == null) return false;
+    final next = markAdvance(e.mark, at, ids);
+    if (next.at == e.mark.at && next.ids.length == e.mark.ids.length) {
+      return false;
+    }
+    e.mark = next;
+    _saveMark(key, next);
+    final ms = mentions();
+    final after = mentionMark(ms, key, next, _nowMs);
+    if (mentionCount(after, key) != mentionCount(ms, key)) _setMentions(after);
+    return true;
+  }
+
+  bool seeAll(String key, [List<Message>? list]) {
+    final e = _entries[key];
+    if (e == null) return false;
+    final src = list ?? _store(key);
+    var changed = false;
+    if (src.isNotEmpty) {
+      var newest = effAt(src.first);
+      for (final m in src) {
+        final at = effAt(m);
+        if (at > newest) newest = at;
+      }
+      changed = advance(key, newest, [
+        for (final m in src)
+          if (effAt(m) == newest) m.id,
+      ]);
+    }
+    if (mentionCountFor(key) > 0) {
+      _setMentions(mentionClear(mentions(), key, _nowMs));
+      changed = true;
+    }
+    return changed;
+  }
+
   FirstUnread? infoFor(String key, [List<Message>? list]) {
     final e = _entries[key];
     if (e == null) return null;
-    if (e.info != null) return e.info;
-    final rows = [for (final m in list ?? _store(key)) _row(m)];
-    final pre = firstUnread(rows, e.lastRead, before: e.openedAt);
-    if (pre == null) return null;
-    final older = e.badge > pre.count;
-    e.info = firstUnread(rows, e.lastRead,
-        before: e.openedAt, olderMayExist: older, badge: e.badge);
-    final start = jumpStart(rows, e.lastRead,
-        before: e.openedAt, olderMayExist: older, badge: e.badge);
-    final prev = e.jump;
-    e.jump = jumpSeen(
-        jumpAdd(start, [
-          for (final x in (prev['ids'] as List).cast<Map<String, dynamic>>())
-            ChatNavRow(id: x['id'] as String, at: x['at'] as int),
-        ]),
-        (prev['seen'] as List).cast<String>());
-    if (e.info != null) _rescanFor(e, list);
+    if (e.info != null || e.landed || e.base <= 0) return e.info;
+    final src = list ?? _store(key);
+    final id = jumpTargetFor(key, src);
+    if (id == null) return null;
+    final i = src.indexWhere((m) => m.id == id);
+    if (i < 0) return null;
+    final seen = _firstSeen[id];
+    if (src[i].createdAt > e.openedAt && (seen == null || seen >= e.openedAt)) {
+      return null;
+    }
+    e.info = FirstUnread(
+        id: id, index: i, count: jumpCountFor(key, src), beyond: false);
+    _rescanFor(e, list);
     return e.info;
   }
 
@@ -227,57 +370,6 @@ class ChatNavService {
   void markLanded(String key) => _entries[key]?.landed = true;
 
   void markScrolled(String key) => _entries[key]?.scrolled = true;
-
-  int jumpCountFor(String key) {
-    final e = _entries[key];
-    return e == null ? 0 : jumpCount(e.jump);
-  }
-
-  List<String> jumpLeadFor(String key) {
-    final e = _entries[key];
-    return e == null ? const [] : jumpLead(e.jump);
-  }
-
-  String? jumpTargetFor(String key) {
-    final e = _entries[key];
-    return e == null ? null : jumpTarget(e.jump);
-  }
-
-  List<String> jumpIds(String key) {
-    final e = _entries[key];
-    if (e == null) return const [];
-    return [
-      for (final x in (e.jump['ids'] as List).cast<Map<String, dynamic>>())
-        x['id'] as String,
-    ];
-  }
-
-  String jumpTextFor(String key) {
-    final e = _entries[key];
-    return e == null ? '' : jumpText(e.jump, _tr);
-  }
-
-  void markJumpSeen(String key, Iterable<String> ids) {
-    final e = _entries[key];
-    if (e == null) return;
-    final before = jumpCount(e.jump);
-    e.jump = jumpSeen(e.jump, ids);
-    if (jumpCount(e.jump) != before) _changed();
-  }
-
-  void revealJump(String key, [List<Message>? list]) {
-    final e = _entries[key];
-    if (e == null) return;
-    e.jump = jumpReveal(e.jump, [for (final m in list ?? _store(key)) _row(m)]);
-  }
-
-  void settleJump(String key) {
-    final e = _entries[key];
-    if (e == null) return;
-    final before = jumpCount(e.jump);
-    e.jump = jumpSettle(e.jump);
-    if (jumpCount(e.jump) != before) _changed();
-  }
 
   String get _mentionKey => 'nym_unread_mentions:${hooks.selfPubkey()}';
 
@@ -377,19 +469,16 @@ class ChatNavService {
   }
 
   void noteLive(String key, Message m, {required bool away}) {
-    if (!away) return;
     final e = _entries[key];
-    if (e != null) {
-      final row = _row(m);
-      if (!row.own && !row.sys) {
-        final before = jumpCount(e.jump);
-        e.jump = jumpAdd(e.jump, [row]);
-        if (jumpCount(e.jump) != before) _changed();
-      }
+    final row = _row(m);
+    if (row.own) {
+      if (e != null) advance(key, row.at, [m.id]);
+      return;
     }
-    if (!_isMention(m)) return;
+    if (!away || !_isMention(m)) return;
+    if (e != null && markUnder(e.mark, row.at, m.id)) return;
     _setMentions(mentionAdd(mentions(), key, [
-      {'id': m.id, 'at': m.createdAt}
+      {'id': m.id, 'at': row.at}
     ], _nowMs));
   }
 
@@ -883,5 +972,8 @@ class ChatNavService {
     _refreshTimer?.cancel();
     _refreshTimer = null;
     if (_mentionTimer != null) flushMentions();
+    try {
+      flushMarks();
+    } on StateError catch (_) {}
   }
 }

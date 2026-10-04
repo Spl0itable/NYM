@@ -2060,13 +2060,13 @@ Object.assign(NYM.prototype, {
                 content: event.content,
             };
             const signed = await window.nostr.signEvent(unsigned);
-            if (signed && this.pubkey && signed.pubkey && signed.pubkey !== this.pubkey) throw new Error('Signer key does not match this account');
+            if (signed && this.pubkey && signed.pubkey && signed.pubkey !== this.pubkey) throw new Error('Signer key does not match this identity');
             return signed;
         }
         // NIP-46 remote signer.
         if (this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
             const signed = await _nip46SignEvent(event);
-            if (signed && this.pubkey && signed.pubkey && signed.pubkey !== this.pubkey) throw new Error('Signer key does not match this account');
+            if (signed && this.pubkey && signed.pubkey && signed.pubkey !== this.pubkey) throw new Error('Signer key does not match this identity');
             return signed;
         }
         if (this.privkey) {

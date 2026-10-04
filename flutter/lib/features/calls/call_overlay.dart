@@ -30,6 +30,37 @@ import 'call_signaling.dart';
 import 'call_state.dart';
 import '../chat_lock/chat_lock_providers.dart';
 
+void showCallEmojiPicker(
+  BuildContext context, {
+  required List<String> recents,
+  required ValueChanged<String> onPick,
+}) {
+  final c = context.nym;
+  showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    isScrollControlled: true,
+    builder: (sheetCtx) => SafeArea(
+      child: Container(
+        height: MediaQuery.of(sheetCtx).size.height * 0.55,
+        decoration: BoxDecoration(
+          color: c.bgSecondary,
+          border: Border(top: BorderSide(color: c.glassBorder)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: EmojiPicker(
+          recents: recents,
+          onSelect: (emoji) {
+            Navigator.of(sheetCtx).maybePop();
+            onPick(emoji);
+          },
+        ),
+      ),
+    ),
+  );
+}
+
 /// Opens the profile-only user context menu for a nick tapped in the call UI; no-op for self or empty pubkey.
 void showCallUserMenu(BuildContext context, String pubkey, {String? nym}) {
   if (pubkey.isEmpty) return;
@@ -71,31 +102,8 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
 
   /// Full emoji picker as a bottom sheet over the call; [onPick] gets the emoji.
   void _openEmojiPicker(ValueChanged<String> onPick) {
-    final recents = ref.read(recentEmojisProvider);
-    final c = context.nym;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (sheetCtx) => SafeArea(
-        child: Container(
-          height: MediaQuery.of(sheetCtx).size.height * 0.55,
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            border: Border(top: BorderSide(color: c.glassBorder)),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: EmojiPicker(
-            recents: recents,
-            onSelect: (emoji) {
-              Navigator.of(sheetCtx).maybePop();
-              onPick(emoji);
-            },
-          ),
-        ),
-      ),
-    );
+    showCallEmojiPicker(context,
+        recents: ref.read(recentEmojisProvider), onPick: onPick);
   }
 
   /// Chat panel: a fixed 320px sibling of the grid on wide layouts, full-body on narrow ones.

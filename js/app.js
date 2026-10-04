@@ -29,7 +29,7 @@
             },
             {
                 title: 'Your Nym',
-                body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin lightning address for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices. Beside it you will find your post-quantum recovery code, the nympq1… code that makes your private messages quantum-resistant. Save that one too and keep it with your nsec: another device needs it to read those messages, and if every device holding it is lost they cannot be recovered. Long-pressing this area for 2 seconds will engage Panic Mode, which will encrypt all data with multiple throwaway Nyms, overwrite all data with junk, and logout immediately to make it difficult for anyone to access the data if you need to quickly hide and protect yourself.',
+                body: 'Tap here to edit the nickname, avatar, banner, bio, and Bitcoin lightning address for your Nym in this session. View the private key (nsec) of the Nym and save it if you would like to reuse this same Nym identity to login with it across devices. Beside it you will find your post-quantum recovery code, the nympq1… code that makes your private messages quantum-resistant. Save that one too and keep it with your nsec: another device needs it to read those messages, and if every device holding it is lost they cannot be recovered. Long-pressing this area for 2 seconds will engage Panic Mode, which will encrypt all data with multiple throwaway Nyms, overwrite all data with junk, and logout immediately to make it difficult for anyone to access the data if you need to quickly hide and protect yourself. If your identity is encrypted, holding the Nymchat wordmark on the unlock screen for 2 seconds does the same before you unlock.',
                 selector: '.nym-display',
                 onBefore: ensureSidebarOpenOnMobile
             },
@@ -5277,6 +5277,7 @@ async function nostrLoginWithExtension() {
             localStorage.setItem('nym_nostr_login_npub', npub);
         } catch (_) { }
 
+        if (typeof nym.remotePanicNoteLogin === 'function') nym.remotePanicNoteLogin();
         applyNostrLogin(pubkey, null, 'extension');
 
         await finishNostrLogin('Logged in with Nostr extension.');
@@ -5328,6 +5329,7 @@ async function nostrLoginApplyKey(nsecInput, secretKey, pubkey) {
         localStorage.setItem('nym_nostr_login_npub', npub);
     } catch (_) { }
 
+    if (typeof nym.remotePanicNoteLogin === 'function') nym.remotePanicNoteLogin();
     applyNostrLogin(pubkey, secretKey, 'nsec');
 
     await finishNostrLogin('Logged in with Nostr identity.');
@@ -5591,6 +5593,7 @@ async function _nip46CompleteLogin(remotePubkey) {
             }]));
         }
 
+        if (typeof nym.remotePanicNoteLogin === 'function') nym.remotePanicNoteLogin();
         applyNostrLogin(pubkey, null, 'nip46');
 
         await finishNostrLogin('Logged in with remote signer (NIP-46).');
@@ -6552,6 +6555,9 @@ async function applyNostrSettings(s) {
     if (s.encryptAtRestPreferred === true) {
         try { localStorage.setItem('nym_encrypt_at_rest_pref', '1'); } catch (_) { }
     }
+    if (typeof s.remotePanic === 'boolean' && typeof nym.remotePanicApplySynced === 'function') {
+        try { nym.remotePanicApplySynced(s.remotePanic); } catch (_) { }
+    }
 
     if (s.theme && typeof s.theme === 'string') {
         nym.settings.theme = s.theme;
@@ -7243,6 +7249,10 @@ function installNativeWalletBridgeCompat(n) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    if (window.NymAccounts && window.NymAccounts.recovering) {
+        document.getElementById('acctSwitchOverlay')?.classList.add('active');
+        return;
+    }
     // Construct now that all module scripts have attached their methods to NYM.prototype.
     nym = new NYM();
     window.nym = nym;

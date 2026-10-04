@@ -98,7 +98,7 @@ class _BootGateState extends ConsumerState<BootGate> {
                       onPressed: () => unawaited(accounts.cancelAdd()),
                       child: Text(
                         from == null
-                            ? tr('Back to my accounts')
+                            ? tr('Back to my identities')
                             : tr('Back to {nym}', {
                                 'nym': getNymFromPubkey(
                                     from.nym.isEmpty ? 'nym' : from.nym,

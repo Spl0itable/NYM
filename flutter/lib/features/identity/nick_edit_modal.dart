@@ -1074,8 +1074,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       context,
       accounts == null
           ? tr('Sign out and disconnect from Nymchat?')
-          : tr('Log out of this account? Keys stored only on this device will '
-              'be deleted. Back up your nsec first. Your other accounts stay '
+          : tr('Log out of this identity? Keys stored only on this device will '
+              'be deleted. Back up your nsec first. Your other identities stay '
               'on this device.'),
       okLabel: tr('Sign out'),
       danger: true,

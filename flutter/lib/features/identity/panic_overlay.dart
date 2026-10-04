@@ -6,25 +6,68 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../services/api/api_client.dart';
+import '../../services/api/storage_sync.dart';
 import '../../state/nostr_controller.dart';
+import '../../state/settings_provider.dart';
 import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
+import 'panic_purge.dart';
 import 'panic_wipe.dart';
+import 'remote_panic.dart';
 
 /// Runs the emergency wipe; the server purge is signed while the key exists and time-bounded so it can't stall the wipe.
 void startPanicWipe(BuildContext context, WidgetRef ref) {
   final ctrl = ref.read(nostrControllerProvider);
   final accounts = ref.read(accountsProvider);
-  unawaited(ctrl
-      .purgeServerRecords()
-      .timeout(const Duration(seconds: 3), onTimeout: () => false));
   PanicOverlay.show(
     context,
-    wipe: PanicWipe.production(),
+    wipe: PanicWipe.production(purge: buildPanicPurge(ref)),
     onComplete: () {
       accounts?.forgetAll();
       unawaited(ctrl.resetAfterPanic());
     },
+  );
+}
+
+void startLockScreenPanic(BuildContext context, WidgetRef ref,
+    {required VoidCallback onComplete}) {
+  final accounts = ref.read(accountsProvider);
+  PanicOverlay.show(
+    context,
+    wipe: PanicWipe.production(purge: buildPanicPurge(ref)),
+    onComplete: () {
+      accounts?.forgetAll();
+      onComplete();
+    },
+  );
+}
+
+@visibleForTesting
+Future<Map<String, dynamic>> Function(Map<String, dynamic> body)?
+    panicSendForTest;
+
+PanicIdentityPurge buildPanicPurge(WidgetRef ref) {
+  final ctrl = ref.read(nostrControllerProvider);
+  final api = ApiClient();
+  final send = panicSendForTest ??
+      (Map<String, dynamic> body) => api.storageAction(body, socket: false);
+  final signals = RemotePanicSender.fromStore(
+    ref.read(keyValueStoreProvider),
+    send: send,
+    url: StorageSync.storageUrl,
+    publish: ctrl.publishRemotePanicWrap,
+  );
+  return PanicIdentityPurge.fromAccounts(
+    ref.read(accountsProvider),
+    send: send,
+    purgeActive: (pubkey) =>
+        ctrl.purgeServerRecords(pubkey: pubkey.isEmpty ? null : pubkey),
+    beforePurge: signals.call,
+    activeKey: ctrl.remotePanicActiveKey,
+    activeSigner: ctrl.remotePanicActiveSigner,
+    beforePurgeSigned: signals.viaSigner,
+    activePubkey: ctrl.identity?.pubkey ?? '',
   );
 }
 
@@ -89,13 +132,14 @@ class _PanicOverlayState extends State<PanicOverlay>
   Future<void> _runWipe() async {
     final startedAt = DateTime.now();
     // Stage strings track real wipe progress, ending on "Keys destroyed.".
-    await widget.wipe.wipe(onStatus: (status) {
+    final report = await widget.wipe.wipe(onStatus: (status) {
       if (mounted) setState(() => _status = status);
     });
-    if (mounted) setState(() => _status = tr('Keys destroyed.'));
+    final unremoved = panicPurgeStatus(report.unremoved);
+    if (mounted) setState(() => _status = unremoved ?? tr('Keys destroyed.'));
     // Hold the animation at least 1.5s so the effect reads as deliberate.
     final elapsed = DateTime.now().difference(startedAt).inMilliseconds;
-    final wait = max(250, 1500 - elapsed);
+    final wait = max(unremoved == null ? 250 : 1500, 1500 - elapsed);
     await Future<void>.delayed(Duration(milliseconds: wait));
     widget.onComplete?.call();
   }
@@ -172,10 +216,11 @@ class _PanicOverlayState extends State<PanicOverlay>
                     ),
                   ),
                   const SizedBox(height: 14),
-                  SizedBox(
-                    height: 16,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 16),
                     child: Text(
                       _status,
+                      textAlign: TextAlign.center,
                       style: TextStyle(
                         color: c.textBright.withValues(alpha: 0.95),
                         fontFamily: 'monospace',

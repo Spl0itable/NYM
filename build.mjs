@@ -233,6 +233,7 @@ async function run() {
     'js/app.js', 'js/vendor/ml-kem.js', 'js/nym-crypto.js', 'js/modules/crypto-pool.js',
     'js/modules/pq.js',
     'js/modules/persistence.js', 'js/modules/key-vault.js', 'js/modules/panic.js',
+    'js/modules/remote-panic.js', 'js/modules/remote-panic-ui.js',
     'js/modules/attest.js', 'js/modules/filter-packs.js', 'js/modules/event-details.js',
     'js/modules/wrap-outbox.js',
     'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/users.js',

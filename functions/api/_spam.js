@@ -506,7 +506,8 @@ const APP_ACTIONS = [
   /^\/me\s+slaps\s+\S+(\s+\S+)?\s+around a bit with a large trout\b/i,
   /^\/me\s+gives\s+\S+(\s+\S+)?\s+a warm hug\b/i,
   /^\*\s*\S[^*]{0,80}?\s+slaps\s+\S[^*]{0,80}?\s+around a bit with a large trout\b[^*]{0,16}\*$/iu,
-  /^\*\s*\S[^*]{0,80}?\s+gives\s+\S[^*]{0,80}?\s+a warm hug\b[^*]{0,16}\*$/iu
+  /^\*\s*\S[^*]{0,80}?\s+gives\s+\S[^*]{0,80}?\s+a warm hug\b[^*]{0,16}\*$/iu,
+  /^\*\s*\S[^*]{0,80}?\s+took a screenshot\s*\*$/iu
 ];
 
 export function isAppAction(content) {

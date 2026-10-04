@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderEditable;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -787,9 +788,12 @@ class _ComposerState extends ConsumerState<Composer> {
       _hideEmojiPicker();
       return;
     }
-    await _ensurePrefs();
+    final prefs = await _ensurePrefs();
     if (!mounted) return;
-    setState(() => _pickerTab = 'emoji');
+    setState(() {
+      _recents = EmojiRecentsStore(prefs).load();
+      _pickerTab = 'emoji';
+    });
     _emojiPortal.show();
   }
 
@@ -1832,6 +1836,57 @@ class _ComposerState extends ConsumerState<Composer> {
   bool _rowPhone = false;
   double _rowGap = 10;
   double _pillT = 0;
+  double _textStart = 37;
+  bool _textStartQueued = false;
+  final _translateGlyphKey = GlobalKey();
+
+  double get _pillFieldLeft =>
+      _pillWanted ? math.min(42 + _rowGap, _textStart) : 42 + _rowGap;
+
+  double get _pillTextPad => _pillWanted
+      ? _textStart - _pillFieldLeft
+      : 16 * (1 - _pillT);
+
+  void _queueTextStartSync() {
+    if (_textStartQueued) return;
+    _textStartQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _textStartQueued = false;
+      if (!mounted || !_pillWanted) return;
+      final glyph = _liveBox(_translateGlyphKey);
+      final plus = _liveBox(_attachKey);
+      if (glyph == null || plus == null || !glyph.hasSize || !plus.hasSize) {
+        return;
+      }
+      final plusX = plus.localToGlobal(Offset.zero).dx;
+      final text = _editableBox();
+      final inset = text == null
+          ? 0.0
+          : text.localToGlobal(Offset.zero).dx -
+              plusX -
+              _pillFieldLeft -
+              _pillTextPad;
+      final x = glyph.localToGlobal(Offset.zero).dx - plusX - inset;
+      if ((x - _textStart).abs() > 0.25) setState(() => _textStart = x);
+    });
+  }
+
+  RenderBox? _editableBox() {
+    RenderBox? found;
+    void visit(RenderObject o) {
+      if (found != null) return;
+      if (o is RenderEditable) {
+        found = o;
+        return;
+      }
+      o.visitChildren(visit);
+    }
+
+    final root = _liveBox(_fieldKey);
+    if (root != null) visit(root);
+    final box = found;
+    return box != null && box.attached && box.hasSize ? box : null;
+  }
   bool _pillOn = false;
 
   bool get _pillWanted =>
@@ -1857,6 +1912,7 @@ class _ComposerState extends ConsumerState<Composer> {
 
   Widget _pillShell(BuildContext context, double topRadius, Widget field) {
     final c = context.nym;
+    if (_pillWanted) _queueTextStartSync();
     final t = _pillT;
     final radius = BorderRadius.vertical(
       top: Radius.circular(topRadius),
@@ -1880,9 +1936,18 @@ class _ComposerState extends ConsumerState<Composer> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          _attachButton(bare: t),
-          SizedBox(width: _rowGap),
-          Expanded(child: field),
+          Expanded(
+            child: Stack(
+              alignment: AlignmentDirectional.bottomStart,
+              children: [
+                Padding(
+                  padding: EdgeInsets.only(left: _pillFieldLeft),
+                  child: field,
+                ),
+                UnconstrainedBox(child: _attachButton(bare: t)),
+              ],
+            ),
+          ),
           SizedBox(width: _rowGap),
           _primaryButton(_rowSendEnabled, _rowPhone, inset: 4 * t, bare: t),
         ],
@@ -2175,8 +2240,8 @@ class _ComposerState extends ConsumerState<Composer> {
             fontSize: fontSize),
         filled: true,
         fillColor: fill,
-        contentPadding:
-            EdgeInsets.fromLTRB(16 * keep, 10, _pillWanted ? 16 : 38, 10),
+        contentPadding: EdgeInsets.fromLTRB(
+            _pillOn ? _pillTextPad : 16, 10, _pillWanted ? 16 : 38, 10),
         border: border,
         enabledBorder: border,
         focusedBorder: border,
@@ -2243,6 +2308,7 @@ class _ComposerState extends ConsumerState<Composer> {
       key: const ValueKey('translateInputBtn'),
       link: _translateAnchor,
       child: _TranslateInputButton(
+        glyphKey: _translateGlyphKey,
         enabled: hasText && !_translating,
         translating: _translating,
         onTap: _toggleTranslateDropdown,
@@ -3453,11 +3519,13 @@ class _ChipCloseButtonState extends State<_ChipCloseButton> {
 /// Pulses while [translating]; disabled when the draft is empty.
 class _TranslateInputButton extends StatefulWidget {
   const _TranslateInputButton({
+    required this.glyphKey,
     required this.enabled,
     required this.translating,
     required this.onTap,
   });
 
+  final Key glyphKey;
   final bool enabled;
   final bool translating;
   final VoidCallback onTap;
@@ -3505,7 +3573,8 @@ class _TranslateInputButtonState extends State<_TranslateInputButton>
     final restAlpha = widget.translating || widget.enabled ? 1.0 : 0.4;
     final base = _hover && widget.enabled ? c.primary : c.textDim;
     final color = base.withValues(alpha: base.a * restAlpha);
-    Widget glyph = NymSvgIcon(NymIcons.translate, size: 16, color: color);
+    Widget glyph = NymSvgIcon(NymIcons.translate,
+        key: widget.glyphKey, size: 16, color: color);
     if (widget.translating) {
       glyph = FadeTransition(
         opacity: Tween(begin: 0.4, end: 0.8).animate(_pulse),

@@ -1,7 +1,7 @@
 name: nym_bar
 description: "Experience the future of decentralized communication with Nymchat, a sleek and secure shell app that wraps around our powerful PWA, delivering instant notifications and seamless external browsing for an uncompromised user experience."
 publish_to: "none"
-version: 3.75.545+402
+version: 3.75.545+413
 
 environment:
   sdk: ^3.13.0
@@ -146,6 +146,8 @@ flutter:
   fonts:
     - family: Roboto
       fonts:
+        - asset: assets/fonts/Roboto-Thin.ttf
+          weight: 100
         - asset: assets/fonts/Roboto-Regular.ttf
         - asset: assets/fonts/Roboto-Medium.ttf
           weight: 500

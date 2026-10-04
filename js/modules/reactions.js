@@ -705,7 +705,7 @@ Object.assign(NYM.prototype, {
     // The modal DOM is ~7k nodes, so it's built once, detached on close, and rebuilt only on data changes.
     _ensureEnhancedEmojiModal() {
         let modal = this._cachedEmojiModal;
-        if (modal && this._emojiRecentsDirty && !this._emojiPickerDirty) {
+        if (modal && !this._emojiPickerDirty && (this._emojiRecentsDirty || modal._recentsKey !== this._recentEmojisForPicker().join('\n'))) {
             this._refreshEmojiModalRecents(modal);
             this._emojiRecentsDirty = false;
         }
@@ -725,6 +725,7 @@ Object.assign(NYM.prototype, {
     <button class="modal-close emoji-modal-close" data-action="closeEnhancedEmojiModal" aria-label="Close">&#x2715;</button>
 </div>
 ${this._emojiSectionsHtml()}`;
+        modal._recentsKey = this._recentEmojisForPicker().join('\n');
         this._indexEmojiSearch(modal, '.emoji-option', '.emoji-section');
         this._emojiPickerDirty = false;
         this._emojiRecentsDirty = false;
@@ -733,6 +734,7 @@ ${this._emojiSectionsHtml()}`;
 
     _refreshEmojiModalRecents(modal) {
         const recents = this._recentEmojisForPicker();
+        modal._recentsKey = recents.join('\n');
         const section = modal.querySelector('.emoji-section[data-category="recent"]');
         if (!section) {
             if (recents.length > 0) this._emojiPickerDirty = true;

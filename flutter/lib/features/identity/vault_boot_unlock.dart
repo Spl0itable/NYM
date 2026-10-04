@@ -8,10 +8,15 @@ import '../../core/theme/nym_theme.dart' show kMonoFont;
 import '../../services/storage/at_rest_wipe.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../../widgets/common/panic_hold_detector.dart';
+import '../accounts/account_host.dart';
+import '../accounts/account_logic.dart';
+import '../accounts/account_switcher.dart' show accountDisplayName;
 import '../i18n/i18n.dart';
 import 'biometric_secret_store.dart';
 import 'identity_vault.dart' show SecureStoreLike;
 import 'modal_chrome.dart';
+import 'panic_overlay.dart';
 import 'vault_settings_modal.dart' show identityVaultProvider;
 
 const String nymchatWordmark = r'''                                            ##\                  ##\
@@ -128,6 +133,17 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
 
   /// "Forget identity" from the error card resets without a second confirmation.
   Future<void> _forgetFromError() async {
+    await _forgetIdentity();
+  }
+
+  Future<void> _forgetIdentity() async {
+    final accounts = ref.read(accountsProvider);
+    if (accounts != null &&
+        accounts.changes.value.activeAccount != null &&
+        await accounts.logout()) {
+      return;
+    }
+    if (!mounted) return;
     await _resetIdentity();
     if (mounted) widget.onForget();
   }
@@ -142,15 +158,28 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   Future<void> _forget() async {
     final confirmed = await _confirmForget();
     if (!confirmed) return;
-    await _resetIdentity();
-    if (mounted) widget.onForget();
+    await _forgetIdentity();
+  }
+
+  String? _nextAccountName() {
+    final accounts = ref.read(accountsProvider);
+    if (accounts == null) return null;
+    final plan = AccountLogic.plan(accounts.changes.value, const LogoutOp());
+    final next = plan.ok ? plan.index.activeAccount : null;
+    return next == null ? null : accountDisplayName(next);
   }
 
   Future<bool> _confirmForget() {
+    final next = _nextAccountName();
+    final current = ref.read(accountsProvider)?.changes.value.activeAccount;
     return showAppConfirm(
       context,
-      tr('This permanently deletes the encrypted identity on this device and '
-          'starts a fresh one. Continue?'),
+      next != null && current != null
+          ? tr('This permanently deletes {nym} and its data on this device, '
+              'and you will switch to {next}. Continue?',
+              {'nym': accountDisplayName(current), 'next': next})
+          : tr('This permanently deletes the encrypted identity on this device and '
+              'starts a fresh one. Continue?'),
       title: tr('Forget identity'),
       okLabel: tr('Forget'),
       danger: true,
@@ -183,7 +212,24 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     );
   }
 
+  bool _panicking = false;
+
+  void _panic() {
+    if (_panicking) return;
+    _panicking = true;
+    FocusManager.instance.primaryFocus?.unfocus();
+    startLockScreenPanic(context, ref, onComplete: widget.onForget);
+  }
+
   Widget _wordmark(NymColors c) {
+    return PanicHoldDetector(
+      key: const Key('vaultWordmarkPanic'),
+      onHold: _panic,
+      child: _wordmarkText(c),
+    );
+  }
+
+  Widget _wordmarkText(NymColors c) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Center(

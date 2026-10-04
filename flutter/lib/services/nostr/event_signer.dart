@@ -54,20 +54,45 @@ class LocalSigner implements EventSigner {
 }
 
 /// Adapts a connected NIP-46 [Nip46Signer] to [EventSigner].
-class Nip46SignerAdapter implements EventSigner {
-  Nip46SignerAdapter(this._remote);
+class SignerKeyMismatch implements Exception {
+  const SignerKeyMismatch(this.expected, this.actual);
 
-  final Nip46Signer _remote;
+  final String expected;
+  final String actual;
 
   @override
-  String get pubkey => _remote.pubkey;
+  String toString() => 'Signer key does not match this identity';
+}
+
+class Nip46SignerAdapter implements EventSigner {
+  Nip46SignerAdapter(this._remote, {String? expectedPubkey, this.onMismatch})
+      : _expected = expectedPubkey ?? _remote.pubkey;
+
+  final Nip46Signer _remote;
+  final String _expected;
+  final void Function(SignerKeyMismatch error)? onMismatch;
+
+  @override
+  String get pubkey => _expected;
 
   @override
   bool get isRemote => true;
 
+  bool get connected {
+    final remote = _remote;
+    return remote is! Nip46Service || remote.isConnected;
+  }
+
   @override
-  Future<NostrEvent> sign(UnsignedEvent unsigned) =>
-      _remote.signEvent(unsigned);
+  Future<NostrEvent> sign(UnsignedEvent unsigned) async {
+    final signed = await _remote.signEvent(unsigned);
+    if (_expected.isEmpty || signed.pubkey != _expected) {
+      final error = SignerKeyMismatch(_expected, signed.pubkey);
+      onMismatch?.call(error);
+      throw error;
+    }
+    return signed;
+  }
 
   @override
   Future<String> nip44Encrypt(String peerPubkey, String plaintext) =>

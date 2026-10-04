@@ -1039,10 +1039,11 @@ class ApiClient {
   }
 
   /// `POST /api/storage` for shop-* actions; [body] carries `action` and any auth. Throws [ApiException] on non-2xx.
-  Future<Map<String, dynamic>> storageAction(Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> storageAction(Map<String, dynamic> body,
+      {bool socket = true}) async {
     final action = (body['action'] ?? 'other').toString();
     // WS-first; a non-null socket result is already a 2xx with no `error`.
-    final ws = await _trySocket(action, body, stream: false);
+    final ws = socket ? await _trySocket(action, body, stream: false) : null;
     if (ws != null) return ws.data;
     final payload = jsonEncode(body);
     final res = await _client.post(

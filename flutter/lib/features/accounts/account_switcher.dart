@@ -35,14 +35,12 @@ String accountMethodLabel(String method) {
 }
 
 String accountDisplayName(AccountEntry a) {
-  if (a.pubkey.isEmpty) return tr('New account');
+  if (a.pubkey.isEmpty) return tr('New identity');
   return getNymFromPubkey(a.nym.isEmpty ? 'nym' : a.nym, a.pubkey);
 }
 
 class AccountSwitchButton extends ConsumerStatefulWidget {
-  const AccountSwitchButton({super.key, this.size = 44});
-
-  final double size;
+  const AccountSwitchButton({super.key});
 
   @override
   ConsumerState<AccountSwitchButton> createState() =>
@@ -51,48 +49,110 @@ class AccountSwitchButton extends ConsumerStatefulWidget {
 
 class _AccountSwitchButtonState extends ConsumerState<AccountSwitchButton> {
   bool _hover = false;
+  bool _focus = false;
 
   @override
   Widget build(BuildContext context) {
     final api = ref.watch(accountsProvider);
     if (api == null) return const SizedBox.shrink();
     final c = context.nym;
-    return Tooltip(
-      message: tr('Switch account'),
-      child: Semantics(
-        button: true,
-        label: tr('Switch account'),
-        child: MouseRegion(
-          onEnter: (_) => setState(() => _hover = true),
-          onExit: (_) => setState(() => _hover = false),
-          child: InkWell(
-            key: const ValueKey('accountSwitchBtn'),
-            borderRadius: NymRadius.rsm,
-            onTap: () => showAccountSwitcher(context),
-            child: Container(
-              width: widget.size,
-              height: widget.size,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: _hover
-                    ? (c.isLight
-                        ? Colors.black.withValues(alpha: 0.07)
-                        : Colors.white.withValues(alpha: 0.07))
-                    : c.insetFill,
-                border: Border.all(
-                  color: _hover && !c.isLight
-                      ? c.primaryA(0.3)
-                      : c.glassBorder,
+    final lit = _hover || _focus;
+    final fg = lit ? c.primary : c.textDim;
+    final label = tr('Manage Identities');
+    final row = InkWell(
+      key: const ValueKey('accountSwitchBtn'),
+      borderRadius: NymRadius.rsm,
+      onTap: () => showAccountSwitcher(context),
+      onHover: (v) => setState(() => _hover = v),
+      onFocusChange: (v) => setState(() => _focus = v),
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(minHeight: 36),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: lit
+              ? (c.isLight
+                  ? Colors.black.withValues(alpha: 0.07)
+                  : Colors.white.withValues(alpha: 0.07))
+              : c.insetFill,
+          border: Border.all(color: lit ? c.primaryA(0.3) : c.glassBorder),
+          borderRadius: NymRadius.rsm,
+          boxShadow: lit && !c.isLight
+              ? [BoxShadow(color: c.primaryA(0.08), blurRadius: 15)]
+              : null,
+        ),
+        child: Row(
+          children: [
+            NymSvgIcon(NymIcons.accountSwitch, size: 16, color: fg),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: fg,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.3,
+                  height: 1.2,
                 ),
-                borderRadius: NymRadius.rsm,
-              ),
-              child: NymSvgIcon(
-                NymIcons.accountSwitch,
-                size: 20,
-                color: _hover ? c.primary : c.textDim,
               ),
             ),
-          ),
+            ValueListenableBuilder<AccountIndex>(
+              valueListenable: api.changes,
+              builder: (context, index, _) {
+                final unread = index.accounts
+                    .any((a) => a.id != index.active && a.unread > 0);
+                if (!unread) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(left: 10),
+                  child: Container(
+                    key: const ValueKey('accountSwitchUnreadDot'),
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: c.danger,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+    return Semantics(
+      container: true,
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      onTap: () => showAccountSwitcher(context),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            row,
+            if (_focus && FocusManager.instance.highlightMode ==
+                FocusHighlightMode.traditional)
+              Positioned(
+                left: -3,
+                top: -3,
+                right: -3,
+                bottom: -3,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: c.primaryA(0.6), width: 2),
+                      borderRadius:
+                          const BorderRadius.all(Radius.circular(NymRadius.sm + 3)),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -169,7 +229,7 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
     if (api == null) return;
     if (api.changes.value.accounts.length >= AccountLogic.maxAccounts) {
       showToast(tr(
-          'You can keep up to {n} accounts on this device. Remove one to add '
+          'You can keep up to {n} identities on this device. Remove one to add '
           'another.',
           {'n': AccountLogic.maxAccounts}));
       return;
@@ -177,10 +237,10 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
     _close();
     final err = await api.add();
     if (err == 'pending') {
-      showToast(tr('Finish setting up the new account first.'));
+      showToast(tr('Finish setting up the new identity first.'));
     } else if (err == 'cap') {
       showToast(tr(
-          'You can keep up to {n} accounts on this device. Remove one to add '
+          'You can keep up to {n} identities on this device. Remove one to add '
           'another.',
           {'n': AccountLogic.maxAccounts}));
     }
@@ -227,11 +287,11 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
     if (api == null) return;
     final ok = await showAppConfirm(
       context,
-      tr('Log out of all {n} accounts? Every account and its data on this '
+      tr('Log out of all {n} identities? Every identity and its data on this '
           'device is deleted. Back up any nsec you need first.',
           {'n': api.changes.value.accounts.length}),
-      title: tr('Log out of all'),
-      okLabel: tr('Log out of all'),
+      title: tr('Log out of all identities'),
+      okLabel: tr('Log out of all identities'),
       danger: true,
     );
     if (!ok || !mounted) return;
@@ -248,14 +308,14 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
     }
     final ok = await showAppConfirm(
       context,
-      tr('This can let the server see that these accounts share a device.'),
-      title: tr('Notify me for this account while it\'s not active'),
+      tr('This can let the server see that these identities share a device.'),
+      title: tr('Notify me for this identity while it\'s not active'),
       okLabel: tr('Turn on'),
     );
     if (!ok) return;
     final err = await api.setNotify(a.id, true);
     if (err == 'unsupported') {
-      showToast(tr('Anonymous and unfinished accounts can\'t get notifications '
+      showToast(tr('Anonymous and unfinished identities can\'t get notifications '
           'while inactive.'));
     }
   }
@@ -284,7 +344,7 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(20, 20, 56, 8),
                         child: Text(
-                          tr('Accounts').toUpperCase(),
+                          tr('Identities').toUpperCase(),
                           style: TextStyle(
                             color: c.primary,
                             fontSize: 16,
@@ -301,7 +361,7 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
               if (index.accounts.isEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-                  child: Text(tr('No saved accounts yet.'),
+                  child: Text(tr('No saved identities yet.'),
                       style: TextStyle(color: c.textDim, fontSize: 13)),
                 ),
               Flexible(
@@ -328,7 +388,7 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
                     Expanded(
                       child: _FooterButton(
                         key: const ValueKey('accountAddBtn'),
-                        label: tr('Add account'),
+                        label: tr('Add identity'),
                         icon: NymIcons.plus,
                         enabled: !full,
                         onTap: _add,
@@ -338,7 +398,7 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
                     Expanded(
                       child: _FooterButton(
                         key: const ValueKey('accountLogoutAllBtn'),
-                        label: tr('Log out of all'),
+                        label: tr('Log out of all identities'),
                         icon: NymIcons.logout,
                         danger: true,
                         enabled: index.accounts.isNotEmpty,
@@ -352,7 +412,7 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 14),
                   child: Text(
-                    tr('You can keep up to {n} accounts on this device.',
+                    tr('You can keep up to {n} identities on this device.',
                         {'n': AccountLogic.maxAccounts}),
                     style: TextStyle(color: c.textDim, fontSize: 12),
                   ),
@@ -452,7 +512,7 @@ class _AccountRow extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(right: 4),
                 child: Tooltip(
-                  message: tr('Active account'),
+                  message: tr('Active identity'),
                   child: Icon(Icons.check,
                       key: const ValueKey('accountActiveCheck'),
                       size: 18,
@@ -462,7 +522,7 @@ class _AccountRow extends StatelessWidget {
             if (canNotify)
               IconButton(
                 key: ValueKey('accountNotify-${a.id}'),
-                tooltip: tr('Notify me for this account while it\'s not active'),
+                tooltip: tr('Notify me for this identity while it\'s not active'),
                 onPressed: onToggleNotify,
                 icon: NymSvgIcon(
                   a.notifyInactive ? NymIcons.bell : NymIcons.bellOff,
@@ -472,7 +532,7 @@ class _AccountRow extends StatelessWidget {
               ),
             IconButton(
               key: ValueKey('accountRemove-${a.id}'),
-              tooltip: tr('Remove account'),
+              tooltip: tr('Remove identity'),
               onPressed: onRemove,
               icon: NymSvgIcon(NymIcons.close, size: 16, color: c.textDim),
             ),
@@ -567,7 +627,7 @@ class _RemoveAccountDialog extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  tr('Remove account'),
+                  tr('Remove identity'),
                   style: TextStyle(
                     color: c.text,
                     fontSize: 16,
@@ -584,7 +644,7 @@ class _RemoveAccountDialog extends StatelessWidget {
                         ? tr('Its key stays in your signer; you can add it '
                             'again later.')
                         : tr('Its key is stored only on this device: back up '
-                            'the nsec first or you lose this account.'),
+                            'the nsec first or you lose this identity.'),
                     if (next != null) tr('You will switch to {nym}.', {'nym': next}),
                   ].join(' '),
                   style: TextStyle(color: c.textDim, fontSize: 13, height: 1.4),

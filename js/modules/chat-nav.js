@@ -31,6 +31,7 @@
         pinnedPending: 'nym_pinned_pending',
         mentions: 'nym_unread_mentions',
         scheduled: 'nym_scheduled_cache',
+        seenMarks: 'nym_seen_marks',
     });
 
     const STRINGS = Object.freeze({
@@ -129,37 +130,38 @@
         return !!(info && info.id && dividerAbove && !dismissed);
     }
 
-    const JUMP = Object.freeze({ seenRatio: 0.5, dwellMs: 500, seenMax: 500 });
+    const JUMP = Object.freeze({ bottomPx: 48, landPx: 8, markMax: 200, storeMax: 300, storeIds: 50 });
     const FABS = Object.freeze({ order: Object.freeze(['mention', 'jump', 'bottom']), gap: 8, right: 24, rightPhone: 16, rightColumn: 16, phoneMax: 768 });
 
-    function seenInView(top, bottom, viewTop, viewBottom) {
-        const t = num(top), b = num(bottom), vt = num(viewTop), vb = num(viewBottom);
-        const h = b - t;
-        const vh = vb - vt;
-        if (!(h > 0) || !(vh > 0)) return false;
-        const vis = Math.min(b, vb) - Math.max(t, vt);
-        if (!(vis > 0)) return false;
-        return vis >= h * JUMP.seenRatio || vis >= vh * JUMP.seenRatio;
+    function markIndex(bottoms, viewTop, viewBottom, count) {
+        const get = typeof bottoms === 'function' ? bottoms : (i) => num(bottoms[i]);
+        const n = typeof bottoms === 'function' ? Math.max(0, Math.floor(num(count))) : (Array.isArray(bottoms) ? bottoms.length : 0);
+        const vt = num(viewTop), vb = num(viewBottom);
+        if (!(vb > vt) || n <= 0) return -1;
+        let lo = 0, hi = n - 1, hit = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (get(mid) <= vb) { hit = mid; lo = mid + 1; } else hi = mid - 1;
+        }
+        return hit >= 0 && get(hit) > vt ? hit : -1;
     }
 
-    function dwellStep(pending, visibleIds, nowMs) {
-        const p = pending && typeof pending === 'object' ? pending : {};
-        const now = num(nowMs);
-        const next = {};
-        const seen = [];
-        let due = 0;
-        for (const id of (Array.isArray(visibleIds) ? visibleIds : [])) {
-            if (typeof id !== 'string' || !id || next[id] !== undefined || seen.indexOf(id) >= 0) continue;
-            const since = Object.prototype.hasOwnProperty.call(p, id) ? num(p[id]) : now;
-            if (now - since >= JUMP.dwellMs) {
-                seen.push(id);
-                continue;
-            }
-            next[id] = since;
-            const left = since + JUMP.dwellMs - now;
-            if (!due || left < due) due = left;
+    function effectiveAt(createdAt, seenAt) {
+        const c = Math.floor(num(createdAt));
+        const s = Math.floor(num(seenAt));
+        return s > 0 && s < c ? s : c;
+    }
+
+    function atBottom(distance) {
+        return Math.abs(num(distance)) <= JUMP.bottomPx;
+    }
+
+    function jumpDir(o) {
+        const r = o && typeof o === 'object' ? o : {};
+        if (r.top !== undefined && r.top !== null && Number.isFinite(Number(r.top))) {
+            return num(r.top) - num(r.viewTop) - JUMP.landPx > 0 ? 'down' : 'up';
         }
-        return { pending: next, seen, wait: due };
+        return num(r.at) < num(r.firstAt) ? 'up' : 'down';
     }
 
     function fabRow(visible) {
@@ -172,118 +174,86 @@
         return num(width) > 0 && num(width) <= FABS.phoneMax ? FABS.rightPhone : FABS.right;
     }
 
-    function jumpEmpty(floor, before) {
-        return { floor: Math.max(0, Math.floor(num(floor))), before: Math.max(0, Math.floor(num(before))), ids: [], hidden: 0, seen: [] };
-    }
-
-    function jumpNorm(raw) {
+    function markNorm(raw) {
         const r = raw && typeof raw === 'object' ? raw : {};
-        const s = jumpEmpty(r.floor, r.before);
-        const have = new Set();
-        for (const e of (Array.isArray(r.ids) ? r.ids : [])) {
-            if (!e || typeof e.id !== 'string' || !e.id || have.has(e.id)) continue;
-            have.add(e.id);
-            s.ids.push({ id: e.id, at: Math.max(0, Math.floor(num(e.at))) });
-        }
-        for (const id of (Array.isArray(r.seen) ? r.seen : [])) if (typeof id === 'string' && id && s.seen.indexOf(id) < 0) s.seen.push(id);
-        s.ids.sort((a, b) => (a.at - b.at) || cmpStr(a.id, b.id));
-        s.hidden = Math.max(0, Math.floor(num(r.hidden)));
-        return s;
+        const at = Math.max(0, Math.floor(num(r.at)));
+        const ids = [];
+        if (at > 0) for (const id of (Array.isArray(r.ids) ? r.ids : [])) if (typeof id === 'string' && id && ids.indexOf(id) < 0) ids.push(id);
+        return { at, ids: ids.length > JUMP.markMax ? ids.slice(ids.length - JUMP.markMax) : ids };
     }
 
-    function jumpStart(list, lastRead, opts) {
-        const o = opts || {};
-        const s = jumpEmpty(lastRead, o.before);
-        const info = firstUnread(list, lastRead, o);
-        if (!info) return s;
-        for (let i = info.index; i < list.length; i++) {
-            const m = list[i] || {};
-            if (m.own || m.sys || !m.id) continue;
-            if (num(m.at) > s.floor) s.ids.push({ id: String(m.id), at: Math.floor(num(m.at)) });
+    function markFloor(sec) {
+        const s = Math.floor(num(sec));
+        return s > 0 ? { at: s + 1, ids: [] } : { at: 0, ids: [] };
+    }
+
+    function markUnder(mark, at, id) {
+        const m = mark && typeof mark === 'object' ? mark : {};
+        const ma = Math.floor(num(m.at));
+        if (!(ma > 0)) return false;
+        const a = Math.floor(num(at));
+        if (a < ma) return true;
+        return a === ma && Array.isArray(m.ids) && m.ids.indexOf(id) >= 0;
+    }
+
+    function markAdvance(mark, at, ids) {
+        const m = markNorm(mark);
+        const a = Math.floor(num(at));
+        if (!(a > 0) || a < m.at) return m;
+        if (a > m.at) {
+            m.at = a;
+            m.ids = [];
         }
-        const out = jumpNorm(s);
-        out.hidden = info.beyond ? Math.max(0, info.count - out.ids.length) : 0;
+        for (const id of (Array.isArray(ids) ? ids : [])) if (typeof id === 'string' && id && m.ids.indexOf(id) < 0) m.ids.push(id);
+        if (m.ids.length > JUMP.markMax) m.ids = m.ids.slice(m.ids.length - JUMP.markMax);
+        return m;
+    }
+
+    function markMax(a, b) {
+        const x = markNorm(a), y = markNorm(b);
+        if (x.at !== y.at) return x.at > y.at ? x : y;
+        return markAdvance(x, y.at, y.ids);
+    }
+
+    function unseenRows(list, mark) {
+        const out = [];
+        const m = markNorm(mark);
+        if (!(m.at > 0) || !Array.isArray(list)) return out;
+        for (const r of list) {
+            if (!r || r.own || r.sys || !r.id) continue;
+            if (markUnder(m, r.at, String(r.id))) continue;
+            out.push(String(r.id));
+        }
         return out;
     }
 
-    function jumpSeen(state, ids) {
-        const s = jumpNorm(state);
-        const list = (Array.isArray(ids) ? ids : []).filter((id) => typeof id === 'string' && id);
-        if (!list.length) return s;
-        const gone = new Set(list);
-        s.ids = s.ids.filter((e) => !gone.has(e.id));
-        for (const id of list) {
-            const i = s.seen.indexOf(id);
-            if (i >= 0) s.seen.splice(i, 1);
-            s.seen.push(id);
-        }
-        if (s.seen.length > JUMP.seenMax) s.seen = s.seen.slice(s.seen.length - JUMP.seenMax);
-        return s;
+    function unseenCount(list, mark) {
+        return unseenRows(list, mark).length;
     }
 
-    function jumpAdd(state, items) {
-        const s = jumpNorm(state);
-        const have = new Set(s.ids.map((e) => e.id));
-        const seen = new Set(s.seen);
-        for (const it of (Array.isArray(items) ? items : [])) {
-            if (!it || it.own || it.sys || typeof it.id !== 'string' || !it.id) continue;
-            if (have.has(it.id) || seen.has(it.id)) continue;
-            have.add(it.id);
-            s.ids.push({ id: it.id, at: Math.max(0, Math.floor(num(it.at))) });
-        }
-        s.ids.sort((a, b) => (a.at - b.at) || cmpStr(a.id, b.id));
-        return s;
+    function unseenFirst(list, mark) {
+        const rows = unseenRows(list, mark);
+        return rows.length ? rows[0] : null;
     }
 
-    function jumpReveal(state, list) {
-        const s = jumpNorm(state);
-        if (!(s.hidden > 0) || !Array.isArray(list)) return s;
-        const have = new Set(s.ids.map((e) => e.id));
-        const seen = new Set(s.seen);
-        let found = 0;
-        for (const m of list) {
-            if (!m || m.own || m.sys || !m.id) continue;
-            const id = String(m.id);
-            const at = num(m.at);
-            if (at <= s.floor || (s.before > 0 && at > s.before)) continue;
-            if (have.has(id) || seen.has(id)) continue;
-            have.add(id);
-            s.ids.push({ id, at: Math.floor(at) });
-            found++;
-        }
-        s.ids.sort((a, b) => (a.at - b.at) || cmpStr(a.id, b.id));
-        s.hidden = Math.max(0, s.hidden - found);
-        return s;
-    }
-
-    function jumpSettle(state) {
-        const s = jumpNorm(state);
-        s.hidden = 0;
-        return s;
-    }
-
-    function jumpCount(state) {
-        const s = jumpNorm(state);
-        return s.ids.length + s.hidden;
-    }
-
-    function jumpTarget(state) {
-        const s = jumpNorm(state);
-        return s.ids.length ? s.ids[0].id : null;
-    }
-
-    function jumpLead(state) {
-        const s = jumpNorm(state);
-        if (!s.ids.length) return [];
-        const at = s.ids[0].at;
-        return s.ids.filter((e) => e.at === at).map((e) => e.id);
-    }
-
-    function jumpText(state, t) {
-        const n = jumpCount(state);
+    function jumpText(count, t) {
+        const n = Math.max(0, Math.floor(num(count)));
         if (n <= 0) return '';
         const tr = (x) => (typeof t === 'function' ? t(x) : x);
         return fill(tr(STRINGS.nNew), { n });
+    }
+
+    function markStoreNorm(raw) {
+        const out = {};
+        if (!raw || typeof raw !== 'object') return out;
+        const keys = Object.keys(raw).filter((k) => k && raw[k] && typeof raw[k] === 'object');
+        keys.sort((a, b) => (num(raw[b].t) - num(raw[a].t)) || cmpStr(a, b));
+        for (const k of keys.slice(0, JUMP.storeMax)) {
+            const m = markNorm(raw[k]);
+            if (!(m.at > 0)) continue;
+            out[k] = { at: m.at, ids: m.ids.slice(-JUMP.storeIds), t: Math.max(0, Math.floor(num(raw[k].t))) };
+        }
+        return out;
     }
 
     function emptyMentions() {
@@ -365,6 +335,19 @@
         if (!c || !id) return s;
         c.ids = c.ids.filter((e) => e.id !== id);
         markSeen(c, [id]);
+        c.t = num(nowMs);
+        return s;
+    }
+
+    function mentionMark(state, key, mark, nowMs) {
+        const s = normalizeMentions(state);
+        const c = s.chats[key];
+        if (!c || !c.ids.length) return s;
+        const m = markNorm(mark);
+        const drop = c.ids.filter((e) => markUnder(m, e.at, e.id)).map((e) => e.id);
+        if (!drop.length) return s;
+        c.ids = c.ids.filter((e) => drop.indexOf(e.id) < 0);
+        markSeen(c, drop);
         c.t = num(nowMs);
         return s;
     }
@@ -876,9 +859,9 @@
     G.NymChatNav = {
         LIMITS, KEYS, STRINGS, STATUSES,
         firstUnread, landOnDivider, jumpLabel, showJump,
-        JUMP, FABS, seenInView, dwellStep, fabRow, fabRight, jumpEmpty, jumpNorm, jumpStart, jumpSeen, jumpAdd, jumpReveal, jumpSettle,
-        jumpCount, jumpTarget, jumpLead, jumpText,
-        emptyMentions, normalizeMentions, mentionAdd, mentionSeen, mentionClear, mentionPrune, mentionDrop,
+        JUMP, FABS, markIndex, effectiveAt, atBottom, jumpDir, fabRow, fabRight, markNorm, markFloor, markUnder, markAdvance, markMax,
+        unseenRows, unseenCount, unseenFirst, jumpText, markStoreNorm,
+        emptyMentions, normalizeMentions, mentionAdd, mentionSeen, mentionMark, mentionClear, mentionPrune, mentionDrop,
         mentionNext, mentionCount, mentionScan,
         pinKey, pinParse, pinKeyForChat, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,
         pinMove, pinReorderWithin, mergePins, pinImportLegacy, pinChannels, pinSort, trimPinnedPayload,

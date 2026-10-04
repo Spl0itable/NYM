@@ -277,7 +277,7 @@ window.nymHapticTap = function (ms) {
         'acctRemove':                 function (_e, t) { nym().acctRemove(t.dataset.acctId); },
         'acctCopyNsec':               function (_e, t) { nym().acctCopyNsec(t.dataset.acctId); },
         'acctLogoutAll':              function () { nym().acctLogoutAll(); },
-        'acctNotify':                 function (_e, t) { if (!nym().acctSetNotify(t.dataset.acctId, t.checked)) t.checked = false; },
+        'acctNotify':                 function (_e, t) { Promise.resolve(nym().acctSetNotify(t.dataset.acctId, t.checked)).then((ok) => { if (!ok) t.checked = false; }); },
         'openNostrLogin':             function () { window.openNostrLogin(); },
         'editNick':                   function () { window.editNick(); },
         'openRelayStats':             function () { window.openRelayStats(); },

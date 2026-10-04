@@ -54,6 +54,7 @@ import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
 import 'sidebar_skeleton.dart';
 import 'user_list_item.dart';
+import '../common/panic_hold_detector.dart';
 
 enum _SectionId { channels, pms, nyms }
 
@@ -751,79 +752,76 @@ class _SidebarState extends ConsumerState<Sidebar> {
         children: [
           const SizedBox(height: 15),
           // Bind only the nym box, not the status row: the raw Listener bypasses the gesture arena.
-          Row(
-            children: [
-              const AccountSwitchButton(),
-              if (ref.watch(accountsProvider) != null) const SizedBox(width: 8),
-              Expanded(
-                child: _PanicHoldDetector(
-                  onTap: () => NickEditModal.open(context),
-                  onHold: () => _triggerPanic(context),
-                  child: MouseRegion(
-                    onEnter: (_) => setState(() => _nymHover = true),
-                    onExit: (_) => setState(() => _nymHover = false),
-                    child: Container(
-                      key: TutorialTargets.keyFor(TutorialTarget.nymDisplay),
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      decoration: BoxDecoration(
-                        color: _nymHover
-                            ? (c.isLight
-                                ? Colors.black.withValues(alpha: 0.07)
-                                : Colors.white.withValues(alpha: 0.07))
-                            : c.insetFill,
-                        border: Border.all(
-                          color: _nymHover && !c.isLight
-                              ? c.primaryA(0.3)
-                              : c.glassBorder,
-                        ),
-                        borderRadius: NymRadius.rsm,
-                        boxShadow: _nymHover
-                            ? [BoxShadow(color: c.primaryA(0.08), blurRadius: 15)]
-                            : null,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            tr('YOUR NYM (CLICK TO EDIT)'),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: c.textDim,
-                              fontSize: 10,
-                              letterSpacing: 1.5,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              NymAvatar(
-                                seed: ref.read(appStateProvider).selfPubkey,
-                                size: 32,
-                                imageUrl: ref
-                                    .read(appStateProvider)
-                                    .users[ref.read(appStateProvider).selfPubkey]
-                                    ?.profile
-                                    ?.picture,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _NymValueText(
-                                  nym: nym,
-                                  pubkey: ref.read(appStateProvider).selfPubkey,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+          PanicHoldDetector(
+            onTap: () => NickEditModal.open(context),
+            onHold: () => _triggerPanic(context),
+            child: MouseRegion(
+              onEnter: (_) => setState(() => _nymHover = true),
+              onExit: (_) => setState(() => _nymHover = false),
+              child: Container(
+                key: TutorialTargets.keyFor(TutorialTarget.nymDisplay),
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: _nymHover
+                      ? (c.isLight
+                          ? Colors.black.withValues(alpha: 0.07)
+                          : Colors.white.withValues(alpha: 0.07))
+                      : c.insetFill,
+                  border: Border.all(
+                    color: _nymHover && !c.isLight
+                        ? c.primaryA(0.3)
+                        : c.glassBorder,
+                  ),
+                  borderRadius: NymRadius.rsm,
+                  boxShadow: _nymHover
+                      ? [BoxShadow(color: c.primaryA(0.08), blurRadius: 15)]
+                      : null,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      tr('YOUR NYM (CLICK TO EDIT)'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: c.textDim,
+                        fontSize: 10,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        NymAvatar(
+                          seed: ref.read(appStateProvider).selfPubkey,
+                          size: 32,
+                          imageUrl: ref
+                              .read(appStateProvider)
+                              .users[ref.read(appStateProvider).selfPubkey]
+                              ?.profile
+                              ?.picture,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _NymValueText(
+                            nym: nym,
+                            pubkey: ref.read(appStateProvider).selfPubkey,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-            ],
+            ),
           ),
+          if (ref.watch(accountsProvider) != null) ...[
+            const SizedBox(height: 6),
+            const AccountSwitchButton(),
+          ],
           const SizedBox(height: 10),
           _ConnectionStatusIndicator(
             connectedCount: connectedRelays,
@@ -838,82 +836,6 @@ class _SidebarState extends ConsumerState<Sidebar> {
 
   // PanicWipe clears disk stores; resetAfterPanic's boot-epoch bump remounts the first-run gate.
   void _triggerPanic(BuildContext context) => startPanicWipe(context, ref);
-}
-
-/// Tap fires [onTap]; a [holdMs] press fires [onHold] and swallows the tap; movement cancels the hold.
-class _PanicHoldDetector extends StatefulWidget {
-  const _PanicHoldDetector({
-    required this.child,
-    required this.onTap,
-    required this.onHold,
-  });
-
-  final Widget child;
-  final VoidCallback onTap;
-  final VoidCallback onHold;
-
-  static const int holdMs = 2000;
-
-  @override
-  State<_PanicHoldDetector> createState() => _PanicHoldDetectorState();
-}
-
-class _PanicHoldDetectorState extends State<_PanicHoldDetector> {
-  /// Equivalent to the PWA's cancel on any `touchmove`, which browsers emit past about 10px of slop.
-  static const double _moveTolerance = 10;
-
-  Timer? _timer;
-  bool _fired = false;
-  Offset _downAt = Offset.zero;
-
-  void _start(PointerDownEvent e) {
-    _fired = false;
-    _downAt = e.position;
-    _timer?.cancel();
-    _timer = Timer(
-      const Duration(milliseconds: _PanicHoldDetector.holdMs),
-      () {
-        _fired = true;
-        // No haptic here: [PanicOverlay] fires the single buzz, so this would double it.
-        widget.onHold();
-      },
-    );
-  }
-
-  void _cancel([PointerEvent? _]) {
-    _timer?.cancel();
-    _timer = null;
-  }
-
-  void _move(PointerMoveEvent e) {
-    if (_timer == null) return;
-    if ((e.position - _downAt).distance > _moveTolerance) _cancel();
-  }
-
-  void _up(PointerUpEvent _) {
-    final held = _timer != null;
-    _cancel();
-    // A movement-canceled press must not fall through to the tap action.
-    if (!_fired && held) widget.onTap();
-    _fired = false;
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: _start,
-      onPointerMove: _move,
-      onPointerUp: _up,
-      onPointerCancel: _cancel,
-      child: widget.child,
-    );
-  }
 }
 
 final RegExp _hex64Re = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);

@@ -56,7 +56,7 @@
             const others = idx.accounts.filter((a) => a.pubkey && (!cur || a.id !== cur.id));
             if (!cur || cur.pubkey || !others.length) { row.classList.add('nm-hidden'); return; }
             const label = document.getElementById('setupAccountBackLabel');
-            if (label) label.textContent = from ? this._ac('Back to {nym}', { nym: this._acctLabel(from) }) : this._ac('Back to my accounts');
+            if (label) label.textContent = from ? this._ac('Back to {nym}', { nym: this._acctLabel(from) }) : this._ac('Back to my identities');
             row.classList.remove('nm-hidden');
         },
 
@@ -69,24 +69,11 @@
             if (setup && setup.classList.contains('active')) return;
             const idx = A.read();
             if (idx.journal || idx.active !== A.pageId) return;
-            let method = '';
-            try { method = A.methodFromStorage((k) => localStorage.getItem(k)); } catch (_) { }
-            if (!method) method = this.nostrLoginMethod || 'ephemeral';
-            const nym = String(this.nym || '');
-            const cur = A.activeOf(idx);
-            if (!cur || cur.pubkey !== this.pubkey || cur.method !== method || cur.nym !== nym) {
-                const id = A.pageId || A.randomId();
-                const r = A.plan(idx, { type: 'register', id, now: Date.now(), pubkey: this.pubkey, method, nym });
-                if (r.result === 'duplicate') { this._acctDuplicate(r); return; }
-                if (!r.ok) return;
-                A.commit(localStorage, r, idx);
-                const mine = A.activeOf(r.index);
-                if (mine) A.adopt(mine);
-                this._acctRenderAddMode();
-            }
-            if (!this._acctBooted) {
+            const reg = this._acctRegister(idx);
+            if (reg === 'duplicate') return;
+            if (!this._acctBooted && reg === 'ok') {
                 this._acctBooted = true;
-                this._acctRestoreDrafts();
+                this._acctResume();
                 this._acctSyncWatchers();
             }
             const now = Date.now();
@@ -96,6 +83,43 @@
             }
         },
 
+        _acctLiveMethod() {
+            let method = '';
+            try { method = M().methodFromStorage((k) => localStorage.getItem(k)); } catch (_) { }
+            return method || this.nostrLoginMethod || 'ephemeral';
+        },
+
+        _acctRegister(idxIn) {
+            const A = M();
+            if (!this.pubkey || A.frozen) return 'none';
+            const idx = idxIn || A.read();
+            if (idx.journal || idx.active !== A.pageId) return 'none';
+            const method = this._acctLiveMethod();
+            const nym = String(this.nym || '');
+            const cur = A.activeOf(idx);
+            if (cur && cur.pubkey === this.pubkey && cur.method === method && cur.nym === nym) return 'ok';
+            const id = A.pageId || A.randomId();
+            const r = A.plan(idx, { type: 'register', id, now: Date.now(), pubkey: this.pubkey, method, nym });
+            if (r.result === 'duplicate') { this._acctDuplicate(r); return 'duplicate'; }
+            if (!r.ok) return 'none';
+            const next = Object.assign({}, r.index, { journal: null });
+            try { localStorage.setItem(A.INDEX_KEY, JSON.stringify(next)); } catch (_) { return 'none'; }
+            const mine = A.activeOf(r.index);
+            if (mine) A.adopt(mine);
+            this._acctRenderAddMode();
+            return 'ok';
+        },
+
+        _acctFail(res) {
+            const text = res && res.error === 'quota'
+                ? this._ac("This device's storage is full, so nothing was changed and you are still on this identity. Free up space or remove an identity, then try again.")
+                : this._ac('The identity change could not be saved, so nothing was changed and you are still on this identity. Try again.');
+            try {
+                if (typeof this.showToast === 'function') this.showToast(text, { kind: 'error' });
+                else this.displaySystemMessage(text);
+            } catch (_) { }
+        },
+
         async _acctDuplicate(r) {
             if (this._acctDupShown) return;
             this._acctDupShown = true;
@@ -103,10 +127,10 @@
             const other = A.read().accounts.find((a) => a.id === r.existing);
             const name = other ? this._acctLabel(other) : '';
             if (!r.ok) {
-                try { this.displaySystemMessage(this._ac('This key is also saved as {nym}. Switch to it from the account switcher.', { nym: name })); } catch (_) { }
+                try { this.displaySystemMessage(this._ac('This key is also saved as {nym}. Switch to it from Manage Identities.', { nym: name })); } catch (_) { }
                 return;
             }
-            try { await window.showAppAlert(this._ac('{nym} is already saved on this device, so the app switches to it.', { nym: name }), { title: this._ac('Account already added') }); } catch (_) { }
+            try { await window.showAppAlert(this._ac('{nym} is already saved on this device, so the app switches to it.', { nym: name }), { title: this._ac('Identity already added') }); } catch (_) { }
             await this._acctGo(r);
         },
 
@@ -116,11 +140,11 @@
             let url = '';
             try {
                 const c = document.createElement('canvas');
-                c.width = 48; c.height = 48;
-                c.getContext('2d').drawImage(img, 0, 0, 48, 48);
-                url = c.toDataURL('image/jpeg', 0.8);
+                c.width = 32; c.height = 32;
+                c.getContext('2d').drawImage(img, 0, 0, 32, 32);
+                url = c.toDataURL('image/jpeg', 0.7);
             } catch (_) { url = ''; }
-            if (!url || url.length > 12000) return;
+            if (!url || url.length > M().AVATAR_MAX) return;
             M().update((idx) => {
                 const a = idx.accounts.find((x) => x.id === M().pageId);
                 if (!a || a.avatar === url) return null;
@@ -129,22 +153,87 @@
             });
         },
 
-        _acctSaveDrafts() {
+        _acctDrafts() {
             try {
                 if (!this._activeDraftKey && typeof this._getInputContextKey === 'function') this._activeDraftKey = this._getInputContextKey();
                 if (typeof this._saveCurrentDraft === 'function') this._saveCurrentDraft();
             } catch (_) { }
             const list = this._inputDrafts ? [...this._inputDrafts.entries()].filter(([k, v]) => k && typeof v === 'string' && v.trim()) : [];
-            try {
-                if (list.length) localStorage.setItem(DRAFTS_KEY, JSON.stringify(list.slice(0, 50)));
-                else localStorage.removeItem(DRAFTS_KEY);
-            } catch (_) { }
+            return list.slice(0, 50);
         },
 
-        _acctRestoreDrafts() {
-            let list = null;
-            try { list = JSON.parse(localStorage.getItem(DRAFTS_KEY) || 'null'); } catch (_) { list = null; }
+        _acctUnsent() {
+            const signed = (m) => Array.isArray(m) && m[0] === 'EVENT' && m[1] && typeof m[1].id === 'string' && typeof m[1].sig === 'string' && m[1].sig.length > 0;
+            const events = [];
+            const seen = new Set();
+            const add = (m, dm) => {
+                if (!signed(m) || seen.has(m[1].id)) return;
+                seen.add(m[1].id);
+                events.push({ m, dm: !!dm });
+            };
+            for (const q of this._dmOutbox || []) for (const e of q || []) add(e && e.message, true);
+            for (const h of this._heldEvents || []) add(h && h.message, h && h.kind === 'dm');
+            for (const v of (this._dmInflight || new Map()).values()) add(v && v.message, true);
+            const pending = [];
+            for (const [id, p] of this.pendingDMs || new Map()) {
+                const wraps = (p && Array.isArray(p.wrappedEvents) ? p.wrappedEvents : []).filter(signed);
+                if (wraps.length) pending.push({ id, wraps, to: p.recipientPubkey || '', conv: p.conversationKey || '' });
+            }
+            return { events: events.slice(-2000), pending: pending.slice(-500) };
+        },
+
+        _acctOutboxBusy() {
+            const held = (this._heldEvents || []).length;
+            const queued = typeof this._dmOutboxSize === 'function' ? this._dmOutboxSize() : 0;
+            const inflight = this._dmInflight ? this._dmInflight.size : 0;
+            return held + queued + inflight;
+        },
+
+        async _acctDrain(ms) {
+            const until = Date.now() + ms;
+            try { if (typeof this._flushHeldEvents === 'function' && this._anyRelayOpen()) this._flushHeldEvents(); } catch (_) { }
+            while (Date.now() < until && this._acctOutboxBusy()) {
+                let open = false;
+                try { open = this._anyRelayOpen(); } catch (_) { open = false; }
+                if (!open) break;
+                await new Promise((r) => setTimeout(r, 100));
+            }
+        },
+
+        async _acctResume() {
+            const A = M();
+            let carry = null;
+            try { carry = await A.carryTake(A.pageId); } catch (_) { carry = null; }
+            let legacy = null;
+            try { legacy = JSON.parse(localStorage.getItem(DRAFTS_KEY) || 'null'); } catch (_) { legacy = null; }
             try { localStorage.removeItem(DRAFTS_KEY); } catch (_) { }
+            if (carry && carry.pubkey && carry.pubkey !== this.pubkey) {
+                await A.carryPut(A.pageId, carry);
+                carry = null;
+            }
+            const drafts = [].concat(Array.isArray(legacy) ? legacy : [], carry && Array.isArray(carry.drafts) ? carry.drafts : []);
+            this._acctRestoreDrafts(drafts);
+            if (carry) this._acctResend(carry);
+        },
+
+        _acctResend(carry) {
+            for (const p of Array.isArray(carry.pending) ? carry.pending : []) {
+                if (!p || typeof p.id !== 'string' || !Array.isArray(p.wraps) || !p.wraps.length) continue;
+                try {
+                    if (!this.pendingDMs.has(p.id) && typeof this.trackPendingDM === 'function') this.trackPendingDM(p.id, p.wraps, p.to, p.conv);
+                } catch (_) { }
+                for (const w of p.wraps) { try { this.sendDMToRelays(w); } catch (_) { } }
+            }
+            for (const e of Array.isArray(carry.events) ? carry.events : []) {
+                if (!e || !Array.isArray(e.m)) continue;
+                try {
+                    if (e.dm) this.sendDMToRelays(e.m);
+                    else this.broadcastEvent(e.m);
+                } catch (_) { }
+            }
+        },
+
+        _acctRestoreDrafts(list) {
             if (!Array.isArray(list) || !list.length) return;
             if (!this._inputDrafts) this._inputDrafts = new Map();
             for (const e of list) {
@@ -155,8 +244,8 @@
         },
 
         async _acctPrepareLeave() {
-            this._acctSaveDrafts();
             this._acctSnapshotAvatar();
+            await this._acctDrain(3000);
             try { if (typeof this.flushPendingGroupReactions === 'function') this.flushPendingGroupReactions(); } catch (_) { }
             try { if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true); } catch (_) { }
             try {
@@ -167,6 +256,7 @@
                 if (typeof this.flushPendingPersists === 'function') await Promise.race([Promise.resolve(this.flushPendingPersists({ sync: true })), new Promise((r) => setTimeout(r, 2500))]);
             } catch (_) { }
             for (const w of (this._acctWatchers || new Map()).values()) { try { w.stop(); } catch (_) { } }
+            if (this._acctWatchers) this._acctWatchers.clear();
         },
 
         _acctReturnUrl() {
@@ -180,23 +270,40 @@
 
         async _acctGo(r) {
             const A = M();
-            if (!r || !r.ok) return false;
-            const before = A.read();
+            if (!r || !r.ok || this._acctGoing) return false;
             const wipes = r.effects.filter((e) => e.startsWith('wipe:'));
             if (r.effects.includes('reload')) {
+                this._acctGoing = true;
                 const overlay = document.getElementById('acctSwitchOverlay');
                 if (overlay) overlay.classList.add('active');
-                await this._acctPrepareLeave();
+                const leaving = A.pageId;
+                let carried = false;
+                try {
+                    await this._acctPrepareLeave();
+                    if (leaving && this.pubkey) {
+                        const unsent = this._acctUnsent();
+                        carried = await A.carryPut(leaving, { pubkey: this.pubkey, at: Date.now(), drafts: this._acctDrafts(), events: unsent.events, pending: unsent.pending });
+                    }
+                } catch (_) { }
+                let res = null;
+                try { res = await A.apply(r, A.read(), { before: () => A.freeze() }); } catch (e) { res = { ok: false, error: A.isQuota(e) ? 'quota' : 'storage' }; }
+                if (!res || !res.ok) {
+                    A.thaw();
+                    if (carried) await A.carryDel(leaving);
+                    if (overlay) overlay.classList.remove('active');
+                    this._acctGoing = false;
+                    this._acctSyncWatchers();
+                    this._acctFail(res);
+                    return false;
+                }
                 if (wipes.length) { try { await caches.delete(MEDIA_CACHE); } catch (_) { } }
-                const res = A.commit(localStorage, r, before);
-                if (!res) return false;
-                A.freeze();
                 try { history.replaceState(null, '', this._acctReturnUrl()); } catch (_) { }
                 location.reload();
                 return true;
             }
-            const res = A.commit(localStorage, r, before);
-            if (!res) return false;
+            let res = null;
+            try { res = await A.apply(r, A.read()); } catch (e) { res = { ok: false, error: A.isQuota(e) ? 'quota' : 'storage' }; }
+            if (!res || !res.ok) { this._acctFail(res); return false; }
             for (const name of res.dbs) { try { indexedDB.deleteDatabase(name); } catch (_) { } }
             if (wipes.length) { try { await caches.delete(MEDIA_CACHE); } catch (_) { } }
             this._acctSyncWatchers();
@@ -205,53 +312,59 @@
             return true;
         },
 
-        openAccountSwitcher() {
+        async openAccountSwitcher() {
             if (!this.acctEnabled()) return;
-            this._acctSnapshotAvatar();
             const A = M();
+            if (this.pubkey && !A.frozen) this._acctRegister();
+            this._acctSnapshotAvatar();
             const idx = A.read();
             const list = document.getElementById('acctList');
             if (!list) return;
+            if (this.pubkey && !idx.accounts.some((a) => a.id === A.pageId)) {
+                idx.accounts.push({ id: A.pageId || 'live', ns: '', pubkey: this.pubkey, method: this._acctLiveMethod(), nym: String(this.nym || ''), avatar: '', addedAt: Date.now(), notifyInactive: false, unread: 0, returnTo: null, live: true });
+            }
+            const copyable = new Set();
+            await Promise.all(idx.accounts.map(async (a) => { if (await this._acctNsecFor(a)) copyable.add(a.id); }));
             const rows = idx.accounts.map((a) => {
-                const active = a.id === A.pageId;
+                const active = !!a.live || a.id === A.pageId;
                 const avatarSrc = active ? ((document.getElementById('sidebarAvatar') || {}).src || a.avatar) : a.avatar;
                 const avatar = avatarSrc
                     ? `<img class="acct-avatar" src="${esc(avatarSrc)}" alt="" width="36" height="36">`
                     : `<span class="acct-avatar acct-avatar-blank">${esc((a.nym || '?').slice(0, 1).toUpperCase())}</span>`;
                 const nameHtml = a.pubkey
                     ? `${esc(a.nym || this._ac('Unnamed'))}<span class="nym-suffix">#${esc(a.pubkey.slice(-4))}</span>`
-                    : esc(this._ac('New account'));
+                    : esc(this._ac('New identity'));
                 const badge = BADGE[a.method] ? `<span class="acct-badge">${esc(this._ac(BADGE[a.method]))}</span>` : '';
                 const unread = !active && a.unread > 0 ? `<span class="acct-unread">${a.unread > 99 ? '99+' : a.unread}</span>` : '';
-                const check = active ? `<span class="acct-check" title="${esc(this._ac('Active account'))}">${CHECK}</span>` : '';
+                const check = active ? `<span class="acct-check" title="${esc(this._ac('Active identity'))}">${CHECK}</span>` : '';
                 const canNotify = a.pubkey && a.method !== 'anonymous';
-                const notify = canNotify ? `<label class="acct-notify"><input type="checkbox" data-on-change="acctNotify" data-acct-id="${esc(a.id)}"${a.notifyInactive ? ' checked' : ''}><span>${esc(this._ac("Notify me for this account while it's not active"))}</span></label><div class="acct-notify-hint">${esc(this._ac('This can let the server see that these accounts share a device.'))}</div>` : '';
-                const copy = this._acctNsecFor(a) ? `<button type="button" class="acct-row-btn" data-action="acctCopyNsec" data-acct-id="${esc(a.id)}">${esc(this._ac('Copy nsec'))}</button>` : '';
+                const notify = canNotify ? `<label class="acct-notify"><input type="checkbox" data-on-change="acctNotify" data-acct-id="${esc(a.id)}"${a.notifyInactive ? ' checked' : ''}><span>${esc(this._ac("Notify me for this identity while it's not active"))}</span></label><div class="acct-notify-hint">${esc(this._ac('This can let the server see that these identities share a device.'))}</div>` : '';
+                const copy = copyable.has(a.id) ? `<button type="button" class="acct-row-btn" data-action="acctCopyNsec" data-acct-id="${esc(a.id)}">${esc(this._ac('Copy nsec'))}</button>` : '';
                 return `<div class="acct-row${active ? ' is-active' : ''}" data-acct-row="${esc(a.id)}">`
                     + `<button type="button" class="acct-row-main" data-action="acctSwitch" data-acct-id="${esc(a.id)}"${active ? ' aria-current="true"' : ''}>${avatar}<span class="acct-name">${nameHtml}${badge}</span>${unread}${check}</button>`
                     + `<div class="acct-row-tools">${notify}<div class="acct-row-btns">${copy}<button type="button" class="acct-row-btn acct-danger" data-action="acctRemove" data-acct-id="${esc(a.id)}">${esc(this._ac('Remove'))}</button></div></div>`
                     + `</div>`;
             });
-            list.innerHTML = rows.join('') || `<div class="form-hint">${esc(this._ac('No saved accounts yet.'))}</div>`;
+            list.innerHTML = rows.join('') || `<div class="form-hint">${esc(this._ac('No saved identities yet.'))}</div>`;
             const add = document.getElementById('acctAddBtn');
             if (add) {
                 const full = idx.accounts.length >= A.MAX_ACCOUNTS;
                 add.disabled = full;
-                add.title = full ? this._ac('You can keep up to {n} accounts on this device.', { n: A.MAX_ACCOUNTS }) : '';
+                add.title = full ? this._ac('You can keep up to {n} identities on this device.', { n: A.MAX_ACCOUNTS }) : '';
             }
             const hint = document.getElementById('acctCapHint');
-            if (hint) hint.textContent = this._ac('{n} of {max} accounts on this device. Only the active account stays connected.', { n: idx.accounts.length, max: A.MAX_ACCOUNTS });
+            if (hint) hint.textContent = this._ac('{n} of {max} identities on this device. Only the active identity stays connected.', { n: idx.accounts.length, max: A.MAX_ACCOUNTS });
             document.getElementById('accountSwitcherModal').classList.add('active');
             try { if (typeof this.closeSidebar === 'function' && window.innerWidth <= 768) this.closeSidebar(); } catch (_) { }
         },
 
-        _acctNsecFor(a) {
+        async _acctNsecFor(a) {
             const A = M();
             const names = a.method === 'nsec' ? ['nym_nostr_login_nsec'] : (a.method === 'ephemeral' ? ['nym_session_nsec'] : []);
             for (const n of names) {
                 let v = null;
                 if (a.id === A.pageId) { try { v = window.nymSecretGet(n); } catch (_) { v = null; } }
-                else { try { v = localStorage.getItem(A.nsKey(a.id, n)); } catch (_) { v = null; } }
+                else v = await A.stashKey(a.id, n);
                 if (v && /^nsec1[0-9a-z]+$/.test(v)) return v;
             }
             return null;
@@ -259,7 +372,7 @@
 
         async acctCopyNsec(id) {
             const a = M().read().accounts.find((x) => x.id === id);
-            const nsec = a && this._acctNsecFor(a);
+            const nsec = a && await this._acctNsecFor(a);
             if (!nsec) return;
             try { await window.copySecretToClipboard(nsec); } catch (_) { }
             try { this.displaySystemMessage(this._ac('nsec copied. Store it somewhere safe.')); } catch (_) { }
@@ -279,7 +392,7 @@
             const A = M();
             const r = A.plan(A.read(), { type: 'add', id: A.randomId(), now: Date.now() });
             if (!r.ok) {
-                if (r.error === 'cap') await window.showAppAlert(this._ac('You can keep up to {n} accounts on this device. Remove one to add another.', { n: A.MAX_ACCOUNTS }));
+                if (r.error === 'cap') await window.showAppAlert(this._ac('You can keep up to {n} identities on this device. Remove one to add another.', { n: A.MAX_ACCOUNTS }));
                 return;
             }
             await this._acctGo(r);
@@ -295,7 +408,7 @@
             const local = a.method === 'nsec' || a.method === 'ephemeral' || a.method === 'anonymous';
             const head = this._ac('Remove {nym} from this device? Its messages, settings and caches on this device are deleted.', { nym: this._acctLabel(a) });
             const keys = local
-                ? this._ac('Its key is stored only on this device: back up the nsec first or you lose this account.')
+                ? this._ac('Its key is stored only on this device: back up the nsec first or you lose this identity.')
                 : this._ac('Its key stays in your signer; you can add it again later.');
             return head + '\n\n' + keys;
         },
@@ -304,7 +417,7 @@
             const A = M();
             const a = A.read().accounts.find((x) => x.id === id);
             if (!a) return;
-            const ok = await window.showAppConfirm(this._acctRemoveMessage(a), { title: this._ac('Remove account'), okLabel: this._ac('Remove'), danger: true });
+            const ok = await window.showAppConfirm(this._acctRemoveMessage(a), { title: this._ac('Remove identity'), okLabel: this._ac('Remove'), danger: true });
             if (!ok) return;
             const r = A.plan(A.read(), { type: 'remove', id });
             await this._acctGo(r);
@@ -324,20 +437,40 @@
             return true;
         },
 
+        acctForgetTarget() {
+            if (!this.acctEnabled()) return null;
+            const A = M();
+            const idx = A.read();
+            const cur = A.activeOf(idx);
+            if (!cur || cur.id !== A.pageId) return null;
+            const planned = A.plan(idx, { type: 'logout' });
+            const next = planned.ok ? planned.index.accounts.find((a) => a.id === planned.index.active) : null;
+            return { from: this._acctLabel(cur), to: next ? this._acctLabel(next) : '' };
+        },
+
+        async acctForget() {
+            if (!this.acctForgetTarget()) return false;
+            const A = M();
+            const r = A.plan(A.read(), { type: 'logout' });
+            if (!r.ok) return false;
+            return await this._acctGo(r);
+        },
+
         async acctLogoutAll() {
             const A = M();
             const n = A.read().accounts.length;
-            const ok = await window.showAppConfirm(this._ac('Log out of all {n} accounts? Every account and its data on this device is deleted. Back up any nsec you need first.', { n }), { title: this._ac('Log out of all'), okLabel: this._ac('Log out of all'), danger: true });
+            const ok = await window.showAppConfirm(this._ac('Log out of all {n} identities? Every identity and its data on this device is deleted. Back up any nsec you need first.', { n }), { title: this._ac('Log out of all identities'), okLabel: this._ac('Log out of all identities'), danger: true });
             if (!ok) return;
             await this._acctGo(A.plan(A.read(), { type: 'logoutAll' }));
         },
 
-        acctSetNotify(id, on) {
+        async acctSetNotify(id, on) {
             const A = M();
             const idx = A.read();
             const r = A.plan(idx, { type: 'notify', id, on: !!on });
             if (!r.ok) return false;
-            A.commit(localStorage, r, idx);
+            const res = await A.apply(r, idx);
+            if (!res || !res.ok) { this._acctFail(res); return false; }
             if (on && typeof Notification !== 'undefined' && Notification.permission === 'default') {
                 try { Notification.requestPermission(); } catch (_) { }
             }
@@ -422,8 +555,8 @@
         async acctExtensionMismatch(expected) {
             const A = M();
             const others = A.read().accounts.filter((a) => a.id !== A.pageId && a.pubkey);
-            const msg = this._ac('Your browser extension is signed in with a different key than {nym}. Switch the extension to that key and reload, or pick another account. Nothing was sent.', { nym: (this.nym || 'nym') + '#' + String(expected || '').slice(-4) });
-            const reload = await window.showAppConfirm(msg, { title: this._ac('Different key in extension'), okLabel: this._ac('Reload'), cancelLabel: others.length ? this._ac('Switch account') : this._ac('Cancel') });
+            const msg = this._ac('Your browser extension is signed in with a different key than {nym}. Switch the extension to that key and reload, or pick another identity. Nothing was sent.', { nym: (this.nym || 'nym') + '#' + String(expected || '').slice(-4) });
+            const reload = await window.showAppConfirm(msg, { title: this._ac('Different key in extension'), okLabel: this._ac('Reload'), cancelLabel: others.length ? this._ac('Switch identity') : this._ac('Cancel') });
             if (reload) { location.reload(); return; }
             if (others.length) this.openAccountSwitcher();
         }

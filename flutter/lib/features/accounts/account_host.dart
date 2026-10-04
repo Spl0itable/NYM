@@ -246,8 +246,8 @@ class AccountSession extends ChangeNotifier implements AccountsController {
         showToast(plan.ok
             ? tr('{nym} is already saved on this device, so the app switches '
                 'to it.', {'nym': name})
-            : tr('This key is also saved as {nym}. Switch to it from the '
-                'account switcher.', {'nym': name}));
+            : tr('This key is also saved as {nym}. Switch to it from '
+                'Manage Identities.', {'nym': name}));
       }
       await _execute(plan);
     }

@@ -48,6 +48,8 @@ import '../chat_lock/screen_privacy.dart' show chatLockPlatform;
 import '../identity/key_backup/key_backup_actions.dart';
 import '../identity/key_backup/key_backup_store.dart';
 import '../identity/nick_edit_modal.dart';
+import '../identity/remote_panic.dart';
+import '../identity/remote_panic_logic.dart';
 import '../../widgets/wallpaper/wallpaper_cache.dart';
 import '../../services/filter/filter_packs.dart';
 import '../toasts/toast_center.dart';
@@ -1317,7 +1319,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             'key with a password, PIN, passkey, or biometric (Face/Touch ID) '
             "so it can't be read from this device without unlocking. Passkeys "
             '(synced or hardware security keys) and biometrics use WebAuthn '
-            'where supported, with password/PIN as the universal fallback.'),
+            'where supported, with password/PIN as the universal fallback. On '
+            'the unlock screen, holding the Nymchat wordmark for 2 seconds '
+            'engages Panic Mode and wipes this device without unlocking.'),
         child: FormGroup(
           label: tr('Identity Encryption'),
           hint: tr("Optionally protect your saved identity's (nsec) private "
@@ -1325,7 +1329,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               "ID) so it can't be read from this device without unlocking. "
               'Passkeys (synced or hardware security keys) and biometrics use '
               'WebAuthn where supported, with password/PIN as the universal '
-              'fallback.'),
+              'fallback. On the unlock screen, holding the Nymchat wordmark '
+              'for 2 seconds engages Panic Mode and wipes this device without '
+              'unlocking.'),
           child: NymOutlineButton(
             label: tr('Encrypt identity (nsec) key on this device…'),
             onPressed: () => VaultSettingsModal.open(context),
@@ -1333,6 +1339,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       ..._chatLockGroups(),
+      _remotePanicGroup(),
       if (canBackUpKey)
         _GroupSpec(
           text: '${tr('Cloud Key Backup')} $backupHint',
@@ -2774,6 +2781,57 @@ class _SectionSpec {
 
 /// One searchable form group; [text] is its full rendered text.
 extension _ChatLockSettings on _SettingsScreenState {
+  _GroupSpec _remotePanicGroup() {
+    ref.watch(remotePanicRevisionProvider);
+    final on = ref.read(keyValueStoreProvider).getBool(StorageKeys.remotePanic);
+    final onOff = <({String value, String label})>[
+      (value: 'off', label: tr('Disabled')),
+      (value: 'on', label: tr('Enabled')),
+    ];
+    final label = tr(RemotePanicStrings.label);
+    final hint = tr(RemotePanicStrings.hint);
+    return _GroupSpec(
+      text: '$label ${_SettingsScreenState._optText(onOff)} $hint',
+      child: FormGroup(
+        label: label,
+        hint: hint,
+        child: FormSelect<String>(
+          key: const Key('remotePanicSelect'),
+          value: on ? 'on' : 'off',
+          items: onOff,
+          onChanged: (v) => _setRemotePanic(v == 'on'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _setRemotePanic(bool on) async {
+    final kv = ref.read(keyValueStoreProvider);
+    if (on == kv.getBool(StorageKeys.remotePanic)) return;
+    if (on) {
+      final ok = await showAppConfirm(
+        context,
+        tr(RemotePanicStrings.confirm),
+        title: tr(RemotePanicStrings.confirmTitle),
+        okLabel: tr(RemotePanicStrings.confirmOk),
+        cancelLabel: tr(RemotePanicStrings.confirmBackup),
+        danger: true,
+      );
+      if (!mounted) return;
+      if (!ok) {
+        ref.read(remotePanicRevisionProvider.notifier).state++;
+        NickEditModal.open(context);
+        return;
+      }
+    }
+    await kv.setBool(StorageKeys.remotePanic, on);
+    if (!mounted) return;
+    ref.read(remotePanicRevisionProvider.notifier).state++;
+    try {
+      ref.read(nostrControllerProvider).syncSettings();
+    } catch (_) {}
+  }
+
   List<_GroupSpec> _chatLockGroups() {
     ref.watch(chatLockRevisionProvider);
     final lock = ref.read(chatLockProvider);

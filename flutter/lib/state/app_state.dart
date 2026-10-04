@@ -4871,6 +4871,12 @@ class RecentEmojisNotifier extends StateNotifier<List<String>> {
     }
   }
 
+  void replaceAll(List<String> next) {
+    state = next.length > kRecentEmojisCap
+        ? next.sublist(0, kRecentEmojisCap)
+        : List<String>.of(next);
+  }
+
   Future<void> _persistWhenReady(String emoji) async {
     try {
       final prefs = await _ref.read(emojiPrefsProvider.future);

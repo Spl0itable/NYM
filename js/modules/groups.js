@@ -1698,7 +1698,7 @@ Object.assign(NYM.prototype, {
         let tsSec = originalGroupTsSec;
 
         // Guard against clock skew: cap at current time.
-        tsSec = Math.min(tsSec, nowSec);
+        if (tsSec > nowSec) tsSec = Math.min(nowSec, Math.floor(this._stableClampMs(event && event.id, tsSec * 1000) / 1000));
 
         const groupEditTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'edit' && t[1]);
         if (groupEditTag) {

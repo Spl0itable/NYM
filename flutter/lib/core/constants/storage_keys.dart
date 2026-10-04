@@ -38,6 +38,9 @@ class StorageKeys {
   static const encryptAtRestPref = 'nym_encrypt_at_rest_pref';
   static const encryptAtRestPromptDismissed =
       'nym_encrypt_at_rest_prompt_dismissed';
+  static const remotePanic = 'nym_remote_panic';
+  static const panicLoginAt = 'nym_panic_login_at';
+  static const panicClearPending = 'nym_panic_clear_pending';
 
   // Settings (one per Settings field)
   static const theme = 'nym_theme';
@@ -168,6 +171,8 @@ class StorageKeys {
   /// Mesh sender outbox, replayed to Nostr when relays return.
   static const meshOutbox = 'nym_mesh_outbox';
 
+  static const switchOutbox = 'nym_switch_outbox';
+
   /// Gossip-sync public history, persisted so it can still be served after a restart.
   static const meshGossipArchive = 'nym_mesh_gossip_archive';
 
@@ -179,6 +184,7 @@ class StorageKeys {
     leftGroupTimes,
     meshGossipArchive,
     meshPrekeys,
+    switchOutbox,
   ];
 
   // Notifications / sync

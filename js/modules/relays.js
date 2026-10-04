@@ -4583,6 +4583,7 @@ Object.assign(NYM.prototype, {
                     ? data[3] : relayUrl;
                 const r = typeof reason === 'string' ? reason : '';
                 const hasEventId = typeof okEventId === 'string' && okEventId.length > 0;
+                if (accepted === true && hasEventId && this._dmInflight) this._dmInflight.delete(okEventId);
                 if (this._isUnsupportedKind(reason)) {
                     if (hasEventId) this._recordEventKindRejection(attributedRelay, okEventId);
                     else this._permanentlyBlacklistRelay(attributedRelay, reason);

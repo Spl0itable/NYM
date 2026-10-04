@@ -75,6 +75,7 @@ import '../features/zaps/zap_archive.dart';
 import '../features/zaps/zap_logic.dart';
 import '../services/api/api_client.dart';
 import '../services/api/storage_sync.dart';
+import '../services/relay/dm_outbox.dart';
 import '../services/relay/relay_message.dart';
 import '../services/nostr/event_provenance.dart';
 import '../services/relay/relay_pool.dart';
@@ -97,6 +98,8 @@ import '../features/chat_nav/chat_nav_providers.dart';
 import '../features/chat_lock/chat_lock_providers.dart';
 import '../features/identity/nip46_service.dart';
 import '../features/identity/panic_wipe.dart';
+import '../features/identity/remote_panic.dart';
+import '../features/identity/remote_panic_logic.dart';
 import '../features/identity/vault_settings_modal.dart'
     show identityVaultProvider;
 import '../services/nostr/event_mapper.dart';
@@ -691,6 +694,7 @@ class NostrController {
       unawaited(_restoreAllChannelArchives());
       // A killed session can return with a full outbox and no reconnect edge, so flush once here.
       unawaited(flushMeshOutbox());
+      unawaited(_replaySwitchOutbox());
     } catch (e, st) {
       // Never strand the user on seed data: force the empty shell if we never went live.
       debugPrint('NostrController.init failed: $e\n$st');
@@ -749,6 +753,7 @@ class NostrController {
       _retryPendingDmsOnReconnect();
       // Publish what the mesh carried while offline.
       unawaited(flushMeshOutbox());
+      if (_carried.isNotEmpty && svc != null) unawaited(_publishCarried(svc));
       _chatNavReconnect();
       // Driven by the connection edge, not the backfill, so failures there can't skip it.
       schedulePqAnnouncement();
@@ -1064,10 +1069,25 @@ class NostrController {
         nym: nym,
         loginMethod: 'nip46',
       );
-      return (identity, Nip46SignerAdapter(svc));
+      return (
+        identity,
+        Nip46SignerAdapter(svc,
+            expectedPubkey: pubkey, onMismatch: (_) => _signerMismatchNotice())
+      );
     } catch (_) {
       return null;
     }
+  }
+
+  int _signerMismatchShownAt = 0;
+
+  void _signerMismatchNotice() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _signerMismatchShownAt < 5000) return;
+    _signerMismatchShownAt = now;
+    showToast(tr('Your remote signer signed with a different key than this '
+        'identity, so nothing was sent. Switch the signer back to this '
+        'identity\'s key or pick another identity.'));
   }
 
   /// The cached login profile name for instant restore, or null.
@@ -1148,6 +1168,10 @@ class NostrController {
     _dmRetryTimer?.cancel();
     _dmRetryTimer = null;
     _pendingDms.clear();
+    _switchOutboxTimer?.cancel();
+    _switchOutboxTimer = null;
+    _carried.clear();
+    _foreignOutbox = null;
     _profileBackfillTimer?.cancel();
     _profileBackfillTimer = null;
     _profileBackfillQueue.clear();
@@ -1187,6 +1211,8 @@ class NostrController {
     _service = null;
     _groups = null;
     _storageSync = null;
+    _remotePanicTimer?.cancel();
+    _remotePanicTimer = null;
     _resetPqRootState();
     _zapArchive?.dispose();
     _zapArchive = null;
@@ -1251,6 +1277,7 @@ class NostrController {
     }
     // Throws on an invalid key so the modal shows its error.
     final loggedIn = await identityService.loginWithNsec(nsec);
+    await RemotePanicPrefs.noteLogin(kv);
 
     await _teardownLiveSession();
     _started = false;
@@ -1270,6 +1297,7 @@ class NostrController {
 
   /// Adopts a NIP-46 session the login modal just established by re-booting the controller onto it.
   Future<void> loginWithNip46() async {
+    await RemotePanicPrefs.noteLogin(_ref.read(keyValueStoreProvider));
     // Teardown leaves `nip46ServiceProvider` alone, so the live socket survives into the re-boot.
     await _teardownLiveSession();
     _started = false;
@@ -1376,10 +1404,13 @@ class NostrController {
         } catch (_) {}
       }
       final deadline = DateTime.now().add(drainBudget);
-      while ((_service?.pendingDmCount ?? 0) > 0 &&
+      while ((_service?.unsentDmCount ?? 0) > 0 &&
           DateTime.now().isBefore(deadline)) {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
+      try {
+        await _syncSwitchOutbox().timeout(drainBudget);
+      } catch (_) {}
       try {
         await sync?.persistDepositsNow();
       } catch (_) {}
@@ -2608,6 +2639,11 @@ class NostrController {
 
     final isOwn = self.isNotEmpty && senderPubkey == self;
     if (!isOwn) return;
+
+    if (dTag == RemotePanic.dTag) {
+      unawaited(_onRemotePanicMarker(RemotePanic.markerFromRumor(rumor)));
+      return;
+    }
 
     // Another of our devices saved settings; pull the authoritative values from D1.
     if (dTag == 'nymchat-sync-ping') {
@@ -4082,6 +4118,223 @@ class NostrController {
   /// Sent-but-unacked PMs keyed by `nymMessageId`.
   final Map<String, _PendingDm> _pendingDms = <String, _PendingDm>{};
 
+  static const int _kSwitchOutboxCap = 2000;
+
+  final List<UnsentEvent> _carried = <UnsentEvent>[];
+  Map<String, dynamic>? _foreignOutbox;
+  Timer? _switchOutboxTimer;
+  SealedKeyValue? _switchOutboxSealed;
+
+  SealedKeyValue _switchOutboxStore() =>
+      _switchOutboxSealed ??= SealedKeyValue(_ref.read(keyValueStoreProvider),
+          blocked: () => PanicWipe.inProgress);
+
+  static Map<String, dynamic> _encodeOwnerOutbox(
+      Iterable<UnsentEvent> events,
+      Iterable<MapEntry<String, _PendingDm>> rumors) {
+    return {
+      'e': [
+        for (final u in events)
+          {'ev': u.event.toJson(), 't': u.tier, 'dm': u.dm},
+      ],
+      'r': [
+        for (final r in rumors)
+          {
+            'id': r.key,
+            'to': r.value.recipientPubkey,
+            'r': r.value.rumor.toJson(),
+          },
+      ],
+    };
+  }
+
+  static List<UnsentEvent> _decodeOutboxEvents(Object? raw) {
+    final out = <UnsentEvent>[];
+    if (raw is! List) return out;
+    for (final x in raw) {
+      if (x is! Map || x['ev'] is! Map) continue;
+      try {
+        final ev = NostrEvent.fromJson(Map<String, dynamic>.from(x['ev'] as Map));
+        if (ev.id.isEmpty || ev.sig.isEmpty) continue;
+        final t = x['t'];
+        out.add(UnsentEvent(ev,
+            tier: t is int ? t : WrapTier.critical, dm: x['dm'] == true));
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  static List<(String, String, UnsignedEvent)> _decodeOutboxRumors(Object? raw) {
+    final out = <(String, String, UnsignedEvent)>[];
+    if (raw is! List) return out;
+    for (final x in raw) {
+      if (x is! Map || x['r'] is! Map) continue;
+      final id = x['id'], to = x['to'];
+      if (id is! String || to is! String || id.isEmpty || to.isEmpty) continue;
+      final r = x['r'] as Map;
+      final pubkey = r['pubkey'], kind = r['kind'], at = r['created_at'];
+      if (pubkey is! String || kind is! int || at is! int) continue;
+      final tags = <List<String>>[];
+      final rawTags = r['tags'];
+      if (rawTags is List) {
+        for (final t in rawTags) {
+          if (t is List) tags.add([for (final v in t) '$v']);
+        }
+      }
+      final content = r['content'];
+      out.add((
+        id,
+        to,
+        UnsignedEvent(
+          pubkey: pubkey,
+          createdAt: at,
+          kind: kind,
+          tags: tags,
+          content: content is String ? content : '',
+        )
+      ));
+    }
+    return out;
+  }
+
+  Future<Map<String, dynamic>?> _readSwitchOutbox() async {
+    final read =
+        await _switchOutboxStore().readDetailed(StorageKeys.switchOutbox);
+    if (read.status == SealedReadStatus.absent) return <String, dynamic>{};
+    final raw = read.value;
+    if (raw == null) return null;
+    try {
+      final j = jsonDecode(raw);
+      return j is Map ? Map<String, dynamic>.from(j) : <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  List<UnsentEvent> _currentUnsent() {
+    final seen = <String>{};
+    final out = <UnsentEvent>[];
+    for (final u in [...?_service?.unsentEvents(), ..._carried]) {
+      if (seen.add(u.event.id)) out.add(u);
+    }
+    return out.length > _kSwitchOutboxCap
+        ? out.sublist(out.length - _kSwitchOutboxCap)
+        : out;
+  }
+
+  List<MapEntry<String, _PendingDm>> _currentUnackedRumors() => [
+        for (final e in _pendingDms.entries)
+          if (!_isDmAcked(e.key)) e,
+      ];
+
+  Future<void> _syncSwitchOutbox() async {
+    final owner = _identity?.pubkey ?? '';
+    if (owner.isEmpty) return;
+    final events = _currentUnsent();
+    final rumors = _currentUnackedRumors();
+    var all = _foreignOutbox;
+    if (all == null) {
+      all = await _readSwitchOutbox();
+      if (all == null) return;
+      final mine = all[owner];
+      if (mine is Map) {
+        final keep = <String>{for (final u in events) u.event.id};
+        final stored = _decodeOutboxEvents(mine['e']);
+        events.addAll(stored.where((u) => keep.add(u.event.id)));
+        final ids = <String>{for (final r in rumors) r.key};
+        for (final (id, to, rumor) in _decodeOutboxRumors(mine['r'])) {
+          if (!ids.add(id) || rumor.pubkey != owner) continue;
+          rumors.add(MapEntry(
+              id,
+              _PendingDm(
+                  rumor: rumor, recipientPubkey: to, lastAttemptMs: 0)));
+        }
+      }
+    }
+    final next = <String, dynamic>{
+      for (final e in all.entries)
+        if (e.key != owner) e.key: e.value,
+    };
+    if (events.isNotEmpty || rumors.isNotEmpty) {
+      next[owner] = _encodeOwnerOutbox(events, rumors);
+    }
+    final store = _switchOutboxStore();
+    if (next.isEmpty) {
+      store.remove(StorageKeys.switchOutbox);
+    } else {
+      store.write(StorageKeys.switchOutbox, jsonEncode(next));
+    }
+    await store.idle;
+  }
+
+  Future<void> _replaySwitchOutbox() async {
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) return;
+    final all = await _readSwitchOutbox();
+    if (all == null || !identical(_service, service)) return;
+    final owner = identity.pubkey;
+    final foreign = <String, dynamic>{};
+    var replayed = false;
+    for (final entry in all.entries) {
+      final v = entry.value;
+      if (v is! Map) continue;
+      for (final u in _decodeOutboxEvents(v['e'])) {
+        replayed = true;
+        if (u.dm) {
+          service.publishDmQueued(u.event, tier: u.tier);
+        } else if (!_carried.any((c) => c.event.id == u.event.id)) {
+          _carried.add(u);
+        }
+      }
+      if (entry.key == owner) {
+        for (final (id, to, rumor) in _decodeOutboxRumors(v['r'])) {
+          if (rumor.pubkey != owner || _pendingDms.containsKey(id)) continue;
+          replayed = true;
+          _pendingDms[id] = _PendingDm(
+              rumor: rumor, recipientPubkey: to, lastAttemptMs: 0);
+        }
+      } else if (v['r'] is List && (v['r'] as List).isNotEmpty) {
+        foreign[entry.key] = {'e': const <Object>[], 'r': v['r']};
+      }
+    }
+    _foreignOutbox = foreign;
+    if (!replayed) {
+      if (all.isNotEmpty) unawaited(_syncSwitchOutbox());
+      return;
+    }
+    if (_pendingDms.isNotEmpty) {
+      _dmRetryTimer ??= Timer.periodic(
+        const Duration(milliseconds: _kDmRetryCheckMs),
+        (_) => _retryPendingDms(),
+      );
+      _retryPendingDms();
+    }
+    if (_carried.isNotEmpty) unawaited(_publishCarried(service));
+    unawaited(_syncSwitchOutbox());
+    _switchOutboxTimer?.cancel();
+    _switchOutboxTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!identical(_service, service)) return;
+      final done = _currentUnsent().isEmpty && _currentUnackedRumors().isEmpty;
+      unawaited(_syncSwitchOutbox());
+      if (done) {
+        _switchOutboxTimer?.cancel();
+        _switchOutboxTimer = null;
+      }
+    });
+  }
+
+  Future<void> _publishCarried(NostrService service) async {
+    for (final u in List<UnsentEvent>.of(_carried)) {
+      var n = 0;
+      try {
+        n = await service.pool.publish(u.event);
+      } catch (_) {}
+      if (!identical(_service, service)) return;
+      if (n > 0) _carried.removeWhere((c) => c.event.id == u.event.id);
+    }
+  }
+
   // Mesh sender outbox.
 
   /// Sends the mesh carried while offline, published to Nostr once relays return; drops fail the bubble.
@@ -4971,14 +5224,125 @@ class NostrController {
   bool _pqRootSettled = false;
 
   /// Asks the worker to delete this account's rows during a wipe, signed while the key is still here.
-  Future<bool> purgeServerRecords() async {
+  Future<bool> purgeServerRecords({String? pubkey}) async {
     final sync = _storageSync;
-    if (sync == null) return false;
+    final signer = _signer;
+    if (sync == null || signer == null) return false;
+    if (pubkey != null &&
+        (signer.pubkey != pubkey || _identity?.pubkey != pubkey)) {
+      return false;
+    }
+    if (signer is Nip46SignerAdapter && !signer.connected) return false;
     try {
       return await sync.purgeAccount();
     } catch (_) {
       return false;
     }
+  }
+
+  Timer? _remotePanicTimer;
+  bool _remotePanicBusy = false;
+  bool _remotePanicWiping = false;
+
+  @visibleForTesting
+  Future<void> Function()? remotePanicWipeForTest;
+
+  Uint8List? remotePanicActiveKey() {
+    final s = _signer;
+    if (s is! LocalSigner) return null;
+    if (_identity?.pubkey != s.pubkey) return null;
+    return s.privkey;
+  }
+
+  EventSigner? remotePanicActiveSigner() {
+    final s = _signer;
+    if (s is! Nip46SignerAdapter || !s.connected) return null;
+    if (_identity?.pubkey != s.pubkey) return null;
+    return s;
+  }
+
+  bool publishRemotePanicWrap(NostrEvent wrap) {
+    final svc = _service;
+    if (svc == null) return false;
+    svc.publishDmQueued(wrap);
+    return true;
+  }
+
+  void _startRemotePanic() {
+    _remotePanicWiping = false;
+    _remotePanicTimer?.cancel();
+    _remotePanicTimer = Timer.periodic(
+        RemotePanic.checkEvery, (_) => unawaited(checkRemotePanic()));
+    unawaited(checkRemotePanic());
+  }
+
+  Future<bool> checkRemotePanic() async {
+    final sync = _storageSync;
+    if (sync == null ||
+        _remotePanicBusy ||
+        _remotePanicWiping ||
+        PanicWipe.inProgress) {
+      return false;
+    }
+    _remotePanicBusy = true;
+    try {
+      final kv = _ref.read(keyValueStoreProvider);
+      await RemotePanicPrefs.ensureLoginAt(kv);
+      if (kv.getBool(StorageKeys.panicClearPending)) {
+        if (await sync.panicClear()) {
+          await kv.remove(StorageKeys.panicClearPending);
+        }
+      }
+      if (!kv.getBool(StorageKeys.remotePanic)) return false;
+      final pubkey = _identity?.pubkey ?? '';
+      if (pubkey.isEmpty) return false;
+      final row = await sync.panicCheck();
+      if (_identity?.pubkey != pubkey) return false;
+      return await _onRemotePanicMarker(RemotePanic.fromRow(pubkey, row));
+    } catch (_) {
+      return false;
+    } finally {
+      _remotePanicBusy = false;
+    }
+  }
+
+  Future<bool> _onRemotePanicMarker(Map<String, dynamic>? marker) async {
+    if (marker == null || _remotePanicWiping || PanicWipe.inProgress) {
+      return false;
+    }
+    final pubkey = _identity?.pubkey ?? '';
+    if (pubkey.isEmpty) return false;
+    final kv = _ref.read(keyValueStoreProvider);
+    final verdict = RemotePanic.decide(
+      enabled: kv.getBool(StorageKeys.remotePanic),
+      loginAt: RemotePanicPrefs.loginAt(kv),
+      now: RemotePanicSignals.nowSec(),
+      pubkey: pubkey,
+      marker: marker,
+      verify: RemotePanicSignals.verify,
+    );
+    if (!verdict.wipe) return false;
+    _remotePanicWiping = true;
+    _remotePanicTimer?.cancel();
+    final run = remotePanicWipeForTest ?? _remotePanicWipeHere;
+    try {
+      await run();
+    } catch (_) {}
+    return true;
+  }
+
+  Future<void> _remotePanicWipeHere() async {
+    final accounts = _ref.read(accountsProvider);
+    final index = accounts?.changes.value;
+    if (accounts != null &&
+        index != null &&
+        index.activeAccount != null &&
+        index.accounts.where((a) => a.pubkey.isNotEmpty).length > 1) {
+      if (await accounts.logout()) return;
+    }
+    await PanicWipe.production().wipe();
+    accounts?.forgetAll();
+    await resetAfterPanic();
   }
 
   /// The root as its `nympq1…` code.
@@ -8463,6 +8827,7 @@ class NostrController {
       }
       final capped = out.length > 24 ? out.sublist(0, 24) : out;
       kv.setString(StorageKeys.recentEmojis, jsonEncode(capped));
+      _ref.read(recentEmojisProvider.notifier).replaceAll(capped);
     } catch (_) {}
   }
 
@@ -9302,6 +9667,7 @@ class NostrController {
       },
     );
     _storageSync = sync;
+    _startRemotePanic();
     // Every synced category is written to D1 and also pushed live to our other devices as a gift wrap.
     sync.setSyncWrapPublisher((payload, dTag) async {
       await _service?.publishNymSyncWrap(payload: payload, dTag: dTag);
@@ -9480,6 +9846,7 @@ class NostrController {
 
   /// On foreground: top up the open view from D1, re-check shop purchases, and clear the focused column's unread.
   void onAppResumed() {
+    unawaited(checkRemotePanic());
     _service?.probePool();
     _appInForeground = true;
     _onViewOpened(_ref.read(appStateProvider).view);
@@ -10483,6 +10850,13 @@ class NostrController {
   set apiForTest(ApiClient api) => _api = api;
 
   @visibleForTesting
+  set storageSyncForTest(StorageSync sync) => _storageSync = sync;
+
+  @visibleForTesting
+  void applySyncedForTest(Map<String, dynamic> p) =>
+      _applySyncedSettingsNow(p);
+
+  @visibleForTesting
   Future<bool> Function(String to, List<List<String>> tags, String content)?
       sendDirectForTest;
 
@@ -11018,6 +11392,14 @@ class NostrController {
     if (p['encryptAtRestPreferred'] == true) {
       try {
         kvStore.setBool(StorageKeys.encryptAtRestPref, true);
+      } catch (_) {}
+    }
+    final remotePanic = p['remotePanic'];
+    if (remotePanic is bool &&
+        remotePanic != kvStore.getBool(StorageKeys.remotePanic)) {
+      try {
+        kvStore.setBool(StorageKeys.remotePanic, remotePanic);
+        _ref.read(remotePanicRevisionProvider.notifier).state++;
       } catch (_) {}
     }
   }

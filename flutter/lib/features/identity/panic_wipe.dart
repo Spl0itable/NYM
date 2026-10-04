@@ -9,6 +9,7 @@ import '../../services/storage/cache_store.dart';
 import '../../services/storage/mesh_file_store.dart';
 import '../../services/storage/secure_store.dart';
 import 'biometric_secret_store.dart';
+import 'panic_purge.dart';
 
 /// Store abstractions so tests can inject fakes and assert they were cleared.
 abstract class PanicPrefsStore {
@@ -114,6 +115,12 @@ String _junk(Random rng) {
   return b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 }
 
+class PanicWipeReport {
+  const PanicWipeReport({this.unremoved = 0});
+
+  final int unremoved;
+}
+
 /// Emergency wipe of prefs, secure storage and the sqflite cache DB; the caller handles restart-to-first-run.
 class PanicWipe {
   PanicWipe({
@@ -121,11 +128,15 @@ class PanicWipe {
     required this._secure,
     required this._cache,
     this._files,
+    this._purge,
+    this._purgeBudget = defaultPurgeBudget,
   });
 
   factory PanicWipe.production({
     SecureStore? secure,
     CacheStore? cache,
+    PanicIdentityPurge? purge,
+    Duration purgeBudget = defaultPurgeBudget,
   }) =>
       PanicWipe(
         prefs: _SharedPrefsAdapter(),
@@ -133,20 +144,39 @@ class PanicWipe {
         cache: _CacheStoreAdapter(cache ?? CacheStore()),
         files: _AtRestFilesAdapter(
             MeshFileStore.instance, AtRestCipher.instance),
+        purge: purge,
+        purgeBudget: purgeBudget,
       );
+
+  static const Duration defaultPurgeBudget = Duration(seconds: 3);
 
   final PanicPrefsStore _prefs;
   final PanicSecureStore _secure;
   final PanicCacheStore _cache;
   final PanicFileStore? _files;
+  final PanicIdentityPurge? _purge;
+  final Duration _purgeBudget;
 
   /// True while a wipe runs; persistence paths check it and refuse to write so nothing re-writes data mid-wipe.
   static bool inProgress = false;
 
   /// Destroys every local store, each step isolated so one failure can't abort the others.
-  Future<void> wipe({void Function(String status)? onStatus}) async {
+  Future<PanicWipeReport> wipe({void Function(String status)? onStatus}) async {
     // Stop persistence before destroying anything.
     inProgress = true;
+    final clock = Stopwatch()..start();
+    Duration left() {
+      final rest = _purgeBudget - clock.elapsed;
+      return rest.isNegative ? Duration.zero : rest;
+    }
+
+    final purge = _purge;
+    List<Future<bool>>? pending;
+    if (purge != null) {
+      try {
+        pending = await purge.start().timeout(left());
+      } catch (_) {}
+    }
     // Order: key/value store, then the local database, then the secure keystore last.
     try {
       onStatus?.call('Encrypting local store with a random key…');
@@ -169,5 +199,14 @@ class PanicWipe {
     try {
       await _secure.wipe();
     } catch (_) {}
+    if (purge == null) return const PanicWipeReport();
+    if (pending == null) return PanicWipeReport(unremoved: purge.expected);
+    final wait = left();
+    final outcomes = await Future.wait([
+      for (final f in pending)
+        f.timeout(wait, onTimeout: () => false).catchError((_) => false),
+    ]);
+    return PanicWipeReport(
+        unremoved: outcomes.where((ok) => !ok).length);
   }
 }

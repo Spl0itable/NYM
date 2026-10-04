@@ -128,7 +128,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   bool _showScrollButton = false;
 
   late final ChatNavListBinding _nav =
-      ChatNavListBinding(ref, _positionsListener);
+      ChatNavListBinding(ref, _positionsListener, inset: _bottomInset);
   String? _navBreak;
 
   /// Taken once from the scroller on the first build after a thread handed the list back.
@@ -492,6 +492,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
               // LayoutBuilder captures the viewport height [_onPositionsChanged] needs.
               child: LayoutBuilder(builder: (context, constraints) {
                 _viewportHeight = constraints.maxHeight;
+                _nav.viewport = constraints.maxHeight;
                 return Stack(
                   children: [
                     Positioned.fill(

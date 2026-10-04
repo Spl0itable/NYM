@@ -76,27 +76,33 @@ class ChatNavDivider extends StatelessWidget {
   }
 }
 
-class ChatNavListBinding {
-  ChatNavListBinding(this.ref, this.positions);
+class ChatNavListBinding with WidgetsBindingObserver {
+  ChatNavListBinding(this.ref, this.positions, {this.inset = 0}) {
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   final WidgetRef ref;
   final ItemPositionsListener positions;
+  final double inset;
+  double viewport = 0;
   final ValueNotifier<int> fabs = ValueNotifier(0);
 
   String _key = '';
   String? dividerId;
   int? dividerIndex;
   Map<String, int> _indexById = const {};
-  int _maxIndex = 0;
+  Map<String, int>? _posById;
   bool _landing = false;
+  bool _queued = false;
+  bool _disposed = false;
+  int _hold = 0;
   String? _lastId;
   int _lastAt = 0;
   List<Message> _messages = const [];
-  Map<String, num> _pending = const {};
-  Timer? _dwellTimer;
+  List<String> _unseen = const [];
   int _shownCount = -1;
   int _shownMentions = -1;
-  bool _down = false;
+  bool _down = true;
   Map<int, List<Message>>? _members;
 
   ChatNavService get nav => ref.read(chatNavProvider);
@@ -105,14 +111,21 @@ class ChatNavListBinding {
 
   bool get jumpDown => _down;
 
+  int get unseenCount => _unseen.length;
+
+  String get jumpLabel => jumpText(_unseen.length, (s) => tr(s));
+
   String? prepare(String key, List<Message> messages) {
     if (key != _key) {
       _key = key;
       _lastId = null;
       _lastAt = 0;
-      _resetDwell();
+      _unseen = const [];
+      _shownCount = -1;
     }
+    if (!identical(messages, _messages)) _hold = 2;
     _messages = messages;
+    _posById = null;
     if (key.isEmpty) return dividerId = null;
     final n = nav;
     if (!n.hasEntry(key)) n.capture(key);
@@ -122,7 +135,6 @@ class ChatNavListBinding {
 
   void bind(Map<String, int> indexById, int maxIndex) {
     _indexById = indexById;
-    _maxIndex = maxIndex;
     _members = null;
     final id = dividerId;
     dividerIndex = id == null ? null : indexById[id];
@@ -146,99 +158,156 @@ class ChatNavListBinding {
   }
 
   void afterBuild(MessageListScroller scroller) {
+    _queue();
     final di = dividerIndex;
-    if (di == null || !nav.shouldLand(_key)) return;
+    final id = dividerId;
+    if (di == null || id == null || !nav.shouldLand(_key)) return;
     nav.markLanded(_key);
     _landing = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_landAt(scroller, di, animate: false)
+      if (_disposed) return;
+      unawaited(_landAt(scroller, di, id, animate: false)
           .whenComplete(() => _landing = false));
     });
   }
 
-  Future<void> _landAt(MessageListScroller scroller, int index,
+  void _queue() {
+    if (_queued || _disposed) return;
+    _queued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _queued = false;
+      if (_hold > 0 && --_hold > 0) {
+        _queue();
+        WidgetsBinding.instance.scheduleFrame();
+        return;
+      }
+      update();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      if (!_disposed) nav.flushMarks();
+      return;
+    }
+    _queue();
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  ItemPosition? _at(int index) {
+    for (final q in positions.itemPositions.value) {
+      if (q.index == index) return q;
+    }
+    return null;
+  }
+
+  double _topOf(ItemPosition p, String id) {
+    final group = _membersByIndex()[p.index];
+    if (group == null || group.length < 2 || group.first.id == id) {
+      return p.itemTrailingEdge;
+    }
+    for (final s in _slices(p, group)) {
+      if (s.$1 == id) return s.$2;
+    }
+    return p.itemTrailingEdge;
+  }
+
+  double get _landLine =>
+      1 - (viewport > 0 ? ChatJump.landPx / viewport : 0.01);
+
+  Future<void> _landAt(MessageListScroller scroller, int index, String id,
       {required bool animate}) async {
     await scroller.animateTo(
       index: index,
       alignment: 0.45,
       duration: Duration(milliseconds: animate ? 300 : 1),
     );
-    final done = Completer<void>();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      ItemPosition? p;
-      for (final q in positions.itemPositions.value) {
-        if (q.index == index) p = q;
-      }
-      if (p != null) {
-        final h = p.itemTrailingEdge - p.itemLeadingEdge;
-        var target = 0.92 - h;
-        if (target < 0) target = 0;
-        if (target > 0.45) target = 0.45;
-        if ((target - p.itemLeadingEdge).abs() > 0.02) {
-          await scroller.animateTo(
-              index: index,
-              alignment: target,
-              duration: const Duration(milliseconds: 1));
-        }
-      }
-      _landing = false;
-      update();
-      done.complete();
-    });
-    return done.future;
-  }
-
-  void _resetDwell() {
-    _dwellTimer?.cancel();
-    _dwellTimer = null;
-    _pending = const {};
+    for (var i = 0; i < 2 && !_disposed; i++) {
+      await WidgetsBinding.instance.endOfFrame;
+      final p = _at(index);
+      if (p == null) break;
+      final shift = _landLine - _topOf(p, id);
+      if (shift.abs() < 0.004) break;
+      await scroller.animateTo(
+          index: index,
+          alignment: p.itemLeadingEdge + shift,
+          duration: const Duration(milliseconds: 1));
+    }
+    _landing = false;
+    update();
   }
 
   void update() {
-    if (_key.isEmpty) return;
-    _dwellTimer?.cancel();
-    _dwellTimer = null;
+    if (_key.isEmpty || _disposed) return;
     final pos = positions.itemPositions.value;
     final n = nav;
-    final jumpIds = n.jumpIds(_key).toSet();
-    final mentionIds = n.queuedMentionIds(_key).toSet();
-    if (jumpIds.isEmpty && mentionIds.isEmpty) {
-      _pending = const {};
-    } else if (!ref.read(appStateProvider.notifier).appVisible) {
-      _pending = const {};
-      _dwellTimer = Timer(const Duration(seconds: 1), update);
-    } else if (_landing || n.shouldLand(_key)) {
-      _pending = const {};
-    } else {
-      final want = {...jumpIds, ...mentionIds};
-      final inView = <String>[];
-      final members = _membersByIndex();
-      for (final q in pos) {
-        final group = members[q.index];
-        if (group == null || !group.any((m) => want.contains(m.id))) continue;
-        for (final s in _slices(q, group)) {
-          if (want.contains(s.$1) && seenInView(s.$3, s.$2, 0, 1)) {
-            inView.add(s.$1);
-          }
-        }
-      }
-      final step =
-          dwellStep(_pending, inView, DateTime.now().millisecondsSinceEpoch);
-      _pending = step.pending;
-      if (step.seen.isNotEmpty) {
-        final sj = [for (final id in step.seen) if (jumpIds.contains(id)) id];
-        final sm = [
-          for (final id in step.seen) if (mentionIds.contains(id)) id
-        ];
-        if (sj.isNotEmpty) n.markJumpSeen(_key, sj);
-        if (sm.isNotEmpty) n.markMentionsSeen(_key, sm);
-      }
-      if (step.wait > 0) {
-        _dwellTimer =
-            Timer(Duration(milliseconds: step.wait.ceil() + 30), update);
-      }
+    if (pos.isNotEmpty &&
+        _hold == 0 &&
+        !_landing &&
+        !n.shouldLand(_key) &&
+        ref.read(appStateProvider.notifier).appVisible) {
+      _track(pos);
     }
     _refresh(pos);
+  }
+
+  void _track(Iterable<ItemPosition> pos) {
+    if (_messages.isEmpty) return;
+    final n = nav;
+    ItemPosition? newest;
+    for (final q in pos) {
+      if (q.index == 0) newest = q;
+    }
+    final bottom = newest != null &&
+        (viewport > 0
+            ? atBottom(inset - newest.itemLeadingEdge * viewport)
+            : newest.itemLeadingEdge >= -0.01);
+    if (bottom) {
+      n.seeAll(_key, _messages);
+      return;
+    }
+    final members = _membersByIndex();
+    final vh = viewport > 0 ? viewport : 1000.0;
+    bool inside(double edge) => edge * vh > 0.5 && edge * vh < vh - 0.5;
+    final seen = <Message>[];
+    for (final q in pos) {
+      if (q.itemTrailingEdge <= 0 || q.itemLeadingEdge >= 1) continue;
+      final group = members[q.index];
+      if (group == null || group.isEmpty) continue;
+      if (inside(q.itemLeadingEdge)) {
+        seen.addAll(group);
+        continue;
+      }
+      if (q.itemLeadingEdge > 0) continue;
+      for (final s in _slices(q, group)) {
+        if (!inside(s.$3)) continue;
+        for (final m in group) {
+          if (m.id == s.$1) seen.add(m);
+        }
+      }
+    }
+    if (seen.isEmpty) return;
+    final byId = _posById ??= {
+      for (var i = 0; i < _messages.length; i++) _messages[i].id: i,
+    };
+    var at = -1;
+    var last = -1;
+    for (final m in seen) {
+      final e = n.effAt(m);
+      final i = byId[m.id] ?? -1;
+      if (e > at || (e == at && i > last)) {
+        at = e;
+        last = i;
+      }
+    }
+    final ids = <String>[];
+    for (var j = last;
+        j >= 0 && ids.length < ChatJump.markMax && _messages[j].createdAt >= at;
+        j--) {
+      if (n.effAt(_messages[j]) == at) ids.add(_messages[j].id);
+    }
+    n.advance(_key, at, ids);
   }
 
   Map<int, List<Message>> _membersByIndex() {
@@ -254,36 +323,32 @@ class ChatNavListBinding {
 
   static double _weight(Message m) => 1 + m.content.length / 40;
 
-  String? _first() {
-    final n = nav;
-    final lead = n.jumpLeadFor(_key);
-    if (lead.length < 2) return n.jumpTargetFor(_key);
-    final want = lead.toSet();
-    for (final m in _messages) {
-      if (want.contains(m.id)) return m.id;
+  String _dirFor(String id, Iterable<ItemPosition> pos) {
+    final idx = _indexById[id];
+    if (idx == null) return 'down';
+    ItemPosition? hit;
+    var minVis = 1 << 30;
+    var maxVis = -1;
+    for (final q in pos) {
+      if (q.index == idx) hit = q;
+      if (q.itemTrailingEdge <= 0 || q.itemLeadingEdge >= 1) continue;
+      if (q.index < minVis) minVis = q.index;
+      if (q.index > maxVis) maxVis = q.index;
     }
-    return n.jumpTargetFor(_key);
+    if (hit != null) {
+      final vh = viewport > 0 ? viewport : 1000.0;
+      return jumpDir(top: (1 - _topOf(hit, id)) * vh, viewTop: 0);
+    }
+    if (maxVis < 0) return 'down';
+    return idx > maxVis ? 'up' : 'down';
   }
 
   void _refresh(Iterable<ItemPosition> pos) {
     final n = nav;
-    final count = n.jumpCountFor(_key);
+    _unseen = n.unseenFor(_key, _messages);
+    final count = _unseen.length;
     final mentions = n.mentionCountFor(_key);
-    var down = _down;
-    final target = _first();
-    final idx = target == null ? null : _indexById[target];
-    if (idx != null && pos.isNotEmpty) {
-      var minVis = 1 << 30;
-      var maxVis = -1;
-      for (final q in pos) {
-        if (q.itemTrailingEdge <= 0 || q.itemLeadingEdge >= 1) continue;
-        if (q.index < minVis) minVis = q.index;
-        if (q.index > maxVis) maxVis = q.index;
-      }
-      if (maxVis >= 0) down = idx < minVis;
-    } else if (idx == null) {
-      down = false;
-    }
+    final down = count == 0 || _dirFor(_unseen.first, pos) == 'down';
     if (count != _shownCount || mentions != _shownMentions || down != _down) {
       _shownCount = count;
       _shownMentions = mentions;
@@ -321,10 +386,7 @@ class ChatNavListBinding {
   }
 
   (double, double)? _sliceShift(int idx, String id, List<Message> group) {
-    ItemPosition? p;
-    for (final q in positions.itemPositions.value) {
-      if (q.index == idx) p = q;
-    }
+    final p = _at(idx);
     if (p == null) return null;
     for (final s in _slices(p, group)) {
       if (s.$1 == id) return (p.itemLeadingEdge, 0.5 - (s.$2 + s.$3) / 2);
@@ -347,29 +409,23 @@ class ChatNavListBinding {
     }
   }
 
-  bool get jumpShown => _key.isNotEmpty && nav.jumpCountFor(_key) > 0;
+  bool get jumpShown => _key.isNotEmpty && _unseen.isNotEmpty;
 
   Future<void> jumpFirst(MessageListScroller scroller) async {
     final n = nav;
     n.markScrolled(_key);
-    n.revealJump(_key, _messages);
-    n.settleJump(_key);
-    var target = _first();
-    for (var guard = 0;
-        guard < 200 && target != null && !_indexById.containsKey(target);
-        guard++) {
-      n.markJumpSeen(_key, [target]);
-      target = _first();
+    n.markLanded(_key);
+    _landing = false;
+    update();
+    final target = _unseen.isEmpty ? null : _unseen.first;
+    final idx = target == null ? null : _indexById[target];
+    if (target == null || idx == null) {
+      fabs.value++;
+      return;
     }
-    final di = dividerIndex;
-    if (target != null && target == dividerId && di != null) {
-      await _landAt(scroller, di, animate: true);
-    } else if (target != null && _indexById.containsKey(target)) {
-      await _reveal(scroller, target);
-    } else {
-      await scroller.animateTo(index: _maxIndex, alignment: 0.9);
-    }
-    fabs.value++;
+    _down = _dirFor(target, positions.itemPositions.value) == 'down';
+    await _landAt(scroller, idx, target, animate: true);
+    if (!_disposed) fabs.value++;
   }
 
   bool jumpMention(MessageListScroller scroller) {
@@ -395,7 +451,8 @@ class ChatNavListBinding {
   }
 
   void dispose() {
-    _resetDwell();
+    _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
     fabs.dispose();
   }
 }
@@ -440,7 +497,7 @@ class ChatNavFabs extends ConsumerWidget {
             case 'jump':
               children.add(Flexible(
                 child: _JumpPill(
-                  label: nav.jumpTextFor(key),
+                  label: binding.jumpLabel,
                   down: binding.jumpDown,
                   onTap: () => unawaited(binding.jumpFirst(scroller)),
                 ),

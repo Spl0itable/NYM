@@ -1532,7 +1532,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   /// Detects appended messages for autoscroll.
   int _lastMessageCount = 0;
 
-  late final ChatNavListBinding _nav = ChatNavListBinding(ref, _positions);
+  late final ChatNavListBinding _nav = ChatNavListBinding(ref, _positions, inset: _bottomInset);
   late final ChatNavService _navService;
   String? _navBreak;
 
@@ -1882,6 +1882,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                             return LayoutBuilder(
                                 builder: (context, constraints) {
                               _viewportHeight = constraints.maxHeight;
+                              _nav.viewport = constraints.maxHeight;
                               return NotificationListener<ScrollNotification>(
                                 onNotification: _onScroll,
                                 child: ScrollablePositionedList.builder(

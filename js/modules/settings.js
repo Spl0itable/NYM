@@ -12,7 +12,7 @@ const NYM_SETTINGS_SECTION_KEYS = {
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
         'acceptCalls', 'showStatus', 'powDifficulty', 'appVerifiedFilter', 'filterPacks',
-        'encryptAtRestPreferred'],
+        'encryptAtRestPreferred', 'remotePanic'],
     messaging: ['groupChatPMOnlyMode', 'threadsEnabled', 'translateLanguage', 'translateFavoriteLanguages',
         'emojiPackFavorites', 'emojiCategoryFavorites', 'favoriteGifs', 'recentEmojis',
         'gesturesEnabled', 'swipeLeftAction', 'swipeRightAction', 'swipeThreshold',
@@ -176,7 +176,8 @@ Object.assign(NYM.prototype, {
             botPmWelcomed: localStorage.getItem('nym_botpm_welcomed') === 'true',
             botPmClearedAt: this._getBotPmClearedAt() || 0,
             botMaxRuns: typeof this.botMaxRuns === 'function' ? this.botMaxRuns() : 0,
-            encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1'
+            encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1',
+            remotePanic: typeof this.remotePanicEnabled === 'function' ? this.remotePanicEnabled() : false
         };
     },
 

@@ -1973,6 +1973,22 @@ Object.assign(NYM.prototype, {
         return !!(ts && prevTs && Math.abs(ts - prevTs) <= 5 * 60 * 1000);
     },
 
+    _scrollAnchorFor(container) {
+        const sc = container.parentElement && container.parentElement.classList.contains('messages-container') ? container.parentElement : null;
+        if (!sc || Math.abs(sc.scrollTop) < 2) return null;
+        const rows = container.querySelectorAll('.message[data-message-id]');
+        if (!rows.length) return null;
+        const viewTop = sc.getBoundingClientRect().top;
+        let lo = 0, hi = rows.length - 1, hit = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (rows[mid].getBoundingClientRect().bottom > viewTop) { hit = mid; hi = mid - 1; } else lo = mid + 1;
+        }
+        if (hit < 0) return null;
+        const el = rows[hit];
+        return { sc, el, top: el.getBoundingClientRect().top };
+    },
+
     _recomputeAllBubbleGrouping(container) {
         if (!container) return;
         this._rewrapBubbleGroups(container);
@@ -3380,7 +3396,7 @@ Object.assign(NYM.prototype, {
         return true;
     },
 
-    getFilteredMessages(storageKey) {
+    getFilteredMessages(storageKey, subset) {
         const messages = this.messages.get(storageKey) || [];
 
         // Hide thread replies from the flat view only when the root is present locally.
@@ -3394,7 +3410,7 @@ Object.assign(NYM.prototype, {
         }
 
         const clientGates = this._clientGatesActive();
-        return messages.filter(msg => {
+        return (Array.isArray(subset) ? subset : messages).filter(msg => {
             if (this.deletedEventIds.has(msg.id)) return false;
             if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;

@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import '../../models/nostr_event.dart';
+
 class HeldPublishes<T> {
   HeldPublishes({required this.max, required this.wait});
 
@@ -9,7 +11,12 @@ class HeldPublishes<T> {
 
   bool get isEmpty => _items.isEmpty;
 
-  Future<int> hold(Future<int> Function(T via) send) {
+  List<NostrEvent> get events => [
+        for (final item in _items)
+          if (item.event != null) item.event!,
+      ];
+
+  Future<int> hold(Future<int> Function(T via) send, {NostrEvent? event}) {
     if (_items.length >= max) {
       _items.removeAt(0).settle(0);
     }
@@ -18,7 +25,7 @@ class HeldPublishes<T> {
     item = _Held<T>(send, done, Timer(wait, () {
       _items.remove(item);
       item.settle(0);
-    }));
+    }), event);
     _items.add(item);
     return done.future;
   }
@@ -43,11 +50,12 @@ class HeldPublishes<T> {
 }
 
 class _Held<T> {
-  _Held(this.send, this.done, this.timer);
+  _Held(this.send, this.done, this.timer, this.event);
 
   final Future<int> Function(T via) send;
   final Completer<int> done;
   final Timer timer;
+  final NostrEvent? event;
 
   void settle(int n) {
     timer.cancel();

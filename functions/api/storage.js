@@ -671,6 +671,84 @@ async function handleAccountAction(context, body) {
   return json({ ok: true, app: app, removed: removed });
 }
 
+var PANIC_TTL_S = 90 * 86400;
+var PANIC_MARK_SKEW_S = 600;
+var PANIC_CHECK_RATE = 30;
+var PANIC_DDL = "CREATE TABLE IF NOT EXISTS panic_marks (pubkey TEXT PRIMARY KEY, created_at INTEGER NOT NULL, event_id TEXT NOT NULL, sig TEXT NOT NULL)";
+
+function panicMarkerValid(pubkey, at, id, sig) {
+  try {
+    if (!Number.isInteger(at) || at <= 0) return false;
+    if (typeof id !== "string" || !/^[0-9a-f]{64}$/.test(id)) return false;
+    if (typeof sig !== "string" || !/^[0-9a-f]{128}$/.test(sig)) return false;
+    var ev = { kind: 30078, pubkey: pubkey, created_at: at, tags: [["d", "nym-panic"]], content: "" };
+    if (getEventHash(ev) !== id) return false;
+    return schnorr.verify(sig, id, pubkey);
+  } catch (e) {
+    return false;
+  }
+}
+
+async function handlePanicAction(context, body) {
+  var env = context.env;
+  var json = function (obj, status) {
+    return new Response(JSON.stringify(obj), {
+      status: status || 200,
+      headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+    });
+  };
+  var action = body.action;
+  if (action !== "panic-mark" && action !== "panic-check" && action !== "panic-clear") return json({ error: "Unknown action" }, 400);
+  if (!hasD1(env.DB_SETTINGS)) return json({ error: "Settings storage is not configured (missing DB_SETTINGS binding)." }, 503);
+
+  var userPubkey = body.pubkey;
+  if (!userPubkey || !/^[0-9a-f]{64}$/i.test(userPubkey)) return json({ error: "Invalid pubkey" }, 400);
+  userPubkey = userPubkey.toLowerCase();
+  if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
+  var nowSec = Math.floor(Date.now() / 1000);
+
+  if (action === "panic-check") {
+    if (!(await cacheRateTake("panic-check", userPubkey, 1, PANIC_CHECK_RATE, STORAGE_RATE_WINDOW_MS))) {
+      return json({ error: "Too many requests." }, 429);
+    }
+    var row = null;
+    try {
+      row = await env.DB_SETTINGS.prepare("SELECT created_at, event_id, sig FROM panic_marks WHERE pubkey = ?").bind(userPubkey).first();
+    } catch (e) { row = null; }
+    if (row && Number(row.created_at) < nowSec - PANIC_TTL_S) {
+      try { await env.DB_SETTINGS.prepare("DELETE FROM panic_marks WHERE pubkey = ?").bind(userPubkey).run(); } catch (e) { }
+      row = null;
+    }
+    return json({ mark: row ? { at: Number(row.created_at), id: row.event_id, sig: row.sig } : null });
+  }
+
+  if (!context._wsAuthedPubkey) {
+    var replay = await enforceAuthReplay(ledgerCall, env, body.auth && body.auth.id);
+    if (!replay.ok) return json({ error: replay.error }, replay.status);
+  }
+
+  if (action === "panic-clear") {
+    var cleared = 0;
+    try {
+      var cr = await env.DB_SETTINGS.prepare("DELETE FROM panic_marks WHERE pubkey = ?").bind(userPubkey).run();
+      cleared = (cr && cr.meta && cr.meta.changes) || 0;
+    } catch (e) { }
+    return json({ ok: true, cleared: cleared });
+  }
+
+  var at = body.at;
+  if (!Number.isInteger(at) || Math.abs(at - nowSec) > PANIC_MARK_SKEW_S) return json({ error: "Panic marker time is out of range." }, 400);
+  if (!panicMarkerValid(userPubkey, at, body.id, body.sig)) return json({ error: "Panic marker signature is invalid." }, 400);
+  await env.DB_SETTINGS.prepare(PANIC_DDL).run();
+  await env.DB_SETTINGS.prepare(
+    "INSERT INTO panic_marks (pubkey, created_at, event_id, sig) VALUES (?, ?, ?, ?) " +
+    "ON CONFLICT(pubkey) DO UPDATE SET created_at = excluded.created_at, event_id = excluded.event_id, sig = excluded.sig " +
+    "WHERE excluded.created_at > panic_marks.created_at"
+  ).bind(userPubkey, at, body.id, body.sig).run();
+  try { await env.DB_SETTINGS.prepare("DELETE FROM panic_marks WHERE created_at < ?").bind(nowSec - PANIC_TTL_S).run(); } catch (e) { }
+  return json({ ok: true, at: at });
+}
+
 // Public Nostr kind 0 profile mirror, stored as the signed event so clients can verify and reconcile it.
 var PROFILE_MAX_EVENT = 64 * 1024;
 
@@ -1872,6 +1950,17 @@ async function routeStorageAction(context, body) {
   if (body && typeof body.action === "string" && body.action.indexOf("account-") === 0) {
     try {
       return await handleAccountAction(context, body);
+    } catch (e) {
+      console.error("storage action error:", e);
+      return new Response(JSON.stringify({ error: "Internal server error" }), {
+        status: 500, headers: { "Content-Type": "application/json", ...CLIENT_CORS_HEADERS }
+      });
+    }
+  }
+
+  if (body && typeof body.action === "string" && body.action.indexOf("panic-") === 0) {
+    try {
+      return await handlePanicAction(context, body);
     } catch (e) {
       console.error("storage action error:", e);
       return new Response(JSON.stringify({ error: "Internal server error" }), {

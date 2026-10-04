@@ -419,11 +419,38 @@ class NostrService {
   /// The current pool after any swap.
   PoolTransport get pool => _quietHeld ? _QuietPool(_pool) : _pool;
 
-  late final DmOutbox _dmOutbox = DmOutbox(send: (e) => pool.publishDm(e));
+  late final DmOutbox _dmOutbox = DmOutbox(send: _sendDm);
+
+  Future<int> _sendDm(NostrEvent e) async {
+    final via = pool;
+    final n = await via.publishDm(e);
+    if (n > 0 && _pool is! RelayPoolProxy) _dmOutbox.confirm(e.id);
+    return n;
+  }
 
   final LinkedHashMap<String, int> _sentTiers = LinkedHashMap();
 
   int get pendingDmCount => _dmOutbox.length;
+
+  int get unsentDmCount => _dmOutbox.unsentCount;
+
+  List<UnsentEvent> unsentEvents() {
+    final out = <UnsentEvent>[];
+    final seen = <String>{};
+    for (final (e, tier) in _dmOutbox.unsent()) {
+      if (seen.add(e.id)) out.add(UnsentEvent(e, tier: tier, dm: true));
+    }
+    final p = _pool;
+    final held = p is RelayPoolProxy
+        ? p.heldEvents
+        : (p is RelayPool ? p.heldEvents : const <NostrEvent>[]);
+    for (final e in held) {
+      if (seen.add(e.id)) {
+        out.add(UnsentEvent(e, tier: WrapTier.critical, dm: e.kind == 1059));
+      }
+    }
+    return out;
+  }
 
   int sentWrapTier(String wrapId) => _sentTiers[wrapId] ?? WrapTier.critical;
 
@@ -456,6 +483,7 @@ class NostrService {
     if (p is RelayPoolProxy) {
       p.onPublishCharge = _dmOutbox.charge;
       p.onPublishRateLimited = (id) => _dmOutbox.refused(id);
+      p.onPublishAccepted = _dmOutbox.confirm;
     }
   }
 
