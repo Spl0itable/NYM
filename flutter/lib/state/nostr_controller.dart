@@ -6,7 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/crypto/bech32_codec.dart' as bech32;
-import '../core/crypto/key_format.dart' show normalizePubkeyInput;
+import '../core/crypto/key_format.dart'
+    show normalizePrivkeyInput, normalizePubkeyInput;
 import '../core/crypto/bitchat.dart' as bitchat;
 import '../core/crypto/crypto_worker.dart' show CryptoWorker;
 import '../core/crypto/gift_wrap.dart' as giftwrap;
@@ -36,6 +37,7 @@ import '../features/commands/command_i18n.dart';
 import '../features/commands/command_registry.dart';
 import '../features/emoji/custom_emoji.dart';
 import '../features/dm_polls/dm_polls_providers.dart';
+import '../features/accounts/account_host.dart';
 import '../features/groups/group_logic.dart';
 import '../features/group_tools/group_tools.dart';
 import '../features/group_tools/group_tools_providers.dart';
@@ -62,6 +64,7 @@ import '../features/shop/shop_controller.dart';
 import '../features/nymbot/bot_commands.dart';
 import '../features/nymbot/nymbot_providers.dart';
 import '../features/nymbot/nymbot_threads.dart';
+import '../features/nymbot/anon_channel_bot.dart';
 import '../features/p2p/p2p_models.dart';
 import '../features/p2p/p2p_service.dart';
 import '../features/pms/pm_logic.dart';
@@ -581,9 +584,11 @@ class NostrController {
       // Mirror a cached own name onto the identity before the first presence broadcast.
       _syncSelfNymFromProfile();
 
+      final poolFactory = debugPoolFactory;
       final service = NostrService(
         identity: identity,
         signer: signer,
+        pool: poolFactory?.call(),
         userDirect: _ref
             .read(keyValueStoreProvider)
             .getBool(StorageKeys.relayDirectMode),
@@ -957,6 +962,7 @@ class NostrController {
   Future<void> _restoreAllChannelArchives(
       {bool force = false, int sinceSec = 0}) async {
     await _discoverChannelActivity();
+    if (_retired) return;
     final keys = <String>{
       for (final c in _ref.read(appStateProvider).channels) c.key,
     };
@@ -1236,6 +1242,13 @@ class NostrController {
       secure: SecureStore(),
       secretWrite: _ref.read(identityVaultProvider).secretSet,
     );
+    final candidate = normalizePrivkeyInput(nsec);
+    if (candidate != null && candidate.length == 32) {
+      final saved = _ref
+          .read(accountsProvider)
+          ?.savedElsewhere(keys.getPublicKeyHex(candidate));
+      if (saved != null) throw AccountAlreadySaved(saved);
+    }
     // Throws on an invalid key so the modal shows its error.
     final loggedIn = await identityService.loginWithNsec(nsec);
 
@@ -1303,6 +1316,77 @@ class NostrController {
     PanicWipe.inProgress = false;
 
     _ref.read(bootEpochProvider.notifier).state++;
+  }
+
+  @visibleForTesting
+  static PoolTransport Function()? debugPoolFactory;
+
+  bool _suspended = false;
+  bool _retired = false;
+
+  bool get suspended => _suspended;
+
+  int unreadTotal() {
+    try {
+      final st = _ref.read(appStateProvider);
+      final keys = <String>{
+        for (final c in st.pmConversations) c.pubkey,
+        for (final g in st.groups) GroupLogic.groupStorageKey(g.id),
+      };
+      var total = 0;
+      for (final k in keys) {
+        total += st.unreadCounts[k] ?? 0;
+      }
+      return total;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  Future<void> suspendForAccountSwitch({
+    bool persist = true,
+    Duration drainBudget = const Duration(seconds: 3),
+  }) async {
+    if (_suspended) return;
+    _suspended = true;
+    if (persist) {
+      try {
+        flushPendingGroupReactions();
+      } catch (_) {}
+      try {
+        _persistMeshOutbox();
+      } catch (_) {}
+      final sync = _storageSync;
+      if (sync != null && sync.durableIdentity) {
+        try {
+          await sync.flushDeposits().timeout(drainBudget);
+        } catch (_) {}
+      }
+      final mode = _ref.read(settingsProvider.notifier).keypairMode;
+      final throwaway = _identity?.loginMethod == null &&
+          (mode == 'random' || mode == 'hardcore');
+      if (_settingsSyncTimer != null &&
+          sync != null &&
+          _settingsHydrated &&
+          !throwaway) {
+        _settingsSyncTimer?.cancel();
+        _settingsSyncTimer = null;
+        try {
+          await _flushSettingsSync(sync).timeout(drainBudget);
+        } catch (_) {}
+      }
+      final deadline = DateTime.now().add(drainBudget);
+      while ((_service?.pendingDmCount ?? 0) > 0 &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      try {
+        await sync?.persistDepositsNow();
+      } catch (_) {}
+    }
+    await _teardownLiveSession(flush: persist);
+    _started = false;
+    _retired = true;
   }
 
   Future<void> signOut() async {
@@ -3866,11 +3950,62 @@ class NostrController {
     }
     final view = _ref.read(appStateProvider).view;
     if (view.kind != ViewKind.channel) return false;
-    return _sendChannelPseudonymous(trimmed);
+    final threadTarget = _threadBotTarget();
+    final ask = anonNymbotTriggers(
+      body: _quoteBody(trimmed),
+      quoteAuthor: _quotedAuthor(trimmed) ?? '',
+      threadBot: threadTarget != null,
+    );
+    if (!ask) return (await _sendChannelPseudonymous(trimmed)) != null;
+    final blocked = anonNymbotBlocker(
+      apiHost: true,
+      mesh: _ref
+              .read(meshControllerProvider.notifier)
+              .bridge
+              ?.shouldSendOverMesh(view) ??
+          false,
+    );
+    final request = blocked == null
+        ? await _botChannelRequest(trimmed, threadTarget, anon: true)
+        : null;
+    final sender = await _sendChannelPseudonymous(trimmed);
+    if (sender == null) return false;
+    if (blocked != null) {
+      unawaited(Future<void>(() => _anonBotNotice(blocked)));
+    } else if (request != null) {
+      unawaited(_askNymbotAnonymously(request, sender, view.storageKey));
+    }
+    return true;
+  }
+
+  Future<void> _askNymbotAnonymously(Map<String, dynamic> request,
+      ({String nym, String pubkey}) sender, String storageKey) async {
+    _setBotChannelThinking(storageKey, true);
+    String? reason;
+    var answered = false;
+    try {
+      answered = await _postBotChannelRequest({
+        ...request,
+        'senderNym': anonNymbotSenderNym(sender.nym, sender.pubkey),
+      }, storageKey);
+      if (!answered) reason = 'failed';
+    } on ApiException catch (e) {
+      reason = anonNymbotOutcome(e.statusCode, false);
+    } catch (_) {
+      reason = 'failed';
+    }
+    if (!answered) _setBotChannelThinking(storageKey, false);
+    _anonBotNotice(reason);
+  }
+
+  void _anonBotNotice(String? reason) {
+    final text = anonNymbotNotice(reason);
+    if (text.isNotEmpty) showToast(tr(text));
   }
 
   /// Publishes one pseudonymous channel message; never records presence, which would link it to the user.
-  Future<bool> _sendChannelPseudonymous(String content) async {
+  Future<({String nym, String pubkey})?> _sendChannelPseudonymous(
+      String content) async {
     final appState = _ref.read(appStateProvider.notifier);
     final state = _ref.read(appStateProvider);
     final service = _service;
@@ -3892,21 +4027,23 @@ class NostrController {
       authorOverride: anonNym,
       threadRoot: threadRoot,
     );
-    if (service == null) return false;
+    final publishHook = pseudonymousPublishForTest;
+    if (service == null && publishHook == null) return null;
     final isGeo = state.channels
         .any((c) => c.key == view.id.toLowerCase() && c.isGeohash);
     try {
-      final signed = await service.publishChannelMessage(
-        channelKey: view.id,
-        content: content,
-        nym: anonNym,
-        geohash: isGeo ? view.id : null,
-        emojiTags: _contentTags(content),
-        // The service clamps this up to the Nymchat floor.
-        powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
-        signerOverride: ephemeralSigner,
-        threadRoot: threadRoot,
-      );
+      final signed = publishHook != null
+          ? await publishHook(content, ephemeralSigner, anonNym, threadRoot)
+          : await service!.publishChannelMessage(
+              channelKey: view.id,
+              content: content,
+              nym: anonNym,
+              geohash: isGeo ? view.id : null,
+              emojiTags: _contentTags(content),
+              powDifficulty: _ref.read(settingsProvider.notifier).powDifficulty,
+              signerOverride: ephemeralSigner,
+              threadRoot: threadRoot,
+            );
       if (signed != null && echo != null) {
         appState.replaceOptimistic(
           echo.id,
@@ -3916,10 +4053,12 @@ class NostrController {
           powTarget: EventMapper.powTargetOf(signed),
         );
       }
-      return signed != null;
+      return signed != null
+          ? (nym: anonNym, pubkey: ephemeralSigner.pubkey)
+          : null;
     } catch (_) {
       if (echo != null) appState.markOptimisticFailed(echo.id);
-      return false;
+      return null;
     }
   }
 
@@ -4894,6 +5033,7 @@ class NostrController {
   }
 
   Future<bool> _writePqRootStore(PqRootStore store) async {
+    if (_retired) return false;
     try {
       final vault = _ref.read(identityVaultProvider);
       final encoded = store.encode();
@@ -8522,7 +8662,7 @@ class NostrController {
   /// Persists the group store (with device-local extras) and ephemeral keys so an offline launch still works.
   void _persistGroupStore() {
     final identity = _identity;
-    if (identity == null) return;
+    if (identity == null || _retired) return;
     final kv = _ref.read(keyValueStoreProvider);
     try {
       final st = _ref.read(appStateProvider);
@@ -10332,6 +10472,17 @@ class NostrController {
       addMembersSenderForTest;
 
   @visibleForTesting
+  Future<NostrEvent?> Function(
+          String content, LocalSigner signer, String nym, String? threadRoot)?
+      pseudonymousPublishForTest;
+
+  @visibleForTesting
+  Future<void> Function(NostrEvent event)? botReplyPublishForTest;
+
+  @visibleForTesting
+  set apiForTest(ApiClient api) => _api = api;
+
+  @visibleForTesting
   Future<bool> Function(String to, List<List<String>> tags, String content)?
       sendDirectForTest;
 
@@ -11879,7 +12030,7 @@ class NostrController {
             await api.uploadBlob(bytes, server, authHeader, contentType: type);
         final url = data['url'];
         return url is String ? url : null;
-      });
+      }, size: bytes.length);
       if (done == null) {
         lastUploadFailure = _blossomUploader.lastFailure;
         return null;
@@ -12259,14 +12410,39 @@ class NostrController {
       await _sendMessageContent(rawText);
       return;
     }
+    final request = await _botChannelRequest(rawText, _threadBotTarget());
+    await _sendMessageContent(rawText);
+    if (request == null) return;
 
-    // Detect commands on the non-quoted body; a quote prepend would hide the `?` prefix.
+    final identity = _identity;
+    final senderNym = identity != null
+        ? '${stripPubkeySuffix(identity.nym)}#${getPubkeySuffix(identity.pubkey)}'
+        : null;
+    final storageKey = view.storageKey;
+    _setBotChannelThinking(storageKey, true);
+    try {
+      await _postBotChannelRequest(
+          {...request, 'senderNym': ?senderNym}, storageKey);
+    } catch (e) {
+      _setBotChannelThinking(storageKey, false);
+      debugPrint('Nymbot command failed: $e');
+      _emitSystemMessage(tr('Nymbot is unavailable right now.'));
+    }
+  }
+
+  static String? _quotedAuthor(String text) {
+    final m = RegExp(r'^>\s*@([^:]+):').firstMatch(text);
+    return m?.group(1)?.trim();
+  }
+
+  Future<Map<String, dynamic>?> _botChannelRequest(
+      String rawText, Message? threadTarget,
+      {bool anon = false}) async {
+    final view = _ref.read(appStateProvider).view;
     final body = _quoteBody(rawText);
-    // Fold a localized `?` command back to its English token; the published message keeps the user's words.
     var content =
         canonicalizeCommandInput(body.isNotEmpty ? body : rawText.trim());
 
-    // @Nymbot mention → `?ask`; a bare mention with a quote asks the quoted text.
     if (!isBotCommand(content) && isNymbotMention(content)) {
       final question = stripNymbotMention(content);
       if (question.isNotEmpty) {
@@ -12278,12 +12454,7 @@ class NostrController {
       }
     }
 
-    // The thread to answer in, for any thread; [threadTarget] gates implicit routing.
     final threadRoot = _composerThreadRoot();
-    // Resolved before publishing so the bot is still the thread's last speaker.
-    final threadTarget = _threadBotTarget();
-
-    // A reply to Nymbot (or in its thread) without a command → `?ask`, or `?guess` when a game token is present.
     final gameTokenRe = RegExp(r'\[gc:[A-Za-z0-9+/=]+\]');
     if (_quotedNymbotAuthor(rawText) != null && !content.startsWith('?')) {
       content = (gameTokenRe.hasMatch(rawText) ? '?guess ' : '?ask ') + content;
@@ -12294,17 +12465,12 @@ class NostrController {
     }
 
     final parsed = parseBotCommand(content);
-    if (parsed == null) {
-      await _sendMessageContent(rawText);
-      return;
-    }
+    if (parsed == null) return null;
 
-    // The raw channel key for both geohash and named channels; the worker picks the reply kind.
     final channelKey = view.id.startsWith('#') ? view.id.substring(1) : view.id;
     final storageKey = view.storageKey;
     final cmd = parsed.name;
 
-    // Conversation context: the whole thread when in one, otherwise the reply chain.
     var conversation = const <Map<String, String>>[];
     if (cmd == 'ask' || cmd == 'guess') {
       if (threadRoot != null) {
@@ -12315,7 +12481,6 @@ class NostrController {
       if (conversation.isEmpty) conversation = _extractQuoteChain(rawText);
     }
 
-    // `?ask` may reference other #channels; context then comes from those, fetching unloaded ones.
     var channelMessages = const <Map<String, dynamic>>[];
     var activeUsers = const <Map<String, dynamic>>[];
     const aiCommands = {'ask', 'summarize'};
@@ -12326,55 +12491,53 @@ class NostrController {
         final referenced = await _resolveReferencedChannels(parsed.args);
         if (referenced.isNotEmpty) contextKeys = referenced;
       }
-      // Re-read: the referenced-channel fetch may have ingested history.
       final ctxState = _ref.read(appStateProvider);
       channelMessages = _botChannelMessages(ctxState, contextKeys,
-          allChannels: memoryCommands.contains(cmd));
+          allChannels: memoryCommands.contains(cmd), markPending: anon);
       activeUsers = _botActiveUsers(ctxState, contextKeys,
           allUsers: memoryCommands.contains(cmd));
-    }
-
-    // The published user message (what the bot replies to).
-    await _sendMessageContent(rawText);
-
-    final identity = _identity;
-    final senderNym = identity != null
-        ? '${stripPubkeySuffix(identity.nym)}#${getPubkeySuffix(identity.pubkey)}'
-        : null;
-
-    // Show "Nymbot is thinking" for the round-trip (45s auto-expiry; cleared early on errors).
-    _setBotChannelThinking(storageKey, true);
-    try {
-      // Public request; the worker returns a signed channel event from the verified bot key.
-      final api = _api ??= ApiClient();
-      final data = await api.botAction({
-        'command': cmd,
-        'args': parsed.args,
-        'geohash': channelKey,
-        'conversation': conversation,
-        'senderNym': ?senderNym,
-        'publishedContent': rawText,
-        'channelMessages': channelMessages,
-        'activeUsers': activeUsers,
-        // The worker marks the reply with this NIP-10 root so it lands in the thread.
-        'threadRoot': ?threadRoot,
-        'lang': LocalizationService.instance.language,
-      });
-      final event = data['event'];
-      if (event is Map) {
-        // Publish the worker-signed event verbatim; it arrives back via the channel subscription.
-        final botEvent = NostrEvent.fromJson(Map<String, dynamic>.from(event));
-        if (EventMapper.channelKeyOf(botEvent) == null) {
-          _setBotChannelThinking(storageKey, false);
-          return;
-        }
-        await _service?.pool.publish(botEvent);
+      if (anon) {
+        final scrubbed = anonNymbotScrubContext(
+          messages: channelMessages,
+          users: activeUsers,
+          self: [?_identity?.pubkey, ctxState.selfPubkey],
+        );
+        channelMessages = scrubbed.messages;
+        activeUsers = scrubbed.users;
       }
-    } catch (e) {
-      _setBotChannelThinking(storageKey, false);
-      debugPrint('Nymbot command failed: $e');
-      _emitSystemMessage(tr('Nymbot is unavailable right now.'));
     }
+
+    return {
+      'command': cmd,
+      'args': parsed.args,
+      'geohash': channelKey,
+      'conversation': conversation,
+      'publishedContent': rawText,
+      'channelMessages': channelMessages,
+      'activeUsers': activeUsers,
+      'threadRoot': ?threadRoot,
+      'lang': LocalizationService.instance.language,
+    };
+  }
+
+  Future<bool> _postBotChannelRequest(
+      Map<String, dynamic> body, String storageKey) async {
+    final api = _api ??= ApiClient();
+    final data = await api.botAction(body);
+    final event = data['event'];
+    if (event is! Map) return false;
+    final botEvent = NostrEvent.fromJson(Map<String, dynamic>.from(event));
+    if (EventMapper.channelKeyOf(botEvent) == null) {
+      _setBotChannelThinking(storageKey, false);
+      return false;
+    }
+    final hook = botReplyPublishForTest;
+    if (hook != null) {
+      await hook(botEvent);
+    } else {
+      await _service?.pool.publish(botEvent);
+    }
+    return true;
   }
 
   /// Shows or clears the bot in a channel's typing strip (45s auto-expiry).
@@ -12458,7 +12621,7 @@ class NostrController {
 
   List<Map<String, dynamic>> _botChannelMessages(
       AppState state, Set<String> keys,
-      {required bool allChannels}) {
+      {required bool allChannels, bool markPending = false}) {
     final out = <Map<String, dynamic>>[];
     void mapList(String key, List<Message> msgs, {int? limit}) {
       final kept = msgs.where((m) => !m.spamGated).toList();
@@ -12473,6 +12636,9 @@ class NostrController {
           'timestamp': m.createdAt,
           'isBot': m.isBot,
           'channel': key,
+          if (markPending &&
+              (m.optimistic || m.deliveryStatus == DeliveryStatus.failed))
+            'pending': true,
         });
       }
     }

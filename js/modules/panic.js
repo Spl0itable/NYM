@@ -74,6 +74,12 @@ Object.assign(NYM.prototype, {
     if (this._panicking) return;
     this._panicking = true;
     const startedAt = Date.now();
+    const accountDbs = [];
+    try {
+      const A = window.NymAccounts;
+      if (A && typeof A.read === 'function') A.read().accounts.forEach((a) => accountDbs.push(A.dbName('nym-cache', a)));
+      if (A && typeof A.pageDb === 'function') accountDbs.push(A.pageDb('nym-cache'));
+    } catch (e) {}
 
     const ui = this._panicShowOverlay();
 
@@ -116,7 +122,7 @@ Object.assign(NYM.prototype, {
 
     try { ui.setStatus('Shredding local databases…'); } catch (e) {}
     try {
-      const names = new Set(['nym-cache']);
+      const names = new Set(['nym-cache'].concat(accountDbs));
       try {
         if (indexedDB.databases) {
           const dbs = (await indexedDB.databases()) || [];

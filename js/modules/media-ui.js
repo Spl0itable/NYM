@@ -55,10 +55,13 @@
 
         async _sendMediaNoteContent(content, target) {
             const t = target || this._mediaTarget();
-            if (t.group) return this.sendGroupMessage(content, t.group, { threadRoot: t.threadRoot });
-            if (t.pm) return this.sendPM(content, t.pm, { threadRoot: t.threadRoot });
-            if (t.geohash) return this.publishMessage(content, t.geohash, t.geohash, null, t.threadRoot);
-            return false;
+            let sent;
+            if (t.group) sent = await this.sendGroupMessage(content, t.group, { threadRoot: t.threadRoot });
+            else if (t.pm) sent = await this.sendPM(content, t.pm, { threadRoot: t.threadRoot });
+            else if (t.geohash) sent = await this.publishMessage(content, t.geohash, t.geohash, null, t.threadRoot);
+            else throw new Error(this._mt("There's no open chat to send this to."));
+            if (sent === false) throw new Error(this._mt("The message couldn't be published."));
+            return true;
         },
 
         _mediaNotice(text) {
@@ -144,13 +147,13 @@
                 nymOnceClose(e) { e.stopPropagation(); self._closeOnceViewer(); },
                 nymMediaHd(e) { e.stopPropagation(); self._toggleComposerHd(); },
                 nymMediaOnce(e) { e.stopPropagation(); self._toggleComposerOnce(); },
-                nymRetryNote(e) { e.stopPropagation(); self._retryFailedNote(); },
+                nymRetryNote(e) { e.stopPropagation(); self._voiceGuard(self._retryFailedNote(), true); },
                 nymVideoNoteRecord(e) { e.stopPropagation(); self._videoNoteRecordToggle(); },
-                nymVideoNoteSend(e) { e.stopPropagation(); self._videoNoteSend(); },
+                nymVideoNoteSend(e) { e.stopPropagation(); self._voiceGuard(self._videoNoteSend(), true); },
                 nymVideoNoteCancel(e) { e.stopPropagation(); self.closeVideoNoteRecorder(); },
                 nymVideoNoteOnce(e) { e.stopPropagation(); self._videoNoteToggleOnce(); },
-                nymVoiceRecCancel(e) { e.stopPropagation(); self._stopVoiceRecording(false); },
-                nymVoiceRecSend(e) { e.stopPropagation(); self._stopVoiceRecording(true); },
+                nymVoiceRecCancel(e) { e.stopPropagation(); self._voiceGuard(self._stopVoiceRecording(false), true); },
+                nymVoiceRecSend(e) { e.stopPropagation(); self._voiceGuard(self._stopVoiceRecording(true), true); },
                 nymVoiceRecOnce(e) { e.stopPropagation(); self._voiceToggleOnce(); },
             });
         },
@@ -893,7 +896,7 @@
                 }
                 try { btn.setPointerCapture(e.pointerId); } catch (_) { }
                 this._voiceGesture = { x: e.clientX, y: e.clientY, at: Date.now(), id: e.pointerId };
-                this._startVoiceRecording(st);
+                this._voiceGuard(this._startVoiceRecording(st), false);
             });
             btn.addEventListener('pointermove', (e) => {
                 const g = this._voiceGesture;
@@ -904,7 +907,7 @@
                 rec.dragX = dx;
                 if (dx < -CANCEL_DX) {
                     this._voiceGesture = null;
-                    this._stopVoiceRecording(false);
+                    this._voiceGuard(this._stopVoiceRecording(false), false);
                     return;
                 }
                 if (dy < -LOCK_DY) {
@@ -923,8 +926,8 @@
                     this._lockVoiceRecording();
                     return;
                 }
-                if (e.type === 'pointercancel') { this._stopVoiceRecording(false); return; }
-                this._stopVoiceRecording(true);
+                if (e.type === 'pointercancel') { this._voiceGuard(this._stopVoiceRecording(false), false); return; }
+                this._voiceGuard(this._stopVoiceRecording(true), true);
             };
             btn.addEventListener('pointerup', release);
             btn.addEventListener('pointercancel', release);
@@ -934,7 +937,7 @@
                 if (this._voiceRec) return;
                 const st = this.mediaFeatureState('voice');
                 if (st.state === 'off') { this._mediaNotice(this._mt(st.reason)); return; }
-                this._startVoiceRecording(st).then(() => this._lockVoiceRecording());
+                this._voiceGuard(this._startVoiceRecording(st).then(() => this._lockVoiceRecording()), false);
             });
         },
 
@@ -943,7 +946,7 @@
             const route = this._mediaRoute();
             const rec = {
                 target, route, st, startedAt: Date.now(), locked: false, once: false,
-                chunks: [], samples: [], stream: null, recorder: null, mime: '', dragX: 0,
+                samples: [], stream: null, recorder: null, run: null, mime: '', dragX: 0,
                 maxSeconds: st.maxSeconds || NM().LIMITS.voiceMaxSeconds, stopped: false, limitHit: false,
             };
             this._voiceRec = rec;
@@ -959,16 +962,7 @@
             }
             if (this._voiceRec !== rec) { rec.stream.getTracks().forEach((t) => t.stop()); return; }
             try {
-                rec.mime = NM().preferredMime('voice', (m) => window.MediaRecorder.isTypeSupported(m));
-                try {
-                    rec.recorder = new MediaRecorder(rec.stream, Object.assign({ audioBitsPerSecond: NM().LIMITS.voiceBitrate }, rec.mime ? { mimeType: rec.mime } : {}));
-                } catch (_) {
-                    rec.mime = '';
-                    rec.recorder = new MediaRecorder(rec.stream);
-                }
-                rec.recorder.ondataavailable = (e) => { if (e.data && e.data.size) rec.chunks.push(e.data); };
-                rec.stopPromise = new Promise((r) => { rec.recorder.onstop = r; });
-                rec.recorder.start(250);
+                this._voiceOpenRecorder(rec);
             } catch (err) {
                 rec.stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) { } });
                 this._voiceRec = null;
@@ -1004,6 +998,36 @@
             this._renderVoiceBar();
         },
 
+        _voiceOpenRecorder(rec) {
+            const bad = this._voiceBadMimes || (this._voiceBadMimes = new Set());
+            rec.mime = NM().preferredMime('voice', (m) => !bad.has(m) && window.MediaRecorder.isTypeSupported(m));
+            let recorder;
+            try {
+                recorder = new MediaRecorder(rec.stream, Object.assign({ audioBitsPerSecond: NM().LIMITS.voiceBitrate }, rec.mime ? { mimeType: rec.mime } : {}));
+            } catch (_) {
+                rec.mime = '';
+                recorder = new MediaRecorder(rec.stream);
+            }
+            const run = { recorder, mime: rec.mime, chunks: [], error: null, onData: null };
+            run.stopped = new Promise((r) => recorder.addEventListener('stop', r));
+            recorder.ondataavailable = (e) => {
+                if (!e.data || !e.data.size) return;
+                run.chunks.push(e.data);
+                if (run.onData) run.onData();
+            };
+            recorder.onerror = (e) => {
+                const err = (e && e.error) || new Error(this._mt('the recorder stopped with an error'));
+                run.error = err;
+                console.warn('[voice] recorder error:', run.mime || 'default type', (err && err.message) || err);
+                if (rec.run !== run || rec.stopped || run.chunks.length || !run.mime) return;
+                bad.add(run.mime);
+                try { this._voiceOpenRecorder(rec); } catch (err2) { console.warn('[voice] recorder restart failed:', (err2 && err2.message) || err2); }
+            };
+            rec.run = run;
+            rec.recorder = recorder;
+            recorder.start(250);
+        },
+
         _lockVoiceRecording() {
             const rec = this._voiceRec;
             if (!rec) return;
@@ -1026,20 +1050,28 @@
             rec.stopped = true;
             rec.duration = Math.min(rec.maxSeconds, (Date.now() - rec.startedAt) / 1000);
             clearInterval(rec.sampleTimer);
-            if (rec.recorder && rec.recorder.state !== 'inactive') {
-                try { rec.recorder.stop(); } catch (_) { }
-                await this._voiceWithin(rec.stopPromise, this._voiceStopTimeoutMs || 3000).catch(() => { });
+            const run = rec.run;
+            if (run && run.recorder.state !== 'inactive') {
+                try { run.recorder.stop(); } catch (_) { }
+                await this._voiceWithin(run.stopped, this._voiceStopTimeoutMs || 3000).catch(() => { });
+                if (!run.chunks.length && !run.error) {
+                    const late = new Promise((r) => { run.onData = r; run.stopped.then(r); });
+                    await this._voiceWithin(late, this._voiceLateDataMs || 12000).catch(() => { });
+                }
             }
             if (rec.stream) rec.stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) { } });
             if (rec.audioCtx) { try { Promise.resolve(rec.audioCtx.close()).catch(() => { }); } catch (_) { } }
             const type = NM().baseMime((rec.recorder && rec.recorder.mimeType) || rec.mime) || 'audio/webm';
-            rec.blob = new Blob(rec.chunks, { type });
+            rec.blob = new Blob(run ? run.chunks : [], { type });
             return rec.blob;
         },
 
         async _stopVoiceRecording(send) {
             const rec = this._voiceRec;
-            if (!rec) return;
+            if (!rec) {
+                if (send) this._voiceSendFailed(new Error(this._mt("There's no recording to send.")));
+                return;
+            }
             clearInterval(rec.tick);
             let blob = null;
             try {
@@ -1052,8 +1084,12 @@
                 this._renderVoiceBar();
             }
             if (!send) return;
-            if (!blob || rec.duration < NM().LIMITS.minVoiceSeconds) {
-                this._mediaNotice(this._mt('Hold to record, release to send. Tap to record hands-free.'));
+            if (!blob || !blob.size) {
+                const run = rec.run;
+                const why = !run ? this._mt("the microphone hadn't started yet")
+                    : (run.error && run.error.message) || this._mt('no audio data came from the microphone');
+                console.warn('[voice] recording failed:', why, { mime: run ? run.mime : '', chunks: run ? run.chunks.length : 0 });
+                this._voiceErrorToast(this._mt('The recording failed: {error}', { error: why }));
                 return;
             }
             await this._sendVoiceNote({
@@ -1194,7 +1230,23 @@
             else this._mediaNotice(text);
         },
 
+        _userCancelled(err) {
+            return !!(err && err.name === 'AbortError' && err.userCancelled);
+        },
+
+        _voiceGuard(promise, sending) {
+            Promise.resolve(promise).catch((err) => {
+                if (this._userCancelled(err)) return;
+                if (sending) this._voiceSendFailed(err);
+                else {
+                    console.warn('[voice] recording failed:', (err && err.message) || err);
+                    this._voiceErrorToast(this._mt("Voice messages can't be recorded in this browser: {error}", { error: (err && err.message) || this._mt('unknown error') }));
+                }
+            });
+        },
+
         _voiceSendFailed(err) {
+            console.warn('[voice] send failed:', (err && err.message) || err);
             this._voiceErrorToast(this._mt("Couldn't send the voice message: {error}", { error: (err && err.message) || this._mt('unknown error') }));
         },
 
@@ -1202,10 +1254,10 @@
             const M = NM();
             try {
                 let blob = n.blob;
-                if (!blob || !blob.size) throw new Error(this._mt('the recording is empty'));
+                if (!blob || !blob.size) throw new Error(this._mt('no audio data came from the microphone'));
                 const inVideo = M.noteUploadTypes('voice', blob.type).length > 1;
                 if (n.route !== 'mesh' && !inVideo && !M.isPortableVoiceMime(n.recordedMime || blob.type, n.requestedMime)) {
-                    try { blob = (await this._portableVoiceBlob(blob, n.duration)) || blob; } catch (_) { }
+                    try { blob = (await this._portableVoiceBlob(blob, n.duration)) || blob; } catch (err) { console.warn('[voice] conversion skipped:', (err && err.message) || err); }
                 }
                 const mime = M.voiceDescriptorMime(blob.type) || 'audio/webm';
                 const waveform = this._voiceWaveform(n.samples);
@@ -1217,7 +1269,7 @@
                 }
                 await this._uploadAndSendNote(desc, bytes, n.target, !!n.once, this._mt('Sending voice message…'));
             } catch (err) {
-                if (err && err.name === 'AbortError') return;
+                if (this._userCancelled(err)) return;
                 this._voiceSendFailed(err);
             }
         },
@@ -1240,7 +1292,7 @@
                         url = (await this._uploadNoteBlob(new Blob([body], { type }), label)).url;
                         break;
                     } catch (e) {
-                        if (e && e.name === 'AbortError') throw e;
+                        if (this._userCancelled(e)) throw e;
                         errs.push((e && e.message) || 'upload failed');
                     }
                 }
@@ -1250,7 +1302,8 @@
                 const content = once ? M.onceContent(desc.kind, full) : full;
                 await this._sendMediaNoteContent(content, target);
             } catch (err) {
-                if (err && err.name === 'AbortError') return;
+                if (this._userCancelled(err)) return;
+                console.warn('[media-note] send failed:', (err && err.message) || err);
                 this._lastFailedNote = { desc, bytes, target, once, label };
                 const msg = this.escapeHtml(this._mt("Couldn't send: {error}", { error: (err && err.message) || 'upload failed' }));
                 const html = msg + ' <button type="button" class="nym-retry-note" data-action="nymRetryNote">' + this.escapeHtml(this._mt('Retry')) + '</button>';

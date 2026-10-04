@@ -566,7 +566,7 @@ class ChatNavService {
   }
 
   Future<bool> syncPins() async {
-    if (!hooks.syncAllowed()) return false;
+    if (_disposed || !hooks.syncAllowed()) return false;
     if (!pinPending) return true;
     final publish = hooks.publishPinned;
     if (publish == null || !hooks.online() || !hooks.hydrated()) return false;
@@ -876,7 +876,10 @@ class ChatNavService {
     return t(map[id] ?? '{time}', {'time': time});
   }
 
+  bool _disposed = false;
+
   void dispose() {
+    _disposed = true;
     _refreshTimer?.cancel();
     _refreshTimer = null;
     if (_mentionTimer != null) flushMentions();

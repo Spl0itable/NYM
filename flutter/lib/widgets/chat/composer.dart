@@ -277,6 +277,7 @@ class _ComposerState extends ConsumerState<Composer> {
       _voiceRoute = _currentMediaRoute(view);
     });
     final r = await rec.start();
+    if (r == VoiceStartResult.cancelled) return false;
     if (r != VoiceStartResult.started) {
       if (mounted && _voice == rec) setState(() => _voice = null);
       rec.dispose();
@@ -292,7 +293,14 @@ class _ComposerState extends ConsumerState<Composer> {
 
   Future<void> _stopVoice(bool send) async {
     final rec = _voice;
-    if (rec == null) return;
+    if (rec == null) {
+      if (send) {
+        debugPrint('[voice] send pressed with no active recording');
+        showToast(voiceStopFailureText(noRecording: true),
+            kind: ToastKind.error);
+      }
+      return;
+    }
     final target = _voiceTarget ?? ref.read(appStateProvider).view;
     final route = _voiceRoute;
     RecordedVoice? recorded;
@@ -305,14 +313,9 @@ class _ComposerState extends ConsumerState<Composer> {
     if (mounted && _voice == rec) setState(() => _voice = null);
     rec.dispose();
     if (!send) return;
-    if (stopError != null) {
-      showToast(tr(kVoiceSendFailed, {'error': '$stopError'}),
-          kind: ToastKind.error);
-      return;
-    }
-    if (recorded == null) {
-      _onSystemMessage(
-          tr('Hold to record, release to send. Tap to record hands-free.'));
+    if (stopError != null || recorded == null) {
+      debugPrint('[voice] recording failed: $stopError');
+      showToast(voiceStopFailureText(error: stopError), kind: ToastKind.error);
       return;
     }
     await ref.read(mediaNoteSenderProvider).sendRecording(
@@ -1816,7 +1819,7 @@ class _ComposerState extends ConsumerState<Composer> {
     final panelsH = _boxHeight(_panelsKey);
     if (!_pillWanted) return overhang + panelsH + (chipH > 0 ? chipH + 8 : 0);
     final layers = (panelsH > 0 ? _panelLayers : 0) + (chipH > 0 ? 1 : 0);
-    return overhang + panelsH + chipH - layers - 9;
+    return overhang + panelsH + chipH - layers - 8;
   }
 
 
@@ -1843,7 +1846,8 @@ class _ComposerState extends ConsumerState<Composer> {
   @visibleForTesting
   bool get pillOn => _pillOn;
 
-  double _stackShift(int layersBelow) => _pillWanted ? layersBelow.toDouble() : 0;
+  double _stackShift(int layersBelow) =>
+      _pillWanted ? math.max(0, layersBelow - 1).toDouble() : 0;
 
   Widget _shifted(int layersBelow, Widget child) {
     final dy = _stackShift(layersBelow);
@@ -1854,29 +1858,20 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget _pillShell(BuildContext context, double topRadius, Widget field) {
     final c = context.nym;
     final t = _pillT;
-    final focused = _focus.hasFocus;
     final radius = BorderRadius.vertical(
       top: Radius.circular(topRadius),
       bottom: const Radius.circular(NymRadius.md),
     );
     final flatFill = c.isLight
-        ? Colors.black.withValues(alpha: focused ? 0.02 : 0.04)
-        : Colors.white.withValues(alpha: focused ? 0.07 : 0.05);
+        ? Colors.black.withValues(alpha: 0.04)
+        : Colors.white.withValues(alpha: 0.05);
     final fill = _popout ? c.bgTertiary : flatFill;
-    final side = (_popout || focused) ? c.primaryA(0.30) : c.glassBorder;
+    final side = c.glassBorder;
     final box = Container(
       key: const ValueKey('composerPill'),
       decoration: BoxDecoration(
         color: fill.withValues(alpha: fill.a * t),
         borderRadius: radius,
-        boxShadow: _popout
-            ? [
-                BoxShadow(
-                    color: const Color(0x80000000).withValues(alpha: 0.5 * t),
-                    blurRadius: 32,
-                    offset: const Offset(0, 8)),
-              ]
-            : null,
       ),
       foregroundDecoration: BoxDecoration(
         borderRadius: radius,
@@ -1894,7 +1889,7 @@ class _ComposerState extends ConsumerState<Composer> {
       ),
     );
     return CssFocusRing(
-      show: focused && !_popout && t >= 0.5,
+      show: false,
       color: c.primaryA(0.06),
       radius: radius,
       child: box,
@@ -1981,12 +1976,14 @@ class _ComposerState extends ConsumerState<Composer> {
             rows: _paletteRows,
             selectedIndex: _selectedIndex,
             onSelect: _completeCommand,
+            docked: true,
           )
         : _botPaletteActive
             ? BotCommandPalette(
                 rows: _botRows,
                 selectedIndex: _selectedIndex,
                 onSelect: _completeBotCommand,
+                docked: true,
               )
             : AutocompleteDropdown(
                 view: _acView!,
@@ -1999,6 +1996,7 @@ class _ComposerState extends ConsumerState<Composer> {
                 onSelectEmoji: _onEmojiAutocompletePicked,
                 onSelectKaomoji: (k) =>
                     _replaceTriggerToken(kaomojiInsertText(k)),
+                docked: true,
               );
     // Lift the dropdown by the popout overhang and chip height, or it paints under the field or over the chip.
     final acOffset = _acOffsetNow();
@@ -2081,7 +2079,6 @@ class _ComposerState extends ConsumerState<Composer> {
   Widget _textField(
       BuildContext context, bool inputEnabled, double topRadius) {
     final c = context.nym;
-    final focused = _focus.hasFocus;
     // Watch so a text-size change re-renders the field live.
     ref.watch(settingsProvider.select((s) => s.textSize));
     final fontSize = _inputFontSize();
@@ -2105,8 +2102,8 @@ class _ComposerState extends ConsumerState<Composer> {
       ((popoutMaxHeight - 20) / popoutLineHeight).floor(),
     );
     final flatFill = c.isLight
-        ? Colors.black.withValues(alpha: focused ? 0.02 : 0.04)
-        : Colors.white.withValues(alpha: focused ? 0.07 : 0.05);
+        ? Colors.black.withValues(alpha: 0.04)
+        : Colors.white.withValues(alpha: 0.05);
     final keep = _pillOn ? 1 - _pillT : 1.0;
     Color fade(Color x) => x.withValues(alpha: x.a * keep);
     final fill = fade(_popout ? c.bgTertiary : flatFill);
@@ -2117,7 +2114,7 @@ class _ComposerState extends ConsumerState<Composer> {
     final border = _FieldBorder(
       borderRadius: radius,
       borderSide:
-          BorderSide(color: fade(_popout ? c.primaryA(0.30) : c.glassBorder)),
+          BorderSide(color: fade(c.glassBorder)),
     );
     // Custom emoji render inline via single PUA sentinel chars painted as images; see [EmojiSentinelController].
     final incog = ref.watch(incognitoFieldFlagsProvider);
@@ -2178,13 +2175,11 @@ class _ComposerState extends ConsumerState<Composer> {
             fontSize: fontSize),
         filled: true,
         fillColor: fill,
-        contentPadding: EdgeInsets.fromLTRB(16, 10, _pillWanted ? 16 : 38, 10),
+        contentPadding:
+            EdgeInsets.fromLTRB(16 * keep, 10, _pillWanted ? 16 : 38, 10),
         border: border,
         enabledBorder: border,
-        focusedBorder: _FieldBorder(
-          borderRadius: radius,
-          borderSide: BorderSide(color: fade(c.primaryA(0.30))),
-        ),
+        focusedBorder: border,
       ),
     );
 
@@ -2217,7 +2212,7 @@ class _ComposerState extends ConsumerState<Composer> {
     if (!_popout) {
       // Always rendered, toggling only `show`, so focusing never re-parents the TextField and drops the keyboard.
       return CssFocusRing(
-        show: focused && keep > 0.5,
+        show: false,
         color: c.primaryA(0.06),
         radius: radius,
         child: stack,

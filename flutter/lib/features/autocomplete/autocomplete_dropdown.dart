@@ -80,9 +80,11 @@ class AutocompleteDropdown extends StatefulWidget {
     this.custom = CustomEmojiState.empty,
     this.badgesFor,
     this.cosmeticsFor,
+    this.docked = false,
   });
 
   final AutocompleteView view;
+  final bool docked;
   final int selectedIndex;
   final void Function(MentionResult) onSelectMention;
   final void Function(ChannelResult) onSelectChannel;
@@ -154,14 +156,17 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
                 : c.bgTertiary,
         border: Border.all(color: c.glassBorder),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-        boxShadow: [
-          BoxShadow(
-            color:
-                c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
-            blurRadius: 32,
-            offset: const Offset(0, 8),
-          ),
-        ],
+        boxShadow: widget.docked
+            ? null
+            : [
+                BoxShadow(
+                  color: c.isLight
+                      ? const Color(0x1F000000)
+                      : const Color(0x80000000),
+                  blurRadius: 32,
+                  offset: const Offset(0, 8),
+                ),
+              ],
       ),
       // Clip rows to the rounded top so the selected highlight can't poke past the corner.
       child: ClipRRect(

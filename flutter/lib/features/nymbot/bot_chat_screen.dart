@@ -52,6 +52,7 @@ import 'bot_runs_view.dart';
 import 'nymbot_models.dart';
 import 'brand_tile.dart';
 import 'nymbot_providers.dart';
+import '../../services/storage/revocable_prefs.dart';
 import '../chat_lock/chat_lock_providers.dart';
 
 /// Private Nymbot chat over the canonical bot PM thread, with tier/model switching and credit buying.
@@ -992,8 +993,13 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
     super.dispose();
   }
 
-  Future<SharedPreferences> _ensurePrefs() async =>
-      _prefs ??= await SharedPreferences.getInstance();
+  Future<SharedPreferences> _ensurePrefs() async {
+    final cached = _prefs;
+    if (cached != null) return cached;
+    final SharedPreferences fresh = await ref.read(sharedPrefsProvider.future);
+    _prefs = fresh;
+    return fresh;
+  }
 
   void _onTextChanged() {
     // Collapse a just-completed `:code:` into its inline sentinel; the re-notify is a no-op.

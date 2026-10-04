@@ -95,6 +95,28 @@
             const r = Math.round(Math.max(0, Math.max(w.right, ...edges.map((e) => e.right)) - w.right)) + 'px';
             if (wrap.style.getPropertyValue('--pill-l') !== l) wrap.style.setProperty('--pill-l', l);
             if (wrap.style.getPropertyValue('--pill-r') !== r) wrap.style.setProperty('--pill-r', r);
+            this._syncComposerTextStart(box, input);
+        },
+
+        _syncComposerTextStart(box, input) {
+            const btn = box.classList.contains('composer-pill') ? document.getElementById('translateInputBtn') : null;
+            const glyph = btn && btn.offsetWidth > 0 ? (btn.querySelector('svg') || btn) : null;
+            if (!glyph) {
+                if (input.style.paddingLeft) input.style.paddingLeft = '';
+                if (input.style.marginLeft) input.style.marginLeft = '';
+                return;
+            }
+            const bar = btn.closest('.format-toolbar');
+            const g = glyph.getBoundingClientRect();
+            const i = input.getBoundingClientRect();
+            const cs = getComputedStyle(input);
+            const border = parseFloat(cs.borderLeftWidth) || 0;
+            const base = i.left - (parseFloat(cs.marginLeft) || 0);
+            const need = Math.round(g.left + (bar ? bar.scrollLeft : 0) - base - border);
+            const pad = Math.max(4, need) + 'px';
+            const shift = Math.min(0, need - 4) + 'px';
+            if (input.style.paddingLeft !== pad) input.style.paddingLeft = pad;
+            if (input.style.marginLeft !== shift) input.style.marginLeft = shift === '0px' ? '' : shift;
         },
 
         _composerScheduleRefresh() {

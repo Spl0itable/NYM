@@ -482,17 +482,12 @@ class FormatToolbar extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
           decoration: BoxDecoration(
             color: c.glassBg.a == 1.0 ? c.glassBg : c.bgTertiary,
-            border: Border.all(color: c.glassBorder),
+            border: Border(
+              top: BorderSide(color: c.glassBorder),
+              left: BorderSide(color: c.glassBorder),
+              right: BorderSide(color: c.glassBorder),
+            ),
             borderRadius: radius,
-            boxShadow: [
-              BoxShadow(
-                color: c.isLight
-                    ? const Color(0x1F000000)
-                    : const Color(0x80000000),
-                blurRadius: 32,
-                offset: const Offset(0, 8),
-              ),
-            ],
           ),
           child: ClipRRect(
             borderRadius: radius,

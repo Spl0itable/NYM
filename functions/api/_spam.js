@@ -46,10 +46,21 @@ export const SPAM_DDL = [
   "DROP INDEX IF EXISTS spam_events_b3",
   "DROP INDEX IF EXISTS spam_events_nym",
   "DROP INDEX IF EXISTS spam_events_label",
-  "DROP INDEX IF EXISTS spam_pubkeys_score"
+  "DROP INDEX IF EXISTS spam_pubkeys_score",
+  "CREATE TABLE IF NOT EXISTS spam_texts (sim_key INTEGER PRIMARY KEY, size TEXT, script TEXT, messages INTEGER NOT NULL DEFAULT 0, senders INTEGER NOT NULL DEFAULT 0, " +
+  "model_ok REAL NOT NULL DEFAULT 0, model_spam REAL NOT NULL DEFAULT 0, strong_spam REAL NOT NULL DEFAULT 0, admin_ok INTEGER NOT NULL DEFAULT 0, " +
+  "admin_spam INTEGER NOT NULL DEFAULT 0, admin_last TEXT, admin_at INTEGER NOT NULL DEFAULT 0, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS spam_texts_last ON spam_texts (last_seen)",
+  "CREATE TABLE IF NOT EXISTS spam_nyms (nym TEXT PRIMARY KEY, pubkeys INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, " +
+  "model_ok REAL NOT NULL DEFAULT 0, model_spam REAL NOT NULL DEFAULT 0, strong_spam REAL NOT NULL DEFAULT 0, admin_ok INTEGER NOT NULL DEFAULT 0, " +
+  "admin_spam INTEGER NOT NULL DEFAULT 0, admin_last TEXT, admin_at INTEGER NOT NULL DEFAULT 0, first_seen INTEGER NOT NULL, last_seen INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS spam_nyms_last ON spam_nyms (last_seen)",
+  "ALTER TABLE spam_pubkeys ADD COLUMN admin_ok INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE spam_pubkeys ADD COLUMN admin_spam INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE spam_events ADD COLUMN event_json TEXT"
 ];
 
-export const SPAM_SCHEMA_VERSION = 2;
+export const SPAM_SCHEMA_VERSION = 3;
 export const SPAM_ENGINE_VERSION = 3;
 export const SPAM_STATUS_VERSION_PREFIX = "status:v";
 const SPAM_SCHEMA_KEY = "schema:worker";
@@ -471,7 +482,8 @@ const RHYTHM_MAX_GAP_MS = 3600000;
 const DOMAIN_WINDOW_MS = 7 * 86400000;
 const DOMAIN_MAX = 5;
 const EXAMPLES_TTL_MS = 5 * 60000;
-const EXAMPLES_CACHE_KEY = "examples-v2";
+const EXAMPLES_CACHE_KEY = "examples-v3";
+const EXAMPLES_POOL = 24;
 const EXAMPLES_CACHE_S = 300;
 const SETTINGS_CACHE_KEY = "settings";
 const SETTINGS_CACHE_S = 60;
@@ -511,6 +523,56 @@ export function isShortChatter(content) {
   const words = t.split(/\s+/).filter((w) => w[0] !== "@");
   if (words.length > CHATTER_MAX_TOKENS) return false;
   return /\p{L}|\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(t) || /^[?!.]+$/.test(t) === false;
+}
+
+const LOW_INFO_TOKENS = 3;
+const LOW_INFO_CHARS = 32;
+const COPY_BURST_MIN = 15;
+const COPY_BURST_MS = COPY_BURST_MIN * 60000;
+const HELD_CONFIDENCE = 0.6;
+const SENDER_FLOOD_N15 = 5;
+const FLOOD_CATEGORIES = new Set(["bot-flood", "repeat", "campaign"]);
+const KNOW_HALF_LIFE_MS = 7 * 86400000;
+const SCRIPT_RES = [["latin", /\p{Script=Latin}/u], ["arabic", /\p{Script=Arabic}/u], ["cyrillic", /\p{Script=Cyrillic}/u], ["han", /\p{Script=Han}/u], ["kana", /[\p{Script=Hiragana}\p{Script=Katakana}]/u], ["hangul", /\p{Script=Hangul}/u], ["devanagari", /\p{Script=Devanagari}/u], ["hebrew", /\p{Script=Hebrew}/u], ["greek", /\p{Script=Greek}/u], ["thai", /\p{Script=Thai}/u]];
+
+export function lowInformation(content) {
+  if (typeof content !== "string") return false;
+  const t = content.trim();
+  if (!t) return true;
+  if (LINKISH.test(t)) return false;
+  const toks = spamTokens(bodyText(t));
+  return toks.length <= LOW_INFO_TOKENS && toks.join("").length <= LOW_INFO_CHARS;
+}
+
+export function scriptOf(content) {
+  if (typeof content !== "string") return "none";
+  const counts = new Map();
+  for (const ch of content) {
+    if (!/\p{L}/u.test(ch)) continue;
+    const hit = SCRIPT_RES.find(([, re]) => re.test(ch));
+    const k = hit ? hit[0] : "other";
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  let best = "none", n = 0;
+  for (const [k, c] of counts) if (c > n) { best = k; n = c; }
+  return best;
+}
+
+export function sizeClass(tokens) {
+  const n = Number(tokens) || 0;
+  return n <= LOW_INFO_TOKENS ? "short" : n <= 12 ? "medium" : "long";
+}
+
+export function decayedCount(n, at, now) {
+  const v = Number(n) || 0;
+  const age = Math.max(0, (Number(now) || 0) - (Number(at) || 0));
+  return v * KNOW_HALF_LIFE_MS / (KNOW_HALF_LIFE_MS + age);
+}
+
+export function nymFamilyKey(key) {
+  if (!key) return "";
+  const stem = nymStem(key);
+  return stem ? "~" + stem : "=" + key;
 }
 
 export function innocuousKind(content) {
@@ -597,7 +659,8 @@ export function messageSignals(job, dossier) {
   const out = [];
   const d = dossier || {};
   if ((job.copies || 0) >= 2) out.push("near-copies seen by this proxy");
-  if ((d.copyPubkeys || 0) >= COPY_KEYS_MIN) out.push("the same text from " + d.copyPubkeys + " other keys");
+  const flood = floodCopies(job, d);
+  if (flood >= COPY_KEYS_MIN) out.push("the same text from " + flood + " other keys within " + COPY_BURST_MIN + " minutes");
   if ((job.nonces && job.nonces.length) || job.marker) out.push("a random-looking token");
   if ((job.obfuscations || 0) > 0) out.push("obfuscated words");
   if ((job.localScore || 0) >= 2) out.push("gibberish");
@@ -614,12 +677,71 @@ export function messageSignals(job, dossier) {
   return out;
 }
 
+function senderSettled(job, dossier) {
+  if (job.burst) return false;
+  const a = dossier && dossier.activity;
+  if (a && (a.ch15 >= FANOUT_CHANNELS || a.n15 > 2)) return false;
+  if (dossier && dossier.cleanHistory) return true;
+  const hours = job.settings && job.settings.establishedKeyHours ? job.settings.establishedKeyHours : 24;
+  return !!(a && a.firstSeen && (job.seenAt || Date.now()) - a.firstSeen >= hours * 3600000);
+}
+
+export function floodCopies(job, dossier) {
+  const n = (dossier && dossier.copyBurstPubkeys) || 0;
+  if (n < COPY_KEYS_MIN) return 0;
+  if (lowInformation(job.content)) return 0;
+  if (senderSettled(job, dossier)) return 0;
+  return n;
+}
+
+function ownSignals(job, dossier) {
+  const out = [];
+  if ((job.copies || 0) >= 2 && !lowInformation(job.content)) out.push("near-copies");
+  if ((job.nonces && job.nonces.length) || job.marker) out.push("a random-looking token");
+  if ((job.obfuscations || 0) > 0) out.push("obfuscated words");
+  if ((job.localScore || 0) >= 2) out.push("gibberish");
+  if (lexStrong(job)) out.push("a hard slur or threat");
+  if ((job.urlSpam || 0) > 0) out.push("links recent spam carried");
+  if ((job.memSimilar || 0) >= SIM_CLUSTER) out.push("text like recent spam from other keys");
+  if (job.burst) out.push("a burst");
+  const a = dossier && dossier.activity;
+  if (a && a.ch15 >= FANOUT_CHANNELS) out.push("a channel spread");
+  if (a && a.rhythm && a.rhythm.regularity === "regular" && a.rhythm.gaps >= REGULAR_MIN_GAPS) out.push("a machine rhythm");
+  const rec = dossier && dossier.record;
+  if (rec && Number(rec.admin_spam) > 0) out.push("a hand-labeled spam record");
+  if (rec && Number(rec.strikes) > 0) out.push("strikes on the sender's record");
+  if (dossier && ((dossier.recentLabelledSpam || 0) > 0 || (dossier.nymSpam || 0) > 0 || (dossier.similarSpam || 0) > 0 || (dossier.domainSpam || 0) > 0)) out.push("spam history with hand labels or hard signals");
+  return out;
+}
+
+export function knownLabel(job, dossier) {
+  const d = dossier || {};
+  if (d.textLabel === "ok" || d.textLabel === "spam") return d.textLabel;
+  const k = d.knowledge;
+  return k && (k.admin_last === "ok" || k.admin_last === "spam") ? k.admin_last : "";
+}
+
+export function unbackedFlood(job, dossier, v) {
+  if (!v || !v.spam) return "";
+  if (v.model === "rule" || DERIVED_MODELS.has(v.model)) return "";
+  if (hardSignals(job, dossier).length) return "";
+  if ((job.domains || []).length || (job.urls || []).length) return "";
+  if (ownSignals(job, dossier).length) return "";
+  const flood = FLOOD_CATEGORIES.has(v.category);
+  if (lowInformation(job.content)) return "ok";
+  const a = dossier && dossier.activity;
+  if (a && a.n15 >= SENDER_FLOOD_N15) return "";
+  if (!flood) return "";
+  return (dossier && dossier.copyPubkeys) > 0 ? "hold" : "solo";
+}
+
 export function hardSignals(job, dossier) {
   const out = messageSignals(job, dossier);
   const d = dossier || {};
   if ((d.similarSpam || 0) > 0) out.push("text close to hand-labelled spam or to spam that carried hard signals");
   if ((d.nymLabelledSpam || 0) > 0 || (d.nymSpamPubkeys || 0) >= FAMILY_SPAM_MIN) out.push("a nym family that was hand-labelled or carried hard signals");
   if ((d.recentLabelledSpam || 0) > 0) out.push("earlier messages from this key hand-labelled spam");
+  if (knownLabel(job, d) === "spam" && !lowInformation(job.content)) out.push("identical text hand-labeled spam");
   return out;
 }
 
@@ -643,7 +765,7 @@ export function senderSuspicious(job, dossier, settings) {
   if (!dossier) return false;
   if (dossier.nymSpam > 0 || dossier.domainSpam > 0) return true;
   const copies = settings && settings.campaignCopies ? settings.campaignCopies : 3;
-  return !rec && (dossier.nymPubkeys || 0) + 1 >= copies;
+  return !rec && (dossier.nymPubkeys || 0) + 1 >= copies && (dossier.nymMachineSpam || 0) > 0;
 }
 
 export function ruleVerdict(job, dossier, settings) {
@@ -793,7 +915,7 @@ export function parseSpamVerdict(text) {
 
 export const SPAM_SYSTEM_PROMPT = `You are the spam filter for Nymchat, an ephemeral, pseudonymous chat over public Nostr relays. Channels are geohash areas or named rooms; users pick a throwaway nym and post short messages. Public relays are flooded by bot networks that post into many channels: profane insult "personas" that address nobody, gibberish or random tokens, ads, crypto and link spam, the same text under several nyms and pubkeys, machine-written filler in several languages, and messages that repeat with small variations.
 
-What spam means here: unsolicited ads and promotions, scams and phishing, link floods, the same or nearly the same text pushed from several keys or nyms, machine-written filler, random-token noise, bot persona chatter, and coordinated harassment campaigns. What is NOT spam: opinions of any kind, including political, unpopular or offensive ones; rudeness, sarcasm, insults or mild profanity from a person taking part in the chat; complaints, rants and jokes; non-English chat; short chatter; a link shared while talking. A person being unpleasant is for the admins to handle, not for the spam filter.
+What spam means here: unsolicited ads and promotions, scams and phishing, link floods, the same or nearly the same text pushed from several keys or nyms, machine-written filler, random-token noise, bot persona chatter, and coordinated harassment campaigns. What is NOT spam: opinions of any kind, including political, unpopular or offensive ones; a short common message such as a greeting, a thank-you or a one-word reaction, however many different people send the same words; rudeness, sarcasm, insults or mild profanity from a person taking part in the chat; complaints, rants and jokes; non-English chat; short chatter; a link shared while talking. A person being unpleasant is for the admins to handle, not for the spam filter.
 
 Messages come in any language and script (Turkish, Russian, Ukrainian, Spanish, Portuguese, German, Arabic, Persian, Hindi, Indonesian, Chinese, Japanese and more), often colloquial, misspelled, slang, dialect or a regional spelling ("geliyom", "toletini temizle", "q tal", "wsg"). First work out which language the message is in. "gibberish" means random characters, keyboard mashing or token soup with no reading in ANY language; a word or phrase you do not recognise is far more likely a real language you know less well than gibberish, so never use the gibberish category unless you are sure the text has no meaning anywhere. A message of one or two ordinary words is chatter whatever the language.
 
@@ -807,7 +929,7 @@ Earlier verdicts by this filter are deliberately left out of the audit. They can
 
 Sender activity and conversation structure matter. A pubkey first seen minutes ago that posts every few seconds at a steady interval, or fans out across several channels within a quarter hour, is behaving like a bot; a person's gaps vary and they mostly stay in one or two rooms. A message that replies in a thread, quotes another message or @mentions a nym is addressed to somebody in the room, which the persona bots never do; that makes a person more likely but does not clear an ad, a scam or a link flood. A link whose domain earlier spam verdicts carried from several senders is evidence of the same campaign; a domain with ok verdicts behind it is a normal shared link.
 
-Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, the objective bot signals, the sender's activity, near-copies of the text from other keys, and hand labels. Repetition across channels, nyms or pubkeys is strong evidence. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to hand-labelled spam nyms can corroborate a verdict when this message reads like that family's spam. A nym never convicts on its own: many people keep one nym and get a fresh key every session, so several keys under one nym in the same room, posting at human gaps and talking to people, is one person and not a campaign; real people also pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. The persona bots have a signature: insults, threats, slurs and profane abuse aimed at the room or at "you" rather than at anyone in a conversation, from keys first seen minutes ago. That hostility together with an objective bot signal (near-copies across keys, random tokens, obfuscated words, a spread over several channels, a steady machine rhythm, a hand-labelled family) IS spam and should be muted. A rude, crude, sexual or angry message from a human talking to the room, with no objective bot signal, is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, opinions and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence, and keep confidence above 0.9 for unmistakable ads, scams and floods or for messages with an objective bot signal.
+Decide whether ONE message is bot spam that should be muted. Judge the evidence: the message itself, the objective bot signals, the sender's activity, near-copies of the text from other keys, and hand labels. Repetition across channels, nyms or pubkeys is strong evidence only when it is concentrated in time (many keys posting the same text within minutes) or the text is an ad, a link or a scam: people greet a room with the same few words every day, so identical short text from many keys spread over hours is ordinary chat and never a flood, and similar messages that were never hand-labeled spam and carried no bot signal count against a flood. Bot networks reuse nyms with small variations (case, digits, leetspeak, a suffix or a longer form of the same name), so a nym close to hand-labelled spam nyms can corroborate a verdict when this message reads like that family's spam. A nym never convicts on its own: many people keep one nym and get a fresh key every session, so several keys under one nym in the same room, posting at human gaps and talking to people, is one person and not a campaign; real people also pick common names, copy names, and get impersonated, so a message that would pass on its own must pass even if the nym matches a spammer's exactly. Judge the text first, then let the nym only confirm what the text already shows. The persona bots have a signature: insults, threats, slurs and profane abuse aimed at the room or at "you" rather than at anyone in a conversation, from keys first seen minutes ago. That hostility together with an objective bot signal (near-copies across keys, random tokens, obfuscated words, a spread over several channels, a steady machine rhythm, a hand-labelled family) IS spam and should be muted. A rude, crude, sexual or angry message from a human talking to the room, with no objective bot signal, is NOT spam. Short chatter ("gm", "anyone here?"), links shared in a conversation, non-English human talk, opinions and jokes are NOT spam. Be conservative: when the evidence is thin, answer spam=false with low confidence, and keep confidence above 0.9 for unmistakable ads, scams and floods or for messages with an objective bot signal.
 
 Respond with ONE JSON object and nothing else, exactly this shape:
 {"spam": true|false, "confidence": 0.0-1.0, "message_alone": true|false, "hostile": true|false, "language": "<ISO 639-1 code of the message, or unknown>", "category": "<one of: bot-flood, gibberish, ad, scam, link-spam, persona-bot, repeat, other, ok>", "reason": "<one sentence>"}
@@ -835,6 +957,26 @@ function signalNote(row) {
 }
 function clip(s, n) { s = String(s == null ? "" : s).replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n) + "…" : s; }
 function quotedNym(nym) { const n = clip(nym, 64); return n ? JSON.stringify(n) : "?"; }
+
+function spanText(first, last) {
+  const f = Number(first) || 0, l = Number(last) || 0;
+  return f && l && l > f ? " over " + agoText(l - f) : "";
+}
+
+export function knowledgeLines(job, dossier) {
+  const out = [];
+  const k = dossier.knowledge;
+  if (!k) out.push("this exact text: not seen before");
+  else {
+    const label = k.admin_last === "ok" || k.admin_last === "spam" ? "; most recent hand label: " + k.admin_last : "";
+    out.push("this exact text: seen " + (Number(k.messages) || 0) + " times from about " + Math.max(Number(k.senders) || 0, dossier.exactSenders || 0) + " senders" + spanText(k.first_seen, k.last_seen) + "; hand-labeled ok " + (Number(k.admin_ok) || 0) + ", spam " + (Number(k.admin_spam) || 0) + label + "; judged spam with hard bot signals: " + Math.round(decayedCount(k.strong_spam, k.last_seen, job.seenAt)));
+  }
+  const rec = dossier.record;
+  out.push("this sender: " + (rec ? (Number(rec.audits) || 0) + " earlier audits, hand-labeled ok " + (Number(rec.admin_ok) || 0) + ", spam " + (Number(rec.admin_spam) || 0) : "no earlier audits"));
+  const n = dossier.nymKnowledge;
+  if (job.nymKey) out.push("this nym family: " + (n ? "about " + (Number(n.pubkeys) || 0) + " keys" + spanText(n.first_seen, n.last_seen) + ", hand-labeled ok " + (Number(n.admin_ok) || 0) + ", spam " + (Number(n.admin_spam) || 0) + "; judged spam with hard bot signals: " + Math.round(decayedCount(n.strong_spam, n.last_seen, job.seenAt)) : "not seen before"));
+  return out;
+}
 
 export function buildSpamPrompt(job, dossier) {
   const lines = [];
@@ -885,6 +1027,7 @@ export function buildSpamPrompt(job, dossier) {
   lines.push("obfuscated words (dots, invisible characters or look-alike letters inside words): " + (job.obfuscations || 0));
   lines.push("trailing random token: " + (job.tail ? JSON.stringify(job.tail) + (job.marker ? " (shares the campaign marker \"" + job.marker + "\" with spam from other senders)" : "") : "none"));
   lines.push("burst: " + (job.burst ? "yes, " + job.burstCount + " messages from this key within 15 seconds" : "no"));
+  if (lowInformation(job.content)) lines.push("low-information text: yes (a greeting or a few words; many people send the same short text on their own, so repetition of it is never spam by itself)");
   const lex = job.lex;
   if (lex && (lex.slur || lex.vulgar || lex.threat || lex.child)) lines.push("lexicon: hard slurs " + lex.slur + ", vulgar words " + lex.vulgar + ", explicit threats " + lex.threat + ", sexual talk about a child " + (lex.child ? "yes" : "no"));
   if (job.memSimilar) lines.push("reads like recent spam from " + job.memSimilar + " other senders seen by this proxy");
@@ -912,7 +1055,9 @@ export function buildSpamPrompt(job, dossier) {
   const sim = (dossier.similar || []).filter((r) => r.category !== MUTED_SENDER);
   if (!sim.length) lines.push("none");
   else {
-    lines.push("count: " + sim.length + ", distinct pubkeys: " + dossier.similarPubkeys + ", other keys with the same text: " + (dossier.copyPubkeys || 0) + ", hand-labelled spam: " + (dossier.similarLabelledSpam || 0) + ", with hard bot signals: " + (dossier.similarStrong || 0));
+    lines.push("count: " + sim.length + ", distinct pubkeys: " + dossier.similarPubkeys + ", hand-labelled spam: " + (dossier.similarLabelledSpam || 0) + ", with hard bot signals: " + (dossier.similarStrong || 0));
+    lines.push("timing: other keys with the same text within " + COPY_BURST_MIN + " minutes before this message: " + (dossier.copyBurstPubkeys || 0) + "; across the whole window: " + (dossier.copyPubkeys || 0) + (dossier.copySpanMs ? ", spread over " + agoText(dossier.copySpanMs) : "") + ". A flood is many keys posting the same text within minutes; the same text from different people spread over hours is ordinary chat.");
+    if (!(dossier.similarSpam > 0) && !(dossier.similarLabelledSpam > 0) && !(dossier.similarStrong > 0)) lines.push("none of them was hand-labeled spam or carried a bot signal, which is evidence against a flood");
     for (const s of sim.slice(0, LIST_CAP)) {
       lines.push("- " + when(s.seen_at) + " [" + (s.channel || "?") + "] " + quotedNym(s.nym) + " " + short(s.pubkey) + (s.pubkey === job.pubkey ? " (same sender)" : "") + ": " + JSON.stringify(clip(s.content, 120)) + labelNote(s) + signalNote(s));
     }
@@ -927,7 +1072,11 @@ export function buildSpamPrompt(job, dossier) {
     for (const s of nyms.slice(0, LIST_CAP)) {
       lines.push("- " + when(s.seen_at) + " [" + (s.channel || "?") + "] " + quotedNym(s.nym) + " " + short(s.pubkey) + ": " + JSON.stringify(clip(s.content, 120)) + labelNote(s) + signalNote(s));
     }
+    if (!(dossier.nymSpam > 0) && !(dossier.nymLabelledSpam > 0) && !(dossier.nymStrong > 0)) lines.push("none of them was hand-labeled spam or carried a bot signal");
   }
+  lines.push("");
+  lines.push("WHAT WE KNOW (kept across audits; hand labels are ground truth, machine verdicts are not shown)");
+  for (const l of knowledgeLines(job, dossier)) lines.push(l);
   lines.push("");
   lines.push("EXAMPLES FROM THIS NETWORK (hand-labelled ones were set by the developer or an admin and are ground truth; unlabelled ones are shown only for the bot signals they carried)");
   const ex = dossier.examples;
@@ -937,10 +1086,10 @@ export function buildSpamPrompt(job, dossier) {
   else {
     lines.push("spam:");
     if (!exSpam.length) lines.push("- none");
-    for (const r of exSpam) lines.push("- " + (r.labelled ? "[hand-labelled] " : r.signals && r.signals.length ? "[bot signals: " + r.signals.join(", ") + "] " : "") + "[" + (r.channel || "?") + "] " + quotedNym(r.nym) + ": " + JSON.stringify(r.content));
+    for (const r of exSpam) lines.push("- " + (r.labelled ? (r.same || (r.key && job.fp && r.key === job.fp.simKey) ? "[hand-labelled, same text] " : "[hand-labelled] ") : r.signals && r.signals.length ? "[bot signals: " + r.signals.join(", ") + "] " : "") + "[" + (r.channel || "?") + "] " + quotedNym(r.nym) + ": " + JSON.stringify(r.content));
     lines.push("ok:");
     if (!exOk.length) lines.push("- none");
-    for (const r of exOk) lines.push("- " + (r.labelled ? "[hand-labelled] " : "") + "[" + (r.channel || "?") + "] " + quotedNym(r.nym) + ": " + JSON.stringify(r.content));
+    for (const r of exOk) lines.push("- " + (r.labelled ? (r.same || (r.key && job.fp && r.key === job.fp.simKey) ? "[hand-labelled, same text] " : "[hand-labelled] ") : "") + "[" + (r.channel || "?") + "] " + quotedNym(r.nym) + ": " + JSON.stringify(r.content));
   }
   return lines.join("\n");
 }
@@ -1077,7 +1226,7 @@ function freshCounters() {
     overBudgetDropped: 0, unverified: 0, lite: 0, remuted: 0, recordMuted: 0, flushes: 0, writeErrors: 0, writeRetries: 0, writeDropped: 0,
     fastMarker: 0, fastRepeat: 0, fastUrl: 0, fastSimilar: 0, fastFamily: 0, fastBurst: 0, fastActor: 0, fastLexicon: 0,
     timeoutDropped: 0, stalls: 0, abandoned: 0, offReleased: 0, ioTimeouts: 0, cacheSkipped: 0, flushAbandoned: 0, settingsTimeouts: 0,
-    parked: 0, modelQueued: 0, delivered: 0, unsupported: 0, sampled: 0, unmuted: 0
+    parked: 0, modelQueued: 0, delivered: 0, unsupported: 0, sampled: 0, unmuted: 0, labelled: 0, unbacked: 0
   };
 }
 
@@ -1141,6 +1290,7 @@ const state = {
   schema: new Map(),
   configReady: false,
   auditMissing: false,
+  knowMissing: false,
   lastWriteError: null,
   lastWriteErrorAt: 0,
   tails: new Map(),
@@ -1184,7 +1334,7 @@ export function _resetSpamState() {
   if (state.flushRun) state.flushRun.abandoned = true;
   state.flushRun = null; state.lastFlushAt = 0; state.lastFlushError = null; state.lastFlushErrorAt = 0;
   state.records.clear(); state.nopeLive.clear(); state.settled.clear(); state.campaign.clear(); state.schema.clear();
-  state.configReady = false; state.auditMissing = false; state.lastWriteError = null; state.lastWriteErrorAt = 0;
+  state.configReady = false; state.auditMissing = false; state.knowMissing = false; state.lastWriteError = null; state.lastWriteErrorAt = 0;
   state.tails.clear(); state.markers.clear(); state.markersDirty = false; state.markersPulledAt = 0; state.markerSync = null;
   state.nyms.clear(); state.stems.clear(); state.urls.clear(); state.bands.clear(); state.sims = []; state.hamDocs = []; state.hamDf.clear();
   state.burstSpam.clear(); state.clean.clear(); state.nymRows.clear(); state.engineMutes.clear(); state.ioBusy = new WeakMap();
@@ -1287,8 +1437,17 @@ function applyRestored(value) {
     next.set(id, Number(x.at));
     state.hidden.delete(id);
     state.dropped.delete(id);
+    const pk = typeof x.pk === "string" ? x.pk.toLowerCase() : "";
+    if (HEX64.test(pk)) forgetAdminUnmuted(pk, Number(x.at));
   }
   state.restored = next;
+}
+
+function forgetAdminUnmuted(pubkey, at) {
+  const until = state.muted.get(pubkey);
+  const hours = state.settings && state.settings.muteHours ? state.settings.muteHours : 24;
+  if (until !== undefined && until - hours * 3600000 > at) return;
+  forgetMute(pubkey);
 }
 
 function withoutRestored(ids) {
@@ -2306,7 +2465,7 @@ async function loadDossier(env, job, settings, opts) {
   const labelSince = now - LABELS_WINDOW_MS;
   const light = !!o.light;
   const posted = postedAt(job);
-  const out = { self: null, record: null, cleanHistory: false, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, similarStrong: 0, similarMachineSpam: 0, copyPubkeys: 0, labelledOk: null, exact: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, nymStrong: 0, nymMachineSpam: 0, nymMachineSpamPubkeys: 0, recentLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
+  const out = { self: null, record: null, cleanHistory: false, recent: [], similar: [], similarPubkeys: 0, similarSpam: 0, similarSpamPubkeys: 0, similarLabelledSpam: 0, similarStrong: 0, similarMachineSpam: 0, copyPubkeys: 0, copyBurstPubkeys: 0, copySpanMs: 0, exactSenders: 0, labelledOk: null, exact: null, knowledge: null, nymKnowledge: null, nymMatches: [], nymPubkeys: 0, nymSpam: 0, nymSpamPubkeys: 0, nymLabelledSpam: 0, nymStrong: 0, nymMachineSpam: 0, nymMachineSpamPubkeys: 0, recentLabelledSpam: 0, activity: null, domainStats: {}, domainSpam: 0, domainSpamPubkeys: 0, examples: null };
   const reusable = verdictReusable(job.fp);
   if (!job.force) {
     const own = state.wrows.get(job.id);
@@ -2323,9 +2482,13 @@ async function loadDossier(env, job, settings, opts) {
     const clauses = ["sim_key = ?"];
     const binds = [job.fp.simKey];
     for (let i = 0; i < 4; i++) if (b[i] != null) { clauses.push("b" + i + " = ?"); binds.push(b[i]); }
-    add("similar", { first: false, stmt: r.prepare("SELECT id, pubkey, nym, channel, content, verdict, confidence, category, model, signals, seen_at, sim_key, b0, b1, b2, b3, label, labeled_by FROM spam_events WHERE (" + clauses.join(" OR ") +
-      ") AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) AND id != ? ORDER BY seen_at DESC LIMIT 40").bind(...binds, since, labelSince, job.id) });
+    const cols = "id, pubkey, nym, channel, content, verdict, confidence, category, model, signals, seen_at, sim_key, b0, b1, b2, b3, label, labeled_by";
+    add("similar", { first: false, stmt: r.prepare("SELECT * FROM (SELECT " + cols + " FROM spam_events WHERE (" + clauses.join(" OR ") +
+      ") AND (seen_at > ? OR (label IS NOT NULL AND seen_at > ?)) AND id != ? ORDER BY seen_at DESC LIMIT 40) UNION SELECT * FROM (SELECT " + cols +
+      " FROM spam_events WHERE sim_key = ? AND label IS NOT NULL AND seen_at > ? AND id != ? ORDER BY seen_at DESC LIMIT 2)").bind(...binds, since, labelSince, job.id, job.fp.simKey, labelSince, job.id) });
+    if (!state.knowMissing) add("knowledge", { first: true, stmt: r.prepare(KNOW_TEXT_SQL).bind(job.fp.simKey) });
   }
+  if (job.nymKey && !light && !state.knowMissing) add("nymKnowledge", { first: true, stmt: r.prepare(KNOW_NYM_SQL).bind(nymFamilyKey(job.nymKey)) });
   let nymKeyMem = "";
   let nymCached = null;
   if (job.nymKey && !light) {
@@ -2357,6 +2520,10 @@ async function loadDossier(env, job, settings, opts) {
   }
   let similar = at.similar != null ? got("similar") : null;
   if (similar === undefined) similar = null;
+  const labelledRows = similar ? similar.filter((row) => row.label === "ok" || row.label === "spam") : [];
+  if (similar) similar = similar.slice().sort((a, b) => (Number(b.seen_at) || 0) - (Number(a.seen_at) || 0));
+  out.knowledge = got("knowledge") || null;
+  out.nymKnowledge = got("nymKnowledge") || null;
   let nyms = null;
   if (job.nymKey && !light) {
     let rows = nymCached;
@@ -2404,20 +2571,28 @@ async function loadDossier(env, job, settings, opts) {
     const spamPks = new Set();
     const copyPks = new Set();
     const exactPks = new Set();
+    const burstPks = new Set();
+    const senders = new Set([job.pubkey]);
+    let oldestCopy = 0;
     const b = job.fp.bands;
     let weakExact = null;
+    for (const row of labelledRows) if (!similar.some((x) => x.id === row.id)) similar.push(row);
     for (const row of similar) {
       pks.add(row.pubkey);
       const earlier = Number(row.seen_at) <= posted;
       const ev = rowEvidence(row);
       const same = row.sim_key === job.fp.simKey;
-      if (earlier && row.pubkey !== job.pubkey && (same || [0, 1, 2, 3].filter((i) => b[i] != null && row["b" + i] === b[i]).length >= 2)) copyPks.add(row.pubkey);
+      if (same) senders.add(row.pubkey);
+      if (earlier && row.pubkey !== job.pubkey && (same || [0, 1, 2, 3].filter((i) => b[i] != null && row["b" + i] === b[i]).length >= 2)) {
+        copyPks.add(row.pubkey);
+        if (posted - Number(row.seen_at) <= COPY_BURST_MS) burstPks.add(row.pubkey);
+        if (!oldestCopy || Number(row.seen_at) < oldestCopy) oldestCopy = Number(row.seen_at);
+      }
       if (earlier && same && row.pubkey !== job.pubkey) exactPks.add(row.pubkey);
       if ((ev === "label" || ev === "strong") && earlier) { out.similarSpam++; spamPks.add(row.pubkey); }
       if (ev === "strong") out.similarStrong++;
       if ((ev === "label" || ev === "strong" || ev === "weak") && earlier) out.similarMachineSpam++;
       if (row.label === "spam") out.similarLabelledSpam++;
-      if (!out.labelledOk && row.label === "ok" && same) out.labelledOk = row;
       if (reusable && earlier && same && row.pubkey !== job.pubkey && verdictOf(row) === "spam" && (row.label === "spam" || Number(row.confidence) >= settings.minConfidence)) {
         if (!out.exact && (ev === "label" || ev === "strong")) out.exact = row;
         else if (!weakExact && ev === "weak") weakExact = row;
@@ -2427,7 +2602,16 @@ async function loadDossier(env, job, settings, opts) {
     out.similarPubkeys = pks.size;
     out.similarSpamPubkeys = spamPks.size;
     out.copyPubkeys = copyPks.size;
-    if (!out.exact && weakExact && exactPks.size >= COPY_KEYS_MIN) out.exact = weakExact;
+    out.copyBurstPubkeys = burstPks.size;
+    out.copySpanMs = oldestCopy ? Math.max(0, posted - oldestCopy) : 0;
+    out.exactSenders = senders.size;
+    if (!out.exact && weakExact && exactPks.size >= COPY_KEYS_MIN && burstPks.size >= COPY_KEYS_MIN && !lowInformation(job.content)) out.exact = weakExact;
+    let latest = null;
+    for (const row of similar) if (row.sim_key === job.fp.simKey && (row.label === "ok" || row.label === "spam") && (!latest || Number(row.seen_at) > Number(latest.seen_at))) latest = row;
+    const k = out.knowledge;
+    const fromKnow = !!(k && (k.admin_last === "ok" || k.admin_last === "spam") && Number(k.admin_at) >= (latest ? Number(latest.seen_at) : 0));
+    out.textLabel = fromKnow ? k.admin_last : latest ? latest.label : "";
+    if (out.textLabel === "ok") out.labelledOk = latest && latest.label === "ok" ? latest : { label: "ok", sim_key: job.fp.simKey, seen_at: Number(k && k.admin_at) || 0 };
     if (out.labelledOk) { out.exact = null; state.exact.delete(job.fp.simKey); }
     if (out.cleanHistory) out.exact = null;
   }
@@ -2500,17 +2684,19 @@ async function fetchExamples(env, now, ctx) {
   const hit = await cacheGet(ctx, EXAMPLES_CACHE_KEY);
   if (hit && typeof hit === "object" && Array.isArray(hit.spam) && Array.isArray(hit.ok)) return hit;
   const r = replica(spamDb(env));
-  const ex = { at: now, spam: [], ok: [], labelled: 0 };
+  const ex = { at: now, spam: [], ok: [], labelled: 0, pool: { spam: [], ok: [] } };
   const keys = new Set();
   const take = (rows, side, labelled) => {
     for (const row of rows) {
-      if (ex[side].length >= EXAMPLES_PER_SIDE) break;
+      if (ex.pool[side].length >= EXAMPLES_POOL) break;
       if (keys.has(row.sim_key)) continue;
       keys.add(row.sim_key);
-      const item = { id: row.id, nym: row.nym || "", channel: row.channel || "", content: clip(row.content, 160), labelled, by: row.labeled_by || "" };
-      if (!labelled) item.signals = rowSignals(row.signals);
-      ex[side].push(item);
-      if (labelled) ex.labelled++;
+      const item = exampleItem(row, labelled);
+      ex.pool[side].push(item);
+      if (ex[side].length < EXAMPLES_PER_SIDE) {
+        ex[side].push(item);
+        if (labelled) ex.labelled++;
+      }
     }
   };
   const [l, s] = await readRound(r, [
@@ -2526,6 +2712,45 @@ async function fetchExamples(env, now, ctx) {
   take(s.filter((x) => rowEvidence(x) === "strong" && rowSignals(x.signals).length), "spam", false);
   await cachePut(ctx, EXAMPLES_CACHE_KEY, ex, EXAMPLES_CACHE_S);
   return ex;
+}
+
+function exampleItem(row, labelled) {
+  const item = { id: row.id, nym: row.nym || "", channel: row.channel || "", content: clip(row.content, 160), labelled, by: row.labeled_by || "", key: Number(row.sim_key) || 0, script: scriptOf(row.content), size: sizeClass(spamTokens(bodyText(row.content || "")).length) };
+  if (!labelled) item.signals = rowSignals(row.signals);
+  return item;
+}
+
+export function pickExamples(job, dossier, ex) {
+  if (!ex) return null;
+  const pool = ex.pool || { spam: ex.spam || [], ok: ex.ok || [] };
+  const mine = { key: job.fp ? job.fp.simKey : 0, script: scriptOf(job.content), size: sizeClass(job.fp ? job.fp.tokens : 0), channel: job.channel || "" };
+  const near = new Map();
+  for (const row of (dossier && dossier.similar) || []) {
+    if ((row.label !== "ok" && row.label !== "spam") || row.id === job.id || row.category === MUTED_SENDER) continue;
+    const item = exampleItem(row, true);
+    item.same = item.key === mine.key;
+    item.near = true;
+    const prev = near.get(item.key);
+    if (!prev) near.set(item.key, { side: row.label, item });
+  }
+  const score = (it) => (it.same || (mine.key && it.key === mine.key) ? 16 : 0) + (it.near ? 8 : 0) + (it.script === mine.script ? 4 : 0) + (it.size === mine.size ? 2 : 0) + (it.channel === mine.channel ? 1 : 0);
+  const out = { spam: [], ok: [], labelled: 0 };
+  for (const side of ["spam", "ok"]) {
+    const seen = new Set();
+    const cands = [];
+    for (const { side: sd, item } of near.values()) if (sd === side) cands.push(item);
+    for (const it of pool[side] || []) cands.push(it);
+    const ranked = cands.map((it, i) => ({ it, i, s: score(it) })).sort((a, b) => (Number(b.it.labelled) - Number(a.it.labelled)) || (b.s - a.s) || (a.i - b.i));
+    for (const { it } of ranked) {
+      if (out[side].length >= EXAMPLES_PER_SIDE) break;
+      const k = it.key || it.id;
+      if (seen.has(k) || it.id === job.id) continue;
+      seen.add(k);
+      out[side].push(it);
+      if (it.labelled) out.labelled++;
+    }
+  }
+  return out;
 }
 
 async function loadExamples(env, now, ctx) {
@@ -2574,7 +2799,7 @@ async function enrichDossier(env, job, dossier) {
   dossier.recent = recent.length ? recent : archiveRows(b[1]);
   dossier.recentLabelledSpam = dossier.recent.filter((row) => row.label === "spam").length;
   dossier.activity = activityFrom(job, dossier, a[1] || null, b[0] || null);
-  dossier.examples = examples || null;
+  dossier.examples = pickExamples(job, dossier, examples);
   job.signals = buildSignals(job, dossier);
 }
 
@@ -2603,6 +2828,11 @@ export function buildSignals(job, dossier) {
   if (job.memSimilar) out.memSimilar = job.memSimilar;
   if (job.urlSpam) out.urlSpam = job.urlSpam;
   if (job.fast) out.fast = job.fast;
+  if (dossier.copyBurstPubkeys) out.copyBurst = dossier.copyBurstPubkeys;
+  if (dossier.copySpanMs) out.copySpanMs = dossier.copySpanMs;
+  if (lowInformation(job.content)) out.lowInfo = true;
+  const k = dossier.knowledge;
+  if (k || dossier.textLabel) out.known = { ok: Number(k && k.admin_ok) || 0, spam: Number(k && k.admin_spam) || 0, label: knownLabel(job, dossier) || null, senders: Math.max(Number(k && k.senders) || 0, dossier.exactSenders || 0), messages: Number(k && k.messages) || 0 };
   const hard = hardSignals(job, dossier);
   if (hard.length) out.hard = hard;
   return out;
@@ -2613,9 +2843,61 @@ function strikesAfter(dossier, strong) {
   return (rec ? Number(rec.strikes) || 0 : 0) + (strong ? 1 : 0);
 }
 
-const EVENT_COLS = ["id", "pubkey", "nym", "channel", "kind", "content", "sim_key", "b0", "b1", "b2", "b3", "created_at", "seen_at", "verdict", "confidence", "category", "reason", "model", "action", "source", "local_score", "nym_key", "lang", "badge", "domains", "signals"];
+const EVENT_COLS = ["id", "pubkey", "nym", "channel", "kind", "content", "sim_key", "b0", "b1", "b2", "b3", "created_at", "seen_at", "verdict", "confidence", "category", "reason", "model", "action", "source", "local_score", "nym_key", "lang", "badge", "domains", "signals", "event_json"];
+const EVENT_JSON_MAX = 16384;
+const KNOW_COLS = "messages, senders, model_ok, model_spam, strong_spam, admin_ok, admin_spam, admin_last, admin_at, first_seen, last_seen";
+const KNOW_TEXT_SQL = "SELECT " + KNOW_COLS + " FROM spam_texts WHERE sim_key = ?";
+const KNOW_NYM_SQL = "SELECT pubkeys, " + KNOW_COLS.replace("senders, ", "") + " FROM spam_nyms WHERE nym = ?";
+const KNOW_DECAY = (t, c) => t + "." + c + " * " + KNOW_HALF_LIFE_MS + " / (" + KNOW_HALF_LIFE_MS + " + MAX(0, excluded.last_seen - " + t + ".last_seen)) + excluded." + c;
+const KNOW_TEXT_UPSERT_SQL = "INSERT INTO spam_texts (sim_key, size, script, messages, senders, model_ok, model_spam, strong_spam, first_seen, last_seen) SELECT ?, ?, ?, 1, ?, ?, ?, ?, ?, ? WHERE ";
+const KNOW_TEXT_UPSERT_TAIL = " ON CONFLICT(sim_key) DO UPDATE SET messages = spam_texts.messages + 1, senders = MAX(spam_texts.senders, excluded.senders), " +
+  "model_ok = " + KNOW_DECAY("spam_texts", "model_ok") + ", model_spam = " + KNOW_DECAY("spam_texts", "model_spam") + ", strong_spam = " + KNOW_DECAY("spam_texts", "strong_spam") + ", " +
+  "first_seen = MIN(spam_texts.first_seen, excluded.first_seen), last_seen = MAX(spam_texts.last_seen, excluded.last_seen)";
+const KNOW_NYM_UPSERT_SQL = "INSERT INTO spam_nyms (nym, pubkeys, messages, model_ok, model_spam, strong_spam, first_seen, last_seen) SELECT ?, ?, 1, ?, ?, ?, ?, ? WHERE ";
+const KNOW_NYM_UPSERT_TAIL = " ON CONFLICT(nym) DO UPDATE SET messages = spam_nyms.messages + 1, pubkeys = MAX(spam_nyms.pubkeys, excluded.pubkeys), " +
+  "model_ok = " + KNOW_DECAY("spam_nyms", "model_ok") + ", model_spam = " + KNOW_DECAY("spam_nyms", "model_spam") + ", strong_spam = " + KNOW_DECAY("spam_nyms", "strong_spam") + ", " +
+  "first_seen = MIN(spam_nyms.first_seen, excluded.first_seen), last_seen = MAX(spam_nyms.last_seen, excluded.last_seen)";
+
+function nymRange(familyKey) {
+  if (familyKey[0] === "~") return { sql: "nym_key >= ? AND nym_key < ?", binds: [familyKey.slice(1), familyKey.slice(1) + NYM_RANGE_END] };
+  return { sql: "nym_key = ?", binds: [familyKey.slice(1)] };
+}
+
+export function knowledgeRelabelStatements(db, o) {
+  const at = Number(o.at) || Date.now();
+  const label = o.label === "ok" || o.label === "spam" ? o.label : null;
+  const out = [];
+  if (o.simKey) {
+    out.push(db.prepare("INSERT INTO spam_texts (sim_key, first_seen, last_seen) VALUES (?, ?, ?) ON CONFLICT(sim_key) DO NOTHING").bind(o.simKey, at, at));
+    out.push(db.prepare("UPDATE spam_texts SET admin_ok = (SELECT COUNT(*) FROM spam_events WHERE sim_key = ? AND label = 'ok'), admin_spam = (SELECT COUNT(*) FROM spam_events WHERE sim_key = ? AND label = 'spam'), " +
+      "admin_last = COALESCE(?, (SELECT label FROM spam_events WHERE sim_key = ? AND label IS NOT NULL ORDER BY seen_at DESC LIMIT 1)), admin_at = ? WHERE sim_key = ?")
+      .bind(o.simKey, o.simKey, label, o.simKey, at, o.simKey));
+  }
+  if (o.pubkey) {
+    out.push(db.prepare("UPDATE spam_pubkeys SET admin_ok = (SELECT COUNT(*) FROM spam_events WHERE pubkey = ? AND label = 'ok'), admin_spam = (SELECT COUNT(*) FROM spam_events WHERE pubkey = ? AND label = 'spam') WHERE pubkey = ?")
+      .bind(o.pubkey, o.pubkey, o.pubkey));
+  }
+  const fam = o.nymKey ? nymFamilyKey(o.nymKey) : "";
+  if (fam) {
+    const r = nymRange(fam);
+    out.push(db.prepare("INSERT INTO spam_nyms (nym, first_seen, last_seen) VALUES (?, ?, ?) ON CONFLICT(nym) DO NOTHING").bind(fam, at, at));
+    out.push(db.prepare("UPDATE spam_nyms SET admin_ok = (SELECT COUNT(*) FROM spam_events WHERE " + r.sql + " AND label = 'ok'), admin_spam = (SELECT COUNT(*) FROM spam_events WHERE " + r.sql + " AND label = 'spam'), " +
+      "admin_last = COALESCE(?, (SELECT label FROM spam_events WHERE " + r.sql + " AND label IS NOT NULL ORDER BY seen_at DESC LIMIT 1)), admin_at = ? WHERE nym = ?")
+      .bind(...r.binds, ...r.binds, label, ...r.binds, at, fam));
+  }
+  return out;
+}
+
+function knowledgeStatements(db, e) {
+  const k = e.know;
+  const g = guardOf(e);
+  const out = [];
+  if (k.simKey) out.push(db.prepare(KNOW_TEXT_UPSERT_SQL + g.sql + KNOW_TEXT_UPSERT_TAIL).bind(k.simKey, k.size, k.script, k.senders, k.ok, k.spam, k.strong, e.seenAt, e.seenAt, ...g.binds));
+  if (k.nym) out.push(db.prepare(KNOW_NYM_UPSERT_SQL + g.sql + KNOW_NYM_UPSERT_TAIL).bind(k.nym, k.nymKeys, k.ok, k.spam, k.strong, e.seenAt, e.seenAt, ...g.binds));
+  return out;
+}
 const EVENT_INSERT_SQL = "INSERT INTO spam_events (" + EVENT_COLS.join(", ") + ") VALUES (" + EVENT_COLS.map(() => "?").join(", ") + ")";
-const EVENT_REPORT_TAIL = " ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = excluded.verdict, confidence = excluded.confidence, category = excluded.category, reason = excluded.reason, model = excluded.model, action = excluded.action, source = excluded.source, lang = excluded.lang, badge = excluded.badge, domains = excluded.domains, signals = excluded.signals WHERE spam_events.label IS NULL";
+const EVENT_REPORT_TAIL = " ON CONFLICT(id) DO UPDATE SET seen_at = excluded.seen_at, verdict = excluded.verdict, confidence = excluded.confidence, category = excluded.category, reason = excluded.reason, model = excluded.model, action = excluded.action, source = excluded.source, lang = excluded.lang, badge = excluded.badge, domains = excluded.domains, signals = excluded.signals, event_json = COALESCE(excluded.event_json, spam_events.event_json) WHERE spam_events.label IS NULL";
 const EVENT_POOL_TAIL = " ON CONFLICT(id) DO NOTHING";
 const OWN_ROW_SQL = "EXISTS (SELECT 1 FROM spam_events WHERE id = ? AND seen_at = ? AND verdict = ? AND COALESCE(model, '') = ? AND action = ?)";
 const OWN_ROWS_SQL = "(id, seen_at, verdict, COALESCE(model, ''), action) IN (VALUES ";
@@ -2705,8 +2987,10 @@ function writeEntry(env, job, v, dossier, p) {
     verdict: v.spam ? "spam" : "ok", confidence: v.confidence, category: v.category || null, reason: v.reason || null, model: v.model || null, action: p.action,
     source: job.source || "pool", local_score: job.localScore || 0, nym_key: job.nymKey || null, lang: v.language || null,
     badge: job.badge && job.badge !== "none" ? job.badge : null, domains: job.domains && job.domains.length ? job.domains.join(",") : null,
-    signals: job.signals ? JSON.stringify(job.signals) : null, label: null, labeled_by: null
+    signals: job.signals ? JSON.stringify(job.signals) : null, label: null, labeled_by: null,
+    event_json: /event-hidden/.test(p.action || "") ? eventJson(job) : null
   };
+  const know = knowledgeOf(job, v, dossier, p);
   const recAfter = Object.assign({}, rec || {}, {
     pubkey: job.pubkey, first_seen: rec ? rec.first_seen : now, last_seen: now, audits: (rec ? Number(rec.audits) || 0 : 0) + 1,
     spam: (rec ? Number(rec.spam) || 0 : 0) + (counted ? 1 : 0), ham: (rec ? Number(rec.ham) || 0 : 0) + (v.spam ? 0 : 1),
@@ -2718,7 +3002,26 @@ function writeEntry(env, job, v, dossier, p) {
     id: job.id, pubkey: job.pubkey, seenAt: now, report, guarded: report || !job.force, drop: p.enforcing, ev,
     hide: /event-hidden/.test(p.action || ""), domains: (job.domains || []).slice(), verdictWord: v.spam ? "spam" : "ok",
     rec: { spam: counted ? 1 : 0, ham: v.spam ? 0 : 1, strikeDelta, scoreDelta: p.derived ? 0 : v.spam ? v.confidence : -0.5, strikes: p.strikes, score, channels, nyms, lastReason, mutedUntil: mute ? mute.until : 0 },
-    mute, recAfter, stage: { event: true, rec: true, nope: !!mute, chan }, attempts: 0, lost: false
+    mute, recAfter, know, stage: { event: true, rec: true, nope: !!mute, chan }, attempts: 0, lost: false
+  };
+}
+
+function eventJson(job) {
+  const ev = job.event;
+  if (!ev || typeof ev !== "object" || ev.id !== job.id || typeof ev.sig !== "string") return null;
+  const json = JSON.stringify({ id: ev.id, pubkey: ev.pubkey, created_at: ev.created_at, kind: ev.kind, tags: ev.tags, content: ev.content, sig: ev.sig });
+  return json.length <= EVENT_JSON_MAX ? json : null;
+}
+
+function knowledgeOf(job, v, dossier, p) {
+  if (job.source === "report" || p.derived || DERIVED_MODELS.has(v.model) || v.category === MUTED_SENDER) return null;
+  const simKey = job.fp && job.fp.simKey;
+  const nym = job.nymKey ? nymFamilyKey(job.nymKey) : "";
+  if (!simKey && !nym) return null;
+  const strong = v.spam && p.strong && messageSignals(job, dossier).length > 0 ? 1 : 0;
+  return {
+    simKey: simKey || 0, size: sizeClass(job.fp ? job.fp.tokens : 0), script: scriptOf(job.content), senders: Math.max(1, dossier.exactSenders || 0),
+    ok: !v.spam && v.model !== "label" ? 1 : 0, spam: v.spam ? 1 : 0, strong, nym, nymKeys: (dossier.nymPubkeys || 0) + 1
   };
 }
 
@@ -2784,6 +3087,7 @@ function muteStatements(db, e, guarded) {
 async function repairFor(env, err) {
   const msg = String(err && err.message || err);
   if (/no such table: audit/i.test(msg) && !state.auditMissing) { state.auditMissing = true; return true; }
+  if (/no such table: spam_(texts|nyms)/i.test(msg) && !state.knowMissing) { state.knowMissing = true; return true; }
   if (/no such table: nope/i.test(msg)) {
     for (const ddl of NOPE_DDL) { try { await env.DB_NOPE.prepare(ddl).run(); } catch (_) { } }
     return true;
@@ -2815,6 +3119,7 @@ async function writeEntries(env, entries) {
       if (e.report) stmts.push(sdb.prepare(UNHIDE_SYNC_SQL).bind(e.id, e.id));
       const g = guardOf(e);
       for (const d of e.domains) stmts.push(sdb.prepare(DOMAIN_UPSERT_SQL + g.sql + DOMAIN_UPSERT_TAIL).bind(e.id, d, e.pubkey, e.verdictWord, e.seenAt, ...g.binds));
+      if (e.know && !state.knowMissing) stmts.push(...knowledgeStatements(sdb, e));
     }
     recs = recordStatements(sdb, entries);
     for (const r of recs) { r.at = stmts.length; stmts.push(r.stmt); }
@@ -3136,7 +3441,8 @@ function planEnforcement(job, v, dossier, strikes) {
   const own = messageSignals(job, dossier);
   const familyKeys = own.length ? Math.max(dossier.nymSpamPubkeys || 0, dossier.nymMachineSpamPubkeys || 0) : dossier.nymSpamPubkeys || 0;
   const nymFamily = familyKeys + 1 >= s.campaignCopies && (own.length > 0 || (dossier.nymLabelledSpam || 0) > 0);
-  const campaign = dossier.similarSpamPubkeys + 1 >= s.campaignCopies || (dossier.copyPubkeys || 0) + 1 >= s.campaignCopies || (dossier.similarPubkeys + 1 >= s.campaignCopies && (job.copies || 0) >= 2) || nymFamily;
+  const flood = floodCopies(job, dossier);
+  const campaign = dossier.similarSpamPubkeys + 1 >= s.campaignCopies || flood + 1 >= s.campaignCopies || (dossier.similarPubkeys + 1 >= s.campaignCopies && (job.copies || 0) >= 2 && !lowInformation(job.content)) || nymFamily;
   const shortFloor = !!innocuousKind(job.content) && strikes < 2;
   const actor = !!v.mute;
   const muteNow = (strikes >= s.strikesToMute && !shortFloor) || campaign || actor;
@@ -3144,7 +3450,7 @@ function planEnforcement(job, v, dossier, strikes) {
   if (s.blockEvents) actions.push("event-hidden");
   if (!muteNow) { actions.push("strike"); return { actions, muteNow: false }; }
   const until = now + Math.round(s.muteHours * 3600000);
-  const why = actor ? "same actor as a muted key" : campaign ? (nymFamily && dossier.similarSpamPubkeys + 1 < s.campaignCopies && (dossier.copyPubkeys || 0) + 1 < s.campaignCopies ? "nym family" : "campaign") : strikes + " strikes";
+  const why = actor ? "same actor as a muted key" : campaign ? (nymFamily && dossier.similarSpamPubkeys + 1 < s.campaignCopies && flood + 1 < s.campaignCopies ? "nym family" : "campaign") : strikes + " strikes";
   const reason = "spam engine: " + (v.category || "spam") + " (" + Math.round(v.confidence * 100) + "%, " + why + ")";
   const note = clip(v.reason, 300) + "\nnym: " + (job.nym || "?") + " · channel: " + (job.channel || "?") + "\n" + clip(job.content, 240);
   actions.push("muted");
@@ -3213,6 +3519,12 @@ export async function auditNow(env, job, hooks) {
   } else if (innocuous && !senderSuspicious(job, dossier, settings)) {
     v = { spam: false, confidence: 0.1, category: "ok", language: "", model: innocuous, reason: innocuous === "action" ? "app action (/slap, /hug) from a sender with a clean record" : "short chatter from a sender with a clean record" };
     state.counters.chatter++;
+  } else if (!job.force && knownLabel(job, dossier) === "ok" && !ownSignals(job, dossier).length) {
+    v = { spam: false, confidence: 0.1, category: "ok", language: "", model: "label", reason: "identical text was hand-labeled ok by an admin" };
+    state.counters.labelled++;
+  } else if (!job.force && knownLabel(job, dossier) === "spam" && !dossier.exact && !lowInformation(job.content) && !dossier.cleanHistory) {
+    v = { spam: true, confidence: 0.99, category: "repeat", language: "", model: "cross-ref", reason: "identical text was hand-labeled spam by an admin" };
+    state.counters.cached++;
   } else if (cached && cached.spam) {
     v = Object.assign({}, cached, { model: "cache", reason: "same text already judged spam: " + cached.reason });
     state.counters.cached++;
@@ -3239,14 +3551,25 @@ export async function auditNow(env, job, hooks) {
       const prompt = buildSpamPrompt(job, dossier);
       v = await askSpamModel(env, settings, prompt);
       state.counters.audited++;
+      let held = false;
       if (nymIsOnlyEvidence(job, dossier, v)) {
         v = Object.assign({}, v, { spam: false, category: "ok", confidence: Math.min(v.confidence, 0.5), reason: "let through: the message is not spam on its own and only the nym resembles prior spam (model: " + clip(v.reason, 200) + ")" });
         state.counters.nymOnly++;
       } else if (unsupportedSpam(job, dossier, v, settings)) {
         v = Object.assign({}, v, { spam: false, category: "ok", confidence: Math.min(v.confidence, 0.5), reason: "let through: no objective spam signal backs the model's " + (v.category || "spam") + " call on a sender who " + (v.messageAlone === false ? "would only be convicted by history" : "is talking to people or has an established key") + " (model: " + clip(v.reason, 200) + ")" });
         state.counters.unsupported++;
+      } else {
+        const unbacked = unbackedFlood(job, dossier, v);
+        if (unbacked === "ok") {
+          v = Object.assign({}, v, { spam: false, category: "ok", confidence: Math.min(v.confidence, 0.5), reason: "let through: a short common message with no burst, no link and no spam history is never spam without a bot signal (model: " + clip(v.reason, 200) + ")" });
+          state.counters.unbacked++;
+        } else if (unbacked === "hold") {
+          v = Object.assign({}, v, { confidence: Math.min(v.confidence, HELD_CONFIDENCE), reason: "held for review: the model called a flood, but no copies landed within " + COPY_BURST_MIN + " minutes and there is no burst, link or spam history (model: " + clip(v.reason, 200) + ")" });
+          state.counters.unbacked++;
+          held = true;
+        } else if (unbacked === "solo") held = true;
       }
-      rememberExact(job.fp, v, now);
+      if (!held) rememberExact(job.fp, v, now);
     }
   }
   if (!dossier.activity && !light) dossier.activity = activityFrom(job, dossier, null, null);

@@ -4,9 +4,11 @@ Object.assign(NYM.prototype, {
         this.shareChannel();
     },
 
-    async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot) {
-        if (!this._getApiHost()) return;
-        if (typeof geohash === 'string' && geohash && !this.isValidChannelTag(geohash)) return;
+    async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot, anon) {
+        const anonModel = anon ? window.NymAnonNymbot : null;
+        if (anon && !anonModel) return 'unavailable';
+        if (!this._getApiHost()) return anon ? 'unavailable' : undefined;
+        if (typeof geohash === 'string' && geohash && !this.isValidChannelTag(geohash)) return anon ? 'unavailable' : undefined;
         const mentionRegex = /@nymbot(?:#[a-f0-9]{4})?/i;
         if (mentionRegex.test(content) && !content.startsWith('?')) {
             const question = content.replace(mentionRegex, '').trim();
@@ -113,7 +115,8 @@ Object.assign(NYM.prototype, {
                     content: this.truncateText(m.content || '', 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
-                    channel: chanKey
+                    channel: chanKey,
+                    ...(anon && m._optimistic ? { pending: true } : {})
                 }));
                 channelMessages.push(...mapped);
             }
@@ -159,7 +162,8 @@ Object.assign(NYM.prototype, {
                     content: this.truncateText(m.content || '', 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
-                    channel: chanKey
+                    channel: chanKey,
+                    ...(anon && m._optimistic ? { pending: true } : {})
                 }));
                 channelMessages.push(...mapped);
             }
@@ -174,20 +178,32 @@ Object.assign(NYM.prototype, {
                 }
             });
         }
+        if (anon) {
+            const scrubbed = anonModel.scrubContext({ messages: channelMessages, users: activeUsers, self: [this.pubkey] });
+            channelMessages = scrubbed.messages;
+            activeUsers = scrubbed.users;
+        }
+        const senderNym = anon
+            ? anonModel.senderNym(anon.nym, anon.pubkey)
+            : this.nym + '#' + this.getPubkeySuffix(this.pubkey);
         this._setBotChannelThinking(true);
         try {
             const apiHost = this._getApiHost();
-            if (!apiHost) { this._setBotChannelThinking(false); return; }
+            if (!apiHost) { this._setBotChannelThinking(false); return anon ? 'unavailable' : undefined; }
             const resp = await this._edgeFetch(`https://${apiHost}/api/bot`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command, args, geohash, conversation, senderNym: this.nym + '#' + this.getPubkeySuffix(this.pubkey), publishedContent, channelMessages, activeUsers, threadRoot: threadRoot || null, lang: (this.getUiLanguage && this.getUiLanguage()) || '' })
+                body: JSON.stringify({ command, args, geohash, conversation, senderNym, publishedContent, channelMessages, activeUsers, threadRoot: threadRoot || null, lang: (this.getUiLanguage && this.getUiLanguage()) || '' })
             });
-            if (!resp.ok) { this._setBotChannelThinking(false); return; }
+            if (!resp.ok) { this._setBotChannelThinking(false); return anon ? anonModel.outcome(resp.status, false) : undefined; }
             const data = await resp.json();
             if (data.event && !this.isValidBotChannelEvent(data.event)) {
                 this._setBotChannelThinking(false);
-                return;
+                return anon ? 'failed' : undefined;
+            }
+            if (anon && !data.event) {
+                this._setBotChannelThinking(false);
+                return anonModel.outcome(resp.status, false);
             }
             if (data.event) {
                 const msg = JSON.stringify(['EVENT', data.event]);
@@ -205,9 +221,11 @@ Object.assign(NYM.prototype, {
                     }
                 }
             }
+            return null;
         } catch (e) {
             this._setBotChannelThinking(false);
             console.error('[nymbot] Command failed:', e);
+            return anon ? 'failed' : undefined;
         }
     },
 

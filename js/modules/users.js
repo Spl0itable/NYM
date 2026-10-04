@@ -1,5 +1,8 @@
 // users.js - User identities, blocked users/keywords, friends, avatars, banners, wallpaper, uploads
 
+const UPLOAD_HOST_TIMEOUT_MS = 45000;
+const UPLOAD_MIN_BYTES_PER_MS = 50;
+
 const BLOSSOM_SERVERS = [
     'https://blossom.band',
     'https://blossom.primal.net',
@@ -662,17 +665,35 @@ Object.assign(NYM.prototype, {
         if (!this._blossomRejects) this._blossomRejects = new Set();
         const type = this._blossomType(file);
         const candidates = BLOSSOM_SERVERS.filter(s => !this._blossomRejects.has(s + ' ' + type));
+        const limitMs = this._uploadHostTimeoutMs || Math.max(UPLOAD_HOST_TIMEOUT_MS, Math.ceil((file && file.size || 0) / UPLOAD_MIN_BYTES_PER_MS));
+        const outerReason = () => (signal && signal.reason && signal.reason.name === 'AbortError' ? signal.reason : new DOMException('Aborted', 'AbortError'));
         for (const server of (candidates.length ? candidates : BLOSSOM_SERVERS)) {
-            if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
+            if (signal && signal.aborted) throw outerReason();
+            const ctl = new AbortController();
+            const onAbort = () => ctl.abort(outerReason());
+            if (signal) signal.addEventListener('abort', onAbort, { once: true });
+            let timedOut = false;
+            const timer = setTimeout(() => { timedOut = true; ctl.abort(new DOMException('timeout', 'TimeoutError')); }, limitMs);
             try {
-                const url = await this._putToBlossom(file, hashHex, server, signal);
+                const url = await this._putToBlossom(file, hashHex, server, ctl.signal);
                 return { url, server };
             } catch (e) {
+                if (signal && signal.aborted) throw outerReason();
+                if (timedOut) {
+                    const secs = Math.round(limitMs / 1000);
+                    const why = typeof this.uiText === 'function' ? this.uiText('timed out after {s} s') : 'timed out after {s} s';
+                    console.warn('[upload] ' + server + ' timed out after ' + secs + ' s');
+                    failures.push(server.replace(/^https?:\/\//, '') + ' (' + type + '): ' + why.split('{s}').join(String(secs)));
+                    continue;
+                }
                 if (e && e.name === 'AbortError') throw e;
                 const text = (e && e.message) || 'failed';
                 const rejects = MN ? MN.blossomRejectsType(e && e.status, text) : (e && e.status === 415);
                 if (rejects) this._blossomRejects.add(server + ' ' + type);
                 failures.push(server.replace(/^https?:\/\//, '') + ' (' + type + '): ' + text);
+            } finally {
+                clearTimeout(timer);
+                if (signal) signal.removeEventListener('abort', onAbort);
             }
         }
         const err = new Error(failures.length ? failures.join('; ') : 'All Blossom servers failed');
@@ -1256,7 +1277,9 @@ Object.assign(NYM.prototype, {
 
     cancelUpload() {
         if (this._uploadAbort) {
-            try { this._uploadAbort.abort(); } catch (_) { }
+            const reason = new DOMException('Upload cancelled', 'AbortError');
+            reason.userCancelled = true;
+            try { this._uploadAbort.abort(reason); } catch (_) { }
         }
         if (typeof this.clearComposerAttachments === 'function') {
             this.clearComposerAttachments();

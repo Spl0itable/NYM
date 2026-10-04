@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../services/storage/revocable_prefs.dart';
+
 import 'emoji_data.dart';
 
 /// Persisted keys: loose [shortcode,url] pairs (max 5000) and packs (max 200).
@@ -140,5 +142,5 @@ final customEmojiStateProvider = Provider<CustomEmojiState>(
 
 /// Resolved lazily so the stores build only when a picker opens.
 final emojiPrefsProvider = FutureProvider<SharedPreferences>(
-  (ref) => SharedPreferences.getInstance(),
+  (ref) => ref.watch(sharedPrefsProvider.future),
 );

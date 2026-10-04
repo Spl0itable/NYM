@@ -4760,6 +4760,14 @@ async function checkSavedConnection() {
                     if (window.nostr?.getPublicKey) break;
                     await new Promise(r => setTimeout(r, 300));
                 }
+                let live = null;
+                try { live = window.nostr?.getPublicKey ? await window.nostr.getPublicKey() : null; } catch (_) { live = null; }
+                if (typeof live === 'string' && /^[0-9a-f]{64}$/.test(live) && live !== pubkey) {
+                    document.getElementById('setupModal').classList.remove('active');
+                    nym.pubkey = pubkey;
+                    if (typeof nym.acctExtensionMismatch === 'function') nym.acctExtensionMismatch(pubkey);
+                    return;
+                }
             }
 
             if (method === 'nip46') {
@@ -7194,6 +7202,7 @@ async function applyNostrSettings(s) {
 }
 
 async function signOut() {
+    if (nym && typeof nym.acctLogout === 'function' && await nym.acctLogout()) return;
     if (!(await window.showAppConfirm('Sign out and disconnect from Nymchat?', { okLabel: 'Sign out', danger: true }))) return;
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
@@ -7238,6 +7247,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     nym = new NYM();
     window.nym = nym;
     installNativeWalletBridgeCompat(nym);
+    if (typeof nym.acctSetup === 'function') nym.acctSetup();
 
     let _scrollHideTimer = null;
     document.addEventListener('scroll', () => {

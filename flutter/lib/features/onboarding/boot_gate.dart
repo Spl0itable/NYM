@@ -6,10 +6,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/bech32_codec.dart' as bech32;
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/nym_utils.dart';
 import '../../screens/home_shell.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
 import '../i18n/localization_service.dart';
@@ -65,13 +67,50 @@ class _BootGateState extends ConsumerState<BootGate> {
     }
     // The static setup modal watches the i18n version so it re-renders as its translations land.
     if (_needsSetup) {
+      final accounts = ref.read(accountsProvider);
+      final pending = accounts?.changes.value.activeAccount;
+      final canCancel = accounts != null &&
+          pending != null &&
+          pending.isPlaceholder &&
+          accounts.changes.value.accounts.length > 1;
+      final from = accounts?.changes.value.byId(pending?.returnTo);
       return Scaffold(
         backgroundColor: context.nym.bg,
-        body: Consumer(
-          builder: (context, ref, _) {
-            ref.watch(i18nVersionProvider);
-            return SetupModal(onComplete: _onSetupComplete);
-          },
+        body: Stack(
+          children: [
+            Positioned.fill(
+              child: Consumer(
+                builder: (context, ref, _) {
+                  ref.watch(i18nVersionProvider);
+                  return SetupModal(onComplete: _onSetupComplete);
+                },
+              ),
+            ),
+            if (canCancel)
+              Positioned(
+                top: 0,
+                left: 0,
+                child: SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: TextButton(
+                      key: const ValueKey('accountCancelAddBtn'),
+                      onPressed: () => unawaited(accounts.cancelAdd()),
+                      child: Text(
+                        from == null
+                            ? tr('Back to my accounts')
+                            : tr('Back to {nym}', {
+                                'nym': getNymFromPubkey(
+                                    from.nym.isEmpty ? 'nym' : from.nym,
+                                    from.pubkey)
+                              }),
+                        style: TextStyle(color: context.nym.textDim),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       );
     }

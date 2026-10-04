@@ -14,6 +14,7 @@ import '../toasts/toast_center.dart';
 import '../toasts/toast_model.dart';
 import 'media_notes.dart';
 import 'once_crypto.dart';
+import 'voice_recorder.dart';
 
 typedef MediaUpload = Future<String?> Function(Uint8List bytes, String contentType);
 typedef MediaContentSend = Future<void> Function(ChatView view, String content);
@@ -26,6 +27,17 @@ const String kSendingVideoNote = 'Sending video note…';
 const String kVoiceSendFailed = "Couldn't send the voice message: {error}";
 const String kVideoNoteSendFailed = "Couldn't send the video note: {error}";
 const String kRecordingEmpty = 'the recording is empty';
+const String kVoiceRecordingFailed = 'The recording failed: {error}';
+const String kNoRecordingToSend = "There's no recording to send.";
+
+String voiceStopFailureText({bool noRecording = false, Object? error}) {
+  if (noRecording) return tr(kNoRecordingToSend);
+  if (error is VoiceRecordingFailure) {
+    return tr(kVoiceRecordingFailed, {'error': tr(error.reason)});
+  }
+  return tr(kVoiceSendFailed,
+      {'error': error == null ? tr(kVoiceNoData) : '$error'});
+}
 typedef MediaFileRead = Future<Uint8List> Function(String path);
 typedef MediaNotice = void Function(String text, {bool retry});
 
@@ -134,9 +146,16 @@ class MediaNoteSender {
     Uint8List bytes;
     try {
       bytes = await readFile(path);
-      if (bytes.isEmpty) throw StateError(tr(kRecordingEmpty));
+      if (bytes.isEmpty) {
+        throw kind == 'voice'
+            ? const VoiceRecordingFailure(kVoiceNoData)
+            : StateError(tr(kRecordingEmpty));
+      }
     } catch (e) {
-      notice(tr(failText, {'error': _short(e)}));
+      debugPrint('[media-note] $kind recording unreadable: $e');
+      notice(e is VoiceRecordingFailure
+          ? voiceStopFailureText(error: e)
+          : tr(failText, {'error': _short(e)}));
       return false;
     } finally {
       try {
@@ -163,6 +182,7 @@ class MediaNoteSender {
     try {
       return await send(desc, bytes, target, route: route, once: once);
     } catch (e) {
+      debugPrint('[media-note] $kind send failed: $e');
       notice(tr(failText, {'error': _short(e)}));
       return false;
     }
@@ -218,6 +238,7 @@ class MediaNoteSender {
       await sendContent(target, once ? onceContent(desc.kind, full) : full);
       return true;
     } catch (e) {
+      debugPrint('[media-note] upload or publish failed: $e');
       failed = PendingMediaNote(desc: desc, bytes: bytes, target: target, once: once);
       notice(tr("Couldn't send: {error}", {'error': _short(e, 600)}), retry: true);
       return false;

@@ -3,13 +3,19 @@ import 'dart:typed_data';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../../features/accounts/account_logic.dart';
+import 'account_scope.dart';
 import 'at_rest_cipher.dart';
 
 class MeshFileStore {
   MeshFileStore({
     this._cipher,
     Future<Directory> Function()? baseDirectory,
-  })  : _baseDirectory = baseDirectory ?? getApplicationDocumentsDirectory;
+    String? account,
+  })  : _baseDirectory = baseDirectory ?? getApplicationDocumentsDirectory,
+        account = account ?? AccountScope.namespace;
+
+  final String account;
 
   static MeshFileStore instance = MeshFileStore();
 
@@ -21,7 +27,8 @@ class MeshFileStore {
   AtRestCipher get _crypto => _cipher ?? AtRestCipher.instance;
 
   Future<Directory> directory() async =>
-      Directory('${(await _baseDirectory()).path}/$folderName');
+      Directory('${(await _baseDirectory()).path}/'
+          '${AccountLogic.dbName(folderName, account)}');
 
   Future<String?> save(String fileName, Uint8List bytes) async {
     try {

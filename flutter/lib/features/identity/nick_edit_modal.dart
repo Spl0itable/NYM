@@ -22,6 +22,7 @@ import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
+import '../accounts/account_host.dart';
 import 'dev_nsec_modal.dart';
 import 'key_backup/key_backup_actions.dart';
 import 'modal_chrome.dart';
@@ -1068,14 +1069,23 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
 
   Future<void> _logout() async {
     final controller = ref.read(nostrControllerProvider);
+    final accounts = ref.read(accountsProvider);
     final ok = await showAppConfirm(
       context,
-      tr('Sign out and disconnect from Nymchat?'),
+      accounts == null
+          ? tr('Sign out and disconnect from Nymchat?')
+          : tr('Log out of this account? Keys stored only on this device will '
+              'be deleted. Back up your nsec first. Your other accounts stay '
+              'on this device.'),
       okLabel: tr('Sign out'),
       danger: true,
     );
     if (!ok) return;
     if (mounted) Navigator.of(context).pop();
+    if (accounts != null) {
+      await accounts.logout();
+      return;
+    }
     await controller.signOut();
   }
 

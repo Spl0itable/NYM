@@ -54,9 +54,11 @@ class CommandPalette extends StatefulWidget {
     required this.rows,
     required this.selectedIndex,
     required this.onSelect,
+    this.docked = false,
   });
 
   final List<PaletteRow> rows;
+  final bool docked;
 
   /// Index into the selectable commands, not the flat rows.
   final int selectedIndex;
@@ -94,7 +96,7 @@ class _CommandPaletteState extends State<CommandPalette> {
       constraints: const BoxConstraints(maxHeight: 200),
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(6),
-      decoration: commandPaletteDecoration(c),
+      decoration: commandPaletteDecoration(c, docked: widget.docked),
       child: SingleChildScrollView(
         controller: _scroll,
         child: Column(
@@ -152,9 +154,11 @@ class BotCommandPalette extends StatefulWidget {
     required this.rows,
     required this.selectedIndex,
     required this.onSelect,
+    this.docked = false,
   });
 
   final List<BotPaletteCommand> rows;
+  final bool docked;
 
   final int selectedIndex;
 
@@ -189,7 +193,7 @@ class _BotCommandPaletteState extends State<BotCommandPalette> {
       constraints: const BoxConstraints(maxHeight: 200),
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(6),
-      decoration: commandPaletteDecoration(c),
+      decoration: commandPaletteDecoration(c, docked: widget.docked),
       child: SingleChildScrollView(
         controller: _scroll,
         child: Column(
@@ -213,7 +217,8 @@ class _BotCommandPaletteState extends State<BotCommandPalette> {
 }
 
 /// Shared palette decoration; solid-ui is detected by its fully opaque glass background token.
-BoxDecoration commandPaletteDecoration(NymColors c) => BoxDecoration(
+BoxDecoration commandPaletteDecoration(NymColors c, {bool docked = false}) =>
+    BoxDecoration(
       color: c.glassBg.a == 1.0
           ? c.glassBg
           : c.isLight
@@ -221,13 +226,17 @@ BoxDecoration commandPaletteDecoration(NymColors c) => BoxDecoration(
               : const Color(0xE6141423),
       border: Border.all(color: c.glassBorder),
       borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-      boxShadow: [
-        BoxShadow(
-          color: c.isLight ? const Color(0x1F000000) : const Color(0x80000000),
-          blurRadius: 32,
-          offset: const Offset(0, 8),
-        ),
-      ],
+      boxShadow: docked
+          ? null
+          : [
+              BoxShadow(
+                color: c.isLight
+                    ? const Color(0x1F000000)
+                    : const Color(0x80000000),
+                blurRadius: 32,
+                offset: const Offset(0, 8),
+              ),
+            ],
     );
 
 /// Scrolls the selected row into view after the next frame.

@@ -273,7 +273,8 @@ function spamEngineJob(ev, kind, sig) {
     channel: channelKeyFor(kind, getTag),
     createdAt: ev.created_at * 1000,
     localScore: sig.score,
-    copies: sig.copies
+    copies: sig.copies,
+    event: ev
   };
 }
 

@@ -1,8 +1,12 @@
 // NIP-92 `imeta` media-fallback registry: builds outbound mirror tags, ingests inbound ones, records upload mirrors.
 
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/api/api_client.dart' show ApiException;
+import '../i18n/i18n.dart';
 import '../media_notes/media_notes.dart' show blossomFailureText, blossomRejectsType;
 
 /// http(s) URLs ending in an image/video extension, with an optional query string.
@@ -84,27 +88,44 @@ String blossomContentType(String? type) {
   return t.isEmpty ? 'application/octet-stream' : t;
 }
 
+const Duration kUploadHostTimeout = Duration(seconds: 45);
+const int kUploadMinBytesPerMs = 50;
+
+Duration uploadHostTimeout(int size) {
+  final bySize = Duration(milliseconds: (size / kUploadMinBytesPerMs).ceil());
+  return bySize > kUploadHostTimeout ? bySize : kUploadHostTimeout;
+}
+
 class BlossomUploader {
+  BlossomUploader({this.hostTimeout});
+
+  final Duration? hostTimeout;
   final Set<String> _rejects = {};
   String lastFailure = '';
 
   Future<({String url, String server})?> upload(
     List<String> servers,
     String contentType,
-    Future<String?> Function(String server, String contentType) put,
-  ) async {
+    Future<String?> Function(String server, String contentType) put, {
+    int size = 0,
+  }) async {
     final type = blossomContentType(contentType);
     final open = servers.where((s) => !_rejects.contains('$s $type')).toList();
     final failures = <String>[];
+    final limit = hostTimeout ?? uploadHostTimeout(size);
     for (final server in open.isEmpty ? servers : open) {
       final host = server.replaceFirst(RegExp(r'^https?://'), '');
       try {
-        final url = await put(server, type);
+        final url = await put(server, type).timeout(limit);
         if (url != null && url.isNotEmpty) {
           lastFailure = '';
           return (url: url, server: server);
         }
         failures.add('$host ($type): no URL in response');
+      } on TimeoutException {
+        final secs = (limit.inMilliseconds / 1000).round();
+        debugPrint('[upload] $host timed out after $secs s');
+        failures.add('$host ($type): ${tr('timed out after {s} s', {'s': '$secs'})}');
       } on ApiException catch (e) {
         final text = blossomFailureText(e.statusCode, '', e.body);
         if (blossomRejectsType(e.statusCode, text)) _rejects.add('$server $type');

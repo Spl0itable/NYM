@@ -19,6 +19,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/brand_buttons.dart';
+import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import 'dev_nsec_modal.dart';
 import 'key_backup/key_backup_crypto.dart';
@@ -333,11 +334,14 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     });
     try {
       await ref.read(nostrControllerProvider).loginWithNsec(input);
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() {
         _loggingIn = false;
-        _loginError = tr('Invalid nsec key. Please check and try again.');
+        _loginError = e is AccountAlreadySaved
+            ? tr('This key is also saved as {nym}. Switch to it from the '
+                'account switcher.', {'nym': e.nym})
+            : tr('Invalid nsec key. Please check and try again.');
       });
       return;
     }

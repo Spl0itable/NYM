@@ -31,6 +31,7 @@ import '../toasts/toast_center.dart';
 import 'bot_commands.dart';
 import 'bot_runs.dart';
 import 'nymbot_models.dart';
+import '../../services/storage/revocable_prefs.dart';
 import '../../services/storage/secure_store.dart';
 import 'anon_bot.dart';
 import 'nymbot_service.dart';
@@ -493,7 +494,7 @@ class BotChatController extends StateNotifier<BotChatState> {
     }
   }
 
-  Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
+  Future<SharedPreferences> get _prefs => _ref.read(sharedPrefsProvider.future);
 
   Future<void> _hydrate() async {
     try {

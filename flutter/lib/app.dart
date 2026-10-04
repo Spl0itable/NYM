@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/theme/nym_theme.dart';
+import 'features/accounts/account_host.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/commands/command_i18n.dart';
 import 'features/chat_lock/chat_lock_providers.dart';
@@ -74,9 +75,14 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     final controller = ref.read(nostrControllerProvider);
 
     // Registered regardless of the notification setting; the catch-up re-checks it.
-    _backgroundRefresh.start(
-      () => ref.read(nostrControllerProvider).runBackgroundCatchUp(),
-    );
+    _backgroundRefresh.start(() async {
+      final caught =
+          await ref.read(nostrControllerProvider).runBackgroundCatchUp();
+      try {
+        await ref.read(accountsProvider)?.runInactiveProbes();
+      } catch (_) {}
+      return caught;
+    });
 
     _startHeartbeat();
 
@@ -121,6 +127,13 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
 
   /// A route payload opens its conversation; anything else is tried as a deep link.
   void _openNotification(String payload) {
+    if (payload.startsWith(kAccountPayloadPrefix)) {
+      final id = payload.substring(kAccountPayloadPrefix.length);
+      try {
+        unawaited(ref.read(accountsProvider)?.switchTo(id));
+      } catch (_) {}
+      return;
+    }
     try {
       final target = decodeNotificationPayload(payload);
       if (target != null) {

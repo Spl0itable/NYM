@@ -2060,11 +2060,14 @@ Object.assign(NYM.prototype, {
                 content: event.content,
             };
             const signed = await window.nostr.signEvent(unsigned);
+            if (signed && this.pubkey && signed.pubkey && signed.pubkey !== this.pubkey) throw new Error('Signer key does not match this account');
             return signed;
         }
         // NIP-46 remote signer.
         if (this.nostrLoginMethod === 'nip46' && _nip46State && _nip46State.connected) {
-            return await _nip46SignEvent(event);
+            const signed = await _nip46SignEvent(event);
+            if (signed && this.pubkey && signed.pubkey && signed.pubkey !== this.pubkey) throw new Error('Signer key does not match this account');
+            return signed;
         }
         if (this.privkey) {
             return window.NostrTools.finalizeEvent(event, this.privkey);
@@ -2899,7 +2902,6 @@ Object.assign(NYM.prototype, {
             this.userScrolledUp = false;
             this.displayMessage(optimisticMessage);
             this._scheduleScrollToBottom(true);
-            this.recordOwnActivity();
 
             (async () => {
                 try {
@@ -2914,7 +2916,7 @@ Object.assign(NYM.prototype, {
                 }
             })();
 
-            return true;
+            return { nym: anonNym, pubkey: ephPk };
         } catch (error) {
             this.displaySystemMessage('Failed to send pseudonymous message: ' + error.message);
             return false;

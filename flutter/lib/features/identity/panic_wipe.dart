@@ -103,6 +103,9 @@ class _CacheStoreAdapter implements PanicCacheStore {
     try {
       await _store.panicWipe();
     } catch (_) {}
+    try {
+      await CacheStore.deleteAllAccountFiles();
+    } catch (_) {}
   }
 }
 

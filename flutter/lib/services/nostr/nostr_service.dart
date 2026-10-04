@@ -274,6 +274,13 @@ class NostrService {
     _evictProcessedWraps();
   }
 
+  static List<String> recentProcessedWraps(int max) {
+    final all = _processedWrapIds.toList();
+    return all.length > max ? all.sublist(all.length - max) : all;
+  }
+
+  static void forgetProcessedWraps() => _processedWrapIds.clear();
+
   static void _rememberProcessedWrap(String id) {
     if (id.isEmpty) return;
     _processedWrapIds.remove(id);

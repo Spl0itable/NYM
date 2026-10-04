@@ -74,7 +74,19 @@ class RecordedVoice {
   String get mime => 'audio/mp4';
 }
 
-enum VoiceStartResult { started, denied, failed }
+enum VoiceStartResult { started, denied, failed, cancelled }
+
+const String kVoiceNotStarted = "the microphone hadn't started yet";
+const String kVoiceNoData = 'no audio data came from the microphone';
+
+class VoiceRecordingFailure implements Exception {
+  const VoiceRecordingFailure(this.reason);
+
+  final String reason;
+
+  @override
+  String toString() => reason;
+}
 
 class VoiceRecordingController extends ChangeNotifier {
   VoiceRecordingController({
@@ -118,11 +130,23 @@ class VoiceRecordingController extends ChangeNotifier {
 
   Future<VoiceStartResult> start() async {
     try {
-      if (!await backend.hasPermission()) return VoiceStartResult.denied;
+      if (!await backend.hasPermission()) {
+        return stopped ? VoiceStartResult.cancelled : VoiceStartResult.denied;
+      }
+      if (stopped) return VoiceStartResult.cancelled;
       _path = await tempPath();
+      if (stopped) return VoiceStartResult.cancelled;
       await backend.start(_path!);
-    } catch (_) {
+    } catch (e) {
+      if (stopped) return VoiceStartResult.cancelled;
+      debugPrint('[voice] recorder failed to start: $e');
       return VoiceStartResult.failed;
+    }
+    if (stopped) {
+      try {
+        await backend.cancel();
+      } catch (_) {}
+      return VoiceStartResult.cancelled;
     }
     _startedAt = _clock();
     _levels = backend.levels(sampleEvery).listen((v) {
@@ -162,25 +186,37 @@ class VoiceRecordingController extends ChangeNotifier {
     stopped = true;
     _duration = elapsed.clamp(0, maxSeconds).toDouble();
     _levels?.cancel();
-    final f = backend.stop();
+    final Future<String?> f =
+        _startedAt == null ? Future<String?>.value(null) : backend.stop();
     _stopping = f;
     return f;
   }
 
   Future<RecordedVoice?> stop({required bool send}) async {
     _tick?.cancel();
+    final started = _startedAt != null;
     final path = await _finish() ?? _path;
     notifyListeners();
-    if (!send || path == null) {
+    if (!send) {
       await _deleteQuietly(path);
       return null;
     }
-    if ((_duration ?? 0) < MediaNoteLimits.minVoiceSeconds) {
+    if (!started) throw const VoiceRecordingFailure(kVoiceNotStarted);
+    if (path == null || _sizeOf(path) == 0) {
       await _deleteQuietly(path);
-      return null;
+      throw const VoiceRecordingFailure(kVoiceNoData);
     }
     return RecordedVoice(
         path: path, duration: _duration!, samples: List.of(samples), once: once);
+  }
+
+  static int _sizeOf(String path) {
+    try {
+      final f = File(path);
+      return f.existsSync() ? f.lengthSync() : 0;
+    } catch (_) {
+      return 0;
+    }
   }
 
   static Future<void> _deleteQuietly(String? path) async {

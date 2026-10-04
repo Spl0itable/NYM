@@ -206,6 +206,13 @@ class NotificationService {
         payload: payload);
   }
 
+  static Future<void> cancelEverything() async {
+    if (!isSupported) return;
+    try {
+      await _instance._notifications.cancelAll();
+    } catch (_) {}
+  }
+
   Future<void> cancelConversation(String conversationKey) async {
     if (!isSupported || conversationKey.isEmpty) return;
     try {

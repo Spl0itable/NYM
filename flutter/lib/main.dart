@@ -7,10 +7,12 @@ import 'dart:async';
 import 'app.dart';
 import 'core/constants/storage_keys.dart';
 import 'core/theme/nym_theme.dart';
+import 'features/accounts/account_host.dart';
+import 'features/accounts/account_runtime.dart';
+import 'features/accounts/inactive_probe.dart';
 import 'features/identity/vault_settings_modal.dart' show identityVaultProvider;
 import 'features/identity/vault_boot_unlock.dart';
 import 'services/platform/background_refresh.dart';
-import 'services/storage/key_value_store.dart';
 import 'services/storage/secure_store.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
@@ -26,21 +28,20 @@ Future<void> main() async {
 
   // Catch otherwise-fatal async errors (e.g. offline WebSocket DNS failures) so they don't kill the app.
   await runZonedGuarded(() async {
-    await SecureStore.settleInstall(await SharedPreferences.getInstance());
-    final kv = await KeyValueStore.open();
+    final prefs = await SharedPreferences.getInstance();
+    await SecureStore.settleInstall(prefs);
+    final runtime = AccountRuntime(prefs: prefs);
+    await runtime.boot();
 
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
-    // Manual container so only the real app boots the controller; widget tests use their own ProviderScope.
-    final container = ProviderContainer(
-      overrides: [keyValueStoreProvider.overrideWithValue(kv)],
-    );
-
     runApp(
-      UncontrolledProviderScope(
-        container: container,
-        // When the vault is enabled, block until unlock before booting the controller.
-        child: const _BootUnlockGate(),
+      AccountHost(
+        session: AccountSession(
+          runtime: runtime,
+          probe: InactiveProbe(prefs: prefs),
+        ),
+        builder: () => const _BootUnlockGate(),
       ),
     );
   }, (error, stack) {

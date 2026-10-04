@@ -1077,3 +1077,245 @@ body.sidebar-reorder-mode .nav-title {
     transform: translateZ(0);
     backface-visibility: hidden;
 }
+
+.nym-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    margin-top: 15px;
+}
+
+.nym-row .nym-display {
+    margin-top: 0;
+    flex: 1;
+    min-width: 0;
+}
+
+.acct-switch-btn {
+    position: relative;
+    flex: 0 0 auto;
+    width: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.acct-switch-btn:hover,
+.acct-switch-btn:focus-visible {
+    color: var(--primary);
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgb(from var(--primary) r g b / 0.3);
+}
+
+.acct-switch-dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--danger, #ef4444);
+}
+
+.acct-modal-content {
+    max-width: 460px;
+}
+
+.acct-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.acct-row {
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.03);
+    overflow: hidden;
+}
+
+.acct-row.is-active {
+    border-color: rgb(from var(--primary) r g b / 0.45);
+}
+
+.acct-row-main {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+}
+
+.acct-row-main:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.acct-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    object-fit: cover;
+}
+
+.acct-avatar-blank {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-dim);
+    font-weight: 600;
+}
+
+.acct-name {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 8px;
+    color: var(--secondary);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.acct-name .nym-suffix {
+    color: var(--text-dim);
+}
+
+.acct-badge {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    border: 1px solid var(--glass-border);
+    border-radius: 999px;
+    padding: 1px 7px;
+}
+
+.acct-unread {
+    min-width: 20px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--danger, #ef4444);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.acct-check {
+    color: var(--primary);
+    display: flex;
+}
+
+.acct-row-tools {
+    padding: 0 12px 10px 58px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.acct-notify {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.acct-notify-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+}
+
+.acct-row-btns {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.acct-row-btn {
+    background: none;
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-sm);
+    color: var(--text-dim);
+    font-size: 12px;
+    padding: 4px 10px;
+    cursor: pointer;
+}
+
+.acct-row-btn:hover {
+    color: var(--text);
+}
+
+.acct-danger,
+.acct-row-btn.acct-danger {
+    color: var(--danger, #ef4444);
+}
+
+.acct-actions {
+    justify-content: space-between;
+}
+
+.acct-switch-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 10050;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+}
+
+.acct-switch-overlay.active,
+html.nym-acct-frozen .acct-switch-overlay {
+    display: flex;
+}
+
+.setup-account-back {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin: 0 0 14px;
+    padding: 8px 12px;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+@media (max-width: 768px) {
+    .modal.acct-modal {
+        align-items: flex-end;
+    }
+
+    .acct-modal .acct-modal-content {
+        width: 100%;
+        max-width: 100%;
+        border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+        padding: 24px 16px calc(16px + env(safe-area-inset-bottom));
+    }
+
+    .acct-row-tools {
+        padding-left: 12px;
+    }
+}

@@ -1,7 +1,7 @@
 // persistence.js - IndexedDB-backed cache for channel messages, PMs, group chats, user profiles, and reactions.
 
 (function () {
-    const DB_NAME = 'nym-cache';
+    const DB_NAME = (window.NymAccounts && typeof window.NymAccounts.pageDb === 'function') ? window.NymAccounts.pageDb('nym-cache') : 'nym-cache';
     const DB_VERSION = 2;
     const STORES = ['meta', 'profiles', 'channels', 'pms', 'reactions', 'avatars', 'banners'];
 

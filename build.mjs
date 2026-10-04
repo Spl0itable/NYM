@@ -228,7 +228,7 @@ async function run() {
     'css/styles-core.css', 'css/styles-shell.css', 'css/styles-chat.css',
     'css/styles-components.css', 'css/styles-themes-responsive.css', 'css/styles-columns.css',
     'css/no-inline.css',
-    'js/defer-css.js', 'js/theme-init.js', 'js/setup-modal-init.js',
+    'js/defer-css.js', 'js/accounts.js', 'js/theme-init.js', 'js/setup-modal-init.js',
     'js/modules/inline-bindings.js', 'js/modules/dialog.js', 'js/nostr-tools.js',
     'js/app.js', 'js/vendor/ml-kem.js', 'js/nym-crypto.js', 'js/modules/crypto-pool.js',
     'js/modules/pq.js',

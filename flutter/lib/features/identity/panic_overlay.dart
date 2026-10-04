@@ -7,19 +7,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../state/nostr_controller.dart';
+import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import 'panic_wipe.dart';
 
 /// Runs the emergency wipe; the server purge is signed while the key exists and time-bounded so it can't stall the wipe.
 void startPanicWipe(BuildContext context, WidgetRef ref) {
   final ctrl = ref.read(nostrControllerProvider);
+  final accounts = ref.read(accountsProvider);
   unawaited(ctrl
       .purgeServerRecords()
       .timeout(const Duration(seconds: 3), onTimeout: () => false));
   PanicOverlay.show(
     context,
     wipe: PanicWipe.production(),
-    onComplete: () => unawaited(ctrl.resetAfterPanic()),
+    onComplete: () {
+      accounts?.forgetAll();
+      unawaited(ctrl.resetAfterPanic());
+    },
   );
 }
 

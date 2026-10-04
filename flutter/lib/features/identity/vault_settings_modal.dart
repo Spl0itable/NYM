@@ -8,6 +8,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../services/storage/secure_store.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import 'biometric_secret_store.dart';
 import 'identity_vault.dart';
@@ -53,7 +54,8 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   Future<void> _checkBiometric() async {
     final supported =
         await ref.read(identityVaultProvider).biometricAvailable();
-    if (mounted) setState(() => _bioAvailable = supported);
+    final taken = ref.read(accountsProvider)?.biometricHeldByOther() ?? false;
+    if (mounted) setState(() => _bioAvailable = supported && !taken);
   }
 
   @override

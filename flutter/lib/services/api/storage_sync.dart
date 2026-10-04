@@ -1743,6 +1743,12 @@ class StorageSync {
     }
   }
 
+  Future<void> persistDepositsNow() async {
+    _depositPersistTimer?.cancel();
+    _depositPersistTimer = null;
+    await _persistDeposits();
+  }
+
   Future<int> restoreDeposits() async {
     final load = _depositLoad;
     if (!_durable || load == null) return 0;

@@ -11,13 +11,18 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 
 import '../../core/constants/history_window.dart';
 import '../../core/crypto/keys.dart' as keys;
+import '../../features/accounts/account_logic.dart';
 import '../../models/message.dart';
 import '../../models/user.dart';
+import 'account_scope.dart';
 import 'secure_store.dart';
 
 /// SQLCipher-encrypted mirror of the PWA's IndexedDB `nym-cache`, with the same LRU limits and no app state.
 class CacheStore {
-  CacheStore({this._db});
+  CacheStore({this._db, String? account})
+      : account = account ?? AccountScope.namespace;
+
+  final String account;
 
   /// LRU caps per store (`STORE_LIMITS` in persistence.js).
   static const Map<String, int> storeLimits = {
@@ -49,7 +54,6 @@ class CacheStore {
   /// Past-verified event ids, restored at boot to skip signature checks; ids are content-bound, so this is safe.
   static const String metaVerifiedEventIds = 'verifiedEventIds';
 
-  static const String _dbName = 'nym_cache.db';
   static const int _dbVersion = 2;
 
   /// Every logical store, plus the unbounded `meta` store.
@@ -80,7 +84,6 @@ class CacheStore {
 
   int _now() => DateTime.now().millisecondsSinceEpoch;
 
-  /// SecureStore key holding the SQLCipher passphrase for [_dbName].
   static const String _dbKeyName = 'nym_cache_db_key';
 
   /// SQLCipher passphrase from the keystore, minted as random 64-hex on first use; never leaves the device.
@@ -158,7 +161,7 @@ class CacheStore {
   Future<void> open() async {
     if (_db != null) return;
     final dir = await getApplicationDocumentsDirectory();
-    final path = p.join(dir.path, _dbName);
+    final path = p.join(dir.path, cacheFileName(account));
     _path = path;
     final password = await _databasePassword(SecureStore(), path);
     await _migratePlaintextIfNeeded(path, password);
@@ -861,6 +864,37 @@ class CacheStore {
     if (path != null) {
       try {
         await deleteDatabase(path);
+      } catch (_) {}
+    }
+  }
+
+  static String cacheFileName(String ns) =>
+      '${AccountLogic.dbName('nym_cache', ns)}.db';
+
+  static Future<void> deleteAccountFiles(String account) async {
+    final dir = await getApplicationDocumentsDirectory();
+    final path = p.join(dir.path, cacheFileName(account));
+    try {
+      await deleteDatabase(path);
+    } catch (_) {}
+    for (final suffix in ['', '-wal', '-shm', '-journal', '.enc']) {
+      try {
+        final f = File('$path$suffix');
+        if (await f.exists()) await f.delete();
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> deleteAllAccountFiles() async {
+    final dir = await getApplicationDocumentsDirectory();
+    if (!await dir.exists()) return;
+    await for (final entity in dir.list()) {
+      final name = p.basename(entity.path);
+      if (!name.startsWith('nym_cache~') && !name.startsWith('mesh_files~')) {
+        continue;
+      }
+      try {
+        await entity.delete(recursive: true);
       } catch (_) {}
     }
   }

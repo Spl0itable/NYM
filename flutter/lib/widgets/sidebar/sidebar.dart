@@ -20,6 +20,8 @@ import '../../features/mesh/mesh_controller.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/i18n/localization_service.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/accounts/account_host.dart';
+import '../../features/accounts/account_switcher.dart';
 import '../../features/identity/nick_edit_modal.dart';
 import '../../features/identity/panic_overlay.dart';
 import '../../features/onboarding/tutorial_overlay.dart';
@@ -749,70 +751,78 @@ class _SidebarState extends ConsumerState<Sidebar> {
         children: [
           const SizedBox(height: 15),
           // Bind only the nym box, not the status row: the raw Listener bypasses the gesture arena.
-          _PanicHoldDetector(
-            onTap: () => NickEditModal.open(context),
-            onHold: () => _triggerPanic(context),
-            child: MouseRegion(
-              onEnter: (_) => setState(() => _nymHover = true),
-              onExit: (_) => setState(() => _nymHover = false),
-              child: Container(
-                key: TutorialTargets.keyFor(TutorialTarget.nymDisplay),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: _nymHover
-                      ? (c.isLight
-                          ? Colors.black.withValues(alpha: 0.07)
-                          : Colors.white.withValues(alpha: 0.07))
-                      : c.insetFill,
-                  border: Border.all(
-                    color: _nymHover && !c.isLight
-                        ? c.primaryA(0.3)
-                        : c.glassBorder,
-                  ),
-                  borderRadius: NymRadius.rsm,
-                  boxShadow: _nymHover
-                      ? [BoxShadow(color: c.primaryA(0.08), blurRadius: 15)]
-                      : null,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      tr('YOUR NYM (CLICK TO EDIT)'),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: c.textDim,
-                        fontSize: 10,
-                        letterSpacing: 1.5,
-                        fontWeight: FontWeight.w500,
+          Row(
+            children: [
+              const AccountSwitchButton(),
+              if (ref.watch(accountsProvider) != null) const SizedBox(width: 8),
+              Expanded(
+                child: _PanicHoldDetector(
+                  onTap: () => NickEditModal.open(context),
+                  onHold: () => _triggerPanic(context),
+                  child: MouseRegion(
+                    onEnter: (_) => setState(() => _nymHover = true),
+                    onExit: (_) => setState(() => _nymHover = false),
+                    child: Container(
+                      key: TutorialTargets.keyFor(TutorialTarget.nymDisplay),
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: _nymHover
+                            ? (c.isLight
+                                ? Colors.black.withValues(alpha: 0.07)
+                                : Colors.white.withValues(alpha: 0.07))
+                            : c.insetFill,
+                        border: Border.all(
+                          color: _nymHover && !c.isLight
+                              ? c.primaryA(0.3)
+                              : c.glassBorder,
+                        ),
+                        borderRadius: NymRadius.rsm,
+                        boxShadow: _nymHover
+                            ? [BoxShadow(color: c.primaryA(0.08), blurRadius: 15)]
+                            : null,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            tr('YOUR NYM (CLICK TO EDIT)'),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: c.textDim,
+                              fontSize: 10,
+                              letterSpacing: 1.5,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              NymAvatar(
+                                seed: ref.read(appStateProvider).selfPubkey,
+                                size: 32,
+                                imageUrl: ref
+                                    .read(appStateProvider)
+                                    .users[ref.read(appStateProvider).selfPubkey]
+                                    ?.profile
+                                    ?.picture,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _NymValueText(
+                                  nym: nym,
+                                  pubkey: ref.read(appStateProvider).selfPubkey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        NymAvatar(
-                          seed: ref.read(appStateProvider).selfPubkey,
-                          size: 32,
-                          imageUrl: ref
-                              .read(appStateProvider)
-                              .users[ref.read(appStateProvider).selfPubkey]
-                              ?.profile
-                              ?.picture,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _NymValueText(
-                            nym: nym,
-                            pubkey: ref.read(appStateProvider).selfPubkey,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
           const SizedBox(height: 10),
           _ConnectionStatusIndicator(

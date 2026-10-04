@@ -2800,6 +2800,17 @@ Object.assign(NYM.prototype, {
         const savedQuote = this.pendingQuote ? { author: this.pendingQuote.author, text: this.pendingQuote.text, fullText: this.pendingQuote.fullText } : null;
         const threadRoot = (typeof this._threadRootForSend === 'function')
             ? this._threadRootForSend() : null;
+        const rawInput = content;
+        const threadBotQuote = (!savedQuote && threadRoot && typeof this._threadBotQuoteContext === 'function')
+            ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
+            : null;
+        const botQuote = savedQuote || threadBotQuote;
+        const anonModel = window.NymAnonNymbot;
+        const askBot = !!(anonModel && !rawInput.startsWith('/') && anonModel.triggers({
+            body: rawInput,
+            quoteAuthor: botQuote ? botQuote.author : '',
+            threadBot: !!threadBotQuote
+        }));
 
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
@@ -2836,8 +2847,36 @@ Object.assign(NYM.prototype, {
                 const label = window.NymComposer ? window.NymComposer.STRINGS.sentAnon : 'Sent anonymously';
                 this.showToast(typeof this.uiText === 'function' ? this.uiText(label) : label);
             }
+            if (askBot) this._askNymbotAnonymously(rawInput, botQuote, content, threadRoot, sent);
         }
-        return sent;
+        return !!sent;
+    },
+
+    _askNymbotAnonymously(rawInput, botQuote, content, threadRoot, sender) {
+        const anonModel = window.NymAnonNymbot;
+        const geohash = this.currentGeohash;
+        const say = (reason) => {
+            const text = reason ? anonModel.notice(reason) : '';
+            if (text && typeof this.showToast === 'function') {
+                this.showToast(typeof this.uiText === 'function' ? this.uiText(text) : text);
+            }
+        };
+        const blocked = anonModel.blocker({
+            apiHost: !!(typeof this._getApiHost === 'function' && this._getApiHost()),
+            mesh: typeof this.meshShouldCarry === 'function' && !!this.meshShouldCarry(geohash || this.currentChannel),
+            validChannel: !geohash || typeof this.isValidChannelTag !== 'function' || this.isValidChannelTag(geohash)
+        });
+        if (blocked) {
+            say(blocked);
+            return Promise.resolve(blocked);
+        }
+        const anon = { nym: sender && sender.nym, pubkey: sender && sender.pubkey };
+        return Promise.resolve(this._handleBotCommand(rawInput, geohash, botQuote, content, threadRoot, anon))
+            .catch(() => 'failed')
+            .then((reason) => {
+                say(reason);
+                return reason || null;
+            });
     },
 
     hideMessagesFromBlockedUser(pubkey) {

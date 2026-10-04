@@ -79,6 +79,17 @@ class NymIcons {
       '<line x1="12" y1="16" x2="12" y2="12"/>'
       '<line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
 
+  static const String accountSwitch =
+      '<svg fill="none" stroke="currentColor" stroke-linecap="round" '
+      'stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24">'
+      '<circle cx="12" cy="10" r="3"/>'
+      '<path d="M7.5 18a5 5 0 0 1 9 0"/>'
+      '<path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"/>'
+      '<polyline points="21 3 21 8 16 8"/>'
+      '<path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"/>'
+      '<polyline points="3 21 3 16 8 16"/>'
+      '</svg>';
+
   static const String logout =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
       'stroke-linecap="round" stroke-linejoin="round">'
