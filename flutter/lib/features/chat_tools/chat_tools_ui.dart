@@ -32,6 +32,8 @@ import 'chat_tools_providers.dart';
 import 'chat_tools_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../identity/deleted_notice.dart' show dimNymSuffixes;
+import '../search/unified_search_panel.dart' show nymSuffixStyle;
 
 class ChatToolIcons {
   const ChatToolIcons._();
@@ -561,7 +563,13 @@ class SavedMessagesPanel extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Wrap(spacing: 8, children: [
-                          Text('${a['n']}',
+                          Text.rich(
+                              dimNymSuffixes(
+                                  '${a['n']}',
+                                  nymSuffixStyle(TextStyle(
+                                      color: c.primary,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600))),
                               style: TextStyle(
                                   color: c.primary,
                                   fontSize: 12,
@@ -935,7 +943,14 @@ class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
                           color: hidden ? c.textDim : c.text,
                           fontStyle: hidden ? FontStyle.italic : FontStyle.normal,
                           fontSize: 13)),
-                  Text('${it.author} · ${when(it.at)}',
+                  Text.rich(
+                      TextSpan(children: [
+                        dimNymSuffixes(
+                            it.author,
+                            nymSuffixStyle(
+                                TextStyle(color: c.textDim, fontSize: 11))),
+                        TextSpan(text: ' · ${when(it.at)}'),
+                      ]),
                       style: TextStyle(color: c.textDim, fontSize: 11)),
                 ],
               ),

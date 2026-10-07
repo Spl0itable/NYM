@@ -955,6 +955,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                   child: GeoSearchField(
                     loadPlaces: _loadPlaces,
                     onPick: (gh) => _focusCell(gh, size),
+                    placeLabel: _placeLabel,
                   ),
                 ),
               ),

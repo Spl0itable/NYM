@@ -122,14 +122,18 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final bigText = MediaQuery.textScalerOf(context).scale(10) > 15;
     final body = Stack(
       children: [
         Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _header(c),
+            if (bigText)
+              Flexible(child: SingleChildScrollView(child: _header(c)))
+            else
+              _header(c),
             _tabs(c),
-            Flexible(child: _body(c)),
+            Flexible(flex: bigText ? 2 : 1, child: _body(c)),
           ],
         ),
         ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
@@ -188,9 +192,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          FitWordsText(
             tr('Shop').toUpperCase(),
-            key: const ValueKey('shopTitle'),
+            textKey: const ValueKey('shopTitle'),
             style: TextStyle(
               color: c.primary,
               fontSize: 24,
@@ -954,10 +958,18 @@ class _ShopItemCard extends StatelessWidget {
               decoration: BoxDecoration(
                 border: Border(top: BorderSide(color: c.glassBorder)),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: _footerChildren(c),
-              ),
+              child: MediaQuery.textScalerOf(context).scale(10) > 15
+                  ? Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _footerChildren(c, wrap: true),
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: _footerChildren(c),
+                    ),
             ),
         ],
       ),
@@ -980,22 +992,21 @@ class _ShopItemCard extends StatelessWidget {
   }
 
   /// Footer order: price, BUY, GIFT.
-  List<Widget> _footerChildren(NymColors c) {
+  List<Widget> _footerChildren(NymColors c, {bool wrap = false}) {
     // Scales down so a long price never overflows.
-    final price = Flexible(
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        alignment: Alignment.centerLeft,
-        child: Text(
-          tr('⚡ {price} sats', {'price': item.price}),
-          style: const TextStyle(
-            color: Color(0xFFF7931A),
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          ),
+    final priceText = FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Text(
+        tr('⚡ {price} sats', {'price': item.price}),
+        style: const TextStyle(
+          color: Color(0xFFF7931A),
+          fontWeight: FontWeight.bold,
+          fontSize: 16,
         ),
       ),
     );
+    final Widget price = wrap ? priceText : Flexible(child: priceText);
     // Owned wins over the availability label.
     if (owned && !_isBundle) {
       // Regular owned items can be gifted; limited owned items can't.

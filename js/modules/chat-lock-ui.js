@@ -648,8 +648,10 @@
             const keys = this.lockedChatKeys();
             const rows = keys.map((k) => {
                 const n = this._clChatUnread(k);
+                const p = L().lockParse(k);
+                const name = p && p.kind === 'dm' ? this.nymLabelHtml(this._clChatLabel(k)) : esc(this._clChatLabel(k));
                 return `<div class="cl-row" data-cl-key="${esc(k)}">
-                    <button type="button" class="cl-row-open" data-action="clOpenLocked" data-cl-key="${esc(k)}">${ICON_LOCK}<span class="cl-row-name">${esc(this._clChatLabel(k))}</span>${n > 0 ? `<span class="cl-row-badge">${n > 99 ? '99+' : n}</span>` : ''}</button>
+                    <button type="button" class="cl-row-open" data-action="clOpenLocked" data-cl-key="${esc(k)}">${ICON_LOCK}<span class="cl-row-name">${name}</span>${n > 0 ? `<span class="cl-row-badge">${n > 99 ? '99+' : n}</span>` : ''}</button>
                     <button type="button" class="ct-btn" data-action="clRemoveLock" data-cl-key="${esc(k)}">${ICON_UNLOCK}${esc(this._cl(L().STRINGS.unlockChat))}</button>
                 </div>`;
             }).join('');

@@ -327,7 +327,11 @@ class GeoSearchResult {
             'tier': match!.tier,
             'geohash': geohash,
           },
-        'geohash' => {'type': 'geohash', 'geohash': geohash},
+        'geohash' => {
+            'type': 'geohash',
+            'geohash': geohash,
+            'precision': geohash!.length,
+          },
         _ => {'type': 'invalid', 'reason': reason},
       };
 }
@@ -342,16 +346,10 @@ List<GeoSearchResult> buildGeoSearchResults(List<GeoPlace> places, String raw,
       GeoSearchResult.place(m, placeGeohash(m.place)),
   ];
   final List<GeoSearchResult> out;
-  if (c.type == 'geohash') {
+  if (c.type == 'geohash' || c.type == 'maybe') {
     out = [GeoSearchResult.geohash(c.geohash!), ...matches];
   } else if (c.type == 'invalid') {
     out = [GeoSearchResult.invalid(c.reason!), ...matches];
-  } else if (c.type == 'maybe') {
-    out = [
-      ...matches.where((m) => m.match!.tier <= 1),
-      GeoSearchResult.geohash(c.geohash!),
-      ...matches.where((m) => m.match!.tier > 1),
-    ];
   } else {
     out = matches;
   }

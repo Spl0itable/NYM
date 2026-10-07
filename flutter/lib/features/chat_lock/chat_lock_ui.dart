@@ -12,6 +12,8 @@ import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
 import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
+import '../identity/deleted_notice.dart' show dimNymSuffixes;
+import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import 'chat_lock.dart';
 import 'chat_lock_providers.dart';
 import 'chat_lock_service.dart';
@@ -391,8 +393,13 @@ class _LockedRow extends ConsumerWidget {
                     NymSvgIcon(ChatLockIcons.lock, size: 16, color: c.textDim),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        chatLockLabel(ref, lockKey),
+                      child: Text.rich(
+                        lockParse(lockKey)?.kind == 'dm'
+                            ? dimNymSuffixes(
+                                chatLockLabel(ref, lockKey),
+                                nymSuffixStyle(
+                                    TextStyle(color: c.text, fontSize: 14)))
+                            : TextSpan(text: chatLockLabel(ref, lockKey)),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: c.text, fontSize: 14),
                       ),

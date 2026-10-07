@@ -277,6 +277,7 @@
             const entry = this._cnEntries().get(key);
             if (!entry || !entry.placed || entry.landing) return;
             const sc = ctx.scroller;
+            if (sc._cnKeep && sc._cnKeep.shift && Math.abs(sc._cnKeep.shift()) >= 1) return;
             const v = sc.getBoundingClientRect();
             if (!(v.height > 0)) return;
             const rows = this._cnRows(ctx);
@@ -440,12 +441,12 @@
         _cnKeepAnchor(sc, list) {
             if (!sc || !list || sc._cnKeep || typeof ResizeObserver === 'undefined' || typeof this._scrollAnchorFor !== 'function') return;
             sc.style.overflowAnchor = 'none';
-            const keep = sc._cnKeep = { top: sc.scrollTop, el: null, at: 0 };
+            const keep = sc._cnKeep = { top: sc.scrollTop, el: null, at: 0, shift: null };
+            keep.shift = () => (keep.el && keep.el.isConnected && Math.abs(sc.scrollTop) >= 2
+                ? keep.el.getBoundingClientRect().top - keep.at + (sc.scrollTop - keep.top) : 0);
             const settle = () => {
-                if (keep.el && keep.el.isConnected && Math.abs(sc.scrollTop) >= 2) {
-                    const d = keep.el.getBoundingClientRect().top - keep.at + (sc.scrollTop - keep.top);
-                    if (Math.abs(d) >= 1) sc.scrollTop += d;
-                }
+                const d = keep.shift();
+                if (Math.abs(d) >= 1) sc.scrollTop += d;
                 keep.top = sc.scrollTop;
                 const a = this._scrollAnchorFor(list);
                 keep.el = a ? a.el : null;

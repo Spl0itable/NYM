@@ -11,10 +11,12 @@ class GeoSearchField extends StatefulWidget {
     super.key,
     required this.loadPlaces,
     required this.onPick,
+    this.placeLabel,
   });
 
   final Future<List<GeoPlace>> Function() loadPlaces;
   final void Function(String geohash) onPick;
+  final String Function(String geohash)? placeLabel;
 
   @override
   State<GeoSearchField> createState() => _GeoSearchFieldState();
@@ -205,8 +207,14 @@ class _GeoSearchFieldState extends State<GeoSearchField> {
     final String title;
     final String subtitle;
     if (r.type == 'geohash') {
-      title = tr('Go to #{geohash}', {'geohash': r.geohash});
-      subtitle = tr('Geohash');
+      final gh = r.geohash!;
+      final steps = geohashPrecisionSteps(gh);
+      subtitle = [
+        tr('Precision {n}', {'n': '${gh.length}'}),
+        if (steps.isNotEmpty) tr(steps.last.label),
+        widget.placeLabel?.call(gh) ?? '',
+      ].where((s) => s.isNotEmpty).join(' · ');
+      title = tr('Go to #{geohash}', {'geohash': gh});
     } else {
       final p = r.match!.place;
       title = p.name;

@@ -319,8 +319,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       ),
       child: SafeArea(
         bottom: false,
-        child: SizedBox(
-          height: headerHeight - 1,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: headerHeight - 1),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: phone ? NymSpace.s2 : NymSpace.s3),
             child: Row(
@@ -705,7 +705,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
               const SizedBox(height: 2),
               SizedBox(
                 key: const ValueKey('chatHeaderSub'),
-                height: 16,
+                height: MediaQuery.textScalerOf(context).scale(16),
                 child: Row(
                   children: [
                     if (dot) ...[
@@ -1517,8 +1517,8 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
       ),
       child: SafeArea(
         bottom: false,
-        child: SizedBox(
-          height: chatHeaderHeight(width) - 1,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: chatHeaderHeight(width) - 1),
           child: Padding(
             padding: EdgeInsets.symmetric(
                 horizontal: phone ? NymSpace.s2 : NymSpace.s3),
@@ -1572,7 +1572,7 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
                               const SizedBox(height: 2),
                               SizedBox(
                                 key: const ValueKey('meshHeaderSub'),
-                                height: 16,
+                                height: MediaQuery.textScalerOf(context).scale(16),
                                 child: Text(
                                   widget.subtitle,
                                   maxLines: 1,

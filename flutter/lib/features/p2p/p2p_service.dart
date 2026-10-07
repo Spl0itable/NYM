@@ -7,6 +7,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/utils/peer_connection_release.dart';
 import 'p2p_models.dart';
 
 /// Relay transport for plain (not gift-wrapped) p-tagged kind-25051/25052 events; implemented by NostrController.
@@ -44,6 +45,10 @@ class _P2PConnection {
 /// Direct WebRTC data-channel file sharing; the PWA's optional WebTorrent route is intentionally not ported.
 class P2PService extends ChangeNotifier {
   P2PService(this._transport);
+
+  @visibleForTesting
+  static Future<RTCPeerConnection> Function(Map<String, dynamic> config)?
+      peerConnectionFactory;
 
   final P2PTransport _transport;
   void Function()? _unsub;
@@ -90,9 +95,7 @@ class P2PService extends ChangeNotifier {
       try {
         c.channel?.close();
       } catch (_) {}
-      try {
-        c.pc.close();
-      } catch (_) {}
+      unawaited(releasePeerConnection(c.pc));
     }
     _connections.clear();
     super.dispose();
@@ -232,9 +235,11 @@ class P2PService extends ChangeNotifier {
   Future<_P2PConnection> _createConnection(
       String peerPubkey, String transferId, bool isInitiator) async {
     final connectionId = '$peerPubkey-$transferId';
-    final pc = await createPeerConnection({
-      'iceServers': P2PConstants.iceServers,
-    });
+    final config = <String, dynamic>{'iceServers': P2PConstants.iceServers};
+    final factory = peerConnectionFactory;
+    final pc = factory != null
+        ? await factory(config)
+        : await createPeerConnection(config);
     final conn = _P2PConnection(pc);
     _connections[connectionId] = conn;
 
@@ -599,9 +604,7 @@ class P2PService extends ChangeNotifier {
     try {
       c.channel?.close();
     } catch (_) {}
-    try {
-      c.pc.close();
-    } catch (_) {}
+    unawaited(releasePeerConnection(c.pc));
   }
 
   void _updateStatus(String transferId, P2PStatus status, String message) {

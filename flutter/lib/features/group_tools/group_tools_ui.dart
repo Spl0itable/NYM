@@ -24,6 +24,7 @@ import '../groups/group_logic.dart' show kMaxGroupMembers;
 import '../i18n/i18n.dart';
 import '../messages/format/discord_timestamp.dart';
 import '../messages/format/message_content.dart';
+import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import '../toasts/toast_center.dart';
 import 'group_tools.dart';
 import 'group_tools_providers.dart';
@@ -1168,7 +1169,16 @@ class _JoinRequestsBody extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(nym.gtNym(r.pubkey)),
+                      Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: nym.gtNym(r.pubkey)),
+                          TextSpan(
+                            text: '#${r.pubkey.substring(r.pubkey.length - 4)}',
+                            style: nymSuffixStyle(TextStyle(color: c.text)),
+                          ),
+                        ]),
+                        style: TextStyle(color: c.text),
+                      ),
                       Text(
                         formatDiscordTimestamp(r.ts, 'R'),
                         style: TextStyle(color: c.textDim, fontSize: 12),

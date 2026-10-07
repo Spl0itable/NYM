@@ -648,7 +648,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
-      child: Text(
+      child: FitWordsText(
         tr('SETTINGS'),
         style: TextStyle(
           color: c.primary,
@@ -676,8 +676,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget _actions(NymColors c) {
     return Container(
       padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 10,
+        runSpacing: 10,
         children: [
           // Stretched to match the 42px Save button.
           NymOutlineButton(
@@ -685,7 +687,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onPressed: () => Navigator.of(context).pop(),
             height: 42,
           ),
-          const SizedBox(width: 10),
           InkWell(
             onTap: _onSave,
             borderRadius: NymRadius.rsm,
@@ -3759,8 +3760,7 @@ class _TextSizeRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Row(
-      children: [
+    final slider = <Widget>[
         Text('A', style: TextStyle(color: c.textDim, fontSize: 12)),
         Expanded(
           child: SliderTheme(
@@ -3784,7 +3784,8 @@ class _TextSizeRow extends StatelessWidget {
           ),
         ),
         Text('A', style: TextStyle(color: c.textDim, fontSize: 20)),
-        const SizedBox(width: 8),
+    ];
+    final tail = <Widget>[
         Container(
           constraints: const BoxConstraints(minWidth: 32),
           alignment: Alignment.center,
@@ -3796,7 +3797,18 @@ class _TextSizeRow extends StatelessWidget {
         const SizedBox(width: 8),
         NymOutlineButton(
             label: tr('Reset'), onPressed: onReset, uppercase: false),
-      ],
+    ];
+    if (MediaQuery.textScalerOf(context).scale(10) > 15) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: slider),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: tail),
+        ],
+      );
+    }
+    return Row(
+      children: [...slider, const SizedBox(width: 8), ...tail],
     );
   }
 }

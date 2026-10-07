@@ -669,7 +669,9 @@
             var title = document.createElement('div');
             title.className = 'notif-group-title';
             var first = items[g.items[0]];
-            title.textContent = notifGroupTitle(n, g.key, first && first._notif, ui);
+            var label = notifGroupTitle(n, g.key, first && first._notif, ui);
+            if (g.key.indexOf('pm:') === 0 && typeof n.nymLabelHtml === 'function') title.innerHTML = n.nymLabelHtml(label);
+            else title.textContent = label;
             var unread = g.items.filter(function (i) { return !items[i]._notif || !items[i]._notif.viewed; }).length;
             if (unread) {
                 var dot = document.createElement('span');

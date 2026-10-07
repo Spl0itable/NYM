@@ -419,7 +419,7 @@
             if (typeof this.ensureListProfiles === 'function') this.ensureListProfiles(null, list.map((r) => r.pubkey));
             body.innerHTML = list.map((r) => `<div class="gt-join-row" data-pubkey="${esc(r.pubkey)}">
                 <img class="avatar-message" src="${esc(this.getAvatarUrl(r.pubkey))}" alt="">
-                <div class="gt-join-info"><div class="gt-join-nym">${esc(this.getNymFromPubkey(r.pubkey))}</div>
+                <div class="gt-join-info"><div class="gt-join-nym">${this.formatNymWithPubkey(this.getNymFromPubkey(r.pubkey), r.pubkey)}</div>
                 <div class="gt-join-time">${this.formatMessage('<t:' + r.ts + ':R>')}</div></div>
                 ${canDecide ? `${full ? `<span class="gt-join-full">${esc(this._gx('Full'))}</span>` : ''}<button class="send-btn gt-join-approve" data-action="gtJoinApprove" data-group-id="${esc(groupId)}" data-pubkey="${esc(r.pubkey)}"${full ? ` disabled title="${esc(this._gx('Group is full'))}"` : ''}>${esc(this._gx('Approve'))}</button>
                 <button class="icon-btn gt-join-decline" data-action="gtJoinDecline" data-group-id="${esc(groupId)}" data-pubkey="${esc(r.pubkey)}">${esc(this._gx('Decline'))}</button>` : ''}
@@ -1218,7 +1218,7 @@
             if (!this._canSendGiftWraps()) { this._gtNotice(this._gx('Pick a nym or log in to join this call.')); return; }
             if (this.activeCall || this.incomingCall) { this._gtNotice(this._gx('Already in a call')); return; }
             if (!this.users.has(link.host) && typeof this.fetchProfileDirect === 'function') { try { await this.fetchProfileDirect(link.host); } catch (_) { } }
-            const host = this.getNymFromPubkey(link.host) + '#' + this.getPubkeySuffix(link.host);
+            const host = this._gtNymTag(link.host);
             const msg = link.kind === 'video'
                 ? this._gx('Join the video call "{name}" hosted by {host}? The host admits you. Your camera and microphone are used once you join.', { name: link.name, host })
                 : this._gx('Join the voice call "{name}" hosted by {host}? The host admits you. Your microphone is used once you join.', { name: link.name, host });
@@ -1270,7 +1270,7 @@
                 return;
             }
             if (!this.users.has(sender) && typeof this.fetchProfileDirect === 'function') { try { await this.fetchProfileDirect(sender); } catch (_) { } }
-            const who = this.getNymFromPubkey(sender) + '#' + this.getPubkeySuffix(sender);
+            const who = this._gtNymTag(sender);
             this.showNotification(this._gx('Call link: {name}', { name: link.name }), this._gx('{nym} wants to join', { nym: who }), { type: 'call', pubkey: sender, eventId: 'call-link-' + link.id + '-' + sender + '-' + nowSec() }, Date.now());
             const admit = await window.showAppConfirm(this._gx('{nym} wants to join your call link "{name}".', { nym: who, name: link.name }), { title: this._gx('Join request'), okLabel: this._gx('Admit'), cancelLabel: this._gx('Decline') });
             const recheck = T().checkCallLinkJoin(this._gtCallLinks(), data.linkId, data.secret, nowSec());

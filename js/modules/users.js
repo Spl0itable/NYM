@@ -267,6 +267,13 @@ Object.assign(NYM.prototype, {
         return `${this.escapeHtml(nym)}<span class="nym-suffix">#${suffix}</span>`;
     },
 
+    nymLabelHtml(label) {
+        const s = String(label == null ? '' : label);
+        const m = /^([\s\S]*[^\s#])(#[0-9a-f]{4})$/i.exec(s);
+        if (!m) return this.escapeHtml(s);
+        return `${this.escapeHtml(m[1])}<span class="nym-suffix">${this.escapeHtml(m[2])}</span>`;
+    },
+
     updateSidebarAvatar() {
         const el = document.getElementById('sidebarAvatar');
         if (el && this.pubkey) {

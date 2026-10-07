@@ -307,7 +307,7 @@
                 const when = this._formatFullTimestamp((e.at || 0) * 1000);
                 const chat = e.chat.t === 'channel' ? e.chat.n : e.chat.t === 'group' ? this._ct('Group: {name}', { name: e.chat.n }) : this._ct('PM with {name}', { name: e.chat.n });
                 return `<div class="ct-saved-item" data-saved-id="${esc(e.id)}">
-                    <div class="ct-saved-meta"><span class="ct-saved-author">${esc(e.a.n)}</span><span class="ct-saved-chat">${esc(chat)}</span><span class="ct-saved-time">${esc(when)}</span></div>
+                    <div class="ct-saved-meta"><span class="ct-saved-author">${this.nymLabelHtml(e.a.n)}</span><span class="ct-saved-chat">${esc(chat)}</span><span class="ct-saved-time">${esc(when)}</span></div>
                     <div class="ct-saved-text message-content">${this.formatMessageWithQuotes(e.text, 0)}</div>
                     <div class="ct-saved-actions">
                         <button type="button" class="ct-btn" data-action="ctSavedJump" data-saved-id="${esc(e.id)}">${esc(this._ct('Jump to original'))}</button>
@@ -918,7 +918,7 @@
                 const main = hidden ? this._ct('Spoiler, tap to reveal') : (g.tab === 'links' ? it.url : label);
                 return `<button type="button" class="ct-row${hidden ? ' ct-spoiler' : ''}" data-action="ctGalleryOpen" data-idx="${i}">
                     <span class="ct-row-main">${esc(main)}</span>
-                    <span class="ct-row-meta">${esc(it.author)} · ${esc(when)}</span>
+                    <span class="ct-row-meta">${this.nymLabelHtml(it.author)} · ${esc(when)}</span>
                 </button>`;
             }).join('');
             const empty = g.tab === 'media' ? this._ct('No media in this chat yet.') : g.tab === 'files' ? this._ct('No files in this chat yet.') : this._ct('No links in this chat yet.');

@@ -2177,6 +2177,7 @@ const List<String> kAppStringsCatalog = <String>[
   'Activity',
   'Joined',
   'Precision',
+  'Precision {n}',
   'A shorter geohash shares less about where you are.',
   '#{geohash}, {label}, about {size}',
   'Subcontinent',

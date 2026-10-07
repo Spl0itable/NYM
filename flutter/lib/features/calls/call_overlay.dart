@@ -336,15 +336,16 @@ class _Top extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 6),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text('$kindLabel · ',
                   style: TextStyle(
                       color: c.textDim,
                       fontSize: 16.8,
                       fontWeight: FontWeight.w500)),
-              Flexible(child: id),
+              id,
             ],
           ),
           const SizedBox(height: 2),

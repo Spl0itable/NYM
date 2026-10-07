@@ -157,35 +157,40 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     final media = MediaQuery.of(context);
     // Pad by the keyboard height and cap the modal height so lower fields stay visible.
     final keyboardInset = media.viewInsets.bottom;
+    final bigText = MediaQuery.textScalerOf(context).scale(10) > 15;
     final column = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _modalHeader(c),
+        if (!bigText) _modalHeader(c),
         Flexible(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
+            padding: bigText ? EdgeInsets.zero : const EdgeInsets.all(20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _pubkeySlideout(c),
-                const SizedBox(height: 18),
-                _nicknameGroup(c),
-                const SizedBox(height: 18),
-                _avatarGroup(c),
-                const SizedBox(height: 18),
-                _bannerGroup(c),
-                const SizedBox(height: 18),
-                _bioGroup(c),
-                const SizedBox(height: 18),
-                _lightningGroup(c),
-                const SizedBox(height: 18),
-                _revealPrivkeyGroup(c),
+                if (bigText) _modalHeader(c),
+                if (bigText)
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: _formGroups(c),
+                    ),
+                  )
+                else
+                  ..._formGroups(c),
+                if (bigText) ...[
+                  _actions(c),
+                  _logoutRow(c),
+                ],
               ],
             ),
           ),
         ),
-        _actions(c),
-        _logoutRow(c),
+        if (!bigText) ...[
+          _actions(c),
+          _logoutRow(c),
+        ],
       ],
     );
     final close = ModalChrome.closeChip(c, () => Navigator.of(context).pop());
@@ -249,7 +254,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         decoration: BoxDecoration(
           border: Border(bottom: BorderSide(color: c.glassBorder)),
         ),
-        child: Text(
+        child: FitWordsText(
           tr("View or Edit Nym's Details").toUpperCase(),
           style: TextStyle(
             color: c.primary,
@@ -364,7 +369,9 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
             ),
           ),
           const SizedBox(height: 10),
-          Row(
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
             children: [
               _smallButton(
                 c,
@@ -372,7 +379,6 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 () => _copyToClipboard(
                     pk, isNpub ? tr('npub copied') : tr('Pubkey copied')),
               ),
-              const SizedBox(width: 6),
               _smallButton(
                 c,
                 isNpub ? tr('Show hex') : tr('Show npub'),
@@ -438,12 +444,13 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
                       _smallButton(
                           c, tr('Change photo'), () => _pickImage(true)),
                       if (_avatarPath != null) ...[
-                        const SizedBox(width: 8),
                         _smallButton(
                           c,
                           tr('Remove'),
@@ -497,11 +504,12 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
           );
         }),
         const SizedBox(height: 8),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
             _smallButton(c, tr('Choose banner'), () => _pickImage(false)),
             if (_bannerPath != null) ...[
-              const SizedBox(width: 8),
               _smallButton(
                   c,
                   tr('Remove'),
@@ -1025,21 +1033,37 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     );
   }
 
+  List<Widget> _formGroups(NymColors c) => [
+        _pubkeySlideout(c),
+        const SizedBox(height: 18),
+        _nicknameGroup(c),
+        const SizedBox(height: 18),
+        _avatarGroup(c),
+        const SizedBox(height: 18),
+        _bannerGroup(c),
+        const SizedBox(height: 18),
+        _bioGroup(c),
+        const SizedBox(height: 18),
+        _lightningGroup(c),
+        const SizedBox(height: 18),
+        _revealPrivkeyGroup(c),
+      ];
+
   Widget _actions(NymColors c) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: c.glassBorder)),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 10,
+        runSpacing: 10,
         children: [
           ModalChrome.iconButton(
               c, tr('Randomize'), _saving ? null : _randomize),
-          const SizedBox(width: 10),
           ModalChrome.iconButton(
               c, tr('Cancel'), () => Navigator.of(context).pop()),
-          const SizedBox(width: 10),
           ModalChrome.sendButton(
             c,
             tr('Change'),
@@ -1137,7 +1161,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
               NymSvgIcon(icon, size: 12, color: fg),
               const SizedBox(width: 5),
             ],
-            Text(label, style: TextStyle(color: fg, fontSize: 12)),
+            Flexible(
+                child: Text(label, style: TextStyle(color: fg, fontSize: 12))),
           ],
         ),
       ),

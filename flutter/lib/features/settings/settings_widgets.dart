@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../identity/modal_chrome.dart';
+
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../widgets/nym_icons.dart';
@@ -43,7 +45,7 @@ class SettingsSection extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(
+                    child: FitWordsText(
                       title.toUpperCase(),
                       style: TextStyle(
                         color: c.primary,
@@ -406,7 +408,7 @@ class SegmentGroup<T> extends StatelessWidget {
                           : Colors.transparent,
                     ),
                   ),
-                  child: Text(
+                  child: FitWordsText(
                     s.label,
                     textAlign: TextAlign.center,
                     style: TextStyle(

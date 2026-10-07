@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/relays.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../core/utils/peer_connection_release.dart';
 import '../../models/group.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -1988,9 +1989,7 @@ class CallService {
     final peer = _Peer(pc: pc, nym: _nymFor(peerPubkey));
     await peer.renderer.initialize();
     if (_active != ac) {
-      try {
-        await pc.close();
-      } catch (_) {}
+      await releasePeerConnection(pc);
       peer.renderer.dispose();
       return;
     }
@@ -2139,9 +2138,7 @@ class CallService {
     if (ac == null) return;
     final peer = ac.peers.remove(peerPubkey);
     if (peer != null) {
-      try {
-        peer.pc.close();
-      } catch (_) {}
+      unawaited(releasePeerConnection(peer.pc));
       peer.renderer.srcObject = null;
       peer.renderer.dispose();
     }
@@ -2259,9 +2256,7 @@ class CallService {
       _callTypingStopTimer = null;
       _callTypingThrottle = 0;
       for (final peer in ac.peers.values) {
-        try {
-          peer.pc.close();
-        } catch (_) {}
+        unawaited(releasePeerConnection(peer.pc));
         peer.renderer.srcObject = null;
         peer.renderer.dispose();
       }

@@ -34,6 +34,8 @@ import '../settings/settings_widgets.dart' show FormSelect;
 import 'notifications_service.dart' show notificationsServiceProvider;
 import '../toasts/event_toast_prefs.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../identity/deleted_notice.dart' show dimNymSuffixes;
+import '../search/unified_search_panel.dart' show nymSuffixStyle;
 
 /// Opening doesn't clear the badge; rows are marked viewed once ≥60% visible, with unread state snapshotted before opening.
 Future<void> showNotificationsPanel(BuildContext context) {
@@ -195,6 +197,12 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
     return tr('Other');
   }
 
+  TextStyle _groupTitleStyle(NymColors c) => TextStyle(
+        color: c.textDim,
+        fontSize: NymType.sm,
+        fontWeight: FontWeight.w600,
+      );
+
   List<Widget> _groupedRows(NymColors c) {
     final keys = [
       for (final r in _rows)
@@ -211,15 +219,16 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
         child: Row(
           children: [
             Flexible(
-              child: Text(
-                _groupTitle(g.key, _rows[g.items.first].entry),
+              child: Text.rich(
+                g.key.startsWith('pm:')
+                    ? dimNymSuffixes(
+                        _groupTitle(g.key, _rows[g.items.first].entry),
+                        nymSuffixStyle(_groupTitleStyle(c)))
+                    : TextSpan(
+                        text: _groupTitle(g.key, _rows[g.items.first].entry)),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: c.textDim,
-                  fontSize: NymType.sm,
-                  fontWeight: FontWeight.w600,
-                ),
+                style: _groupTitleStyle(c),
               ),
             ),
             if (unread > 0) ...[

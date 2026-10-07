@@ -96,7 +96,7 @@ class ModalChrome {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
-      child: Text(
+      child: FitWordsText(
         title.toUpperCase(),
         style: TextStyle(
           color: c.primary,
@@ -427,5 +427,51 @@ class _CloseChipState extends State<_CloseChip> {
         ),
       ),
     );
+  }
+}
+
+class FitWordsText extends StatelessWidget {
+  const FitWordsText(this.text,
+      {super.key, this.textKey, required this.style, this.textAlign});
+
+  final String text;
+  final Key? textKey;
+  final TextAlign? textAlign;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, box) {
+      final merged = DefaultTextStyle.of(context).style.merge(style);
+      final dir = Directionality.of(context);
+      final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+      double widest(TextScaler scaler) {
+        var most = 0.0;
+        for (final w in words) {
+          final tp = TextPainter(
+            text: TextSpan(text: w, style: merged),
+            textDirection: dir,
+            textScaler: scaler,
+            maxLines: 1,
+          )..layout();
+          if (tp.width > most) most = tp.width;
+          tp.dispose();
+        }
+        return most;
+      }
+
+      var fitted = MediaQuery.textScalerOf(context);
+      if (box.maxWidth.isFinite) {
+        final size = merged.fontSize ?? 14;
+        for (var i = 0; i < 4; i++) {
+          final w = widest(fitted);
+          if (w <= box.maxWidth) break;
+          fitted = TextScaler.linear(
+              fitted.scale(size) / size * box.maxWidth / w * 0.98);
+        }
+      }
+      return Text(text,
+          key: textKey, style: style, textAlign: textAlign, textScaler: fitted);
+    });
   }
 }

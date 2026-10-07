@@ -126,9 +126,10 @@ class MessageActionSheet extends StatelessWidget {
           children: [
             _Preview(preview: preview, text: summary.text, thumb: summary.thumb),
             const SizedBox(height: 10),
-            Container(
+            MediaQuery.withNoTextScaling(
+              child: Container(
               key: const ValueKey('messageSheetReactRow'),
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
               decoration: BoxDecoration(
                 color: c.insetFill,
                 border: Border.all(color: c.insetBorder),
@@ -138,32 +139,42 @@ class MessageActionSheet extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   for (final e in emojis)
-                    _SheetEmoji(
-                      emoji: e,
-                      onTap: () => _then(context, () => onReact(e)),
+                    Expanded(
+                      child: _SheetEmoji(
+                        emoji: e,
+                        onTap: () => _then(context, () => onReact(e)),
+                      ),
                     ),
                   if (more != null)
-                    Semantics(
+                    Expanded(
+                      child: Semantics(
                       button: true,
                       label: tr('More reactions'),
                       child: InkResponse(
                         key: const ValueKey('messageSheetMoreReactions'),
                         onTap: () => _then(context, more),
                         radius: 22,
-                        child: Container(
-                          width: 36,
-                          height: 36,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: c.hoverOverlay,
+                        child: SizedBox(
+                          height: 44,
+                          child: Center(
+                            child: Container(
+                              width: 36,
+                              height: 36,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: c.hoverOverlay,
+                              ),
+                              child: NymSvgIcon(NymIcons.plus,
+                                  size: 16, color: c.textDim),
+                            ),
                           ),
-                          child: NymSvgIcon(NymIcons.plus,
-                              size: 16, color: c.textDim),
                         ),
                       ),
                     ),
+                    ),
                 ],
+              ),
               ),
             ),
             const SizedBox(height: 8),
@@ -280,7 +291,10 @@ class _SheetEmoji extends StatelessWidget {
       key: ValueKey('messageSheetEmoji-$emoji'),
       onTap: onTap,
       radius: 22,
-      child: Padding(
+      child: SizedBox(
+        height: 44,
+        child: Center(
+          child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
         child: InlineEmojiText(
           text: emoji,
@@ -289,6 +303,8 @@ class _SheetEmoji extends StatelessWidget {
           emojiSize: 28,
           emojiMargin: EdgeInsets.zero,
           emojiAlignment: PlaceholderAlignment.middle,
+        ),
+      ),
         ),
       ),
     );

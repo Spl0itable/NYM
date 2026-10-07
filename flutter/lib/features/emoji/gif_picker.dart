@@ -311,17 +311,31 @@ class _GifPickerState extends ConsumerState<GifPicker>
           ],
         ),
         padding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ?widget.tabs,
-            _header(c),
-            const SizedBox(height: 10),
-            Flexible(child: _results(c)),
-            _attribution(c),
-          ],
-        ),
+        child: MediaQuery.textScalerOf(context).scale(10) > 15
+            ? SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ?widget.tabs,
+                    _header(c),
+                    const SizedBox(height: 10),
+                    SizedBox(height: 240, child: _results(c)),
+                    _attribution(c),
+                  ],
+                ),
+              )
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ?widget.tabs,
+                  _header(c),
+                  const SizedBox(height: 10),
+                  Flexible(child: _results(c)),
+                  _attribution(c),
+                ],
+              ),
       ),
     );
   }

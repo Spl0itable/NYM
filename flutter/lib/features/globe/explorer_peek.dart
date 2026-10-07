@@ -7,6 +7,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import '../mesh/mesh_controller.dart';
+import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import 'geo_explore.dart';
 
 enum GeoPeekReach { online, offline, meshOnly }
@@ -192,18 +193,19 @@ class _GeoPeekViewState extends ConsumerState<GeoPeekView> {
   }
 
   Widget _message(GeoPeekMessage m, NymColors nym) {
-    final who = '${stripPubkeySuffix(m.nym.isEmpty ? tr('anon') : m.nym)}#${getPubkeySuffix(m.pubkey)}';
+    final base = stripPubkeySuffix(m.nym.isEmpty ? tr('anon') : m.nym);
+    final whoStyle = TextStyle(
+        fontSize: 11, color: nym.secondary, fontWeight: FontWeight.w600);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Text.rich(
         TextSpan(children: [
+          TextSpan(text: base, style: whoStyle),
           TextSpan(
-            text: '$who ',
-            style: TextStyle(
-                fontSize: 11,
-                color: nym.secondary,
-                fontWeight: FontWeight.w600),
+            text: '#${getPubkeySuffix(m.pubkey)}',
+            style: nymSuffixStyle(whoStyle),
           ),
+          TextSpan(text: ' ', style: whoStyle),
           TextSpan(
             text: m.content,
             style: TextStyle(fontSize: 11, color: nym.text),

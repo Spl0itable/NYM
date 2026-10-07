@@ -1,3 +1,4 @@
+import AVFoundation
 import BackgroundTasks
 import CallKit
 import Flutter
@@ -8,6 +9,10 @@ import Speech
 import UIKit
 import UniformTypeIdentifiers
 import UserNotifications
+#if canImport(WebRTC) && canImport(flutter_webrtc)
+import WebRTC
+import flutter_webrtc
+#endif
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -38,6 +43,11 @@ import UserNotifications
   private var callUUIDs: [String: UUID] = [:]
   private var answeredCalls: Set<UUID> = []
   private var callOnRingEngine: Set<UUID> = []
+  private var videoCalls: Set<UUID> = []
+  private var notificationPluginsReady = false
+  private var heldNotificationTap: (
+    center: UNUserNotificationCenter, response: UNNotificationResponse, done: () -> Void
+  )?
   private lazy var shareLinks = ShareLinks { [weak self] in self?.drainShareInbox() }
   private lazy var callProvider: CXProvider = {
     let config = CXProviderConfiguration()
@@ -87,6 +97,12 @@ import UserNotifications
       name: UIScene.didDisconnectNotification,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(uiSceneDidActivate),
+      name: UIScene.didActivateNotification,
+      object: nil
+    )
     drainShareInbox()
     // Must happen before launch finishes, or BGTaskScheduler throws.
     registerBackgroundRefreshTask()
@@ -99,6 +115,7 @@ import UserNotifications
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     endHeadlessRefresh(headlessRun, .failed)
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    releaseHeldNotificationTap()
     guard let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NymchatChannels") else { return }
     channelMessenger = registrar.messenger()
     shareListening = false
@@ -117,7 +134,33 @@ import UserNotifications
     registerCallChannel()
   }
 
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    guard notificationPluginsReady else {
+      heldNotificationTap?.done()
+      heldNotificationTap = (center, response, completionHandler)
+      return
+    }
+    super.userNotificationCenter(center, didReceive: response, withCompletionHandler: completionHandler)
+  }
+
+  private func releaseHeldNotificationTap() {
+    notificationPluginsReady = true
+    guard let held = heldNotificationTap else { return }
+    heldNotificationTap = nil
+    super.userNotificationCenter(
+      held.center, didReceive: held.response, withCompletionHandler: held.done)
+  }
+
+  @objc private func uiSceneDidActivate(_ notification: Notification) {
+    releaseHeldNotificationTap()
+  }
+
   @objc private func uiSceneDidDisconnect(_ notification: Notification) {
+    notificationPluginsReady = false
     channelMessenger = nil
     backgroundRefreshChannel = nil
     heartbeatChannel = nil
@@ -1141,12 +1184,14 @@ extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
       pushCallUUID = nil
       callUUIDs[callId] = pending
       if fromRingEngine { callOnRingEngine.insert(pending) }
+      if video { videoCalls.insert(pending) }
       callProvider.reportCall(with: pending, updated: update)
       return
     }
     let uuid = UUID()
     callUUIDs[callId] = uuid
     if fromRingEngine { callOnRingEngine.insert(uuid) }
+    if video { videoCalls.insert(uuid) }
     callProvider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
       if error != nil { self?.forget(uuid) }
     }
@@ -1164,6 +1209,7 @@ extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
     if let id = callId(for: uuid) { callUUIDs.removeValue(forKey: id) }
     answeredCalls.remove(uuid)
     callOnRingEngine.remove(uuid)
+    videoCalls.remove(uuid)
     if pushCallUUID == uuid { pushCallUUID = nil }
     if callUUIDs.isEmpty && pushCallUUID == nil && ringPendingChecks.isEmpty {
       stopRingEngine()
@@ -1186,6 +1232,15 @@ extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
   func providerDidReset(_ provider: CXProvider) {
     for uuid in Array(callUUIDs.values) { forget(uuid) }
     if let pending = pushCallUUID { forget(pending) }
+    CallKitAudio.release()
+  }
+
+  func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+    CallKitAudio.activate(audioSession)
+  }
+
+  func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
+    CallKitAudio.deactivate(audioSession)
   }
 
   func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
@@ -1194,6 +1249,7 @@ extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
       return
     }
     answeredCalls.insert(action.callUUID)
+    CallKitAudio.prepare(video: videoCalls.contains(action.callUUID))
     channel(for: action.callUUID)?.invokeMethod("answer", arguments: ["callId": id])
     action.fulfill()
   }
@@ -1205,6 +1261,7 @@ extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
       channel(for: uuid)?.invokeMethod(method, arguments: ["callId": id])
     }
     forget(uuid)
+    CallKitAudio.release()
     action.fulfill()
   }
 
@@ -1212,4 +1269,59 @@ extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
     channel(for: action.callUUID)?.invokeMethod("mute", arguments: ["muted": action.isMuted])
     action.fulfill()
   }
+}
+
+enum CallKitAudio {
+  static func prepare(video: Bool) {
+    let mode: AVAudioSession.Mode = video ? .videoChat : .voiceChat
+    let options: AVAudioSession.CategoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+    #if canImport(WebRTC) && canImport(flutter_webrtc)
+      let rtc = RTCAudioSession.sharedInstance()
+      rtc.lockForConfiguration()
+      try? rtc.setCategory(.playAndRecord, mode: mode, options: options)
+      rtc.unlockForConfiguration()
+      setEngine(available: false)
+    #else
+      try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: mode, options: options)
+    #endif
+  }
+
+  static func activate(_ session: AVAudioSession) {
+    #if canImport(WebRTC) && canImport(flutter_webrtc)
+      let rtc = RTCAudioSession.sharedInstance()
+      rtc.audioSessionDidActivate(session)
+      rtc.isAudioEnabled = true
+      if audioDeviceModule()?.isEngineRunning == true {
+        setEngine(available: false)
+      }
+      setEngine(available: true)
+    #endif
+  }
+
+  static func deactivate(_ session: AVAudioSession) {
+    #if canImport(WebRTC) && canImport(flutter_webrtc)
+      let rtc = RTCAudioSession.sharedInstance()
+      rtc.audioSessionDidDeactivate(session)
+      rtc.isAudioEnabled = false
+    #endif
+    release()
+  }
+
+  static func release() {
+    #if canImport(WebRTC) && canImport(flutter_webrtc)
+      setEngine(available: true)
+    #endif
+  }
+
+  #if canImport(WebRTC) && canImport(flutter_webrtc)
+    private static func audioDeviceModule() -> RTCAudioDeviceModule? {
+      return FlutterWebRTCPlugin.sharedSingleton()?.peerConnectionFactory?.audioDeviceModule
+    }
+
+    private static func setEngine(available: Bool) {
+      guard let adm = FlutterWebRTCPlugin.sharedSingleton()?.peerConnectionFactory?.audioDeviceModule else { return }
+      let flag = ObjCBool(available)
+      _ = adm.setEngineAvailability(RTCAudioEngineAvailability(isInputAvailable: flag, isOutputAvailable: flag))
+    }
+  #endif
 }

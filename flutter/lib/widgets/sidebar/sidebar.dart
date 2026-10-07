@@ -816,7 +816,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
       label: tr('Connection status and sidebar tools'),
       child: Container(
       key: const ValueKey('sidebarFooter'),
-      height: extent,
+      constraints: BoxConstraints(minHeight: extent),
       padding: EdgeInsets.fromLTRB(NymSpace.s2, 0, NymSpace.s2, bottom),
       decoration: BoxDecoration(
         color: c.isLight
@@ -912,7 +912,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             top;
     return Container(
       key: const ValueKey('sidebarHeader'),
-      height: extent,
+      constraints: BoxConstraints(minHeight: extent),
       padding: EdgeInsets.fromLTRB(NymSpace.s3, top, NymSpace.s3, 0),
       decoration: BoxDecoration(
         color: c.isLight

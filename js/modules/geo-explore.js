@@ -171,13 +171,10 @@
             tier: m.tier, geohash: placeGeohash(m),
         }));
         let out;
-        if (c.type === 'geohash') out = [{ type: 'geohash', geohash: c.geohash }].concat(matches);
-        else if (c.type === 'invalid') out = [{ type: 'invalid', reason: c.reason }].concat(matches);
-        else if (c.type === 'maybe') {
-            out = matches.filter((m) => m.tier <= 1)
-                .concat([{ type: 'geohash', geohash: c.geohash }])
-                .concat(matches.filter((m) => m.tier > 1));
-        } else out = matches;
+        if (c.type === 'geohash' || c.type === 'maybe') {
+            out = [{ type: 'geohash', geohash: c.geohash, precision: c.geohash.length }].concat(matches);
+        } else if (c.type === 'invalid') out = [{ type: 'invalid', reason: c.reason }].concat(matches);
+        else out = matches;
         return out.slice(0, n);
     }
 

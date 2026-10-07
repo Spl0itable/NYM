@@ -2083,8 +2083,8 @@ Object.assign(NYM.prototype, {
             return;
         }
         const rows = summary.messages.map((m) => {
-            const who = `${this.stripPubkeySuffix(m.nym || this._gxL('anon'))}#${this.getPubkeySuffix(m.pubkey)}`;
-            return `<div class="gx-peek-msg"><span class="gx-peek-who">${e(who)}</span> <span class="gx-peek-text">${e(m.content)}</span></div>`;
+            const who = this.formatNymWithPubkey(m.nym || this._gxL('anon'), m.pubkey);
+            return `<div class="gx-peek-msg"><span class="gx-peek-who">${who}</span> <span class="gx-peek-text">${e(m.content)}</span></div>`;
         }).join('');
         el.innerHTML = `${head(summary.online)}<div class="gx-peek-list" aria-label="${e(this._gxL('Recent messages, read only'))}">${rows}</div>`;
     },
@@ -2147,7 +2147,16 @@ Object.assign(NYM.prototype, {
                 return `<div class="gx-result-invalid" role="alert">${e(this._gxL(msg))}</div>`;
             }
             let title, sub;
-            if (r.type === 'geohash') { title = this._gxL(`Go to #${r.geohash}`); sub = this._gxL('Geohash'); }
+            if (r.type === 'geohash') {
+                title = this._gxL(`Go to #${r.geohash}`);
+                const steps = window.NymGeoExplore.precisionSteps(r.geohash);
+                const step = steps[steps.length - 1];
+                sub = [
+                    this._gxL('Precision {n}').replace('{n}', String(r.precision || r.geohash.length)),
+                    step ? this._gxL(step.label) : '',
+                    this._gxPlaceLabel(r.geohash),
+                ].filter(Boolean).join(' · ');
+            }
             else {
                 title = r.name;
                 const where = [r.region && r.region !== r.name ? r.region : '', r.country].filter(Boolean).join(', ');

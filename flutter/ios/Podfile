@@ -33,91 +33,14 @@ target 'Runner' do
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
 
-# App Store review rejects any reference to `RPSystemBroadcastPickerView`'s
-# private `buttonPressed:` selector, which flutter_webrtc uses to open the
-# broadcast picker programmatically (ios/Classes/FlutterRTCDesktopCapturer.m).
-#
-# The block only runs when a caller asks for the broadcast extension, and
-# Nymchat never does — `_startScreenShare` requests plain
-# `getDisplayMedia({video:true})`, which takes the in-app ReplayKit path. So
-# removing it costs us nothing, while leaving it in costs us the submission:
-# the scan looks for the symbol in the binary, not for a reachable call.
-#
-# Idempotent, and re-applied on every `pod install` because `flutter pub get`
-# restores the pristine plugin source.
-def strip_private_broadcast_picker(installer)
-  root = File.realpath(File.join(__dir__, '.symlinks', 'plugins', 'flutter_webrtc'))
-  target = File.join(root, 'ios', 'Classes', 'FlutterRTCDesktopCapturer.m')
-  return unless File.exist?(target)
-
-  src = File.read(target)
-  return if src.include?('NYM_PRIVATE_PICKER_STRIPPED')
-
-  needle = <<~OBJC
-    SEL selector = NSSelectorFromString(@"buttonPressed:");
-    if ([picker respondsToSelector:selector]) {
-      [picker performSelector:selector withObject:nil];
-    }
-  OBJC
-  replacement = <<~OBJC
-    // NYM_PRIVATE_PICKER_STRIPPED — see ios/Podfile. `buttonPressed:` is
-    // private API and fails App Store review; the picker is left for the
-    // user to present. Unreachable here: Nymchat never requests the
-    // broadcast extension.
-  OBJC
-
-  # Match the block regardless of leading indentation.
-  pattern = /^[ \t]*SEL selector = NSSelectorFromString\(@"buttonPressed:"\);\n[ \t]*if \(\[picker respondsToSelector:selector\]\) \{\n[ \t]*\[picker performSelector:selector withObject:nil\];\n[ \t]*\}\n/
-  unless src =~ pattern
-    raise "flutter_webrtc: could not find the buttonPressed: block to strip. " \
-          "Check whether the plugin fixed it upstream, then drop this patch."
-  end
-
-  File.write(target, src.sub(pattern, replacement))
-  Pod::UI.puts '[nym] stripped private buttonPressed: from flutter_webrtc'.green
-end
-
-def use_public_ice_server_initializer(installer)
-  root = File.realpath(File.join(__dir__, '.symlinks', 'plugins', 'flutter_webrtc'))
-  target = File.join(root, 'ios', 'Classes', 'FlutterWebRTCPlugin.m')
-  return unless File.exist?(target)
-
-  src = File.read(target, encoding: 'UTF-8')
-  pattern = /\[\[RTCIceServer alloc\] initWithURLStrings:urls\];/
-  return unless src =~ pattern
-
-  File.write(target, src.gsub(pattern, '[[RTCIceServer alloc] initWithURLStrings:urls username:nil credential:nil];'))
-  Pod::UI.puts '[nym] flutter_webrtc now uses the three-argument RTCIceServer initializer'.green
-end
-
-def patch_ice_server_initializer_at_build(installer)
-  target = installer.pods_project.targets.find { |t| t.name == 'flutter_webrtc' }
-  return unless target
-
-  name = '[nym] RTCIceServer initializer'
-  return if target.shell_script_build_phases.any? { |p| p.name == name }
-
-  phase = target.new_shell_script_build_phase(name)
-  phase.shell_path = '/bin/sh'
-  phase.shell_script = <<~'SH'
-    set -e
-    src="$(cd "${PODS_ROOT}/../.symlinks/plugins/flutter_webrtc/ios/Classes" && pwd -P)/FlutterWebRTCPlugin.m"
-    /usr/bin/sed -i '' 's/\[\[RTCIceServer alloc\] initWithURLStrings:urls\];/[[RTCIceServer alloc] initWithURLStrings:urls username:nil credential:nil];/' "$src"
-    if /usr/bin/grep -Eq 'initWithURLStrings:[A-Za-z_]+[[:space:]]*\]' "$src"; then
-      echo "error: flutter_webrtc still calls initWithURLStrings: in $src"
-      exit 1
-    fi
-  SH
-  target.build_phases.move(phase, 0)
-  target.build_configurations.each do |config|
-    config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
-  end
+def patch_flutter_webrtc
+  script = File.join(__dir__, 'scripts', 'patch_flutter_webrtc.sh')
+  return if system('sh', script, File.expand_path('..', __dir__))
+  raise 'flutter_webrtc: ios/scripts/patch_flutter_webrtc.sh failed'
 end
 
 post_install do |installer|
-  strip_private_broadcast_picker(installer)
-  use_public_ice_server_initializer(installer)
-  patch_ice_server_initializer_at_build(installer)
+  patch_flutter_webrtc
 
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)

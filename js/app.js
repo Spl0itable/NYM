@@ -4520,7 +4520,7 @@ const GOOGLE_WEB_CLIENT_ID = '435441872913-ccmsrqp8nsi3vqm27cptpsld3kqb5i2g.apps
 
 const APPLE_CLOUDKIT_CONTAINER = 'iCloud.com.nym.bar';
 
-const APPLE_CLOUDKIT_API_TOKEN = 'db6bf0994a872362d6b7893f9ec739e38187271cd007f9a463ab6bb542d49be7';
+const APPLE_CLOUDKIT_API_TOKEN = 'acdccebf2562364b51337f3b1bba220882b9a13e857f1c2f679072d41f95ff51';
 
 function runBuildVerification() {
     const statusEl = document.getElementById('aboutBuildStatus');

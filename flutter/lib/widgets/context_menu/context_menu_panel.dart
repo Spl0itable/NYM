@@ -986,9 +986,9 @@ class _PubkeyBlockState extends State<_PubkeyBlock> {
             ),
           ),
         ),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 4,
           children: [
             _CopyPubkeyRow(
               svg: NymIcons.ctxCopy,
@@ -999,7 +999,6 @@ class _PubkeyBlockState extends State<_PubkeyBlock> {
                 widget.onClose();
               },
             ),
-            const SizedBox(width: 4),
             _CopyPubkeyRow(
               svg: NymIcons.ctxSwapFormat,
               label: isNpub ? tr('Show hex') : tr('Show npub'),
