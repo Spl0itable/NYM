@@ -5329,13 +5329,30 @@ async function nostrLoginWithNsec() {
     await nostrLoginApplyKey(nsecInput, secretKey, pubkey);
 }
 
-async function nostrLoginImportKey(privkeyInput) {
+async function nostrLoginImportKey(privkeyInput, opts) {
     const secretKey = nym.decodeNsec(privkeyInput);
     const pubkey = window.NostrTools.getPublicKey(secretKey);
-    await nostrLoginApplyKey(privkeyInput, secretKey, pubkey);
+    await nostrLoginApplyKey(privkeyInput, secretKey, pubkey, opts);
 }
 
-async function nostrLoginApplyKey(nsecInput, secretKey, pubkey) {
+function adoptGeneratedNym() {
+    nym.nym = nym.generateRandomNym();
+    try { localStorage.setItem(`nym_nickname_${nym.pubkey}`, nym.nym); } catch (_) { }
+    const user = nym.users.get(nym.pubkey);
+    if (user) user.nym = nym.nym;
+    const el = document.getElementById('currentNym');
+    if (el) el.innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+    nym.updateSidebarAvatar();
+    try {
+        localStorage.setItem('nym_nostr_login_profile', JSON.stringify({
+            name: nym.nym,
+            avatar: nym.userAvatars.get(nym.pubkey) || null
+        }));
+    } catch (_) { }
+    Promise.resolve(nym.saveToNostrProfile()).catch(() => { });
+}
+
+async function nostrLoginApplyKey(nsecInput, secretKey, pubkey, opts) {
     // Always store the canonical nsec, since Settings reveals it back to the user.
     localStorage.setItem('nym_nostr_login_method', 'nsec');
     localStorage.setItem('nym_nostr_login_pubkey', pubkey);
@@ -5349,6 +5366,7 @@ async function nostrLoginApplyKey(nsecInput, secretKey, pubkey) {
     applyNostrLogin(pubkey, secretKey, 'nsec');
 
     await finishNostrLogin('Logged in with Nostr identity.');
+    if (opts && opts.fresh) adoptGeneratedNym();
 }
 
 let _nip46State = null; // holds active connection state during login flow
@@ -6244,6 +6262,7 @@ async function applyNostrSettingsAdditive(s) {
                     }
                 }
                 for (const m of nym.notificationHistory) {
+                    if (evId && (m.eventId || m.channelInfo?.eventId)) continue;
                     if (m.body !== n.body) continue;
                     if ((m.senderPubkey || '') !== (n.senderPubkey || '')) continue;
                     if (Math.abs((m.timestamp || 0) - (n.timestamp || 0)) > 60000) continue;

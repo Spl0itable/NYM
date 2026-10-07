@@ -1,4 +1,4 @@
 #include "../Flutter/Generated.xcconfig"
 
 FLUTTER_BUILD_NAME=3.75.545
-FLUTTER_BUILD_NUMBER=549
+FLUTTER_BUILD_NUMBER=554

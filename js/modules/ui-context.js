@@ -1106,21 +1106,9 @@ Object.assign(NYM.prototype, {
         this.setupSwipeToReply();
         this.setupDoubleClickToReply();
 
-        // Browsers intercept mouse back/forward before JS, so use the History API (pushState in _pushNavigation).
         window.addEventListener('popstate', (e) => {
             if (typeof this._phonePop === 'function' && this._phonePop(e)) return;
-            if (e.state && e.state._nym_nav != null) {
-                const targetIndex = e.state._nym_nav;
-                if (targetIndex < this.navigationIndex) {
-                    this.navigationIndex = targetIndex;
-                    this._navigateTo(this.navigationHistory[this.navigationIndex]);
-                    this._updateNavButtons();
-                } else if (targetIndex > this.navigationIndex) {
-                    this.navigationIndex = targetIndex;
-                    this._navigateTo(this.navigationHistory[this.navigationIndex]);
-                    this._updateNavButtons();
-                }
-            }
+            this._navPop(e.state);
         });
 
         const input = document.getElementById('messageInput');

@@ -59,5 +59,38 @@
         return true;
     }
 
-    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed });
+    function num(v) {
+        return typeof v === 'number' && isFinite(v) ? v : 0;
+    }
+
+    function readTs(ts, receivedAt, live) {
+        const t = num(ts);
+        const r = num(receivedAt);
+        return live === true && r > t ? r : t;
+    }
+
+    function sameAlert(a, b) {
+        const x = a && typeof a === 'object' ? a : {};
+        const y = b && typeof b === 'object' ? b : {};
+        const xi = str(x.eventId);
+        const yi = str(y.eventId);
+        if (xi && yi) return xi === yi;
+        if ((x.exact === true && xi) || (y.exact === true && yi)) return false;
+        return str(x.title) === str(y.title) && str(x.body) === str(y.body) &&
+            str(x.sender) === str(y.sender) && Math.abs(num(x.ts) - num(y.ts)) < 60000;
+    }
+
+    function samePm(a, b) {
+        const x = a && typeof a === 'object' ? a : {};
+        const y = b && typeof b === 'object' ? b : {};
+        if (str(x.pubkey) !== str(y.pubkey)) return false;
+        const xi = str(x.nymId);
+        const yi = str(y.nymId);
+        if (xi && yi) return xi === yi;
+        if (str(x.content) !== str(y.content)) return false;
+        if (Math.abs(num(x.createdAt) - num(y.createdAt)) >= 5) return false;
+        return !str(x.replyTo) || str(x.replyTo) === str(y.replyTo);
+    }
+
+    G.NymNotifyView = Object.freeze({ threadOpen, onScreen, sees, outcome, addressed, readTs, sameAlert, samePm });
 })();

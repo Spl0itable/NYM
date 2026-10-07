@@ -934,7 +934,7 @@
                     g1.appendChild(p1);
                     let g2 = null;
                     if (p2) { g2 = el('div', 'form-group'); g2.appendChild(p2); }
-                    const err = el('div', 'nm-h-20');
+                    const err = el('div', 'nm-kb-error');
                     err.setAttribute('role', 'alert');
                     const showErr = (m) => { err.textContent = m || ''; err.classList.toggle('nm-hidden', !m); localize(err); };
                     showErr(opts.error);
@@ -1042,7 +1042,7 @@
     async function finishSignIn(handoff) {
         const restored = handoff.restored || {};
         presetPq(handoff.hex, restored);
-        await window.nostrLoginImportKey(handoff.hex);
+        await window.nostrLoginImportKey(handoff.hex, { fresh: !!restored.fresh });
         if (restored.fresh) return;
         if (restored.pq && typeof window.restorePqRootFromBackup === 'function') {
             Promise.resolve(window.restorePqRootFromBackup(restored.pq)).then((status) => {

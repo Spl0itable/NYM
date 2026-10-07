@@ -2404,3 +2404,27 @@ Object.assign(NYM.prototype, {
     },
 
 });
+
+const NYM_PLACEHOLDER_NICK = 'pseudonymous';
+
+function nymUsableNick(value) {
+    if (typeof value !== 'string') return false;
+    const base = value.replace(/#[0-9a-f]{4}$/i, '').trim();
+    return base !== '' && base.toLowerCase() !== NYM_PLACEHOLDER_NICK;
+}
+
+Object.defineProperty(NYM.prototype, 'nym', {
+    configurable: true,
+    get() {
+        return nymUsableNick(this._nymValue) ? this._nymValue : null;
+    },
+    set(value) {
+        if (value === null || value === undefined) {
+            this._nymValue = null;
+            return;
+        }
+        if (nymUsableNick(value)) this._nymValue = value;
+    }
+});
+
+NYM.prototype.isUsableNym = nymUsableNick;

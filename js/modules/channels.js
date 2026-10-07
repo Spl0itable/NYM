@@ -410,7 +410,7 @@ Object.assign(NYM.prototype, {
 </div>
 ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distance}</div>` : ''}
 <div class="geohash-info-item">
-    <strong>Messages:</strong> ${channel.messages}
+    <strong>Messages:</strong> <span id="geohashInfoMessages">${Number(channel.messages) || 0}</span>
 </div>
 `;
 
@@ -616,25 +616,37 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (entry.type === 'mesh') return;
         }
         this.navigationHistory = this.navigationHistory.slice(0, this.navigationIndex + 1);
-        this.navigationHistory.push(entry);
+        if (!this._navSession) this._navSession = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        this._navSeq = (this._navSeq || 0) + 1;
+        this.navigationHistory.push(Object.assign({}, entry, { _navId: this._navSession + ':' + this._navSeq }));
         if (this.navigationHistory.length > 50) {
             this.navigationHistory.shift();
         }
         this.navigationIndex = this.navigationHistory.length - 1;
-        // Sync with browser history so mouse back/forward buttons trigger popstate.
-        try {
-            history.pushState({ _nym_nav: this.navigationIndex }, '');
-        } catch {
-            // pushState can fail, e.g. in a sandboxed iframe.
-        }
+        try { history.pushState(this._navState(), ''); } catch { }
         this._updateNavButtons();
+    },
+
+    _navState() {
+        const entry = this.navigationHistory[this.navigationIndex];
+        return { _nym_nav: this.navigationIndex, _nym_nav_id: entry ? entry._navId : null };
+    },
+
+    _navPop(state) {
+        if (!state || typeof state !== 'object' || !state._nym_nav_id) return false;
+        const target = this.navigationHistory.findIndex((e) => e && e._navId === state._nym_nav_id);
+        if (target < 0 || target === this.navigationIndex) return false;
+        this.navigationIndex = target;
+        this._navigateTo(this.navigationHistory[target]);
+        this._updateNavButtons();
+        return true;
     },
 
     navigateBack() {
         if (this.navigationIndex <= 0) return;
         this.navigationIndex--;
         this._navigateTo(this.navigationHistory[this.navigationIndex]);
-        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch { }
+        try { history.replaceState(this._navState(), ''); } catch { }
         this._updateNavButtons();
     },
 
@@ -642,11 +654,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this.navigationIndex >= this.navigationHistory.length - 1) return;
         this.navigationIndex++;
         this._navigateTo(this.navigationHistory[this.navigationIndex]);
-        try { history.replaceState({ _nym_nav: this.navigationIndex }, ''); } catch { }
+        try { history.replaceState(this._navState(), ''); } catch { }
         this._updateNavButtons();
     },
 
     _navigateTo(entry) {
+        if (!entry || typeof entry !== 'object' || !entry.type) return;
         this._navigating = true;
         try {
             if (entry.type === 'mesh') {
@@ -2117,7 +2130,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     },
 
     // Every caller gates this on `!message.isHistorical`, so it means one more live unread arrived.
-    updateUnreadCount(channel, createdAt) {
+    updateUnreadCount(channel, createdAt, live) {
         let count = this._recomputeUnreadCount(channel);
         // Don't let a partial local cache drop the badge below the D1 archive.
         count = Math.max(count, this._d1UnreadFloor(channel));
@@ -2125,7 +2138,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         if (this._unreadCountStillValid(channel)) {
             const standing = this.unreadCounts.get(channel) || 0;
             const lastRead = (this.channelLastRead && this.channelLastRead.get(channel)) || 0;
-            const isNew = !(createdAt > 0) || createdAt > lastRead;
+            const isNew = !(createdAt > 0) || createdAt > lastRead || (live === true && createdAt >= lastRead);
             count = Math.max(count, standing + (isNew ? 1 : 0));
         }
         this._setUnreadCount(channel, count);

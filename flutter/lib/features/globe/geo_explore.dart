@@ -14,6 +14,7 @@ const int kGeoSearchMinChars = 2;
 const int kGeoSearchLimit = 8;
 const int kGeoMinTouchPx = 44;
 const int kGeoPeekContentMax = 140;
+const int kGeoPeekFetchCap = 500;
 
 const List<String> kGeoPrecisionLabels = [
   'Subcontinent',
@@ -660,14 +661,36 @@ class GeoPeekMessage {
 
 @immutable
 class GeoPeekSummary {
-  const GeoPeekSummary({required this.messages, required this.online});
+  const GeoPeekSummary({
+    required this.messages,
+    required this.online,
+    required this.total,
+    this.capped = false,
+  });
   final List<GeoPeekMessage> messages;
   final int online;
+  final int total;
+  final bool capped;
 
   Map<String, Object?> toJson() => {
         'messages': [for (final m in messages) m.toJson()],
         'online': online,
+        'total': total,
+        'capped': capped,
       };
+}
+
+bool geoPeekCapped(List<Map<String, dynamic>> events) {
+  var n = 0;
+  for (final e in events) {
+    if (e['kind'] != 9735) n++;
+  }
+  return n >= kGeoPeekFetchCap;
+}
+
+String geoPeekCountLabel(GeoPeekSummary? summary) {
+  if (summary == null) return '';
+  return '${summary.total}${summary.capped ? '+' : ''}';
 }
 
 String? _tagValue(Object? tags, String name) {
@@ -695,6 +718,7 @@ GeoPeekSummary summarizeGeoPeek(
   Set<String> blocked = const {},
   List<String> localOnline = const [],
   int limit = 5,
+  bool capped = false,
 }) {
   final gh = geohash.toLowerCase();
   final seen = <String>{};
@@ -741,6 +765,8 @@ GeoPeekSummary summarizeGeoPeek(
         ),
     ],
     online: online.length,
+    total: valid.length,
+    capped: capped,
   );
 }
 

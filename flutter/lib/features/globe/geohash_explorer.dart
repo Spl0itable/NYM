@@ -208,6 +208,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     with TickerProviderStateMixin {
   GeoView _view = const GeoView();
   List<GeoFeature> _features = const [];
+  String? _peekGh;
+  GeoPeekSummary? _peekSummary;
   Size _lastSize = Size.zero;
 
   /// Whether [GeohashExplorer.focusGeohash] has been framed yet.
@@ -1369,14 +1371,30 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
         _infoRow(tr('Coordinates'), coords, nym),
         _infoRow(tr('Location'), _locationInfo, nym),
         if (distance != null) _infoRow(tr('Distance'), distance, nym),
-        _infoRow(tr('Messages'), '${ch.messages}', nym, isLast: true),
+        _infoRow(
+            tr('Messages'),
+            _peekGh == gh && _peekSummary != null
+                ? geoPeekCountLabel(_peekSummary)
+                : '${ch.messages}',
+            nym,
+            isLast: true),
         const SizedBox(height: 8),
         GeoPrecisionPath(
           geohash: gh,
           onStep: (prefix) => _focusCell(prefix, size),
         ),
         const SizedBox(height: 10),
-        GeoPeekView(key: ValueKey('peek-$gh'), geohash: gh),
+        GeoPeekView(
+          key: ValueKey('peek-$gh'),
+          geohash: gh,
+          onSummary: (peeked, summary) {
+            if (!mounted) return;
+            setState(() {
+              _peekGh = peeked;
+              _peekSummary = summary;
+            });
+          },
+        ),
       ],
     );
     final join = SizedBox(

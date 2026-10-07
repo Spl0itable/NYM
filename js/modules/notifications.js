@@ -42,14 +42,7 @@ Object.assign(NYM.prototype, {
         const eventId = channelInfo?.eventId || '';
 
         // Live and replay paths can both call this for the same event.
-        const isDupe = this.notificationHistory.some(n => {
-            if (eventId && n.eventId && n.eventId === eventId) return true;
-            if (lockedChat && eventId) return false;
-            if (n.title === titleToShow && n.body === body
-                && n.senderPubkey === (channelInfo?.pubkey || '')
-                && Math.abs((n.timestamp || 0) - ts) < 60000) return true;
-            return false;
-        });
+        const isDupe = this._notifIsDupe({ eventId, title: titleToShow, body, sender: channelInfo?.pubkey || '', ts, exact: !!lockedChat });
         if (isDupe) {
             this._updateNotificationBadge();
             return;
@@ -66,12 +59,13 @@ Object.assign(NYM.prototype, {
             eventId: eventId || undefined
         };
         if (lockedChat) entry.locked = true;
+        entry.live = true;
         const previouslySeen = this._isNotificationSeen(entry);
         const seenNow = this._notifSees(channelInfo);
         entry.viewed = previouslySeen
             || seenNow
             || receivedAt <= (this.notificationLastReadTime || 0)
-            || this._notificationAlreadySeen(channelInfo, ts);
+            || this._notificationAlreadySeen(channelInfo, this._notifReadTs(entry), true);
         if (entry.viewed) this._rememberNotificationSeen(entry);
         if (seenNow) this._noteThreadRead(channelInfo, ts);
         this.notificationHistory.push(entry);
@@ -160,14 +154,7 @@ Object.assign(NYM.prototype, {
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         if (ts < cutoff24h) return;
         const eventId = channelInfo?.eventId || '';
-        const isDupe = this.notificationHistory.some(n => {
-            if (eventId && n.eventId && n.eventId === eventId) return true;
-            if (lockedChat && eventId) return false;
-            if (n.title === titleToShow && n.body === body
-                && n.senderPubkey === (channelInfo?.pubkey || '')
-                && Math.abs((n.timestamp || 0) - ts) < 60000) return true;
-            return false;
-        });
+        const isDupe = this._notifIsDupe({ eventId, title: titleToShow, body, sender: channelInfo?.pubkey || '', ts, exact: !!lockedChat });
         if (isDupe) return;
         const entry = {
             title: titleToShow,
@@ -190,6 +177,18 @@ Object.assign(NYM.prototype, {
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
         if (!entry.viewed && typeof this._etConsider === 'function') this._etConsider(entry, true);
+    },
+
+    _notifIsDupe(a) {
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        return (this.notificationHistory || []).some(n => (V ? V.sameAlert(a, {
+            eventId: n.eventId || '', title: n.title, body: n.body, sender: n.senderPubkey || '', ts: n.timestamp || 0
+        }) : !!(a.eventId && n.eventId === a.eventId)));
+    },
+
+    _notifReadTs(n) {
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        return V ? V.readTs(n.timestamp || 0, n.receivedAt || 0, n.live === true) : (n.timestamp || 0);
     },
 
     _openNotificationTarget(n) {
@@ -380,11 +379,22 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    _notifView() {
+    _notifColumnOnScreen(c) {
+        const strip = this._cvStrip;
+        if (!c || !c.el || !strip || typeof c.el.getBoundingClientRect !== 'function') return false;
+        const r = c.el.getBoundingClientRect();
+        const s = strip.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.right > s.left && r.left < s.right;
+    },
+
+    _notifView(banner) {
         const focused = typeof document === 'undefined' || !document.hidden;
         const keys = [];
         if (this._cvActive && Array.isArray(this._cvColumns)) {
-            for (const c of this._cvColumns) if (c && c.key) keys.push(c.key);
+            for (const c of this._cvColumns) {
+                if (!c || !c.key) continue;
+                if (c.id === this._cvFocusedId || (banner === true && this._notifColumnOnScreen(c))) keys.push(c.key);
+            }
         } else if (this.inPMMode) {
             if (this.currentGroup) keys.push(this.getGroupConversationKey(this.currentGroup));
             else if (this.currentPM) keys.push(this.getPMConversationKey(this.currentPM));
@@ -419,10 +429,10 @@ Object.assign(NYM.prototype, {
         return { key, root };
     },
 
-    _notifSees(channelInfo) {
+    _notifSees(channelInfo, banner) {
         const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
         if (!V || !channelInfo) return false;
-        return V.sees(this._notifView(), this._notifEvent(channelInfo));
+        return V.sees(this._notifView(banner === true), this._notifEvent(channelInfo));
     },
 
     _threadReadKey(convKey, root) {
@@ -502,16 +512,18 @@ Object.assign(NYM.prototype, {
             this._notificationConvKey(n.channelInfo) === convKey);
     },
 
-    _notificationAlreadySeen(channelInfo, tsMs) {
+    _notificationAlreadySeen(channelInfo, tsMs, live) {
         const { key, root } = this._notifEvent(channelInfo);
+        const sec = Math.floor((tsMs || 0) / 1000);
+        const before = (t) => (live === true ? sec < t : sec <= t);
         if (key && root) {
             const t = this._threadLastReadMap().get(this._threadReadKey(key, root)) || 0;
-            return !!t && Math.floor((tsMs || 0) / 1000) <= t;
+            return !!t && before(t);
         }
         if (!key || !this.channelLastRead) return false;
         const seen = this.channelLastRead.get(key) || 0;
         if (!seen) return false;
-        return Math.floor((tsMs || 0) / 1000) <= seen;
+        return before(seen);
     },
 
     _retractMissedCallNotification(callId) {
@@ -541,7 +553,7 @@ Object.assign(NYM.prototype, {
             if (this._notificationConvKey(n.channelInfo) !== convKey) continue;
             const root = this._notifEvent(n.channelInfo).root;
             if (root && !(V && V.sees(view, { key: convKey, root }))) continue;
-            if (Math.floor((n.timestamp || 0) / 1000) > tsSec) continue;
+            if (Math.floor(this._notifReadTs(n) / 1000) > tsSec) continue;
             n.viewed = true;
             this._rememberNotificationSeen(n, false);
             changed = true;
@@ -602,7 +614,7 @@ Object.assign(NYM.prototype, {
             if (n.viewed === true) return false;
             const observedAt = n.receivedAt || n.timestamp || 0;
             if (observedAt <= lastRead) return false;
-            if (this._notificationAlreadySeen(n.channelInfo, n.timestamp)) return false;
+            if (this._notificationAlreadySeen(n.channelInfo, this._notifReadTs(n), n.live === true)) return false;
             const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
             if (pubkey && this.blockedUsers.has(pubkey)) return false;
             return true;

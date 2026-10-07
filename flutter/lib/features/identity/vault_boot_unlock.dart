@@ -184,8 +184,19 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
 
   @override
   Widget build(BuildContext context) {
-    final c = context.nym;
+    final theme = Theme.of(context);
+    final c = context.nym.gate;
     final isBio = _isBiometric;
+    return Theme(
+      data: theme.copyWith(extensions: [
+        ...theme.extensions.values.where((e) => e is! NymColors),
+        c,
+      ]),
+      child: _gateBody(c, isBio),
+    );
+  }
+
+  Widget _gateBody(NymColors c, bool isBio) {
     return Material(
       color: c.bg,
       child: SafeArea(

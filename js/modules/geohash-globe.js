@@ -2071,6 +2071,7 @@ Object.assign(NYM.prototype, {
             }
             summary = window.NymGeoExplore.summarizePeek(ok, {
                 geohash: gh, nowSec: Math.floor(now / 1000), blocked: [...(this.blockedUsers || [])], localOnline: local,
+                capped: window.NymGeoExplore.peekCapped(events),
             });
         } catch (_) {
             summary = null;
@@ -2078,6 +2079,8 @@ Object.assign(NYM.prototype, {
         if (run.cancelled || this._gxPeekRun !== run) return;
         this._gxPeekRun = null;
         if (!summary) { el.innerHTML = note('gx-peek-error', "Couldn't load recent messages."); return; }
+        const countEl = document.getElementById('geohashInfoMessages');
+        if (countEl && this.selectedGeohash === gh) countEl.textContent = window.NymGeoExplore.peekCountLabel(summary);
         if (!summary.messages.length) {
             el.innerHTML = `${head(summary.online)}<div class="gx-peek-note">${e(this._gxL('No recent messages in this room.'))}</div>`;
             return;

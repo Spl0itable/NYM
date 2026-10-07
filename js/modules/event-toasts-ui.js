@@ -125,7 +125,7 @@
 
         _etSees(entry) {
             const info = (entry && entry.channelInfo) || {};
-            return typeof this._notifSees === 'function' && !!this._notifSees(info);
+            return typeof this._notifSees === 'function' && !!this._notifSees(info, true);
         },
 
         _etTopDialog() {

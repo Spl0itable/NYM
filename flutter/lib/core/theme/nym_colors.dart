@@ -46,6 +46,7 @@ class NymColors extends ThemeExtension<NymColors> {
     this._bubbleSelfBg,
     this._bubbleOtherBg,
     this._fieldPlaceholder,
+    this._warningStrong,
   });
 
   final Color primary; // accent / brand
@@ -77,6 +78,12 @@ class NymColors extends ThemeExtension<NymColors> {
   bool get isLight => brightness == Brightness.light;
 
   Color get fieldPlaceholder => _fieldPlaceholder ?? textDim;
+
+  final Color? _warningStrong;
+
+  Color get warningStrong => _warningStrong ?? warning;
+
+  NymColors get gate => copyWith(warning: warningStrong);
 
   Color get messageText =>
       isLight ? const Color(0xFF4A4A4A) : const Color(0xFFCCCCCC);
@@ -151,6 +158,7 @@ class NymColors extends ThemeExtension<NymColors> {
     Color? bubbleSelfBg,
     Color? bubbleOtherBg,
     Color? fieldPlaceholder,
+    Color? warningStrong,
   }) {
     return NymColors(
       primary: primary ?? this.primary,
@@ -174,6 +182,7 @@ class NymColors extends ThemeExtension<NymColors> {
       bubbleSelfBg: bubbleSelfBg ?? _bubbleSelfBg,
       bubbleOtherBg: bubbleOtherBg ?? _bubbleOtherBg,
       fieldPlaceholder: fieldPlaceholder ?? _fieldPlaceholder,
+      warningStrong: warningStrong ?? _warningStrong,
     );
   }
 
@@ -202,6 +211,7 @@ class NymColors extends ThemeExtension<NymColors> {
       bubbleSelfBg: t < 0.5 ? _bubbleSelfBg : other._bubbleSelfBg,
       bubbleOtherBg: t < 0.5 ? _bubbleOtherBg : other._bubbleOtherBg,
       fieldPlaceholder: Color.lerp(fieldPlaceholder, other.fieldPlaceholder, t),
+      warningStrong: Color.lerp(warningStrong, other.warningStrong, t),
     );
   }
 }

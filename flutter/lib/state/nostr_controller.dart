@@ -1385,6 +1385,12 @@ class NostrController {
 
     await _teardownLiveSession();
     _started = false;
+    if (newKey) {
+      final generated = NymGenerator().generate(loggedIn.pubkey,
+          style: kv.getString(StorageKeys.nickStyle) ?? 'fancy');
+      await kv.setString(StorageKeys.nostrLoginProfile,
+          jsonEncode({'name': generated, 'avatar': null}));
+    }
     final root = pqRootCode == null ? null : pqRootFromCode(pqRootCode.trim());
     if (root != null) {
       if (newKey) {
@@ -1394,9 +1400,26 @@ class NostrController {
       }
     }
     await init();
+    if (newKey) unawaited(_publishGeneratedNym());
 
     // Remount the boot gate so it sees the saved login.
     _ref.read(bootEpochProvider.notifier).state++;
+  }
+
+  Future<void> _publishGeneratedNym() async {
+    final service = _service;
+    final identity = _identity;
+    if (service == null || identity == null) return;
+    final profile = Map<String, dynamic>.of(_cachedKind0Profile ?? const {})
+      ..['name'] = identity.nym
+      ..['display_name'] = identity.nym;
+    _cachedKind0Profile = Map<String, dynamic>.of(profile);
+    final signed = await service.publishProfile(jsonEncode(profile));
+    if (signed == null) return;
+    _adoptSelfKind0(signed);
+    _ref.read(appStateProvider.notifier).ingestEvent(signed);
+    _syncSelfNymFromProfile();
+    _mirrorOwnProfileToD1(signed);
   }
 
   /// Adopts a NIP-46 session the login modal just established by re-booting the controller onto it.
@@ -2171,6 +2194,7 @@ class NostrController {
             eventId: eventId,
             senderPubkey: senderPubkey,
             threadRoot: threadRoot,
+            live: !silent,
           );
     } catch (_) {}
     EventToastEvent toastEvent(bool backlog) => _eventToastFor(
@@ -2244,6 +2268,7 @@ class NostrController {
             contextLabel: shownLabel,
             threadRoot: threadRoot,
             exactOnly: lockedChat,
+            live: !silent,
           );
     } catch (_) {
       // History store may be unavailable in teardown; alerting still happened.
@@ -10621,6 +10646,7 @@ class NostrController {
           if (u.channels.contains(gh) && nowMs - u.lastSeen < kActiveThresholdMs)
             u.pubkey,
       ],
+      capped: geoPeekCapped(rows),
     );
   }
 

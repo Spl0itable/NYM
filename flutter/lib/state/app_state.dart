@@ -985,6 +985,14 @@ class AppStateNotifier extends StateNotifier<AppState> {
   bool _isUnreadByWatermark(String key, Message m) =>
       m.createdAt > (_channelLastRead[key] ?? 0);
 
+  bool _isLivePmUnreadByWatermark(String key, Message m) {
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final live = !m.isHistorical && nowMs - m.timestamp <= 30000;
+    final lastRead = _channelLastRead[key] ?? 0;
+    if (!live) return m.createdAt > lastRead;
+    return NotifyView.readTs(m.createdAt, nowMs ~/ 1000, live) >= lastRead;
+  }
+
   /// Columns-mode read gate: true only when the key's column is focused, at the bottom, and the app is visible.
   bool Function(String storageKey)? columnsReadGate;
 
@@ -2161,11 +2169,23 @@ class AppStateNotifier extends StateNotifier<AppState> {
       }
     }
     if (dup == null) {
+      final incoming = NotifyPmKey(
+        pubkey: m.pubkey,
+        content: m.content,
+        createdAt: m.createdAt,
+        nymId: nymId ?? '',
+        replyTo: m.replyTo ?? '',
+      );
       for (final e in list) {
-        if (e.pubkey == m.pubkey &&
-            e.content == m.content &&
-            (e.createdAt - m.createdAt).abs() < 5 &&
-            (m.replyTo == null || e.replyTo == m.replyTo)) {
+        if (NotifyView.samePm(
+            incoming,
+            NotifyPmKey(
+              pubkey: e.pubkey,
+              content: e.content,
+              createdAt: e.createdAt,
+              nymId: e.nymMessageId ?? '',
+              replyTo: e.replyTo ?? '',
+            ))) {
           dup = e;
           break;
         }
@@ -2262,7 +2282,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (!seenPm &&
         countUnread &&
         state.countsTowardUnread(m) &&
-        _isUnreadByWatermark(peer, m)) {
+        _isLivePmUnreadByWatermark(peer, m)) {
       state.unreadCounts[peer] = (state.unreadCounts[peer] ?? 0) + 1;
     } else if (seenPm &&
         columnsReadGate != null &&
@@ -4982,6 +5002,7 @@ class NotificationEntry {
     this.contextLabel,
     this.threadRoot,
     this.viewed = false,
+    this.live = false,
   }) : receivedAt = (receivedAt != null && receivedAt > 0) ? receivedAt : ts;
 
   /// `'message' | 'mention' | 'reaction' | 'call' | 'pm' | 'group' | …`.
@@ -5011,6 +5032,10 @@ class NotificationEntry {
   final String? threadRoot;
   bool viewed;
 
+  final bool live;
+
+  int get readTs => NotifyView.readTs(ts, receivedAt, live);
+
   /// Copy with [ts] clamped to [receivedAt], never to `now`, so re-running is idempotent.
   NotificationEntry clampedToObserved() => NotificationEntry(
         type: type,
@@ -5024,6 +5049,7 @@ class NotificationEntry {
         contextLabel: contextLabel,
         threadRoot: threadRoot,
         viewed: viewed,
+        live: live,
       );
 
   /// `timestamp` is the PWA field name so either client's blob round-trips; nulls are omitted.
@@ -5039,6 +5065,7 @@ class NotificationEntry {
         if (contextLabel != null) 'contextLabel': contextLabel,
         if (threadRoot != null) 'threadRoot': threadRoot,
         if (viewed) 'viewed': true,
+        if (live) 'live': true,
       };
 
   /// Rebuilds an entry from native JSON or a PWA `channelInfo` record; null when required fields are missing.
@@ -5099,6 +5126,7 @@ class NotificationEntry {
           ? raw['threadRoot'] as String
           : ciThreadRoot,
       viewed: raw['viewed'] == true,
+      live: raw['live'] == true,
     );
   }
 }
@@ -5310,6 +5338,7 @@ class NotificationHistoryNotifier
               senderPubkey: e.senderPubkey,
               threadRoot: e.threadRoot,
               viewed: e.viewed,
+              live: e.live,
             );
           })()
         else
@@ -5511,6 +5540,7 @@ class NotificationHistoryNotifier
     String? eventId,
     String? senderPubkey,
     String? threadRoot,
+    bool live = false,
   }) {
     final now = DateTime.now().millisecondsSinceEpoch;
     final raw = ts ?? now;
@@ -5524,6 +5554,7 @@ class NotificationHistoryNotifier
       eventId: eventId,
       senderPubkey: senderPubkey,
       threadRoot: threadRoot,
+      live: live,
     );
     return _isSeen(probe) ||
         probe.receivedAt <= _lastReadTimeMs ||
@@ -5536,9 +5567,11 @@ class NotificationHistoryNotifier
   /// True when the source conversation's read watermark is at or after this notification.
   bool _alreadySeenByWatermark(NotificationEntry n, Map<String, int> lastRead) {
     final ev = _entryEvent(n);
+    final sec = n.readTs ~/ 1000;
+    bool before(int t) => n.live ? sec < t : sec <= t;
     if (ev.key.isNotEmpty && ev.root.isNotEmpty) {
       final t = _threadReads['${ev.key}|${ev.root}'] ?? 0;
-      return t > 0 && n.ts ~/ 1000 <= t;
+      return t > 0 && before(t);
     }
     final route = n.route;
     if (lastRead.isEmpty || route == null || route.isEmpty || n.ts <= 0) {
@@ -5556,7 +5589,7 @@ class NotificationHistoryNotifier
       if (v > seen) seen = v;
     }
     if (seen == 0) return false;
-    return n.ts ~/ 1000 <= seen;
+    return before(seen);
   }
 
   /// Records a notification, trimming to 24h and deduping by [eventId] or title+body+sender within 60s.
@@ -5572,6 +5605,7 @@ class NotificationHistoryNotifier
     String? threadRoot,
     int? receivedAtMs,
     bool exactOnly = false,
+    bool live = false,
   }) {
     // Channel digests never enter the bell history, on any path.
     if (body.contains('10 recent messages:')) return;
@@ -5590,6 +5624,7 @@ class NotificationHistoryNotifier
         senderPubkey: senderPubkey,
         contextLabel: contextLabel,
         threadRoot: threadRoot,
+        live: live,
       ));
       _pendingRecords.add(() => record(
             type: type,
@@ -5603,6 +5638,7 @@ class NotificationHistoryNotifier
             threadRoot: threadRoot,
             receivedAtMs: observedAt,
             exactOnly: exactOnly,
+            live: live,
           ));
       return;
     }
@@ -5615,19 +5651,23 @@ class NotificationHistoryNotifier
     if (now - stamp >= _maxAgeMs) return;
 
     // Dedup against existing history (live and replay can both fire).
-    final isDupe = state.entries.any((e) {
-      if (eventId != null &&
-          eventId.isNotEmpty &&
-          e.eventId != null &&
-          e.eventId == eventId) {
-        return true;
-      }
-      if (exactOnly && eventId != null && eventId.isNotEmpty) return false;
-      return e.title == title &&
-          e.body == body &&
-          (e.senderPubkey ?? '') == (senderPubkey ?? '') &&
-          (e.ts - stamp).abs() < 60000;
-    });
+    final probe = NotifyAlertKey(
+      eventId: eventId ?? '',
+      title: title,
+      body: body,
+      sender: senderPubkey ?? '',
+      ts: stamp,
+      exact: exactOnly,
+    );
+    final isDupe = state.entries.any((e) => NotifyView.sameAlert(
+        probe,
+        NotifyAlertKey(
+          eventId: e.eventId ?? '',
+          title: e.title,
+          body: e.body,
+          sender: e.senderPubkey ?? '',
+          ts: e.ts,
+        )));
     if (isDupe) return;
 
     final entry = NotificationEntry(
@@ -5641,6 +5681,7 @@ class NotificationHistoryNotifier
       senderPubkey: senderPubkey,
       contextLabel: contextLabel,
       threadRoot: threadRoot,
+      live: live,
     );
     // Land pre-viewed when seen on another device or under a read watermark; remember newly viewed keys.
     final seenNow = _seenNow(entry);
@@ -5695,7 +5736,7 @@ class NotificationHistoryNotifier
     for (final e in state.entries) {
       if (e.viewed) continue;
       if (e.route != route) continue;
-      if (cutoffMs != null && e.ts > cutoffMs) continue;
+      if (cutoffMs != null && e.readTs > cutoffMs) continue;
       final ev = _entryEvent(e);
       if (ev.root.isNotEmpty && !NotifyView.sees(view, ev)) continue;
       e.viewed = true;

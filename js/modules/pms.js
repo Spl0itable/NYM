@@ -1326,8 +1326,11 @@ Object.assign(NYM.prototype, {
                 dupMsg = list.find(m => m.pubkey === senderPubkey && m.nymMessageId === nymMsgIdFromRumor);
             }
             if (!dupMsg) {
-                dupMsg = list.find(m => m.pubkey === senderPubkey && m.content === messageContent && Math.abs((m.timestamp?.getTime() / 1000 || 0) - tsSec) < 5 &&
-                    (!botReplyTo || m.replyTo === botReplyTo));
+                const NV = window.NymNotifyView;
+                const incoming = { pubkey: senderPubkey, content: messageContent, createdAt: tsSec, nymId: nymMsgIdFromRumor || '', replyTo: botReplyTo || '' };
+                dupMsg = list.find(m => NV.samePm(incoming, {
+                    pubkey: m.pubkey, content: m.content, createdAt: m.timestamp?.getTime() / 1000 || 0, nymId: m.nymMessageId || '', replyTo: m.replyTo || ''
+                }));
             }
             if (dupMsg) {
                 let needsRerender = false;
@@ -1488,13 +1491,15 @@ Object.assign(NYM.prototype, {
             // Collapsed thread replies must neither advance the read watermark nor count as seen.
             const pmThreadHidden = typeof this._threadReplyHidden === 'function' &&
                 this._threadReplyHidden(msg);
+            const pmHistorical = () => (gap ? tsSec < gap.floorSec : (msg.isHistorical || Date.now() - (tsSec * 1000) > 30000));
+            const pmLive = () => !gap && !pmHistorical();
+            const pmUnreadTs = () => window.NymNotifyView.readTs(msg.created_at, Math.floor(Date.now() / 1000), pmLive());
             const notifyForPM = () => {
                 if (gapStale) return;
                 if (this.blockedUsers.has(peerPubkey) || this.hasBlockedKeyword(msg.content, msg.author, peerPubkey)) return;
                 // `threadNotifyMentionsOnly` applies to PM threads too.
                 if (this._threadReplySuppressed(msg)) return;
-                const ageMs = Date.now() - (tsSec * 1000);
-                const treatAsHistorical = gap ? tsSec < gap.floorSec : (msg.isHistorical || ageMs > 30000);
+                const treatAsHistorical = pmHistorical();
                 const pmChannelInfo = {
                     type: 'pm',
                     nym: msg.author,
@@ -1514,7 +1519,7 @@ Object.assign(NYM.prototype, {
             if (this.inPMMode && this.currentPM === peerPubkey && document.hidden) {
                 this.displayMessage(msg);
                 if (!isOwn && !gapStale) {
-                    this.updateUnreadCount(conversationKey, msg.created_at);
+                    this.updateUnreadCount(conversationKey, pmUnreadTs(), pmLive());
                     notifyForPM();
                 }
             } else if (this.inPMMode && this.currentPM === peerPubkey) {
@@ -1544,7 +1549,7 @@ Object.assign(NYM.prototype, {
                 if (cvShown) this.displayMessage(msg);
                 // Leave the cached DOM; loadPMMessages appends new messages to the cached fragment.
                 if (!isOwn && !gapStale) {
-                    if (!(cvShown && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey, msg.created_at);
+                    if (!(cvShown && this._cvMarkColumnRead(conversationKey))) this.updateUnreadCount(conversationKey, pmUnreadTs(), pmLive());
                     notifyForPM();
                 }
             }

@@ -5525,7 +5525,8 @@ body.chat-bubbles .kept-indicator-irc {
     display: none;
 }
 
-.cl-error {
+.cl-error,
+.form-hint.cl-error {
     color: var(--danger);
 }
 

@@ -330,14 +330,23 @@ class NotificationsService {
     // Also covers records buffered during history hydration, avoiding double popups at boot.
     final history =
         _ref.read(notificationHistoryProvider.notifier).entriesForAlertDedup;
-    final isDupe = history.any((e) {
-      if (eventId.isNotEmpty && e.eventId == eventId) return true;
-      if (exactOnly && eventId.isNotEmpty) return false;
-      return e.title == title &&
-          e.body == body &&
-          (e.senderPubkey ?? '') == sender &&
-          (e.ts - ts).abs() < 60000;
-    });
+    final probe = NotifyAlertKey(
+      eventId: eventId,
+      title: title,
+      body: body,
+      sender: sender,
+      ts: ts,
+      exact: exactOnly,
+    );
+    final isDupe = history.any((e) => NotifyView.sameAlert(
+        probe,
+        NotifyAlertKey(
+          eventId: e.eventId ?? '',
+          title: e.title,
+          body: e.body,
+          sender: e.senderPubkey ?? '',
+          ts: e.ts,
+        )));
     if (isDupe) return true;
 
     // Seen key matching the history store: event id, else sender+minute+40-char body prefix.

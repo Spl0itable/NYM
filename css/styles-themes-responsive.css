@@ -760,8 +760,13 @@ body.light-mode.theme-ghost {
     --lightning: #999999;
 }
 
+body {
+    --warning-strong: var(--warning);
+}
+
 body.light-mode {
     --warning: #8a6d00;
+    --warning-strong: #7a5c00;
     --danger: #cc0000;
     --purple: #880088;
     --blue: #0060cc;
@@ -769,6 +774,7 @@ body.light-mode {
 
 body.light-mode.theme-ghost {
     --warning: #555555;
+    --warning-strong: #555555;
 }
 
 body.light-mode .image-modal img {

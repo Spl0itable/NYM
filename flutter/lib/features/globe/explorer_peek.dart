@@ -45,9 +45,10 @@ final geoPeekSourceProvider =
     Provider<GeoPeekSource>((ref) => _ControllerPeekSource(ref));
 
 class GeoPeekView extends ConsumerStatefulWidget {
-  const GeoPeekView({super.key, required this.geohash});
+  const GeoPeekView({super.key, required this.geohash, this.onSummary});
 
   final String geohash;
+  final void Function(String geohash, GeoPeekSummary summary)? onSummary;
 
   @override
   ConsumerState<GeoPeekView> createState() => _GeoPeekViewState();
@@ -98,6 +99,7 @@ class _GeoPeekViewState extends ConsumerState<GeoPeekView> {
         _summary = s;
         _failed = s == null;
       });
+      if (s != null) widget.onSummary?.call(widget.geohash, s);
     }, onError: (_) {
       if (!mounted || stale()) return;
       setState(() {

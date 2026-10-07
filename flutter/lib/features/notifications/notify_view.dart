@@ -72,7 +72,83 @@ class NotifyOutcome {
   final bool toast;
 }
 
+class NotifyAlertKey {
+  const NotifyAlertKey({
+    this.eventId = '',
+    this.title = '',
+    this.body = '',
+    this.sender = '',
+    this.ts = 0,
+    this.exact = false,
+  });
+
+  final String eventId;
+  final String title;
+  final String body;
+  final String sender;
+  final int ts;
+  final bool exact;
+
+  static NotifyAlertKey fromJson(Map<String, dynamic> raw) => NotifyAlertKey(
+        eventId: raw['eventId'] is String ? raw['eventId'] as String : '',
+        title: raw['title'] is String ? raw['title'] as String : '',
+        body: raw['body'] is String ? raw['body'] as String : '',
+        sender: raw['sender'] is String ? raw['sender'] as String : '',
+        ts: raw['ts'] is num ? (raw['ts'] as num).toInt() : 0,
+        exact: raw['exact'] == true,
+      );
+}
+
+class NotifyPmKey {
+  const NotifyPmKey({
+    this.pubkey = '',
+    this.content = '',
+    this.createdAt = 0,
+    this.nymId = '',
+    this.replyTo = '',
+  });
+
+  final String pubkey;
+  final String content;
+  final int createdAt;
+  final String nymId;
+  final String replyTo;
+
+  static NotifyPmKey fromJson(Map<String, dynamic> raw) => NotifyPmKey(
+        pubkey: raw['pubkey'] is String ? raw['pubkey'] as String : '',
+        content: raw['content'] is String ? raw['content'] as String : '',
+        createdAt:
+            raw['createdAt'] is num ? (raw['createdAt'] as num).toInt() : 0,
+        nymId: raw['nymId'] is String ? raw['nymId'] as String : '',
+        replyTo: raw['replyTo'] is String ? raw['replyTo'] as String : '',
+      );
+}
+
 abstract final class NotifyView {
+  static int readTs(int ts, int receivedAt, bool live) =>
+      live && receivedAt > ts ? receivedAt : ts;
+
+  static bool sameAlert(NotifyAlertKey a, NotifyAlertKey b) {
+    if (a.eventId.isNotEmpty && b.eventId.isNotEmpty) {
+      return a.eventId == b.eventId;
+    }
+    if ((a.exact && a.eventId.isNotEmpty) || (b.exact && b.eventId.isNotEmpty)) {
+      return false;
+    }
+    return a.title == b.title &&
+        a.body == b.body &&
+        a.sender == b.sender &&
+        (a.ts - b.ts).abs() < 60000;
+  }
+
+  static bool samePm(NotifyPmKey a, NotifyPmKey b) {
+    if (a.pubkey != b.pubkey) return false;
+    if (a.nymId.isNotEmpty && b.nymId.isNotEmpty) return a.nymId == b.nymId;
+    if (a.content != b.content) return false;
+    if ((a.createdAt - b.createdAt).abs() >= 5) return false;
+    return a.replyTo.isEmpty || a.replyTo == b.replyTo;
+  }
+
   static bool threadOpen(NotifyViewState view, NotifyEvent ev) {
     final t = view.thread;
     if (ev.key.isEmpty || ev.root.isEmpty || t == null) return false;

@@ -11,6 +11,7 @@
     const SEARCH_LIMIT = 8;
     const MIN_TOUCH_PX = 44;
     const PEEK_CONTENT_MAX = 140;
+    const PEEK_FETCH_CAP = 500;
     const PRECISION_LABELS = Object.freeze([
         'Subcontinent', 'Large region', 'Region', 'Metro area', 'Town or district', 'Neighborhood',
         'Street block', 'Building', 'Room', 'Spot', 'Pinpoint', 'Pinpoint',
@@ -375,7 +376,19 @@
         const messages = newest.reverse().map((e) => ({
             id: e.id, pubkey: e.pubkey, nym: tagValue(e.tags, 'n') || '', content: clip(e.content), createdAt: e.created_at,
         }));
-        return { messages, online: online.size };
+        return { messages, online: online.size, total: valid.length, capped: o.capped === true };
+    }
+
+    function peekCapped(events) {
+        if (!Array.isArray(events)) return false;
+        let n = 0;
+        for (const e of events) if (e && typeof e === 'object' && e.kind !== 9735) n++;
+        return n >= PEEK_FETCH_CAP;
+    }
+
+    function peekCountLabel(summary) {
+        if (!summary || typeof summary.total !== 'number') return '';
+        return String(summary.total) + (summary.capped ? '+' : '');
     }
 
     const MAX_DPR = 2;
@@ -466,7 +479,7 @@
         SEARCH_MIN_CHARS, SEARCH_LIMIT, MIN_TOUCH_PX, PRECISION_LABELS, KIND_PRECISION,
         foldText, normalizeQuery, classifyQuery, isValidGeohash, encodeGeohash, cellBounds, placeGeohash,
         rankPlaces, buildPlaceIndex, buildSearchResults, roomPlaceLabel, formatLength, cellSizeMeters, precisionSteps, haversineKm, formatDistanceKm,
-        rankActive, rankNearby, clusterPoints, isRecent, normalizeWindowHours, summarizePeek,
+        rankActive, rankNearby, clusterPoints, isRecent, normalizeWindowHours, summarizePeek, peekCapped, peekCountLabel, PEEK_FETCH_CAP,
         MAX_DPR, TIER_PX_PER_DEG, LABEL_PAD, capDpr, tierFor, cityRankCutoff, placeLabels, fitLabelBox,
     });
 })();

@@ -150,6 +150,7 @@ NymColors resolveNymColors({
     bubbleSelfBg: bubbleSelfBg,
     bubbleOtherBg: bubbleOtherBg,
     fieldPlaceholder: theme == NymThemeKey.cyber && !isLight ? _hex('#e64ce6') : null,
+    warningStrong: isLight && theme != NymThemeKey.ghost ? _hex('#7a5c00') : null,
   );
 }
 
