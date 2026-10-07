@@ -44,13 +44,16 @@ Future<RecordedVideoNote?> showVideoNoteRecorder(
   BuildContext context, {
   required bool onceAllowed,
   int maxSeconds = MediaNoteLimits.roundMaxSeconds,
+  void Function(bool recording)? onRecording,
 }) {
   return showDialog<RecordedVideoNote>(
     context: context,
     barrierDismissible: false,
     barrierColor: Colors.black.withValues(alpha: 0.8),
-    builder: (_) =>
-        VideoNoteRecorder(onceAllowed: onceAllowed, maxSeconds: maxSeconds),
+    builder: (_) => VideoNoteRecorder(
+        onceAllowed: onceAllowed,
+        maxSeconds: maxSeconds,
+        onRecording: onRecording),
   );
 }
 
@@ -59,10 +62,12 @@ class VideoNoteRecorder extends StatefulWidget {
     super.key,
     required this.onceAllowed,
     required this.maxSeconds,
+    this.onRecording,
   });
 
   final bool onceAllowed;
   final int maxSeconds;
+  final void Function(bool recording)? onRecording;
 
   @override
   State<VideoNoteRecorder> createState() => _VideoNoteRecorderState();
@@ -121,6 +126,7 @@ class _VideoNoteRecorderState extends State<VideoNoteRecorder> {
   @override
   void dispose() {
     _tick?.cancel();
+    if (_phase == VideoNotePhase.recording) widget.onRecording?.call(false);
     _camera?.dispose();
     _review?.dispose();
     super.dispose();
@@ -142,6 +148,7 @@ class _VideoNoteRecorderState extends State<VideoNoteRecorder> {
     }
     _startedAt = DateTime.now();
     setState(() => _phase = VideoNotePhase.recording);
+    widget.onRecording?.call(true);
     _tick = Timer.periodic(const Duration(milliseconds: 200), (_) {
       if (_elapsed >= widget.maxSeconds) _stop();
       if (mounted) setState(() {});
@@ -154,6 +161,7 @@ class _VideoNoteRecorderState extends State<VideoNoteRecorder> {
     _tick?.cancel();
     _duration = _elapsed.clamp(0, widget.maxSeconds).toDouble();
     setState(() => _phase = VideoNotePhase.review);
+    widget.onRecording?.call(false);
     try {
       final file = await cam.stopVideoRecording();
       _path = file.path;

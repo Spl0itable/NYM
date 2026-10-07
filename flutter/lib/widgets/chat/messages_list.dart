@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
@@ -9,7 +10,10 @@ import '../../core/utils/nym_utils.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/chat_nav/chat_nav.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
+import '../../features/day_separators/day_labels.dart';
+import '../../features/day_separators/day_separator.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/messages/message_announcer.dart';
 import '../../features/polls/poll_card.dart';
 import '../../features/reactions/reaction_picker.dart';
 import '../../models/channel.dart';
@@ -127,6 +131,19 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   bool _showScrollButton = false;
 
+  late final MessageAnnouncer _announcer = MessageAnnouncer(speak: _speak);
+
+  void _speak(String text) {
+    if (!mounted) return;
+    final view = View.maybeOf(context);
+    if (view == null) return;
+    SemanticsService.sendAnnouncement(
+      view,
+      text,
+      Directionality.maybeOf(context) ?? TextDirection.ltr,
+    );
+  }
+
   late final ChatNavListBinding _nav =
       ChatNavListBinding(ref, _positionsListener, inset: _bottomInset);
   String? _navBreak;
@@ -150,6 +167,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   _UnitsBuild? _units;
   int _seenScrolls = 0;
   bool _listBuilt = false;
+  final DayFloatController _dayFloat = DayFloatController();
+  final GlobalKey _floatHost = GlobalKey();
+  final DayFloatCover _navDivider = DayFloatCover();
 
   bool _sameEntries(List<MessageGroupEntry> a, List<MessageGroupEntry> b) {
     if (a.length != b.length) return false;
@@ -183,7 +203,9 @@ class _MessagesListState extends ConsumerState<MessagesList> {
   @override
   void dispose() {
     _positionsListener.itemPositions.removeListener(_onPositionsChanged);
+    _announcer.dispose();
     _nav.dispose();
+    _dayFloat.dispose();
     super.dispose();
   }
 
@@ -328,9 +350,22 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     final indexById = <String, int>{};
     final indexByUnit = <String, int>{};
     final unitByIndex = <int, String>{};
+    final atByIndex = <int, int>{};
+    final dayStarts = <int>{};
+    String? lastDay;
     for (var f = 0; f < units.length; f++) {
       final unit = units[f];
       final revIndex = units.length - 1 - f;
+      final firstAt = unit is _GroupUnit
+          ? unit.entries.first.message.createdAt
+          : (unit as _PollUnit).poll.createdAt;
+      final lastAt = unit is _GroupUnit
+          ? unit.entries.last.message.createdAt
+          : firstAt;
+      atByIndex[revIndex] = firstAt;
+      final day = DayClock.instance.keyOf(firstAt);
+      if (day != lastDay) dayStarts.add(revIndex);
+      lastDay = DayClock.instance.keyOf(lastAt);
       final String unitId;
       if (unit is _GroupUnit) {
         for (final entry in unit.entries) {
@@ -354,6 +389,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       indexById: indexById,
       indexByUnit: indexByUnit,
       unitByIndex: unitByIndex,
+      atByIndex: atByIndex,
+      dayStarts: dayStarts,
     );
   }
 
@@ -381,6 +418,26 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     if (shouldShow != _showScrollButton) {
       setState(() => _showScrollButton = shouldShow);
     }
+    _updateDayFloat(positions, !shouldShow);
+  }
+
+  void _updateDayFloat(Iterable<ItemPosition> positions, bool atBottom) {
+    final built = _units;
+    if (built == null) return;
+    ItemPosition? top;
+    for (final p in positions) {
+      if (p.itemTrailingEdge <= 0 || p.itemLeadingEdge >= 1) continue;
+      if (!built.atByIndex.containsKey(p.index)) continue;
+      if (top == null || p.index > top.index) top = p;
+    }
+    _dayFloat.update(
+      topCreatedAt: top == null ? null : built.atByIndex[top.index],
+      inlineVisible: top != null &&
+          built.dayStarts.contains(top.index) &&
+          top.itemTrailingEdge <= 1.0,
+      atBottom: atBottom,
+      cover: _navDivider.measure(_floatHost, inset: ChatNavDivider.pad),
+    );
   }
 
   void _scrollToBottom() {
@@ -397,10 +454,21 @@ class _MessagesListState extends ConsumerState<MessagesList> {
     // Watch only the rendered slices, not the whole AppState, which emits on every ambient change.
     final view = ref.watch(appStateProvider.select((s) => s.view));
     final selfNym = ref.watch(appStateProvider.select((s) => s.selfNym));
+    final historyMissing =
+        ref.watch(appStateProvider.select((s) => s.channelHistoryMissing));
     final messages = ref.watch(messagesForCurrentViewProvider);
     final reactions = ref.watch(reactionsProvider);
     final polls = ref.watch(pollsForCurrentViewProvider);
     ref.listen(messagesForCurrentViewProvider, (_, _) => _keepAnchor());
+    ref.listen(
+      messagesForCurrentViewProvider,
+      (prev, next) => _announcer.update(
+        ref.read(appStateProvider).view.storageKey,
+        prev ?? const <Message>[],
+        next,
+        nymOf: (m) => stripPubkeySuffix(m.author),
+      ),
+    );
     ref.listen(pollsForCurrentViewProvider, (_, _) => _keepAnchor());
 
     // Different views share no keys, so keeping the cache across a switch would only leak.
@@ -423,7 +491,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       if (key.startsWith('#') || key.startsWith('pm-')) {
         final rawCount = ref.read(appStateProvider).messages[key]?.length ?? 0;
         MeshDiagnostics.instance
-            .log('RENDER empty view=$key widgetStore=$rawCount visible=0 '
+            .log('RENDER empty view=${key.startsWith('pm-') ? 'pm' : key} widgetStore=$rawCount visible=0 '
                 'rev=${ref.read(appStateProvider).displayRev}');
       }
       // Shimmer skeleton first, settling into the empty note after a grace period.
@@ -494,12 +562,14 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                 _viewportHeight = constraints.maxHeight;
                 _nav.viewport = constraints.maxHeight;
                 return Stack(
+                  key: _floatHost,
                   children: [
                     Positioned.fill(
                       child: ScrollablePositionedList.builder(
                         itemScrollController: _itemScrollController,
                         itemPositionsListener: _positionsListener,
                         reverse: true,
+                        physics: const KeepReadingPhysics(),
                         initialScrollIndex: restore?.index ?? 0,
                         initialAlignment: restore?.alignment ?? 0,
                         padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
@@ -508,7 +578,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                         itemBuilder: (context, revIndex) {
                           if (revIndex == units.length) {
                             return _ChannelHistoryEdgeNotice(
-                                textSize: settings.textSize.toDouble());
+                                textSize: settings.textSize.toDouble(),
+                                partial: historyMissing);
                           }
                           final forward = units.length - 1 - revIndex;
                           final unit = units[forward];
@@ -538,13 +609,24 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                                   group.entries, settings, child);
                             }
                           }
-                          final Widget body = unit is _GroupUnit &&
-                                  _navBreak != null &&
-                                  unit.entries.first.message.id == _navBreak
+                          final navBreak = unit is _GroupUnit &&
+                              _navBreak != null &&
+                              unit.entries.first.message.id == _navBreak;
+                          final dayStart = built.dayStarts.contains(revIndex);
+                          final Widget body = navBreak || dayStart
                               ? Column(
                                   crossAxisAlignment:
                                       CrossAxisAlignment.stretch,
-                                  children: [const ChatNavDivider(), child],
+                                  children: [
+                                    if (dayStart)
+                                      DaySeparator(
+                                        createdAt: built.atByIndex[revIndex]!,
+                                        useBubbles: settings.useBubbles,
+                                      ),
+                                    if (navBreak)
+                                      ChatNavDivider(cover: _navDivider),
+                                    child,
+                                  ],
                                 )
                               : child;
                           // 3px list gap from the top edge; RepaintBoundary keeps each row's repaints from re-rasterizing the whole list.
@@ -564,19 +646,29 @@ class _MessagesListState extends ConsumerState<MessagesList> {
                       ),
                     ),
                     Positioned(
+                      top: DayLabels.floatTopPx.toDouble(),
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: DayFloatLabel(controller: _dayFloat),
+                      ),
+                    ),
+                    Positioned(
                       left: ChatFabs.rightPhone,
                       right: fabRight(MediaQuery.sizeOf(context).width, false),
-                      bottom: 16,
-                      child: Align(
-                        alignment: Alignment.bottomRight,
-                        child: ChatNavFabs(
-                          binding: _nav,
-                          slot: _fabSlot(context),
-                          bottom: _showScrollButton
-                              ? _ScrollToBottomButton(
-                                  size: _fabSlot(context),
-                                  onTap: _scrollToBottom)
-                              : null,
+                      bottom: 0,
+                      child: ChatFloatInset(
+                        child: Align(
+                          alignment: Alignment.bottomRight,
+                          child: ChatNavFabs(
+                            binding: _nav,
+                            slot: _fabSlot(context),
+                            bottom: _showScrollButton
+                                ? _ScrollToBottomButton(
+                                    size: _fabSlot(context),
+                                    onTap: _scrollToBottom)
+                                : null,
+                          ),
                         ),
                       ),
                     ),
@@ -601,6 +693,7 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   bool _onScroll(ScrollNotification n) {
     _keeper.observe(n);
+    if (n.depth == 0) _dayFloat.observe(n);
     if ((n is ScrollUpdateNotification && n.dragDetails != null) ||
         n is UserScrollNotification) {
       _nav.userScrolled();
@@ -620,12 +713,16 @@ class _MessagesListState extends ConsumerState<MessagesList> {
       !prev.isMeAction &&
       !cur.isMeAction &&
       prev.pubkey == cur.pubkey &&
-      (cur.createdAt - prev.createdAt).abs() <= _groupWindowSec;
+      (cur.createdAt - prev.createdAt).abs() <= _groupWindowSec &&
+      DayClock.instance.sameDay(prev.createdAt, cur.createdAt);
 
   String _baseNym(String nym) => splitNymSuffix(nym).base;
 
   String _emptyNoteText(AppState app) {
     final view = app.view;
+    if (app.channelHistoryMissing) {
+      return tr("Earlier messages aren't available in direct connection mode");
+    }
     if (view.kind == ViewKind.channel) {
       final ch = app.channels.firstWhere(
         (c) => c.key == view.id,
@@ -695,7 +792,12 @@ class _EmptyOrLoadingState extends State<_EmptyOrLoading> {
 
 /// The pill marking the start of stored channel history.
 class _ChannelHistoryEdgeNotice extends StatelessWidget {
-  const _ChannelHistoryEdgeNotice({required this.textSize});
+  const _ChannelHistoryEdgeNotice({
+    required this.textSize,
+    this.partial = false,
+  });
+
+  final bool partial;
 
   final double textSize;
 
@@ -713,7 +815,10 @@ class _ChannelHistoryEdgeNotice extends StatelessWidget {
             borderRadius: const BorderRadius.all(Radius.circular(20)),
           ),
           child: Text(
-            tr("You've reached the edge of this channel's history."),
+            partial
+                ? tr(
+                    'Earlier messages may be incomplete in direct connection mode')
+                : tr("You've reached the edge of this channel's history."),
             textAlign: TextAlign.center,
             style: TextStyle(
               color: c.textDim,
@@ -779,6 +884,8 @@ class _UnitsBuild {
     required this.indexById,
     required this.indexByUnit,
     required this.unitByIndex,
+    required this.atByIndex,
+    required this.dayStarts,
   });
 
   final List<Message> messages;
@@ -791,6 +898,8 @@ class _UnitsBuild {
   final Map<String, int> indexById;
   final Map<String, int> indexByUnit;
   final Map<int, String> unitByIndex;
+  final Map<int, int> atByIndex;
+  final Set<int> dayStarts;
 }
 
 double _fabSlot(BuildContext context) =>

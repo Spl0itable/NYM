@@ -13,12 +13,17 @@ import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/layout/layout_model.dart';
+import '../../features/toasts/event_toast_center.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/chat_nav/chat_nav.dart';
 import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/chat_nav/chat_nav_service.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
+import '../../features/day_separators/day_labels.dart';
+import '../../features/day_separators/day_separator.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/toasts/toast_center.dart';
 import '../../features/nymbot/nymbot_providers.dart'
     show BotChatController, botChatControllerProvider, mergeBotThreadWithInfo;
 import '../../features/nymbot/bot_runs_view.dart' show botRunTrailing;
@@ -39,15 +44,19 @@ import '../chat/list_anchor.dart';
 import '../chat/messages_list.dart' show messageListScrollerProvider;
 import '../chat/message_skeleton.dart';
 import '../chat/typing_indicator.dart';
-import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
 import '../context_menu/profile_badges.dart';
 import '../nym_icons.dart';
 import '../../features/chat_lock/chat_lock_providers.dart';
+import '../common/nym_field.dart';
+import '../common/nym_tooltip.dart';
+
+final ValueNotifier<double> cvColumnWidth =
+    ValueNotifier<double>(kColumnDefault.toDouble());
 
 class _CvDimens {
-  static const double column = 360;
-  static const double addColumn = 220;
+  static double get column => cvColumnWidth.value;
+  static const double addColumn = 56;
   static const double gap = 12;
   static const double padding = 12;
   // The PWA's mobile snap carousel applies at `width <= 768`.
@@ -205,6 +214,11 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
   @override
   void initState() {
     super.initState();
+    cvColumnWidth.value = clampColumnWidth(ref
+            .read(keyValueStoreProvider)
+            .getString(StorageKeys.columnWidth))
+        .toDouble();
+    cvColumnWidth.addListener(_onColumnWidth);
     // While set, unread bumps and read marks defer to focused + at-bottom + visible columns.
     final notifier = ref.read(appStateProvider.notifier);
     notifier.columnsReadGate = _columnsReadGate;
@@ -212,6 +226,25 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     notifier.openThreadGate =
         () => mounted ? ref.read(activeThreadProvider) : null;
     _gateHost = notifier;
+    EventToastCenter.instance.columnKeys = _eventToastColumnKeys;
+  }
+
+  List<String> _eventToastColumnKeys() {
+    if (!mounted || _columns.isEmpty) return const [];
+    if (_isMobile || !_stripScroll.hasClients) {
+      return [_columns[_focused.clamp(0, _columns.length - 1)].storageKey];
+    }
+    final pos = _stripScroll.position;
+    return [
+      for (var i = 0; i < _columns.length; i++)
+        if (_CvDimens.padding + i * (_CvDimens.column + _CvDimens.gap) <
+                pos.pixels + pos.viewportDimension &&
+            _CvDimens.padding +
+                    i * (_CvDimens.column + _CvDimens.gap) +
+                    _CvDimens.column >
+                pos.pixels)
+          _columns[i].storageKey,
+    ];
   }
 
   @override
@@ -223,6 +256,10 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       host.openThreadGate = null;
     }
     _gateHost = null;
+    if (EventToastCenter.instance.columnKeys == _eventToastColumnKeys) {
+      EventToastCenter.instance.columnKeys = null;
+    }
+    cvColumnWidth.removeListener(_onColumnWidth);
     _removeGhost();
     _pageController.dispose();
     _stripScroll.dispose();
@@ -385,31 +422,29 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     });
   }
 
-  /// Read via the KV store directly since the constants file belongs to another slice.
-  static const String _skipRemoveConfirmKey = 'nym_columns_skip_delete_confirm';
-
-  /// Confirms removal with a persistable "Don't ask again" unless already skipped.
-  Future<void> _removeColumn(_ColumnDesc desc) async {
+  void _removeColumn(_ColumnDesc desc) {
     final idx = _columns.indexOf(desc);
     if (idx < 0) return;
-    final kv = ref.read(keyValueStoreProvider);
-    if (kv.getBool(_skipRemoveConfirmKey)) {
-      _doRemoveColumn(desc);
-      return;
-    }
     final title = _columnTitle(context, desc);
-    final res = await showAppConfirmWithCheckbox(
-      context,
-      tr('Remove the "{title}" column? You can add it back anytime.',
-          {'title': title}),
-      title: tr('Remove column'),
-      okLabel: tr('Remove'),
-      danger: true,
-      checkboxLabel: tr("Don't ask again"),
-    );
-    if (!res.confirmed || !mounted) return;
-    if (res.checked) kv.setBool(_skipRemoveConfirmKey, true);
+    final wasPrimary = desc.key == _primaryKey;
     _doRemoveColumn(desc);
+    showUndoToast(tr('Closed the "{title}" column', {'title': title}),
+        () => _restoreColumn(desc, idx, wasPrimary));
+  }
+
+  void _restoreColumn(_ColumnDesc desc, int idx, bool wasPrimary) {
+    if (!mounted || _columns.any((d) => d.key == desc.key)) return;
+    final at = math.min(idx, _columns.length);
+    setState(() {
+      _columns.insert(at, desc);
+      _focused = at;
+    });
+    if (wasPrimary && _primaryKey == null) _primaryKey = desc.key;
+    _subscribeChannel(desc);
+    _saveLayout();
+    _syncPageController();
+    _syncFocusedView();
+    _scrollToIndex(at);
   }
 
   /// Focus moves only when the removed column was the focused one.
@@ -715,7 +750,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     if (stripBox == null) return;
     final originX =
         stripBox.localToGlobal(Offset.zero).dx - _stripScroll.offset;
-    const span = _CvDimens.column + _CvDimens.gap;
+    final span = _CvDimens.column + _CvDimens.gap;
     var insertAt = _columns.length - 1;
     var pos = 0;
     var found = false;
@@ -862,7 +897,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       if (open.contains(d)) continue;
       out.add((
         desc: d,
-        label: pm.nym.isNotEmpty ? pm.nym : tr('Direct message'),
+        label: pm.nym.isNotEmpty ? pm.nym : tr('Private message'),
         icon: _pickerRowIcon(context, d),
       ));
     }
@@ -878,13 +913,15 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     return out;
   }
 
+  String _channelSvg(_ColumnDesc d) => channelGlyphSvg(
+      geohash: ChannelEntry(channel: d.channel, geohash: d.geohash).isGeohash);
+
   Widget _pickerRowIcon(BuildContext context, _ColumnDesc d) {
     final c = context.nym;
     final app = ref.read(appStateProvider);
     switch (d.kind) {
       case _ColumnKind.channel:
-        return Text('#',
-            style: TextStyle(color: c.textDim, fontSize: 13, height: 1));
+        return NymSvgIcon(_channelSvg(d), size: 16, color: c.textDim);
       case _ColumnKind.pm:
         return NymAvatar(
           seed: d.pubkey,
@@ -971,7 +1008,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           iconOf: (d) => _columnIcon(ctx, d, size: 24),
           onReorder: _commitTabsReorder,
           onRemove: (d) async {
-            await _removeColumn(d);
+            _removeColumn(d);
             return !_columns.contains(d);
           },
         ),
@@ -1003,7 +1040,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
             ? nym
             : (d.nym.isNotEmpty
                 ? d.nym
-                : (app.users[d.pubkey]?.nym ?? tr('Direct message')));
+                : (app.users[d.pubkey]?.nym ?? tr('Private message')));
       case _ColumnKind.group:
         final g = app.groups.where((g) => g.id == d.groupId).toList();
         return (g.isNotEmpty && g.first.name.isNotEmpty)
@@ -1086,15 +1123,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
     final app = ref.read(appStateProvider);
     switch (d.kind) {
       case _ColumnKind.channel:
-        return Text(
-          '#',
-          style: TextStyle(
-            color: c.textDim,
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-            height: 1,
-          ),
-        );
+        return NymSvgIcon(_channelSvg(d), size: size * 0.85, color: c.textDim);
       case _ColumnKind.pm:
         final u = app.users[d.pubkey];
         return NymAvatar(
@@ -1118,6 +1147,10 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
           child: CustomPaint(painter: _GroupGlyphPainter(color: c.textDim)),
         );
     }
+  }
+
+  void _onColumnWidth() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -1535,6 +1568,9 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
   late final ChatNavListBinding _nav = ChatNavListBinding(ref, _positions, inset: _bottomInset);
   late final ChatNavService _navService;
   String? _navBreak;
+  final DayFloatController _dayFloat = DayFloatController();
+  final GlobalKey _floatHost = GlobalKey();
+  final DayFloatCover _navDivider = DayFloatCover();
 
   @override
   void initState() {
@@ -1571,6 +1607,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
     _positions.itemPositions.removeListener(_onPositionsChanged);
     _navService.release(widget.desc.storageKey);
     _nav.dispose();
+    _dayFloat.dispose();
     super.dispose();
   }
 
@@ -1603,6 +1640,24 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
         _showScrollButton = showButton;
       });
     }
+    final built = _groups;
+    if (built != null) {
+      ItemPosition? top;
+      for (final p in positions) {
+        if (p.itemTrailingEdge <= 0 || p.itemLeadingEdge >= 1) continue;
+        if (!built.atByIndex.containsKey(p.index)) continue;
+        if (top == null || p.index > top.index) top = p;
+      }
+      _dayFloat.update(
+        topCreatedAt: top == null ? null : built.atByIndex[top.index],
+        inlineVisible: top != null &&
+            built.dayStarts.contains(top.index) &&
+            top.itemTrailingEdge <= 1.0,
+        atBottom: atBottom,
+        cover: _navDivider.measure(_floatHost,
+            inset: ChatNavDivider.pad),
+      );
+    }
   }
 
   void _scrollToBottom() {
@@ -1633,18 +1688,27 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
         cached.breakBefore == _navBreak) {
       return cached;
     }
-    final groups = buildMessageGroups(
-      messages,
-      reactions: app.reactions,
-      useBubbles: settings.useBubbles,
-      mentionToken: mentionToken,
-      breakBefore: _navBreak,
+    final groups = splitGroupsByDay(
+      buildMessageGroups(
+        messages,
+        reactions: app.reactions,
+        useBubbles: settings.useBubbles,
+        mentionToken: mentionToken,
+        breakBefore: _navBreak,
+      ),
+      (MessageGroupEntry e) => e.message.createdAt,
     );
+    final starts =
+        dayStartIndexes(groups, (MessageGroupEntry e) => e.message.createdAt);
     final indexById = <String, int>{};
     final indexByUnit = <String, int>{};
     final unitByIndex = <int, String>{};
+    final atByIndex = <int, int>{};
+    final dayStarts = <int>{};
     for (var f = 0; f < groups.length; f++) {
       final revIndex = groups.length - 1 - f;
+      atByIndex[revIndex] = groups[f].first.message.createdAt;
+      if (starts.contains(f)) dayStarts.add(revIndex);
       for (final e in groups[f]) {
         indexById[e.message.id] = revIndex;
       }
@@ -1662,6 +1726,8 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       indexById: indexById,
       indexByUnit: indexByUnit,
       unitByIndex: unitByIndex,
+      atByIndex: atByIndex,
+      dayStarts: dayStarts,
     );
   }
 
@@ -1735,6 +1801,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
 
   bool _onScroll(ScrollNotification n) {
     _keeper.observe(n);
+    if (n.depth == 0) _dayFloat.observe(n);
     if ((n is ScrollUpdateNotification && n.dragDetails != null) ||
         n is UserScrollNotification) {
       _nav.userScrolled();
@@ -1838,6 +1905,7 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                       ? const Color(0x4DFFFFFF)
                       : const Color(0x26000000)),
               child: Stack(
+                key: _floatHost,
                 children: [
                   Positioned.fill(
                     child: messages.isEmpty
@@ -1915,14 +1983,29 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                                     child: AnchoredUnit(
                                       id: unitId,
                                       units: _anchors,
-                                      child: _navBreak != null &&
-                                              entries.first.message.id ==
-                                                  _navBreak
+                                      child: (_navBreak != null &&
+                                                  entries.first.message.id ==
+                                                      _navBreak) ||
+                                              built.dayStarts
+                                                  .contains(revIndex)
                                           ? Column(
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.stretch,
                                               children: [
-                                                const ChatNavDivider(),
+                                                if (built.dayStarts
+                                                    .contains(revIndex))
+                                                  DaySeparator(
+                                                    createdAt: built
+                                                        .atByIndex[revIndex]!,
+                                                    useBubbles:
+                                                        settings.useBubbles,
+                                                  ),
+                                                if (_navBreak != null &&
+                                                    entries.first.message
+                                                            .id ==
+                                                        _navBreak)
+                                                  ChatNavDivider(
+                                                      cover: _navDivider),
                                                 group,
                                               ],
                                             )
@@ -1937,17 +2020,28 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
                   ),
                   if (messages.isNotEmpty)
                     Positioned(
+                      top: DayLabels.floatTopPx.toDouble(),
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: DayFloatLabel(controller: _dayFloat),
+                      ),
+                    ),
+                  if (messages.isNotEmpty)
+                    Positioned(
                       left: ChatFabs.rightColumn,
                       right: fabRight(0, true),
-                      bottom: 16,
-                      child: Align(
-                        alignment: Alignment.bottomRight,
-                        child: ChatNavFabs(
-                          binding: _nav,
-                          slot: 36,
-                          bottom: _showScrollButton
-                              ? _ScrollBottomButton(onTap: _scrollToBottom)
-                              : null,
+                      bottom: 0,
+                      child: ChatFloatInset(
+                        child: Align(
+                          alignment: Alignment.bottomRight,
+                          child: ChatNavFabs(
+                            binding: _nav,
+                            slot: 36,
+                            bottom: _showScrollButton
+                                ? _ScrollBottomButton(onTap: _scrollToBottom)
+                                : null,
+                          ),
                         ),
                       ),
                     ),
@@ -1960,7 +2054,42 @@ class _DeckColumnState extends ConsumerState<_DeckColumn> {
       ),
     );
 
-    return mobile ? body : SizedBox(width: _CvDimens.column, child: body);
+    if (mobile) return body;
+    final kv = ref.read(keyValueStoreProvider);
+    return SizedBox(
+      width: _CvDimens.column,
+      child: Stack(
+        children: [
+          Positioned.fill(child: body),
+          Positioned(
+            top: 0,
+            bottom: 0,
+            right: 0,
+            width: 6,
+            child: Semantics(
+              label: tr('Resize columns'),
+              value: '${_CvDimens.column.round()}',
+              slider: true,
+              child: MouseRegion(
+                cursor: SystemMouseCursors.resizeColumn,
+                child: GestureDetector(
+                  key: ValueKey('cvColumnResizer-${widget.desc.storageKey}'),
+                  behavior: HitTestBehavior.opaque,
+                  dragStartBehavior: DragStartBehavior.down,
+                  onHorizontalDragUpdate: (d) => cvColumnWidth.value =
+                      clampColumnWidth(cvColumnWidth.value + d.delta.dx)
+                          .toDouble(),
+                  onHorizontalDragEnd: (_) => kv.setString(
+                      StorageKeys.columnWidth,
+                      '${cvColumnWidth.value.round()}'),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Columns always use the generic empty note, not the single view's channel-specific one.
@@ -2252,7 +2381,7 @@ class _HeaderIconButtonState extends State<_HeaderIconButton> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final color = _hover ? c.textBright : c.textDim;
-    return Tooltip(
+    return NymTooltip(
       message: widget.tooltip,
       child: MouseRegion(
         onEnter: (_) => setState(() => _hover = true),
@@ -2296,7 +2425,7 @@ class _PagerState extends State<_Pager> {
       child: GestureDetector(
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
-        child: Tooltip(
+        child: NymTooltip(
           message: tr('Switch columns'),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
@@ -2379,7 +2508,7 @@ class _HoverCloseButtonState extends State<_HoverCloseButton> {
     );
     final t = widget.tooltip;
     if (t != null && t.isNotEmpty) {
-      button = Tooltip(message: t, child: button);
+      button = NymTooltip(message: t, child: button);
     }
     return button;
   }
@@ -2512,27 +2641,12 @@ class _PickerBodyState extends State<_PickerBody> {
         style: TextStyle(color: c.inputText, fontSize: 14),
         cursorColor: c.isLight ? Colors.black : Colors.white,
         onChanged: (v) => setState(() => _term = v),
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: tr('Search conversations…'),
-          hintStyle: TextStyle(color: c.textDim, fontSize: 14),
+        decoration: NymField.decoration(c,
+          hint: tr('Search conversations…'),
+          fontSize: 14,
+          radius: NymRadius.rxs,
           contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          filled: true,
-          fillColor: c.insetFill,
-          border: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.glassBorder),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.glassBorder),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.primaryA(0.30)),
-          ),
-        ),
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
       ),
     );
 
@@ -2990,12 +3104,16 @@ class _AddColumnButtonState extends State<_AddColumnButton> {
             radius: NymRadius.md,
             fill: (_hover && widget.hoverFill) ? c.primaryA(0.04) : null,
             child: Center(
-              child: Text(
-                tr('+ Add column'),
-                style: TextStyle(
-                  color: labelColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
+              child: RotatedBox(
+                quarterTurns: widget.width < 100 ? 1 : 0,
+                child: Text(
+                  tr('+ Add column'),
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: labelColor,
+                    fontSize: widget.width < 100 ? NymType.md : 14,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ),
@@ -3090,6 +3208,8 @@ class _ColumnGroups {
     required this.indexById,
     required this.indexByUnit,
     required this.unitByIndex,
+    required this.atByIndex,
+    required this.dayStarts,
   });
 
   final int rev;
@@ -3101,4 +3221,6 @@ class _ColumnGroups {
   final Map<String, int> indexById;
   final Map<String, int> indexByUnit;
   final Map<int, String> unitByIndex;
+  final Map<int, int> atByIndex;
+  final Set<int> dayStarts;
 }

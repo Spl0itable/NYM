@@ -14,6 +14,7 @@ import '../common/nym_avatar.dart';
 import '../context_menu/context_menu_actions.dart';
 import '../context_menu/context_menu_panel.dart';
 import '../context_menu/profile_badges.dart';
+import 'sidebar_chrome.dart';
 
 /// One online-nyms row; long-press or right-click opens the profile context menu in profile-only mode.
 class UserListItem extends ConsumerStatefulWidget {
@@ -77,6 +78,8 @@ class _UserListItemState extends ConsumerState<UserListItem> {
               onTap: widget.onTap,
               borderRadius: NymRadius.rxs,
               child: Container(
+                key: const ValueKey('sidebarRowBox'),
+                constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
@@ -86,17 +89,24 @@ class _UserListItemState extends ConsumerState<UserListItem> {
                           : Colors.white.withValues(alpha: 0.04))
                       : null,
                   borderRadius: NymRadius.rxs,
+                  border: Border.all(color: Colors.transparent, width: 1),
                 ),
                 child: Row(
                   children: [
-                    _AvatarWithStatus(
-                      seed: user.pubkey,
-                      imageUrl: user.profile?.picture,
-                      status: status,
+                    SizedBox(
+                      key: const ValueKey('sidebarLead'),
+                      width: kSidebarIcon,
+                      height: kSidebarIcon,
+                      child: _AvatarWithStatus(
+                        seed: user.pubkey,
+                        imageUrl: user.profile?.picture,
+                        status: status,
+                      ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: kSidebarGap),
                     Flexible(
                       child: Text.rich(
+                        key: const ValueKey('sidebarName'),
                         TextSpan(
                           children: [
                             TextSpan(text: displayNym),
@@ -181,7 +191,7 @@ class _AvatarWithStatus extends StatelessWidget {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        NymAvatar(seed: seed, size: 20, imageUrl: imageUrl),
+        NymAvatar(seed: seed, size: kSidebarIcon, imageUrl: imageUrl),
         if (status != UserStatus.hidden)
           Positioned(
             right: -1,

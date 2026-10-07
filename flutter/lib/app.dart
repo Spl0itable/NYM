@@ -4,8 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'features/calls/call_platform.dart';
+import 'features/calls/call_providers.dart';
+import 'features/calls/call_wake.dart';
+import 'features/calls/ring_setting.dart';
 import 'core/theme/nym_theme.dart';
 import 'features/accounts/account_host.dart';
+import 'features/ai_consent/ai_consent.dart';
 import 'features/i18n/app_strings_catalog.dart';
 import 'features/commands/command_i18n.dart';
 import 'features/chat_lock/chat_lock_providers.dart';
@@ -20,6 +25,8 @@ import 'features/notifications/notification_route_target.dart';
 import 'features/notifications/notification_routing.dart';
 import 'features/onboarding/boot_gate.dart';
 import 'features/share/share_intake.dart';
+import 'features/toasts/event_toast_center.dart';
+import 'features/toasts/event_toast_wiring.dart';
 import 'models/group.dart';
 import 'services/notification_service.dart';
 import 'services/platform/background_connectivity.dart';
@@ -30,6 +37,7 @@ import 'services/platform/deep_links.dart';
 import 'state/app_state.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
+import 'widgets/common/nym_tooltip.dart';
 import 'widgets/common/toast_host.dart';
 
 /// Root widget; rebuilds when the theme setting or platform brightness changes.
@@ -47,8 +55,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   ShareIntake? _shareIntake;
 
   /// Background keep-alive, held only while backgrounded with the setting on and released on every resume.
-  final BackgroundConnectivityService _backgroundConnectivity =
-      BackgroundConnectivityService();
+  late final BackgroundConnectivityService _backgroundConnectivity;
 
   /// iOS-only catch-up via `BGAppRefresh`, the only chance a suspended app gets to notify; no-op on Android.
   final BackgroundRefreshService _backgroundRefresh =
@@ -62,6 +69,8 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
   @override
   void initState() {
     super.initState();
+    registerAiConsentPrompter(_navKey);
+    _backgroundConnectivity = ref.read(backgroundConnectivityServiceProvider);
     WidgetsBinding.instance.addObserver(this);
     _initLocalization();
     WidgetsBinding.instance.addPostFrameCallback((_) => _syncBrightness());
@@ -85,9 +94,12 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     });
 
     _startHeartbeat();
+    unawaited(_startRing());
 
     _wireGroupTools();
     _wireChatLock();
+    installEventToasts(ProviderScope.containerOf(context, listen: false),
+        () => _navKey.currentContext);
     DeepLinkService? deepLinks;
     try {
       deepLinks = DeepLinkService(NostrControllerDeepLinkTarget(controller,
@@ -175,6 +187,21 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     final navContext = _navKey.currentContext;
     if (navContext == null || !navContext.mounted) return false;
     return confirmGroupInviteJoin(navContext, token);
+  }
+
+  Future<void> _startRing() async {
+    try {
+      ref.read(callServiceProvider);
+      final platform = ref.read(callPlatformProvider);
+      final reg = ref.read(ringRegistrationProvider);
+      reg.nativeSupported = await platform.ringSupported();
+      final self = ref.read(nostrControllerProvider).identity?.pubkey ?? '';
+      if (reg.supported && reg.enabledFor(self)) {
+        await platform.ringEnable(ringNativeStrings());
+      }
+    } catch (e) {
+      debugPrint('[Platform] ring skipped: ${e.runtimeType}');
+    }
   }
 
   void _startHeartbeat() {
@@ -333,6 +360,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     return MaterialApp(
       title: 'Nymchat',
       navigatorKey: _navKey,
+      navigatorObservers: [EventToastCenter.instance.observer],
       debugShowCheckedModeBanner: false,
       theme: buildNymThemeData(colors),
       // Tint system bars per color mode and flip icon brightness so they stay legible.
@@ -349,8 +377,10 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
             systemNavigationBarIconBrightness:
                 isLight ? Brightness.dark : Brightness.light,
           ),
-          child: PrivacyShield(
-              child: ToastHost(child: child ?? const SizedBox.shrink())),
+          child: NymTooltipWarmth(
+            child: PrivacyShield(
+                child: ToastHost(child: child ?? const SizedBox.shrink())),
+          ),
         );
       },
       // Keyed on the boot generation so sign-out remounts a pristine gate.

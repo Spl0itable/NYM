@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../state/settings_provider.dart';
+
 import '../toasts/toast_center.dart';
 import 'pq_root.dart';
 import '../../core/crypto/pq.dart' as pq;
@@ -21,22 +23,24 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
+import '../../widgets/common/nym_sheet.dart';
 import '../i18n/i18n.dart';
 import '../accounts/account_host.dart';
 import 'dev_nsec_modal.dart';
 import 'key_backup/key_backup_actions.dart';
 import 'modal_chrome.dart';
 import 'nym_identicon.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// Profile and nickname editor, with a reveal slideout for the private key and recovery code.
 class NickEditModal extends ConsumerStatefulWidget {
   const NickEditModal({super.key});
 
   static Future<void> open(BuildContext context) {
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => const NickEditModal(),
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => const NickEditModal(),
     );
   }
 
@@ -153,69 +157,90 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     final media = MediaQuery.of(context);
     // Pad by the keyboard height and cap the modal height so lower fields stay visible.
     final keyboardInset = media.viewInsets.bottom;
-    return Center(
-      child: AnimatedPadding(
-        duration: const Duration(milliseconds: 150),
-        curve: Curves.easeOut,
-        padding: EdgeInsets.only(
-          left: 20,
-          right: 20,
-          top: 20,
-          bottom: 20 + keyboardInset,
-        ),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500),
-          child: Material(
-            color: Colors.transparent,
-            child: Stack(
+    final column = Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _modalHeader(c),
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                ModalChrome.box(
-                  c,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: (media.size.height - keyboardInset) * 0.9,
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _modalHeader(c),
-                        Flexible(
-                          child: SingleChildScrollView(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _pubkeySlideout(c),
-                                const SizedBox(height: 18),
-                                _nicknameGroup(c),
-                                const SizedBox(height: 18),
-                                _avatarGroup(c),
-                                const SizedBox(height: 18),
-                                _bannerGroup(c),
-                                const SizedBox(height: 18),
-                                _bioGroup(c),
-                                const SizedBox(height: 18),
-                                _lightningGroup(c),
-                                const SizedBox(height: 18),
-                                _revealPrivkeyGroup(c),
-                              ],
-                            ),
-                          ),
-                        ),
-                        _actions(c),
-                        _logoutRow(c),
-                      ],
-                    ),
-                  ),
-                ),
-                ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
+                _pubkeySlideout(c),
+                const SizedBox(height: 18),
+                _nicknameGroup(c),
+                const SizedBox(height: 18),
+                _avatarGroup(c),
+                const SizedBox(height: 18),
+                _bannerGroup(c),
+                const SizedBox(height: 18),
+                _bioGroup(c),
+                const SizedBox(height: 18),
+                _lightningGroup(c),
+                const SizedBox(height: 18),
+                _revealPrivkeyGroup(c),
               ],
+            ),
+          ),
+        ),
+        _actions(c),
+        _logoutRow(c),
+      ],
+    );
+    final close = ModalChrome.closeChip(c, () => Navigator.of(context).pop());
+    return NymDiscardGuard(
+      isDirty: () => _dirty,
+      child: nymSheetOr(
+        context,
+        Stack(children: [column, close]),
+        (_) => Center(
+          child: AnimatedPadding(
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+            padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: 20 + keyboardInset,
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 500),
+              child: Material(
+                color: Colors.transparent,
+                child: Stack(
+                  children: [
+                    ModalChrome.box(
+                      c,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: (media.size.height - keyboardInset) * 0.9,
+                        ),
+                        child: column,
+                      ),
+                    ),
+                    close,
+                  ],
+                ),
+              ),
             ),
           ),
         ),
       ),
     );
   }
+
+  bool get _dirty =>
+      !_saving &&
+      (_nick.text.trim() != _originalNick.trim() ||
+          _bio.text != _originalBio ||
+          _lightning.text != _originalLightning ||
+          _avatarPath != null ||
+          _bannerPath != null ||
+          _currentAvatarUrl != _origAvatarUrl ||
+          _currentBannerUrl != _origBannerUrl ||
+          _pqRootLink.text.isNotEmpty ||
+          _pqRootReplace.text.isNotEmpty);
 
   // Full width and left-aligned, never centered.
   Widget _modalHeader(NymColors c) => Container(
@@ -252,57 +277,37 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         child: Text(text, style: TextStyle(color: c.textDim, fontSize: 11)),
       );
 
-  InputBorder _inputBorder(NymColors c, [Color? color]) => OutlineInputBorder(
-        borderRadius: NymRadius.rxs,
-        borderSide: BorderSide(color: color ?? c.glassBorder),
-      );
-
   Widget _nicknameGroup(NymColors c) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _label(c, tr('Nickname')),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _nick,
-                maxLength: 20,
-                buildCounter: (_,
-                        {required currentLength,
-                        required isFocused,
-                        maxLength}) =>
-                    null,
-                onChanged: (_) => setState(() {}),
-                style: TextStyle(color: c.inputText, fontSize: 14),
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: tr('Enter new nym'),
-                  hintStyle: TextStyle(color: c.textDim),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-                  filled: true,
-                  fillColor: Colors.white.withValues(alpha: 0.05),
-                  border: _inputBorder(c),
-                  enabledBorder: _inputBorder(c),
-                  focusedBorder: _inputBorder(c, c.primaryA(0.3)),
+        TextField(
+          controller: _nick,
+          maxLength: 20,
+          buildCounter: (_,
+                  {required currentLength, required isFocused, maxLength}) =>
+              null,
+          onChanged: (_) => setState(() {}),
+          style: TextStyle(color: c.inputText, fontSize: 14),
+          decoration: NymField.decoration(c,
+              hint: tr('Enter new nym'),
+              fontSize: 14,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+              suffixIcon: Padding(
+                padding: const EdgeInsets.only(left: 4, right: 12),
+                child: Text(
+                  _suffix,
+                  style: TextStyle(
+                    color: c.primary,
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            // The key tail is shown in full above, so this doesn't look tappable.
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-              child: Text(
-                _suffix,
-                style: TextStyle(
-                  color: c.primary,
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                ),
-              ),
-            ),
-          ],
+              suffixIconConstraints:
+                  const BoxConstraints(minWidth: 0, minHeight: 0)),
         ),
         Align(
           alignment: Alignment.centerRight,
@@ -389,6 +394,12 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
     setState(() => _pubkeyFormat = next);
     final prefs = await SharedPreferences.getInstance();
     await writePubkeyFormat(prefs, next);
+    if (!mounted) return;
+    try {
+      ProviderScope.containerOf(context, listen: false)
+          .read(settingsProvider.notifier)
+          .notePrefChanged('pubkeyFormat');
+    } catch (_) {}
   }
 
   Widget _avatarGroup(NymColors c) {
@@ -555,15 +566,10 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                   {required currentLength, required isFocused, maxLength}) =>
               null,
           style: TextStyle(color: c.inputText, fontSize: 14),
-          decoration: InputDecoration(
-            hintText: tr('Tell people a bit about yourself...'),
-            hintStyle: TextStyle(color: c.textDim),
-            filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.05),
-            border: _inputBorder(c),
-            enabledBorder: _inputBorder(c),
-            focusedBorder: _inputBorder(c, c.primaryA(0.3)),
-          ),
+          decoration: NymField.decoration(c,
+              hint: tr('Tell people a bit about yourself...'),
+              fontSize: 14,
+              isDense: false),
         ),
         Align(
           alignment: Alignment.centerRight,
@@ -583,18 +589,11 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
         TextField(
           controller: _lightning,
           style: TextStyle(color: c.inputText, fontSize: 14),
-          decoration: InputDecoration(
-            isDense: true,
-            hintText: 'your@lightning-address.com',
-            hintStyle: TextStyle(color: c.textDim),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-            filled: true,
-            fillColor: Colors.white.withValues(alpha: 0.05),
-            border: _inputBorder(c),
-            enabledBorder: _inputBorder(c),
-            focusedBorder: _inputBorder(c, c.primaryA(0.3)),
-          ),
+          decoration: NymField.decoration(c,
+              hint: 'your@lightning-address.com',
+              fontSize: 14,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 11)),
         ),
         _hint(c, tr('Your Bitcoin Lightning address for receiving zaps')),
       ],
@@ -779,15 +778,11 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                       color: c.inputText,
                       fontFamily: 'monospace',
                       fontSize: 12),
-                  decoration: InputDecoration(
-                    hintText: 'nympq1…',
-                    hintStyle: TextStyle(color: c.textDim, fontSize: 12),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    enabledBorder: _inputBorder(c, c.glassBorder),
-                    focusedBorder: _inputBorder(c, c.primaryA(0.3)),
-                  ),
+                  decoration: NymField.decoration(c,
+                      hint: 'nympq1…',
+                      fontSize: 12,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10)),
                 ),
               ),
               const SizedBox(width: 8),
@@ -899,15 +894,11 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 enableSuggestions: false,
                 style: TextStyle(
                     color: c.inputText, fontFamily: 'monospace', fontSize: 12),
-                decoration: InputDecoration(
-                  hintText: 'nympq1…',
-                  hintStyle: TextStyle(color: c.textDim, fontSize: 12),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
-                  enabledBorder: _inputBorder(c, c.glassBorder),
-                  focusedBorder: _inputBorder(c, c.primaryA(0.3)),
-                ),
+                decoration: NymField.decoration(c,
+                    hint: 'nympq1…',
+                    fontSize: 12,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10)),
               ),
             ),
             const SizedBox(width: 8),

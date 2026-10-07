@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/haptics.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/identity/modal_chrome.dart';
 import '../../services/api/api_client.dart';
@@ -17,6 +18,8 @@ import '../i18n/i18n.dart';
 import '../shop/shop_controller.dart';
 import 'lnurl.dart';
 import 'zap_logic.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// Zap modal: amount and comment, LNURL-pay invoice with QR, then LUD-21 payment polling.
 class ZapModal extends ConsumerStatefulWidget {
@@ -53,18 +56,18 @@ class ZapModal extends ConsumerStatefulWidget {
     String? originalKind,
   }) {
     final isLight = context.nym.isLight;
-    return showDialog<void>(
-      context: context,
-      barrierColor: isLight
-          ? const Color(0x73000000)
-          : const Color(0xBF000000),
-      builder: (_) => ZapModal(
+    return showNymSheet<void>(
+      context,
+      (_) => ZapModal(
         recipientPubkey: recipientPubkey,
         recipientNym: recipientNym,
         lightningAddress: lightningAddress,
         messageId: messageId,
         originalKind: originalKind,
       ),
+      barrierColor: isLight
+          ? const Color(0x73000000)
+          : const Color(0xBF000000),
     );
   }
 
@@ -237,7 +240,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   void _markPaid(LnInvoice invoice) {
     if (!_settledInvoices.add(invoice.dedupKey)) return; // already counted
     _clearPendingZap(invoice);
-    HapticFeedback.mediumImpact();
+    Haptics.medium();
     // Record our zap on the message badge now, deduped by bolt11 so a later receipt echo can't double-count.
     final messageId = widget.messageId;
     if (messageId != null && messageId.isNotEmpty) {
@@ -258,7 +261,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     }
     setState(() => _phase = _Phase.paid);
     Future<void>.delayed(const Duration(seconds: 2), () {
-      if (mounted) Navigator.of(context).maybePop();
+      if (mounted) Navigator.of(context).pop();
     });
   }
 
@@ -318,65 +321,74 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return KeyboardInsetDialog(
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 400),
-        width: MediaQuery.of(context).size.width * 0.9,
-        margin: const EdgeInsets.all(16),
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: c.bgSecondary,
-          border: Border.all(color: c.glassBorder),
-          borderRadius: NymRadius.rxl,
-          boxShadow: [
-            BoxShadow(
-              color: c.isLight
-                  ? const Color(0x1F000000)
-                  : const Color(0x80000000),
-              blurRadius: c.isLight ? 40 : 32,
-              offset: const Offset(0, 8),
-            ),
-          ],
-        ),
-        // `showDialog` inserts no Material; the InkWell buttons need an ink ancestor.
-        child: Material(
-          type: MaterialType.transparency,
-          // The close chip is a Stack sibling so it can sit at the card corner.
-          child: Stack(
-            children: [
-              SingleChildScrollView(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _header(c),
-                    const SizedBox(height: 24),
-                    Text(
-                      widget.messageId != null
-                          ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
-                          : tr("Zapping @{nym}'s profile",
-                              {'nym': widget.recipientNym}),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: c.textDim, fontSize: 15),
-                    ),
-                    const SizedBox(height: 20),
-                    if (_phase == _Phase.amount) ..._amountSection(c),
-                    if (_phase == _Phase.generating) _status(c, checking: true),
-                    if (_phase == _Phase.error) _status(c),
-                    if (_phase == _Phase.invoice) ..._invoiceSection(c),
-                    if (_phase == _Phase.invoice && _statusText.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      _status(c, checking: _checkingManual),
-                    ],
-                    if (_phase == _Phase.paid) _paidSection(c),
-                    const SizedBox(height: 20),
-                    _actions(c),
-                  ],
+    final body = Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          SingleChildScrollView(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _header(c),
+                const SizedBox(height: 24),
+                Text(
+                  widget.messageId != null
+                      ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
+                      : tr("Zapping @{nym}'s profile",
+                          {'nym': widget.recipientNym}),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: c.textDim, fontSize: 15),
                 ),
-              ),
-              ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
-            ],
+                const SizedBox(height: 20),
+                if (_phase == _Phase.amount) ..._amountSection(c),
+                if (_phase == _Phase.generating) _status(c, checking: true),
+                if (_phase == _Phase.error) _status(c),
+                if (_phase == _Phase.invoice) ..._invoiceSection(c),
+                if (_phase == _Phase.invoice && _statusText.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  _status(c, checking: _checkingManual),
+                ],
+                if (_phase == _Phase.paid) _paidSection(c),
+                const SizedBox(height: 20),
+                _actions(c),
+              ],
+            ),
+          ),
+          ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
+        ],
+      ),
+    );
+    return NymDiscardGuard(
+      isDirty: () =>
+          _phase == _Phase.amount &&
+          (_customController.text.trim().isNotEmpty ||
+              _commentController.text.trim().isNotEmpty),
+      child: nymSheetOr(
+        context,
+        body,
+        (body) => KeyboardInsetDialog(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 400),
+            width: MediaQuery.of(context).size.width * 0.9,
+            margin: const EdgeInsets.all(16),
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: c.bgSecondary,
+              border: Border.all(color: c.glassBorder),
+              borderRadius: NymRadius.rxl,
+              boxShadow: [
+                BoxShadow(
+                  color: c.isLight
+                      ? const Color(0x1F000000)
+                      : const Color(0x80000000),
+                  blurRadius: c.isLight ? 40 : 32,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: body,
           ),
         ),
       ),
@@ -656,7 +668,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       return Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _iconBtn(c, tr('Cancel'), () => Navigator.of(context).maybePop()),
+          _iconBtn(c, tr('Cancel'), () => Navigator.of(context).pop()),
           const SizedBox(width: 10),
           _sendBtn(c, tr("I've paid"), _checkingManual ? null : _manualCheck),
         ],
@@ -665,7 +677,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _iconBtn(c, tr('Cancel'), () => Navigator.of(context).maybePop()),
+        _iconBtn(c, tr('Cancel'), () => Navigator.of(context).pop()),
       ],
     );
   }
@@ -739,27 +751,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
       onSubmitted: onSubmitted,
       keyboardType: number ? TextInputType.number : TextInputType.text,
       style: TextStyle(color: c.inputText, fontSize: 15),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(color: c.textDim),
-        isDense: true,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        filled: true,
-        fillColor: Colors.white.withValues(alpha: 0.05),
-        border: OutlineInputBorder(
-          borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: c.glassBorder),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: c.glassBorder),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: c.primary.withValues(alpha: 0.3)),
-        ),
-      ),
+      decoration: NymField.decoration(c, hint: hint),
     );
   }
 }

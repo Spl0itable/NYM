@@ -245,23 +245,40 @@ Object.assign(NYM.prototype, {
     },
 
     cvRequestRemoveColumn(id) {
-        const col = this._cvColumns.find(c => c.id === id);
-        if (!col) return;
-        if (localStorage.getItem('nym_columns_skip_delete_confirm') === 'true' || typeof window.showAppConfirm !== 'function') {
-            this.cvRemoveColumn(id);
-            return;
-        }
+        const idx = this._cvColumns.findIndex(c => c.id === id);
+        if (idx < 0) return;
+        const col = this._cvColumns[idx];
         const title = this._cvColTitle(col);
-        Promise.resolve(window.showAppConfirm(`Remove the "${title}" column? You can add it back anytime.`, {
-            title: 'Remove column', okLabel: 'Remove', danger: true, checkboxLabel: "Don't ask again"
-        })).then((res) => {
-            const confirmed = (res && typeof res === 'object') ? res.confirmed : res;
-            if (!confirmed) return;
-            if (res && typeof res === 'object' && res.checked) {
-                try { localStorage.setItem('nym_columns_skip_delete_confirm', 'true'); } catch (_) { }
-            }
-            this.cvRemoveColumn(id);
-        });
+        const desc = this._cvDescForSave(col);
+        const wasPrimary = this._cvPrimaryId === id;
+        this.cvRemoveColumn(id);
+        if (typeof this.showUndoToast !== 'function') return;
+        const text = typeof this.uiText === 'function'
+            ? this.uiText('Closed the "{title}" column').replace('{title}', title)
+            : 'Closed the "' + title + '" column';
+        this.showUndoToast(text, () => this._cvRestoreColumn(desc, idx, wasPrimary));
+    },
+
+    _cvRestoreColumn(desc, idx, wasPrimary) {
+        if (!this._cvActive) return;
+        const key = this._cvColKey(desc);
+        if (!key || this._cvColumns.some(c => c.key === key)) return;
+        this.cvAddColumn(desc, { focus: false });
+        const col = this._cvColumns.find(c => c.key === key);
+        if (!col) return;
+        const from = this._cvColumns.indexOf(col);
+        const to = Math.min(idx, this._cvColumns.length - 1);
+        if (from !== to) {
+            this._cvColumns.splice(from, 1);
+            this._cvColumns.splice(to, 0, col);
+            const addBtn = this._cvStrip.querySelector('.cv-add-column');
+            for (const c of this._cvColumns) this._cvStrip.insertBefore(c.el, addBtn || null);
+            this._cvSaveLayout();
+            this._cvRebuildHeaderDots();
+        }
+        if (wasPrimary && !this._cvPrimaryId) this._cvPrimaryId = col.id;
+        this._cvFocusColumn(col.id);
+        this._cvScrollToCol(col);
     },
 
     cvRemoveColumn(id) {
@@ -447,6 +464,7 @@ Object.assign(NYM.prototype, {
         this._cvAttachColumnScroll(col);
         this._cvAttachAutoScroll(col);
         this._cvAttachDnd(col);
+        if (typeof this._scheduleFloatOffsets === 'function') this._scheduleFloatOffsets();
     },
 
     _cvAttachAutoScroll(col) {
@@ -483,16 +501,16 @@ Object.assign(NYM.prototype, {
             }
             return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
         }
-        return '#';
+        return this._channelGlyphSvg(!!this.channelGeohashKey(col.channel, col.geohash), 16);
     },
 
     _cvColTitle(col) {
-        if (col.type === 'channel') return col.geohash || col.channel;
+        if (col.type === 'channel') return '#' + (col.geohash || col.channel);
         if (col.type === 'pm') {
             const conv = this.pmConversations && this.pmConversations.get(col.pubkey);
             const resolved = this.resolveDisplayNym(col.pubkey, (conv && conv.nym) || col.nym || '');
             if (resolved && resolved.toLowerCase() !== 'nym') return resolved;
-            return (conv && conv.nym) || col.nym || (this.getDisplayNym && this.getDisplayNym(col.pubkey)) || 'Direct message';
+            return (conv && conv.nym) || col.nym || (this.getDisplayNym && this.getDisplayNym(col.pubkey)) || 'Private message';
         }
         if (col.type === 'group') {
             const g = this.groupConversations && this.groupConversations.get(col.groupId);
@@ -865,7 +883,7 @@ Object.assign(NYM.prototype, {
             for (const [, ch] of this.channels) {
                 const desc = { type: 'channel', channel: ch.channel, geohash: ch.geohash || '' };
                 if (open.has(this._cvColKey(desc))) continue;
-                out.push({ label: `#${ch.geohash || ch.channel}`, icon: '#', desc });
+                out.push({ label: `#${ch.geohash || ch.channel}`, icon: this._channelGlyphSvg(!!this.channelGeohashKey(ch.channel, ch.geohash), 16), desc });
             }
         }
         if (this.pmConversations) {
@@ -873,7 +891,7 @@ Object.assign(NYM.prototype, {
                 const desc = { type: 'pm', pubkey, nym: conv.nym };
                 if (open.has(this._cvColKey(desc))) continue;
                 const src = this.getAvatarUrl(pubkey);
-                out.push({ label: conv.nym || 'Direct message', icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(pubkey)}" alt="" width="20" height="20">`, desc });
+                out.push({ label: conv.nym || 'Private message', icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(pubkey)}" alt="" width="20" height="20">`, desc });
             }
         }
         if (this.groupConversations) {

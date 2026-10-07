@@ -33,6 +33,18 @@ import javax.crypto.spec.GCMParameterSpec
 // local_auth's BiometricPrompt requires a FragmentActivity host.
 class MainActivity : FlutterFragmentActivity() {
     private var shareChannel: MethodChannel? = null
+    private var callChannel: MethodChannel? = null
+    private var pendingAnswer: String? = null
+    private var secretSecure = false
+    private var privacySecure = false
+
+    private fun applySecureFlag() {
+        if (secretSecure || privacySecure) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
     private val pendingShares = mutableListOf<Map<String, Any?>>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,11 +54,20 @@ class MainActivity : FlutterFragmentActivity() {
                 setIntent(Intent(Intent.ACTION_MAIN))
             }
         }
+        val action = intent?.action
+        if ((action == NymRing.ACTION_ANSWER || action == NymRing.ACTION_OPEN) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
         super.onCreate(savedInstanceState)
+        handleCallIntent(intent)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, Transcriber.CHANNEL)
+            .setMethodCallHandler { call, result -> Transcriber.handle(applicationContext, call, result) }
 
         val share = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL)
         share.setMethodCallHandler { call, result ->
@@ -75,6 +96,80 @@ class MainActivity : FlutterFragmentActivity() {
                     stopBackgroundService()
                     result.success(null)
                 }
+                else -> result.notImplemented()
+            }
+        }
+
+        val callChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CALL_CHANNEL)
+        this.callChannel = callChannel
+        NymCallService.onHangup = { runOnUiThread { callChannel.invokeMethod("hangup", null) } }
+        NymRing.onToken = { token ->
+            runOnUiThread { callChannel.invokeMethod("ringToken", mapOf("platform" to "fcm", "token" to token)) }
+        }
+        NymRing.onAction = { action, callId ->
+            runOnUiThread { callChannel.invokeMethod(action, mapOf("callId" to callId)) }
+        }
+        pendingAnswer?.let { id ->
+            pendingAnswer = null
+            callChannel.invokeMethod("answer", mapOf("callId" to id))
+        }
+        callChannel.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "showIncoming" -> {
+                    if (!NymRing.foreground) {
+                        NymRing.show(
+                            applicationContext,
+                            call.argument<String>("callId") ?: "",
+                            call.argument<String>("name") ?: "",
+                            call.argument<String>("body") ?: "",
+                            call.argument<Boolean>("video") ?: false,
+                        )
+                    }
+                    result.success(null)
+                }
+                "endIncoming" -> {
+                    NymRing.cancel(applicationContext)
+                    result.success(null)
+                }
+                "ringSupported" -> result.success(NymRing.supported())
+                "ringEnable" -> {
+                    val strings = call.arguments as? Map<*, *>
+                    if (strings != null) {
+                        NymRing.saveStrings(
+                            applicationContext,
+                            strings.entries.mapNotNull { (k, v) -> if (k is String && v is String) k to v else null }.toMap(),
+                        )
+                    }
+                    val source = NymRing.source()
+                    if (source == null) {
+                        result.success(false)
+                    } else {
+                        source.fetchToken(applicationContext) { token ->
+                            if (token != null) NymRing.onNewToken(token)
+                        }
+                        result.success(true)
+                    }
+                }
+                "ringDisable" -> {
+                    NymRing.source()?.deleteToken(applicationContext)
+                    result.success(null)
+                }
+                "stopOngoing" -> {
+                    stopCallService()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                        setShowWhenLocked(false)
+                        setTurnScreenOn(false)
+                    }
+                    result.success(null)
+                }
+                "startOngoing" -> result.success(
+                    startCallService(
+                        call.argument<Boolean>("video") ?: false,
+                        call.argument<String>("title") ?: "",
+                        call.argument<String>("text") ?: "",
+                        call.argument<String>("hangup") ?: "",
+                    )
+                )
                 else -> result.notImplemented()
             }
         }
@@ -112,11 +207,8 @@ class MainActivity : FlutterFragmentActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "secure" -> {
-                    if (call.arguments == true) {
-                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                    } else {
-                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-                    }
+                    secretSecure = call.arguments == true
+                    applySecureFlag()
                     result.success(null)
                 }
                 "copySecret" -> {
@@ -127,6 +219,21 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(copySecret(text))
                     }
                 }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            PRIVACY_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "configure" -> {
+                    privacySecure = call.argument<Boolean>("secure") ?: false
+                    applySecureFlag()
+                    result.success(null)
+                }
+                "isCaptured" -> result.success(false)
                 else -> result.notImplemented()
             }
         }
@@ -167,7 +274,35 @@ class MainActivity : FlutterFragmentActivity() {
         ).setMethodCallHandler { call, result -> PasskeyBackup.handle(this, call, result) }
     }
 
+    override fun onResume() {
+        super.onResume()
+        NymRing.foreground = true
+        NymRing.cancel(applicationContext)
+    }
+
+    override fun onPause() {
+        NymRing.foreground = false
+        super.onPause()
+    }
+
+    private fun handleCallIntent(intent: Intent?): Boolean {
+        val action = intent?.action ?: return false
+        if (action != NymRing.ACTION_ANSWER && action != NymRing.ACTION_OPEN) return false
+        NymRing.cancel(applicationContext)
+        val callId = intent.getStringExtra(NymRing.EXTRA_CALL_ID) ?: ""
+        if (action == NymRing.ACTION_ANSWER && callId.isNotEmpty()) {
+            val channel = callChannel
+            if (channel != null) {
+                channel.invokeMethod("answer", mapOf("callId" to callId))
+            } else {
+                pendingAnswer = callId
+            }
+        }
+        return true
+    }
+
     override fun onNewIntent(intent: Intent) {
+        if (handleCallIntent(intent)) return
         if (isShare(intent)) {
             val payload = readShare(intent) ?: return
             val channel = shareChannel
@@ -445,6 +580,40 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
+    private fun startCallService(video: Boolean, title: String, text: String, hangup: String): Boolean {
+        val intent = Intent(this, NymCallService::class.java).apply {
+            putExtra(NymCallService.EXTRA_VIDEO, video)
+            putExtra(NymCallService.EXTRA_TITLE, title)
+            putExtra(NymCallService.EXTRA_TEXT, text)
+            putExtra(NymCallService.EXTRA_HANGUP, hangup)
+        }
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            true
+        } catch (t: Throwable) {
+            false
+        }
+    }
+
+    private fun stopCallService() {
+        try {
+            stopService(Intent(this, NymCallService::class.java))
+        } catch (t: Throwable) {
+        }
+    }
+
+    override fun onDestroy() {
+        NymCallService.onHangup = null
+        NymRing.onToken = null
+        NymRing.onAction = null
+        callChannel = null
+        super.onDestroy()
+    }
+
     private fun stopBackgroundService() {
         try {
             stopService(Intent(this, NymBackgroundService::class.java))
@@ -458,10 +627,12 @@ class MainActivity : FlutterFragmentActivity() {
         private const val MAX_SHARED_FILES = 10
         private const val MAX_SHARED_BYTES = 16 * 1024 * 1024
         private const val MAX_SHARED_TOTAL_BYTES = 64L * 1024 * 1024
+        private const val CALL_CHANNEL = "app.nymchat/call"
         private const val BACKGROUND_CHANNEL = "app.nymchat/background_connectivity"
         private const val BUILD_INTEGRITY_CHANNEL = "app.nymchat/build_integrity"
         private const val ATTEST_CHANNEL = "app.nymchat/attest"
         private const val SECURE_CHANNEL = "app.nymchat/secure"
+        private const val PRIVACY_CHANNEL = "app.nymchat/privacy"
         private const val VAULT_KEY_CHANNEL = "app.nymchat/vault_key"
         private const val PASSKEY_BACKUP_CHANNEL = "app.nymchat/passkey_backup"
         private const val VAULT_KEY_ALIAS = "nymchat_vault_key"

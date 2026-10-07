@@ -6,6 +6,7 @@ const String kGoogleIosClientId =
 const String kGoogleWebClientId =
     '435441872913-ccmsrqp8nsi3vqm27cptpsld3kqb5i2g.apps.googleusercontent.com';
 const String kAppleKeychainGroup = 'KJ6U2Y9B2M.com.nym.shared';
+const String kAppleCloudKitContainer = 'iCloud.com.nym.bar';
 
 class KeyBackupConfig {
   const KeyBackupConfig({
@@ -13,6 +14,7 @@ class KeyBackupConfig {
     this.googleServerClientId = '',
     this.appleBackup = false,
     this.appleKeychainGroup = '',
+    this.appleCloudKitContainer = kAppleCloudKitContainer,
     this.passkeyBackup = false,
     this.passkeyRpId = kDefaultPasskeyRpId,
   });
@@ -26,6 +28,8 @@ class KeyBackupConfig {
         String.fromEnvironment('APPLE_BACKUP', defaultValue: 'true') == 'true',
     appleKeychainGroup: String.fromEnvironment('APPLE_KEYCHAIN_GROUP',
         defaultValue: kAppleKeychainGroup),
+    appleCloudKitContainer: String.fromEnvironment('APPLE_CLOUDKIT_CONTAINER',
+        defaultValue: kAppleCloudKitContainer),
     passkeyBackup:
         String.fromEnvironment('PASSKEY_BACKUP', defaultValue: 'true') == 'true',
     passkeyRpId: String.fromEnvironment('PASSKEY_RP_ID',
@@ -36,6 +40,7 @@ class KeyBackupConfig {
   final String googleServerClientId;
   final bool appleBackup;
   final String appleKeychainGroup;
+  final String appleCloudKitContainer;
   final bool passkeyBackup;
   final String passkeyRpId;
 
@@ -58,7 +63,10 @@ class KeyBackupConfig {
       (platform == TargetPlatform.iOS || platform == TargetPlatform.android);
 
   bool appleEnabledOn(TargetPlatform platform, {bool web = kIsWeb}) =>
-      !web && appleBackup && platform == TargetPlatform.iOS;
+      !web &&
+      appleBackup &&
+      appleCloudKitContainer.isNotEmpty &&
+      platform == TargetPlatform.iOS;
 
   String? get googleClientIdForIos =>
       googleIosClientId.isEmpty ? null : googleIosClientId;

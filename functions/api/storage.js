@@ -614,10 +614,16 @@ async function handleSettingsAction(context, body) {
     return json({ ok: true, category: cat, updatedAt: updatedAt });
   }
 
+  if (body.action === "settings-delete") {
+    var delCat = String(body.category || "");
+    if (!isValidSettingsCategory(delCat)) return json({ error: "Unknown settings category." }, 400);
+    var delRes = await env.DB_SETTINGS.prepare("DELETE FROM settings WHERE pubkey = ? AND category = ?").bind(userPubkey, delCat).run();
+    return json({ ok: true, category: delCat, deleted: (delRes && delRes.meta && delRes.meta.changes) || 0 });
+  }
+
   return json({ error: "Unknown action" }, 400);
 }
 
-// App-scoped wipe; credits, shop items, the free-tier counter and zap receipts are deliberately kept.
 async function handleAccountAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -666,8 +672,49 @@ async function handleAccountAction(context, body) {
           "DELETE FROM pm WHERE pubkey = ?").bind(userPubkey).run());
       } catch (e) { }
     }
+    var purgeRows = async function (db, table) {
+      if (!hasD1(db)) return 0;
+      try { return changes(await db.prepare("DELETE FROM " + table + " WHERE pubkey = ?").bind(userPubkey).run()); } catch (e) { return 0; }
+    };
+    removed.bot = 0;
+    var botTables = ["botpm_thread", "botpm_wraps", "botpm_turns", "botpm_runs", "botpm_results", "botpm_steer", "botpm_locks", "botpm_summary"];
+    for (var bi = 0; bi < botTables.length; bi++) removed.bot += await purgeRows(env.DB_BOT, botTables[bi]);
+    removed.scheduled = await purgeRows(hasD1(env.DB_SCHEDULE) ? env.DB_SCHEDULE : env.DB_PM, "scheduled");
+    removed.archive = await purgeRows(env.DB_CHANNELS, "events");
+    removed.emoji = await purgeRows(env.DB_CHANNELS, "emoji_packs");
+    removed.attestation = await purgeRows(env.DB_CHANNELS, "app_attestations");
+    removed.reports = 0;
+    if (hasD1(env.DB_REPORT)) {
+      try { removed.reports = changes(await env.DB_REPORT.prepare("DELETE FROM reports WHERE reporter = ?").bind(userPubkey).run()); } catch (e) { }
+    }
+    var spamStore = hasD1(env.DB_SPAM) ? env.DB_SPAM : env.DB_NOPE;
+    removed.spam = await purgeRows(spamStore, "spam_events") + await purgeRows(spamStore, "spam_pubkeys") + await purgeRows(spamStore, "spam_domains");
+    removed.panicMark = 0;
+    if (hasD1(env.DB_SETTINGS)) {
+      try {
+        removed.panicMark = changes(await env.DB_SETTINGS.prepare("DELETE FROM panic_marks WHERE pubkey = ? AND created_at < ?")
+          .bind(userPubkey, Math.floor(Date.now() / 1000) - 600).run());
+      } catch (e) { }
+    }
   }
 
+  var incomplete = [];
+  var erased = null;
+  try { erased = await ledgerCall(env, { op: "account-erase", pubkey: userPubkey, keyIds: [] }); } catch (e) { erased = null; }
+  if (erased && erased.ok) removed.ledger = erased;
+  else incomplete.push("credits");
+  var dropWhere = async function (db, sql) {
+    if (!hasD1(db)) return 0;
+    try { return changes(await db.prepare(sql).bind(userPubkey).run()); } catch (e) { return 0; }
+  };
+  removed.vouchers = await dropWhere(env.DB_CREDITS, "DELETE FROM voucher_redeem WHERE pubkey = ?");
+  removed.shop = await dropWhere(env.DB_SHOP, "DELETE FROM shop WHERE pubkey = ?");
+  removed.codes = await dropWhere(env.DB_CODES, "DELETE FROM codes WHERE owner = ?");
+  removed.invoices = await dropWhere(env.DB_INVOICES, "DELETE FROM invoices WHERE json_extract(data, '$.pubkey') = ?1");
+  removed.zaps = await dropWhere(env.DB_CHANNELS, "DELETE FROM zaps WHERE pubkey = ?1 OR instr(json, ?1) > 0") +
+    await dropWhere(env.DB_PM, "DELETE FROM zaps WHERE pubkey = ?1 OR instr(json, ?1) > 0");
+
+  if (incomplete.length) return json({ ok: false, app: app, removed: removed, incomplete: incomplete, error: "Some account data could not be deleted. Try again." }, 503);
   return json({ ok: true, app: app, removed: removed });
 }
 
@@ -676,13 +723,23 @@ var PANIC_MARK_SKEW_S = 600;
 var PANIC_CHECK_RATE = 30;
 var PANIC_DDL = "CREATE TABLE IF NOT EXISTS panic_marks (pubkey TEXT PRIMARY KEY, created_at INTEGER NOT NULL, event_id TEXT NOT NULL, sig TEXT NOT NULL)";
 
+var PANIC_MARK_TAGS = ["nym-panic", "nym-account-deleted"];
+
+function panicMarkerTag(pubkey, at, id) {
+  for (var i = 0; i < PANIC_MARK_TAGS.length; i++) {
+    var ev = { kind: 30078, pubkey: pubkey, created_at: at, tags: [["d", PANIC_MARK_TAGS[i]]], content: "" };
+    if (getEventHash(ev) === id) return PANIC_MARK_TAGS[i];
+  }
+  return null;
+}
+
 function panicMarkerValid(pubkey, at, id, sig) {
   try {
     if (!Number.isInteger(at) || at <= 0) return false;
     if (typeof id !== "string" || !/^[0-9a-f]{64}$/.test(id)) return false;
     if (typeof sig !== "string" || !/^[0-9a-f]{128}$/.test(sig)) return false;
-    var ev = { kind: 30078, pubkey: pubkey, created_at: at, tags: [["d", "nym-panic"]], content: "" };
-    if (getEventHash(ev) !== id) return false;
+    var d = panicMarkerTag(pubkey, at, id);
+    if (!d) return false;
     return schnorr.verify(sig, id, pubkey);
   } catch (e) {
     return false;
@@ -719,7 +776,10 @@ async function handlePanicAction(context, body) {
       try { await env.DB_SETTINGS.prepare("DELETE FROM panic_marks WHERE pubkey = ?").bind(userPubkey).run(); } catch (e) { }
       row = null;
     }
-    return json({ mark: row ? { at: Number(row.created_at), id: row.event_id, sig: row.sig } : null });
+    if (!row) return json({ mark: null });
+    var mark = { at: Number(row.created_at), id: row.event_id, sig: row.sig };
+    if (panicMarkerTag(userPubkey, mark.at, mark.id) === "nym-account-deleted") mark.d = "nym-account-deleted";
+    return json({ mark: mark });
   }
 
   if (!context._wsAuthedPubkey) {

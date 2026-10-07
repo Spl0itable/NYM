@@ -18,6 +18,8 @@ import '../../widgets/nym_icons.dart';
 import '../groups/group_invite_confirm.dart';
 import '../i18n/i18n.dart';
 import '../chat_lock/chat_lock_providers.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// A picked recipient: 64-hex pubkey plus display nym.
 class PmRecipient {
@@ -52,14 +54,14 @@ class NewPmModal extends ConsumerStatefulWidget {
     final solidUi =
         ProviderScope.containerOf(context).read(settingsProvider).solidUi;
     final isLight = context.nym.isLight;
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => const NewPmModal(),
       barrierColor: !solidUi
           ? Colors.black.withValues(alpha: 0.7)
           : isLight
               ? const Color(0x73000000)
               : const Color(0xBF000000),
-      builder: (_) => const NewPmModal(),
     );
   }
 
@@ -92,6 +94,15 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   String? _uploadError;
 
   bool get _groupMode => _recipients.length >= 2;
+
+  bool get _dirty =>
+      _recipients.isNotEmpty ||
+      _recipientController.text.trim().isNotEmpty ||
+      _groupNameController.text.trim().isNotEmpty ||
+      _groupDescController.text.trim().isNotEmpty ||
+      _messageController.text.trim().isNotEmpty ||
+      _groupAvatarUrl != null ||
+      _groupBannerUrl != null;
 
   @override
   void initState() {
@@ -306,7 +317,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     if (initial.isNotEmpty) {
       await controller.sendCurrent(initial);
     }
-    if (mounted) Navigator.of(context).maybePop();
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override
@@ -315,140 +326,149 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     final incog = ref.watch(incognitoFieldFlagsProvider);
     final title = _groupMode ? tr('New Group') : tr('New Message');
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 440),
-        child: Container(
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            border: Border.all(color: c.glassBorder),
-            borderRadius: NymRadius.rxl,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.5),
-                blurRadius: 32,
-                offset: const Offset(0, 8),
+    final body = Stack(
+      children: [
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              margin: NymSheetScope.of(context)
+                  ? const EdgeInsets.fromLTRB(32, 12, 56, 20)
+                  : const EdgeInsets.fromLTRB(32, 32, 32, 24),
+              padding: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: c.glassBorder)),
               ),
-              BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
-              BoxShadow(
-                  color: Colors.white.withValues(alpha: 0.05), spreadRadius: 1),
-            ],
-          ),
-          child: Stack(
-            children: [
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+              child: Text(
+                title.toUpperCase(),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _label(c, tr('To')),
+                    const SizedBox(height: 8),
+                    _recipientBox(c),
+                    if (_recipientError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Text(
+                          _recipientError!,
+                          style: TextStyle(color: c.danger, fontSize: 11),
+                        ),
+                      ),
+                    _suggestionsList(c),
+                    if (_groupMode) ...[
+                      const SizedBox(height: 16),
+                      _label(c, tr('Group Name'), optional: true),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _groupNameController,
+                        maxLength: 40,
+                        onChanged: (_) => setState(() {}),
+                        style:
+                            TextStyle(color: c.textBright, fontSize: 15),
+                        decoration: _inputDecoration(
+                          c,
+                          tr('Enter a group name...'),
+                        ).copyWith(counterText: ''),
+                      ),
+                      _charCount(c, _groupNameController.text.length, 40),
+                      const SizedBox(height: 16),
+                      _groupMediaSection(c),
+                      const SizedBox(height: 16),
+                      _label(c, tr('Description'), optional: true),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: _groupDescController,
+                        maxLength: 150,
+                        maxLines: 3,
+                        onChanged: (_) => setState(() {}),
+                        style:
+                            TextStyle(color: c.textBright, fontSize: 15),
+                        decoration: _inputDecoration(
+                          c,
+                          tr("What's this group about?"),
+                        ).copyWith(counterText: ''),
+                      ),
+                      _charCount(
+                          c, _groupDescController.text.length, 150),
+                      const SizedBox(height: 12),
+                      _allowInvitesRow(c),
+                    ],
+                    const SizedBox(height: 16),
+                    _label(c, tr('Message'), optional: true),
+                    const SizedBox(height: 8),
+                    TextField(
+                      key: const ValueKey('new-pm-message'),
+                      controller: _messageController,
+                      enableIMEPersonalizedLearning: incog.imeLearning,
+                      autocorrect: incog.autocorrect,
+                      enableSuggestions: incog.suggestions,
+                      maxLines: 3,
+                      style: TextStyle(color: c.inputText, fontSize: 15),
+                      decoration: _inputDecoration(
+                          c, tr('Start the conversation...')),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Container(
-                    margin: const EdgeInsets.fromLTRB(32, 32, 32, 24),
-                    padding: const EdgeInsets.only(bottom: 14),
-                    decoration: BoxDecoration(
-                      border: Border(bottom: BorderSide(color: c.glassBorder)),
-                    ),
-                    child: Text(
-                      title.toUpperCase(),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                  Flexible(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _label(c, tr('To')),
-                          const SizedBox(height: 8),
-                          _recipientBox(c),
-                          // Inline under the box rather than in the chat behind the modal.
-                          if (_recipientError != null)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 6),
-                              child: Text(
-                                _recipientError!,
-                                style: TextStyle(color: c.danger, fontSize: 11),
-                              ),
-                            ),
-                          _suggestionsList(c),
-                          if (_groupMode) ...[
-                            const SizedBox(height: 16),
-                            _label(c, tr('Group Name'), optional: true),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: _groupNameController,
-                              maxLength: 40,
-                              onChanged: (_) => setState(() {}),
-                              style:
-                                  TextStyle(color: c.textBright, fontSize: 15),
-                              decoration: _inputDecoration(
-                                c,
-                                tr('Enter a group name...'),
-                              ).copyWith(counterText: ''),
-                            ),
-                            _charCount(c, _groupNameController.text.length, 40),
-                            const SizedBox(height: 16),
-                            _groupMediaSection(c),
-                            const SizedBox(height: 16),
-                            _label(c, tr('Description'), optional: true),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: _groupDescController,
-                              maxLength: 150,
-                              maxLines: 3,
-                              onChanged: (_) => setState(() {}),
-                              style:
-                                  TextStyle(color: c.textBright, fontSize: 15),
-                              decoration: _inputDecoration(
-                                c,
-                                tr("What's this group about?"),
-                              ).copyWith(counterText: ''),
-                            ),
-                            _charCount(
-                                c, _groupDescController.text.length, 150),
-                            const SizedBox(height: 12),
-                            _allowInvitesRow(c),
-                          ],
-                          const SizedBox(height: 16),
-                          _label(c, tr('Message'), optional: true),
-                          const SizedBox(height: 8),
-                          TextField(
-                            key: const ValueKey('new-pm-message'),
-                            controller: _messageController,
-                            enableIMEPersonalizedLearning: incog.imeLearning,
-                            autocorrect: incog.autocorrect,
-                            enableSuggestions: incog.suggestions,
-                            maxLines: 3,
-                            style: TextStyle(color: c.inputText, fontSize: 15),
-                            decoration: _inputDecoration(
-                                c, tr('Start the conversation...')),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _cancelBtn(c),
-                        const SizedBox(width: 10),
-                        _startBtn(c),
-                      ],
-                    ),
-                  ),
+                  _cancelBtn(c),
+                  const SizedBox(width: 10),
+                  _startBtn(c),
                 ],
               ),
-              Positioned(top: 14, right: 14, child: _closeButton(c)),
-            ],
+            ),
+          ],
+        ),
+        Positioned(top: 14, right: 14, child: _closeButton(c)),
+      ],
+    );
+    return NymDiscardGuard(
+      isDirty: () => _dirty,
+      child: nymSheetOr(
+        context,
+        body,
+        (body) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Container(
+              decoration: BoxDecoration(
+                color: c.bgSecondary,
+                border: Border.all(color: c.glassBorder),
+                borderRadius: NymRadius.rxl,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    blurRadius: 32,
+                    offset: const Offset(0, 8),
+                  ),
+                  BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
+                  BoxShadow(
+                      color: Colors.white.withValues(alpha: 0.05), spreadRadius: 1),
+                ],
+              ),
+              child: body,
+            ),
           ),
         ),
       ),
@@ -457,7 +477,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
 
   Widget _closeButton(NymColors c) {
     return InkWell(
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: () => Navigator.of(context).pop(),
       borderRadius: const BorderRadius.all(Radius.circular(16)),
       child: Container(
         width: 32,
@@ -468,15 +488,15 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
           color: Colors.white.withValues(alpha: 0.05),
           border: Border.all(color: c.glassBorder),
         ),
-        child: Text('✕',
-            style: TextStyle(color: c.textDim, fontSize: 16, height: 1)),
+        child: Icon(Icons.close,
+            semanticLabel: tr('Close'), size: 16, color: c.textDim),
       ),
     );
   }
 
   Widget _cancelBtn(NymColors c) {
     return InkWell(
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: () => Navigator.of(context).pop(),
       borderRadius: NymRadius.rxs,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -557,18 +577,17 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: NymRadius.rsm,
-        boxShadow: _recipientFocused
-            ? [BoxShadow(color: c.primaryA(0.06), spreadRadius: 3)]
-            : null,
+        boxShadow: NymField.ring(c, _recipientFocused),
       ),
       child: Container(
         constraints: const BoxConstraints(minHeight: 42),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         decoration: BoxDecoration(
-          color:
-              Colors.white.withValues(alpha: _recipientFocused ? 0.07 : 0.05),
+          color: NymField.fill(c, focused: _recipientFocused),
           border: Border.all(
-            color: _recipientFocused ? c.primaryA(0.3) : c.glassBorder,
+            color: _recipientFocused
+                ? NymField.focusBorder(c)
+                : NymField.border(c),
           ),
           borderRadius: NymRadius.rsm,
         ),
@@ -609,7 +628,10 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                       hintText: _recipients.isEmpty
                           ? tr('Search nym or paste pubkey...')
                           : null,
-                      hintStyle: TextStyle(color: c.textDim, fontSize: 13),
+                      hintStyle:
+                          TextStyle(color: NymField.placeholder(c), fontSize: 13),
+                      filled: false,
+                      hoverColor: Colors.transparent,
                       contentPadding: const EdgeInsets.symmetric(vertical: 2),
                     ),
                   ),
@@ -751,7 +773,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
         final controller = ref.read(nostrControllerProvider);
         final ok = await confirmGroupInviteJoin(context, token);
         if (!ok || !mounted) return;
-        Navigator.of(context).maybePop();
+        Navigator.of(context).pop();
         await controller.joinGroupViaInvite(token);
       },
       child: Padding(
@@ -1015,26 +1037,7 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   }
 
   InputDecoration _inputDecoration(NymColors c, String hint) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: TextStyle(color: c.textDim, fontSize: 15),
-      isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-      filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.05),
-      border: OutlineInputBorder(
-        borderRadius: NymRadius.rsm,
-        borderSide: BorderSide(color: c.glassBorder),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: NymRadius.rsm,
-        borderSide: BorderSide(color: c.glassBorder),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: NymRadius.rsm,
-        borderSide: BorderSide(color: c.primaryA(0.3)),
-      ),
-    );
+    return NymField.decoration(c, hint: hint);
   }
 }
 

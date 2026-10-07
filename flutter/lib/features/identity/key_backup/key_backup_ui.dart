@@ -12,6 +12,7 @@ import '../../../widgets/common/brand_buttons.dart';
 import '../../../widgets/common/keyboard_inset_dialog.dart';
 import '../../i18n/i18n.dart';
 import '../modal_chrome.dart';
+import 'cloudkit_backup_store.dart';
 import 'key_backup_crypto.dart';
 import 'key_backup_service.dart';
 import 'key_backup_store.dart';
@@ -385,7 +386,16 @@ Future<BackupCandidate?> showBackupCandidatePicker(
   );
 }
 
+const String kICloudSignInMessage =
+    'Sign in to iCloud in the Settings app to use your Apple backup, then '
+    'try again.';
+
+const String kICloudFullMessage =
+    'Your iCloud storage is full. Free up space and try again.';
+
 String _errorMessage(Object e, BackupCloud cloud) {
+  if (e is KeyBackupICloudUnavailable) return tr(kICloudSignInMessage);
+  if (e is KeyBackupICloudFull) return tr(kICloudFullMessage);
   if (e is KeyBackupAuthExpired) {
     return tr('{provider} did not grant access. Please sign in again.',
         {'provider': cloud.label});
@@ -407,7 +417,9 @@ Future<(KeyBackupSession, List<BackupEntry>)?> _openSession(
     if (context.mounted) {
       await showAppAlert(
         context,
-        e is KeyBackupAuthExpired
+        e is KeyBackupAuthExpired ||
+                e is KeyBackupICloudUnavailable ||
+                e is KeyBackupICloudFull
             ? _errorMessage(e, store.cloud)
             : tr("Couldn't sign in with {provider}. Please try again.",
                 {'provider': store.cloud.label}),
@@ -427,10 +439,14 @@ Future<bool> runKeyBackupSignIn(
   final opened = await _openSession(context, ref, store);
   if (opened == null || !context.mounted) return false;
   final (session, entries) = opened;
+  final legacy = _LegacyBackups(ref, store);
+  final legacyEntries = await legacy.entries();
+  if (!context.mounted) return false;
 
-  if (entries.isNotEmpty) {
+  if (entries.isNotEmpty || legacyEntries.isNotEmpty) {
     final throttle = PinThrottle.forCloud(cloud);
     List<BackupCandidate> found = const [];
+    Uint8List? migrateKey;
     final ok = await KeyBackupPinDialog.show(
       context,
       KeyBackupPinDialog(
@@ -444,12 +460,26 @@ Future<bool> runKeyBackupSignIn(
         throttle: throttle,
         onSubmit: (pin) async {
           final key = await session.deriveKey(pin);
+          var keep = false;
           try {
-            found = await session.candidates(key, entries);
+            found = entries.isEmpty
+                ? const <BackupCandidate>[]
+                : await session.candidates(key, entries);
+            if (found.isEmpty && legacyEntries.isNotEmpty) {
+              found = await legacy.candidates(pin, legacyEntries);
+              if (found.isNotEmpty) {
+                wipeBytes(migrateKey);
+                migrateKey = key;
+                keep = true;
+              }
+            }
+          } on KeyBackupCanceled {
+            return tr("Couldn't sign in with {provider}. Please try again.",
+                {'provider': cloud.label});
           } catch (e) {
             return _errorMessage(e, cloud);
           } finally {
-            wipeBytes(key);
+            if (!keep) wipeBytes(key);
           }
           if (found.isEmpty) {
             throttle.fail();
@@ -460,14 +490,29 @@ Future<bool> runKeyBackupSignIn(
         },
       ),
     );
-    if (!ok || found.isEmpty || !context.mounted) return false;
+    if (!ok || found.isEmpty || !context.mounted) {
+      wipeBytes(migrateKey);
+      return false;
+    }
     var chosen = found.first;
     if (found.length > 1) {
       final picked = await showBackupCandidatePicker(context, found);
-      if (picked == null) return false;
+      if (picked == null) {
+        wipeBytes(migrateKey);
+        return false;
+      }
       chosen = picked;
     }
     found = const [];
+    final resave = migrateKey;
+    if (resave != null) {
+      try {
+        await session.upload(resave, chosen.secretHex, pqCode: chosen.pqCode);
+      } catch (_) {
+      } finally {
+        wipeBytes(resave);
+      }
+    }
     if (!context.mounted) return false;
     await _completeSignIn(context, chosen.backup, signIn);
     return true;
@@ -590,7 +635,10 @@ Future<bool> runKeyBackupRemove(
   final opened = await _openSession(context, ref, store);
   if (opened == null || !context.mounted) return false;
   final (session, entries) = opened;
-  if (entries.isEmpty) {
+  final legacy = _LegacyBackups(ref, store);
+  final legacyEntries = await legacy.entries();
+  if (!context.mounted) return false;
+  if (entries.isEmpty && legacyEntries.isEmpty) {
     await showAppAlert(
       context,
       tr('There are no Nymchat backups in this {provider} account.',
@@ -600,6 +648,7 @@ Future<bool> runKeyBackupRemove(
   }
   final throttle = PinThrottle.forCloud(cloud);
   var matches = const <BackupEntry>[];
+  var legacyMatches = const <BackupEntry>[];
   final ok = await KeyBackupPinDialog.show(
     context,
     KeyBackupPinDialog(
@@ -614,13 +663,21 @@ Future<bool> runKeyBackupRemove(
       onSubmit: (pin) async {
         final key = await session.deriveKey(pin);
         try {
-          matches = await session.entriesFor(key, entries, pubkeyHex);
+          matches = entries.isEmpty
+              ? const <BackupEntry>[]
+              : await session.entriesFor(key, entries, pubkeyHex);
+          legacyMatches = legacyEntries.isEmpty
+              ? const <BackupEntry>[]
+              : await legacy.entriesFor(pin, legacyEntries, pubkeyHex);
+        } on KeyBackupCanceled {
+          return tr("Couldn't sign in with {provider}. Please try again.",
+              {'provider': cloud.label});
         } catch (e) {
           return _errorMessage(e, cloud);
         } finally {
           wipeBytes(key);
         }
-        if (matches.isEmpty) {
+        if (matches.isEmpty && legacyMatches.isEmpty) {
           throttle.fail();
           return tr('Wrong PIN, or no backup of this key uses it.');
         }
@@ -629,12 +686,14 @@ Future<bool> runKeyBackupRemove(
       },
     ),
   );
-  if (!ok || matches.isEmpty || !context.mounted) return false;
+  if (!ok || (matches.isEmpty && legacyMatches.isEmpty) || !context.mounted) {
+    return false;
+  }
   final confirmed = await showAppConfirm(
     context,
     tr('Delete {count} backup(s) of this key from {provider}? This device '
         'keeps working, but you will not be able to restore from them.',
-        {'count': matches.length, 'provider': cloud.label}),
+        {'count': matches.length + legacyMatches.length, 'provider': cloud.label}),
     title: tr('Remove backups'),
     okLabel: tr('Delete'),
     danger: true,
@@ -642,6 +701,7 @@ Future<bool> runKeyBackupRemove(
   if (!confirmed || !context.mounted) return false;
   try {
     await session.deleteEntries(matches);
+    await legacy.delete(legacyMatches);
   } catch (e) {
     if (context.mounted) await showAppAlert(context, _errorMessage(e, cloud));
     return false;
@@ -652,6 +712,56 @@ Future<bool> runKeyBackupRemove(
     tr('Backups removed from {provider}.', {'provider': cloud.label}),
   );
   return true;
+}
+
+class _LegacyBackups {
+  _LegacyBackups(this._ref, KeyBackupStore store)
+      : _store =
+            store is LegacyBackupSource ? (store as LegacyBackupSource).legacy : null;
+
+  final WidgetRef _ref;
+  final KeyBackupStore? _store;
+  KeyBackupSession? _session;
+
+  Future<List<BackupEntry>> entries() async {
+    final store = _store;
+    if (store == null) return const <BackupEntry>[];
+    try {
+      return await store.list();
+    } catch (_) {
+      return const <BackupEntry>[];
+    }
+  }
+
+  Future<KeyBackupSession> _open() async => _session ??= await KeyBackupSession
+      .open(_store!, deriver: _ref.read(keyBackupDeriverProvider));
+
+  Future<List<BackupCandidate>> candidates(
+      String pin, List<BackupEntry> entries) async {
+    final session = await _open();
+    final key = await session.deriveKey(pin);
+    try {
+      return await session.candidates(key, entries);
+    } finally {
+      wipeBytes(key);
+    }
+  }
+
+  Future<List<BackupEntry>> entriesFor(
+      String pin, List<BackupEntry> entries, String pubkeyHex) async {
+    final session = await _open();
+    final key = await session.deriveKey(pin);
+    try {
+      return await session.entriesFor(key, entries, pubkeyHex);
+    } finally {
+      wipeBytes(key);
+    }
+  }
+
+  Future<void> delete(List<BackupEntry> entries) async {
+    if (entries.isEmpty) return;
+    await (await _open()).deleteEntries(entries);
+  }
 }
 
 String passkeyErrorMessage(PasskeyBackupError error) => switch (error) {

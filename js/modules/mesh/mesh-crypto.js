@@ -578,13 +578,40 @@
                 const pubkeyHex = P().toHex(value.subarray(0, 32));
                 const sigHex = P().toHex(value.subarray(32, 96));
                 const msgHex = await NostrLink.messageHex(noiseStaticPublicKey);
-                const ok = G.NostrTools._secp256k1.schnorr.verify(sigHex, msgHex, pubkeyHex);
+                const ok = G.NostrTools._schnorr.verify(sigHex, msgHex, pubkeyHex);
                 return ok ? pubkeyHex : null;
             } catch (_) {
                 return null;
             }
         },
     };
+
+    const CHANNEL_PBKDF2_ITERATIONS = 100000;
+
+    function channelWireName(channel) {
+        const c = String(channel || '');
+        return c.charAt(0) === '#' ? c : '#' + c;
+    }
+
+    async function channelKey(password, channel) {
+        const enc = new TextEncoder();
+        const base = await subtle().importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+        return subtle().deriveKey(
+            { name: 'PBKDF2', salt: enc.encode(channel), iterations: CHANNEL_PBKDF2_ITERATIONS, hash: 'SHA-256' },
+            base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    }
+
+    async function channelEncrypt(key, text, iv) {
+        const nonce = iv || G.crypto.getRandomValues(new Uint8Array(12));
+        const ct = new Uint8Array(await subtle().encrypt({ name: 'AES-GCM', iv: nonce }, key, new TextEncoder().encode(text)));
+        return concat(nonce, ct);
+    }
+
+    async function channelDecrypt(key, data) {
+        if (!data || data.length < 28) throw new Error('encrypted channel data too short');
+        const pt = await subtle().decrypt({ name: 'AES-GCM', iv: data.subarray(0, 12) }, key, data.subarray(12));
+        return new TextDecoder().decode(pt);
+    }
 
     G.NymMeshCrypto = {
         cryptoSupported, sha256, hmacSha256, noiseHkdf, concat,
@@ -593,5 +620,6 @@
         CipherState, SymmetricState, HandshakeState, NoiseSession, NoiseSessionManager,
         MeshIdentity, derivePeerID, matchesClaimedPeerID, NostrLink,
         NOISE_PROTOCOL_NAME, IDENTITY_STORAGE_KEY,
+        channelKey, channelEncrypt, channelDecrypt, channelWireName,
     };
 })();

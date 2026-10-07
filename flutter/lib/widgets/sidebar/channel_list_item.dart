@@ -11,8 +11,12 @@ import '../../features/settings/settings_helpers.dart';
 import '../../models/channel.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
 import '../nym_icons.dart';
+import 'row_preview.dart';
+import 'sidebar_chrome.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
+import 'unread_pill.dart';
+import '../common/nym_tooltip.dart';
 
 /// Gray tint for a favorited channel row that is not active.
 const Color _pinnedGrey = Color(0xFF9696A0);
@@ -70,7 +74,10 @@ class ChannelListItem extends ConsumerWidget {
 
     final nameText = Text(
       name,
-      softWrap: true,
+      key: const ValueKey('sidebarName'),
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.ellipsis,
       style: TextStyle(
         color: c.text,
         fontSize: textSize,
@@ -79,15 +86,20 @@ class ChannelListItem extends ConsumerWidget {
       ),
     );
 
+    final preview = sidebarRowPreview(ref, entry.storageKey, 'channel');
+    final hasMenu = buildChannelMenuActions(context, ref, entry).isNotEmpty;
     final nameBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         nameText,
-        _ChannelLocationLine(
-          geohash: entry.geohashKey,
-          textSize: textSize,
-        ),
+        if (preview.text.isNotEmpty)
+          rowPreviewLine(context, preview.text, 'channel')
+        else
+          _ChannelLocationLine(
+            geohash: entry.geohashKey,
+            textSize: textSize,
+          ),
       ],
     );
 
@@ -108,8 +120,9 @@ class ChannelListItem extends ConsumerWidget {
           return Stack(
             children: [
               Container(
-                constraints: const BoxConstraints(minHeight: 36),
-                padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 9, 12, 9),
+                key: const ValueKey('sidebarRowBox'),
+                constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
+                padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 6, 12, 6),
                 decoration: BoxDecoration(
                   color: fill,
                   borderRadius: NymRadius.rxs,
@@ -118,35 +131,39 @@ class ChannelListItem extends ConsumerWidget {
                 ),
                 child: Row(
                   children: [
-                    if (mesh) ...[
-                      NymSvgIcon(NymIcons.bluetooth,
-                          size: 12, color: c.primary),
-                      const SizedBox(width: 6),
-                    ],
+                    SidebarChannelTile(geohash: entry.isGeohash),
+                    const SizedBox(width: kSidebarGap),
                     Expanded(
                       child: location.isEmpty
                           ? nameBlock
-                          : Tooltip(message: location, child: nameBlock),
+                          : NymTooltip(message: location, child: nameBlock),
                     ),
+                    if (mesh) ...[
+                      const SizedBox(width: 5),
+                      NymSvgIcon(NymIcons.bluetooth,
+                          size: 12, color: c.primary),
+                    ],
+                    rowTimeLabel(context, preview.time),
                     ChatNavRowBadges(storageKey: entry.storageKey),
-                    // The unread pill is the only channel badge in the PWA; geohash vs named is shown by the name.
                     if (unread > 0) ...[
                       const SizedBox(width: 5),
-                      _UnreadPill(count: unread),
+                      SidebarUnreadPill(count: unread),
                     ],
-                    // Hidden when there is no menu, so it never appears as a dead tap target.
-                    if (buildChannelMenuActions(context, ref, entry)
-                        .isNotEmpty) ...[
-                      const SizedBox(width: 2),
-                      SidebarRowMenuButton(
-                        semanticLabel: 'Channel menu',
-                        onShowMenu: (pos) => maybeShowChannelContextMenu(
-                            context, ref, entry, pos),
-                      ),
-                    ],
+                    if (hasMenu) const SizedBox(width: kSidebarMenuReserve),
                   ],
                 ),
               ),
+              if (hasMenu)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: SidebarRowMenuButton(
+                    semanticLabel: 'Channel menu',
+                    onShowMenu: (pos) =>
+                        maybeShowChannelContextMenu(context, ref, entry, pos),
+                  ),
+                ),
               if (active || showPinned)
                 Positioned(
                   left: 0,
@@ -190,28 +207,33 @@ class ChannelListItem extends ConsumerWidget {
   }
 }
 
-class _UnreadPill extends StatelessWidget {
-  const _UnreadPill({required this.count});
-  final int count;
+class SidebarChannelTile extends StatelessWidget {
+  const SidebarChannelTile({super.key, required this.geohash, this.svg});
+
+  final bool geohash;
+  final String? svg;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Container(
-      constraints: const BoxConstraints(minWidth: 30),
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: c.primary,
-        borderRadius: const BorderRadius.all(Radius.circular(20)),
-      ),
-      child: Text(
-        count > 99 ? '99+' : '$count',
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: c.bg,
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          fontFeatures: const [FontFeature.tabularFigures()],
+    return ExcludeSemantics(
+      child: Container(
+        key: const ValueKey('sidebarLead'),
+        width: kSidebarIcon,
+        height: kSidebarIcon,
+        alignment: Alignment.center,
+        child: Container(
+          key: const ValueKey('channelTile'),
+          width: kSidebarIcon,
+          height: kSidebarIcon,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: c.primaryA(0.14),
+            borderRadius:
+                const BorderRadius.all(Radius.circular(kSidebarIcon * 10 / 36)),
+          ),
+          child: NymSvgIcon(svg ?? channelGlyphSvg(geohash: geohash),
+              size: kSidebarIcon / 2, color: c.primary),
         ),
       ),
     );
@@ -324,7 +346,7 @@ class _ChannelLocationLineState extends ConsumerState<_ChannelLocationLine>
     final style = TextStyle(
       color: c.textDim,
       fontSize: widget.textSize - 3,
-      height: 1.25,
+      height: kSidebarSubLine / (widget.textSize - 3),
     );
     // Only the city half ellipsizes, so a narrow row keeps the country.
     final splitIdx = _place != null ? text.lastIndexOf(', ') : -1;

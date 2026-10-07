@@ -8,6 +8,7 @@ import '../../services/nostr/event_mapper.dart';
 import '../nymbot/bot_runs.dart' show botReplyToFromTags;
 import '../p2p/p2p_models.dart';
 import 'pm_support_tokens.dart';
+import 'upload_activity.dart';
 
 /// Socket-free NIP-17 PM logic: rumor construction, rumor-to-[Message] mapping, receipt and typing parsing.
 class PmLogic {
@@ -223,6 +224,7 @@ class PmLogic {
       groupId: groupId,
       pubkey: rumor['pubkey'] as String?,
       ttlSec: ttl > 0 ? ttl : 0,
+      activity: UploadActivity.decode(rumor['tags'])?.activity,
     );
   }
 
@@ -288,7 +290,12 @@ class ReceiptInfo {
 }
 
 class TypingInfo {
-  TypingInfo({required this.status, this.groupId, this.pubkey, this.ttlSec = 0});
+  TypingInfo(
+      {required this.status,
+      this.groupId,
+      this.pubkey,
+      this.ttlSec = 0,
+      this.activity});
 
   /// 'start' | 'stop'.
   final String status;
@@ -296,6 +303,8 @@ class TypingInfo {
   final String? pubkey;
 
   final int ttlSec;
+
+  final String? activity;
 
   bool get isStart => status == 'start';
 }

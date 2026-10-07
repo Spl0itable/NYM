@@ -4,6 +4,8 @@ import '../common/keyboard_inset_dialog.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/i18n/i18n.dart';
+import '../common/nym_sheet.dart';
+import '../common/nym_field.dart';
 
 /// Report modal; [onSubmit] is wired to the NIP-56 kind-1984 report publish.
 class ReportModal extends StatefulWidget {
@@ -37,14 +39,14 @@ class ReportModal extends StatefulWidget {
     bool hasMessage = false,
     void Function(String type, String details, bool reportMessage)? onSubmit,
   }) {
-    return showDialog<bool>(
-      context: context,
-      barrierColor: const Color(0xB3000000),
-      builder: (_) => ReportModal(
+    return showNymSheet<bool>(
+      context,
+      (_) => ReportModal(
         targetNym: targetNym,
         hasMessage: hasMessage,
         onSubmit: onSubmit,
       ),
+      barrierColor: const Color(0xB3000000),
     );
   }
 
@@ -66,186 +68,178 @@ class _ReportModalState extends State<ReportModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return KeyboardInsetDialog(
-      child: Container(
-        // Cap height so the inner scroll view scrolls instead of overflowing on short screens.
-        constraints: BoxConstraints(
-          maxWidth: 500,
-          maxHeight: MediaQuery.of(context).size.height * 0.9,
-        ),
-        width: MediaQuery.of(context).size.width * 0.9,
-        margin: const EdgeInsets.all(16),
-        padding: const EdgeInsets.all(32),
-        decoration: BoxDecoration(
-          color: c.bgSecondary,
-          border: Border.all(color: c.glassBorder),
-          borderRadius: NymRadius.rxl,
-          boxShadow: c.isLight
-              ? const [
-                  BoxShadow(
-                    color: Color(0x1F000000),
-                    blurRadius: 40,
-                    offset: Offset(0, 8),
+    final body = Material(
+      type: MaterialType.transparency,
+      child: Stack(
+        children: [
+          SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(bottom: 24),
+                  padding: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                    border:
+                        Border(bottom: BorderSide(color: c.glassBorder)),
                   ),
-                ]
-              : [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.5),
-                    blurRadius: 32,
-                    offset: const Offset(0, 8),
+                  child: Text(tr('REPORT USER/CONTENT'),
+                      style: TextStyle(
+                          color: c.primary,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.5)),
+                ),
+                Text.rich(TextSpan(children: [
+                  TextSpan(
+                      text: tr('Reporting: '),
+                      style: TextStyle(color: c.textDim, fontSize: 15)),
+                  TextSpan(
+                      text: widget.targetNym,
+                      style: TextStyle(color: c.primary, fontSize: 15)),
+                ])),
+                const SizedBox(height: 15),
+                Text(tr('Report Type:'),
+                    style: TextStyle(color: c.textDim, fontSize: 15)),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  decoration: BoxDecoration(
+                    color: c.insetFill,
+                    border: Border.all(color: c.insetBorder),
+                    borderRadius: NymRadius.rsm,
                   ),
-                  BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
-                  BoxShadow(
-                      color: Colors.white.withValues(alpha: 0.05),
-                      spreadRadius: 1),
-                ],
-        ),
-        // `showDialog` inserts no Material, so this transparent one supplies the ink/text-style ancestor.
-        child: Material(
-          type: MaterialType.transparency,
-          child: Stack(
-            children: [
-              SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  child: DropdownButton<String>(
+                    value: _type,
+                    isExpanded: true,
+                    underline: const SizedBox.shrink(),
+                    dropdownColor: c.bgSecondary,
+                    style: TextStyle(color: c.text, fontSize: 15),
+                    items: [
+                      for (final t in ReportModal.types)
+                        DropdownMenuItem(
+                            value: t.$1, child: Text(tr(t.$2))),
+                    ],
+                    onChanged: (v) => setState(() => _type = v ?? _type),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text.rich(TextSpan(
+                  text: tr('Additional Details'),
+                  style: TextStyle(color: c.textDim, fontSize: 15),
                   children: [
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 24),
-                      padding: const EdgeInsets.only(bottom: 14),
-                      decoration: BoxDecoration(
-                        border:
-                            Border(bottom: BorderSide(color: c.glassBorder)),
-                      ),
-                      child: Text(tr('REPORT USER/CONTENT'),
-                          style: TextStyle(
-                              color: c.primary,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.5)),
+                    TextSpan(
+                      text: tr(' (optional)'),
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w400, letterSpacing: 0),
                     ),
-                    Text.rich(TextSpan(children: [
-                      TextSpan(
-                          text: tr('Reporting: '),
-                          style: TextStyle(color: c.textDim, fontSize: 15)),
-                      TextSpan(
-                          text: widget.targetNym,
-                          style: TextStyle(color: c.primary, fontSize: 15)),
-                    ])),
-                    const SizedBox(height: 15),
-                    Text(tr('Report Type:'),
-                        style: TextStyle(color: c.textDim, fontSize: 15)),
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      decoration: BoxDecoration(
-                        color: c.insetFill,
-                        border: Border.all(color: c.insetBorder),
-                        borderRadius: NymRadius.rsm,
-                      ),
-                      child: DropdownButton<String>(
-                        value: _type,
-                        isExpanded: true,
-                        underline: const SizedBox.shrink(),
-                        dropdownColor: c.bgSecondary,
-                        style: TextStyle(color: c.text, fontSize: 15),
-                        items: [
-                          for (final t in ReportModal.types)
-                            DropdownMenuItem(
-                                value: t.$1, child: Text(tr(t.$2))),
-                        ],
-                        onChanged: (v) => setState(() => _type = v ?? _type),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Text.rich(TextSpan(
-                      text: tr('Additional Details'),
-                      style: TextStyle(color: c.textDim, fontSize: 15),
-                      children: [
-                        TextSpan(
-                          text: tr(' (optional)'),
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w400, letterSpacing: 0),
-                        ),
-                        const TextSpan(text: ':'),
-                      ],
-                    )),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _details,
-                      maxLines: 4,
-                      style: TextStyle(color: c.inputText, fontSize: 15),
-                      decoration: InputDecoration(
-                        hintText: tr(
+                    const TextSpan(text: ':'),
+                  ],
+                )),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _details,
+                  maxLines: 4,
+                  style: TextStyle(color: c.inputText, fontSize: 15),
+                  decoration: NymField.decoration(c,
+                        hint: tr(
                             'Provide any additional context for this report...'),
-                        hintStyle: TextStyle(color: c.textDim),
-                        isDense: true,
-                        contentPadding: const EdgeInsets.all(10),
-                        filled: true,
-                        fillColor: c.insetFill,
-                        border: OutlineInputBorder(
-                          borderRadius: NymRadius.rsm,
-                          borderSide: BorderSide(color: c.insetBorder),
-                        ),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: NymRadius.rsm,
-                          borderSide: BorderSide(color: c.insetBorder),
+                        contentPadding: const EdgeInsets.all(10)),
+                ),
+                const SizedBox(
+                    height: 15),
+                InkWell(
+                  onTap: widget.hasMessage
+                      ? () =>
+                          setState(() => _reportMessage = !_reportMessage)
+                      : null,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: Checkbox(
+                          value: _reportMessage,
+                          onChanged: widget.hasMessage
+                              ? (v) => setState(
+                                  () => _reportMessage = v ?? false)
+                              : null,
+                          activeColor: c.primary,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
                         ),
                       ),
-                    ),
-                    const SizedBox(
-                        height: 15),
-                    InkWell(
-                      onTap: widget.hasMessage
-                          ? () =>
-                              setState(() => _reportMessage = !_reportMessage)
-                          : null,
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: Checkbox(
-                              value: _reportMessage,
-                              onChanged: widget.hasMessage
-                                  ? (v) => setState(
-                                      () => _reportMessage = v ?? false)
-                                  : null,
-                              activeColor: c.primary,
-                              materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
-                              visualDensity: VisualDensity.compact,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              tr('Report specific message (if unchecked, reports the user profile)'),
-                              style: TextStyle(color: c.textDim, fontSize: 15),
-                            ),
-                          ),
-                        ],
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          tr('Report specific message (if unchecked, reports the user profile)'),
+                          style: TextStyle(color: c.textDim, fontSize: 15),
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 15),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _cancelBtn(c),
-                        const SizedBox(width: 10),
-                        _submitBtn(c),
-                      ],
-                    ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 15),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _cancelBtn(c),
+                    const SizedBox(width: 10),
+                    _submitBtn(c),
                   ],
                 ),
-              ),
-              // The Stack sits inside the 32px content padding, so -18 lands the chip 14px from the edge.
-              Positioned(
-                top: -18,
-                right: -18,
-                child: _closeButton(c),
-              ),
-            ],
+              ],
+            ),
+          ),
+          Positioned(
+            top: -18,
+            right: -18,
+            child: _closeButton(c),
+          ),
+        ],
+      ),
+    );
+    return NymDiscardGuard(
+      isDirty: () => _details.text.trim().isNotEmpty,
+      child: nymSheetOr(
+        context,
+        Padding(padding: const EdgeInsets.fromLTRB(24, 0, 24, 20), child: body),
+        (body) => KeyboardInsetDialog(
+          child: Container(
+            constraints: BoxConstraints(
+              maxWidth: 500,
+              maxHeight: MediaQuery.of(context).size.height * 0.9,
+            ),
+            width: MediaQuery.of(context).size.width * 0.9,
+            margin: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: c.bgSecondary,
+              border: Border.all(color: c.glassBorder),
+              borderRadius: NymRadius.rxl,
+              boxShadow: c.isLight
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x1F000000),
+                        blurRadius: 40,
+                        offset: Offset(0, 8),
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.5),
+                        blurRadius: 32,
+                        offset: const Offset(0, 8),
+                      ),
+                      BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
+                      BoxShadow(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          spreadRadius: 1),
+                    ],
+            ),
+            child: body,
           ),
         ),
       ),
@@ -259,7 +253,7 @@ class _ReportModalState extends State<ReportModal> {
 
   Widget _closeButton(NymColors c) {
     return InkWell(
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: () => Navigator.of(context).pop(),
       borderRadius: const BorderRadius.all(Radius.circular(16)),
       child: Container(
         width: 32,
@@ -270,15 +264,14 @@ class _ReportModalState extends State<ReportModal> {
           color: c.subtleFill,
           border: Border.all(color: c.glassBorder),
         ),
-        child: Text('✕',
-            style: TextStyle(color: c.textDim, fontSize: 16, height: 1)),
+        child: Icon(Icons.close, size: 16, color: c.textDim),
       ),
     );
   }
 
   Widget _cancelBtn(NymColors c) {
     return InkWell(
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: () => Navigator.of(context).pop(),
       borderRadius: NymRadius.rxs,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),

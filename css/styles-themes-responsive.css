@@ -56,11 +56,11 @@ body.light-mode.chat-bubbles .read-more-btn {
 }
 
 body.light-mode div.message-input:empty::before {
-    color: rgba(0, 0, 0, 0.4);
+    color: var(--field-placeholder);
 }
 
 body.light-mode div.message-input {
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--field-bg);
 }
 
 @media (max-width: 768px) {
@@ -114,38 +114,39 @@ body.light-mode .verified-badge::before {
     }
 
     .geohash-info-panel {
-        position: fixed;
-        bottom: 60px;
         top: auto;
         right: 10px;
         left: 10px;
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+        width: auto;
         max-width: none;
+        max-height: max(200px, calc(100% - 340px));
     }
 
-    .geohash-controls {
-        bottom: 10px;
-        left: 10px;
-    }
-
-    .geohash-controls.geohash-controls-tl {
+    .gx-search {
         top: 10px;
         left: 10px;
-        bottom: auto;
+        width: auto;
+        right: 62px;
     }
 
-    .geohash-legend {
-        bottom: 10px;
+    .gx-controls {
+        top: 10px;
         right: 10px;
-        font-size: 9px;
-        padding: 0px 14px;
     }
 
-    .geohash-window-group {
-        display: none;
+    .gx-layers {
+        top: 166px;
+        right: 62px;
     }
 
-    .geohash-window-select {
-        display: inline-block;
+    .gx-lists {
+        left: 10px;
+        right: 62px;
+        top: auto;
+        width: auto;
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+        height: max(220px, 42%);
     }
 
     pre {
@@ -179,6 +180,8 @@ body.light-mode .verified-badge::before {
         height: 100%;
         z-index: 9999;
         transform: translateX(-100%);
+        visibility: hidden;
+        transition: transform 0.15s linear, visibility 0s linear 0.15s;
         width: 300px;
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
@@ -187,13 +190,49 @@ body.light-mode .verified-badge::before {
         border-left: 1px solid var(--glass-border);
     }
 
-    .sidebar-header {
-        border-bottom: 0px;
-    }
-
     .sidebar.open {
         transform: translateX(0);
-        box-shadow: 10px 0 40px rgba(0, 0, 0, 0.5);
+        box-shadow: none;
+        visibility: visible;
+        transition: transform 0.15s linear, visibility 0s;
+    }
+
+    #sidebar {
+        width: 100%;
+        max-width: none;
+        border-left: none;
+        border-right: none;
+        height: calc(100dvh - var(--keyboard-inset, 0px));
+    }
+
+    .mobile-overlay.active {
+        display: none;
+    }
+
+    #groupContextMenu {
+        width: 100%;
+        max-width: 100%;
+        border-left: none;
+    }
+
+    #groupContextMenu.active {
+        box-shadow: none;
+    }
+
+    #groupContextMenuOverlay {
+        display: none;
+    }
+
+    #identityNotifBtn {
+        display: flex;
+    }
+
+    #notificationsBtnMobile {
+        display: none;
+    }
+
+    .sidebar-actions .menu-grid {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
     }
 
     .sidebar-actions {
@@ -237,7 +276,8 @@ body.light-mode .verified-badge::before {
         overflow-x: hidden;
         padding-left: 5px;
         padding-right: 5px;
-        padding-bottom: 10px;
+        --list-pad-b: 10px;
+        padding-bottom: var(--list-pad-b);
     }
 
     .main-container {
@@ -346,10 +386,6 @@ body.light-mode .verified-badge::before {
         grid-template-columns: repeat(2, 1fr);
     }
 
-    .msg-hover-buttons {
-        display: none;
-    }
-
     .message {
         flex-direction: column;
         gap: 5px;
@@ -436,19 +472,19 @@ body.light-mode .verified-badge::before {
         height: 100dvh;
         z-index: 9999;
         transform: translateX(-100%);
+        visibility: hidden;
+        transition: transform 0.15s linear, visibility 0s linear 0.15s;
         width: 300px;
         overflow-y: auto;
         -webkit-overflow-scrolling: touch;
         border-left: 1px solid var(--glass-border);
     }
 
-    .sidebar-header {
-        border-bottom: 0px;
-    }
-
     .sidebar.open {
         transform: translateX(0);
         box-shadow: 10px 0 40px rgba(0, 0, 0, 0.5);
+        visibility: visible;
+        transition: transform 0.15s linear, visibility 0s;
     }
 
     .sidebar-actions {
@@ -505,6 +541,7 @@ body.theme-ghost::before {
 
 body.light-mode {
     color-scheme: light;
+    --msg-text: #4a4a4a;
     --bg: #f5f5f2;
     --bg-secondary: rgba(255, 255, 255, 0.85);
     --bg-tertiary: rgba(240, 240, 237, 0.9);
@@ -538,14 +575,14 @@ body.light-mode .shop-content {
     }
 }
 
-body.light-mode input,
-body.light-mode textarea,
+body.light-mode input:not(.nm-field *),
+body.light-mode textarea:not(.nm-field *),
 body.light-mode select,
 body.light-mode .form-input,
 body.light-mode .form-select {
-    background: rgba(0, 0, 0, 0.04) !important;
+    background: var(--field-bg) !important;
     color: var(--text) !important;
-    border-color: rgba(0, 0, 0, 0.1) !important;
+    border-color: var(--field-border) !important;
 }
 
 input,
@@ -713,11 +750,11 @@ body.light-mode.theme-ghost {
     --primary: #333333;
     --secondary: #555555;
     --text: #222222;
-    --text-dim: #777777;
+    --text-dim: #696969;
     --text-bright: #000000;
     --border: #999999;
     --warning: #666666;
-    --danger: #888888;
+    --danger: #cc0000;
     --purple: #777777;
     --blue: #666666;
     --lightning: #999999;
@@ -1146,9 +1183,10 @@ body.light-mode .search-input:focus,
 body.light-mode .form-input:focus,
 body.light-mode .form-select:focus,
 body.light-mode .form-textarea:focus,
-body.light-mode .bio-input-wrap textarea:focus {
-    box-shadow: 0 0 0 3px rgb(from var(--primary) r g b / 0.1) !important;
-    border-color: rgb(from var(--primary) r g b / 0.3) !important;
+body.light-mode .bio-input-wrap textarea:focus,
+body.light-mode :is(input:not([type]), input[type="text"], input[type="search"], input[type="password"], input[type="number"], input[type="email"], input[type="url"], input[type="tel"], textarea):not(.nm-field *):focus {
+    box-shadow: var(--field-ring) !important;
+    border-color: var(--field-border-focus) !important;
 }
 
 body.light-mode ::-webkit-scrollbar-track {
@@ -1283,8 +1321,9 @@ body.light-mode .mobile-notif-toggle {
     border-color: rgba(0, 0, 0, 0.08);
 }
 
-body.light-mode .sidebar-header {
-    background: rgba(255, 255, 255, 0.3);
+body.light-mode .sidebar-header,
+body.light-mode .sidebar-footer {
+    background: linear-gradient(var(--sb-tint), var(--sb-tint)), linear-gradient(var(--bg-secondary), var(--bg-secondary)), var(--bg);
 }
 
 body.light-mode .messages-container {
@@ -1300,23 +1339,40 @@ body.light-mode .emoji-picker-search {
 }
 
 body.light-mode .nym-display {
-    background: rgba(0, 0, 0, 0.04);
-    border-color: rgba(0, 0, 0, 0.08);
+    background: transparent;
+    border-color: transparent;
 }
 
 body.light-mode .nym-display:hover {
-    background: rgba(0, 0, 0, 0.07);
+    background: rgba(0, 0, 0, 0.05);
 }
 
-body.light-mode .acct-switch-btn {
-    background: rgba(0, 0, 0, 0.04);
-    border-color: rgba(0, 0, 0, 0.08);
+
+body.light-mode .header-actions .icon-btn.header-icon-btn {
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-dim);
 }
 
-body.light-mode .acct-switch-btn:hover,
-body.light-mode .acct-switch-btn:focus-visible {
-    background: rgba(0, 0, 0, 0.07);
-    border-color: rgb(from var(--primary) r g b / 0.3);
+body.light-mode .header-actions .icon-btn.header-icon-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: transparent;
+    color: var(--primary);
+}
+
+body.light-mode .header-more-menu {
+    background: rgba(255, 255, 255, 0.97);
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .sidebar-actions .menu-tile {
+    background: transparent;
+    border-color: transparent;
+}
+
+body.light-mode .sidebar-actions .menu-tile:hover {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: transparent;
 }
 
 @media (hover: hover) {

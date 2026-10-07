@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'dart:typed_data';
 
 import '../../core/crypto/bech32_codec.dart' as bech32;
@@ -107,6 +108,71 @@ class PanicIdentityPurge {
   }
 
   int get expected => identities.where((i) => i.pubkey.isNotEmpty).length;
+
+  Iterable<PanicIdentity> get _deletable => identities.where(
+      (i) => i.pubkey.isNotEmpty && (i.active || i.method != 'anonymous'));
+
+  Future<bool> _usable(PanicIdentity identity) async {
+    try {
+      final nsec = await storedNsec(identity.id);
+      if (nsec != null && nsec.startsWith('nsec1')) {
+        final own = keys.getPublicKeyHex(bech32.decodeNsec(nsec));
+        return own.toLowerCase() == identity.pubkey.toLowerCase();
+      }
+    } catch (_) {}
+    return identity.active && purgeActive != null;
+  }
+
+  Future<({int usable, int blocked})> plan() async {
+    var usable = 0;
+    var blocked = 0;
+    for (final i in _deletable) {
+      if (await _usable(i)) {
+        usable++;
+      } else {
+        blocked++;
+      }
+    }
+    return (usable: usable, blocked: blocked);
+  }
+
+  Future<({int missed, List<String> done})> oneByOne({
+    required Duration Function() gap,
+    void Function(int done, int total)? onProgress,
+    Random? random,
+  }) async {
+    final ready = <PanicIdentity>[];
+    final done = <String>[];
+    var missed = 0;
+    for (final i in _deletable) {
+      if (await _usable(i)) {
+        ready.add(i);
+      } else {
+        missed++;
+      }
+    }
+    ready.shuffle(random ?? Random.secure());
+    for (var n = 0; n < ready.length; n++) {
+      if (n > 0) {
+        final wait = gap();
+        if (wait > Duration.zero) await Future<void>.delayed(wait);
+      }
+      onProgress?.call(n + 1, ready.length);
+      var ok = false;
+      try {
+        final launched = await _launch(ready[n]);
+        ok = launched != null && await launched.done;
+      } catch (_) {
+        ok = false;
+      }
+      if (ok) {
+        done.add(ready[n].pubkey.toLowerCase());
+      } else {
+        missed++;
+      }
+    }
+    return (missed: missed, done: done);
+  }
 
   Future<({Future<bool> done})?> _launch(PanicIdentity identity) async {
     if (!identity.active && identity.method == 'anonymous') {

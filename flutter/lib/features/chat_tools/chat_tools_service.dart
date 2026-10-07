@@ -192,8 +192,31 @@ class ChatToolsService {
     return SaveResult.saved;
   }
 
-  void removeSavedEntry(String id) {
-    _persistSaved(removeSaved(savedState(), id, _nowMs));
+  Map<String, dynamic>? removeSavedEntry(String id) {
+    final before = savedState();
+    Map<String, dynamic>? entry;
+    for (final e in before['items'] as List<Map<String, dynamic>>) {
+      if (e['id'] == id) {
+        entry = jsonDecode(jsonEncode(e)) as Map<String, dynamic>;
+      }
+    }
+    _persistSaved(removeSaved(before, id, _nowMs));
+    _savedRev++;
+    _setPending(hooks.syncAllowed());
+    _changed();
+    unawaited(syncSaved());
+    return entry;
+  }
+
+  void restoreSavedEntry(Map<String, dynamic> entry) {
+    final id = entry['id'];
+    if (id is! String || id.isEmpty) return;
+    final state = savedState();
+    if (isSaved(state, id)) return;
+    final now = _nowMs;
+    final sv = entry['sv'] is num ? (entry['sv'] as num).toInt() + 1 : 0;
+    _persistSaved(addSaved(
+        state, {...entry, 'sv': now > sv ? now : sv}, now));
     _savedRev++;
     _setPending(hooks.syncAllowed());
     _changed();

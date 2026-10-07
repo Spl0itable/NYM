@@ -18,7 +18,7 @@ class NymIcons {
   /// Favorite star, outline only.
   static const String starOutline =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-      'stroke-linejoin="round">'
+      'stroke-linecap="round" stroke-linejoin="round">'
       '<path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 '
       'L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg>';
 
@@ -31,8 +31,10 @@ class NymIcons {
 
   /// Filled "share nodes" glyph, not the iOS share box.
   static const String shareNodes =
-      '<svg viewBox="0 0 24 24" fill="currentColor">'
-      '<path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>';
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>'
+      '<line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
 
   /// Concentric sweep rings for the mesh ping button (measures a round trip).
   static const String radar =
@@ -60,11 +62,14 @@ class NymIcons {
       '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>'
       '<path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
 
-  /// Feather star polygon, distinct from the favorite button's custom star.
-  static const String starFlair =
+  static const String store =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
       'stroke-linecap="round" stroke-linejoin="round">'
-      '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+      '<path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"/>'
+      '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>'
+      '<path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"/>'
+      '<path d="M2 7h20"/>'
+      '<path d="M22 7v3a2 2 0 0 1-2 2 2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"/></svg>';
 
   static const String settings =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -149,6 +154,12 @@ class NymIcons {
       '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>'
       '<circle cx="8.5" cy="8.5" r="1.5"/>'
       '<polyline points="21 15 16 10 5 21"/></svg>';
+
+  static const String ghost =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<path d="M5 21V10a7 7 0 0 1 14 0v11l-2.33-2-2.34 2L12 19l-2.33 2-2.34-2Z"/>'
+      '<path d="M9.5 10.5h.01M14.5 10.5h.01"/></svg>';
 
   static const String bluetooth =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
@@ -474,6 +485,16 @@ class NymIcons {
       '<line x1="9" y1="9" x2="9.01" y2="9"/>'
       '<line x1="15" y1="9" x2="15.01" y2="9"/></svg>';
 
+  static const String channelBubble =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>';
+
+  static const String geohashPin =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
+
   static const String callChat =
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
       'stroke-linecap="round" stroke-linejoin="round">'
@@ -493,6 +514,18 @@ class NymIcons {
       '<path d="M15.5 12.5a3.5 3.5 0 0 1-5.6 2.8M8.5 11.5a3.5 3.5 0 0 1 5.6-2.8"/>'
       '<polyline points="14.5 6 14.1 8.7 11.5 8.3"/>'
       '<polyline points="9.5 19 9.9 16.3 12.5 16.7"/></svg>';
+
+  static const String callSpeaker =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>'
+      '<path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+
+  static const String callHeadset =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+      'stroke-linecap="round" stroke-linejoin="round">'
+      '<path d="M3 18v-6a9 9 0 0 1 18 0v6"/>'
+      '<path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>';
 
   static const String send = '<svg viewBox="0 0 24 24" fill="currentColor">'
       '<path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>';
@@ -577,6 +610,11 @@ class NymIcons {
       '<circle cx="12" cy="12" r="1.8"/>'
       '<circle cx="12" cy="19" r="1.8"/></svg>';
 
+  static final String rowMenuOutline = rowMenu
+      .replaceFirst('fill="currentColor"',
+          'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"')
+      .replaceAll('r="1.8"', 'r="1"');
+
   static const String dragHandle = '<svg viewBox="0 0 24 24" fill="currentColor">'
       '<circle cx="9" cy="6" r="1.4"/>'
       '<circle cx="15" cy="6" r="1.4"/>'
@@ -590,6 +628,9 @@ class NymIcons {
       '<line x1="18" y1="6" x2="6" y2="18"/>'
       '<line x1="6" y1="6" x2="18" y2="18"/></svg>';
 }
+
+String channelGlyphSvg({required bool geohash}) =>
+    geohash ? NymIcons.geohashPin : NymIcons.channelBubble;
 
 class NymSvgIcon extends StatelessWidget {
   const NymSvgIcon(

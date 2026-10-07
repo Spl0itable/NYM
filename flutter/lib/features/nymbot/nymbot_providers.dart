@@ -22,6 +22,7 @@ import '../../state/nostr_controller.dart' show nostrControllerProvider;
 import '../../state/settings_provider.dart';
 import '../../widgets/context_menu/interaction_hooks.dart'
     show giftCreditsRequestProvider;
+import '../ai_consent/ai_consent.dart';
 import '../i18n/localization_service.dart';
 import '../i18n/i18n.dart';
 import '../pms/pm_logic.dart';
@@ -918,6 +919,10 @@ class BotChatController extends StateNotifier<BotChatState> {
       await handleBotPMCommand(trimmed);
       return;
     }
+    if (!await AiConsent.instance.ensure()) {
+      _systemFeed(AiConsentStrings.offNotice);
+      return;
+    }
     String? thread = threadRoot == null || threadRoot.isEmpty ? null : threadRoot;
     if (threadRoot == null && appThreadsEnabled) {
       final at = _ref.read(activeThreadProvider);
@@ -1183,6 +1188,10 @@ class BotChatController extends StateNotifier<BotChatState> {
   }
 
   Future<void> _runBotExchange(Message m, {String? wrapId}) async {
+    if (!await AiConsent.instance.ensure()) {
+      _systemFeed(AiConsentStrings.offNotice);
+      return;
+    }
     final anonId = anon.ready ? anon.identity : null;
     if (_pubkey == null) {
       _system(
@@ -1337,12 +1346,22 @@ class BotChatController extends StateNotifier<BotChatState> {
   /// Open-time refresh convenience.
   Future<void> refreshBalance() => checkBotCredits(display: false);
 
+  void applySyncedAnonEnabled(bool on) {
+    anon.setEnabled(on);
+    if (mounted) {
+      state = state.copyWith(anonEnabled: on, anonPubkey: anon.pubkey);
+    }
+  }
+
   Future<void> setAnonEnabled(bool on) async {
     anon.setEnabled(on);
     unawaited(_prefs.then((p) => p.setString(_kAnonPref, on ? 'true' : 'false')));
     if (mounted) {
       state = state.copyWith(anonEnabled: on, anonPubkey: anon.pubkey);
     }
+    try {
+      _ref.read(settingsProvider.notifier).notifySyncedChange();
+    } catch (_) {}
     if (on) unawaited(anon.flush());
     await checkBotCredits(display: false);
   }

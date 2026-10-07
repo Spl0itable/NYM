@@ -166,6 +166,7 @@
     // With opts.checkboxLabel resolves to { confirmed, checked }; otherwise to a boolean.
     window.showAppConfirm = function (message, opts) {
         opts = opts || {};
+        if (opts.danger && window.nymHaptic) window.nymHaptic('medium');
         return open({
             message: message,
             title: opts.title,

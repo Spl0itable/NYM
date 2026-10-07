@@ -150,6 +150,9 @@
             }
             this._clRenderLockedModal();
             this._clUpdateShield();
+            if (typeof this._chRenderBadges === 'function') {
+                try { this._chRenderBadges(); this._chRefreshIfOpen(); } catch (_) { }
+            }
         },
 
         async _clSync() {
@@ -484,7 +487,7 @@
                     ${o.fields.map((f) => `<div class="form-group"><input id="${f.id}" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(f.label)}" aria-label="${esc(f.label)}" class="form-input"></div>`).join('')}
                     <p class="form-hint cl-error" role="alert">${esc(o.error || '')}</p></div>
                     <div class="modal-actions">
-                    <button type="button" class="icon-btn" data-cl="cancel">${esc(this._cl('Cancel'))}</button>
+                    <button type="button" class="icon-btn" data-cl="cancel" data-sheet-close>${esc(this._cl('Cancel'))}</button>
                     ${o.alt ? `<button type="button" class="icon-btn" data-cl="alt">${esc(o.alt)}</button>` : ''}
                     <button type="button" class="send-btn" data-cl="ok">${esc(o.ok)}</button></div>`;
                 ov.appendChild(box);
@@ -532,6 +535,7 @@
             el.title = this._cl(L().STRINGS.lockedChats);
             el.setAttribute('aria-label', this._cl(L().STRINGS.lockedChats));
             el.setAttribute('role', 'button');
+            el.tabIndex = 0;
             el.innerHTML = ICON_LOCK + '<span class="cl-entry-badge nm-hidden"></span>';
             const anchor = title.querySelector('.new-pm-btn');
             if (anchor) title.insertBefore(el, anchor);
@@ -978,6 +982,7 @@
             clChangePasscode: function () { nym().chatLockChangePasscode(); },
             onScreenSecurityChange: function (_e, t) { nym().setScreenSecurity(t.value === 'on'); },
             onIncognitoKeyboardChange: function (_e, t) { nym().setIncognitoKeyboard(t.value === 'on'); },
+            onFallbackNoticeChange: function (_e, t) { nym().setFallbackNoticeEnabled(t.value === 'on'); },
         });
         let tries = 0;
         const boot = () => {

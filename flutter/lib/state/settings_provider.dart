@@ -11,7 +11,9 @@ import '../models/settings.dart';
 import '../services/storage/key_value_store.dart';
 import '../services/attest/attest_badge.dart';
 import '../services/filter/filter_packs.dart';
-import 'app_state.dart' show appThreadsEnabled;
+import '../features/sync/pref_stamps.dart';
+import 'app_state.dart'
+    show appSpamFilterAggressive, appSpamFilterEnabled, appThreadsEnabled;
 
 /// Provides the opened [KeyValueStore]; overridden in `main()` because SharedPreferences opens asynchronously.
 final keyValueStoreProvider = Provider<KeyValueStore>((ref) {
@@ -209,7 +211,6 @@ class SettingsController extends StateNotifier<Settings> {
     }
   }
 
-  /// Spam filter master switch (default true); device-local, never synced.
   bool get spamFilterEnabled =>
       _kv.getBool(StorageKeys.spamFilterEnabled, defaultValue: true);
 
@@ -222,6 +223,17 @@ class SettingsController extends StateNotifier<Settings> {
 
   set spamFilterAggressive(bool v) =>
       _kv.setBool(StorageKeys.spamFilterAggressive, v);
+
+  void setSpamFilter({bool? enabled, bool? aggressive}) {
+    if (enabled != null) _kv.setBool(StorageKeys.spamFilterEnabled, enabled);
+    if (aggressive != null) {
+      _kv.setBool(StorageKeys.spamFilterAggressive, aggressive);
+    }
+    appSpamFilterEnabled = spamFilterEnabled;
+    appSpamFilterAggressive = spamFilterAggressive;
+    PrefStamps.touch(_kv, 'spamFilter');
+    _syncedChanged();
+  }
 
   void setAcceptPMs(String v) {
     _kv.setString(StorageKeys.acceptPms, v);
@@ -349,6 +361,37 @@ class SettingsController extends StateNotifier<Settings> {
   }
 
   bool get hideNonPinned => state.hideNonPinned;
+
+  void setInfoPanelOpen(bool v) {
+    _kv.setBool(StorageKeys.infoPanelOpen, v);
+    state = state.copyWith(infoPanelOpen: v);
+  }
+
+  void setColorfulMessages(bool v, {int? syncedTs}) {
+    _kv.setBool(StorageKeys.colorfulMessages, v);
+    state = state.copyWith(colorfulMessages: v);
+    _stampPref('colorfulMessages', syncedTs);
+  }
+
+  void setHidePreviews(bool v, {int? syncedTs}) {
+    _kv.setBool(StorageKeys.hidePreviews, v);
+    state = state.copyWith(hidePreviews: v);
+    _stampPref('hidePreviews', syncedTs);
+  }
+
+  void notePrefChanged(String name) {
+    PrefStamps.touch(_kv, name);
+    _syncedChanged();
+  }
+
+  void _stampPref(String name, int? syncedTs) {
+    if (syncedTs != null) {
+      PrefStamps.set(_kv, name, syncedTs);
+      return;
+    }
+    PrefStamps.touch(_kv, name);
+    _syncedChanged();
+  }
 
   void setGesturesEnabled(bool v) {
     _kv.setBool(StorageKeys.gesturesEnabled, v);

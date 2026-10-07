@@ -13,7 +13,7 @@
         'nym_chat_layout', 'nym_chat_view_mode', 'nym_nick_style',
         'nym_timestamps', 'nym_time_format', 'nym_date_format',
         'nym_ui_language', 'nym_ui_language_chosen', 'nym_translate_language',
-        'nym_connection_mode', 'nym_relay_url', 'nym_relay_direct_mode', 'nym_relay_direct_ack',
+        'nym_connection_mode', 'nym_relay_url', 'nym_relay_direct_mode', 'nym_relay_direct_ack', 'nym_relay_fallback_notice_off',
         'nym_low_data_mode', 'nym_mesh_ghost_mode', 'nym_tutorial_seen', 'nym_attest_authority',
         'nym_voice_speed', 'nym_sidebar_section_order', 'nym_sidebar_section_collapsed',
         'nym_settings_sections_collapsed'

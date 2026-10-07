@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../day_separators/day_separator.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
@@ -65,8 +66,46 @@ class ThreadView extends ConsumerStatefulWidget {
   ConsumerState<ThreadView> createState() => _ThreadViewState();
 }
 
+class _ThreadScroll extends ScrollController {
+  @override
+  ScrollPosition createScrollPosition(ScrollPhysics physics,
+          ScrollContext context, ScrollPosition? oldPosition) =>
+      _ThreadPosition(
+        physics: physics,
+        context: context,
+        initialPixels: initialScrollOffset,
+        keepScrollOffset: keepScrollOffset,
+        oldPosition: oldPosition,
+        debugLabel: debugLabel,
+      );
+}
+
+class _ThreadPosition extends ScrollPositionWithSingleContext {
+  _ThreadPosition({
+    required super.physics,
+    required super.context,
+    super.initialPixels,
+    super.keepScrollOffset,
+    super.oldPosition,
+    super.debugLabel,
+  });
+
+  @override
+  bool correctForNewDimensions(
+      ScrollMetrics oldPosition, ScrollMetrics newPosition) {
+    final end = newPosition.maxScrollExtent;
+    if (oldPosition.viewportDimension != newPosition.viewportDimension &&
+        oldPosition.extentAfter < 1 &&
+        (pixels - end).abs() > 0.01) {
+      correctPixels(end);
+      return false;
+    }
+    return super.correctForNewDimensions(oldPosition, newPosition);
+  }
+}
+
 class _ThreadViewState extends ConsumerState<ThreadView> {
-  final ScrollController _scroll = ScrollController();
+  final ScrollController _scroll = _ThreadScroll();
   int _lastReplyCount = -1;
 
   @override
@@ -189,9 +228,13 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
               controller: _scroll,
               padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
               children: [
-                if (root != null)
-                  row(root)
-                else
+                if (root != null) ...[
+                  DaySeparator(
+                    createdAt: root.createdAt,
+                    useBubbles: settings.useBubbles,
+                  ),
+                  row(root),
+                ] else
                   Padding(
                     padding: const EdgeInsets.all(16),
                     child: Text(
@@ -224,8 +267,17 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
                     ],
                   ),
                 ),
-                for (final m in replies) ...[
-                  row(m),
+                for (var i = 0; i < replies.length; i++) ...[
+                  if (!DayClock.instance.sameDay(
+                      i == 0
+                          ? (root?.createdAt ?? 0)
+                          : replies[i - 1].createdAt,
+                      replies[i].createdAt))
+                    DaySeparator(
+                      createdAt: replies[i].createdAt,
+                      useBubbles: settings.useBubbles,
+                    ),
+                  row(replies[i]),
                   const SizedBox(height: 3),
                 ],
               ],

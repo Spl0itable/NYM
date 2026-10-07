@@ -973,7 +973,9 @@ class RelayPoolProxy implements PoolTransport {
   /// Publishes a DM gift wrap via `["DM_EVENT",e]`.
   @override
   Future<int> publishDm(NostrEvent event) async {
-    if (_mustHold) return _held.hold((via) => via.publishDm(event));
+    if (_mustHold) {
+      return _held.hold((via) => via.publishDm(event), event: event);
+    }
     return _broadcast(PoolFrame.dmEvent(event));
   }
 

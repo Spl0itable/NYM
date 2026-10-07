@@ -9,7 +9,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/haptics.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../layout/layout_model.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../state/app_state.dart';
 import '../../widgets/chat/message_row.dart' show abbreviateNumber;
@@ -29,6 +31,8 @@ import 'call_service.dart';
 import 'call_signaling.dart';
 import 'call_state.dart';
 import '../chat_lock/chat_lock_providers.dart';
+import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 void showCallEmojiPicker(
   BuildContext context, {
@@ -216,6 +220,7 @@ class _CallOverlayState extends ConsumerState<CallOverlay> {
               presenterOpen: _presenterOpen,
               onMute: service.toggleMute,
               onCamera: service.toggleCamera,
+              onSpeaker: service.toggleSpeaker,
               onShare: service.toggleScreenShare,
               onReact: () => setState(() {
                 _reactionsOpen = !_reactionsOpen;
@@ -379,6 +384,19 @@ class _Grid extends StatelessWidget {
           seed: p.pubkey,
           sharing: p.sharing,
         ),
+      for (final pk in call.ringing)
+        Opacity(
+          key: ValueKey('callRinging-$pk'),
+          opacity: 0.4,
+          child: _Tile(
+            pubkey: pk,
+            label: pk == call.peerPubkey ? (call.peerNym ?? '') : '',
+            renderer: null,
+            hasVideo: false,
+            seed: pk,
+            ringing: true,
+          ),
+        ),
     ];
 
     final count = tiles.length;
@@ -434,6 +452,7 @@ class _Tile extends StatelessWidget {
     this.self = false,
     this.mirror = false,
     this.sharing = false,
+    this.ringing = false,
   });
 
   final String pubkey;
@@ -444,6 +463,7 @@ class _Tile extends StatelessWidget {
   final bool self;
   final bool mirror;
   final bool sharing;
+  final bool ringing;
 
   @override
   Widget build(BuildContext context) {
@@ -492,6 +512,12 @@ class _Tile extends StatelessWidget {
                 right: 8,
                 child:
                     _Badge(text: tr('Presenting'), color: c.primary, fg: c.bg),
+              ),
+            if (ringing)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: _Badge(text: tr('Ringing…'), color: c.textDim, fg: c.bg),
               ),
             // Pinned left and right to cap width; Align shrink-wraps the pill.
             Positioned(
@@ -610,10 +636,13 @@ class _FlyItemState extends State<_FlyItem>
       animation: _ctrl,
       builder: (context, child) {
         final t = _ctrl.value;
-        // Keyframes: y 0→-26 (12%)→-260 (100%) linear; scale and opacity reach 1 by 12%, fade out after 80%.
+        final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
         final double dy;
         final double scale;
-        if (t < 0.12) {
+        if (still) {
+          dy = 0;
+          scale = 1;
+        } else if (t < 0.12) {
           final k = t / 0.12;
           dy = -26 * k;
           scale = 0.6 + 0.4 * k;
@@ -826,9 +855,7 @@ class _ChatPanel extends ConsumerWidget {
                         color: c.textBright, fontWeight: FontWeight.w600)),
                 const Spacer(),
                 IconButton(
-                  icon: Text('✕',
-                      style:
-                          TextStyle(color: c.textDim, fontSize: 20, height: 1)),
+                  icon: Icon(Icons.close, size: 20, color: c.textDim),
                   onPressed: onClose,
                 ),
               ],
@@ -990,7 +1017,7 @@ class _ChatRow extends ConsumerWidget {
           () => _CallChatLongPressRecognizer(debugOwner: this),
           (r) => r
             ..onLongPressStart = (d) {
-              HapticFeedback.mediumImpact();
+              Haptics.selection();
               _openQuickReact(
                   context,
                   Rect.fromCenter(
@@ -1228,7 +1255,7 @@ class _Receipt extends ConsumerWidget {
         alignment: Alignment.centerRight,
         child: GestureDetector(
           onLongPress: () {
-            HapticFeedback.mediumImpact();
+            Haptics.selection();
             _showSeenBy(context, ref);
           },
           child: Padding(
@@ -1275,9 +1302,10 @@ class _Receipt extends ConsumerWidget {
       alignment: Alignment.centerRight,
       child: Padding(
         padding: const EdgeInsets.only(top: 2),
-        child: Text(
-          read ? '✓✓' : '✓',
-          style: TextStyle(color: read ? c.primary : c.textDim, fontSize: 11),
+        child: Icon(
+          read ? Icons.done_all : Icons.done,
+          size: 13,
+          color: read ? c.primary : c.textDim,
         ),
       ),
     );
@@ -1477,23 +1505,12 @@ class _InputRowState extends ConsumerState<_InputRow> {
                     minLines: 1,
                     maxLines: 4,
                     onChanged: _onChanged,
-                    decoration: InputDecoration(
-                      hintText: tr('Message'),
-                      hintStyle: TextStyle(color: c.textDim),
-                      filled: true,
-                      fillColor: c.bgTertiary,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 8),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide(color: c.border),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide(color: c.border),
-                      ),
-                    ),
+                    decoration: NymField.decoration(c,
+                        hint: tr('Message'),
+                        fontSize: 14,
+                        radius: BorderRadius.circular(10),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 8)),
                     onSubmitted: (t) {
                       // A mention pick completes the mention instead of sending.
                       if (_mentionMatches.isNotEmpty) {
@@ -1876,7 +1893,7 @@ class _SwitchCamButtonState extends State<_SwitchCamButton> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Tooltip(
+    return NymTooltip(
       message: widget.facingMode == 'environment'
           ? tr('Switch to front camera')
           : tr('Switch to rear camera'),
@@ -1920,6 +1937,7 @@ class _Controls extends StatelessWidget {
     required this.presenterOpen,
     required this.onMute,
     required this.onCamera,
+    required this.onSpeaker,
     required this.onShare,
     required this.onReact,
     required this.onPresenter,
@@ -1933,6 +1951,7 @@ class _Controls extends StatelessWidget {
   final bool presenterOpen;
   final VoidCallback onMute;
   final VoidCallback onCamera;
+  final VoidCallback onSpeaker;
   final VoidCallback onShare;
   final VoidCallback onReact;
   final VoidCallback onPresenter;
@@ -1942,7 +1961,6 @@ class _Controls extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final isVideo = call.kind == CallKind.video;
     // Transparent; the overlay's SafeArea already consumes the bottom inset.
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1957,16 +1975,31 @@ class _Controls extends StatelessWidget {
             active: call.muted,
             tooltip:
                 call.muted ? tr('Unmute microphone') : tr('Mute microphone'),
+            label: tr('Mute'),
             onTap: onMute,
           ),
-          if (isVideo)
+          if (call.isActiveCall)
             _CtrlBtn(
-              // Same glyph turns red when the camera is off.
+              key: const ValueKey('callCameraBtn'),
               svg: NymIcons.video,
-              active: call.cameraOff,
+              active: call.hasCamera && call.cameraOff,
               tooltip:
                   call.cameraOff ? tr('Turn on camera') : tr('Turn off camera'),
+              label: tr('Camera'),
               onTap: onCamera,
+            ),
+          if (call.canRouteAudio)
+            _CtrlBtn(
+              key: const ValueKey('callSpeakerBtn'),
+              svg: call.headset && !call.speakerOn
+                  ? NymIcons.callHeadset
+                  : NymIcons.callSpeaker,
+              selected: call.speakerOn,
+              tooltip: call.speakerOn
+                  ? tr('Turn off speaker')
+                  : tr('Turn on speaker'),
+              label: tr('Speaker'),
+              onTap: onSpeaker,
             ),
           _CtrlBtn(
             svg: NymIcons.callScreenShare,
@@ -1978,6 +2011,7 @@ class _Controls extends StatelessWidget {
                 : (call.canShareScreen
                     ? tr('Share screen')
                     : tr('Request to present')),
+            label: tr('Share'),
             onTap: onShare,
           ),
           // Mods only; badge shows pending requests.
@@ -1986,6 +2020,7 @@ class _Controls extends StatelessWidget {
               svg: NymIcons.callPresenter,
               active: presenterOpen,
               tooltip: tr('Presenter controls'),
+              label: tr('Presenter'),
               badge: call.presentRequests.length,
               onTap: onPresenter,
             ),
@@ -1993,12 +2028,14 @@ class _Controls extends StatelessWidget {
             svg: NymIcons.callReact,
             active: reactionsOpen,
             tooltip: tr('React'),
+            label: tr('React'),
             onTap: onReact,
           ),
           _CtrlBtn(
             svg: NymIcons.callChat,
             active: chatOpen,
             tooltip: tr('Chat'),
+            label: tr('Chat'),
             badge: call.chatUnread,
             onTap: onChat,
           ),
@@ -2007,6 +2044,7 @@ class _Controls extends StatelessWidget {
             svg: NymIcons.phone,
             rotation: 0.375,
             tooltip: tr('End call'),
+            label: tr('Leave'),
             background: c.danger,
             foreground: Colors.white,
             onTap: onEnd,
@@ -2019,10 +2057,13 @@ class _Controls extends StatelessWidget {
 
 class _CtrlBtn extends StatefulWidget {
   const _CtrlBtn({
+    super.key,
     required this.svg,
     required this.tooltip,
     required this.onTap,
+    this.label = '',
     this.active = false,
+    this.selected = false,
     this.requestMode = false,
     this.badge = 0,
     this.background,
@@ -2032,8 +2073,10 @@ class _CtrlBtn extends StatefulWidget {
 
   final String svg;
   final String tooltip;
+  final String label;
   final VoidCallback onTap;
   final bool active;
+  final bool selected;
   final bool requestMode;
   final int badge;
   final Color? background;
@@ -2052,15 +2095,40 @@ class _CtrlBtnState extends State<_CtrlBtn> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final bg = widget.background ?? (widget.active ? c.danger : c.bgTertiary);
-    final fg =
-        widget.foreground ?? (widget.active ? Colors.white : c.textBright);
+    final bg = widget.background ??
+        (widget.active
+            ? c.danger
+            : (widget.selected ? c.textBright : c.bgTertiary));
+    final fg = widget.foreground ??
+        (widget.active
+            ? Colors.white
+            : (widget.selected ? c.bgTertiary : c.textBright));
     final borderColor = widget.requestMode ? c.primary : c.border;
     final iconColor = widget.requestMode ? c.primary : fg;
-    return Tooltip(
+    final showLabel = widget.label.isNotEmpty &&
+        MediaQuery.sizeOf(context).width >= kCallLabelMin;
+    final button = _button(c, bg, borderColor, iconColor);
+    return NymTooltip(
       message: widget.tooltip,
-      // The whole stack, badge included, scales on hover.
-      child: MouseRegion(
+      child: showLabel
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                button,
+                const SizedBox(height: NymSpace.s1),
+                Text(
+                  widget.label,
+                  key: ValueKey('callLabel-${widget.label}'),
+                  style: TextStyle(color: c.textBright, fontSize: NymType.xs),
+                ),
+              ],
+            )
+          : button,
+    );
+  }
+
+  Widget _button(NymColors c, Color bg, Color borderColor, Color iconColor) {
+    return MouseRegion(
         onEnter: (_) => setState(() => _hover = true),
         onExit: (_) => setState(() => _hover = false),
         child: AnimatedScale(
@@ -2110,7 +2178,6 @@ class _CtrlBtnState extends State<_CtrlBtn> {
             ],
           ),
         ),
-      ),
     );
   }
 }

@@ -17,15 +17,18 @@ import '../../core/crypto/keys.dart' as keys;
 import '../../core/crypto/nym_sync_builder.dart';
 import '../../core/crypto/pow.dart';
 import '../../core/crypto/pq.dart' as pq;
+import '../../features/calls/call_signaling.dart';
 import '../../features/groups/wrap_outbox.dart';
 import '../../features/identity/pq_registry.dart';
 import '../../features/messages/server_quiet.dart';
 import '../../features/messages/trust_graph.dart';
+import '../../features/pms/upload_activity.dart';
 import '../../models/channel.dart' as ch;
 import '../../models/nostr_event.dart';
 import '../api/api_client.dart';
 import '../api/api_config.dart';
 import '../relay/dm_outbox.dart';
+import '../relay/queued_sends.dart';
 import '../relay/relay_message.dart';
 import 'event_provenance.dart';
 import '../relay/relay_pool.dart';
@@ -94,6 +97,17 @@ class GiftWrapUnwrapped {
   final bool isBitchat;
 
   int? get rumorKind => (rumor['kind'] as num?)?.toInt();
+
+  String? get recipient {
+    final tags = rawWrap?['tags'];
+    if (tags is! List) return null;
+    for (final t in tags) {
+      if (t is List && t.length > 1 && t[0] == 'p' && t[1] is String) {
+        return t[1] as String;
+      }
+    }
+    return null;
+  }
 
   int? get expiration {
     final tags = rawWrap?['tags'];
@@ -424,6 +438,7 @@ class NostrService {
   Future<int> _sendDm(NostrEvent e) async {
     final via = pool;
     final n = await via.publishDm(e);
+    if (n > 0) QueuedSends.instance.release(e.id);
     if (n > 0 && _pool is! RelayPoolProxy) _dmOutbox.confirm(e.id);
     return n;
   }
@@ -968,11 +983,14 @@ class NostrService {
   }
 
   /// Proxy unreachable: swap to direct and start the background restore.
+  void Function()? onAutoFallback;
+
   void _onProxyUnreachable() {
     if (!_autoFallback || _poolFallbackActive || _userDirect || _stopped) {
       return;
     }
     _poolFallbackActive = true;
+    onAutoFallback?.call();
     unawaited(_swapToDirect(_newDirectPool()));
   }
 
@@ -1637,6 +1655,7 @@ class NostrService {
     List<List<String>> extraTags = const [],
     // Return the signed event without publishing, byte-identical, for gateway mode.
     bool buildOnly = false,
+    String? queuedKey,
   }) async {
     // [signerOverride] is the pseudonymous path: a per-message ephemeral key.
     final sig = signerOverride ?? signer;
@@ -1682,13 +1701,17 @@ class NostrService {
     eventProvenance.recordLocal(signed, 'THIS CLIENT');
     if (buildOnly) return signed;
 
-    // Geohash messages use GEO_EVENT so the proxy prioritizes the closest geo relays.
-    if (isGeo) {
-      final closest =
-          closestGeoRelays(geohash).map((r) => r.url).toList(growable: false);
-      await pool.publishGeo(signed, closest);
-    } else {
-      await pool.publish(signed);
+    if (queuedKey != null) QueuedSends.instance.register(signed.id, queuedKey);
+    try {
+      if (isGeo) {
+        final closest =
+            closestGeoRelays(geohash).map((r) => r.url).toList(growable: false);
+        await pool.publishGeo(signed, closest);
+      } else {
+        await pool.publish(signed);
+      }
+    } finally {
+      if (queuedKey != null) QueuedSends.instance.release(signed.id);
     }
     return signed;
   }
@@ -1732,7 +1755,7 @@ class NostrService {
         content: emoji,
       ),
     );
-    await pool.publish(signed);
+    _queuePublish(signed);
     return signed;
   }
 
@@ -1810,6 +1833,10 @@ class NostrService {
     return signed;
   }
 
+  void _queuePublish(NostrEvent signed) {
+    unawaited(pool.publish(signed).then((_) {}, onError: (Object _) {}));
+  }
+
   /// created_at of our newest published or received self kind-0: the floor for [publishProfile].
   int _lastKind0Ts = 0;
 
@@ -1828,7 +1855,7 @@ class NostrService {
         content: content,
       ),
     );
-    await pool.publish(signed);
+    _queuePublish(signed);
     return signed;
   }
 
@@ -1916,6 +1943,31 @@ class NostrService {
     return any;
   }
 
+  Future<bool> publishCallSignal({
+    required String to,
+    required Map<String, dynamic> content,
+    String Function(String memberPubkey)? encryptTo,
+  }) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final expiresAt = now + callSignalTtl(content['type']);
+    final rumor = UnsignedEvent(
+      pubkey: identity.pubkey,
+      createdAt: now,
+      kind: EventKind.callSignaling,
+      tags: [
+        ['p', to],
+        ['expiration', '$expiresAt'],
+      ],
+      content: jsonEncode(content),
+    );
+    return publishGiftWrappedRumor(
+      rumor: rumor,
+      recipients: [to],
+      encryptTo: encryptTo,
+      expiration: expiresAt,
+    );
+  }
+
   // Gift-wrapped publish paths and presence
 
   /// Builds a wrap: local keys in the crypto worker, NIP-46 via the async path; [recipientKemPublicKey] makes it hybrid.
@@ -1977,6 +2029,7 @@ class NostrService {
     bool layered = false,
     List<List<String>> extraTags = const [],
     int? tier,
+    String? queuedKey,
   }) async {
     final wrap = await _buildWrap(rumor, recipientPubkey,
         expiration: expiration,
@@ -1984,6 +2037,7 @@ class NostrService {
         layered: layered,
         extraTags: extraTags);
     if (wrap == null) return null;
+    if (queuedKey != null) QueuedSends.instance.register(wrap.id, queuedKey);
     // Gift wraps publish via DM_EVENT so the proxy prioritizes default relays.
     publishDmQueued(wrap, tier: tier ?? rumorTier(rumor, 1));
     return wrap;
@@ -2002,6 +2056,7 @@ class NostrService {
     bool recipientLayered = false,
     bool selfLayered = false,
     List<List<String>> wrapTags = const [],
+    String? queuedKey,
   }) async {
     if (signer == null) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -2021,7 +2076,8 @@ class NostrService {
           expiration: expiration,
           recipientKemPublicKey: recipientKemPublicKey,
           layered: recipientLayered,
-          extraTags: wrapTags);
+          extraTags: wrapTags,
+          queuedKey: queuedKey);
       if (recipientWrap != null) onWrap?.call(recipientWrap);
     }
     if (recipientPubkey != identity.pubkey) {
@@ -2048,6 +2104,7 @@ class NostrService {
     bool Function(String memberPubkey)? layeredFor,
     void Function(int pqCount, int total, int rootCount)? onCoverage,
     Iterable<String> newMembers = const [],
+    String? queuedKey,
   }) async {
     final sig = signer;
     if (sig == null) return false;
@@ -2107,6 +2164,9 @@ class NostrService {
       for (var i = 0; i < wraps.length; i++) {
         final wrap = wraps[i];
         if (wrap != null) {
+          if (queuedKey != null) {
+            QueuedSends.instance.register(wrap.id, queuedKey);
+          }
           publishDmQueued(wrap,
               tier: tierFor(i < recipients.length ? recipients[i] : ''));
           onWrap?.call(wrap);
@@ -2129,7 +2189,8 @@ class NostrService {
           expiration: expiration,
           recipientKemPublicKey: kem,
           layered: kem != null && layeredOf(pk),
-          tier: tierFor(pk));
+          tier: tierFor(pk),
+          queuedKey: queuedKey);
       if (wrap != null) onWrap?.call(wrap);
     }
     onCoverage?.call(remotePq, recipients.length, remoteRoot);
@@ -2189,13 +2250,13 @@ class NostrService {
     required List<String> recipients,
     String? groupId,
     int ttlSec = 0,
+    String? activity,
     String Function(String memberPubkey)? encryptTo,
   }) async {
     if (recipients.isEmpty) return false;
     final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final tags = <List<String>>[
-      ['typing', status],
-      if (status == 'start' && ttlSec > 0) ['ttl', '$ttlSec'],
+      ...UploadActivity.encode(status, activity, ttlSec),
       if (groupId != null) ['g', groupId],
     ];
     var any = false;
@@ -2218,26 +2279,28 @@ class NostrService {
     return any;
   }
 
+  final Map<String, int> _channelTypingLastAt = {};
+
   /// Publishes a kind-24420 channel typing indicator with the channel `g`/`d` tag.
   Future<NostrEvent?> publishChannelTyping({
     required String status,
     required String channelKey,
     required String nym,
     bool isGeohash = true,
+    String? activity,
   }) async {
     final sig = signer;
     if (sig == null) return null;
-    final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final nowSec = max(DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        (_channelTypingLastAt[channelKey] ?? 0) + 1);
+    _channelTypingLastAt[channelKey] = nowSec;
     final signed = await sig.sign(
       UnsignedEvent(
         pubkey: identity.pubkey,
         createdAt: nowSec,
         kind: EventKind.channelTyping,
-        tags: [
-          ['typing', status],
-          [isGeohash ? 'g' : 'd', channelKey],
-          ['n', nym],
-        ],
+        tags: UploadActivity.channelTags(
+            status, activity, isGeohash ? 'g' : 'd', channelKey, nym),
         content: '',
       ),
     );
@@ -2303,7 +2366,7 @@ class NostrService {
         content: '',
       ),
     );
-    await pool.publish(signed);
+    _queuePublish(signed);
     return signed;
   }
 

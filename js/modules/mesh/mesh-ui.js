@@ -20,17 +20,35 @@
             try { return await window.NymMeshCrypto.cryptoSupported(); } catch (_) { return false; }
         },
 
-        // Chromium exposes Web Bluetooth; Safari and Firefox do not.
         async initMeshUI() {
             const row = document.getElementById('meshStatusRow');
             if (!row) return;
-            if (!(await this.meshUsable())) { row.classList.add('nm-hidden'); return; }
+            this._wrapMeshNav();
+            this._meshAvailable = await this.meshUsable();
+            if (!this._meshAvailable) { row.classList.add('nm-hidden'); return; }
             row.classList.remove('nm-hidden');
             this._meshLog = [];
             this._renderMeshStatusRow();
         },
 
-        // Mirrors the Flutter mesh status row.
+        _wrapMeshNav() {
+            const proto = Object.getPrototypeOf(this);
+            if (proto._meshNavWrapped) return;
+            proto._meshNavWrapped = true;
+            ['switchChannel', 'openPM', 'openUserPM', 'openGroup', 'navigateToLatestPMOrGroup'].forEach((name) => {
+                const orig = proto[name];
+                if (typeof orig !== 'function') return;
+                proto[name] = function () {
+                    if (this._meshPageOpen) this.closeMeshPage();
+                    return orig.apply(this, arguments);
+                };
+            });
+        },
+
+        _meshPlural(n, one, many) {
+            return this.uiText(n === 1 ? one : many.replace('{count}', String(n)));
+        },
+
         _renderMeshStatusRow() {
             const row = document.getElementById('meshStatusRow');
             const label = document.getElementById('meshStatusLabel');
@@ -40,13 +58,18 @@
             const running = !!(mesh && mesh.running);
             const peers = running ? mesh.peerList.length : 0;
             label.textContent = !running
-                ? 'Mesh off'
-                : (peers === 0 ? 'Mesh · no peers' : `Mesh · ${peers} peer${peers === 1 ? '' : 's'}`);
+                ? this.uiText('Mesh off')
+                : (peers === 0 ? this.uiText('Mesh · no peers') : this._meshPlural(peers, 'Mesh · 1 peer', 'Mesh · {count} peers'));
             row.classList.toggle('active', running);
+            const open = !!this._meshPageOpen;
+            row.classList.toggle('selected', open);
+            if (open) row.setAttribute('aria-current', 'page');
+            else row.removeAttribute('aria-current');
             if (links) {
                 const n = running ? mesh.linkCount : 0;
-                links.textContent = n > 0 ? `${n} link${n === 1 ? '' : 's'}` : '';
+                links.textContent = n > 0 ? this._meshPlural(n, '1 link', '{count} links') : '';
             }
+            this._renderMeshHeader();
         },
 
         _meshService() {
@@ -169,7 +192,7 @@
                 if (!sk) { this._meshNostrLink = null; return; }
                 const C = window.NymMeshCrypto;
                 const msgHex = await C.NostrLink.messageHex(mesh.realIdentity.staticPublic);
-                const sig = window.NostrTools._secp256k1.schnorr.sign(
+                const sig = window.NostrTools._schnorr.sign(
                     window.NymMeshProtocol.fromHex(msgHex), sk);
                 this._meshNostrLink = C.NostrLink.build(this.pubkey, window.NymMeshProtocol.toHex(sig));
             } catch (_) {
@@ -178,31 +201,72 @@
         },
 
         async addMeshPeer() {
+            if (!this._mesh || !this._mesh.running) return;
             try {
                 const name = await this._meshService().addPeer();
-                this.displaySystemMessage('Mesh peer added: ' + name);
+                this.displaySystemMessage(this.uiText('Mesh peer added: ') + name);
             } catch (err) {
-                if (err && err.name === 'NotFoundError') return; // chooser dismissed
-                this.displaySystemMessage('Could not add mesh peer: ' + (err && err.message));
+                if (err && err.name === 'NotFoundError') return;
+                this.displaySystemMessage(this.uiText('Could not add mesh peer: ') + (err && err.message));
             }
             this._renderMeshPanel();
         },
 
         async setMeshGhostMode(on) {
-            const mesh = this._meshService();
+            const mesh = this._mesh;
+            if (!mesh || !mesh.running) return;
             if (on) {
-                const okToGo = await window.showAppConfirm(
-                    'Ghost Mode hides who you are on the Bluetooth mesh.\n\n' +
-                    'Your device stops advertising your nym and your Nostr identity. It presents a ' +
-                    'throwaway name and key instead, and replaces them every few minutes, so nearby ' +
-                    'devices cannot recognize you or follow you between places.\n\n' +
-                    'You can still send and receive messages. Anyone you talk to while it is on sees ' +
-                    'an anonymous identity, not your usual one. Turning it off restores your normal identity.',
-                    { okLabel: 'Enable' });
-                if (!okToGo) { this._renderMeshPanel(); return; }
+                const modal = document.getElementById('meshGhostModal');
+                if (modal) modal.classList.add('active');
+                return;
             }
-            await mesh.setGhostMode(on);
+            await mesh.setGhostMode(false);
             this._renderMeshPanel();
+        },
+
+        async meshGhostConfirm() {
+            if (typeof window.closeModal === 'function') window.closeModal('meshGhostModal');
+            const mesh = this._mesh;
+            if (!mesh || !mesh.running) return;
+            await mesh.setGhostMode(true);
+            this._renderMeshPanel();
+        },
+
+        _sanitizeMeshGroupName(raw) {
+            const lower = String(raw || '').trim().toLowerCase().replace(/^#+/, '');
+            const cleaned = lower.replace(/[^\p{L}\p{N}]/gu, '');
+            return cleaned.length > 40 ? cleaned.slice(0, 40) : cleaned;
+        },
+
+        openMeshJoin() {
+            const modal = document.getElementById('meshJoinModal');
+            if (!modal) return;
+            const name = document.getElementById('meshJoinName');
+            const pass = document.getElementById('meshJoinPassword');
+            if (name) name.value = '';
+            if (pass) pass.value = '';
+            modal.classList.add('active');
+            if (name) setTimeout(() => { try { name.focus(); } catch (_) { } }, 50);
+        },
+
+        async meshJoinSubmit() {
+            const name = this._sanitizeMeshGroupName((document.getElementById('meshJoinName') || {}).value);
+            const password = (document.getElementById('meshJoinPassword') || {}).value || '';
+            if (typeof window.closeModal === 'function') window.closeModal('meshJoinModal');
+            if (!name) return;
+            await this.joinMeshGroup(name, password);
+        },
+
+        async joinMeshGroup(name, password) {
+            if (!this._meshGroups) this._meshGroups = new Set();
+            this._meshGroups.add(name);
+            const mesh = this._mesh;
+            if (password && mesh && typeof mesh.setChannelPassword === 'function') {
+                try { await mesh.setChannelPassword('#' + name, password); } catch (_) { }
+            }
+            if (typeof this.addChannel === 'function') this.addChannel(name, name);
+            this.closeMeshPage();
+            this.switchChannel(name, name);
         },
 
         // inbound 
@@ -290,6 +354,7 @@
         meshShouldCarry(channel) {
             if (!this._mesh || !this._mesh.running) return false;
             if (channel === MESH_CHANNEL) return true;
+            if (this._meshGroups && this._meshGroups.has(channel)) return true;
             return !this.connected;
         },
 
@@ -300,11 +365,11 @@
             try {
                 meshId = await mesh.sendPublicMessage(content, channel === MESH_CHANNEL ? null : channel);
             } catch (err) {
-                this.displaySystemMessage('Mesh send failed: ' + (err && err.message));
+                this.displaySystemMessage(this.uiText('Mesh send failed: ') + (err && err.message));
                 return;
             }
             if (mesh.linkCount === 0) {
-                this.displaySystemMessage('No mesh device in range — waiting for Bluetooth range.');
+                this.displaySystemMessage(this.uiText('No mesh device in range — waiting for Bluetooth range.'));
             }
             const now = Date.now();
             // `_optim_` so the Nostr replay reconciles onto this bubble (`_replaceOptimisticMessage`).
@@ -360,82 +425,231 @@
             return event && event.sig ? event : null;
         },
 
-        //  panel 
+        meshPageAvailable() {
+            return !!this._meshAvailable;
+        },
+
         openMeshPanel() {
-            const modal = document.getElementById('meshModal');
-            if (!modal) return;
-            modal.classList.add('active');
+            if (!this.meshPageAvailable()) return;
+            const page = document.getElementById('meshPage');
+            const main = document.querySelector('.main-content');
+            if (!page || !main) return;
+            if (!this._meshPageOpen) {
+                this._meshSavedActive = Array.from(document.querySelectorAll('#sidebar .channel-item.active, #sidebar .pm-item.active'));
+                this._meshSavedActive.forEach((el) => el.classList.remove('active'));
+            }
+            this._meshPageOpen = true;
+            main.classList.add('mesh-mode');
+            document.body.classList.add('mesh-page-open');
+            page.hidden = false;
+            if (typeof this._pushNavigation === 'function') this._pushNavigation({ type: 'mesh' });
             this._renderMeshPanel();
             this._renderMeshLog();
+            this._renderMeshStatusRow();
+        },
+
+        closeMeshPage() {
+            if (!this._meshPageOpen) return;
+            this._meshPageOpen = false;
+            const page = document.getElementById('meshPage');
+            const main = document.querySelector('.main-content');
+            if (page) page.hidden = true;
+            if (main) main.classList.remove('mesh-mode');
+            document.body.classList.remove('mesh-page-open');
+            (this._meshSavedActive || []).forEach((el) => { if (el.isConnected) el.classList.add('active'); });
+            this._meshSavedActive = null;
+            this._renderMeshStatusRow();
+            if (!this._navigating) setTimeout(() => this._meshRecordLeave(), 0);
+        },
+
+        _meshRecordLeave() {
+            if (this._meshPageOpen || this._navigating || !Array.isArray(this.navigationHistory)) return;
+            const current = this.navigationHistory[this.navigationIndex];
+            if (!current || current.type !== 'mesh') return;
+            let entry = null;
+            if (this.inPMMode && this.currentGroup) entry = { type: 'group', groupId: this.currentGroup };
+            else if (this.inPMMode && this.currentPM) entry = { type: 'pm', nym: this.getNymFromPubkey(this.currentPM), pubkey: this.currentPM };
+            else if (!this.inPMMode && this.currentChannel) entry = { type: 'channel', channel: this.currentChannel, geohash: this.currentGeohash || '' };
+            if (entry) this._pushNavigation(entry);
+        },
+
+        meshBackToList() {
+            this.closeMeshPage();
+            const s = document.getElementById('sidebar');
+            if (s && !s.classList.contains('open') && typeof this.toggleSidebar === 'function') this.toggleSidebar();
+        },
+
+        meshOpenChannel() {
+            this.closeMeshPage();
+            this.addChannel(MESH_CHANNEL, MESH_CHANNEL);
+            this.switchChannel(MESH_CHANNEL, MESH_CHANNEL);
+        },
+
+        _meshLinkedKey(peer) {
+            return peer && peer.nostrLinkVerified && typeof peer.nostrPubkey === 'string' && /^[0-9a-f]{64}$/i.test(peer.nostrPubkey)
+                ? peer.nostrPubkey.toLowerCase() : null;
+        },
+
+        meshOpenPeer(peerID) {
+            const mesh = this._mesh;
+            const peer = mesh && mesh.peerList ? mesh.peerList.find((p) => p.peerID === peerID) : null;
+            const pk = this._meshLinkedKey(peer);
+            if (!pk) return;
+            this.closeMeshPage();
+            this.openPM(peer.nickname || this.getNymFromPubkey(pk), pk);
+        },
+
+        _meshHeaderSub() {
+            const mesh = this._mesh;
+            if (!mesh || !mesh.running) return this.uiText('Off');
+            const peers = mesh.peerList.length;
+            let base;
+            if (!peers) base = this.uiText('Searching · no peers yet');
+            else {
+                const parts = [this._meshPlural(peers, '1 peer', '{count} peers')];
+                if (mesh.linkCount > 0) parts.push(this._meshPlural(mesh.linkCount, '1 link', '{count} links'));
+                base = parts.join(' · ');
+            }
+            return mesh.ghostEnabled ? base + ' · ' + this.uiText('Ghost Mode') : base;
+        },
+
+        _renderMeshHeader() {
+            const sub = document.getElementById('meshHeaderSub');
+            if (!sub) return;
+            const mesh = this._mesh;
+            const running = !!(mesh && mesh.running);
+            const ghost = running && !!mesh.ghostEnabled;
+            sub.textContent = this._meshHeaderSub();
+            const g = document.getElementById('meshGhostBtn');
+            if (g) {
+                g.disabled = !running;
+                g.setAttribute('aria-pressed', ghost ? 'true' : 'false');
+                g.classList.toggle('on', ghost);
+                g.setAttribute('aria-label', this.uiText(ghost ? 'Ghost Mode on' : 'Ghost Mode off'));
+            }
+            const add = document.getElementById('meshAddBtn');
+            if (add) add.disabled = !running;
+        },
+
+        _meshPeerLine(peer) {
+            const held = this._meshPings && this._meshPings.get(peer.peerID);
+            if (held) {
+                if (held.state === 'waiting') return this.uiText('Pinging…');
+                if (held.state === 'lost') return this.uiText('No reply to ping');
+                if (held.hops === null || held.hops === undefined) return this.uiText(`${held.roundTripMs} ms`);
+                if (held.hops === 1) return this.uiText(`1 hop · ${held.roundTripMs} ms`);
+                return this.uiText(`${held.hops} hops · ${held.roundTripMs} ms`);
+            }
+            return this.uiText(peer.isVerified ? 'Verified' : 'Not verified yet');
         },
 
         _renderMeshPanel() {
+            this._renderMeshHeader();
             const body = document.getElementById('meshPanelBody');
-            if (!body) return;
+            if (!body || !this._meshPageOpen) return;
             const mesh = this._mesh;
             const running = !!(mesh && mesh.running);
-            const links = running ? mesh.linkList : [];
-            const peers = running ? mesh.peerList : [];
-            const ghost = running && mesh.ghostEnabled;
+            const links = running ? (mesh.linkList || []) : [];
+            const peers = running ? (mesh.peerList || []) : [];
+            const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
+            const u = (s) => esc(this.uiText(s));
+            const icon = (inner) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+            const RADAR = icon('<circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="4.75"></circle><path d="M12 12 L18.36 5.64"></path>');
+            const CLOSE = icon('<path d="M18 6 6 18M6 6l12 12"></path>');
+            const PLUS = '<svg class="channel-glyph" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>';
+            const short = running && mesh.peerID ? String(mesh.peerID).slice(0, 8) : '';
+            const powerSub = !running
+                ? u('Chat with people nearby, no internet needed')
+                : (short ? u(`On · your mesh ID ${short}`).replace(esc(short), `<code>${esc(short)}</code>`) : u('Starting…'));
+            const empty = (text) => `<div class="list-empty mesh-empty"><span class="list-empty-text">${u(text)}</span></div>`;
+            const section = (title) => `<div class="nav-title mesh-sec"><span class="nav-title-text">${esc(title)}</span></div>`;
+            const row = (cls, attrs, lead, name, sub, trail) => `<div class="mesh-row${cls}" ${attrs}>${lead}<span class="mesh-row-text"><span class="mesh-row-name">${name}</span><span class="mesh-row-sub">${sub}</span></span>${trail || ''}</div>`;
 
-            const esc = (s) => this.escapeHtml(s);
-            const peerRows = peers.length
-                ? peers.map(p => `<div class="mesh-peer">
-                        <span class="mesh-peer-name">${esc(p.nickname || p.peerID)}</span>
-                        <span class="mesh-peer-meta">${esc(p.peerID)}${p.isVerified ? ' &middot; verified' : ''}${p.nostrLinkVerified ? ' &middot; linked' : ''}${this._meshPingLabel(p.peerID)}</span>
-                        <button class="mesh-ping" data-action="meshPingPeer" data-peer-id="${esc(p.peerID)}" type="button"
-                            title="Measure the round trip and how many hops away this peer is">Ping</button>
-                    </div>`).join('')
-                : '<div class="mesh-empty">No peers heard yet.</div>';
+            const peerRows = peers.map((p) => {
+                const pk = this._meshLinkedKey(p);
+                const display = p.nickname ? p.nickname : String(p.peerID).slice(0, 8);
+                const suffix = pk ? '#' + pk.slice(-4) : '';
+                const avatar = `<img class="mesh-row-avatar" src="${esc(this.getAvatarUrl(pk || p.peerID))}" alt="" aria-hidden="true">`;
+                const name = `${esc(display)}${suffix ? `<span class="nym-suffix">${esc(suffix)}</span>` : ''}`;
+                const attrs = `data-peer-id="${esc(p.peerID)}" title="${esc((p.nickname || display) + ' · ' + p.peerID)}"` +
+                    (pk ? ` role="button" tabindex="0" data-action="meshOpenPeer"` : '');
+                const held = this._meshPings && this._meshPings.get(p.peerID);
+                const waiting = !!(held && held.state === 'waiting');
+                const ping = `<button type="button" class="mesh-icon-btn" data-action="meshPingPeer" data-peer-id="${esc(p.peerID)}" aria-label="${u('Ping')}" data-tip=""${waiting ? ' disabled' : ''}>${RADAR}</button>`;
+                return row(' mesh-peer' + (pk ? ' mesh-tappable' : ''), attrs, avatar, name, esc(this._meshPeerLine(p)), ping);
+            }).join('');
 
-            const linkRows = links.length
-                ? links.map(l => `<div class="mesh-link">
-                        <span class="mesh-link-dot ${l.connected ? 'up' : 'down'}"></span>
-                        <span class="mesh-link-name">${esc(l.name)}</span>
-                        <button class="mesh-forget" data-action="meshForgetPeer" data-peer-id="${esc(l.id)}" type="button">Forget</button>
-                    </div>`).join('')
-                : '<div class="mesh-empty">No devices paired. Add one to join the mesh.</div>';
+            const linkRows = links.map((l) => row(
+                '',
+                'data-link-id="' + esc(l.id) + '"',
+                `<span class="mesh-link-dot ${l.connected ? 'up' : 'down'}" aria-hidden="true"></span>`,
+                esc(l.name),
+                u(l.connected ? 'Connected' : 'Out of range'),
+                `<button type="button" class="mesh-icon-btn" data-action="meshForgetPeer" data-peer-id="${esc(l.id)}" aria-label="${u('Forget')}" data-tip="">${CLOSE}</button>`,
+            )).join('');
+
+            let peersBlock;
+            if (!running) peersBlock = empty('Turn the mesh on to find people nearby.');
+            else if (!peers.length) peersBlock = empty('No one in range yet. Peers show up when another Nymchat device is nearby.');
+            else peersBlock = peerRows;
 
             body.innerHTML = `
-                <div class="mesh-status">
-                    <span class="mesh-status-dot ${running ? 'on' : 'off'}"></span>
-                    <span class="mesh-status-text">${running ? 'Mesh on' : 'Mesh off'}</span>
-                    ${running && mesh.peerID ? `<span class="mesh-self">${esc(mesh.peerID)}</span>` : ''}
-                    <button class="mesh-toggle" data-action="meshToggle" type="button">${running ? 'Turn off' : 'Turn on'}</button>
-                    <button class="mesh-ghost ${ghost ? 'on' : 'off'}" data-action="meshToggleGhost" type="button"
-                        title="${ghost ? 'Ghost Mode on' : 'Ghost Mode off'}" aria-label="Ghost Mode"
-                        ${running ? '' : 'disabled'}>${this._meshGhostIcon(ghost)}</button>
+                <div class="mesh-power">
+                    <div class="mesh-power-text">
+                        <div class="mesh-power-title">${u('Mesh')}</div>
+                        <div class="mesh-power-sub">${powerSub}</div>
+                    </div>
+                    <label class="nym-switch" title="${u('Bluetooth mesh')}">
+                        <input type="checkbox" id="meshPowerSwitch" data-on-change="meshToggle" aria-label="${u('Bluetooth mesh')}"${running ? ' checked' : ''}>
+                        <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
+                    </label>
                 </div>
-                <p class="mesh-note">A browser can join the mesh but cannot advertise itself, so it
-                    connects out to nearby phones and relays through them. Pick each device once —
-                    it reconnects on its own after that.</p>
-                <div class="mesh-section-title">Paired devices
-                    <button class="mesh-add" data-action="meshAddPeer" type="button">Add device</button>
-                </div>
-                ${linkRows}
-                <div class="mesh-section-title">Peers on the mesh</div>
-                ${peerRows}
+                ${section(this.uiText('Channels'))}
+                ${row(' mesh-tappable', 'id="meshChannelRow" role="button" tabindex="0" data-action="meshOpenChannel"', `<span class="channel-tile" aria-hidden="true">${this._channelGlyphSvg(true, 10)}</span>`, '#mesh', u('Public · everyone in range'))}
+                ${row(' mesh-tappable', 'id="meshJoinRow" role="button" tabindex="0" data-action="meshOpenJoin"', `<span class="channel-tile" aria-hidden="true">${PLUS}</span>`, u('Join or create a mesh group'), u('Named room · optional password'))}
+                ${section(running && peers.length ? this.uiText(`Peers nearby (${peers.length})`) : this.uiText('Peers nearby'))}
+                ${peersBlock}
+                ${section(this.uiText('Paired devices'))}
+                ${running && links.length ? linkRows : empty('No devices paired yet.')}
+                <p class="mesh-hint">${u("Browsers can't advertise, so this tab connects out to nearby phones and relays through them. Pick each device once; it reconnects by itself.")}</p>
             `;
         },
 
-        _meshGhostIcon(on) {
-            const body = on
-                ? '<path d="M4 22V10a8 8 0 0 1 16 0v12l-2.7-2.6L14.6 22l-2.6-2.6L9.4 22 6.7 19.4Z" fill="currentColor"/>' +
-                  '<circle cx="9.5" cy="10.5" r="1.4" fill="var(--bg)"/><circle cx="14.5" cy="10.5" r="1.4" fill="var(--bg)"/>'
-                : '<path d="M4 22V10a8 8 0 0 1 16 0v12l-2.7-2.6L14.6 22l-2.6-2.6L9.4 22 6.7 19.4Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>' +
-                  '<circle cx="9.5" cy="10.5" r="1.2" fill="currentColor"/><circle cx="14.5" cy="10.5" r="1.2" fill="currentColor"/>';
-            const badge = on
-                ? '<circle cx="18.5" cy="18.5" r="5" fill="#22C55E"/><path d="m16.2 18.6 1.6 1.6 3-3.2" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
-                : '<circle cx="18.5" cy="18.5" r="5" fill="#EF4444"/><path d="m16.6 16.6 3.8 3.8m0-3.8-3.8 3.8" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>';
-            return `<svg viewBox="0 0 26 26" width="22" height="22" aria-hidden="true">${body}
-                <circle cx="18.5" cy="18.5" r="6.4" fill="var(--bg-secondary)"/>${badge}</svg>`;
+        meshToggleDiag() {
+            const log = document.getElementById('meshLogBody');
+            const btn = document.querySelector('.mesh-diag-toggle');
+            const diag = document.getElementById('meshDiag');
+            if (!log || !btn) return;
+            const open = log.hidden;
+            log.hidden = !open;
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (diag) diag.classList.toggle('open', open);
+            this._renderMeshLog();
+        },
+
+        _meshDiagLines() {
+            const mesh = this._mesh;
+            const ids = [];
+            if (mesh && mesh.running && mesh.peerID) ids.push(this.uiText('Your mesh ID') + '  ' + mesh.peerID);
+            if (mesh && mesh.running) for (const p of (mesh.peerList || [])) ids.push((p.nickname || p.peerID) + '  ' + p.peerID);
+            return ids.concat((this._meshLog || []).slice(-60));
+        },
+
+        meshCopyDiag() {
+            const text = this._meshDiagLines().join('\n');
+            try { navigator.clipboard.writeText(text); } catch (_) { }
+        },
+
+        meshClearDiag() {
+            this._meshLog = [];
+            this._renderMeshLog();
         },
 
         _renderMeshLog() {
             const el = document.getElementById('meshLogBody');
             if (!el) return;
-            const lines = this._meshLog || [];
-            el.textContent = lines.length ? lines.slice(-60).join('\n') : 'No radio activity yet.';
+            const lines = this._meshDiagLines();
+            el.textContent = lines.length ? lines.join('\n') : this.uiText('No mesh activity yet');
         },
 
         meshForgetPeer(id) {
@@ -476,16 +690,6 @@
             this._meshLogLine(`pong from ${result.peerID} ${result.roundTripMs}ms`
                 + (result.hops === null ? '' : ` (${result.hops} hop${result.hops === 1 ? '' : 's'})`));
             this._renderMeshPanel();
-        },
-
-        _meshPingLabel(peerID) {
-            const held = this._meshPings && this._meshPings.get(peerID);
-            if (!held) return '';
-            if (held.state === 'waiting') return ' &middot; pinging&hellip;';
-            if (held.state === 'lost') return ' &middot; no reply';
-            const hops = held.hops === null
-                ? '' : `, ${held.hops} hop${held.hops === 1 ? '' : 's'}`;
-            return ` &middot; ${held.roundTripMs}ms${hops}`;
         },
     });
 })();

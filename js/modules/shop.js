@@ -161,6 +161,11 @@ Object.assign(NYM.prototype, {
 
     // WS-first, falling back to a signed HTTP POST to /api/bot; returns { status, data }.
     async _botMoneyRequest(action, extra, opts) {
+        if ((action === 'pm' || action === 'pm-steer' || action === 'pm-answer')
+            && typeof this.aiConsentAllowed === 'function' && !this.aiConsentAllowed('nymbot')) {
+            const notice = window.NymAiConsentStrings ? window.NymAiConsentStrings.offNotice : 'Nothing was sent.';
+            return { status: 403, data: { error: this._aiText ? this._aiText(notice) : notice } };
+        }
         const apiHost = this._getApiHost();
         if (!apiHost) return { status: 0, data: {} };
         const anon = (opts && typeof opts.anon === 'boolean')
@@ -678,7 +683,7 @@ Object.assign(NYM.prototype, {
             .filter(Boolean);
     },
 
-    async openShop() {
+    async openShop(tab) {
         const modal = document.getElementById('shopModal');
         modal.classList.add('active');
 
@@ -691,7 +696,7 @@ Object.assign(NYM.prototype, {
 `;
 
         this.loadShopFromServer();
-        this.switchShopTab('styles');
+        this.switchShopTab(typeof tab === 'string' && tab ? tab : 'styles');
     },
 
     closeShop() {
@@ -705,10 +710,12 @@ Object.assign(NYM.prototype, {
         if (event && event.target) {
             event.target.classList.add('active');
         } else {
-            const idx = ['styles', 'flair', 'special', 'limited', 'inventory'].indexOf(tab) + 1;
+            const idx = ['styles', 'flair', 'special', 'limited', 'credits', 'inventory'].indexOf(tab) + 1;
             const btn = document.querySelector(`.shop-tab:nth-child(${idx})`);
             if (btn) btn.classList.add('active');
         }
+        const activeTab = document.querySelector('.shop-tab.active');
+        if (activeTab && typeof activeTab.scrollIntoView === 'function') activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 
         const shopBody = document.getElementById('shopBody');
         switch (tab) {
@@ -716,8 +723,18 @@ Object.assign(NYM.prototype, {
             case 'flair': this.renderFlairTab(shopBody); break;
             case 'special': this.renderSpecialTab(shopBody); break;
             case 'limited': this.renderLimitedTab(shopBody); break;
+            case 'credits': this.renderCreditsTab(shopBody); break;
             case 'inventory': this.renderInventoryTab(shopBody); break;
         }
+    },
+
+    renderCreditsTab(container) {
+        container.innerHTML = `
+<div class="shop-category-title">Nymbot Credits</div>
+<div class="shop-credits">
+    <p class="shop-credits-text">Credits pay for private messages with Nymbot. Standard and Pro credits are charged on the tokens each reply uses.</p>
+    <button class="shop-buy-btn" type="button" data-action="openBotCreditsModal">BUY</button>
+</div>`;
     },
 
     _shopItemActionsHtml(item, isPurchased) {
@@ -1938,7 +1955,7 @@ ${bundleCodes || (code ? `
                     const el = document.getElementById('dmForwardSecrecySelect');
                     if (el) el.value = String(s.dmForwardSecrecyEnabled);
                     const ttlGroup = document.getElementById('dmTTLGroup');
-                    if (ttlGroup) ttlGroup.style.display = s.dmForwardSecrecyEnabled ? 'block' : 'none';
+                    if (ttlGroup) ttlGroup.classList.toggle('nm-hidden', !s.dmForwardSecrecyEnabled);
                 }
                 if (s.dmTTLSeconds !== undefined) {
                     const el = document.getElementById('dmTTLSelect');

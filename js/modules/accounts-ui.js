@@ -501,7 +501,7 @@
                 let url = WATCH_RELAY;
                 try { if (typeof this._getProxiedRelayUrl === 'function') url = this._getProxiedRelayUrl(WATCH_RELAY); } catch (_) { }
                 let ws;
-                try { ws = new WebSocket(url); } catch (_) { w.timer = setTimeout(open, 30000); return; }
+                try { ws = new WebSocket(url); } catch (_) { w.timer = setTimeout(open, this._acctWatchDelay(false)); return; }
                 w.ws = ws;
                 const sub = 'n' + M().randomId();
                 let live = false;
@@ -520,7 +520,7 @@
                     w.seen.add(m[2].id);
                     if (live) this._acctBump(a.id);
                 };
-                ws.onclose = () => { w.ws = null; if (!w.stopped) w.timer = setTimeout(open, 30000); };
+                ws.onclose = () => { w.ws = null; if (!w.stopped) w.timer = setTimeout(open, this._acctWatchDelay(false)); };
                 ws.onerror = () => { };
             };
             w.stop = () => {
@@ -528,8 +528,12 @@
                 if (w.timer) clearTimeout(w.timer);
                 try { if (w.ws) w.ws.close(); } catch (_) { }
             };
-            open();
+            w.timer = setTimeout(open, this._acctWatchDelay(true));
             return w;
+        },
+
+        _acctWatchDelay(first) {
+            return first ? 1000 + Math.floor(Math.random() * 11000) : 30000 + Math.floor(Math.random() * 30000);
         },
 
         _acctBump(id) {

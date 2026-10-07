@@ -132,6 +132,12 @@ class CallState {
     this.presentRequests = const {},
     this.isMod = false,
     this.canShareScreen = true,
+    this.ringing = const [],
+    this.speakerOn = false,
+    this.headset = false,
+    this.canRouteAudio = false,
+    this.hasCamera = false,
+    this.rejoinGroupId,
   });
 
   final CallPhase phase;
@@ -179,6 +185,18 @@ class CallState {
 
   final bool canShareScreen;
 
+  final List<String> ringing;
+
+  final bool speakerOn;
+
+  final bool headset;
+
+  final bool canRouteAudio;
+
+  final bool hasCamera;
+
+  final String? rejoinGroupId;
+
   bool get isActiveCall =>
       phase == CallPhase.ringing ||
       phase == CallPhase.connecting ||
@@ -214,6 +232,12 @@ class CallState {
     Set<String>? presentRequests,
     bool? isMod,
     bool? canShareScreen,
+    List<String>? ringing,
+    bool? speakerOn,
+    bool? headset,
+    bool? canRouteAudio,
+    bool? hasCamera,
+    String? rejoinGroupId,
   }) =>
       CallState(
         phase: phase ?? this.phase,
@@ -241,5 +265,11 @@ class CallState {
         presentRequests: presentRequests ?? this.presentRequests,
         isMod: isMod ?? this.isMod,
         canShareScreen: canShareScreen ?? this.canShareScreen,
+        ringing: ringing ?? this.ringing,
+        speakerOn: speakerOn ?? this.speakerOn,
+        headset: headset ?? this.headset,
+        canRouteAudio: canRouteAudio ?? this.canRouteAudio,
+        hasCamera: hasCamera ?? this.hasCamera,
+        rejoinGroupId: rejoinGroupId ?? this.rejoinGroupId,
       );
 }

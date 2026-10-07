@@ -75,9 +75,9 @@ class LocalizationService {
     _kv = kv;
     // An explicit [apiClient] forces a fresh translator (tests); otherwise create one lazily.
     if (apiClient != null) {
-      _translator = TranslateService(api: apiClient);
+      _translator = TranslateService(api: apiClient, gated: false);
     } else {
-      _translator ??= TranslateService(api: ApiClient());
+      _translator ??= TranslateService(api: ApiClient(), gated: false);
     }
     setLanguage(language);
   }

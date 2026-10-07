@@ -15,6 +15,8 @@ import '../messages/inline_network_image.dart';
 import 'custom_emoji.dart';
 import 'emoji_data.dart';
 import 'modal_close_chip.dart';
+import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
@@ -210,12 +212,13 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
           if (_matchesCustom(e.shortcode)) _customCell(e.shortcode, e.url),
       ];
       if (cells.isEmpty) continue;
-      final star = (isOwn(pack) || isSubscribed(pack)) ? ' ★' : '';
+      final owned = isOwn(pack) || isSubscribed(pack);
       // An empty cached title still gets a section header.
       final packTitle = pack.title.isEmpty ? tr('Emoji pack') : pack.title;
       sections.add(_section(
         c,
-        title: '$packTitle$star',
+        title: packTitle,
+        owned: owned,
         children: cells,
         isFavorite: packFavSet.contains(pack.key),
         onToggleFavorite:
@@ -341,8 +344,6 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
   }
 
   Widget _search(NymColors c) {
-    // Light mode forces a black@0.04 fill and black@0.1 border in every state.
-    final borderColor = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     // TextField needs a Material within the closest LookupBoundary, so wrap the input itself.
     return Material(
       type: MaterialType.transparency,
@@ -353,30 +354,12 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         style:
             TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
         cursorColor: c.isLight ? c.text : c.textBright,
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: tr('Search emoji...'),
-          hintStyle: TextStyle(color: c.textDim, fontSize: 12),
-          filled: true,
-          fillColor: c.isLight
-              ? const Color(0x0A000000)
-              : Colors.white.withValues(alpha: 0.05),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-          border: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: borderColor),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: borderColor),
-          ),
-          // No focus rule exists for this input, so focus keeps the same border.
-          focusedBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: borderColor),
-          ),
-        ),
+        decoration: NymField.decoration(c,
+            hint: tr('Search emoji...'),
+            fontSize: 12,
+            radius: NymRadius.rxs,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 10, vertical: 7)),
       ),
     );
   }
@@ -414,12 +397,14 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
       {required String title,
       required List<Widget> children,
       bool isFavorite = false,
+      bool owned = false,
       VoidCallback? onToggleFavorite}) {
     return _Section(
       title: title,
       cells: children,
       isFavorite: isFavorite,
       onToggleFavorite: onToggleFavorite,
+      owned: owned,
     );
   }
 
@@ -467,11 +452,26 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  section.title.toUpperCase(),
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 10, color: c.textDim, letterSpacing: 1),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        section.title.toUpperCase(),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 10, color: c.textDim, letterSpacing: 1),
+                      ),
+                    ),
+                    if (section.owned) ...[
+                      const SizedBox(width: 4),
+                      NymSvgIcon(
+                        NymIcons.starFilled,
+                        key: const ValueKey('emoji-pack-owned-star'),
+                        size: 9,
+                        color: c.textDim,
+                      ),
+                    ],
+                  ],
                 ),
               ),
               if (section.onToggleFavorite != null)
@@ -508,10 +508,12 @@ class _Section {
     required this.cells,
     this.isFavorite = false,
     this.onToggleFavorite,
+    this.owned = false,
   });
   final String title;
   final List<Widget> cells;
   final bool isFavorite;
+  final bool owned;
 
   /// When non-null, a favorite star ends the title row.
   final VoidCallback? onToggleFavorite;
@@ -528,7 +530,7 @@ class _FavStar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Tooltip(
+    return NymTooltip(
       message: active ? tr('Unfavorite') : tr('Favorite'),
       child: InkWell(
         onTap: onTap,

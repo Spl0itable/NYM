@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import '../../services/api/api_client.dart';
 import '../../services/api/api_config.dart';
+import '../ai_consent/ai_consent.dart';
 import 'nymbot_models.dart';
 
 /// Nymbot worker client: public `?` commands over HTTP, private-chat actions WS-first with signed HTTP fallback; lazy network.
@@ -54,6 +55,7 @@ class NymbotService {
     Duration timeout = _defaultTimeout,
     bool anon = false,
   }) async {
+    if (kAiConsentBotActions.contains(action)) await AiConsent.instance.guard();
     final ws = anon ? null : _apiSocketRequest;
     if (ws != null) {
       // The socket is authed once, so frames omit pubkey/auth; null falls back to HTTP.
@@ -89,6 +91,7 @@ class NymbotService {
     List<dynamic>? channelMessages,
     List<dynamic>? activeUsers,
   }) async {
+    await AiConsent.instance.guard();
     final body = <String, dynamic>{
       'command': command,
       'args': args,

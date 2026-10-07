@@ -235,6 +235,7 @@ class AccountLogic {
     'nym_relay_url',
     'nym_relay_direct_mode',
     'nym_relay_direct_ack',
+    'nym_relay_fallback_notice_off',
     'nym_low_data_mode',
     'nym_mesh_ghost_mode',
     'nym_tutorial_seen',

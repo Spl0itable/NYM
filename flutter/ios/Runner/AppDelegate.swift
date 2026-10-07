@@ -1,12 +1,15 @@
 import BackgroundTasks
+import CallKit
 import Flutter
+import PushKit
 import LocalAuthentication
 import Security
+import Speech
 import UIKit
 import UniformTypeIdentifiers
 
 @main
-@objc class AppDelegate: FlutterAppDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   /// Open `beginBackgroundTask` identifier for "Stay Connected in Background".
   private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
 
@@ -17,21 +20,40 @@ import UniformTypeIdentifiers
   private var pendingShares: [[String: Any]] = []
   private var shareListening = false
   private let shareQueue = DispatchQueue(label: "app.nymchat.share-inbox")
+  private var privacyChannel: FlutterMethodChannel?
+  private var privacyEnabled = false
+  private var privacyCover: UIView?
+  private var channelMessenger: FlutterBinaryMessenger?
+  private var headlessEngine: FlutterEngine?
+  private var headlessChannel: FlutterMethodChannel?
+  private var headlessWaiters: [(UIBackgroundFetchResult) -> Void] = []
+  private var headlessRun = 0
+  private var callChannel: FlutterMethodChannel?
+  private var ringEngine: FlutterEngine?
+  private var ringChannel: FlutterMethodChannel?
+  private var ringPendingChecks: [UUID] = []
+  private var voipRegistry: PKPushRegistry?
+  private var pushCallUUID: UUID?
+  private var callUUIDs: [String: UUID] = [:]
+  private var answeredCalls: Set<UUID> = []
+  private var callOnRingEngine: Set<UUID> = []
+  private lazy var callProvider: CXProvider = {
+    let config = CXProviderConfiguration()
+    config.supportsVideo = true
+    config.maximumCallGroups = 1
+    config.maximumCallsPerCallGroup = 1
+    config.supportedHandleTypes = [.generic]
+    config.includesCallsInRecents = false
+    let provider = CXProvider(configuration: config)
+    provider.setDelegate(self, queue: nil)
+    return provider
+  }()
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    GeneratedPluginRegistrant.register(with: self)
     excludeMessageStoreFromBackup()
-    registerBackgroundConnectivityChannel()
-    registerBackgroundRefreshChannel()
-    registerHeartbeatChannel()
-    registerAttestChannel()
-    registerVaultKeyChannel()
-    registerPasskeyBackupChannel()
-    registerSecureChannel()
-    registerShareChannel()
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(shareInboxMayHaveChanged),
@@ -41,7 +63,37 @@ import UniformTypeIdentifiers
     drainShareInbox()
     // Must happen before launch finishes, or BGTaskScheduler throws.
     registerBackgroundRefreshTask()
+    if Self.ringEnabled() {
+      startVoipRegistry()
+    }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    endHeadlessRefresh(headlessRun, .failed)
+    GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    guard let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NymchatChannels") else { return }
+    channelMessenger = registrar.messenger()
+    registerBackgroundConnectivityChannel()
+    registerBackgroundRefreshChannel()
+    registerHeartbeatChannel()
+    registerAttestChannel()
+    registerVaultKeyChannel()
+    registerPasskeyBackupChannel()
+    registerCloudKitBackupChannel()
+    registerSecureChannel()
+    registerPrivacyChannel()
+    registerShareChannel()
+    registerTranscribeChannel()
+    registerCallChannel()
+  }
+
+  private var sceneWindow: UIWindow? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    for scene in scenes {
+      if let key = scene.windows.first(where: { $0.isKeyWindow }) { return key }
+    }
+    return scenes.first?.windows.first
   }
 
   /// The sqflite message store (and WAL/SHM) must not ride iCloud or device backups; re-applied every launch.
@@ -57,22 +109,33 @@ import UniformTypeIdentifiers
     }
   }
 
-  private func registerVaultKeyChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+  private func registerVaultKeyChannel(on target: FlutterBinaryMessenger? = nil) {
+    guard let messenger = target ?? channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/vault_key",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     channel.setMethodCallHandler { call, result in
       VaultKey.handle(call, result: result)
     }
   }
 
+  private func registerTranscribeChannel() {
+    guard let messenger = channelMessenger else { return }
+    let channel = FlutterMethodChannel(
+      name: "app.nymchat/transcribe",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      Transcriber.handle(call, result: result)
+    }
+  }
+
   private func registerSecureChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+    guard let messenger = channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/secure",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     channel.setMethodCallHandler { call, result in
       guard call.method == "copySecret" else {
@@ -97,11 +160,106 @@ import UniformTypeIdentifiers
     }
   }
 
+  private func registerPrivacyChannel() {
+    guard let messenger = channelMessenger else { return }
+    let channel = FlutterMethodChannel(
+      name: "app.nymchat/privacy",
+      binaryMessenger: messenger
+    )
+    privacyChannel = channel
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard let self = self else {
+        result(nil)
+        return
+      }
+      switch call.method {
+      case "configure":
+        let args = call.arguments as? [String: Any]
+        self.privacyEnabled = (args?["secure"] as? Bool) ?? false
+        if !self.privacyEnabled {
+          self.hidePrivacyCover()
+        } else if self.isScreenCaptured() {
+          self.showPrivacyCover()
+        }
+        result(nil)
+      case "isCaptured":
+        result(self.isScreenCaptured())
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(privacyWillResignActive),
+      name: UIApplication.willResignActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(privacyDidBecomeActive),
+      name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(privacyCaptureChanged),
+      name: UIScreen.capturedDidChangeNotification,
+      object: nil
+    )
+  }
+
+  private func isScreenCaptured() -> Bool {
+    if let screen = sceneWindow?.windowScene?.screen {
+      return screen.isCaptured
+    }
+    return UIScreen.main.isCaptured
+  }
+
+  @objc private func privacyWillResignActive() {
+    if privacyEnabled {
+      showPrivacyCover()
+    }
+  }
+
+  @objc private func privacyDidBecomeActive() {
+    if !(privacyEnabled && isScreenCaptured()) {
+      hidePrivacyCover()
+    }
+  }
+
+  @objc private func privacyCaptureChanged() {
+    let captured = isScreenCaptured()
+    privacyChannel?.invokeMethod("captured", arguments: captured)
+    if captured && privacyEnabled {
+      showPrivacyCover()
+    } else if !captured && UIApplication.shared.applicationState == .active {
+      hidePrivacyCover()
+    }
+  }
+
+  private func showPrivacyCover() {
+    guard privacyCover == nil, let window = sceneWindow else { return }
+    let cover = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterialDark))
+    cover.frame = window.bounds
+    cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    let shade = UIView(frame: cover.bounds)
+    shade.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    shade.backgroundColor = UIColor.black.withAlphaComponent(0.85)
+    cover.contentView.addSubview(shade)
+    window.addSubview(cover)
+    privacyCover = cover
+  }
+
+  private func hidePrivacyCover() {
+    privacyCover?.removeFromSuperview()
+    privacyCover = nil
+  }
+
   private func registerShareChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+    guard let messenger = channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/share",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     shareChannel = channel
     channel.setMethodCallHandler { [weak self] call, result in
@@ -159,11 +317,22 @@ import UniformTypeIdentifiers
     return super.application(app, open: url, options: options)
   }
 
+  private func registerCloudKitBackupChannel() {
+    guard let messenger = channelMessenger else { return }
+    let channel = FlutterMethodChannel(
+      name: "app.nymchat/cloudkit_backup",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      CloudKitBackup.handle(call, result: result)
+    }
+  }
+
   private func registerPasskeyBackupChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+    guard let messenger = channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/passkey_backup",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     channel.setMethodCallHandler { call, result in
       PasskeyBackup.handle(call, result: result)
@@ -171,11 +340,11 @@ import UniformTypeIdentifiers
   }
 
   /// App Attest key id and attestation for the server's challenge, or nil when the device can't attest.
-  private func registerAttestChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+  private func registerAttestChannel(on target: FlutterBinaryMessenger? = nil) {
+    guard let messenger = target ?? channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/attest",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     channel.setMethodCallHandler { call, result in
       guard call.method == "attest" else {
@@ -198,10 +367,10 @@ import UniformTypeIdentifiers
 
   /// Holds a background task as long as iOS allows; the BLE mesh uses its own background modes.
   private func registerBackgroundConnectivityChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+    guard let messenger = channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/background_connectivity",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else {
@@ -239,25 +408,29 @@ import UniformTypeIdentifiers
 
   /// BGAppRefresh catch-up window for Dart; APNs sends only a content-free heartbeat.
   private func registerBackgroundRefreshChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+    guard let messenger = channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/background_refresh",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     backgroundRefreshChannel = channel
     channel.setMethodCallHandler { [weak self] call, result in
-      switch call.method {
-      case "schedule":
-        let args = call.arguments as? [String: Any]
-        let earliest = (args?["earliestSeconds"] as? NSNumber)?.doubleValue ?? 15 * 60
-        self?.scheduleBackgroundRefresh(earliest: earliest)
-        result(nil)
-      case "cancel":
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.refreshTaskIdentifier)
-        result(nil)
-      default:
-        result(FlutterMethodNotImplemented)
-      }
+      self?.handleRefreshCall(call, result: result)
+    }
+  }
+
+  private func handleRefreshCall(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    switch call.method {
+    case "schedule":
+      let args = call.arguments as? [String: Any]
+      let earliest = (args?["earliestSeconds"] as? NSNumber)?.doubleValue ?? 15 * 60
+      scheduleBackgroundRefresh(earliest: earliest)
+      result(nil)
+    case "cancel":
+      BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: Self.refreshTaskIdentifier)
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
     }
   }
 
@@ -297,6 +470,13 @@ import UniformTypeIdentifiers
         done(outcome)
       }
     }
+    if channelMessenger == nil {
+      let end = startHeadlessRefresh(finish)
+      DispatchQueue.main.asyncAfter(deadline: .now() + Self.refreshBudget) {
+        end(.failed)
+      }
+      return end
+    }
     if backgroundRefreshChannel == nil {
       registerBackgroundRefreshChannel()
     }
@@ -305,16 +485,72 @@ import UniformTypeIdentifiers
       return finish
     }
     channel.invokeMethod("runRefresh", arguments: nil) { result in
-      if result is FlutterError || (result as? NSObject) === FlutterMethodNotImplemented {
-        finish(.failed)
-      } else {
-        finish((result as? Bool) == true ? .newData : .noData)
-      }
+      finish(Self.refreshOutcome(result))
     }
     DispatchQueue.main.asyncAfter(deadline: .now() + Self.refreshBudget) {
       finish(.failed)
     }
     return finish
+  }
+
+  private static func refreshOutcome(_ result: Any?) -> UIBackgroundFetchResult {
+    if result is FlutterError || (result as? NSObject) === FlutterMethodNotImplemented {
+      return .failed
+    }
+    return (result as? Bool) == true ? .newData : .noData
+  }
+
+  private func startHeadlessRefresh(
+    _ done: @escaping (UIBackgroundFetchResult) -> Void
+  ) -> (UIBackgroundFetchResult) -> Void {
+    headlessWaiters.append(done)
+    if headlessEngine == nil {
+      headlessRun += 1
+    }
+    let run = headlessRun
+    let end: (UIBackgroundFetchResult) -> Void = { [weak self] outcome in
+      DispatchQueue.main.async { self?.endHeadlessRefresh(run, outcome) }
+    }
+    guard headlessEngine == nil else { return end }
+    let engine = FlutterEngine(name: "nym_background", project: nil, allowHeadlessExecution: true)
+    headlessEngine = engine
+    guard engine.run(withEntrypoint: "backgroundRefreshMain", libraryURI: nil) else {
+      end(.failed)
+      return end
+    }
+    GeneratedPluginRegistrant.register(with: engine)
+    let messenger = engine.binaryMessenger
+    registerVaultKeyChannel(on: messenger)
+    registerAttestChannel(on: messenger)
+    let channel = FlutterMethodChannel(
+      name: "app.nymchat/background_refresh",
+      binaryMessenger: messenger
+    )
+    headlessChannel = channel
+    channel.setMethodCallHandler { [weak self] call, result in
+      guard call.method == "ready" else {
+        self?.handleRefreshCall(call, result: result)
+        return
+      }
+      result(nil)
+      self?.headlessChannel?.invokeMethod("runRefresh", arguments: nil) { reply in
+        end(Self.refreshOutcome(reply))
+      }
+    }
+    return end
+  }
+
+  private func endHeadlessRefresh(_ run: Int, _ outcome: UIBackgroundFetchResult) {
+    guard run == headlessRun, let engine = headlessEngine else { return }
+    let waiters = headlessWaiters
+    headlessWaiters = []
+    headlessChannel?.setMethodCallHandler(nil)
+    headlessChannel = nil
+    headlessEngine = nil
+    engine.destroyContext()
+    for waiter in waiters {
+      waiter(outcome)
+    }
   }
 
   private func scheduleBackgroundRefresh(earliest: TimeInterval) {
@@ -331,10 +567,10 @@ import UniformTypeIdentifiers
   }
 
   private func registerHeartbeatChannel() {
-    guard let controller = window?.rootViewController as? FlutterViewController else { return }
+    guard let messenger = channelMessenger else { return }
     let channel = FlutterMethodChannel(
       name: "app.nymchat/heartbeat",
-      binaryMessenger: controller.binaryMessenger
+      binaryMessenger: messenger
     )
     heartbeatChannel = channel
     channel.setMethodCallHandler { call, result in
@@ -564,5 +800,375 @@ enum VaultKey {
     default:
       return FlutterError(code: "failed", message: message, details: nil)
     }
+  }
+}
+
+enum Transcriber {
+  private static var task: SFSpeechRecognitionTask?
+
+  static func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let args = call.arguments as? [String: Any] ?? [:]
+    let lang = args["lang"] as? String ?? Locale.current.identifier
+    switch call.method {
+    case "availability":
+      result(availability(lang))
+    case "install":
+      result(false)
+    case "transcribe":
+      guard let path = args["path"] as? String else {
+        result(FlutterError(code: "bad_args", message: "path missing", details: nil))
+        return
+      }
+      authorize { granted in
+        guard granted else {
+          result(FlutterError(code: "denied", message: nil, details: nil))
+          return
+        }
+        transcribe(path: path, lang: lang, result: result)
+      }
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private static func availability(_ lang: String) -> [String: String] {
+    let status = SFSpeechRecognizer.authorizationStatus()
+    if status == .denied || status == .restricted {
+      return ["status": "unavailable", "reason": "denied"]
+    }
+    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: lang)) else {
+      return ["status": "unavailable", "reason": "no_model"]
+    }
+    if !recognizer.supportsOnDeviceRecognition {
+      return ["status": "unavailable", "reason": "no_model"]
+    }
+    return ["status": "available"]
+  }
+
+  private static func authorize(_ done: @escaping (Bool) -> Void) {
+    let status = SFSpeechRecognizer.authorizationStatus()
+    if status == .authorized {
+      done(true)
+      return
+    }
+    if status != .notDetermined {
+      done(false)
+      return
+    }
+    SFSpeechRecognizer.requestAuthorization { next in
+      DispatchQueue.main.async { done(next == .authorized) }
+    }
+  }
+
+  private static func transcribe(path: String, lang: String, result: @escaping FlutterResult) {
+    guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: lang)),
+          recognizer.supportsOnDeviceRecognition else {
+      result(FlutterError(code: "no_model", message: nil, details: nil))
+      return
+    }
+    let request = SFSpeechURLRecognitionRequest(url: URL(fileURLWithPath: path))
+    request.requiresOnDeviceRecognition = true
+    request.shouldReportPartialResults = false
+    task?.cancel()
+    var finished = false
+    func finish(_ value: Any?) {
+      DispatchQueue.main.async {
+        if finished { return }
+        finished = true
+        task = nil
+        result(value)
+      }
+    }
+    task = recognizer.recognitionTask(with: request) { res, error in
+      if let res = res, res.isFinal {
+        finish(res.bestTranscription.formattedString)
+        return
+      }
+      if let error = error as NSError? {
+        if error.domain == "kAFAssistantErrorDomain" && (error.code == 1110 || error.code == 203) {
+          finish("")
+        } else {
+          finish(FlutterError(code: "failed", message: error.localizedDescription, details: nil))
+        }
+      }
+    }
+  }
+}
+
+class SceneDelegate: FlutterSceneDelegate {}
+
+extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
+  private static let ringWakeKey = "flutter.nym_ring_wake"
+  private static let ringCheckTimeout: TimeInterval = 25
+
+  static func ringEnabled() -> Bool {
+    guard let wake = UserDefaults.standard.string(forKey: ringWakeKey) else { return false }
+    return !wake.isEmpty
+  }
+
+  private static var pushEnv: String {
+    #if DEBUG
+      return "sandbox"
+    #else
+      return "production"
+    #endif
+  }
+
+  func registerCallChannel() {
+    guard let messenger = channelMessenger else { return }
+    let channel = FlutterMethodChannel(name: "app.nymchat/call", binaryMessenger: messenger)
+    callChannel = channel
+    channel.setMethodCallHandler { [weak self] call, result in
+      self?.handleCallMethod(call, result: result, fromRingEngine: false)
+    }
+  }
+
+  private func handleCallMethod(_ call: FlutterMethodCall, result: @escaping FlutterResult, fromRingEngine: Bool) {
+    let args = call.arguments as? [String: Any] ?? [:]
+    switch call.method {
+    case "ready":
+      result(nil)
+      runPendingRingChecks()
+    case "showIncoming":
+      let callId = args["callId"] as? String ?? ""
+      let name = args["name"] as? String ?? ""
+      let video = args["video"] as? Bool ?? false
+      showIncoming(callId: callId, name: name, video: video, fromRingEngine: fromRingEngine)
+      result(nil)
+    case "endIncoming":
+      let callId = args["callId"] as? String ?? ""
+      let answered = args["answered"] as? Bool ?? false
+      if let uuid = callUUIDs[callId], !(answered && answeredCalls.contains(uuid)) {
+        endCall(uuid, reason: answered ? .answeredElsewhere : .unanswered)
+      }
+      result(nil)
+    case "stopOngoing":
+      for uuid in answeredCalls {
+        endCall(uuid, reason: .remoteEnded)
+      }
+      result(nil)
+    case "startOngoing":
+      result(nil)
+    case "ringSupported":
+      result(true)
+    case "ringEnable":
+      startVoipRegistry()
+      if let token = voipRegistry?.pushToken(for: .voIP) {
+        sendVoipToken(token)
+      }
+      result(true)
+    case "ringDisable":
+      voipRegistry?.desiredPushTypes = []
+      voipRegistry = nil
+      result(nil)
+    default:
+      result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func startVoipRegistry() {
+    if voipRegistry != nil { return }
+    let registry = PKPushRegistry(queue: DispatchQueue.main)
+    registry.delegate = self
+    registry.desiredPushTypes = [.voIP]
+    voipRegistry = registry
+  }
+
+  private func sendVoipToken(_ token: Data) {
+    let hex = token.map { String(format: "%02x", $0) }.joined()
+    callChannel?.invokeMethod("ringToken", arguments: ["platform": "apns", "token": hex, "env": Self.pushEnv])
+  }
+
+  func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+    guard type == .voIP else { return }
+    sendVoipToken(pushCredentials.token)
+  }
+
+  func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {}
+
+  func pushRegistry(
+    _ registry: PKPushRegistry,
+    didReceiveIncomingPushWith payload: PKPushPayload,
+    for type: PKPushType,
+    completion: @escaping () -> Void
+  ) {
+    guard type == .voIP else {
+      completion()
+      return
+    }
+    let uuid = UUID()
+    let update = CXCallUpdate()
+    update.remoteHandle = CXHandle(type: .generic, value: "Nymchat")
+    update.localizedCallerName = "Nymchat"
+    update.hasVideo = false
+    update.supportsGrouping = false
+    update.supportsUngrouping = false
+    update.supportsHolding = false
+    update.supportsDTMF = false
+    if let pending = pushCallUUID {
+      endCall(pending, reason: .failed)
+    }
+    pushCallUUID = uuid
+    callProvider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+      if error != nil {
+        if self?.pushCallUUID == uuid { self?.pushCallUUID = nil }
+      } else {
+        self?.ringCheck(uuid)
+      }
+      completion()
+    }
+  }
+
+  private func ringCheck(_ uuid: UUID) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + Self.ringCheckTimeout) { [weak self] in
+      guard let self = self, self.pushCallUUID == uuid else { return }
+      self.endCall(uuid, reason: .failed)
+    }
+    if let channel = callChannel {
+      channel.invokeMethod("ringCheck", arguments: nil) { [weak self] reply in
+        self?.onRingCheck(uuid, reply: reply, fromRingEngine: false)
+      }
+      return
+    }
+    ringPendingChecks.append(uuid)
+    startRingEngine()
+  }
+
+  private func startRingEngine() {
+    if ringEngine != nil {
+      runPendingRingChecks()
+      return
+    }
+    let engine = FlutterEngine(name: "nym_ring", project: nil, allowHeadlessExecution: true)
+    guard engine.run(withEntrypoint: "ringMain", libraryURI: nil) else {
+      for uuid in ringPendingChecks { endCall(uuid, reason: .failed) }
+      ringPendingChecks = []
+      return
+    }
+    ringEngine = engine
+    GeneratedPluginRegistrant.register(with: engine)
+    let messenger = engine.binaryMessenger
+    registerVaultKeyChannel(on: messenger)
+    registerAttestChannel(on: messenger)
+    let channel = FlutterMethodChannel(name: "app.nymchat/call", binaryMessenger: messenger)
+    ringChannel = channel
+    channel.setMethodCallHandler { [weak self] call, result in
+      self?.handleCallMethod(call, result: result, fromRingEngine: true)
+    }
+  }
+
+  private func runPendingRingChecks() {
+    guard let channel = ringChannel else { return }
+    let pending = ringPendingChecks
+    ringPendingChecks = []
+    for uuid in pending {
+      channel.invokeMethod("ringCheck", arguments: nil) { [weak self] reply in
+        self?.onRingCheck(uuid, reply: reply, fromRingEngine: true)
+      }
+    }
+  }
+
+  private func onRingCheck(_ uuid: UUID, reply: Any?, fromRingEngine: Bool) {
+    guard let info = reply as? [String: Any], let callId = info["callId"] as? String, !callId.isEmpty else {
+      if pushCallUUID == uuid { endCall(uuid, reason: .failed) }
+      return
+    }
+    if callUUIDs[callId] == nil, pushCallUUID == uuid {
+      showIncoming(
+        callId: callId,
+        name: info["name"] as? String ?? "",
+        video: info["video"] as? Bool ?? false,
+        fromRingEngine: fromRingEngine
+      )
+    }
+  }
+
+  private func showIncoming(callId: String, name: String, video: Bool, fromRingEngine: Bool) {
+    guard !callId.isEmpty, callUUIDs[callId] == nil else { return }
+    if !fromRingEngine && pushCallUUID == nil && UIApplication.shared.applicationState == .active {
+      return
+    }
+    let update = CXCallUpdate()
+    update.remoteHandle = CXHandle(type: .generic, value: name.isEmpty ? "Nymchat" : name)
+    update.localizedCallerName = name.isEmpty ? "Nymchat" : name
+    update.hasVideo = video
+    update.supportsGrouping = false
+    update.supportsUngrouping = false
+    update.supportsHolding = false
+    update.supportsDTMF = false
+    if let pending = pushCallUUID {
+      pushCallUUID = nil
+      callUUIDs[callId] = pending
+      if fromRingEngine { callOnRingEngine.insert(pending) }
+      callProvider.reportCall(with: pending, updated: update)
+      return
+    }
+    let uuid = UUID()
+    callUUIDs[callId] = uuid
+    if fromRingEngine { callOnRingEngine.insert(uuid) }
+    callProvider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+      if error != nil { self?.forget(uuid) }
+    }
+  }
+
+  private func callId(for uuid: UUID) -> String? {
+    return callUUIDs.first(where: { $0.value == uuid })?.key
+  }
+
+  private func channel(for uuid: UUID) -> FlutterMethodChannel? {
+    return callOnRingEngine.contains(uuid) ? ringChannel : callChannel
+  }
+
+  private func forget(_ uuid: UUID) {
+    if let id = callId(for: uuid) { callUUIDs.removeValue(forKey: id) }
+    answeredCalls.remove(uuid)
+    callOnRingEngine.remove(uuid)
+    if pushCallUUID == uuid { pushCallUUID = nil }
+    if callUUIDs.isEmpty && pushCallUUID == nil && ringPendingChecks.isEmpty {
+      stopRingEngine()
+    }
+  }
+
+  private func stopRingEngine() {
+    guard let engine = ringEngine else { return }
+    ringChannel?.setMethodCallHandler(nil)
+    ringChannel = nil
+    ringEngine = nil
+    engine.destroyContext()
+  }
+
+  private func endCall(_ uuid: UUID, reason: CXCallEndedReason) {
+    callProvider.reportCall(with: uuid, endedAt: Date(), reason: reason)
+    forget(uuid)
+  }
+
+  func providerDidReset(_ provider: CXProvider) {
+    for uuid in Array(callUUIDs.values) { forget(uuid) }
+    if let pending = pushCallUUID { forget(pending) }
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    guard let id = callId(for: action.callUUID) else {
+      action.fail()
+      return
+    }
+    answeredCalls.insert(action.callUUID)
+    channel(for: action.callUUID)?.invokeMethod("answer", arguments: ["callId": id])
+    action.fulfill()
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    let uuid = action.callUUID
+    if let id = callId(for: uuid) {
+      let method = answeredCalls.contains(uuid) ? "hangup" : "decline"
+      channel(for: uuid)?.invokeMethod(method, arguments: ["callId": id])
+    }
+    forget(uuid)
+    action.fulfill()
+  }
+
+  func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+    channel(for: action.callUUID)?.invokeMethod("mute", arguments: ["muted": action.isMuted])
+    action.fulfill()
   }
 }

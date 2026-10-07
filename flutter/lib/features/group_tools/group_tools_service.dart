@@ -6,12 +6,14 @@ import '../../models/group.dart';
 import '../../models/message.dart';
 import '../chat_tools/chat_tools_service.dart' show ChatToolsPrefs;
 import '../groups/group_logic.dart' show kMaxGroupMembers;
+import '../sync/sync_merge.dart';
 import 'group_tools.dart';
 
 class GroupToolsKeys {
   GroupToolsKeys._();
   static const String rsvps = 'nym_gt_rsvps';
   static const String reminders = 'nym_gt_reminders';
+  static const String remindersRemoved = 'nym_gt_reminders_removed';
   static const String callLinks = 'nym_gt_call_links';
   static const String pendingJoins = 'nym_gt_pending_joins';
   static const String liveShare = 'nym_gt_live_share';
@@ -136,12 +138,14 @@ class EventReminder {
     required this.title,
     required this.groupId,
     this.fired = false,
+    this.t = 0,
   });
   final int offset;
   final int start;
   final String title;
   final String groupId;
   bool fired;
+  final int t;
 
   Map<String, dynamic> toJson() => {
     'offset': offset,
@@ -149,6 +153,7 @@ class EventReminder {
     'title': title,
     'groupId': groupId,
     'fired': fired,
+    't': t,
   };
 
   static EventReminder? fromJson(Object? j) {
@@ -162,6 +167,7 @@ class EventReminder {
       title: (j['title'] ?? '').toString(),
       groupId: (j['groupId'] ?? '').toString(),
       fired: j['fired'] == true,
+      t: j['t'] is num ? (j['t'] as num).floor() : 0,
     );
   }
 }
@@ -192,6 +198,7 @@ class GroupToolsHooks {
     this.joinAccepted,
     this.position,
     this.onChanged,
+    this.onSyncChanged,
     this.now,
     this.translate,
   });
@@ -241,6 +248,7 @@ class GroupToolsHooks {
   final void Function()? joinAccepted;
   final Future<GtPosition?> Function()? position;
   final void Function()? onChanged;
+  final void Function()? onSyncChanged;
   final int Function()? now;
   final String Function(String text, [Map<String, String>? vars])? translate;
 }
@@ -854,6 +862,87 @@ class GroupToolsService {
     return out;
   }
 
+  void _syncChanged() => hooks.onSyncChanged?.call();
+
+  Map<String, int>? _remGone;
+
+  Map<String, int> remindersRemoved() =>
+      _remGone ??= tsMapNorm(_readJson(GroupToolsKeys.remindersRemoved));
+
+  void _saveRemindersRemoved() => _prefs.write(
+      GroupToolsKeys.remindersRemoved, jsonEncode(remindersRemoved()));
+
+  Map<String, dynamic> _remindersJson() => {
+        'items': reminders().map((k, v) => MapEntry(k, v.toJson())),
+        'removed': remindersRemoved(),
+      };
+
+  Map<String, dynamic> syncPayload() => {
+        'rsvps': rsvpMerge(_rsvpJson(), null),
+        'reminders': remindersMerge(_remindersJson(), null),
+        'callLinks': callLinksMerge([for (final l in callLinks()) l.toJson()], null),
+      };
+
+  bool get hasSyncData {
+    final p = syncPayload();
+    final rem = p['reminders'] as Map;
+    return (p['rsvps'] as Map).isNotEmpty ||
+        (rem['items'] as Map).isNotEmpty ||
+        (rem['removed'] as Map).isNotEmpty ||
+        (p['callLinks'] as List).isNotEmpty;
+  }
+
+  Map<String, dynamic> _rsvpJson() => rsvpStore().map(
+      (k, v) => MapEntry(k, v.map((pk, e) => MapEntry(pk, e.toJson()))));
+
+  void applySynced(Object? raw) {
+    if (raw is! Map || _self.isEmpty) return;
+    var changed = false;
+    final curRs = rsvpMerge(_rsvpJson(), null);
+    final rs = rsvpMerge(curRs, raw['rsvps']);
+    if (jsonEncode(rs) != jsonEncode(curRs)) {
+      final out = <String, Map<String, RsvpEntry>>{};
+      rs.forEach((id, entries) {
+        out[id] = {
+          for (final e in entries.entries)
+            e.key: RsvpEntry(e.value['s'] as String, e.value['ts'] as int),
+        };
+      });
+      _rsvpCache = out;
+      _rsvpPk = _self;
+      _prefs.write(_k(GroupToolsKeys.rsvps), jsonEncode(rs));
+      changed = true;
+    }
+    final curRem = remindersNorm(_remindersJson());
+    final rem = remindersMerge(curRem, raw['reminders']);
+    if (jsonEncode(rem) != jsonEncode(remindersMerge(curRem, null))) {
+      final items = <String, EventReminder>{};
+      (rem['items'] as Map).forEach((k, v) {
+        final r = EventReminder.fromJson(v);
+        if (r != null) items['$k'] = r;
+      });
+      _remCache = items;
+      _remGone = Map<String, int>.from(rem['removed'] as Map);
+      _saveReminders();
+      _saveRemindersRemoved();
+      armReminders();
+      changed = true;
+    }
+    final curLinks = callLinksMerge([for (final l in callLinks()) l.toJson()], null);
+    final links = callLinksMerge(curLinks, raw['callLinks']);
+    if (jsonEncode(links) != jsonEncode(curLinks)) {
+      _linksCache = [
+        for (final l in links)
+          if (CallLink.fromJson(l) != null) CallLink.fromJson(l)!,
+      ];
+      _linksPk = _self;
+      _prefs.write(_k(GroupToolsKeys.callLinks),
+          jsonEncode([for (final x in _linksCache!) x.toJson()]));
+      changed = true;
+    }
+    if (changed) _changed();
+  }
+
   void _saveRsvps() {
     final s = rsvpStore();
     if (s.length > 300) {
@@ -870,6 +959,7 @@ class GroupToolsService {
         ),
       ),
     );
+    _syncChanged();
   }
 
   Map<String, RsvpEntry> rsvpEntries(String eventId) =>
@@ -956,14 +1046,21 @@ class GroupToolsService {
   void setReminder(String groupId, String eventId, int? offset) {
     final ev = findEvent(groupId, eventId);
     if (offset == null || ev == null) {
-      reminders().remove(eventId);
+      final had = reminders().remove(eventId);
+      if (had != null) {
+        remindersRemoved()[eventId] = max(_nowMs, had.t + 1);
+        _saveRemindersRemoved();
+      }
     } else {
       if (!GroupTools.reminderOffsetsMin.contains(offset)) return;
+      final gone = remindersRemoved().remove(eventId);
+      if (gone != null) _saveRemindersRemoved();
       reminders()[eventId] = EventReminder(
         offset: offset,
         start: ev.start,
         title: ev.title,
         groupId: groupId,
+        t: max(_nowMs, (gone ?? 0) + 1),
       );
       final at = GroupTools.reminderAt(ev.start, offset);
       if (at <= _nowSec) {
@@ -977,6 +1074,7 @@ class GroupToolsService {
     _saveReminders();
     _changed();
     armReminders();
+    _syncChanged();
   }
 
   Timer? _remTimer;
@@ -1046,6 +1144,7 @@ class GroupToolsService {
       jsonEncode([for (final x in l) x.toJson()]),
     );
     _changed();
+    _syncChanged();
   }
 
   CallLink createCallLink({

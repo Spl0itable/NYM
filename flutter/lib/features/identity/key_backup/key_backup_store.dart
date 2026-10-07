@@ -7,8 +7,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'apple_keychain_backup_store.dart';
+import 'cloudkit_backup_store.dart';
 import 'drive_backup_client.dart';
 import 'key_backup_config.dart';
 import 'key_backup_crypto.dart';
@@ -166,8 +168,74 @@ class GoogleKeyBackupStore implements KeyBackupStore {
   }
 }
 
-class AppleKeyBackupStore implements KeyBackupStore {
-  AppleKeyBackupStore(KeyBackupConfig config, {AppleKeychainBackupStore? keychain})
+abstract class LegacyBackupSource {
+  KeyBackupStore? get legacy;
+}
+
+class AppleKeyBackupStore implements KeyBackupStore, LegacyBackupSource {
+  AppleKeyBackupStore(
+    KeyBackupConfig config, {
+    CloudKitBackupChannel? cloudKit,
+    KeyBackupStore? legacy,
+    this._newId,
+  })  : _cloudKit = cloudKit ??
+            CloudKitBackupChannel(container: config.appleCloudKitContainer),
+        _legacy = legacy ?? AppleLegacyKeyBackupStore(config);
+
+  final CloudKitBackupChannel _cloudKit;
+  final KeyBackupStore _legacy;
+  final String Function()? _newId;
+
+  @override
+  BackupCloud get cloud => BackupCloud.apple;
+
+  @override
+  KeyBackupStore? get legacy => _legacy;
+
+  @override
+  Future<String> signIn() => _cloudKit.userRecordName();
+
+  @override
+  Future<List<BackupEntry>> list() async {
+    final records = await _cloudKit.query();
+    return [
+      for (final r in records) BackupEntry(id: r.recordName, payload: r.payload),
+    ];
+  }
+
+  @override
+  Future<String> read(BackupEntry entry) async {
+    final cached = entry.payload;
+    if (cached != null) return cached;
+    for (final r in await _cloudKit.query()) {
+      if (r.recordName == entry.id) return r.payload;
+    }
+    throw StateError('backup not found');
+  }
+
+  @override
+  Future<void> write(String payload) async {
+    final name = newCloudKitRecordName(_newId);
+    await _cloudKit.save(name, payload);
+    try {
+      await CloudKitSavedRecords.add(
+          await SharedPreferences.getInstance(), name);
+    } catch (_) {}
+  }
+
+  @override
+  Future<void> delete(BackupEntry entry) async {
+    await _cloudKit.delete(entry.id);
+    try {
+      await CloudKitSavedRecords.remove(
+          await SharedPreferences.getInstance(), entry.id);
+    } catch (_) {}
+  }
+}
+
+class AppleLegacyKeyBackupStore implements KeyBackupStore {
+  AppleLegacyKeyBackupStore(KeyBackupConfig config,
+      {AppleKeychainBackupStore? keychain})
       : _keychain = keychain ??
             AppleKeychainBackupStore(
                 accessGroup: config.appleKeychainGroupOrNull);
@@ -216,7 +284,7 @@ class AppleKeyBackupStore implements KeyBackupStore {
 
   @override
   Future<void> write(String payload) async {
-    await _keychain.write(payload);
+    throw UnsupportedError('Apple backups are written to CloudKit');
   }
 
   @override

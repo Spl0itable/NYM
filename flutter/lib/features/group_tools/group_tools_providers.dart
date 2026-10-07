@@ -118,6 +118,11 @@ final groupToolsProvider = Provider<GroupToolsService>((ref) {
       admitToCall: (link, joiner) =>
           ref.read(callServiceProvider).admitViaLink(link, joiner),
       position: () => currentGtPosition(prompt: false),
+      onSyncChanged: () {
+        try {
+          ctl().syncSettings();
+        } catch (_) {}
+      },
       onChanged: () {
         ref.read(groupToolsRevisionProvider.notifier).state++;
         ref.read(appStateProvider.notifier).touch();

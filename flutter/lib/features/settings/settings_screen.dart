@@ -3,11 +3,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../calls/call_ip_notice.dart';
+import '../calls/ring_setting.dart';
+import '../calls/call_wake.dart' show ringRegistrationProvider;
 import '../../services/attest/attest_badge.dart';
 import 'package:flutter/services.dart';
-import '../../widgets/common/keyboard_inset_dialog.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../calls/call_history_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -22,6 +27,7 @@ import '../../core/theme/nym_theme.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/channel.dart';
 import '../../models/settings.dart';
+import '../identity/delete_account.dart';
 import '../identity/panic_overlay.dart';
 import '../notifications/notifications_service.dart';
 import '../../services/location/geolocation.dart';
@@ -30,11 +36,13 @@ import '../../services/storage/secure_store.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../layout/layout_model.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart' show proxiedAvatarUrl;
 import '../../widgets/nym_icons.dart';
 import '../../widgets/wallpaper/wallpaper_layer.dart';
 import '../emoji/emoji_picker.dart';
+import '../ai_consent/ai_consent.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
 import '../messages/format/message_content.dart' show InlineEmojiText;
@@ -53,8 +61,10 @@ import '../identity/remote_panic_logic.dart';
 import '../../widgets/wallpaper/wallpaper_cache.dart';
 import '../../services/filter/filter_packs.dart';
 import '../toasts/toast_center.dart';
+import '../../state/fallback_notice.dart';
 import 'settings_helpers.dart';
 import 'settings_widgets.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Post-quantum status line, named so a test can hold the translation catalog to it.
 const String kPqStatusFull = 'Active for messages with other Nymchat users.';
@@ -95,6 +105,7 @@ class SettingsScreen extends ConsumerStatefulWidget {
     super.key,
     this.initialSearch,
     this.focusLanding = false,
+    this.initialSection,
   });
 
   /// Pre-fills the search so the dialog opens narrowed to one setting.
@@ -103,26 +114,31 @@ class SettingsScreen extends ConsumerStatefulWidget {
   /// Focuses the Default Landing Channel field once shown.
   final bool focusLanding;
 
+  final String? initialSection;
+
   /// Opens the settings dialog as a modal route.
   static Future<void> open(
     BuildContext context, {
     String? initialSearch,
     bool focusLanding = false,
+    String? initialSection,
   }) {
     final solidUi =
         ProviderScope.containerOf(context).read(settingsProvider).solidUi;
     final isLight = context.nym.isLight;
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => SettingsScreen(
+        initialSearch: initialSearch,
+        focusLanding: focusLanding,
+        initialSection: initialSection,
+      ),
       barrierColor: !solidUi
           ? Colors.black.withValues(alpha: 0.7)
           : isLight
               ? const Color(0x73000000)
               : const Color(0xBF000000),
-      builder: (_) => SettingsScreen(
-        initialSearch: initialSearch,
-        focusLanding: focusLanding,
-      ),
+      fullHeight: true,
     );
   }
 
@@ -137,6 +153,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _landingController = TextEditingController();
   final _landingFocus = FocusNode();
   String _search = '';
+  String _pane = 'appearance';
 
   /// Inline error under the transfer field.
   String? _transferError;
@@ -157,6 +174,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final Map<String, bool> _open = {
     'appearance': true,
     'privacy': true,
+    'pms': true,
+    'safety': true,
     'messaging': true,
     'channels': true,
     'mobile': true,
@@ -231,6 +250,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (raw != null && raw.isNotEmpty) {
         final map = jsonDecode(raw);
         if (map is Map) {
+          if (kv.getString(_kSettingsSectionsSplitKey) == null) {
+            final p = map['privacy'];
+            if (p != null && p != 0 && p != false) {
+              map['pms'] = 1;
+              map['safety'] = 1;
+            }
+          }
           for (final key in _open.keys.toList()) {
             final v = map[key];
             if (v != null && v != 0 && v != false) _open[key] = false;
@@ -238,6 +264,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         }
       }
     } catch (_) {}
+    if (kv.getString(_kSettingsSectionsSplitKey) == null) {
+      kv.setString(_kSettingsSectionsSplitKey, '1');
+      final collapsed = <String, int>{
+        for (final e in _open.entries)
+          if (!e.value) e.key: 1,
+      };
+      kv.setString(_kSettingsSectionsCollapsedKey, jsonEncode(collapsed));
+    }
+    final section = settingsSectionForAnchor(
+        widget.focusLanding ? 'pinnedLandingChannelSearch' : widget.initialSection);
+    if (section != null && _open.containsKey(section)) {
+      _pane = section;
+      _open[section] = true;
+    }
     final seed = widget.initialSearch;
     if (seed != null && seed.isNotEmpty) {
       _search = seed;
@@ -324,8 +364,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   /// Mutates the Save-gated [_draft] instead of committing.
   void _mutate(Settings Function(Settings draft) fn) {
-    setState(() => _draft = fn(_draft));
+    setState(() {
+      _draft = fn(_draft);
+      _touched = true;
+    });
   }
+
+  bool _touched = false;
 
   @override
   Widget build(BuildContext context) {
@@ -342,6 +387,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // Mobile Gestures only at ≤768px width.
     final isMobileWidth = MediaQuery.of(context).size.width <= 768;
 
+    final privacy = _privacy(settings, ctrl);
     final sections = <_SectionSpec>[
       _SectionSpec(
         key: 'appearance',
@@ -351,7 +397,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _SectionSpec(
         key: 'privacy',
         title: tr('Privacy & Security'),
-        groups: _privacy(settings, ctrl),
+        groups: privacy.privacy,
+      ),
+      _SectionSpec(
+        key: 'pms',
+        title: tr('Private Messages'),
+        groups: privacy.pms,
+      ),
+      _SectionSpec(
+        key: 'safety',
+        title: tr('Safety & Filtering'),
+        groups: privacy.safety,
       ),
       _SectionSpec(
         key: 'messaging',
@@ -391,78 +447,171 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       visibleSections.add((spec: s, groups: groups));
     }
 
-    return KeyboardInsetDialog(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500),
-          child: Material(
-            color: Colors.transparent,
-            child: ModalChrome.box(
-              c,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.9,
+    final size = MediaQuery.of(context).size;
+    final mode = settingsMode(size.width);
+    final twoPane = mode == 'two-pane';
+    final inSheet = NymSheetScope.of(context);
+    if (twoPane && !sections.any((x) => x.key == _pane)) {
+      _pane = sections.first.key;
+    }
+    final shown = twoPane && q.isEmpty
+        ? visibleSections.where((x) => x.spec.key == _pane).toList()
+        : visibleSections;
+
+    final body = CustomScrollView(
+      shrinkWrap: !twoPane && !inSheet,
+      slivers: [
+        SliverToBoxAdapter(
+          child: Stack(
+            children: [
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _header(c),
+                  const SizedBox(height: 24),
+                ],
+              ),
+              ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
+            ],
+          ),
+        ),
+        PinnedHeaderSliver(child: _searchBar(c)),
+        SliverToBoxAdapter(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (visibleSections.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(32, 18, 32, 6),
+                  child: Text(
+                    tr('No settings match your search.'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: c.textDim, fontSize: 13),
+                  ),
                 ),
-                // The whole card scrolls; only the search row is sticky, and Save sits at the end.
-                child: CustomScrollView(
-                  shrinkWrap: true,
-                  slivers: [
-                    SliverToBoxAdapter(
-                      child: Stack(
-                        children: [
-                          Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _header(c),
-                              const SizedBox(height: 24),
-                            ],
-                          ),
-                          // The close chip scrolls away with the header.
-                          ModalChrome.closeChip(
-                              c, () => Navigator.of(context).maybePop()),
-                        ],
-                      ),
-                    ),
-                    PinnedHeaderSliver(child: _searchBar(c)),
-                    SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (visibleSections.isEmpty)
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(32, 18, 32, 6),
-                              child: Text(
-                                tr('No settings match your search.'),
-                                textAlign: TextAlign.center,
-                                style:
-                                    TextStyle(color: c.textDim, fontSize: 13),
-                              ),
-                            ),
-                          for (final s in visibleSections)
-                            SettingsSection(
-                              title: s.spec.title,
-                              // A live query force-expands matching sections without persisting.
-                              open: q.isNotEmpty
-                                  ? true
-                                  : (_open[s.spec.key] ?? true),
-                              onToggle: () => _toggleSection(s.spec.key),
-                              children: [
-                                for (final g in s.groups) g.child,
-                              ],
-                            ),
-                          // Actions are the last block of the scrolled content.
-                          _actions(c),
-                        ],
-                      ),
-                    ),
+              for (final s in shown)
+                SettingsSection(
+                  key: ValueKey('settingsSection-${s.spec.key}'),
+                  title: s.spec.title,
+                  open: q.isNotEmpty || twoPane
+                      ? true
+                      : (_open[s.spec.key] ?? true),
+                  onToggle: twoPane ? () {} : () => _toggleSection(s.spec.key),
+                  children: [
+                    for (final g in s.groups) g.child,
                   ],
                 ),
+              _actions(c),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    if (inSheet) {
+      return NymDiscardGuard(
+        isDirty: () => _touched,
+        child: KeyedSubtree(
+          key: const ValueKey('settingsPage'),
+          child: body,
+        ),
+      );
+    }
+
+    if (twoPane) {
+      return NymDiscardGuard(
+        isDirty: () => _touched,
+        child: ModalChrome.shell(
+          context,
+          maxWidth: 960,
+          child: ModalChrome.box(
+            c,
+            child: SizedBox(
+              height: size.height * 0.85,
+              child: Row(
+                key: const ValueKey('settingsTwoPane'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _nav(c, sections, q.isNotEmpty),
+                  Expanded(child: body),
+                ],
               ),
             ),
           ),
         ),
+      );
+    }
+
+    return NymDiscardGuard(
+      isDirty: () => _touched,
+      child: ModalChrome.shell(
+        context,
+        maxWidth: 500,
+        child: ModalChrome.box(
+          c,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: size.height * 0.9,
+            ),
+            child: body,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _nav(NymColors c, List<_SectionSpec> sections, bool searching) {
+    return Container(
+      key: const ValueKey('settingsNav'),
+      width: 208,
+      padding: const EdgeInsets.fromLTRB(
+          NymSpace.s3, NymSpace.s8, NymSpace.s3, NymSpace.s4),
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: c.glassBorder)),
+      ),
+      child: ListView(
+        children: [
+          for (final sec in sections)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Semantics(
+                selected: !searching && sec.key == _pane,
+                button: true,
+                child: InkWell(
+                  key: ValueKey('settingsNav-${sec.key}'),
+                  borderRadius: NymRadius.rxs,
+                  onTap: () => setState(() {
+                    _pane = sec.key;
+                    if (_search.isNotEmpty) {
+                      _search = '';
+                      _searchController.clear();
+                    }
+                  }),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: NymSpace.s3, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: !searching && sec.key == _pane
+                          ? c.primaryA(0.1)
+                          : Colors.transparent,
+                      borderRadius: NymRadius.rxs,
+                    ),
+                    child: Text(
+                      sec.title,
+                      style: TextStyle(
+                        color: !searching && sec.key == _pane
+                            ? c.primary
+                            : c.text,
+                        fontSize: NymType.md,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -533,7 +682,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // Stretched to match the 42px Save button.
           NymOutlineButton(
             label: tr('Cancel'),
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: () => Navigator.of(context).pop(),
             height: 42,
           ),
           const SizedBox(width: 10),
@@ -625,7 +774,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ctrl.setSwipeThreshold(d.swipeThreshold);
     ctrl.setSwipeReactEmoji(d.swipeReactEmoji);
     ctrl.setLowDataMode(d.lowDataMode);
-    ctrl.setBackgroundConnectivity(d.backgroundConnectivity);
+    if (d.backgroundConnectivity !=
+        ref.read(settingsProvider).backgroundConnectivity) {
+      ctrl.setBackgroundConnectivity(d.backgroundConnectivity);
+    }
 
     // Keypair is locked to 'persistent' while logged in with a Nostr identity.
     final nostrLoggedIn =
@@ -680,7 +832,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     if (!mounted) return;
     _systemMessage(tr('Settings saved'));
-    Navigator.of(context).maybePop();
+    Navigator.of(context).pop();
   }
 
   /// Picks an image, uploads it to Blossom and selects it; failures leave the selection unchanged.
@@ -867,7 +1019,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _systemMessage(tr(
         'Local storage cache cleared. Settings, group memberships, and login '
         'preserved.'));
-    Navigator.of(context).maybePop();
+    Navigator.of(context).pop();
   }
 
   /// Confirms, wipes settings keys, resets moderation sets and reloads Settings so everything reverts live.
@@ -916,7 +1068,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _systemMessage(
         tr('Settings reset to defaults. Cache, group memberships, and login '
             'preserved.'));
-    Navigator.of(context).maybePop();
+    Navigator.of(context).pop();
   }
 
   /// Validates the recipient, publishes the gift-wrapped settings transfer, and shows success or error.
@@ -1013,7 +1165,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             .read(keyValueStoreProvider)
             .getString(StorageKeys.wallpaperCustomUrl)
         : null;
+    final timeFormatItems = <({String value, String label})>[
+      (value: '24hr', label: tr('24-hour (14:30)')),
+      (value: '12hr', label: tr('12-hour (2:30 PM)')),
+    ];
+    final dateFormatItems = <({String value, String label})>[
+      (value: 'default', label: tr('Default (May 28, 2026)')),
+      (value: 'mdy', label: tr('MM/DD/YYYY (05/28/2026)')),
+      (value: 'dmy', label: tr('DD/MM/YYYY (28/05/2026)')),
+      (value: 'ymd', label: tr('YYYY-MM-DD (2026-05-28)')),
+    ];
     return [
+      // Live-applied: commit now and mirror into the draft.
+      _GroupSpec(
+        text: tr('Light Auto Dark Auto matches your system preference'),
+        child: FormGroup(
+          hint: tr('Auto matches your system preference'),
+          child: SegmentGroup<ColorMode>(
+            value: s.colorMode,
+            segments: [
+              (value: ColorMode.light, label: tr('Light')),
+              (value: ColorMode.auto, label: tr('Auto')),
+              (value: ColorMode.dark, label: tr('Dark')),
+            ],
+            onChanged: (v) {
+              ctrl.setColorMode(v);
+              _mutate((d) => d.copyWith(colorMode: v));
+            },
+          ),
+        ),
+      ),
       // App UI language; the choice persists and syncs, separate from the translation target.
       _GroupSpec(
         text: tr('Language app language localization {lang}',
@@ -1036,25 +1217,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Live-applied: commit now and mirror into the draft.
-      _GroupSpec(
-        text: tr('Light Auto Dark Auto matches your system preference'),
-        child: FormGroup(
-          hint: tr('Auto matches your system preference'),
-          child: SegmentGroup<ColorMode>(
-            value: s.colorMode,
-            segments: [
-              (value: ColorMode.light, label: tr('Light')),
-              (value: ColorMode.auto, label: tr('Auto')),
-              (value: ColorMode.dark, label: tr('Dark')),
-            ],
-            onChanged: (v) {
-              ctrl.setColorMode(v);
-              _mutate((d) => d.copyWith(colorMode: v));
-            },
-          ),
-        ),
-      ),
       _GroupSpec(
         text: tr('Theme {options}', {'options': _optText(_themeOptions())}),
         child: FormGroup(
@@ -1065,6 +1227,64 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             onChanged: (v) {
               ctrl.setTheme(v);
               _mutate((d) => d.copyWith(theme: v));
+            },
+          ),
+        ),
+      ),
+      _GroupSpec(
+        text: '${tr('Colorful Messages')} ${tr('Disabled')} ${tr('Enabled')} ${tr(kColorfulHint)}',
+        child: FormGroup(
+          label: tr('Colorful Messages'),
+          hint: tr(kColorfulHint),
+          child: FormSelect<String>(
+            key: const Key('colorfulMessagesSelect'),
+            value: ref.watch(settingsProvider.select((x) => x.colorfulMessages))
+                ? 'on'
+                : 'off',
+            items: [
+              (value: 'off', label: tr('Disabled')),
+              (value: 'on', label: tr('Enabled')),
+            ],
+            onChanged: (v) => ref
+                .read(settingsProvider.notifier)
+                .setColorfulMessages(v == 'on'),
+          ),
+        ),
+      ),
+      // Search text includes the mock preview lines.
+      _GroupSpec(
+        text: tr('Message Layout Bubbles (Default) IRC Style Choose between '
+            "classic IRC-style or modern chat bubbles alice#e45f hey there! "
+            "you#6si9 hello! bob#2t5g what's up?"),
+        child: FormGroup(
+          label: tr('Message Layout'),
+          hint: tr('Choose between classic IRC-style or modern chat bubbles'),
+          child: _LayoutPicker(
+            value: s.chatLayout,
+            onChanged: (v) {
+              ctrl.setChatLayout(v);
+              _mutate((d) => d.copyWith(chatLayout: v));
+            },
+          ),
+        ),
+      ),
+      // Default on; off restores the flat view.
+      _GroupSpec(
+        text: tr('Message Threads {options} Group replies under their '
+            'original message. Replies open in a thread view and the '
+            'original shows a reply count. Disabling shows every message '
+            'inline like before.', {'options': _optText(threadsItems)}),
+        child: FormGroup(
+          label: tr('Message Threads'),
+          hint: tr('Group replies under their original message. Replies '
+              'open in a thread view and the original shows a reply count. '
+              'Disabling shows every message inline like before.'),
+          child: FormSelect<bool>(
+            value: s.threadsEnabled,
+            items: threadsItems,
+            onChanged: (v) {
+              ctrl.setThreadsEnabled(v);
+              _mutate((d) => d.copyWith(threadsEnabled: v));
             },
           ),
         ),
@@ -1098,28 +1318,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Default on; off restores the flat view.
-      _GroupSpec(
-        text: tr('Message Threads {options} Group replies under their '
-            'original message. Replies open in a thread view and the '
-            'original shows a reply count. Disabling shows every message '
-            'inline like before.', {'options': _optText(threadsItems)}),
-        child: FormGroup(
-          label: tr('Message Threads'),
-          hint: tr('Group replies under their original message. Replies '
-              'open in a thread view and the original shows a reply count. '
-              'Disabling shows every message inline like before.'),
-          child: FormSelect<bool>(
-            value: s.threadsEnabled,
-            items: threadsItems,
-            onChanged: (v) {
-              ctrl.setThreadsEnabled(v);
-              _mutate((d) => d.copyWith(threadsEnabled: v));
-            },
-          ),
-        ),
-      ),
-      // Columns mode only.
       if (s.useColumns)
         _GroupSpec(
           text: tr(
@@ -1158,23 +1356,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               _mutate((d) => d.copyWith(wallpaperType: v));
             },
             onUploadCustom: () => _uploadCustomWallpaper(ctrl),
-          ),
-        ),
-      ),
-      // Search text includes the mock preview lines.
-      _GroupSpec(
-        text: tr('Message Layout Bubbles (Default) IRC Style Choose between '
-            "classic IRC-style or modern chat bubbles alice#e45f hey there! "
-            "you#6si9 hello! bob#2t5g what's up?"),
-        child: FormGroup(
-          label: tr('Message Layout'),
-          hint: tr('Choose between classic IRC-style or modern chat bubbles'),
-          child: _LayoutPicker(
-            value: s.chatLayout,
-            onChanged: (v) {
-              ctrl.setChatLayout(v);
-              _mutate((d) => d.copyWith(chatLayout: v));
-            },
           ),
         ),
       ),
@@ -1225,10 +1406,56 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
+      _GroupSpec(
+        text: tr('Show Timestamps Show Hide'),
+        child: FormGroup(
+          label: tr('Show Timestamps'),
+          child: FormSelect<bool>(
+            value: s.showTimestamps,
+            items: [
+              (value: true, label: tr('Show')),
+              (value: false, label: tr('Hide')),
+            ],
+            onChanged: (v) => _mutate((d) => d.copyWith(showTimestamps: v)),
+          ),
+        ),
+      ),
+      // Time/date format hide when timestamps are hidden.
+      if (s.showTimestamps) ...[
+        _GroupSpec(
+          text: tr(
+              'Time Format {options}', {'options': _optText(timeFormatItems)}),
+          child: FormGroup(
+            label: tr('Time Format'),
+            child: FormSelect<String>(
+              value: s.timeFormat,
+              items: timeFormatItems,
+              onChanged: (v) => _mutate((d) => d.copyWith(timeFormat: v)),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Date Format {options} Used in the full timestamp shown when '
+              'tapping a message time',
+              {'options': _optText(dateFormatItems)}),
+          child: FormGroup(
+            label: tr('Date Format'),
+            hint: tr('Used in the full timestamp shown when tapping a message '
+                'time'),
+            child: FormSelect<String>(
+              value: s.dateFormat,
+              items: dateFormatItems,
+              onChanged: (v) => _mutate((d) => d.copyWith(dateFormat: v)),
+            ),
+          ),
+        ),
+      ],
     ];
   }
 
-  List<_GroupSpec> _privacy(Settings s, SettingsController ctrl) {
+  ({List<_GroupSpec> privacy, List<_GroupSpec> pms, List<_GroupSpec> safety})
+      _privacy(Settings s, SettingsController ctrl) {
     // Moderation sets live on AppState.
     final app = ref.watch(appStateProvider);
     // A durable Nostr login locks keypair rotation to 'persistent'.
@@ -1261,10 +1488,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: 'friends', label: tr('Friends only')),
       (value: 'disabled', label: tr('Disabled')),
     ];
-    final callsWarning = tr(
-        '⚠ Audio/video calls and P2P file sharing connect peers directly over '
-        'WebRTC, which can reveal your true IP address to the other party. '
-        'Use a VPN or Tor to help conceal it.');
+    final callsWarning = tr(kCallIpNotice);
     // Sending post-quantum needs only the peer's key; receiving needs this device's root.
     final nostrCtrl = ref.read(nostrControllerProvider);
     final pqCapable = nostrCtrl.pqCapable;
@@ -1312,462 +1536,529 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final backupHint = '${keyBackupHint(passkeyOnly: ref.watch(keyBackupStoresProvider).isEmpty)} '
         '${tr('The backup options are in View or Edit Nym\u2019s Details, '
             'beside your private key and recovery code.')}';
-    return [
-      _GroupSpec(
-        text: tr('Identity Encryption Encrypt identity (nsec) key on this '
-            "device… Optionally protect your saved identity's (nsec) private "
-            'key with a password, PIN, passkey, or biometric (Face/Touch ID) '
-            "so it can't be read from this device without unlocking. Passkeys "
-            '(synced or hardware security keys) and biometrics use WebAuthn '
-            'where supported, with password/PIN as the universal fallback. On '
-            'the unlock screen, holding the Nymchat wordmark for 2 seconds '
-            'engages Panic Mode and wipes this device without unlocking.'),
-        child: FormGroup(
-          label: tr('Identity Encryption'),
-          hint: tr("Optionally protect your saved identity's (nsec) private "
-              'key with a password, PIN, passkey, or biometric (Face/Touch '
-              "ID) so it can't be read from this device without unlocking. "
-              'Passkeys (synced or hardware security keys) and biometrics use '
-              'WebAuthn where supported, with password/PIN as the universal '
-              'fallback. On the unlock screen, holding the Nymchat wordmark '
-              'for 2 seconds engages Panic Mode and wipes this device without '
-              'unlocking.'),
-          child: NymOutlineButton(
-            label: tr('Encrypt identity (nsec) key on this device…'),
-            onPressed: () => VaultSettingsModal.open(context),
-          ),
-        ),
-      ),
-      ..._chatLockGroups(),
-      _remotePanicGroup(),
-      if (canBackUpKey)
+    final nickStyleItems = <({String value, String label})>[
+      (value: 'fancy', label: tr('Fancy (adjective_noun)')),
+      (value: 'simple', label: tr('Simple (nym1234)')),
+    ];
+    final chatLock = _chatLockGroups();
+    return (
+      privacy: <_GroupSpec>[
         _GroupSpec(
-          text: '${tr('Cloud Key Backup')} $backupHint',
+          text: tr('Identity Encryption Encrypt identity (nsec) key on this '
+              "device… Optionally protect your saved identity's (nsec) private "
+              'key with a password, PIN, passkey, or biometric (Face/Touch ID) '
+              "so it can't be read from this device without unlocking. Passkeys "
+              '(synced or hardware security keys) and biometrics use WebAuthn '
+              'where supported, with password/PIN as the universal fallback. On '
+              'the unlock screen, holding the Nymchat wordmark for 2 seconds '
+              'engages Panic Mode and wipes this device without unlocking.'),
           child: FormGroup(
-            label: tr('Cloud Key Backup'),
-            hint: backupHint,
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: NymOutlineButton(
-                key: const Key('keyBackupOpenDetails'),
-                label: tr("View or Edit Nym's Details"),
-                onPressed: () => NickEditModal.open(context),
-              ),
+            label: tr('Identity Encryption'),
+            hint: tr("Optionally protect your saved identity's (nsec) private "
+                'key with a password, PIN, passkey, or biometric (Face/Touch '
+                "ID) so it can't be read from this device without unlocking. "
+                'Passkeys (synced or hardware security keys) and biometrics use '
+                'WebAuthn where supported, with password/PIN as the universal '
+                'fallback. On the unlock screen, holding the Nymchat wordmark '
+                'for 2 seconds engages Panic Mode and wipes this device without '
+                'unlocking.'),
+            child: NymOutlineButton(
+              label: tr('Encrypt identity (nsec) key on this device…'),
+              onPressed: () => VaultSettingsModal.open(context),
             ),
           ),
         ),
-      // The hardcore warning is always searchable.
-      _GroupSpec(
-        text: tr(
-            'Generate Random Keypair Per Session {options} Generate a new '
-            'random keypair on every session restart for improved '
-            'pseudonymity. When disabled, your generated keypair persists '
-            'across reloads. {warning}',
-            {'options': _optText(keypairItems), 'warning': hardcoreWarning}),
-        child: FormGroup(
-          label: tr('Generate Random Keypair Per Session'),
-          hint: tr('Generate a new random keypair on every session restart '
-              'for improved pseudonymity. When disabled, your generated '
-              'keypair persists across reloads.'),
-          // A plain amber hint, not the danger box.
-          amberHint: keypairValue == 'hardcore' ? hardcoreWarning : null,
-          child: FormSelect<String>(
-            value: keypairValue,
-            // Locked while logged in with a Nostr identity.
-            disabled: nostrLoggedIn,
-            tooltip: tr('Not available while logged in with a Nostr identity'),
-            items: keypairItems,
-            onChanged: (v) => setState(() => _draftKeypair = v),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Proof of Work Difficulty {options} Filters incoming messages by '
-            'proof of work — it does not change what you send. Every message '
-            'Nymchat sends is already mined to at least 16 bits, so 16 keeps '
-            'Nymchat traffic and drops clients that do no work. Above 16 also '
-            'hides messages from other Nymchat users.',
-            {'options': _optText(powItems)}),
-        child: FormGroup(
-          label: tr('Proof of Work Difficulty'),
-          hint: tr('Filters incoming messages by proof of work — it does not '
-              'change what you send. Every message Nymchat sends is already '
-              'mined to at least 16 bits, so 16 keeps Nymchat traffic and '
-              'drops clients that do no work. Above 16 also hides messages '
-              'from other Nymchat users.'),
-          child: FormSelect<int>(
-            value: _draftPow,
-            items: powItems,
-            onChanged: (v) => setState(() => _draftPow = v),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Verified Nymchat Users Only {options} Filters incoming channel '
-            'messages to senders who proved they are running Nymchat, on the '
-            'web app or the phone apps. Scripted senders cannot prove it and '
-            'are dropped. Your own messages, friends and Nymbot are always '
-            'shown.',
-            {'options': _optText(verifiedItems)}),
-        child: FormGroup(
-          label: tr('Verified Nymchat Users Only'),
-          hint: tr(
-              'Filters incoming channel messages to senders who proved they '
-              'are running Nymchat, on the web app or the phone apps. '
-              'Scripted senders cannot prove it and are dropped. Your own '
-              'messages, friends and Nymbot are always shown.'),
-          child: FormSelect<String>(
-            value: _draftVerified,
-            items: verifiedItems,
-            onChanged: (v) => setState(() => _draftVerified = v),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr('This Device {status} What this install proved to the '
-            'attestation service. Other people running the filter above see '
-            'your messages only when a badge is here.',
-            {'status': _attestReadout()}),
-        child: FormGroup(
-          label: tr('This Device'),
-          hint: tr('What this install proved to the attestation service. '
-              'Other people running the filter above see your messages only '
-              'when a badge is here.'),
-          child: Text(
-            _attestReadout(),
-            style: TextStyle(color: context.nym.textDim, fontSize: 12),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Accept Private Messages & Group Chat Requests {options} Control '
-            'who can send you PMs and group chat invites. "Friends only" '
-            'filters messages from non-friends.',
-            {'options': _optText(acceptItems)}),
-        child: FormGroup(
-          label: tr('Accept Private Messages & Group Chat Requests'),
-          hint: tr('Control who can send you PMs and group chat invites. '
-              '"Friends only" filters messages from non-friends.'),
-          child: FormSelect<String>(
-            value: s.acceptPMs,
-            items: acceptItems,
-            onChanged: (v) => _mutate((d) => d.copyWith(acceptPMs: v)),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Accept Audio & Video Calls {options} Control who can ring you '
-            'with an audio or video call. "Friends only" silently ignores '
-            'calls from non-friends. {warning}',
-            {'options': _optText(acceptItems), 'warning': callsWarning}),
-        child: FormGroup(
-          label: tr('Accept Audio & Video Calls'),
-          hint: tr('Control who can ring you with an audio or video call. '
-              '"Friends only" silently ignores calls from non-friends.'),
-          warning: callsWarning,
-          child: FormSelect<String>(
-            value: s.acceptCalls,
-            items: acceptItems,
-            onChanged: (v) => _mutate((d) => d.copyWith(acceptCalls: v)),
-          ),
-        ),
-      ),
-      // Read-only status so the security posture and any classical reason are visible.
-      _GroupSpec(
-        text: tr(
-            'Quantum-resistant encryption {status} Private messages and group '
-            'chats with other Nymchat users add ML-KEM-768 (a post-quantum key '
-            'exchange) alongside the standard NIP‑44 secp256k1 ECDH.',
-            {'status': pqStatus}),
-        child: FormGroup(
-          label: tr('Quantum-resistant encryption'),
-          hint: tr('Private messages and group chats with other Nymchat users '
-              'add ML-KEM-768 (a post-quantum key exchange) alongside the '
-              'standard NIP‑44 secp256k1 ECDH, so both would have to be broken '
-              'to read a message and traffic recorded today can\'t be decrypted '
-              'by a future quantum computer. This is automatic and has no '
-              'setting. Bitchat users and other Nostr clients keep receiving '
-              'standard NIP‑17 exactly as before.'),
-          // Green only when genuinely on end to end.
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                pqStatus,
-                style: TextStyle(
-                  color: pqCapable && pqRootHeld
-                      ? context.nym.primary
-                      : context.nym.text.withValues(alpha: 0.85),
-                  fontSize: 13,
-                ),
-              ),
-              // On-demand diagnostics of the terms behind each conversation's shield.
-              const _PqDiagnostics(),
-            ],
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr('Disappearing PM (forward secrecy) Disabled Enabled When '
-            'enabled, your private messages include an "expiration" tag '
-            '(NIP‑40) so relays/clients can delete them after the period '
-            'chosen when enabled.'),
-        child: FormGroup(
-          label: tr('Disappearing PM (forward secrecy)'),
-          hint: tr('When enabled, your private messages include an '
-              '"expiration" tag (NIP‑40) so relays/clients can delete them '
-              'after the period chosen when enabled.'),
-          child: FormSelect<bool>(
-            value: s.dmForwardSecrecyEnabled,
-            items: [
-              (value: false, label: tr('Disabled')),
-              (value: true, label: tr('Enabled')),
-            ],
-            onChanged: (v) =>
-                _mutate((d) => d.copyWith(dmForwardSecrecyEnabled: v)),
-          ),
-        ),
-      ),
-      if (s.dmForwardSecrecyEnabled)
         _GroupSpec(
-          text: tr(
-              'Disappear After {options} This sets the "expiration" timestamp '
-              'on each outgoing gift‑wrapped PM.',
-              {'options': _optText(dmTtlItems)}),
+          text: '${AiConsentStrings.settingSearch} '
+              '${AiConsentStrings.what} ${AiConsentStrings.who}',
           child: FormGroup(
-            label: tr('Disappear After'),
-            hint: tr('This sets the "expiration" timestamp on each outgoing '
-                'gift‑wrapped PM.'),
-            child: FormSelect<int>(
-              value: s.dmTtlSeconds,
-              items: dmTtlItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(dmTtlSeconds: v)),
-            ),
+            key: const Key('aiConsentGroup'),
+            label: AiConsentStrings.settingLabel,
+            footer: AiConsentSettingFooter(consent: AiConsent.instance),
+            child: AiConsentSettingRow(consent: AiConsent.instance),
           ),
         ),
-      _GroupSpec(
-        text: tr(
-            'Read Receipts {options} Choose where senders can see when '
-            "you've read their messages (✓✓). \"Enabled everywhere\" "
-            'includes PMs, group chats, and public channels.',
-            {'options': _optText(scopeItems)}),
-        child: FormGroup(
-          label: tr('Read Receipts'),
-          hint: tr("Choose where senders can see when you've read their "
-              'messages (✓✓). "Enabled everywhere" includes PMs, group '
-              'chats, and public channels.'),
-          child: FormSelect<String>(
-            value: s.readReceiptsScope,
-            items: scopeItems,
-            onChanged: (v) => _mutate((d) => d.copyWith(readReceiptsScope: v)),
+        _GroupSpec(
+          text: '${TranslateConsentStrings.settingSearch} '
+              '${TranslateConsentStrings.what} ${TranslateConsentStrings.who}',
+          child: FormGroup(
+            key: const Key('aiTranslateGroup'),
+            label: TranslateConsentStrings.settingLabel,
+            footer: AiConsentSettingFooter(consent: AiConsent.translation),
+            child: AiConsentSettingRow(consent: AiConsent.translation),
           ),
         ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Typing Indicators {options} Choose where others can see when '
-            'you\'re typing. "Enabled everywhere" includes PMs, group chats, '
-            'and public channels.',
-            {'options': _optText(scopeItems)}),
-        child: FormGroup(
-          label: tr('Typing Indicators'),
-          hint: tr("Choose where others can see when you're typing. "
-              '"Enabled everywhere" includes PMs, group chats, and public '
-              'channels.'),
-          child: FormSelect<String>(
-            value: s.typingIndicatorsScope,
-            items: scopeItems,
-            onChanged: (v) =>
-                _mutate((d) => d.copyWith(typingIndicatorsScope: v)),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Show Status Indicators {options} When enabled, '
-            'online/away/offline status dots are shown on avatars and in user '
-            'profiles. "Friends only" broadcasts a hidden status publicly '
-            "while privately sharing your real status with people you've "
-            'marked as friends, so only they can see it. When disabled, your '
-            "status is hidden from everyone, but you can still see other "
-            "people's status indicators.",
-            {'options': _optText(showStatusItems)}),
-        child: FormGroup(
-          label: tr('Show Status Indicators'),
-          hint: tr('When enabled, online/away/offline status dots are shown '
-              'on avatars and in user profiles. "Friends only" broadcasts a '
-              'hidden status publicly while privately sharing your real '
-              "status with people you've marked as friends, so only they can "
-              'see it. When disabled, your status is hidden from everyone, '
-              "but you can still see other people's status indicators."),
-          child: FormSelect<String>(
-            value: s.showStatus,
-            items: showStatusItems,
-            onChanged: (v) => _mutate((d) => d.copyWith(showStatus: v)),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr('Cache PMs & Group Chats On Device Enabled Disabled When '
-            'enabled, decrypted private messages and group chats are stored '
-            'on this device so they appear instantly on app launch. Disable '
-            "if you'd rather not have decrypted message content kept at rest "
-            'in app storage. Toggling off clears the existing cached PM/group '
-            'data.'),
-        child: FormGroup(
-          label: tr('Cache PMs & Group Chats On Device'),
-          hint: tr('When enabled, decrypted private messages and group chats '
-              'are stored on this device so they appear instantly on app '
-              "launch. Disable if you'd rather not have decrypted message "
-              'content kept at rest in app storage. Toggling off clears the '
-              'existing cached PM/group data.'),
-          child: FormSelect<bool>(
-            value: s.cachePMs,
-            items: [
-              (value: true, label: tr('Enabled')),
-              (value: false, label: tr('Disabled')),
-            ],
-            // The cache wipe happens in `_onSave`, only on an on-to-off flip.
-            onChanged: (v) => _mutate((d) => d.copyWith(cachePMs: v)),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Blur Images from Others {options} Blur images shared by others '
-            'until clicked. Your own images are never blurred. "Friends only" '
-            'shows images from friends unblurred.',
-            {'options': _optText(blurItems)}),
-        child: FormGroup(
-          label: tr('Blur Images from Others'),
-          hint: tr('Blur images shared by others until clicked. Your own '
-              'images are never blurred. "Friends only" shows images from '
-              'friends unblurred.'),
-          child: FormSelect<String>(
-            value: _draftBlur,
-            items: blurItems,
-            onChanged: (v) => setState(() => _draftBlur = v),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Blocked Keywords/Phrases Add keyword or phrase to block '
-            'Add Keyword Remove {list}',
-            {
-              'list': app.blockedKeywords.isEmpty
-                  ? tr('No blocked keywords')
-                  : app.blockedKeywords.join(' ')
-            }),
-        child: FormGroup(
-          label: tr('Blocked Keywords/Phrases'),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              FormInput(
-                controller: _keywordController,
-                hint: tr('Add keyword or phrase to block'),
-              ),
-              const SizedBox(height: 8),
-              Align(
+        chatLock.first,
+        _remotePanicGroup(),
+        ...chatLock.skip(1),
+        if (canBackUpKey)
+          _GroupSpec(
+            text: '${tr('Cloud Key Backup')} $backupHint',
+            child: FormGroup(
+              label: tr('Cloud Key Backup'),
+              hint: backupHint,
+              child: Align(
                 alignment: Alignment.centerLeft,
                 child: NymOutlineButton(
-                  label: tr('Add Keyword'),
-                  onPressed: () => _addKeyword(ctrl),
+                  key: const Key('keyBackupOpenDetails'),
+                  label: tr("View or Edit Nym's Details"),
+                  onPressed: () => NickEditModal.open(context),
                 ),
               ),
-              const SizedBox(height: 8),
-              _removableList(
-                entries: app.blockedKeywords,
-                emptyText: tr('No blocked keywords'),
-                buttonLabel: tr('Remove'),
-                labelFor: (kw) => kw,
-                onRemove: (kw) {
-                  ref.read(appStateProvider.notifier).removeBlockedKeyword(kw);
-                  _persistBlockedKeywords();
-                  _systemMessage(
-                      tr('Unblocked keyword: "{keyword}"', {'keyword': kw}));
-                  ref.read(nostrControllerProvider).syncSettings();
-                },
+            ),
+          ),
+        // The hardcore warning is always searchable.
+        _GroupSpec(
+          text: tr(
+              'Generate Random Keypair Per Session {options} Generate a new '
+              'random keypair on every session restart for improved '
+              'pseudonymity. When disabled, your generated keypair persists '
+              'across reloads. {warning}',
+              {'options': _optText(keypairItems), 'warning': hardcoreWarning}),
+          child: FormGroup(
+            label: tr('Generate Random Keypair Per Session'),
+            hint: tr('Generate a new random keypair on every session restart '
+                'for improved pseudonymity. When disabled, your generated '
+                'keypair persists across reloads.'),
+            // A plain amber hint, not the danger box.
+            amberHint: keypairValue == 'hardcore' ? hardcoreWarning : null,
+            child: FormSelect<String>(
+              value: keypairValue,
+              // Locked while logged in with a Nostr identity.
+              disabled: nostrLoggedIn,
+              tooltip: tr('Not available while logged in with a Nostr identity'),
+              items: keypairItems,
+              onChanged: (v) => setState(() => _draftKeypair = v),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Proof of Work Difficulty {options} Filters incoming messages by '
+              'proof of work — it does not change what you send. Every message '
+              'Nymchat sends is already mined to at least 16 bits, so 16 keeps '
+              'Nymchat traffic and drops clients that do no work. Above 16 also '
+              'hides messages from other Nymchat users.',
+              {'options': _optText(powItems)}),
+          child: FormGroup(
+            label: tr('Proof of Work Difficulty'),
+            hint: tr('Filters incoming messages by proof of work — it does not '
+                'change what you send. Every message Nymchat sends is already '
+                'mined to at least 16 bits, so 16 keeps Nymchat traffic and '
+                'drops clients that do no work. Above 16 also hides messages '
+                'from other Nymchat users.'),
+            child: FormSelect<int>(
+              value: _draftPow,
+              items: powItems,
+              onChanged: (v) => setState(() => _draftPow = v),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Random Nickname Style {options} Style used when generating '
+              'random nicknames',
+              {'options': _optText(nickStyleItems)}),
+          child: FormGroup(
+            label: tr('Random Nickname Style'),
+            hint: tr('Style used when generating random nicknames'),
+            child: FormSelect<String>(
+              value: s.nickStyle,
+              items: nickStyleItems,
+              onChanged: (v) => _mutate((d) => d.copyWith(nickStyle: v)),
+            ),
+          ),
+        ),
+      ],
+      pms: <_GroupSpec>[
+        _GroupSpec(
+          text: tr(
+              'Accept Private Messages & Group Chat Requests {options} Control '
+              'who can send you PMs and group chat invites. "Friends only" '
+              'filters messages from non-friends.',
+              {'options': _optText(acceptItems)}),
+          child: FormGroup(
+            label: tr('Accept Private Messages & Group Chat Requests'),
+            hint: tr('Control who can send you PMs and group chat invites. '
+                '"Friends only" filters messages from non-friends.'),
+            child: FormSelect<String>(
+              value: s.acceptPMs,
+              items: acceptItems,
+              onChanged: (v) => _mutate((d) => d.copyWith(acceptPMs: v)),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Accept Audio & Video Calls {options} Control who can ring you '
+              'with an audio or video call. "Friends only" silently ignores '
+              'calls from non-friends. {warning}',
+              {'options': _optText(acceptItems), 'warning': callsWarning}),
+          child: FormGroup(
+            label: tr('Accept Audio & Video Calls'),
+            hint: tr('Control who can ring you with an audio or video call. '
+                '"Friends only" silently ignores calls from non-friends.'),
+            warning: callsWarning,
+            child: FormSelect<String>(
+              value: s.acceptCalls,
+              items: acceptItems,
+              onChanged: (v) => _mutate((d) => d.copyWith(acceptCalls: v)),
+            ),
+          ),
+        ),
+        if (ref.read(ringRegistrationProvider).supported)
+          _GroupSpec(
+            text: tr('Ring When Nymchat Is Closed {hint}',
+                {'hint': tr(kRingWhenClosedHint)}),
+            child: const RingWhenClosedSetting(),
+          ),
+        // Read-only status so the security posture and any classical reason are visible.
+        _GroupSpec(
+          text: tr(
+              'Quantum-resistant encryption {status} Private messages and group '
+              'chats with other Nymchat users add ML-KEM-768 (a post-quantum key '
+              'exchange) alongside the standard NIP‑44 secp256k1 ECDH.',
+              {'status': pqStatus}),
+          child: FormGroup(
+            label: tr('Quantum-resistant encryption'),
+            hint: tr('Private messages and group chats with other Nymchat users '
+                'add ML-KEM-768 (a post-quantum key exchange) alongside the '
+                'standard NIP‑44 secp256k1 ECDH, so both would have to be broken '
+                'to read a message and traffic recorded today can\'t be decrypted '
+                'by a future quantum computer. This is automatic and has no '
+                'setting. Bitchat users and other Nostr clients keep receiving '
+                'standard NIP‑17 exactly as before.'),
+            // Green only when genuinely on end to end.
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  pqStatus,
+                  style: TextStyle(
+                    color: pqCapable && pqRootHeld
+                        ? context.nym.primary
+                        : context.nym.text.withValues(alpha: 0.85),
+                    fontSize: 13,
+                  ),
+                ),
+                // On-demand diagnostics of the terms behind each conversation's shield.
+                const _PqDiagnostics(),
+              ],
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr('Disappearing PM (forward secrecy) Disabled Enabled When '
+              'enabled, your private messages include an "expiration" tag '
+              '(NIP‑40) so relays/clients can delete them after the period '
+              'chosen when enabled.'),
+          child: FormGroup(
+            label: tr('Disappearing PM (forward secrecy)'),
+            hint: tr('When enabled, your private messages include an '
+                '"expiration" tag (NIP‑40) so relays/clients can delete them '
+                'after the period chosen when enabled.'),
+            child: FormSelect<bool>(
+              value: s.dmForwardSecrecyEnabled,
+              items: [
+                (value: false, label: tr('Disabled')),
+                (value: true, label: tr('Enabled')),
+              ],
+              onChanged: (v) =>
+                  _mutate((d) => d.copyWith(dmForwardSecrecyEnabled: v)),
+            ),
+          ),
+        ),
+        if (s.dmForwardSecrecyEnabled)
+          _GroupSpec(
+            text: tr(
+                'Disappear After {options} This sets the "expiration" timestamp '
+                'on each outgoing gift‑wrapped PM.',
+                {'options': _optText(dmTtlItems)}),
+            child: Container(
+              key: const ValueKey('dmTtlGroup'),
+              margin: const EdgeInsets.only(left: 12),
+              padding: const EdgeInsets.only(left: 12),
+              decoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(color: context.nym.glassBorder, width: 2),
+                ),
               ),
-            ],
+              child: FormGroup(
+                label: tr('Disappear After'),
+                hint: tr('This sets the "expiration" timestamp on each outgoing '
+                    'gift‑wrapped PM.'),
+                child: FormSelect<int>(
+                  value: s.dmTtlSeconds,
+                  items: dmTtlItems,
+                  onChanged: (v) => _mutate((d) => d.copyWith(dmTtlSeconds: v)),
+                ),
+              ),
+            ),
+          ),
+        _GroupSpec(
+          text: tr(
+              'Read Receipts {options} Choose where senders can see when '
+              "you've read their messages (✓✓). \"Enabled everywhere\" "
+              'includes PMs, group chats, and public channels.',
+              {'options': _optText(scopeItems)}),
+          child: FormGroup(
+            label: tr('Read Receipts'),
+            hint: tr("Choose where senders can see when you've read their "
+                'messages (✓✓). "Enabled everywhere" includes PMs, group '
+                'chats, and public channels.'),
+            child: FormSelect<String>(
+              value: s.readReceiptsScope,
+              items: scopeItems,
+              onChanged: (v) => _mutate((d) => d.copyWith(readReceiptsScope: v)),
+            ),
           ),
         ),
-      ),
-      _GroupSpec(
-        text: tr(
-            'Friends Remove Friends can have special privileges like '
-            'bypassing image blur and message filters. Add friends from the '
-            'context menu on any user. {list}',
-            {
-              'list': app.friends.isEmpty
-                  ? tr('No friends added')
-                  : app.friends.map(_nymLabelFor).join(' ')
-            }),
-        child: FormGroup(
-          label: tr('Friends'),
-          hint: tr('Friends can have special privileges like bypassing image '
-              'blur and message filters. Add friends from the context menu on '
-              'any user.'),
-          child: _removableList(
-            entries: app.friends,
-            emptyText: tr('No friends added'),
-            buttonLabel: tr('Remove'),
-            labelFor: _nymLabelFor,
-            labelSpanFor: _nymSpanFor,
-            onRemove: (pk) {
-              final controller = ref.read(nostrControllerProvider);
-              controller.toggleFriend(pk);
-              controller.syncSettings();
-            },
+        _GroupSpec(
+          text: tr(
+              'Typing Indicators {options} Choose where others can see when '
+              'you\'re typing. "Enabled everywhere" includes PMs, group chats, '
+              'and public channels.',
+              {'options': _optText(scopeItems)}),
+          child: FormGroup(
+            label: tr('Typing Indicators'),
+            hint: tr("Choose where others can see when you're typing. "
+                '"Enabled everywhere" includes PMs, group chats, and public '
+                'channels.'),
+            child: FormSelect<String>(
+              value: s.typingIndicatorsScope,
+              items: scopeItems,
+              onChanged: (v) =>
+                  _mutate((d) => d.copyWith(typingIndicatorsScope: v)),
+            ),
           ),
         ),
-      ),
-      _GroupSpec(
-        text: tr('Blocked Users Unblock {list}', {
-          'list': app.blockedUsers.isEmpty
-              ? tr('No blocked users')
-              : app.blockedUsers.map(_nymLabelFor).join(' ')
-        }),
-        child: FormGroup(
-          label: tr('Blocked Users'),
-          child: _blockedProfilesLoading
-              ? _emptyListBox(tr('Loading...'))
-              : _removableList(
-                  entries: app.blockedUsers,
-                  emptyText: tr('No blocked users'),
-                  buttonLabel: tr('Unblock'),
-                  labelFor: _nymLabelFor,
-                  labelSpanFor: _nymSpanFor,
-                  onRemove: (pk) {
-                    final controller = ref.read(nostrControllerProvider);
-                    controller.unblockUser(pk);
-                    controller.syncSettings();
+        _GroupSpec(
+          text: tr(
+              'Show Status Indicators {options} When enabled, '
+              'online/away/offline status dots are shown on avatars and in user '
+              'profiles. "Friends only" broadcasts a hidden status publicly '
+              "while privately sharing your real status with people you've "
+              'marked as friends, so only they can see it. When disabled, your '
+              "status is hidden from everyone, but you can still see other "
+              "people's status indicators.",
+              {'options': _optText(showStatusItems)}),
+          child: FormGroup(
+            label: tr('Show Status Indicators'),
+            hint: tr('When enabled, online/away/offline status dots are shown '
+                'on avatars and in user profiles. "Friends only" broadcasts a '
+                'hidden status publicly while privately sharing your real '
+                "status with people you've marked as friends, so only they can "
+                'see it. When disabled, your status is hidden from everyone, '
+                "but you can still see other people's status indicators."),
+            child: FormSelect<String>(
+              value: s.showStatus,
+              items: showStatusItems,
+              onChanged: (v) => _mutate((d) => d.copyWith(showStatus: v)),
+            ),
+          ),
+        ),
+      ],
+      safety: <_GroupSpec>[
+        _GroupSpec(
+          text: '${tr('Spam filter')} ${_optText(verifiedItems)} ${tr(kSpamFilterHint)}',
+          child: FormGroup(
+            label: tr('Spam filter'),
+            hint: tr(kSpamFilterHint),
+            child: FormSelect<String>(
+              key: const Key('spamFilterSelect'),
+              value: ctrl.spamFilterEnabled ? 'on' : 'off',
+              items: verifiedItems,
+              onChanged: (v) => setState(
+                  () => ctrl.setSpamFilter(enabled: v != 'off')),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: '${tr('Aggressive filtering')} ${_optText(verifiedItems)} ${tr(kSpamFilterAggressiveHint)}',
+          child: FormGroup(
+            label: tr('Aggressive filtering'),
+            hint: tr(kSpamFilterAggressiveHint),
+            child: FormSelect<String>(
+              key: const Key('spamFilterAggressiveSelect'),
+              value: ctrl.spamFilterAggressive ? 'on' : 'off',
+              items: verifiedItems,
+              disabled: !ctrl.spamFilterEnabled,
+              onChanged: (v) => setState(
+                  () => ctrl.setSpamFilter(aggressive: v != 'off')),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Verified Nymchat Users Only {options} Filters incoming channel '
+              'messages to senders who proved they are running Nymchat, on the '
+              'web app or the phone apps. Scripted senders cannot prove it and '
+              'are dropped. Your own messages, friends and Nymbot are always '
+              'shown.',
+              {'options': _optText(verifiedItems)}),
+          child: FormGroup(
+            label: tr('Verified Nymchat Users Only'),
+            hint: tr(
+                'Filters incoming channel messages to senders who proved they '
+                'are running Nymchat, on the web app or the phone apps. '
+                'Scripted senders cannot prove it and are dropped. Your own '
+                'messages, friends and Nymbot are always shown.'),
+            child: FormSelect<String>(
+              value: _draftVerified,
+              items: verifiedItems,
+              onChanged: (v) => setState(() => _draftVerified = v),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr('This Device {status} What this install proved to the '
+              'attestation service. Other people running the filter above see '
+              'your messages only when a badge is here.',
+              {'status': _attestReadout()}),
+          child: FormGroup(
+            label: tr('This Device'),
+            hint: tr('What this install proved to the attestation service. '
+                'Other people running the filter above see your messages only '
+                'when a badge is here.'),
+            child: Text(
+              _attestReadout(),
+              style: TextStyle(color: context.nym.textDim, fontSize: 12),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Blur Images from Others {options} Blur images shared by others '
+              'until clicked. Your own images are never blurred. "Friends only" '
+              'shows images from friends unblurred.',
+              {'options': _optText(blurItems)}),
+          child: FormGroup(
+            label: tr('Blur Images from Others'),
+            hint: tr('Blur images shared by others until clicked. Your own '
+                'images are never blurred. "Friends only" shows images from '
+                'friends unblurred.'),
+            child: FormSelect<String>(
+              value: _draftBlur,
+              items: blurItems,
+              onChanged: (v) => setState(() => _draftBlur = v),
+            ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Blocked Keywords/Phrases Add keyword or phrase to block '
+              'Add Keyword Remove {list}',
+              {
+                'list': app.blockedKeywords.isEmpty
+                    ? tr('No blocked keywords')
+                    : app.blockedKeywords.join(' ')
+              }),
+          child: FormGroup(
+            label: tr('Blocked Keywords/Phrases'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FormInput(
+                  controller: _keywordController,
+                  hint: tr('Add keyword or phrase to block'),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: NymOutlineButton(
+                    label: tr('Add Keyword'),
+                    onPressed: () => _addKeyword(ctrl),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _removableList(
+                  entries: app.blockedKeywords,
+                  emptyText: tr('No blocked keywords'),
+                  buttonLabel: tr('Remove'),
+                  labelFor: (kw) => kw,
+                  onRemove: (kw) {
+                    ref.read(appStateProvider.notifier).removeBlockedKeyword(kw);
+                    _persistBlockedKeywords();
+                    _systemMessage(
+                        tr('Unblocked keyword: "{keyword}"', {'keyword': kw}));
+                    ref.read(nostrControllerProvider).syncSettings();
                   },
                 ),
+              ],
+            ),
+          ),
         ),
-      ),
-      _GroupSpec(
-        text: tr('Filter Packs {packs} Ready-made keyword lists, applied like '
-            'your own blocked keywords: a matching message is hidden, and so is '
-            'one from a matching nym. Your friends and your own messages are '
-            'never filtered.', {
-          'packs': _filterPackSpecs.map((p) => '${p.label} ${p.desc}').join(' ')
-        }),
-        child: FormGroup(
-          label: tr('Filter Packs'),
-          hint: tr('Ready-made keyword lists, applied like your own blocked '
-              'keywords: a matching message is hidden, and so is one from a '
-              'matching nym. Your friends and your own messages are never '
-              'filtered.'),
-          child: _filterPackList(),
+        _GroupSpec(
+          text: tr('Filter Packs {packs} Ready-made keyword lists, applied like '
+              'your own blocked keywords: a matching message is hidden, and so is '
+              'one from a matching nym. Your friends and your own messages are '
+              'never filtered.', {
+            'packs': _filterPackSpecs.map((p) => '${p.label} ${p.desc}').join(' ')
+          }),
+          child: FormGroup(
+            label: tr('Filter Packs'),
+            hint: tr('Ready-made keyword lists, applied like your own blocked '
+                'keywords: a matching message is hidden, and so is one from a '
+                'matching nym. Your friends and your own messages are never '
+                'filtered.'),
+            child: _filterPackList(),
+          ),
         ),
-      ),
-    ];
+        _GroupSpec(
+          text: tr('Blocked Users Unblock {list}', {
+            'list': app.blockedUsers.isEmpty
+                ? tr('No blocked users')
+                : app.blockedUsers.map(_nymLabelFor).join(' ')
+          }),
+          child: FormGroup(
+            label: tr('Blocked Users'),
+            child: _blockedProfilesLoading
+                ? _emptyListBox(tr('Loading...'))
+                : _removableList(
+                    entries: app.blockedUsers,
+                    emptyText: tr('No blocked users'),
+                    buttonLabel: tr('Unblock'),
+                    labelFor: _nymLabelFor,
+                    labelSpanFor: _nymSpanFor,
+                    onRemove: (pk) {
+                      final controller = ref.read(nostrControllerProvider);
+                      controller.unblockUser(pk);
+                      controller.syncSettings();
+                    },
+                  ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr(
+              'Friends Remove Friends can have special privileges like '
+              'bypassing image blur and message filters. Add friends from the '
+              'context menu on any user. {list}',
+              {
+                'list': app.friends.isEmpty
+                    ? tr('No friends added')
+                    : app.friends.map(_nymLabelFor).join(' ')
+              }),
+          child: FormGroup(
+            label: tr('Friends'),
+            hint: tr('Friends can have special privileges like bypassing image '
+                'blur and message filters. Add friends from the context menu on '
+                'any user.'),
+            child: _removableList(
+              entries: app.friends,
+              emptyText: tr('No friends added'),
+              buttonLabel: tr('Remove'),
+              labelFor: _nymLabelFor,
+              labelSpanFor: _nymSpanFor,
+              onRemove: (pk) {
+                final controller = ref.read(nostrControllerProvider);
+                controller.toggleFriend(pk);
+                controller.syncSettings();
+              },
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   /// Each pack's description is shown, since what it does and doesn't catch is the basis for choosing it.
@@ -1902,20 +2193,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   List<_GroupSpec> _messaging(Settings s, SettingsController ctrl) {
-    final timeFormatItems = <({String value, String label})>[
-      (value: '24hr', label: tr('24-hour (14:30)')),
-      (value: '12hr', label: tr('12-hour (2:30 PM)')),
-    ];
-    final dateFormatItems = <({String value, String label})>[
-      (value: 'default', label: tr('Default (May 28, 2026)')),
-      (value: 'mdy', label: tr('MM/DD/YYYY (05/28/2026)')),
-      (value: 'dmy', label: tr('DD/MM/YYYY (28/05/2026)')),
-      (value: 'ymd', label: tr('YYYY-MM-DD (2026-05-28)')),
-    ];
-    final nickStyleItems = <({String value, String label})>[
-      (value: 'fancy', label: tr('Fancy (adjective_noun)')),
-      (value: 'simple', label: tr('Simple (nym1234)')),
-    ];
     return [
       _GroupSpec(
         text: tr(
@@ -1941,12 +2218,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
       _GroupSpec(
         text: tr('Notification Sound {options}',
-            {'options': _optText(_soundOptions())}),
+            {'options': _optText(notificationSoundOptions())}),
         child: FormGroup(
           label: tr('Notification Sound'),
           child: FormSelect<String>(
             value: s.sound,
-            items: _soundOptions(),
+            items: notificationSoundOptions(),
             // Stage and preview the chosen tone.
             onChanged: (v) => _onSoundChanged(ctrl, v),
           ),
@@ -1963,66 +2240,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               (value: false, label: tr('Disabled')),
             ],
             onChanged: (v) => _mutate((d) => d.copyWith(autoscroll: v)),
-          ),
-        ),
-      ),
-      _GroupSpec(
-        text: tr('Show Timestamps Show Hide'),
-        child: FormGroup(
-          label: tr('Show Timestamps'),
-          child: FormSelect<bool>(
-            value: s.showTimestamps,
-            items: [
-              (value: true, label: tr('Show')),
-              (value: false, label: tr('Hide')),
-            ],
-            onChanged: (v) => _mutate((d) => d.copyWith(showTimestamps: v)),
-          ),
-        ),
-      ),
-      // Time/date format hide when timestamps are hidden.
-      if (s.showTimestamps) ...[
-        _GroupSpec(
-          text: tr(
-              'Time Format {options}', {'options': _optText(timeFormatItems)}),
-          child: FormGroup(
-            label: tr('Time Format'),
-            child: FormSelect<String>(
-              value: s.timeFormat,
-              items: timeFormatItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(timeFormat: v)),
-            ),
-          ),
-        ),
-        _GroupSpec(
-          text: tr(
-              'Date Format {options} Used in the full timestamp shown when '
-              'tapping a message time',
-              {'options': _optText(dateFormatItems)}),
-          child: FormGroup(
-            label: tr('Date Format'),
-            hint: tr('Used in the full timestamp shown when tapping a message '
-                'time'),
-            child: FormSelect<String>(
-              value: s.dateFormat,
-              items: dateFormatItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(dateFormat: v)),
-            ),
-          ),
-        ),
-      ],
-      _GroupSpec(
-        text: tr(
-            'Random Nickname Style {options} Style used when generating '
-            'random nicknames',
-            {'options': _optText(nickStyleItems)}),
-        child: FormGroup(
-          label: tr('Random Nickname Style'),
-          hint: tr('Style used when generating random nicknames'),
-          child: FormSelect<String>(
-            value: s.nickStyle,
-            items: nickStyleItems,
-            onChanged: (v) => _mutate((d) => d.copyWith(nickStyle: v)),
           ),
         ),
       ),
@@ -2293,11 +2510,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
     return [
       _GroupSpec(
-        text: tr('Swipe Gestures (Mobile) Enabled Disabled Swipe a message '
+        text: tr('Swipe Gestures Enabled Disabled Swipe a message '
             'horizontally to trigger an action. Disable to turn off all swipe '
             'gestures on messages.'),
         child: FormGroup(
-          label: tr('Swipe Gestures (Mobile)'),
+          label: tr('Swipe Gestures'),
           hint: tr('Swipe a message horizontally to trigger an action. '
               'Disable to turn off all swipe gestures on messages.'),
           child: FormSelect<bool>(
@@ -2465,6 +2682,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       _GroupSpec(
+        text: tr('Cache PMs & Group Chats On Device Enabled Disabled When '
+            'enabled, decrypted private messages and group chats are stored '
+            'on this device so they appear instantly on app launch. Disable '
+            "if you'd rather not have decrypted message content kept at rest "
+            'in app storage. Toggling off clears the existing cached PM/group '
+            'data.'),
+        child: FormGroup(
+          label: tr('Cache PMs & Group Chats On Device'),
+          hint: tr('When enabled, decrypted private messages and group chats '
+              'are stored on this device so they appear instantly on app '
+              "launch. Disable if you'd rather not have decrypted message "
+              'content kept at rest in app storage. Toggling off clears the '
+              'existing cached PM/group data.'),
+          child: FormSelect<bool>(
+            value: s.cachePMs,
+            items: [
+              (value: true, label: tr('Enabled')),
+              (value: false, label: tr('Disabled')),
+            ],
+            // The cache wipe happens in `_onSave`, only on an on-to-off flip.
+            onChanged: (v) => _mutate((d) => d.copyWith(cachePMs: v)),
+          ),
+        ),
+      ),
+      _GroupSpec(
         text: tr('Transfer Settings to Another User Recipient npub or hex '
             'pubkey Send Transfers your nickname, avatar, and all '
             'preferences to the specified pubkey'),
@@ -2570,21 +2812,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       _GroupSpec(
-        text: tr('Wipe This Device Everything, permanently: your key, your '
-            'settings, your message history and your post-quantum recovery '
-            'code, on this device and on our servers.'),
+        text: tr('Delete account data and wipe device Deletes your account: '
+            'your keys, settings, messages and post-quantum recovery code on '
+            'this device, and your account data on our servers, including '
+            'your Nymbot credits and purchase records, for every identity '
+            'saved here.'),
         child: FormGroup(
-          hint: tr('Everything, permanently: your key, your settings, your '
-              'message history and your post-quantum recovery code, on this '
-              'device and on our servers. The same emergency wipe as holding '
-              'your Nym for two seconds. Credits on your key are not touched. '
-              'This cannot be undone.'),
+          hint: tr('Deletes your account: your keys, settings, messages and '
+              'post-quantum recovery code on this device, and your account '
+              'data on our servers, including your Nymbot credits and '
+              'purchase records, for every identity saved here. Other '
+              'devices signed in to them are wiped too. Posts already on '
+              'public relays stay there. Any remaining Nymbot credits will be '
+              'lost. This cannot be undone.'),
           child: Align(
             alignment: Alignment.centerLeft,
             child: NymOutlineButton(
-              label: tr('Wipe This Device'),
+              key: const ValueKey('deleteAccountBtn'),
+              label: tr('Delete account data and wipe device'),
               danger: true,
-              onPressed: _wipeThisDevice,
+              onPressed: _deleteAccount,
             ),
           ),
         ),
@@ -2592,18 +2839,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ];
   }
 
-  /// Same wipe as the press-and-hold panic gesture, reached deliberately.
-  Future<void> _wipeThisDevice() async {
+  Future<void> _deleteAccount() async {
+    final built = buildDeletePurge(ref);
+    final purge = built.purge;
+    final counts = await purge.plan();
+    if (!mounted) return;
+    final plan =
+        DeleteAccountPlan(usable: counts.usable, blocked: counts.blocked);
     final ok = await showAppConfirm(
       context,
-      tr('Wipe this device? Your key, your settings, your message history and '
-          'your post-quantum recovery code go — here and on our servers. '
-          'Credits on your key are not touched. This cannot be undone.'),
-      okLabel: tr('Wipe'),
+      deleteAccountConfirmText(plan,
+          iOS: defaultTargetPlatform == TargetPlatform.iOS),
+      title: tr('Delete account data and wipe device?'),
+      okLabel: tr('Delete'),
       danger: true,
     );
     if (!ok || !mounted) return;
-    startPanicWipe(context, ref);
+    startDeleteAccount(context, ref, purge: purge, signals: built.signals);
   }
 
   /// Shared list container: padded, bordered, max 200px tall, scrolling.
@@ -2727,7 +2979,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
-                Tooltip(
+                NymTooltip(
                   message: t.fromPubkey,
                   child: Text(
                     tr('Verified sender key: {key}',
@@ -2859,6 +3111,40 @@ extension _ChatLockSettings on _SettingsScreenState {
         ),
       ),
       _GroupSpec(
+        text: '${tr('Hide Previews')} ${_SettingsScreenState._optText(onOff)} ${tr(kHidePreviewsHint)}',
+        child: FormGroup(
+          label: tr('Hide Previews'),
+          hint: tr(kHidePreviewsHint),
+          child: FormSelect<String>(
+            key: const Key('hidePreviewsSelect'),
+            value: ref.watch(settingsProvider.select((s) => s.hidePreviews))
+                ? 'on'
+                : 'off',
+            items: onOff,
+            onChanged: (v) => ref
+                .read(settingsProvider.notifier)
+                .setHidePreviews(v == 'on'),
+          ),
+        ),
+      ),
+      _GroupSpec(
+        text: '${tr('Keep call history')} ${_SettingsScreenState._optText(onOff)} ${tr(kKeepCallHistoryHint)}',
+        child: FormGroup(
+          label: tr('Keep call history'),
+          hint: tr(kKeepCallHistoryHint),
+          child: FormSelect<String>(
+            key: const Key('keepCallHistorySelect'),
+            value: () {
+              ref.watch(callHistoryProvider);
+              return ref.read(callHistoryProvider.notifier).keep ? 'on' : 'off';
+            }(),
+            items: onOff,
+            onChanged: (v) =>
+                ref.read(callHistoryProvider.notifier).setKeep(v != 'off'),
+          ),
+        ),
+      ),
+      _GroupSpec(
         text: '${tr(ChatLockStrings.screenSecurity)} ${_SettingsScreenState._optText(onOff)} $screenHint',
         child: FormGroup(
           label: tr(ChatLockStrings.screenSecurity),
@@ -2886,9 +3172,30 @@ extension _ChatLockSettings on _SettingsScreenState {
           ),
         ),
       ),
+      _GroupSpec(
+        text: '${tr(kFallbackNoticeLabel)} ${_SettingsScreenState._optText(onOff)} ${tr(kFallbackNoticeHint)}',
+        child: FormGroup(
+          label: tr(kFallbackNoticeLabel),
+          hint: tr(kFallbackNoticeHint),
+          child: FormSelect<String>(
+            key: const Key('fallbackNoticeSelect'),
+            value: ref.watch(fallbackNoticeProvider) ? 'on' : 'off',
+            items: onOff,
+            onChanged: (v) => unawaited(ref
+                .read(fallbackNoticeProvider.notifier)
+                .setEnabled(v == 'on')),
+          ),
+        ),
+      ),
     ];
   }
 }
+
+const String kSpamFilterHint =
+    'Hides incoming messages that look like spam, starting with posts from known spam clients. Your own messages are never filtered.';
+
+const String kSpamFilterAggressiveHint =
+    'Also hides keyboard-mash text, random-letter nyms and other spam patterns. Turn it off if real messages go missing. Needs the spam filter on.';
 
 class _GroupSpec {
   const _GroupSpec({required this.text, required this.child});
@@ -2898,6 +3205,48 @@ class _GroupSpec {
 
 /// Persisted section collapse layout key.
 const String _kSettingsSectionsCollapsedKey = 'nym_settings_sections_collapsed';
+const String _kSettingsSectionsSplitKey = 'nym_settings_sections_split';
+
+const Map<String, String> kSettingsAnchors = {
+  'timestampSelect': 'appearance',
+  'timeFormatGroup': 'appearance',
+  'dateFormatGroup': 'appearance',
+  'nickStyleSelect': 'privacy',
+  'autoEphemeralSettingGroup': 'privacy',
+  'acceptPMsSelect': 'pms',
+  'acceptCallsSelect': 'pms',
+  'dmForwardSecrecySelect': 'pms',
+  'dmTTLGroup': 'pms',
+  'readReceiptsSelect': 'pms',
+  'typingIndicatorsSelect': 'pms',
+  'showStatusSelect': 'pms',
+  'spamFilterSelect': 'safety',
+  'spamFilterAggressiveSelect': 'safety',
+  'appVerifiedSelect': 'safety',
+  'blurImagesSelect': 'safety',
+  'keywordList': 'safety',
+  'filterPackList': 'safety',
+  'blockedList': 'safety',
+  'friendsList': 'safety',
+  'cachePMsSelect': 'data',
+  'pinnedLandingChannelSearch': 'channels',
+};
+
+String? settingsSectionForAnchor(String? anchor) {
+  if (anchor == null || anchor.isEmpty) return null;
+  const keys = {
+    'appearance',
+    'privacy',
+    'pms',
+    'safety',
+    'messaging',
+    'channels',
+    'mobile',
+    'data',
+  };
+  if (keys.contains(anchor)) return anchor;
+  return kSettingsAnchors[anchor];
+}
 
 /// Theme options in order.
 List<({NymThemeKey value, String label})> _themeOptions() => [
@@ -3453,7 +3802,7 @@ class _TextSizeRow extends StatelessWidget {
 }
 
 /// Notification-sound options in order.
-List<({String value, String label})> _soundOptions() => [
+List<({String value, String label})> notificationSoundOptions() => [
       (value: 'beep', label: tr('Classic Beep')),
       (value: 'low', label: tr('Low Tone')),
       (value: 'high', label: tr('High Ping')),

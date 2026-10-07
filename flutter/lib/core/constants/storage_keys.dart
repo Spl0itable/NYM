@@ -65,6 +65,7 @@ class StorageKeys {
   static const lowDataMode = 'nym_low_data_mode';
   static const relayDirectMode = 'nym_relay_direct_mode';
   static const relayDirectAck = 'nym_relay_direct_ack';
+  static const relayFallbackNoticeOff = 'nym_relay_fallback_notice_off';
 
   /// Unix seconds of the last iOS background catch-up; only newer events notify, and absent means none.
   static const backgroundCatchUpTs = 'nym_background_catchup_ts';
@@ -123,6 +124,11 @@ class StorageKeys {
   static const attestBadge = 'nym_attest_badge';
   static const attestAuthority = 'nym_attest_authority';
   static const hideNonPinned = 'nym_hide_non_pinned';
+  static const hidePreviews = 'nym_hide_previews';
+  static const sidebarWidth = 'nym_sidebar_width';
+  static const columnWidth = 'nym_column_width';
+  static const colorfulMessages = 'nym_colorful_messages';
+  static const infoPanelOpen = 'nym_info_panel_open';
   static const imageBlur = 'nym_image_blur';
   static String imageBlurFor(String pubkey) => 'nym_image_blur_$pubkey';
 
@@ -152,9 +158,13 @@ class StorageKeys {
   static const friends = 'nym_friends';
   static const blockedKeywords = 'nym_blocked_keywords';
 
-  // Heuristic spam filter (device-local), distinct from the web-of-trust spam gate.
   static const spamFilterEnabled = 'nym_spam_filter_enabled';
   static const spamFilterAggressive = 'nym_spam_filter_aggressive';
+
+  static const pubkeyFormat = 'nym_pubkey_format';
+  static const voiceSpeed = 'nym_voice_speed';
+  static const keepCallHistory = 'nym_keep_call_history';
+  static const botAnonEnabled = 'nym_botanon_enabled';
 
   // PMs / groups
   static const closedPms = 'nym_closed_pms';
@@ -192,6 +202,7 @@ class StorageKeys {
   static const groupNotifyMentionsOnly = 'nym_group_notify_mentions_only';
   static const threadNotifyMentionsOnly = 'nym_thread_notify_mentions_only';
   static const notifyFriendsOnly = 'nym_notify_friends_only';
+  static const eventToasts = 'nym_event_toasts';
   static const notificationLastRead = 'nym_notification_last_read';
   static const lastSettingsSyncTs = 'nym_last_settings_sync_ts';
   static const settingsDirtyKeys = 'nym_settings_dirty_keys';

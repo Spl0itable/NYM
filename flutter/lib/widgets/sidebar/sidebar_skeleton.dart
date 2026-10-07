@@ -1,26 +1,27 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
+import 'sidebar_chrome.dart';
 
 /// Shimmering `.sidebar-skeleton` placeholder rows shown until a sidebar list gets its first real item.
 class SidebarSkeletonRow extends StatelessWidget {
   const SidebarSkeletonRow.channel({super.key, required this.barWidthFactor})
       : avatarSize = 0,
         gap = 0,
-        vPad = 9,
-        minHeight = 36;
+        vPad = 6,
+        minHeight = kSidebarRowMinH;
 
   const SidebarSkeletonRow.pm({super.key, required this.barWidthFactor})
-      : avatarSize = 26,
-        gap = 10,
-        vPad = 9,
-        minHeight = 36;
+      : avatarSize = kSidebarIcon,
+        gap = kSidebarGap,
+        vPad = 6,
+        minHeight = kSidebarRowMinH;
 
   const SidebarSkeletonRow.nym({super.key, required this.barWidthFactor})
-      : avatarSize = 20,
-        gap = 8,
+      : avatarSize = kSidebarIcon,
+        gap = kSidebarGap,
         vPad = 6,
-        minHeight = 0;
+        minHeight = kSidebarRowMinH;
 
   final double barWidthFactor;
   final double avatarSize;

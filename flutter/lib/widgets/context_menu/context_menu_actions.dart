@@ -1,3 +1,6 @@
+import 'package:flutter/painting.dart';
+
+import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../nym_icons.dart';
@@ -126,11 +129,7 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
   final showTransfer = other && t.iAmOwner;
 
   final canDeleteOwn = t.isSelf && hasMessage;
-  final canModDelete = !canDeleteOwn &&
-      hasMessage &&
-      t.inGroup &&
-      !t.isSelf &&
-      (t.iAmOwner || (t.iCanModerate && t.iOutrankTarget));
+  final canModDelete = !canDeleteOwn && hasMessage && canModDeleteMessage(t);
 
   // Mention is not self-gated in the PWA, so it shows on your own messages too.
   return [
@@ -161,6 +160,52 @@ List<CtxAction> buildContextMenuActions(CtxTarget t) {
     if (!t.isSelf) CtxAction.block,
     if (t.isSelf) CtxAction.editProfile,
   ];
+}
+
+bool canModDeleteMessage(CtxTarget t) =>
+    t.inGroup &&
+    !t.isSelf &&
+    (t.iAmOwner || (t.iCanModerate && t.iOutrankTarget));
+
+const Set<CtxAction> kMessageScopedCtxActions = {
+  CtxAction.react,
+  CtxAction.quote,
+  CtxAction.copyMessage,
+  CtxAction.translate,
+  CtxAction.edit,
+  CtxAction.delete,
+};
+
+List<CtxAction> buildUserSheetActions(CtxTarget t) => [
+      for (final a in buildContextMenuActions(t))
+        if (!kMessageScopedCtxActions.contains(a)) a,
+    ];
+
+enum MenuTone { normal, report, danger }
+
+MenuTone ctxActionTone(CtxAction a) {
+  switch (a) {
+    case CtxAction.report:
+      return MenuTone.report;
+    case CtxAction.delete:
+    case CtxAction.kick:
+    case CtxAction.ban:
+    case CtxAction.block:
+      return MenuTone.danger;
+    default:
+      return MenuTone.normal;
+  }
+}
+
+Color menuToneColor(MenuTone t, NymColors c) {
+  switch (t) {
+    case MenuTone.report:
+      return c.warning;
+    case MenuTone.danger:
+      return c.danger;
+    case MenuTone.normal:
+      return c.text;
+  }
 }
 
 String ctxActionLabel(CtxAction a, CtxTarget t) {

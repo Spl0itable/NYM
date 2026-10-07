@@ -1,4 +1,6 @@
 import 'dart:async';
+import '../../features/layout/info_dock.dart';
+import '../../features/layout/layout_model.dart';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -6,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../state/settings_provider.dart';
 
 import '../../core/crypto/key_format.dart';
 import '../../core/theme/nym_colors.dart';
@@ -27,6 +31,7 @@ import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/app_dialog.dart';
+import '../common/nym_sheet.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import 'context_menu_actions.dart';
@@ -35,6 +40,37 @@ import 'interaction_hooks.dart';
 import 'menu_layer.dart';
 import 'profile_badges.dart';
 import 'report_modal.dart';
+
+CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
+  final self = s.selfPubkey;
+  final inGroup = s.view.kind == ViewKind.group;
+  Group? group;
+  if (inGroup) {
+    for (final g in s.groups) {
+      if (g.id == s.view.id) group = g;
+    }
+  }
+  return CtxTarget(
+    pubkey: target.pubkey,
+    nym: pickDisplayNym(s.users[target.pubkey]?.nym, target.nym),
+    isSelf: target.isSelf,
+    content: target.content,
+    messageId: target.messageId,
+    profileOnly: target.profileOnly,
+    isFriend: s.isFriend(target.pubkey),
+    isBlocked: s.isUserBlocked(target.pubkey),
+    isBot: target.isBot,
+    inGroup: inGroup,
+    iAmOwner: group != null && group.createdBy == self,
+    iAmAdmin: group != null && group.admins.contains(self),
+    iAmMod: group != null && group.mods.contains(self),
+    targetIsMember: group != null && group.members.contains(target.pubkey),
+    targetIsOwner: group != null && group.createdBy == target.pubkey,
+    targetIsAdmin: group != null && group.admins.contains(target.pubkey),
+    targetIsMod: group != null && group.mods.contains(target.pubkey),
+    backToGroupId: target.backToGroupId,
+  );
+}
 
 /// Right-side profile context-menu panel: avatar header then the actions from [buildContextMenuActions].
 class ContextMenuPanel extends ConsumerWidget {
@@ -47,11 +83,18 @@ class ContextMenuPanel extends ConsumerWidget {
     this.onReact,
     this.onTranslateInline,
     this.backToGroupId,
+    this.onDismiss,
+    this.docked = false,
+    this.sheet = false,
   });
+
+  final bool sheet;
 
   final CtxTarget target;
   final Animation<double> animation;
   final VoidCallback onClose;
+  final VoidCallback? onDismiss;
+  final bool docked;
 
   /// When set (or on [target]), a back chevron returns to that group's context menu.
   final String? backToGroupId;
@@ -73,6 +116,31 @@ class ContextMenuPanel extends ConsumerWidget {
     String? backToGroupId,
   }) {
     final backGroup = backToGroupId ?? target.backToGroupId;
+    if (InfoDock.tryDock(
+        context,
+        DockedInfo.user(target,
+            message: message,
+            backToGroupId: backGroup,
+            onReact: onReact,
+            onTranslateInline: onTranslateInline))) {
+      return Future<void>.value();
+    }
+    if (useNymSheet(context)) {
+      return showNymBottomSheet<void>(
+        context,
+        expandable: true,
+        (ctx) => ContextMenuPanel(
+          target: target,
+          message: message,
+          animation: kAlwaysCompleteAnimation,
+          onReact: onReact,
+          onTranslateInline: onTranslateInline,
+          backToGroupId: backGroup,
+          sheet: true,
+          onClose: () => closeMenuRoute(ctx),
+        ),
+      );
+    }
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
@@ -99,56 +167,28 @@ class ContextMenuPanel extends ConsumerWidget {
     );
   }
 
-  /// Re-derives live friend/block/group-role flags so callers need not thread them through.
-  CtxTarget _enrichTarget(WidgetRef ref) {
-    final s = ref.read(appStateProvider);
-    final self = s.selfPubkey;
-    final inGroup = s.view.kind == ViewKind.group;
-    final group = inGroup ? _groupById(s, s.view.id) : null;
-    final iAmOwner = group != null && group.createdBy == self;
-    final iAmAdmin = group != null && group.admins.contains(self);
-    final iAmMod = group != null && group.mods.contains(self);
-    final targetIsMember =
-        group != null && group.members.contains(target.pubkey);
-    final targetIsOwner = group != null && group.createdBy == target.pubkey;
-    final targetIsAdmin = group != null && group.admins.contains(target.pubkey);
-    final targetIsMod = group != null && group.mods.contains(target.pubkey);
-    return CtxTarget(
-      pubkey: target.pubkey,
-      nym: pickDisplayNym(s.users[target.pubkey]?.nym, target.nym),
-      isSelf: target.isSelf,
-      content: target.content,
-      messageId: target.messageId,
-      profileOnly: target.profileOnly,
-      isFriend: s.isFriend(target.pubkey),
-      isBlocked: s.isUserBlocked(target.pubkey),
-      isBot: target.isBot,
-      inGroup: inGroup,
-      iAmOwner: iAmOwner,
-      iAmAdmin: iAmAdmin,
-      iAmMod: iAmMod,
-      targetIsMember: targetIsMember,
-      targetIsOwner: targetIsOwner,
-      targetIsAdmin: targetIsAdmin,
-      targetIsMod: targetIsMod,
-      backToGroupId: target.backToGroupId,
-    );
-  }
-
-  Group? _groupById(AppState s, String id) {
-    for (final g in s.groups) {
-      if (g.id == id) return g;
-    }
-    return null;
-  }
+  CtxTarget _enrichTarget(WidgetRef ref) =>
+      enrichCtxTarget(ref.read(appStateProvider), target);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
     final controller = ref.read(nostrControllerProvider);
     final target = _enrichTarget(ref);
-    final actions = buildContextMenuActions(target);
-    final tools = _chatTools(ref, target);
+    final actions = sheet
+        ? buildUserSheetActions(target)
+        : buildContextMenuActions(target);
+    final allTools = _chatTools(ref, target);
+    final tools = sheet
+        ? (
+            actions: [
+              for (final a in allTools.actions)
+                if (a == ChatToolAction.media || a == ChatToolAction.export) a,
+            ],
+            msg: allTools.msg,
+            key: allTools.key,
+          )
+        : allTools;
     var toolsAt = actions.length;
     for (var i = 0; i < actions.length; i++) {
       if (actions[i].index > CtxAction.copyMessage.index) {
@@ -239,9 +279,31 @@ class ContextMenuPanel extends ConsumerWidget {
       ),
     );
 
+    if (sheet) {
+      return Semantics(
+        container: true,
+        label: tr('User actions'),
+        child: Stack(
+          key: const ValueKey('userSheet'),
+          children: [
+            panel,
+            if (backToGroupId != null)
+              Positioned(
+                top: 6,
+                left: 10,
+                child: _BackButton(
+                  onTap: () => _onBack(context, backToGroupId!),
+                ),
+              ),
+          ],
+        ),
+      );
+    }
+
     // Width 320, clamped to 85% of narrow screens.
     final screenW = MediaQuery.of(context).size.width;
-    final panelW = math.min(320.0, screenW * 0.85);
+    final panelW =
+        docked ? kDockWidth.toDouble() : math.min(320.0, screenW * 0.85);
 
     return SlideTransition(
       position: Tween<Offset>(
@@ -255,13 +317,15 @@ class ContextMenuPanel extends ConsumerWidget {
           decoration: BoxDecoration(
             color: c.glassBg,
             border: Border(left: BorderSide(color: c.glassBorder)),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x66000000),
-                blurRadius: 24,
-                offset: Offset(-4, 0),
-              ),
-            ],
+            boxShadow: docked
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 24,
+                      offset: Offset(-4, 0),
+                    ),
+                  ],
           ),
           child: Stack(
             children: [
@@ -278,7 +342,7 @@ class ContextMenuPanel extends ConsumerWidget {
               Positioned(
                 top: MediaQuery.of(context).padding.top + 14,
                 right: 14,
-                child: CtxCloseButton(onTap: onClose),
+                child: CtxCloseButton(onTap: onDismiss ?? onClose),
               ),
             ],
           ),
@@ -537,19 +601,8 @@ class ContextMenuPanel extends ConsumerWidget {
     });
   }
 
-  Color _colorFor(CtxAction a, NymColors c) {
-    switch (a) {
-      case CtxAction.report:
-        return c.warning;
-      case CtxAction.delete:
-      case CtxAction.kick:
-      case CtxAction.ban:
-      case CtxAction.block:
-        return c.danger;
-      default:
-        return c.text;
-    }
-  }
+  Color _colorFor(CtxAction a, NymColors c) =>
+      menuToneColor(ctxActionTone(a), c);
 
   Future<void> _invoke(
     BuildContext context,
@@ -895,6 +948,12 @@ class _PubkeyBlockState extends State<_PubkeyBlock> {
     setState(() => _format = next);
     final prefs = await SharedPreferences.getInstance();
     await writePubkeyFormat(prefs, next);
+    if (!mounted) return;
+    try {
+      ProviderScope.containerOf(context, listen: false)
+          .read(settingsProvider.notifier)
+          .notePrefChanged('pubkeyFormat');
+    } catch (_) {}
   }
 
   @override
@@ -1002,6 +1061,24 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
   }
 }
 
+class CtxSheetActionRow extends StatelessWidget {
+  const CtxSheetActionRow({
+    super.key,
+    required this.svg,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+  final String svg;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) =>
+      _ActionItem(svg: svg, label: label, color: color, onTap: onTap);
+}
+
 class _ActionItem extends StatefulWidget {
   const _ActionItem({
     super.key,
@@ -1107,15 +1184,11 @@ class _CtxCloseButtonState extends State<CtxCloseButton> {
                   : (c.isLight ? const Color(0x14000000) : c.glassBorder),
             ),
           ),
-          // Outside the card's Material, so explicit `decoration: none` avoids the debug yellow underline.
-          child: Text('✕',
-              style: TextStyle(
-                  fontSize: 16,
-                  height: 1,
-                  decoration: TextDecoration.none,
-                  color: _hover
-                      ? c.danger
-                      : (c.isLight ? const Color(0x80000000) : c.textDim))),
+          child: Icon(Icons.close,
+              size: 16,
+              color: _hover
+                  ? c.danger
+                  : (c.isLight ? const Color(0x80000000) : c.textDim)),
         ),
       ),
     );

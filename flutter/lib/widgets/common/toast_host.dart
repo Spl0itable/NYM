@@ -1,19 +1,28 @@
 import 'dart:math' as math;
 
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/semantics.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/identity/deleted_notice.dart';
+import '../../features/search/unified_search_panel.dart' show nymSuffixStyle;
+import '../../features/toasts/event_toast_area.dart';
+import '../../features/toasts/event_toast_center.dart';
+import '../../features/toasts/event_toasts.dart';
 import '../../features/toasts/toast_center.dart';
 import '../../features/toasts/toast_model.dart';
+import 'event_toast_card.dart';
 
 class ToastHost extends StatefulWidget {
-  const ToastHost({super.key, required this.child, this.center});
+  const ToastHost(
+      {super.key, required this.child, this.center, this.eventCenter});
 
   final Widget child;
   final ToastCenter? center;
+  final EventToastCenter? eventCenter;
 
   @override
   State<ToastHost> createState() => _ToastHostState();
@@ -21,7 +30,9 @@ class ToastHost extends StatefulWidget {
 
 class _ToastHostState extends State<ToastHost> {
   late ToastCenter _center;
+  late EventToastCenter _events;
   final Set<int> _announced = {};
+  final Map<int, String> _eventSpoken = {};
 
   @override
   void initState() {
@@ -29,6 +40,9 @@ class _ToastHostState extends State<ToastHost> {
     _center = widget.center ?? ToastCenter.instance;
     _center.addListener(_changed);
     _center.attach();
+    _events = widget.eventCenter ?? EventToastCenter.instance;
+    _events.addListener(_changed);
+    _events.attach();
   }
 
   @override
@@ -42,13 +56,39 @@ class _ToastHostState extends State<ToastHost> {
       _center.addListener(_changed);
       _center.attach();
     }
+    final nextEvents = widget.eventCenter ?? EventToastCenter.instance;
+    if (!identical(nextEvents, _events)) {
+      _events.removeListener(_changed);
+      _events.detach();
+      _events = nextEvents;
+      _events.addListener(_changed);
+      _events.attach();
+    }
   }
 
   @override
   void dispose() {
     _center.removeListener(_changed);
     _center.detach();
+    _events.removeListener(_changed);
+    _events.detach();
     super.dispose();
+  }
+
+  void _announceEvent(EventToast t) {
+    final p = _events.textFor(t);
+    final spoken = [p.title, p.meta, p.body].where((s) => s.isNotEmpty).join('. ');
+    if (_eventSpoken[t.id] == spoken) return;
+    _eventSpoken[t.id] = spoken;
+    if (_eventSpoken.length > 32) _eventSpoken.remove(_eventSpoken.keys.first);
+    final view = View.maybeOf(context);
+    if (view == null) return;
+    SemanticsService.sendAnnouncement(
+      view,
+      spoken,
+      Directionality.maybeOf(context) ?? TextDirection.ltr,
+      assertiveness: Assertiveness.polite,
+    );
   }
 
   void _changed() {
@@ -84,27 +124,86 @@ class _ToastHostState extends State<ToastHost> {
     for (final t in toasts) {
       _announce(t);
     }
+    final events = _events.visible;
+    for (final t in events) {
+      _announceEvent(t);
+    }
     final pad = MediaQuery.paddingOf(context);
     return Stack(
       textDirection: TextDirection.ltr,
       children: [
         widget.child,
-        if (toasts.isNotEmpty)
-          Positioned(
-            top: pad.top + ToastConfig.offsetPx,
-            left: math.max(ToastConfig.gutterPx, pad.left),
-            right: math.max(ToastConfig.gutterPx, pad.right),
-            child: Column(
-              key: const ValueKey('toastHost'),
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final t in toasts)
-                  Padding(
-                    key: ValueKey('toast-${t.id}'),
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: _ToastCard(item: t, center: _center),
+        if (toasts.isNotEmpty || events.isNotEmpty)
+          ValueListenableBuilder<Rect?>(
+            valueListenable: eventToastRegion,
+            builder: (context, region, _) => ValueListenableBuilder<Rect?>(
+              valueListenable: eventToastComposer,
+              builder: (context, composer, _) {
+                final size = MediaQuery.sizeOf(context);
+                final spot = EventToasts.place(
+                  vw: size.width,
+                  vh: size.height,
+                  safeTop: pad.top,
+                  safeLeft: pad.left,
+                  safeRight: pad.right,
+                  headerBottom: region?.top ?? 0,
+                  chatLeft: region?.left ?? 0,
+                  chatRight: region?.right ?? size.width,
+                  composerTop: composer?.top ?? region?.bottom ?? size.height,
+                );
+                var top = spot.top.toDouble();
+                var maxHeight = spot.maxHeight.toDouble();
+                final dialog =
+                    _events.observer.anyOpen ? _events.dialogRect() : null;
+                if (_events.observer.anyOpen && dialog == null) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted && _events.observer.anyOpen) setState(() {});
+                  });
+                }
+                if (dialog != null) {
+                  final above = dialog.top - pad.top - 16;
+                  final below = size.height - dialog.bottom - 16;
+                  if (above >= below) {
+                    top = pad.top + 8;
+                    maxHeight = math.max(0, dialog.top - 8 - top);
+                  } else {
+                    top = dialog.bottom + 8;
+                    maxHeight = math.max(0, size.height - 8 - top);
+                  }
+                }
+                return Positioned(
+                  key: const ValueKey('toastHost'),
+                  top: top,
+                  left: spot.left.toDouble(),
+                  width: spot.width.toDouble(),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: maxHeight),
+                    child: ClipRect(
+                      child: SingleChildScrollView(
+                        physics: const NeverScrollableScrollPhysics(),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final t in toasts)
+                              Padding(
+                                key: ValueKey('toast-${t.id}'),
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: _ToastCard(item: t, center: _center),
+                              ),
+                            for (final t in events)
+                              Padding(
+                                key: ValueKey('eventToastSlot-${t.id}'),
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: EventToastCard(toast: t, center: _events),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-              ],
+                );
+              },
             ),
           ),
       ],
@@ -174,7 +273,6 @@ class _ToastCardState extends State<_ToastCard> {
 
     final card = Container(
       key: ValueKey('toastCard-${t.kind.name}'),
-      constraints: const BoxConstraints(maxWidth: ToastConfig.maxWidthPx),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(8),
@@ -187,19 +285,66 @@ class _ToastCardState extends State<_ToastCard> {
         borderRadius: BorderRadius.circular(8),
         child: IntrinsicHeight(
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(width: 3, color: accent),
-              Flexible(
+              Expanded(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(11, 10, 4, 10),
-                  child: Text(
-                    t.text,
-                    style: TextStyle(color: fg, fontSize: 13, height: 1.4),
-                  ),
+                  child: hasNymSuffix(t.text)
+                      ? Text.rich(
+                          dimNymSuffixes(
+                            t.text,
+                            nymSuffixStyle(TextStyle(
+                                color: fg, fontSize: 13, height: 1.4)),
+                          ),
+                          style:
+                              TextStyle(color: fg, fontSize: 13, height: 1.4),
+                        )
+                      : Text(
+                          t.text,
+                          style:
+                              TextStyle(color: fg, fontSize: 13, height: 1.4),
+                        ),
                 ),
               ),
+              if (t.action != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, right: 2),
+                  child: Center(
+                    child: Semantics(
+                      button: true,
+                      label: t.action,
+                      excludeSemantics: true,
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          key: ValueKey('toastAction-${t.id}'),
+                          onTap: () => widget.center.runAction(t.id),
+                          onFocusChange: (f) => _hold(_hovered, f),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: c?.primary ?? accent),
+                            ),
+                            child: Text(
+                              t.action!,
+                              style: TextStyle(
+                                color: c?.primary ?? accent,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.24,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.only(top: 6, right: 6),
                 child: Align(

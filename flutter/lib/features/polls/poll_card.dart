@@ -26,6 +26,7 @@ import '../shop/shop_widgets.dart';
 import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import '../../widgets/anchored_popup.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Inline poll rendered as a full message row; tapping an option votes, the footer opens the voters list.
 class PollCard extends ConsumerStatefulWidget {
@@ -530,7 +531,7 @@ class _PollHoverActionButtonState extends State<_PollHoverActionButton> {
       ),
     );
     return widget.tooltip != null
-        ? Tooltip(message: widget.tooltip!, child: btn)
+        ? NymTooltip(message: widget.tooltip!, child: btn)
         : btn;
   }
 }
@@ -647,7 +648,7 @@ class _PollTimestampTextState extends State<_PollTimestampText> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _openPopup,
-        child: Tooltip(
+        child: NymTooltip(
           message: widget.fullTimestamp,
           triggerMode: TooltipTriggerMode.manual,
           waitDuration: Duration.zero,

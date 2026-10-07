@@ -563,13 +563,13 @@ Object.assign(NYM.prototype, {
             return;
         }
         if (!row || !row.isConnected) {
-            row = document.createElement('div');
+            row = document.createElement('span');
             row.className = 'nym-i18n-bg-indicator';
             row.setAttribute('data-no-i18n', '');
             row.innerHTML = '<span class="nym-i18n-bg-spinner"></span><span class="nym-i18n-bg-text"></span>';
-            const anchor = document.querySelector('.sidebar-header .status-indicator');
-            if (anchor && anchor.parentNode) {
-                anchor.insertAdjacentElement('afterend', row);
+            const anchor = document.querySelector('#sidebar .status-indicator');
+            if (anchor) {
+                anchor.appendChild(row);
             } else {
                 document.body.appendChild(row);
             }
@@ -588,18 +588,85 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    // On first run, offer the language picker over the welcome modal once per device.
+    _firstRunLanguageDefault() {
+        const known = new Map(NYM_TRANSLATE_LANGUAGES.map(l => [l.code.toLowerCase(), l.code]));
+        const tags = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || 'en'];
+        for (const tag of tags) {
+            const full = String(tag || '').toLowerCase();
+            if (!full) continue;
+            const base = full.split('-')[0];
+            if (base === 'en') return '';
+            if (known.has(full)) return known.get(full);
+            if (known.has(base)) return known.get(base);
+        }
+        return '';
+    },
+
     _maybeFirstRunLanguagePicker() {
+        const root = document.documentElement;
+        if (!root.classList.contains('nym-first-lang')) return;
+        const screen = document.getElementById('firstLangScreen');
+        const list = document.getElementById('firstLangList');
+        const search = document.getElementById('firstLangSearch');
+        const empty = document.getElementById('firstLangEmpty');
+        if (this._uiLanguageChosen() || this.getUiLanguage() || !screen || !list || !search) {
+            root.classList.remove('nym-first-lang');
+            return;
+        }
+        const preset = this._firstRunLanguageDefault();
+        const options = [{ code: '', name: 'English' }].concat(NYM_TRANSLATE_LANGUAGES
+            .filter(l => l.code !== 'en')
+            .sort((a, b) => a.name.localeCompare(b.name)));
+        list.innerHTML = options.map(l => {
+            const name = l.code ? this._languageNative(l.code) : l.name;
+            const sub = l.code ? this._languageSubtitle(l.code) : '';
+            const key = (l.code ? this._languageSearchKey(l.code, l.name) : 'english') + ' ' + (l.code || 'en').toLowerCase();
+            return `<button type="button" class="first-lang-row${l.code === preset ? ' is-active' : ''}" ` +
+                `data-lang="${this.escapeHtml(l.code)}" data-name="${this.escapeHtml(key)}">` +
+                `<span class="first-lang-name">${this.escapeHtml(name)}</span>` +
+                `${sub ? `<span class="first-lang-sub">${this.escapeHtml(sub)}</span>` : ''}</button>`;
+        }).join('');
+
+        let done = false;
+        const finish = (code) => {
+            if (done) return;
+            done = true;
+            const current = this.getUiLanguage();
+            this._markUiLanguageChosen();
+            root.classList.remove('nym-first-lang');
+            this._syncTranslateLanguageToUi(code);
+            if (code !== current) {
+                this.applyUiLanguage(code).catch(() => { });
+                const select = document.getElementById('uiLanguageSelect');
+                if (select) select.value = code;
+            }
+            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        };
+
+        search.addEventListener('input', () => {
+            const q = search.value.trim().toLowerCase();
+            let any = false;
+            list.querySelectorAll('.first-lang-row').forEach(row => {
+                const hit = !q || row.dataset.name.includes(q);
+                row.classList.toggle('nm-hidden', !hit);
+                if (hit) any = true;
+            });
+            if (empty) empty.classList.toggle('nm-hidden', any);
+        });
+        list.addEventListener('click', (e) => {
+            const row = e.target.closest('.first-lang-row');
+            if (row) finish(row.dataset.lang || '');
+        });
+        const close = document.getElementById('firstLangClose');
+        if (close) close.addEventListener('click', () => finish(preset));
+        screen.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') finish(preset);
+        });
+
+        const active = list.querySelector('.first-lang-row.is-active');
+        if (active) list.scrollTop = Math.max(0, active.offsetTop - (list.clientHeight - active.offsetHeight) / 2);
         try {
-            if (this._uiLanguageChosen()) return;
-            const setup = document.getElementById('setupModal');
-            if (!setup || !setup.classList.contains('active')) return;
-            setTimeout(() => {
-                if (this._uiLanguageChosen()) return;
-                this.showUiLanguagePicker({ dismissible: true })
-                    .then(() => this._markUiLanguageChosen())
-                    .catch(() => this._markUiLanguageChosen());
-            }, 350);
+            if (active) active.focus({ preventScroll: true });
         } catch (_) { }
     },
 
@@ -609,67 +676,6 @@ Object.assign(NYM.prototype, {
 
     _markUiLanguageChosen() {
         try { localStorage.setItem('nym_ui_language_chosen', 'true'); } catch (_) { }
-    },
-
-    // Returns the chosen code ('' for English) or null if dismissed.
-    showUiLanguagePicker(opts = {}) {
-        return new Promise((resolve) => {
-            const languages = NYM_TRANSLATE_LANGUAGES
-                .slice()
-                .sort((a, b) => a.name.localeCompare(b.name));
-            const current = this.getUiLanguage();
-
-            const overlay = document.createElement('div');
-            overlay.className = 'modal active';
-            overlay.setAttribute('data-no-i18n', '');
-            overlay.style.zIndex = '10004';
-            overlay.innerHTML = `
-                <div class="modal-content nm-tr-1">
-                    <h3 class="nm-tr-2">${this.escapeHtml(opts.title || 'Choose Your Language')}</h3>
-                    <p class="nm-tr-3">${this.escapeHtml(opts.subtitle || "Select the language you'd like the app displayed in. You can change this anytime in Settings.")}</p>
-                    <input type="text" class="translate-lang-search nm-tr-4" placeholder="Search languages...">
-                    <div class="translate-lang-grid nm-tr-5">
-                        <button class="translate-lang-option nm-tr-6${!current ? ' selected' : ''}" data-lang="" data-name="english default">English</button>
-                        ${languages.filter(l => l.code !== 'en').map(l => this._languageOptionButton(l, current)).join('')}
-                    </div>
-                </div>`;
-
-            const finish = (code) => {
-                overlay.remove();
-                resolve(code);
-            };
-
-            const search = overlay.querySelector('.translate-lang-search');
-            search.addEventListener('input', () => {
-                const q = search.value.trim().toLowerCase();
-                overlay.querySelectorAll('.translate-lang-option').forEach(btn => {
-                    btn.style.display = (!q || btn.dataset.name.includes(q)) ? '' : 'none';
-                });
-            });
-
-            overlay.querySelectorAll('.translate-lang-option').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const code = btn.dataset.lang || '';
-                    const changed = code !== current;
-                    finish(code);
-                    // Adopt the translation target even when the UI language didn't change.
-                    this._syncTranslateLanguageToUi(code);
-                    if (changed) {
-                        this.applyUiLanguage(code).catch(() => { });
-                        const select = document.getElementById('uiLanguageSelect');
-                        if (select) select.value = code;
-                    }
-                    if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-                });
-            });
-
-            if (opts.dismissible !== false) {
-                overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
-            }
-
-            document.body.appendChild(overlay);
-            setTimeout(() => search.focus(), 50);
-        });
     },
 
     // Adopt the UI language as the message translation language; English UI maps to 'en'.

@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../widgets/nym_icons.dart';
+import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Shared form controls matching the PWA's settings styling, colored from `context.nym`.
 
@@ -191,7 +193,7 @@ class FormSelect<T> extends StatelessWidget {
       child: _field(c),
     );
     if (disabled && tooltip != null) {
-      return Tooltip(message: tooltip!, child: field);
+      return NymTooltip(message: tooltip!, child: field);
     }
     return field;
   }
@@ -321,19 +323,10 @@ class _FormInputState extends State<FormInput> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final borderColor = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     return DecoratedBox(
-      // Hard-edged 3px focus ring; light mode lifts it to primary@.1.
       decoration: BoxDecoration(
         borderRadius: NymRadius.rsm,
-        boxShadow: _focused
-            ? [
-                BoxShadow(
-                  color: c.primaryA(c.isLight ? 0.1 : 0.06),
-                  spreadRadius: 3,
-                ),
-              ]
-            : null,
+        boxShadow: NymField.ring(c, _focused),
       ),
       child: TextField(
         controller: widget.controller,
@@ -353,8 +346,8 @@ class _FormInputState extends State<FormInput> {
           fontSize: 15,
         ),
         cursorColor: c.isLight ? Colors.black : Colors.white,
-        decoration: InputDecoration(
-          isDense: true,
+        decoration: NymField.decoration(c,
+          hint: widget.hint,
           prefixIcon: widget.prefix == null
               ? null
               : Padding(
@@ -362,30 +355,7 @@ class _FormInputState extends State<FormInput> {
                   child: widget.prefix,
                 ),
           prefixIconConstraints:
-              const BoxConstraints(minWidth: 36, minHeight: 16),
-          hintText: widget.hint,
-          hintStyle: TextStyle(color: c.textDim, fontSize: 15),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-          filled: true,
-          // Light mode's fill is `!important`, so no focus lift.
-          fillColor: c.isLight
-              ? const Color(0x0A000000)
-              : Colors.white.withValues(alpha: _focused ? 0.07 : 0.05),
-          border: OutlineInputBorder(
-            borderRadius: NymRadius.rsm,
-            borderSide: BorderSide(color: borderColor),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rsm,
-            borderSide: BorderSide(color: borderColor),
-          ),
-          // Primary@.3 focus border in both modes; light's `:focus` rule beats its base border.
-          focusedBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rsm,
-            borderSide: BorderSide(color: c.primaryA(0.3)),
-          ),
-        ),
+              const BoxConstraints(minWidth: 36, minHeight: 16)),
       ),
     );
   }

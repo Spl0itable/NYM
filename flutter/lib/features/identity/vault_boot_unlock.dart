@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/theme/nym_metrics.dart';
 import '../../core/theme/nym_theme.dart' show kMonoFont;
 import '../../services/storage/at_rest_wipe.dart';
 import '../../state/settings_provider.dart';
@@ -72,8 +73,7 @@ class VaultLockedApp extends StatelessWidget {
 class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   final _pw = TextEditingController();
 
-  /// Non-null while the "Unlock failed" card is showing this message.
-  String? _failMessage;
+  String? _error;
   bool _busy = false;
 
   bool get _isBiometric =>
@@ -87,7 +87,10 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
 
   Future<void> _unlock() async {
     if (_busy) return;
-    setState(() => _busy = true);
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     final vault = ref.read(identityVaultProvider);
     try {
       final Map<String, String> secrets;
@@ -95,7 +98,6 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
         secrets = await vault.unlockBiometric();
       } else {
         final password = _pw.text;
-        // Like every unlock failure, this surfaces through the "Unlock failed" card, not inline.
         if (password.isEmpty) {
           throw StateError(tr('Enter your password or PIN.'));
         }
@@ -104,9 +106,10 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
       if (mounted) widget.onUnlocked(secrets);
     } catch (e) {
       if (mounted) {
+        _pw.clear();
         setState(() {
           _busy = false;
-          _failMessage = _messageOf(e);
+          _error = _messageOf(e);
         });
       }
     }
@@ -122,18 +125,11 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
                 : e is ArgumentError
                     ? e.message?.toString()
                     : null;
-    return (m == null || m.isEmpty) ? tr('Unlock failed.') : m;
-  }
-
-  /// "Try again" re-prompts with a fresh empty field.
-  void _retry() {
-    _pw.clear();
-    setState(() => _failMessage = null);
-  }
-
-  /// "Forget identity" from the error card resets without a second confirmation.
-  Future<void> _forgetFromError() async {
-    await _forgetIdentity();
+    if (m == null || m.isEmpty) return tr('Unlock failed.');
+    if (m == 'Wrong password/PIN or unrecognized passkey.') {
+      return tr('Wrong password/PIN or unrecognized passkey.');
+    }
+    return m;
   }
 
   Future<void> _forgetIdentity() async {
@@ -201,9 +197,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _failMessage != null
-                    ? _errorChildren(c)
-                    : _promptChildren(c, isBio),
+                children: _promptChildren(c, isBio),
               ),
             ),
           ),
@@ -263,20 +257,87 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     );
   }
 
-  Widget _header(NymColors c, String text) {
-    return Container(
-      padding: const EdgeInsets.only(bottom: 14),
-      margin: const EdgeInsets.only(bottom: 24),
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: c.glassBorder)),
-      ),
+  Widget _title(NymColors c, String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
       child: Text(
-        text.toUpperCase(),
+        text,
         style: TextStyle(
-          color: c.primary,
-          fontSize: 22,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.5,
+          color: c.text,
+          fontSize: NymType.xl,
+          fontWeight: FontWeight.w600,
+          height: 1.3,
+        ),
+      ),
+    );
+  }
+
+  Widget _lede(NymColors c, String text, {bool error = false}) {
+    return Text(
+      text,
+      style: TextStyle(
+        color: error ? c.danger : c.textDim,
+        fontSize: 14,
+        height: 1.5,
+      ),
+    );
+  }
+
+  Widget _primary(NymColors c, String label, VoidCallback? onTap,
+      {Widget? child}) {
+    final enabled = onTap != null;
+    return Opacity(
+      opacity: enabled ? 1 : 0.6,
+      child: Material(
+        color: c.primaryA(0.1),
+        shape: RoundedRectangleBorder(
+          borderRadius: NymRadius.rxs,
+          side: BorderSide(color: c.primary),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: 44,
+            child: Center(
+              child: child ??
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: c.primary,
+                      fontSize: NymType.lg,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _ghost(NymColors c, String label, VoidCallback? onTap) {
+    return Material(
+      color: Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: NymRadius.rxs,
+        side: BorderSide(color: c.glassBorder),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox(
+          height: 44,
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: c.textDim,
+                fontSize: NymType.lg,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -285,14 +346,13 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   List<Widget> _promptChildren(NymColors c, bool isBio) {
     return [
       _wordmark(c),
-      _header(c, tr('Unlock your identity')),
-      Text(
-        isBio
-            ? tr('Your Nymchat identity key is encrypted on this device. '
-                'Use your biometric to unlock.')
-            : tr('Your Nymchat identity key is encrypted on this device.'),
-        style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
-      ),
+      _title(c, tr('Unlock your identity')),
+      _lede(
+          c,
+          isBio
+              ? tr('Your Nymchat identity key is encrypted on this device. '
+                  'Use your biometric to unlock.')
+              : tr('Your Nymchat identity key is encrypted on this device.')),
       const SizedBox(height: 16),
       if (!isBio)
         ModalChrome.focusRing(
@@ -308,58 +368,39 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
             style: TextStyle(color: c.inputText, fontSize: 15),
           ),
         ),
-      // Body-to-actions gap: 40 with the password field, 20 for the biometric prompt.
-      SizedBox(height: isBio ? 20 : 40),
-      // Loose Flexibles so a narrow viewport compresses the buttons instead of overflowing.
-      Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Flexible(
-              child: ModalChrome.iconButton(
-                  c, tr('Forget identity'), _busy ? null : _forget,
-                  height: 42)),
-          const SizedBox(width: 10),
-          Flexible(
-            child: ModalChrome.sendButton(
-              c,
-              tr('Unlock'),
-              _busy ? null : _unlock,
-              child: _busy
-                  ? SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: c.primary),
-                    )
-                  : null,
-            ),
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Text(
+            _error!,
+            style: TextStyle(color: c.danger, fontSize: NymType.md, height: 1.4),
           ),
-        ],
+        ),
+      SizedBox(height: isBio ? 4 : 16),
+      _primary(
+        c,
+        tr('Unlock'),
+        _busy ? null : _unlock,
+        child: _busy
+            ? SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: c.primary),
+              )
+            : null,
       ),
-    ];
-  }
-
-  List<Widget> _errorChildren(NymColors c) {
-    return [
-      _wordmark(c),
-      _header(c, tr('Unlock failed')),
-      Text(
-        _failMessage!,
-        style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
-      ),
-      // The paragraph's 16px margin collapses into the body's 20px.
-      const SizedBox(height: 20),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Flexible(
-              child: ModalChrome.iconButton(
-                  c, tr('Forget identity'), _forgetFromError,
-                  height: 42)),
-          const SizedBox(width: 10),
-          Flexible(child: ModalChrome.sendButton(c, tr('Try again'), _retry)),
-        ],
-      ),
+      const SizedBox(height: 8),
+      _ghost(c, tr('Forget identity'), _busy ? null : _forget),
+      if (_busy)
+        Padding(
+          padding: const EdgeInsets.only(top: 12),
+          child: Text(
+            tr('Unlocking…'),
+            textAlign: TextAlign.center,
+            style: TextStyle(color: c.textDim, fontSize: NymType.md),
+          ),
+        ),
     ];
   }
 }

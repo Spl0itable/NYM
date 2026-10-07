@@ -236,6 +236,54 @@ class IdentityVault {
     return out;
   }
 
+  Future<bool> changePassword(String current, String next) async {
+    if (!isEnabled || method == 'biometric') return false;
+    if (next.length < 4) {
+      throw ArgumentError('Use at least 4 characters.');
+    }
+    final saltB64 = _kv.getString(StorageKeys.vaultSalt);
+    final check = _kv.getString(StorageKeys.vaultCheck);
+    if (saltB64 == null || check == null) return false;
+    final oldKey = await _deriveKey(current, base64.decode(saltB64));
+    try {
+      if (await _decrypt(oldKey, check) != _checkPlaintext) return false;
+    } catch (_) {
+      return false;
+    }
+    final salt = _randomBytes(16);
+    final key = await _deriveKey(next, salt);
+    final before = <String, String?>{};
+    final blobs = <String, String>{};
+    for (final name in vaultKeys) {
+      final blob = await _secure.get(name);
+      if (blob == null || !blob.startsWith('enc:v1:')) continue;
+      before[name] = blob;
+      blobs[name] = await _encrypt(key, await _decrypt(oldKey, blob));
+    }
+    final newCheck = await _encrypt(key, _checkPlaintext);
+    try {
+      for (final e in blobs.entries) {
+        await _secure.set(e.key, e.value);
+      }
+      await _kv.setString(StorageKeys.vaultSalt, base64.encode(salt));
+      await _kv.setString(StorageKeys.vaultCheck, newCheck);
+    } catch (_) {
+      for (final e in before.entries) {
+        try {
+          await _secure.set(e.key, e.value!);
+        } catch (_) {}
+      }
+      try {
+        await _kv.setString(StorageKeys.vaultSalt, saltB64);
+        await _kv.setString(StorageKeys.vaultCheck, check);
+      } catch (_) {}
+      rethrow;
+    }
+    _sessionKey = key;
+    await _escrowBackgroundKey(key);
+    return true;
+  }
+
   /// Decrypts secrets back to plaintext and clears metadata; requires the correct [password].
   Future<void> disable(String password) async {
     if (!isEnabled) return;
@@ -401,7 +449,10 @@ class IdentityVault {
   Future<void> secretSet(String name, String value) async {
     final key = _sessionKey;
     if (isEnabled && key != null) {
-      await _secure.set(name, await _encrypt(key, value));
+      var blob = await _encrypt(key, value);
+      final now = _sessionKey;
+      if (now != null && !identical(now, key)) blob = await _encrypt(now, value);
+      await _secure.set(name, blob);
     } else {
       await _secure.set(name, value);
     }

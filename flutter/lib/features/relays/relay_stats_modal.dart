@@ -17,6 +17,9 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../i18n/i18n.dart';
+import '../../widgets/common/nym_focusable.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// At or below this width: 3-column cards, no latency column, tighter padding.
 const double _kMobileMaxWidth = 480;
@@ -24,15 +27,14 @@ const double _kMobileMaxWidth = 480;
 class RelayStatsModal extends ConsumerStatefulWidget {
   const RelayStatsModal({super.key});
 
-  /// Opens the modal as a centered dialog.
   static Future<void> open(BuildContext context) {
     final isLight = context.nym.isLight;
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => const RelayStatsModal(),
       barrierColor: isLight
           ? const Color(0x73000000)
           : const Color(0xBF000000),
-      builder: (_) => const RelayStatsModal(),
     );
   }
 
@@ -60,7 +62,10 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
       final ok = await showAppConfirm(
         context,
         tr('Nymchat will disconnect from the relay pool proxy and connect to '
-            'each relay directly. Relays will see your IP address, and the '
+            'each relay directly. Images, videos, voice messages, avatars, '
+            'custom emoji, GIFs and link previews will also load straight from '
+            'the sites that host them, and uploads will go straight to them. '
+            'Relays and those sites will see your IP address, and the '
             "proxy's spam filtering won't apply. You can switch back anytime "
             'from Network Stats.'),
         title: tr('Use direct connections?'),
@@ -125,146 +130,149 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     final fallbackActive = nostr.isProxyFallbackActive;
     final userDirect = nostr.isUserDirectMode;
 
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.94,
-          constraints: const BoxConstraints(maxWidth: 560, maxHeight: 720),
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            borderRadius: NymRadius.rxl,
-            border: Border.all(color: c.glassBorder),
-            boxShadow: c.isLight
-                ? const [
-                    BoxShadow(
-                      color: Color(0x1F000000),
-                      blurRadius: 40,
-                      offset: Offset(0, 8),
-                    ),
-                  ]
-                : [
-                    const BoxShadow(
-                      color: Color(0x80000000),
-                      blurRadius: 32,
-                      offset: Offset(0, 8),
-                    ),
-                    BoxShadow(
-                      color: c.primary.withValues(alpha: 0.1),
-                      blurRadius: 20,
-                    ),
-                    BoxShadow(
-                      color: Colors.white
-                          .withValues(alpha: 0.05),
-                      spreadRadius: 1,
-                    ),
-                  ],
-          ),
-          child: Stack(
+    final body = Stack(
+      children: [
+        Padding(
+          padding: MediaQuery.sizeOf(context).width <= _kMobileMaxWidth
+              ? const EdgeInsets.symmetric(vertical: 18, horizontal: 14)
+              : const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: MediaQuery.sizeOf(context).width <= _kMobileMaxWidth
-                    ? const EdgeInsets.symmetric(vertical: 18, horizontal: 14)
-                    : const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 24),
-                      padding: const EdgeInsets.only(bottom: 14),
-                      decoration: BoxDecoration(
-                        border:
-                            Border(bottom: BorderSide(color: c.glassBorder)),
-                      ),
-                      child: Text(
-                        tr('NETWORK STATS'),
-                        style: TextStyle(
-                          color: c.primary,
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                    ),
-                    Flexible(
-                      child: SingleChildScrollView(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _ConnectionModeLine(
-                              connected: connected,
-                              proxyMode: proxyMode,
-                              fallbackActive: fallbackActive,
-                              userDirect: userDirect,
-                              canSwitch: nostr.canSwitchRelayTransport,
-                              switching: _switching ||
-                                  (fallbackActive &&
-                                      nostr.isProxyRetryInFlight),
-                              onUseDirect: _useDirect,
-                              onUseProxy: _useProxy,
-                            ),
-                            const SizedBox(height: 12),
-                            _Cards(connected: connected, stats: stats),
-                            const SizedBox(height: 14),
-                            _ThroughputSection(
-                              history: stats?.throughputHistory ?? const [],
-                            ),
-                            const SizedBox(height: 14),
-                            _RelayListSection(
-                              relayStatus: relayStatus,
-                              stats: stats,
-                              expandedRow: _expandedRow,
-                              onToggleRow: _toggleRow,
-                            ),
-                            // Background keep-alive lives here too, since this is where users come when messages aren't arriving.
-                            if (BackgroundConnectivityService.isSupported) ...[
-                              const SizedBox(height: 14),
-                              _TogglePanel(
-                                title: tr('Stay connected in background'),
-                                // The iOS caveat (catch-up only in system-granted windows) is usually the answer here.
-                                hint: tr('Keep relay connections and the '
-                                    'Bluetooth mesh running while Nymchat is in '
-                                    'the background, so messages and '
-                                    'notifications arrive without opening it. '
-                                    'Uses more battery and data. On iOS the system '
-                                    'decides when a suspended app may catch up, '
-                                    'so notifications can lag; with identity '
-                                    'encryption on, catch-up works only once '
-                                    'the device has been unlocked at least once '
-                                    'since it was powered on.'),
-                                enabled: backgroundConnectivity,
-                                onToggle: (v) => ref
-                                    .read(settingsProvider.notifier)
-                                    .setBackgroundConnectivity(v),
-                              ),
-                            ],
-                            const SizedBox(height: 14),
-                            _TogglePanel(
-                              title: tr('Using too much data?'),
-                              hint: tr('Enable Low Data Mode to limit relay '
-                                  'connections to a small core set and load geo '
-                                  'relays only when entering channels.'),
-                              enabled: lowData,
-                              onToggle: (v) => ref
-                                  .read(settingsProvider.notifier)
-                                  .setLowDataMode(v),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
+              Container(
+                margin: const EdgeInsets.only(bottom: 24),
+                padding: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  border:
+                      Border(bottom: BorderSide(color: c.glassBorder)),
+                ),
+                child: Text(
+                  tr('NETWORK STATS'),
+                  style: TextStyle(
+                    color: c.primary,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                  ),
                 ),
               ),
-              Positioned(
-                top: 14,
-                right: 14,
-                child: _CloseChip(
-                  onTap: () => Navigator.of(context).maybePop(),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _ConnectionModeLine(
+                        connected: connected,
+                        proxyMode: proxyMode,
+                        fallbackActive: fallbackActive,
+                        userDirect: userDirect,
+                        canSwitch: nostr.canSwitchRelayTransport,
+                        switching: _switching ||
+                            (fallbackActive &&
+                                nostr.isProxyRetryInFlight),
+                        onUseDirect: _useDirect,
+                        onUseProxy: _useProxy,
+                      ),
+                      const SizedBox(height: 12),
+                      _Cards(connected: connected, stats: stats),
+                      const SizedBox(height: 14),
+                      _ThroughputSection(
+                        history: stats?.throughputHistory ?? const [],
+                      ),
+                      const SizedBox(height: 14),
+                      _RelayListSection(
+                        relayStatus: relayStatus,
+                        stats: stats,
+                        expandedRow: _expandedRow,
+                        onToggleRow: _toggleRow,
+                      ),
+                      if (BackgroundConnectivityService.isSupported) ...[
+                        const SizedBox(height: 14),
+                        _TogglePanel(
+                          title: tr('Stay connected in background'),
+                          hint: tr('Keep relay connections and the '
+                              'Bluetooth mesh running while Nymchat is in '
+                              'the background, so messages and '
+                              'notifications arrive without opening it. '
+                              'Uses more battery and data. On iOS the system '
+                              'decides when a suspended app may catch up, '
+                              'so notifications can lag; with identity '
+                              'encryption on, catch-up works only once '
+                              'the device has been unlocked at least once '
+                              'since it was powered on.'),
+                          enabled: backgroundConnectivity,
+                          onToggle: (v) => ref
+                              .read(settingsProvider.notifier)
+                              .setBackgroundConnectivity(v),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      _TogglePanel(
+                        title: tr('Using too much data?'),
+                        hint: tr('Enable Low Data Mode to limit relay '
+                            'connections to a small core set and load geo '
+                            'relays only when entering channels.'),
+                        enabled: lowData,
+                        onToggle: (v) => ref
+                            .read(settingsProvider.notifier)
+                            .setLowDataMode(v),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
+          ),
+        ),
+        Positioned(
+          top: 14,
+          right: 14,
+          child: _CloseChip(
+            onTap: () => Navigator.of(context).maybePop(),
+          ),
+        ),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      body,
+      (body) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.94,
+            constraints: const BoxConstraints(maxWidth: 560, maxHeight: 720),
+            decoration: BoxDecoration(
+              color: c.bgSecondary,
+              borderRadius: NymRadius.rxl,
+              border: Border.all(color: c.glassBorder),
+              boxShadow: c.isLight
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x1F000000),
+                        blurRadius: 40,
+                        offset: Offset(0, 8),
+                      ),
+                    ]
+                  : [
+                      const BoxShadow(
+                        color: Color(0x80000000),
+                        blurRadius: 32,
+                        offset: Offset(0, 8),
+                      ),
+                      BoxShadow(
+                        color: c.primary.withValues(alpha: 0.1),
+                        blurRadius: 20,
+                      ),
+                      BoxShadow(
+                        color: Colors.white
+                            .withValues(alpha: 0.05),
+                        spreadRadius: 1,
+                      ),
+                    ],
+            ),
+            child: body,
           ),
         ),
       ),
@@ -304,8 +312,9 @@ class _ConnectionModeLine extends StatelessWidget {
           'see the proxy, spam filtering applies.');
     } else if (userDirect) {
       value = tr('Direct');
-      hint = tr('Direct relay connections, chosen by you: relays see your IP '
-          "address and the proxy's spam filtering doesn't apply.");
+      hint = tr('Direct relay connections, chosen by you: relays and media '
+          "hosts see your IP address and the proxy's spam filtering doesn't "
+          'apply.');
     } else if (connected > 0 || fallbackActive) {
       value = tr('Direct');
       hint = fallbackActive
@@ -419,7 +428,7 @@ class _ModeButtonState extends State<_ModeButton> {
     final c = context.nym;
     final enabled = widget.onTap != null;
     final hovered = _hover && enabled;
-    return Tooltip(
+    return NymTooltip(
       message: widget.tooltip,
       child: Semantics(
         button: true,
@@ -931,7 +940,7 @@ class _StatsRow extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Tooltip(
+                  child: NymTooltip(
                     message: tooltip,
                     child: Text(
                       label,
@@ -1091,7 +1100,7 @@ class _ApiActionDetail extends StatelessWidget {
     'channel-activity': 'Channel activity',
     'channel-active': 'Active channels',
     'channel-delete': 'Channel cleanup',
-    'pm-get': 'Direct messages',
+    'pm-get': 'Private messages',
     'pm-put': 'Message backup',
     'pm-deposit': 'Message delivery',
     'pm-delete': 'Message cleanup',
@@ -1247,31 +1256,34 @@ class _CloseChipState extends State<_CloseChip> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final hovered = _hover;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: hovered
-                ? c.danger.withValues(alpha: 0.12)
-                : Colors.white.withValues(alpha: 0.05),
-            border: Border.all(
-              color: hovered ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+    return NymFocusable(
+      onActivate: widget.onTap,
+      tooltip: tr('Close'),
+      excludeChildSemantics: true,
+      radius: const BorderRadius.all(Radius.circular(16)),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: hovered
+                  ? c.danger.withValues(alpha: 0.12)
+                  : Colors.white.withValues(alpha: 0.05),
+              border: Border.all(
+                color: hovered ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+              ),
             ),
-          ),
-          child: Text(
-            '✕',
-            style: TextStyle(
+            child: Icon(
+              Icons.close,
+              size: 16,
               color: hovered ? c.danger : c.textDim,
-              fontSize: 16,
-              height: 1,
             ),
           ),
         ),

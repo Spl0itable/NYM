@@ -1,17 +1,22 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/haptics.dart';
 import '../../services/api/api_client.dart';
 import '../../services/api/storage_sync.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
+import 'delete_account.dart';
+import 'key_backup/cloudkit_backup_store.dart';
+import 'key_backup/key_backup_config.dart';
 import 'panic_purge.dart';
 import 'panic_wipe.dart';
 import 'remote_panic.dart';
@@ -27,6 +32,38 @@ void startPanicWipe(BuildContext context, WidgetRef ref) {
       accounts?.forgetAll();
       unawaited(ctrl.resetAfterPanic());
     },
+  );
+}
+
+void startDeleteAccount(BuildContext context, WidgetRef ref,
+    {required PanicIdentityPurge purge, RemotePanicSender? signals}) {
+  final ctrl = ref.read(nostrControllerProvider);
+  final accounts = ref.read(accountsProvider);
+  final iOS = defaultTargetPlatform == TargetPlatform.iOS;
+  Navigator.of(context, rootNavigator: true).push(
+    PageRouteBuilder<void>(
+      opaque: true,
+      barrierDismissible: false,
+      transitionDuration: Duration.zero,
+      pageBuilder: (_, _, _) => DeleteAccountScreen(
+        run: DeleteAccountRun(
+          purge: purge,
+          wipe: PanicWipe.production(),
+          marked: signals == null ? null : () => signals.marked.toSet(),
+          iCloud: iOS
+              ? () async => deleteSavedICloudBackups(
+                  await SharedPreferences.getInstance(),
+                  CloudKitBackupChannel(
+                      container: KeyBackupConfig
+                          .environment.appleCloudKitContainer))
+              : null,
+        ),
+        onDone: () {
+          accounts?.forgetAll();
+          unawaited(ctrl.resetAfterPanic());
+        },
+      ),
+    ),
   );
 }
 
@@ -47,7 +84,16 @@ void startLockScreenPanic(BuildContext context, WidgetRef ref,
 Future<Map<String, dynamic>> Function(Map<String, dynamic> body)?
     panicSendForTest;
 
-PanicIdentityPurge buildPanicPurge(WidgetRef ref) {
+PanicIdentityPurge buildPanicPurge(WidgetRef ref) =>
+    _buildPurge(ref, deleting: false).purge;
+
+({PanicIdentityPurge purge, RemotePanicSender signals}) buildDeletePurge(
+        WidgetRef ref) =>
+    _buildPurge(ref, deleting: true);
+
+({PanicIdentityPurge purge, RemotePanicSender signals}) _buildPurge(
+    WidgetRef ref,
+    {required bool deleting}) {
   final ctrl = ref.read(nostrControllerProvider);
   final api = ApiClient();
   final send = panicSendForTest ??
@@ -57,8 +103,9 @@ PanicIdentityPurge buildPanicPurge(WidgetRef ref) {
     send: send,
     url: StorageSync.storageUrl,
     publish: ctrl.publishRemotePanicWrap,
+    deleting: deleting,
   );
-  return PanicIdentityPurge.fromAccounts(
+  final purge = PanicIdentityPurge.fromAccounts(
     ref.read(accountsProvider),
     send: send,
     purgeActive: (pubkey) =>
@@ -69,6 +116,7 @@ PanicIdentityPurge buildPanicPurge(WidgetRef ref) {
     beforePurgeSigned: signals.viaSigner,
     activePubkey: ctrl.identity?.pubkey ?? '',
   );
+  return (purge: purge, signals: signals);
 }
 
 /// Opaque full-screen "Encrypting" overlay shown during a panic wipe, so nothing sensitive shows.
@@ -116,7 +164,7 @@ class _PanicOverlayState extends State<PanicOverlay>
   @override
   void initState() {
     super.initState();
-    HapticFeedback.mediumImpact();
+    Haptics.medium();
     _grid = _randomGrid();
     _scrambleTimer = Timer.periodic(
       const Duration(milliseconds: 60),

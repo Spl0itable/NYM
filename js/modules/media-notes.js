@@ -541,7 +541,7 @@
         roundNoCamera: 'No camera is available for video notes.',
         onceChannel: 'View once is only for private messages and groups.',
         onceOffline: "You're offline. View-once media needs the internet or the Bluetooth mesh.",
-        onceMeshUnsupported: "This app can't send direct messages over the Bluetooth mesh, so view once is unavailable here.",
+        onceMeshUnsupported: "This app can't send private messages over the Bluetooth mesh, so view once is unavailable here.",
         onceMesh: 'Sent over the encrypted Bluetooth mesh, up to 100 KB.',
         hdOffline: "You're offline. Media needs the internet or the Bluetooth mesh.",
         hdMesh: 'The Bluetooth mesh is slow and carries at most 100 KB per file, so original quality usually will not fit.',
@@ -595,11 +595,15 @@
 
     function preferredMime(kind, isTypeSupported) {
         const test = typeof isTypeSupported === 'function' ? isTypeSupported : () => false;
+        const ok = (m) => { try { return !!test(m); } catch (_) { return false; } };
+        const opusInMp4 = kind !== 'round' && !ok('audio/mp4;codecs=mp4a.40.2') && ok('audio/mp4;codecs=opus');
         const list = kind === 'round'
             ? ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
-            : ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'];
+            : opusInMp4
+                ? ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4']
+                : ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm'];
         for (const m of list) {
-            try { if (test(m)) return m; } catch (_) { }
+            if (ok(m)) return m;
         }
         return '';
     }

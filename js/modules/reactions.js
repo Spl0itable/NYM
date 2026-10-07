@@ -553,7 +553,7 @@ Object.assign(NYM.prototype, {
                 longPressTimer = setTimeout(() => {
                     didLongPress = true;
                     suppressClickUntil = Date.now() + 800;
-                    window.nymHapticTap && window.nymHapticTap();
+                    window.nymHaptic && window.nymHaptic('selection');
                     this.showReactorsModal(messageId, emoji, badge);
                 }, 500);
             };
@@ -977,7 +977,7 @@ ${this._emojiSectionsHtml()}`;
                 return;
             }
 
-            window.nymHapticTap && window.nymHapticTap();
+            window.nymHaptic && window.nymHaptic('light');
 
             messageReactions.get(emoji).set(this.pubkey, this.nym);
             this.persistReactions(messageId);

@@ -257,6 +257,49 @@ export class NymLedger {
     return { ok: true, spent, live };
   }
 
+  async _accountErase(a) {
+    const pubkey = String(a.pubkey || "");
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) return { error: "Invalid pubkey." };
+    const keyIds = [...new Set((Array.isArray(a.keyIds) ? a.keyIds : [])
+      .filter((k) => typeof k === "string" && k.length > 0 && k.length <= 128))].slice(0, 500);
+    const count = (sql, ...args) => {
+      const rows = this.sql.exec(sql, ...args).toArray();
+      return rows.length ? Number(rows[0].n) || 0 : 0;
+    };
+    const drop = (table, col, ...args) => {
+      const n = count("SELECT COUNT(*) AS n FROM " + table + " WHERE " + col + ";", ...args);
+      if (n) this.sql.exec("DELETE FROM " + table + " WHERE " + col + ";", ...args);
+      return n;
+    };
+    const out = {
+      holds: drop("credit_holds", "pubkey = ?", pubkey),
+      holdSpent: drop("credit_hold_spent", "pubkey = ?", pubkey),
+      dust: drop("credit_dust", "pubkey = ?", pubkey),
+      debt: drop("credit_debt", "pubkey = ?", pubkey),
+      gifts: drop("credit_gifts", "owner = ?", pubkey),
+      resume: drop("bot_resume", "owner = ?", pubkey),
+      notify: drop("turn_notify", "owner = ?", pubkey),
+      editions: drop("edition_resv", "user = ?", pubkey),
+      keyUsage: 0,
+      keyReservations: 0,
+      giftsRedeemed: 0,
+      credits: 0
+    };
+    out.giftsRedeemed = count("SELECT COUNT(*) AS n FROM credit_gifts WHERE redeemer = ?;", pubkey);
+    if (out.giftsRedeemed) this.sql.exec("UPDATE credit_gifts SET redeemer = NULL WHERE redeemer = ?;", pubkey);
+    for (const id of keyIds) {
+      out.keyUsage += drop("api_key_usage", "id = ?", id);
+      out.keyReservations += drop("api_key_resv", "key_id = ?", id);
+    }
+    const db = this.env && this.env.DB_CREDITS;
+    if (db && typeof db.prepare === "function") {
+      const res = await db.prepare("DELETE FROM credits WHERE pubkey = ? OR pubkey = ?")
+        .bind(this._creditKey(pubkey, "standard"), this._creditKey(pubkey, "pro")).run();
+      out.credits = (res && res.meta && res.meta.changes) || 0;
+    }
+    return Object.assign({ ok: true }, out);
+  }
+
   async _holdAge(a) {
     if (!this.env || this.env.LEDGER_TEST_OPS !== "1") return { error: "unknown op" };
     const pubkey = String(a.pubkey || "");
@@ -314,6 +357,7 @@ export class NymLedger {
       case "key-reset": return this._keyReset(a);
       case "hold-age": return this._holdAge(a);
       case "hold-spent": return this._holdSpent(a);
+      case "account-erase": return this._accountErase(a);
       default: return { error: "unknown op" };
     }
   }

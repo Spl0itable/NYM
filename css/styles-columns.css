@@ -81,10 +81,6 @@ body.columns-wallpaper.columns-mode .cv-scroller {
     background: transparent;
 }
 
-body.columns-mode .msg-hover-buttons {
-    flex-direction: column;
-}
-
 [data-action="resetColumnView"] {
     margin-top: 10px;
 }
@@ -293,7 +289,8 @@ body.columns-mode .msg-hover-buttons {
 .cv-scroller {
     width: 100%;
     min-height: 0;
-    padding: 10px;
+    --list-pad-b: 10px;
+    padding: 10px 10px var(--list-pad-b);
 }
 
 .cv-list {
@@ -773,4 +770,54 @@ body.solid-ui .cv-column-header {
 .cv-tabs-add:hover {
     border-color: var(--primary);
     color: var(--text-bright);
+}
+
+@media (min-width: 769px) {
+    .cv-column {
+        flex: 0 0 var(--cv-col-w, 360px);
+        width: var(--cv-col-w, 360px);
+        max-width: var(--cv-col-w, 360px);
+    }
+
+    .cv-add-column {
+        flex: 0 0 56px;
+        width: 56px;
+        writing-mode: vertical-rl;
+        font-size: var(--fs-md);
+        letter-spacing: 0.02em;
+    }
+
+    .cv-column-resizer {
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        width: 6px;
+        z-index: 5;
+        cursor: col-resize;
+        touch-action: none;
+    }
+
+    .cv-column-resizer:hover,
+    .cv-column-resizer:focus-visible,
+    html.cv-resizing .cv-column-resizer {
+        background: rgb(from var(--primary) r g b / 0.35);
+        outline: none;
+    }
+
+    html.cv-resizing,
+    html.cv-resizing * {
+        cursor: col-resize !important;
+        user-select: none !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .cv-column-resizer {
+        display: none;
+    }
+}
+
+body.columns-mode.chat-bubbles .cv-list .message-content {
+    max-width: min(calc(100% - 16px), calc(85 * 0.55em + 24px));
 }

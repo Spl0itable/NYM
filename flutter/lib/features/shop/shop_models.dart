@@ -41,7 +41,7 @@ class ShopItem {
   bool get isLegendary => tier == 'legendary';
 }
 
-enum ShopTab { styles, flair, special, limited, inventory }
+enum ShopTab { styles, flair, special, limited, credits, inventory }
 
 extension ShopTabLabel on ShopTab {
   String get label {
@@ -54,6 +54,8 @@ extension ShopTabLabel on ShopTab {
         return 'Special Items';
       case ShopTab.limited:
         return 'Limited & Bundles';
+      case ShopTab.credits:
+        return 'Nymbot Credits';
       case ShopTab.inventory:
         return 'My Items';
     }

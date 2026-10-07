@@ -21,6 +21,8 @@ import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/brand_buttons.dart';
 import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
+import '../search/unified_search_panel.dart' show nymSuffixStyle;
+import 'deleted_notice.dart';
 import 'dev_nsec_modal.dart';
 import 'key_backup/key_backup_crypto.dart';
 import 'key_backup/key_backup_pq_restore.dart';
@@ -29,6 +31,7 @@ import 'key_backup/key_backup_ui.dart';
 import 'key_backup/passkey_backup_service.dart';
 import 'modal_chrome.dart';
 import 'nip46_service.dart';
+import '../../widgets/common/nym_field.dart';
 
 enum _SetupTab { signup, login }
 
@@ -55,6 +58,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
   final _bioCtl = TextEditingController();
 
   _SetupTab _tab = _SetupTab.signup;
+  bool _profileOpen = false;
 
   final _nsecCtl = TextEditingController();
 
@@ -100,6 +104,11 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     if (lower.endsWith('.gif')) return 'image/gif';
     if (lower.endsWith('.webp')) return 'image/webp';
     return 'image/jpeg';
+  }
+
+  void _complete() {
+    DeletedNotice.pending.value = null;
+    widget.onComplete();
   }
 
   @override
@@ -236,7 +245,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     );
 
     if (!mounted) return;
-    widget.onComplete();
+    _complete();
   }
 
   /// Inline `nostrconnect://` flow on the shared [nip46ServiceProvider] so its socket is the one the controller signs with.
@@ -262,7 +271,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         // Adopt the remote signer at runtime, then advance the gate.
         await ref.read(nostrControllerProvider).loginWithNip46();
         if (!mounted) return;
-        widget.onComplete();
+        _complete();
       } catch (e) {
         if (!mounted) return;
         setState(() =>
@@ -303,7 +312,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       _loginSucceeded = true;
       await ref.read(nostrControllerProvider).loginWithNip46();
       if (!mounted) return;
-      widget.onComplete();
+      _complete();
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -346,7 +355,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       return;
     }
     if (!mounted) return;
-    widget.onComplete();
+    _complete();
   }
 
   Future<void> _loginWithBackupSecret(BackupSecret restored) async {
@@ -370,7 +379,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       unawaited(restoreBackupPqCode(ctrl, restored));
     }
     if (!mounted) return;
-    widget.onComplete();
+    _complete();
   }
 
   bool get _hasKeyBackup =>
@@ -395,6 +404,15 @@ class _SetupModalState extends ConsumerState<SetupModal> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  ValueListenableBuilder<DeletedNotice?>(
+                    valueListenable: DeletedNotice.pending,
+                    builder: (context, notice, _) => notice == null
+                        ? const SizedBox.shrink()
+                        : Padding(
+                            padding: const EdgeInsets.only(bottom: 16),
+                            child: _DeletedNoticeBanner(notice: notice, c: c),
+                          ),
+                  ),
                   if (invite != null) ...[
                     _InviteBanner(text: invite, c: c),
                     const SizedBox(height: 16),
@@ -478,41 +496,17 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       const SizedBox(height: 4),
       Text(
         tr('Your ephemeral pseudonym nickname for this session'),
-        style: TextStyle(color: c.textDim, fontSize: 11),
+        style: TextStyle(color: c.textDim, fontSize: NymType.xs),
       ),
-      const SizedBox(height: 16),
-      _label(c, tr('Choose Your Avatar'), optional: true),
-      const SizedBox(height: 6),
-      _avatarPicker(c),
-      const SizedBox(height: 16),
-      _label(c, tr('Choose Your Banner'), optional: true),
-      const SizedBox(height: 6),
-      _bannerPicker(c),
-      const SizedBox(height: 16),
-      _label(c, tr('Bio'), optional: true),
-      const SizedBox(height: 6),
-      _field(
-        c,
-        controller: _bioCtl,
-        hint: tr('Tell people a bit about yourself...'),
-        maxLength: 150,
-        maxLines: 3,
-        showCounter: true,
-      ),
-      const SizedBox(height: 5),
-      Text(
-        tr('Short bio shown on your profile (max 150 characters)'),
-        style: TextStyle(color: c.textDim, fontSize: 11),
-      ),
-      const SizedBox(height: 20),
-      // Content-width and centered, not full-bleed.
-      Align(
+      const SizedBox(height: NymSpace.s4),
+      KeyedSubtree(
         key: const Key('setupEnterBtn'),
-        alignment: Alignment.center,
         child: ModalChrome.sendButton(
           c,
-          tr('Enter'),
+          tr('Enter Nymchat'),
           _busy ? null : _enter,
+          fullWidth: true,
+          large: true,
           child: _busy
               ? SizedBox(
                   width: 18,
@@ -523,12 +517,90 @@ class _SetupModalState extends ConsumerState<SetupModal> {
               : null,
         ),
       ),
+      const SizedBox(height: NymSpace.s3),
+      Text(
+        tr('No email or phone. Add a photo, banner and bio any time.'),
+        textAlign: TextAlign.center,
+        style: TextStyle(color: c.textDim, fontSize: NymType.md, height: 1.45),
+      ),
       if (_hasKeyBackup) ...[
-        const SizedBox(height: brandGroupGap - 16),
-        ModalChrome.orDivider(c),
+        const SizedBox(height: NymSpace.s6),
+        Text(
+          tr('Keep a backup of your key'),
+          textAlign: TextAlign.center,
+          style: TextStyle(color: c.textDim, fontSize: NymType.md),
+        ),
+        const SizedBox(height: NymSpace.s3),
         KeyBackupSignInButtons(
           onSecret: _loginWithBackupSecret,
           signUp: true,
+        ),
+      ],
+      const SizedBox(height: NymSpace.s4),
+      Container(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: c.glassBorder)),
+        ),
+        padding: const EdgeInsets.only(top: NymSpace.s3),
+        child: Semantics(
+          button: true,
+          expanded: _profileOpen,
+          child: InkWell(
+            key: const Key('setupProfileToggle'),
+            borderRadius: NymRadius.rxs,
+            onTap: () => setState(() => _profileOpen = !_profileOpen),
+            child: SizedBox(
+              height: 40,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(
+                    child: Text(
+                      tr('Add a photo, banner and bio'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          TextStyle(color: c.secondary, fontSize: NymType.md),
+                    ),
+                  ),
+                  const SizedBox(width: NymSpace.s2),
+                  Icon(
+                    _profileOpen
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    size: 18,
+                    color: c.secondary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      if (_profileOpen) ...[
+        const SizedBox(height: NymSpace.s3),
+        _label(c, tr('Choose Your Avatar'), optional: true),
+        const SizedBox(height: 6),
+        _avatarPicker(c),
+        const SizedBox(height: 16),
+        _label(c, tr('Choose Your Banner'), optional: true),
+        const SizedBox(height: 6),
+        _bannerPicker(c),
+        const SizedBox(height: 16),
+        _label(c, tr('Bio'), optional: true),
+        const SizedBox(height: 6),
+        _field(
+          c,
+          controller: _bioCtl,
+          hint: tr('Tell people a bit about yourself...'),
+          maxLength: 150,
+          maxLines: 3,
+          showCounter: true,
+        ),
+        const SizedBox(height: 5),
+        Text(
+          tr('Short bio shown on your profile (max 150 characters)'),
+          style: TextStyle(color: c.textDim, fontSize: NymType.xs),
         ),
       ],
       const SizedBox(height: 20),
@@ -788,7 +860,6 @@ class _SetupModalState extends ConsumerState<SetupModal> {
     bool obscureText = false,
   }) {
     // Light mode forces a black@0.04 fill and black@0.1 border.
-    final baseBorder = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     final field = TextField(
       controller: controller,
       maxLength: maxLength,
@@ -802,29 +873,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
         color: c.inputText,
         fontSize: 15,
       ),
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: TextStyle(color: c.textDim, fontSize: 15),
-        counterText: '',
-        filled: true,
-        fillColor: c.isLight
-            ? const Color(0x0A000000)
-            : Colors.white.withValues(alpha: 0.05),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: baseBorder),
-        ),
-        border: OutlineInputBorder(
-          borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: baseBorder),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rsm,
-          borderSide: BorderSide(color: c.primaryA(0.3), width: 2),
-        ),
-      ),
+      decoration: NymField.decoration(c, hint: hint, isDense: false).copyWith(counterText: ''),
     );
     if (!showCounter || maxLength == null) return field;
     // Warn at 80%, limit at 100%.
@@ -1020,6 +1069,36 @@ class _InviteBanner extends StatelessWidget {
         text,
         textAlign: TextAlign.center,
         style: TextStyle(color: c.textBright, fontSize: 13),
+      ),
+    );
+  }
+}
+
+class _DeletedNoticeBanner extends StatelessWidget {
+  const _DeletedNoticeBanner({required this.notice, required this.c});
+
+  final DeletedNotice notice;
+  final NymColors c;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(color: c.textBright, fontSize: 13);
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        key: const Key('setupDeletedNotice'),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: NymRadius.rxs,
+          border: Border.all(color: c.secondary),
+        ),
+        child: Text.rich(
+          dimNymSuffixes(notice.text, nymSuffixStyle(style)),
+          style: style,
+          textAlign: TextAlign.center,
+        ),
       ),
     );
   }

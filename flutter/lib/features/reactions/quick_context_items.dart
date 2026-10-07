@@ -2,21 +2,72 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../widgets/chat/event_details_sheet.dart';
+import '../../widgets/common/app_dialog.dart';
 import '../../widgets/context_menu/context_menu_actions.dart';
-import '../../widgets/nym_icons.dart';
+import '../../widgets/context_menu/context_menu_panel.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../widgets/context_menu/report_modal.dart';
-import '../../features/zaps/zap_modal.dart';
+import '../chat_tools/chat_tools_providers.dart';
+import '../chat_tools/chat_tools_ui.dart';
 import '../i18n/i18n.dart';
+import '../zaps/zap_modal.dart';
 import '../toasts/toast_center.dart';
+import 'message_actions.dart';
 import 'quick_react_popup.dart';
 
-/// Builds the gated long-press quick-context items; the translate and edit rows appear only when their callback is supplied.
+final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
+
+({MsgActionFacts facts, Message? stored, bool modDelete}) messageActionFactsFor(
+  WidgetRef ref,
+  Message message, {
+  bool threadable = false,
+}) {
+  final app = ref.read(appStateProvider);
+  final self = app.selfPubkey;
+  final pubkey = message.pubkey;
+  final isSelf = message.isOwn || (pubkey.isNotEmpty && pubkey == self);
+  final found = findMessageAnywhere(app, message.nymMessageId ?? message.id) ??
+      (message.id.isEmpty ? null : findMessageAnywhere(app, message.id));
+  final tools = ref.read(chatToolsProvider);
+  final stored = found?.msg;
+  final toolActions = chatToolActionsFor(
+    message: stored,
+    storageKey: found?.key,
+    self: self,
+    saved: stored != null && tools.isMessageSaved(stored),
+    kept: stored != null && tools.isMessageKept(stored),
+    keepOffered: stored != null && tools.keepAvailableFor(stored, found!.key),
+  );
+  final target = enrichCtxTarget(
+    app,
+    ctxTargetForMessage(message, selfPubkey: self),
+  );
+  final modDelete = !isSelf && canModDeleteMessage(target);
+  final facts = MsgActionFacts(
+    isSelf: isSelf,
+    hasId: message.id.isNotEmpty,
+    hasContent: message.content.isNotEmpty,
+    hasAuthor: pubkey.isNotEmpty,
+    threadable: threadable,
+    stored: stored != null,
+    replyPrivately: toolActions.contains(ChatToolAction.replyPrivately),
+    saved: toolActions.contains(ChatToolAction.unsave),
+    keepOffered: toolActions.contains(ChatToolAction.keep) ||
+        toolActions.contains(ChatToolAction.unkeep),
+    kept: toolActions.contains(ChatToolAction.unkeep),
+    modDelete: modDelete,
+    edited: message.isEdited,
+    hexId: _hex64.hasMatch(message.id),
+    bot: message.isBot,
+  );
+  return (facts: facts, stored: stored, modDelete: modDelete);
+}
+
 List<QuickContextItem> buildQuickContextItems(
   BuildContext context,
   WidgetRef ref,
@@ -25,107 +76,70 @@ List<QuickContextItem> buildQuickContextItems(
   VoidCallback? onEdit,
   VoidCallback? onThread,
 }) {
-  final controller = ref.read(nostrControllerProvider);
+  final info = messageActionFactsFor(ref, message, threadable: onThread != null);
+  final read = ProviderScope.containerOf(context, listen: false).read;
   final app = ref.read(appStateProvider);
-  final self = app.selfPubkey;
-  final pubkey = message.pubkey;
-  final isSelf = message.isOwn || pubkey == self;
-  final hasMessageId = message.id.isNotEmpty;
-  final content = message.content;
-  final hasContent = content.isNotEmpty;
-  final baseNym = pickDisplayNym(app.users[pubkey]?.nym, message.author);
-  final fullNym = '$baseNym#${getPubkeySuffix(pubkey)}';
+  final baseNym = pickDisplayNym(app.users[message.pubkey]?.nym, message.author);
+  final fullNym = '${stripPubkeySuffix(baseNym)}#${getPubkeySuffix(message.pubkey)}';
+  final stored = info.stored ?? message;
 
-  final items = <QuickContextItem>[];
-
-  if (!isSelf && pubkey.isNotEmpty) {
-    items.add(QuickContextItem(
-      label: tr('Slap with Trout'),
-      svg: ctxActionSvg(CtxAction.slap),
-      onTap: () => controller.sendCurrent(
-          '/me slaps @$fullNym around a bit with a large trout 🐟'),
-    ));
-    items.add(QuickContextItem(
-      label: tr('Give warm Hug'),
-      svg: ctxActionSvg(CtxAction.hug),
-      onTap: () => controller.sendCurrent('/me gives @$fullNym a warm hug 🫂'),
-    ));
-  }
-
-  if (!isSelf && hasMessageId && pubkey.isNotEmpty) {
-    items.add(QuickContextItem(
-      label: tr('Zap Bitcoin'),
-      svg: ctxActionSvg(CtxAction.zap),
-      onTap: () => _zap(context, ref, message, baseNym),
-    ));
-  }
-
-  if (onThread != null && hasMessageId) {
-    items.add(QuickContextItem(
-      label: tr('Reply in Thread'),
-      svg: NymIcons.thread,
-      onTap: onThread,
-    ));
-  }
-
-  if (hasContent) {
-    items.add(QuickContextItem(
-      label: tr('Quote Message'),
-      svg: ctxActionSvg(CtxAction.quote),
-      onTap: () => ref
-          .read(pendingComposerActionProvider.notifier)
-          .requestQuote(fullNym: fullNym, content: content),
-    ));
-    items.add(QuickContextItem(
-      label: tr('Copy Message'),
-      svg: ctxActionSvg(CtxAction.copyMessage),
-      onTap: () async {
-        await Clipboard.setData(ClipboardData(text: content));
-        showToast(tr('Message copied to clipboard'));
-      },
-    ));
-    if (onTranslate != null) {
-      items.add(QuickContextItem(
-        label: tr('Translate Message'),
-        svg: ctxActionSvg(CtxAction.translate),
-        onTap: onTranslate,
-      ));
+  VoidCallback? run(MsgAction a) {
+    switch (a) {
+      case MsgAction.reply:
+        return () => ref
+            .read(pendingComposerActionProvider.notifier)
+            .requestQuote(fullNym: fullNym, content: message.content);
+      case MsgAction.replyPrivately:
+        return () => ChatToolsActions.replyPrivately(read, stored);
+      case MsgAction.thread:
+        return onThread;
+      case MsgAction.copy:
+        return () async {
+          await Clipboard.setData(ClipboardData(text: message.content));
+          showToast(tr('Message copied to clipboard'));
+        };
+      case MsgAction.translate:
+        return onTranslate;
+      case MsgAction.save:
+      case MsgAction.unsave:
+        return () => ChatToolsActions.toggleSave(read, stored);
+      case MsgAction.keep:
+      case MsgAction.unkeep:
+        return () => ChatToolsActions.toggleKeep(read, stored);
+      case MsgAction.zap:
+        return () => _zap(context, ref, message, stripPubkeySuffix(baseNym));
+      case MsgAction.edit:
+        return onEdit;
+      case MsgAction.delete:
+        return () => _confirmDelete(context, ref, message, mod: info.modDelete);
+      case MsgAction.editHistory:
+        return () => EditHistorySheet.open(context, message);
+      case MsgAction.eventDetails:
+        return () => showEventDetails(
+              context,
+              eventId: message.id,
+              pubkey: message.pubkey,
+              nym: message.author,
+              channel: message.geohash ?? message.channel,
+              createdAt: message.dateTime,
+              powTarget: message.powTarget,
+            );
+      case MsgAction.report:
+        return () => _report(context, ref, message, fullNym);
     }
   }
 
-  if (isSelf && hasMessageId && hasContent && onEdit != null) {
-    items.add(QuickContextItem(
-      label: tr('Edit Message'),
-      svg: ctxActionSvg(CtxAction.edit),
-      onTap: onEdit,
-    ));
-  }
-
-  if (isSelf && hasMessageId) {
-    items.add(QuickContextItem(
-      label: tr('Delete Message'),
-      svg: ctxActionSvg(CtxAction.delete),
-      color: QuickContextItemColor.danger,
-      onTap: () => _confirmDelete(context, ref, message.id),
-    ));
-  }
-
-  if (!isSelf && pubkey.isNotEmpty) {
-    items.add(QuickContextItem(
-      label: tr('Report'),
-      svg: ctxActionSvg(CtxAction.report),
-      color: QuickContextItemColor.report,
-      onTap: () => _report(context, ref, message, fullNym),
-    ));
-    items.add(QuickContextItem(
-      label: app.isUserBlocked(pubkey) ? tr('Unblock User') : tr('Block User'),
-      svg: ctxActionSvg(CtxAction.block),
-      color: QuickContextItemColor.danger,
-      onTap: () => controller.toggleBlockUser(pubkey),
-    ));
-  }
-
-  return items;
+  return [
+    for (final a in buildMessageActions(info.facts))
+      if (run(a) case final onTap?)
+        QuickContextItem(
+          id: a.id,
+          label: msgActionLabel(a),
+          svg: msgActionSvg(a),
+          color: quickItemColorFor(msgActionTone(a)),
+          onTap: onTap,
+        ),
+  ];
 }
 
 Future<void> _report(
@@ -156,7 +170,6 @@ Future<void> _zap(
   Message message,
   String baseNym,
 ) async {
-  // Cache first, then a kind-0 fetch, so unseen senders aren't reported as unable to receive zaps.
   showToast(tr('Checking if @{nym} can receive zaps...', {'nym': baseNym}));
   final String? lnAddr;
   try {
@@ -189,30 +202,24 @@ Future<void> _zap(
 Future<void> _confirmDelete(
   BuildContext context,
   WidgetRef ref,
-  String messageId,
-) async {
-  final c = context.nym;
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: c.bgTertiary,
-      content: Text(
-        tr('Are you sure you want to delete this message? This will send a deletion request to relays.'),
-        style: TextStyle(color: c.text, fontSize: 14),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.of(ctx).pop(false),
-          child: Text(tr('Cancel'), style: TextStyle(color: c.textDim)),
-        ),
-        TextButton(
-          onPressed: () => Navigator.of(ctx).pop(true),
-          child: Text(tr('Delete'), style: TextStyle(color: c.danger)),
-        ),
-      ],
-    ),
+  Message message, {
+  required bool mod,
+}) async {
+  final controller = ref.read(nostrControllerProvider);
+  final view = ref.read(currentViewProvider);
+  final ok = await showAppConfirm(
+    context,
+    mod
+        ? tr("Delete this member's message for everyone in the group?")
+        : tr('Are you sure you want to delete this message? This will send a deletion request to relays.'),
+    okLabel: tr('Delete'),
+    danger: true,
   );
-  if (ok == true) {
-    await ref.read(nostrControllerProvider).deleteMessage(messageId);
+  if (!ok) return;
+  if (mod) {
+    await controller.modDeleteGroupMessage(
+        view.kind == ViewKind.group ? view.id : '', message.id, message.pubkey);
+  } else {
+    await controller.deleteMessage(message.id);
   }
 }

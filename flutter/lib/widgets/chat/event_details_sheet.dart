@@ -13,6 +13,7 @@ import '../../features/i18n/i18n.dart';
 import '../../models/nostr_event.dart';
 import '../../services/nostr/event_provenance.dart';
 import '../../state/nostr_controller.dart';
+import '../common/nym_sheet.dart';
 
 /// Shows a message's signed event JSON and relays, from the session, the D1 archive, or the message itself.
 Future<void> showEventDetails(
@@ -24,10 +25,9 @@ Future<void> showEventDetails(
   DateTime? createdAt,
   int? powTarget,
 }) {
-  return showDialog<void>(
-    context: context,
-    barrierColor: Colors.black.withValues(alpha: 0.6),
-    builder: (_) => _EventDetailsDialog(
+  return showNymSheet<void>(
+    context,
+    (_) => _EventDetailsDialog(
       eventId: eventId,
       pubkey: pubkey,
       nym: nym,
@@ -35,6 +35,7 @@ Future<void> showEventDetails(
       createdAt: createdAt,
       powTarget: powTarget,
     ),
+    barrierColor: Colors.black.withValues(alpha: 0.6),
   );
 }
 
@@ -108,64 +109,69 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final media = MediaQuery.of(context);
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 32),
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: 720,
-          maxHeight: media.size.height * 0.86,
-        ),
-        decoration: BoxDecoration(
-          color: c.bgSecondary,
-          borderRadius: NymRadius.rxl,
-          border: Border.all(color: c.glassBorder),
-        ),
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
           children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    tr('Event Details').toUpperCase(),
-                    style: TextStyle(
-                      color: c.primary,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1.5,
-                    ),
-                  ),
+            Expanded(
+              child: Text(
+                tr('Event Details').toUpperCase(),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
                 ),
-                IconButton(
-                  icon: Icon(Icons.close, size: 18, color: c.textDim),
-                  onPressed: () => Navigator.of(context).pop(),
-                  tooltip: tr('Close'),
-                ),
-              ],
+              ),
             ),
-            Divider(color: c.glassBorder, height: 20),
-            Flexible(child: SingleChildScrollView(child: _body(c))),
-            const SizedBox(height: 14),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (_event != null) ...[
-                  _Btn(
-                    label: tr('Copy Raw JSON'),
-                    onTap: () => Clipboard.setData(ClipboardData(text: _json)),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                _Btn(
-                  label: tr('Close'),
-                  onTap: () => Navigator.of(context).pop(),
-                ),
-              ],
+            IconButton(
+              icon: Icon(Icons.close, size: 18, color: c.textDim),
+              onPressed: () => Navigator.of(context).pop(),
+              tooltip: tr('Close'),
             ),
           ],
+        ),
+        Divider(color: c.glassBorder, height: 20),
+        Flexible(child: SingleChildScrollView(child: _body(c))),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (_event != null) ...[
+              _Btn(
+                label: tr('Copy Raw JSON'),
+                onTap: () => Clipboard.setData(ClipboardData(text: _json)),
+              ),
+              const SizedBox(width: 8),
+            ],
+            _Btn(
+              label: tr('Close'),
+              onTap: () => Navigator.of(context).pop(),
+            ),
+          ],
+        ),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 16), child: body),
+      (body) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 32),
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: 720,
+            maxHeight: media.size.height * 0.86,
+          ),
+          decoration: BoxDecoration(
+            color: c.bgSecondary,
+            borderRadius: NymRadius.rxl,
+            border: Border.all(color: c.glassBorder),
+          ),
+          padding: const EdgeInsets.all(20),
+          child: body,
         ),
       ),
     );

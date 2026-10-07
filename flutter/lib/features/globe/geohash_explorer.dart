@@ -1,10 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart' show PointerScrollEvent;
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show LogicalKeyboardKey, rootBundle;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -14,11 +15,22 @@ import '../../services/api/api_client.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../channels/channel_share.dart';
 import '../i18n/i18n.dart';
+import '../toasts/toast_center.dart';
+import 'explorer_controls.dart';
+import 'explorer_lists.dart';
+import 'explorer_peek.dart';
+import 'explorer_search.dart';
+import 'geo_detail.dart';
+import 'geo_explore.dart';
 import 'geo_map_painter.dart';
 import 'geo_projection.dart';
 import 'geohash_channel.dart';
+import 'precision_path.dart';
 import 'topojson.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Below this width the explorer uses its phone layout.
 const double kGlobeNarrowBreakpoint = 768;
@@ -32,14 +44,19 @@ const String kCitiesAsset = 'assets/data/ne_50m_populated_places_simple.json';
 /// Zoom at which admin-1 and city layers lazy-load.
 const double kSubregionZoomThreshold = 2.5;
 
-/// Active-window options in hours.
-const List<int> kActiveWindowOptions = [1, 3, 6, 12, 24];
+const List<int> kActiveWindowOptions = kGeoWindowOptions;
 
 /// Re-tally channel activity every 30s.
 const Duration kActiveWindowRefresh = Duration(milliseconds: 30000);
 
 /// Repaint the day/night terminator every 60s.
 const Duration kDaynightRefresh = Duration(milliseconds: 60000);
+
+const Duration kGeoFlyDuration = Duration(milliseconds: 650);
+
+const Duration kGeoSelectPulse = Duration(milliseconds: 900);
+
+const Duration kGeoAmbientPulse = Duration(milliseconds: 1600);
 
 /// Isolate entry for [compute] decoding the world TopoJSON.
 List<GeoFeature> decodeWorldFeaturesIsolate(String jsonString) =>
@@ -52,6 +69,65 @@ List<GeoFeature> decodeAdmin1FeaturesIsolate(String jsonString) =>
 /// Isolate entry for [compute] decoding the cities GeoJSON.
 List<CityPoint> decodeCitiesIsolate(String jsonString) =>
     decodeCitiesGeoJson(jsonString);
+
+List<GeoPlace> buildGeoPlacesIsolate(List<String> src) => buildGeoPlaceIndex(
+      cities: jsonDecode(src[0]),
+      admin1: jsonDecode(src[1]),
+      countries: decodeWorldTopoJson(src[2]),
+    );
+
+Future<List<GeoPlace>>? _bundledPlaces;
+
+Future<List<GeoPlace>> loadBundledGeoPlaces() {
+  final cached = _bundledPlaces;
+  if (cached != null) return cached;
+  final f = () async {
+    final src = await Future.wait([
+      rootBundle.loadString(kCitiesAsset),
+      rootBundle.loadString(kAdmin1Asset),
+      rootBundle.loadString(kWorldTopoAsset),
+    ]);
+    return compute(buildGeoPlacesIsolate, src);
+  }();
+  _bundledPlaces = f;
+  f.catchError((Object _) {
+    _bundledPlaces = null;
+    return const <GeoPlace>[];
+  });
+  return f;
+}
+
+typedef GeoTierLoader = Future<GeoTierGeometry> Function(int tier);
+
+final Map<int, Future<GeoTierGeometry>> _bundledTiers = {};
+
+Future<GeoTierGeometry> loadBundledGeoTier(int tier) {
+  final cached = _bundledTiers[tier];
+  if (cached != null) return cached;
+  final f = () async {
+    final src = await rootBundle.loadString(kGeoTierAssets[tier], cache: false);
+    return compute(decodeGeoTier, src);
+  }();
+  _bundledTiers[tier] = f;
+  f.catchError((Object _) {
+    _bundledTiers.remove(tier);
+    return GeoTierGeometry(
+      countries: GeoLayer.empty,
+      lakes: GeoLayer.empty,
+      rivers: GeoLayer.empty,
+      countryLabels: const [],
+    );
+  });
+  return f;
+}
+
+final geoTierLoaderProvider =
+    Provider<GeoTierLoader>((ref) => loadBundledGeoTier);
+
+final Expando<GeoTierPaths> _tierPathCache = Expando<GeoTierPaths>();
+
+final geoPlacesLoaderProvider =
+    Provider<Future<List<GeoPlace>> Function()>((ref) => loadBundledGeoPlaces);
 
 /// Session-only globe preferences (toggles and window), since each open builds a new explorer; not persisted.
 final globePrefsProvider =
@@ -70,13 +146,57 @@ class GeohashExplorer extends ConsumerStatefulWidget {
   static Route<String> route({String? focusGeohash}) {
     return PageRouteBuilder<String>(
       opaque: false,
-      // The Scaffold paints the mode-aware scrim, since this static route has no context.
       barrierColor: Colors.transparent,
       barrierDismissible: false,
       transitionDuration: const Duration(milliseconds: 180),
-      pageBuilder: (_, _, _) => GeohashExplorer(focusGeohash: focusGeohash),
-      transitionsBuilder: (_, animation, _, child) =>
-          FadeTransition(opacity: animation, child: child),
+      pageBuilder: (context, animation, _) {
+        final page = GeohashExplorer(focusGeohash: focusGeohash);
+        if (!useNymSheet(context)) return page;
+        final nym = context.nym;
+        return Stack(
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                key: const ValueKey('geohashSheetBarrier'),
+                behavior: HitTestBehavior.opaque,
+                onTap: () => Navigator.of(context).maybePop(),
+                child: FadeTransition(
+                  opacity: animation,
+                  child: ColoredBox(
+                    color: nym.isLight
+                        ? const Color(0x4D000000)
+                        : const Color(0x66000000),
+                  ),
+                ),
+              ),
+            ),
+            Align(
+              alignment: Alignment.bottomCenter,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 1),
+                  end: Offset.zero,
+                ).animate(CurvedAnimation(
+                  parent: animation,
+                  curve: Curves.easeOutCubic,
+                  reverseCurve: Curves.easeInCubic,
+                )),
+                child: KeyboardInset(
+                  child: NymSheetFrame(
+                    dragAnywhere: false,
+                    fullHeight: true,
+                    child: page,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+      transitionsBuilder: (context, animation, _, child) =>
+          useNymSheet(context)
+              ? child
+              : FadeTransition(opacity: animation, child: child),
     );
   }
 
@@ -84,7 +204,8 @@ class GeohashExplorer extends ConsumerStatefulWidget {
   ConsumerState<GeohashExplorer> createState() => _GeohashExplorerState();
 }
 
-class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
+class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
+    with TickerProviderStateMixin {
   GeoView _view = const GeoView();
   List<GeoFeature> _features = const [];
   Size _lastSize = Size.zero;
@@ -97,6 +218,15 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   List<CityPoint> _cities = const [];
   bool _admin1Loaded = false;
   bool _citiesLoaded = false;
+
+  List<GeoTierPaths?> _tierPaths = const [null, null, null];
+  List<List<GeoLabelFeature>?> _tierLabels = const [null, null, null];
+  final Set<int> _tierRequested = {};
+
+  final GlobalKey _searchBoxKey = GlobalKey();
+  final GlobalKey _controlsKey = GlobalKey();
+  final GlobalKey _mapBoxKey = GlobalKey();
+  List<Rect> _occupied = const [];
 
   bool _heatmap = false;
   bool _daynight = false;
@@ -131,6 +261,24 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   Timer? _daynightTimer;
   final ValueNotifier<int> _ticker = ValueNotifier<int>(0);
 
+  late final AnimationController _fly =
+      AnimationController(vsync: this, duration: kGeoFlyDuration);
+  late final AnimationController _selectPulse =
+      AnimationController(vsync: this, duration: kGeoSelectPulse);
+  late final AnimationController _ambient =
+      AnimationController(vsync: this, duration: kGeoAmbientPulse);
+  GeoView _flyFrom = const GeoView();
+  GeoView _flyTo = const GeoView();
+  bool _reduceMotion = false;
+
+  bool _listsOpen = false;
+  bool _layersOpen = false;
+  final FocusNode _layersButtonFocus = FocusNode(debugLabel: 'geo-layers');
+  GeoListTab _listTab = GeoListTab.active;
+  List<GeoPlace> _places = const [];
+  bool _placesRequested = false;
+  final Map<String, String> _placeLabels = {};
+
   @override
   void initState() {
     super.initState();
@@ -139,7 +287,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     _heatmap = prefs.heat;
     _daynight = prefs.daynight;
     _grid = prefs.grid;
-    _activeWindowHours = prefs.windowHours;
+    _activeWindowHours = normalizeGeoWindowHours(prefs.windowHours);
+    _fly.addListener(_onFlyTick);
+    _selectPulse.addStatusListener((s) {
+      if (s == AnimationStatus.completed || s == AnimationStatus.dismissed) {
+        if (mounted) setState(() {});
+      }
+    });
     _loadFeatures();
     // Pull recent D1 activity on open so unloaded channels still show; throttled in the controller.
     _refreshD1Activity();
@@ -168,6 +322,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     _heatDebounce?.cancel();
     _heatImage?.dispose();
     _ticker.dispose();
+    _fly.dispose();
+    _selectPulse.dispose();
+    _ambient.dispose();
+    _layersButtonFocus.dispose();
     super.dispose();
   }
 
@@ -176,6 +334,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       final jsonStr = await rootBundle.loadString(kWorldTopoAsset);
       // Decode off the UI thread.
       final feats = await compute(decodeWorldFeaturesIsolate, jsonStr);
+      await prewarmGeoPaths(feats);
       if (!mounted) return;
       setState(() => _features = feats);
     } catch (_) {
@@ -184,12 +343,50 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   }
 
   /// Loads admin-1 and city data once each past the zoom threshold, decoded off the UI thread; call after any zoom change.
-  void _ensureSubregions() {
-    if (_view.zoom >= kSubregionZoomThreshold && !_admin1Loaded) {
+  void _measureOccupied() {
+    if (!mounted) return;
+    final map = _mapBoxKey.currentContext?.findRenderObject();
+    if (map is! RenderBox || !map.hasSize) return;
+    final out = <Rect>[];
+    for (final k in [_searchBoxKey, _controlsKey]) {
+      final b = k.currentContext?.findRenderObject();
+      if (b is! RenderBox || !b.hasSize || !b.attached) continue;
+      out.add(map.globalToLocal(b.localToGlobal(Offset.zero)) & b.size);
+    }
+    if (!listEquals(out, _occupied)) setState(() => _occupied = out);
+  }
+
+  void _ensureTier() {
+    if (_lastSize.isEmpty) return;
+    final want = geoTierFor(_view.scale(_lastSize));
+    if (want < 1 || _tierRequested.contains(want)) return;
+    _tierRequested.add(want);
+    _loadTier(want);
+  }
+
+  Future<void> _loadTier(int tier) async {
+    try {
+      final g = await ref.read(geoTierLoaderProvider)(tier);
+      final paths = _tierPathCache[g] ?? await buildGeoTierPaths(g);
+      _tierPathCache[g] ??= paths;
+      if (!mounted) return;
+      setState(() {
+        _tierPaths = [..._tierPaths]..[tier] = paths;
+        _tierLabels = [..._tierLabels]..[tier] = g.countryLabels;
+      });
+    } catch (_) {
+      _tierRequested.remove(tier);
+    }
+  }
+
+  void _ensureSubregions({bool force = false}) {
+    _ensureTier();
+    final want = force || _view.zoom >= kSubregionZoomThreshold;
+    if (want && !_admin1Loaded) {
       _admin1Loaded = true;
       _loadAdmin1();
     }
-    if (_view.zoom >= kSubregionZoomThreshold && !_citiesLoaded) {
+    if (want && !_citiesLoaded) {
       _citiesLoaded = true;
       _loadCities();
     }
@@ -199,6 +396,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     try {
       final jsonStr = await rootBundle.loadString(kAdmin1Asset);
       final feats = await compute(decodeAdmin1FeaturesIsolate, jsonStr);
+      await prewarmGeoPaths(feats, closed: false);
       if (!mounted) return;
       setState(() => _admin1Features = feats);
     } catch (_) {
@@ -219,6 +417,24 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     }
   }
 
+  Future<List<GeoPlace>> _loadPlaces() {
+    _ensureSubregions(force: true);
+    final f = ref.read(geoPlacesLoaderProvider)();
+    if (!_placesRequested) {
+      _placesRequested = true;
+      f.then((p) {
+        if (!mounted) return;
+        setState(() {
+          _places = p;
+          _placeLabels.clear();
+        });
+      }, onError: (_) {
+        _placesRequested = false;
+      });
+    }
+    return f;
+  }
+
   List<GeohashChannelPoint> _channels() {
     final state = ref.read(appStateProvider);
     return buildGeohashChannels(state, windowHours: _activeWindowHours);
@@ -226,8 +442,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
 
   /// Changes the window and forces an immediate redraw; no D1 refetch.
   void _setActiveWindow(int hours) {
-    if (hours == _activeWindowHours) return;
-    setState(() => _activeWindowHours = hours);
+    final h = normalizeGeoWindowHours(hours);
+    if (h == _activeWindowHours) return;
+    setState(() => _activeWindowHours = h);
     _savePrefs();
     _ticker.value++;
   }
@@ -251,13 +468,39 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   }
 
   void _setView(GeoView v, Size size) {
+    if (_fly.isAnimating) _fly.stop();
     setState(() => _view = v.clamped(size));
     // Trigger the lazy detail load on any zoom change.
     _ensureSubregions();
   }
 
+  void _onFlyTick() {
+    final t = Curves.easeInOutCubic.transform(_fly.value);
+    setState(() => _view = GeoView.lerp(_flyFrom, _flyTo, t).clamped(_lastSize));
+    if (_fly.isCompleted) _ensureSubregions();
+  }
+
+  void _flyToView(GeoView target, Size size) {
+    final to = target.clamped(size);
+    if (_reduceMotion) {
+      if (_fly.isAnimating) _fly.stop();
+      setState(() => _view = to);
+      _ensureSubregions();
+      return;
+    }
+    _flyFrom = _view;
+    _flyTo = to;
+    _fly.forward(from: 0);
+  }
+
+  void _startSelectPulse() {
+    if (_reduceMotion) return;
+    _selectPulse.repeat(count: 2);
+  }
+
   /// Rebuilds the heatmap image when inputs change; clears it when heatmap is off.
-  void _maybeRebuildHeat(Size size, List<GeohashChannelPoint> channels) {
+  void _maybeRebuildHeat(
+      Size size, List<GeohashChannelPoint> channels, double dpr) {
     if (!_heatmap) {
       if (_heatImage != null || _heatInputForImage != null) {
         _heatImage?.dispose();
@@ -271,6 +514,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     final input = HeatmapInput(
       view: _view,
       size: size,
+      dpr: dpr,
       points: [
         for (final c in channels)
           (lng: c.lng, lat: c.lat, messages: c.messages),
@@ -302,6 +546,26 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     });
   }
 
+  List<GeoCluster> _clusters(Size size, List<GeohashChannelPoint> channels) {
+    if (_heatmap || _view.zoom >= kGeoClusterMaxZoom) return const [];
+    return clusterGeoPoints([
+      for (final c in channels)
+        () {
+          final p = _view.project(c.lng, c.lat, size);
+          return GeoClusterPoint(
+              id: c.geohash, x: p.dx, y: p.dy, messages: c.messages);
+        }(),
+    ], kGeoClusterCellPx.toDouble());
+  }
+
+  GeoCluster? _clusterAt(Offset local, Size size) {
+    for (final k in _clusters(size, _channels())) {
+      if (k.count < 2) continue;
+      if ((Offset(k.x, k.y) - local).distance <= 22) return k;
+    }
+    return null;
+  }
+
   GeohashChannelPoint? _channelAt(Offset local, Size size) {
     const hitR = 10.0;
     GeohashChannelPoint? nearest;
@@ -318,7 +582,16 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
   }
 
   void _onTapUp(TapUpDetails d, Size size) {
+    if (_layersOpen) {
+      setState(() => _layersOpen = false);
+      return;
+    }
     final local = d.localPosition;
+    final cluster = _clusterAt(local, size);
+    if (cluster != null) {
+      _flyToCluster(cluster, size);
+      return;
+    }
     final ch = _channelAt(local, size);
     if (ch != null) {
       // Tapping a dot selects without re-framing; only grid-cell taps zoom.
@@ -330,8 +603,28 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       if (u.lat < -90 || u.lat > 90 || u.lng < -180 || u.lng > 180) return;
       final precision = computeGridPrecision(_view, size);
       final gh = encodeGeohash(u.lat, u.lng, precision: precision);
-      _selectCell(gh, size);
+      _focusCell(gh, size, fly: false, pulse: false);
     }
+  }
+
+  void _flyToCluster(GeoCluster k, Size size) {
+    var latLo = 90.0, latHi = -90.0, lngLo = 180.0, lngHi = -180.0;
+    for (final id in k.ids) {
+      final b = geohashBounds(id);
+      if (b == null) continue;
+      latLo = math.min(latLo, b.latLo);
+      latHi = math.max(latHi, b.latHi);
+      lngLo = math.min(lngLo, b.lngLo);
+      lngHi = math.max(lngHi, b.lngHi);
+    }
+    if (latLo > latHi) return;
+    final fit = _view.fitBounds(
+        (latLo: latLo, latHi: latHi, lngLo: lngLo, lngHi: lngHi), size,
+        padding: 0.5);
+    final target = fit.zoom <= _view.zoom
+        ? fit.copyWith(zoom: math.min(GeoView.maxZoom, kGeoClusterMaxZoom + 0.5))
+        : fit;
+    _flyToView(target, size);
   }
 
   /// Selects for the info panel and starts a reverse geocode for its Location row.
@@ -341,6 +634,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       _selected = point;
       _hoveredGeohash = point.geohash;
       _locationInfo = tr('Loading location...');
+      _layersOpen = false;
     });
     _fetchLocation(point.lat, point.lng, token);
   }
@@ -368,12 +662,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     setState(() => _locationInfo = result);
   }
 
-  /// Zooms to the cell, reusing an existing channel entry or synthesizing one.
-  void _selectCell(String geohash, Size size) {
+  void _focusCell(String geohash, Size size,
+      {bool fly = true, bool pulse = true}) {
     final gh = geohash.toLowerCase();
     final bounds = geohashBounds(gh);
     if (bounds == null) return;
     final existing = _channels().where((c) => c.geohash == gh);
+    final joined = ref.read(appStateProvider).channels.any((c) => c.key == gh);
     final point = existing.isNotEmpty
         ? existing.first
         : GeohashChannelPoint(
@@ -381,14 +676,26 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
             lat: (bounds.latLo + bounds.latHi) / 2,
             lng: (bounds.lngLo + bounds.lngHi) / 2,
             messages: 0,
-            isJoined: false,
+            isJoined: joined,
           );
     _selectChannel(point);
-    // Re-framing also triggers the lazy detail load.
-    _setView(_view.fitBounds(bounds, size), size);
+    final narrow = size.width < kGlobeNarrowBreakpoint;
+    var target = _view.fitBounds(bounds, size, padding: narrow ? 0.45 : 0.7);
+    if (narrow) {
+      target = target.copyWith(
+          cy: target.cy - 0.23 * size.height / target.scale(size));
+    }
+    if (fly) {
+      _flyToView(target, size);
+    } else {
+      if (_fly.isAnimating) _fly.stop();
+      _setView(target, size);
+    }
+    if (pulse) _startSelectPulse();
   }
 
   void _resetView(Size size) {
+    if (_fly.isAnimating) _fly.stop();
     setState(() {
       _view = const GeoView().clamped(size);
       _heatmap = false;
@@ -398,13 +705,50 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       _hoveredGeohash = null;
       _locationInfo = tr('Loading location...');
       _activeWindowHours = 24;
+      _layersOpen = false;
     });
     // Reset also clears the session preferences.
     _savePrefs();
   }
 
+  void _goToLocation(Size size) {
+    final loc = _userLocation();
+    if (loc == null) {
+      showToast(tr('Location is off. Turn on "Sort by proximity" in Settings to use your location.'));
+      return;
+    }
+    final b = geohashBounds(encodeGeoGeohash(loc.lat, loc.lng, 4));
+    if (b == null) return;
+    _flyToView(_view.fitBounds(b, size), size);
+  }
+
   void _join(String geohash) {
     Navigator.of(context).pop(geohash.toLowerCase());
+  }
+
+  void _toggleSaved(String geohash) {
+    ref.read(nostrControllerProvider).togglePin(geohash.toLowerCase());
+    setState(() {});
+  }
+
+  Set<String> _savedSet() => {
+        for (final k in ref.read(appStateProvider).pinnedChannels)
+          if (k != kDefaultChannel && isGeoGeohash(k)) k.toLowerCase(),
+      };
+
+  String _placeLabel(String gh) {
+    final hit = _placeLabels[gh];
+    if (hit != null) return hit;
+    var label = roomPlaceLabel(_places, gh);
+    if (label.isEmpty && _features.isNotEmpty) {
+      final b = geohashBounds(gh);
+      if (b != null) {
+        label = countryAt(
+            _features, (b.latLo + b.latHi) / 2, (b.lngLo + b.lngHi) / 2);
+      }
+    }
+    if (_places.isNotEmpty || _features.isNotEmpty) _placeLabels[gh] = label;
+    return label;
   }
 
   @override
@@ -415,6 +759,30 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       primary: nym.primary,
       warning: nym.warning,
     );
+
+    if (NymSheetScope.of(context)) {
+      return Material(
+        type: MaterialType.transparency,
+        child: Stack(
+          children: [
+            Column(
+              children: [
+                NymSheetDragRegion(child: _header(nym)),
+                Expanded(child: _body(style)),
+              ],
+            ),
+            Positioned(
+              top: 5,
+              right: 8,
+              child: _ModalCloseButton(
+                nym: nym,
+                onTap: () => Navigator.of(context).maybePop(),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     // Centered overlay card over a mode-aware translucent scrim, the only dimming layer under a non-opaque route.
     return Scaffold(
@@ -461,8 +829,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
                       ],
                     ),
                     Positioned(
-                      top: 14,
-                      right: 14,
+                      top: 5,
+                      right: 8,
                       child: _ModalCloseButton(
                         nym: nym,
                         onTap: () => Navigator.of(context).maybePop(),
@@ -503,6 +871,17 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
+        _reduceMotion = MediaQuery.of(context).disableAnimations;
+        if (_reduceMotion && (_fly.isAnimating || _selectPulse.isAnimating)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_fly.isAnimating) {
+              _fly.stop();
+              setState(() => _view = _flyTo.clamped(_lastSize));
+            }
+            if (_selectPulse.isAnimating) _selectPulse.stop();
+          });
+        }
         // Clamp the view on first layout or resize.
         if (size != _lastSize) {
           _lastSize = size;
@@ -513,7 +892,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
             final focus = widget.focusGeohash;
             if (!_focusApplied && focus != null && focus.isNotEmpty) {
               _focusApplied = true;
-              _selectCell(focus, size);
+              _focusCell(focus, size, fly: false);
             }
           });
         }
@@ -525,21 +904,276 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
         final channels = _channels();
 
         // Keep the heatmap image in sync with the current inputs.
-        _maybeRebuildHeat(size, channels);
+        final dpr = capGeoDpr(MediaQuery.devicePixelRatioOf(context));
+        _maybeRebuildHeat(size, channels, dpr);
 
+        WidgetsBinding.instance.addPostFrameCallback((_) => _measureOccupied());
         final narrow = size.width < kGlobeNarrowBreakpoint;
+        final nowMs = DateTime.now().millisecondsSinceEpoch;
+        final recent = <String>{
+          for (final c in channels)
+            if (isGeoRecent(c.lastActivityMs, nowMs)) c.geohash,
+        };
+        _syncAmbient(recent.isNotEmpty && !_heatmap);
+        final saved = _savedSet();
+        final inset = narrow ? 10.0 : 16.0;
+        final bottomPad = MediaQuery.paddingOf(context).bottom;
+        const columnGap = 8.0;
+        const columnCount = 6;
+        final columnBottom =
+            inset + columnCount * kGeoTouch + (columnCount - 1) * columnGap;
+        final showLists = _listsOpen && !(narrow && _selected != null);
 
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            _mapGestureLayer(size, style, channels),
-            _topLeftControls(size, narrow),
-            _bottomControls(narrow),
-            _legend(narrow),
-            if (_selected != null) _infoPanel(_selected!, narrow),
-          ],
+        return CallbackShortcuts(
+          bindings: {
+            if (_layersOpen)
+              const SingleActivator(LogicalKeyboardKey.escape): _closeLayers,
+          },
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _mapGestureLayer(size, style, channels, recent, saved),
+              if (_layersOpen)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => _layersOpen = false),
+                  ),
+                ),
+              if (showLists)
+                _listsPanel(narrow, inset, size, bottomPad, channels, saved),
+              if (_selected != null)
+                _infoPanel(_selected!, narrow, inset, size, columnBottom,
+                    bottomPad, saved),
+              Positioned(
+                top: inset,
+                left: inset,
+                right: narrow ? inset + kGeoTouch + columnGap : null,
+                width: narrow ? null : math.min(340.0, size.width - 120),
+                child: KeyedSubtree(
+                  key: _searchBoxKey,
+                  child: GeoSearchField(
+                    loadPlaces: _loadPlaces,
+                    onPick: (gh) => _focusCell(gh, size),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: inset,
+                right: inset,
+                child: KeyedSubtree(
+                  key: _controlsKey,
+                  child: _controlColumn(size, columnGap),
+                ),
+              ),
+              if (_layersOpen)
+                Positioned(
+                  top: inset + 3 * (kGeoTouch + columnGap),
+                  right: inset + kGeoTouch + columnGap,
+                  width: math.min(
+                      240.0, size.width - 2 * inset - kGeoTouch - columnGap),
+                  child: GeoLayersMenu(
+                    heat: _heatmap,
+                    daynight: _daynight,
+                    grid: _grid,
+                    windowHours: _activeWindowHours,
+                    showLocationLegend: _userLocation() != null,
+                    showClusterLegend:
+                        !_heatmap && _view.zoom < kGeoClusterMaxZoom,
+                    showPulseLegend: !_heatmap && !_reduceMotion,
+                    reduceMotion: _reduceMotion,
+                    onHeat: () {
+                      setState(() => _heatmap = !_heatmap);
+                      _savePrefs();
+                    },
+                    onDaynight: () {
+                      setState(() => _daynight = !_daynight);
+                      _savePrefs();
+                    },
+                    onGrid: () {
+                      setState(() => _grid = !_grid);
+                      _savePrefs();
+                    },
+                    onWindow: _setActiveWindow,
+                    onClose: _closeLayers,
+                  ),
+                ),
+            ],
+          ),
         );
       },
+    );
+  }
+
+  void _closeLayers() {
+    if (!_layersOpen) return;
+    setState(() => _layersOpen = false);
+    _layersButtonFocus.requestFocus();
+  }
+
+  void _openLayersFromKey() {
+    if (_layersOpen) return;
+    setState(() => _layersOpen = true);
+  }
+
+  int get _layerCount => [_heatmap, _daynight, _grid].where((on) => on).length;
+
+  void _syncAmbient(bool want) {
+    final run = want && !_reduceMotion;
+    if (run && !_ambient.isAnimating) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_ambient.isAnimating && !_reduceMotion) {
+          _ambient.repeat();
+        }
+      });
+    } else if (!run && _ambient.isAnimating) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _ambient.stop();
+        _ambient.value = 0;
+      });
+    }
+  }
+
+  Widget _controlColumn(Size size, double gap) {
+    final children = <Widget>[
+      GeoControlButton(
+        key: const ValueKey('geo-ctl-zoom-in'),
+        icon: Icons.add,
+        tooltip: tr('Zoom in'),
+        onTap: () => _setView(
+            _view.zoomedAt(1.6, size.center(Offset.zero), size), size),
+      ),
+      GeoControlButton(
+        key: const ValueKey('geo-ctl-zoom-out'),
+        icon: Icons.remove,
+        tooltip: tr('Zoom out'),
+        onTap: () => _setView(
+            _view.zoomedAt(1 / 1.6, size.center(Offset.zero), size), size),
+      ),
+      GeoControlButton(
+        key: const ValueKey('geo-ctl-location'),
+        icon: Icons.my_location,
+        tooltip: tr('Your Location'),
+        active: _userLocation() != null,
+        onTap: () => _goToLocation(size),
+      ),
+      CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.arrowDown):
+              _openLayersFromKey,
+          const SingleActivator(LogicalKeyboardKey.arrowUp):
+              _openLayersFromKey,
+        },
+        child: GeoControlButton(
+          key: const ValueKey('geo-ctl-layers'),
+          icon: Icons.layers_outlined,
+          tooltip: _layerCount > 0
+              ? tr('Layers, {n} on', {'n': _layerCount})
+              : tr('Layers'),
+          active: _layersOpen || _layerCount > 0,
+          expanded: _layersOpen,
+          focusNode: _layersButtonFocus,
+          badge: _layerCount > 0 ? '$_layerCount' : null,
+          badgeKey: const ValueKey('geo-layers-count'),
+          onTap: () {
+            if (_layersOpen) {
+              _closeLayers();
+            } else {
+              setState(() => _layersOpen = true);
+            }
+          },
+        ),
+      ),
+      GeoControlButton(
+        key: const ValueKey('geo-ctl-reset'),
+        icon: Icons.public,
+        tooltip: tr('Reset View'),
+        onTap: () => _resetView(size),
+      ),
+      GeoControlButton(
+        key: const ValueKey('geo-ctl-lists'),
+        icon: Icons.list,
+        tooltip: tr('Rooms list'),
+        active: _listsOpen,
+        onTap: () => setState(() {
+          _listsOpen = !_listsOpen;
+          _layersOpen = false;
+          if (_listsOpen) {
+            _loadPlaces();
+            if (size.width < kGlobeNarrowBreakpoint) _selected = null;
+          }
+        }),
+      ),
+    ];
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) SizedBox(height: gap),
+          children[i],
+        ],
+      ],
+    );
+  }
+
+  Widget _panelBox(NymColors nym, Widget child, {Key? key}) {
+    return Container(
+      key: key,
+      decoration: BoxDecoration(
+        color: nym.isLight ? const Color(0xF7FFFFFF) : const Color(0xE6000000),
+        border: Border.all(color: nym.glassBorder),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: child,
+    );
+  }
+
+  Widget _listsPanel(bool narrow, double inset, Size size, double bottomPad,
+      List<GeohashChannelPoint> channels, Set<String> saved) {
+    final nym = context.nym;
+    final byGh = {for (final c in channels) c.geohash: c};
+    final savedRows = [
+      for (final gh in saved.toList()..sort())
+        byGh[gh] ??
+            () {
+              final b = geohashBounds(gh)!;
+              return GeoActivity(
+                geohash: gh,
+                lat: (b.latLo + b.latHi) / 2,
+                lng: (b.lngLo + b.lngHi) / 2,
+                messages: 0,
+              );
+            }(),
+    ];
+    final lists = GeoRoomLists(
+      tab: _listTab,
+      onTab: (t) => setState(() => _listTab = t),
+      active: channels,
+      saved: savedRows,
+      location: _userLocation(),
+      windowHours: _activeWindowHours,
+      onWindow: _setActiveWindow,
+      placeLabel: _placeLabel,
+      onOpen: (gh) => _focusCell(gh, size),
+    );
+    final panel = _panelBox(nym, lists, key: const ValueKey('geo-lists-panel'));
+    if (narrow) {
+      return Positioned(
+        left: inset,
+        right: inset + kGeoTouch + 8,
+        bottom: inset + bottomPad,
+        height: math.max(220.0, size.height * 0.42),
+        child: panel,
+      );
+    }
+    return Positioned(
+      left: inset,
+      top: inset + kGeoTouch + 8,
+      bottom: inset + bottomPad,
+      width: 300,
+      child: panel,
     );
   }
 
@@ -547,6 +1181,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     Size size,
     GeoMapStyle style,
     List<GeohashChannelPoint> channels,
+    Set<String> recent,
+    Set<String> saved,
   ) {
     // `grabbing` while dragging, `click` over a dot, else `grab`.
     final cursor = _dragging
@@ -554,6 +1190,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
         : (_hoveredGeohash != null
             ? SystemMouseCursors.click
             : SystemMouseCursors.grab);
+    final clusters = _clusters(size, channels);
 
     return MouseRegion(
       cursor: cursor,
@@ -587,6 +1224,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           behavior: HitTestBehavior.opaque,
           onTapUp: (d) => _onTapUp(d, size),
           onScaleStart: (d) {
+            if (_fly.isAnimating) _fly.stop();
             _lastScale = 1.0; // GL-H1: reset the cumulative-scale baseline.
             setState(() => _dragging = true);
           },
@@ -611,23 +1249,43 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
           },
           // A CustomPainter isn't bounded by its slot, so clip or zoomed content paints over the header.
           child: ClipRect(
+            key: _mapBoxKey,
             child: RepaintBoundary(
-              child: CustomPaint(
-                size: size,
-                painter: GeoMapPainter(
-                  view: _view,
-                  style: style,
-                  features: _features,
-                  admin1Features: _admin1Features,
-                  cities: _cities,
-                  channels: channels,
-                  heatmap: _heatmap,
-                  daynight: _daynight,
-                  grid: _grid,
-                  hoveredGeohash: _hoveredGeohash,
-                  userLocation: _userLocation(),
-                  heatmapImage: _heatImage,
-                  repaint: _ticker,
+              child: AnimatedBuilder(
+                animation: Listenable.merge([_selectPulse, _ambient]),
+                builder: (context, _) => CustomPaint(
+                  key: const ValueKey('geo-map-paint'),
+                  size: size,
+                  painter: GeoMapPainter(
+                    view: _view,
+                    style: style,
+                    features: _features,
+                    admin1Features: _admin1Features,
+                    cities: _cities,
+                    channels: channels,
+                    heatmap: _heatmap,
+                    daynight: _daynight,
+                    grid: _grid,
+                    hoveredGeohash: _hoveredGeohash,
+                    userLocation: _userLocation(),
+                    heatmapImage: _heatImage,
+                    repaint: _ticker,
+                    selectedGeohash: _selected?.geohash,
+                    selectPulse: _selectPulse.isAnimating && !_reduceMotion
+                        ? _selectPulse.value
+                        : null,
+                    clusters: clusters,
+                    recentGeohashes: recent,
+                    ambient: _ambient.isAnimating && !_reduceMotion
+                        ? _ambient.value
+                        : null,
+                    savedGeohashes: saved,
+                    dpr: capGeoDpr(MediaQuery.devicePixelRatioOf(context)),
+                    tiers: _tierPaths,
+                    tierLabels: _tierLabels,
+                    mapSize: size,
+                    occupied: _occupied,
+                  ),
                 ),
               ),
             ),
@@ -637,206 +1295,11 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     );
   }
 
-  Widget _topLeftControls(Size size, bool narrow) {
-    final inset = narrow ? 10.0 : 20.0;
-    return Positioned(
-      top: inset,
-      left: inset,
-      child: Row(
-        children: [
-          _controlBtn('+',
-              onTap: () => _setView(
-                  _view.zoomedAt(1.6, size.center(Offset.zero), size), size),
-              width: 34),
-          const SizedBox(width: 10),
-          _controlBtn('−',
-              onTap: () => _setView(
-                  _view.zoomedAt(1 / 1.6, size.center(Offset.zero), size),
-                  size),
-              width: 34),
-          const SizedBox(width: 10),
-          _controlBtn(tr('Reset View'), onTap: () => _resetView(size)),
-        ],
-      ),
-    );
-  }
-
-  Widget _bottomControls(bool narrow) {
-    final inset = narrow ? 10.0 : 20.0;
-    return Positioned(
-      bottom: inset,
-      left: inset,
-      child: Row(
-        children: [
-          _controlBtn(tr('Heat'), active: _heatmap, onTap: () {
-            setState(() => _heatmap = !_heatmap);
-            _savePrefs();
-          }),
-          const SizedBox(width: 10),
-          _controlBtn(tr('Day / Night'), active: _daynight, onTap: () {
-            setState(() => _daynight = !_daynight);
-            _savePrefs();
-          }),
-          const SizedBox(width: 10),
-          _controlBtn(tr('Geohash'), active: _grid, onTap: () {
-            setState(() => _grid = !_grid);
-            _savePrefs();
-          }),
-        ],
-      ),
-    );
-  }
-
-  Widget _legend(bool narrow) {
+  Widget _infoPanel(GeohashChannelPoint ch, bool narrow, double inset,
+      Size size, double columnBottom, double bottomPad, Set<String> saved) {
     final nym = context.nym;
-    // Only with proximity sort on and a known location.
-    final showYourLocation = _userLocation() != null;
-    final fontSize = narrow ? 9.0 : 10.0;
-    final inset = narrow ? 10.0 : 20.0;
-    return Positioned(
-      bottom: inset,
-      right: inset,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-        decoration: BoxDecoration(
-          color: const Color(0xB3000000),
-          border: Border.all(color: nym.glassBorder),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _legendRow(
-              dotColor: nym.primary,
-              glow: nym.primary,
-              label: tr('Active'),
-              fontSize: fontSize,
-              trailing: narrow ? _windowSelect(nym) : _windowGroup(nym),
-            ),
-            if (showYourLocation) ...[
-              const SizedBox(height: 5),
-              _legendRow(
-                dotColor:
-                    nym.warning,
-                label: tr('Your Location'),
-                fontSize: fontSize,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _legendRow({
-    required Color dotColor,
-    required String label,
-    required double fontSize,
-    Color? glow,
-    Widget? trailing,
-  }) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(
-            color: dotColor,
-            shape: BoxShape.circle,
-            boxShadow:
-                glow == null ? null : [BoxShadow(color: glow, blurRadius: 5)],
-          ),
-        ),
-        const SizedBox(width: 8),
-        // Inherits `--text`, not a fixed gray.
-        Text(label,
-            style: TextStyle(fontSize: fontSize, color: context.nym.text)),
-        if (trailing != null) ...[
-          const SizedBox(width: 8),
-          trailing,
-        ],
-      ],
-    );
-  }
-
-  Widget _windowGroup(NymColors nym) {
-    // 1px dividers between window buttons, not before the first.
-    final children = <Widget>[];
-    for (var i = 0; i < kActiveWindowOptions.length; i++) {
-      if (i > 0) {
-        children.add(Container(width: 1, color: nym.glassBorder));
-      }
-      final h = kActiveWindowOptions[i];
-      children.add(_windowBtn(h, h == _activeWindowHours, nym));
-    }
-    return Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: nym.glassBorder),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      clipBehavior: Clip.antiAlias,
-      // IntrinsicHeight lets the dividers stretch to button height.
-      child: IntrinsicHeight(
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: children,
-        ),
-      ),
-    );
-  }
-
-  /// Compact dropdown shown under 768px instead of the button group.
-  Widget _windowSelect(NymColors nym) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: const Color(0x0DFFFFFF),
-        border: Border.all(color: nym.glassBorder),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<int>(
-          value: _activeWindowHours,
-          isDense: true,
-          dropdownColor: const Color(0xF2000000),
-          iconSize: 14,
-          icon: Icon(Icons.arrow_drop_down, color: nym.text),
-          style: TextStyle(fontSize: 11, color: nym.text),
-          items: [
-            for (final h in kActiveWindowOptions)
-              DropdownMenuItem<int>(value: h, child: Text('${h}h')),
-          ],
-          onChanged: (h) {
-            if (h != null) _setActiveWindow(h);
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _windowBtn(int hours, bool active, NymColors nym) {
-    return InkWell(
-      onTap: () => _setActiveWindow(hours),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-        color: active ? nym.primaryA(0.18) : Colors.transparent,
-        child: Text(
-          '${hours}h',
-          style: TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.w500,
-            color: active ? nym.primary : nym.textDim,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _infoPanel(GeohashChannelPoint ch, bool narrow) {
-    final nym = context.nym;
+    final gh = ch.geohash.toLowerCase();
+    final isSaved = saved.contains(gh);
 
     // Rows: coordinates (4dp), location, distance (with a user location), messages.
     final coords = '${ch.lat.toStringAsFixed(4)}, ${ch.lng.toStringAsFixed(4)}';
@@ -844,102 +1307,143 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
     final distance = user == null
         ? null
         : tr('{km} km away', {
-            'km': _distanceKm(user.lat, user.lng, ch.lat, ch.lng)
+            'km': haversineKm(user.lat, user.lng, ch.lat, ch.lng)
                 .toStringAsFixed(1)
           });
 
-    final rows = <Widget>[
-      _infoRow(tr('Coordinates'), coords, nym),
-      _infoRow(tr('Location'), _locationInfo, nym),
-      if (distance != null) _infoRow(tr('Distance'), distance, nym),
-      _infoRow(tr('Messages'), '${ch.messages}', nym, isLast: true),
-    ];
-
-    final card = Container(
-      width: narrow ? null : 300, // narrow: stretch via Positioned left/right.
-      // Right padding reserves room for the close chip.
-      padding: const EdgeInsets.fromLTRB(16, 16, 36, 16),
-      decoration: BoxDecoration(
-        color: const Color(0xB3000000),
-        border: Border.all(color: nym.glassBorder),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '#${ch.geohash.toLowerCase()}',
-            style: TextStyle(
-              color: nym.primary,
-              fontSize: 14,
-              letterSpacing: 1,
+    Widget action(String key, IconData icon, String tip, VoidCallback onTap,
+            {Color? color}) =>
+        Semantics(
+          button: true,
+          label: tip,
+          excludeSemantics: true,
+          child: NymTooltip(
+            message: tip,
+            child: InkWell(
+              key: ValueKey(key),
+              borderRadius: BorderRadius.circular(10),
+              onTap: onTap,
+              child: SizedBox(
+                width: kGeoTouch,
+                height: kGeoTouch,
+                child: Icon(icon, size: 20, color: color ?? nym.textDim),
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          ...rows,
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: TextButton(
-              onPressed: () => _join(ch.geohash),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.all(9),
-                backgroundColor: nym.primaryA(0.1),
-                foregroundColor: nym.primary,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  side: BorderSide(color: nym.primaryA(0.3)),
+        );
+
+    final header = Row(
+          children: [
+            Expanded(
+              child: Semantics(
+                header: true,
+                child: Text(
+                  '#$gh',
+                  style: TextStyle(
+                    color: nym.primary,
+                    fontSize: 15,
+                    letterSpacing: 1,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-              child: Text(
-                // "Go to Channel" when joined, else "Join Channel".
-                ch.isJoined ? tr('GO TO CHANNEL') : tr('JOIN CHANNEL'),
-                style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.5),
-              ),
             ),
-          ),
-        ],
-      ),
-    );
-
-    // The close chip floats over the panel via a Stack.
-    final panel = Stack(
+            action(
+              'geo-info-save',
+              isSaved ? Icons.star : Icons.star_border,
+              isSaved ? tr('Remove from saved places') : tr('Save place'),
+              () => _toggleSaved(gh),
+              color: isSaved ? kSavedMarkerColor : null,
+            ),
+            action('geo-info-share', Icons.share_outlined, tr('Share place'),
+                () => ShareChannelModal.open(context, gh)),
+            action('geo-info-close', Icons.close, tr('Close'),
+                () => setState(() => _selected = null)),
+          ],
+        );
+    final details = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        card,
-        Positioned(
-          top: 8,
-          right: 8,
-          child: _InfoCloseButton(
-            nym: nym,
-            onTap: () => setState(() => _selected = null),
-          ),
+        _infoRow(tr('Coordinates'), coords, nym),
+        _infoRow(tr('Location'), _locationInfo, nym),
+        if (distance != null) _infoRow(tr('Distance'), distance, nym),
+        _infoRow(tr('Messages'), '${ch.messages}', nym, isLast: true),
+        const SizedBox(height: 8),
+        GeoPrecisionPath(
+          geohash: gh,
+          onStep: (prefix) => _focusCell(prefix, size),
         ),
+        const SizedBox(height: 10),
+        GeoPeekView(key: ValueKey('peek-$gh'), geohash: gh),
       ],
     );
+    final join = SizedBox(
+          height: kGeoTouch,
+          child: TextButton(
+            key: const ValueKey('geo-info-join'),
+            onPressed: () => _join(gh),
+            style: TextButton.styleFrom(
+              backgroundColor: nym.primaryA(0.1),
+              foregroundColor: nym.primary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+                side: BorderSide(color: nym.primaryA(0.3)),
+              ),
+            ),
+            child: Text(
+              ch.isJoined ? tr('GO TO CHANNEL') : tr('JOIN CHANNEL'),
+              style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5),
+            ),
+          ),
+        );
 
-    // Under 768px a bottom bar, otherwise top-right.
-    return narrow
-        ? Positioned(bottom: 60, left: 10, right: 10, child: panel)
-        : Positioned(top: 20, right: 20, child: panel);
-  }
+    final card = _panelBox(
+      nym,
+      Padding(
+        padding: const EdgeInsets.fromLTRB(14, 4, 6, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            header,
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.only(right: 8),
+                child: details,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: join,
+            ),
+          ],
+        ),
+      ),
+      key: const ValueKey('geo-info-panel'),
+    );
 
-  /// Haversine distance in km (R = 6371).
-  double _distanceKm(double lat1, double lon1, double lat2, double lon2) {
-    const r = 6371.0;
-    const deg = math.pi / 180;
-    final dLat = (lat2 - lat1) * deg;
-    final dLon = (lon2 - lon1) * deg;
-    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
-        math.cos(lat1 * deg) *
-            math.cos(lat2 * deg) *
-            math.sin(dLon / 2) *
-            math.sin(dLon / 2);
-    final c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
-    return r * c;
+    if (narrow) {
+      final top = math.min(columnBottom + 8, size.height - inset - bottomPad - 200);
+      return Positioned(
+        left: inset,
+        right: inset,
+        top: top,
+        bottom: inset + bottomPad,
+        child: Align(alignment: Alignment.bottomCenter, child: card),
+      );
+    }
+    return Positioned(
+      top: inset,
+      right: inset + kGeoTouch + 8,
+      width: 330,
+      bottom: inset + bottomPad,
+      child: Align(alignment: Alignment.topCenter, child: card),
+    );
   }
 
   /// One `Label: value` row with a bottom hairline, dropped on the last row.
@@ -947,8 +1451,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       {bool isLast = false}) {
     return Container(
       width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 5),
-      padding: const EdgeInsets.symmetric(vertical: 5),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       decoration: isLast
           ? null
           : BoxDecoration(
@@ -974,58 +1477,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer> {
       ),
     );
   }
-
-  Widget _controlBtn(
-    String label, {
-    required VoidCallback onTap,
-    bool active = false,
-    double? width,
-  }) {
-    final nym = context.nym;
-    final radius = BorderRadius.circular(8);
-    return SizedBox(
-      width: width,
-      // The active glow sits outside the Material's clip so it renders.
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: active
-              ? [BoxShadow(color: nym.primaryA(0.25), blurRadius: 12)]
-              : null,
-        ),
-        child: Material(
-          color: active ? nym.primaryA(0.18) : const Color(0xB3000000),
-          borderRadius: radius,
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: radius,
-            child: Container(
-              padding: width != null
-                  ? const EdgeInsets.symmetric(vertical: 8)
-                  : const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                border: Border.all(
-                    color: active ? nym.primaryA(0.5) : nym.glassBorder),
-                borderRadius: radius,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: width != null ? 16 : 11,
-                  fontWeight: width != null ? FontWeight.w600 : FontWeight.w500,
-                  color: active ? nym.primary : nym.text,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
-/// 32x32 circular close chip that turns danger-red on hover.
 class _ModalCloseButton extends StatefulWidget {
   const _ModalCloseButton({required this.nym, required this.onTap});
 
@@ -1042,88 +1495,43 @@ class _ModalCloseButtonState extends State<_ModalCloseButton> {
   @override
   Widget build(BuildContext context) {
     final nym = widget.nym;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          // 0.25s cubic-bezier(0.4, 0, 0.2, 1).
-          duration: const Duration(milliseconds: 250),
-          curve: const Cubic(0.4, 0, 0.2, 1),
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hovered
-                ? const Color(0x1FFF4444)
-                : const Color(0x0DFFFFFF),
-            border: Border.all(
-              color: _hovered
-                  ? const Color(0x4DFF4444)
-                  : nym.glassBorder,
-            ),
-          ),
-          child: Text(
-            '✕',
-            style: TextStyle(
-              fontSize: 16,
-              height: 1,
-              color: _hovered ? nym.danger : nym.textDim,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 24x24 info-panel close chip, transparent until hover.
-class _InfoCloseButton extends StatefulWidget {
-  const _InfoCloseButton({required this.nym, required this.onTap});
-
-  final NymColors nym;
-  final VoidCallback onTap;
-
-  @override
-  State<_InfoCloseButton> createState() => _InfoCloseButtonState();
-}
-
-class _InfoCloseButtonState extends State<_InfoCloseButton> {
-  bool _hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final nym = widget.nym;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 250),
-          curve: const Cubic(0.4, 0, 0.2, 1),
-          width: 24,
-          height: 24,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            color: _hovered
-                ? const Color(0x14FFFFFF)
-                : Colors.transparent,
-            border: Border.all(
-              color: _hovered ? nym.glassBorder : Colors.transparent,
-            ),
-          ),
-          child: Text(
-            '✕',
-            style: TextStyle(
-              fontSize: 12,
-              height: 1,
-              color: _hovered ? nym.text : nym.textDim,
+    return Semantics(
+      button: true,
+      label: tr('Close'),
+      excludeSemantics: true,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          key: const ValueKey('geo-modal-close'),
+          behavior: HitTestBehavior.opaque,
+          onTap: widget.onTap,
+          child: SizedBox(
+            width: kGeoTouch,
+            height: kGeoTouch,
+            child: Center(
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 250),
+                curve: const Cubic(0.4, 0, 0.2, 1),
+                width: 32,
+                height: 32,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _hovered
+                      ? const Color(0x1FFF4444)
+                      : const Color(0x0DFFFFFF),
+                  border: Border.all(
+                    color: _hovered ? const Color(0x4DFF4444) : nym.glassBorder,
+                  ),
+                ),
+                child: Icon(
+                  Icons.close,
+                  size: 18,
+                  color: _hovered ? nym.danger : nym.textDim,
+                ),
+              ),
             ),
           ),
         ),

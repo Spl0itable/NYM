@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils/nym_utils.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -36,6 +37,11 @@ bool chatNavMentions(Ref ref, Message m) {
 }
 
 final chatNavRevisionProvider = StateProvider<int>((ref) => 0);
+
+final composerHintTopProvider = StateProvider<double?>((ref) => null);
+
+double floatLiftOver(double? hintTop, double listBottom) =>
+    hintTop == null || hintTop >= listBottom ? 0 : listBottom - hintTop;
 
 final chatNavProvider = Provider<ChatNavService>((ref) {
   final kv = ref.watch(keyValueStoreProvider);
@@ -86,6 +92,21 @@ final chatNavProvider = Provider<ChatNavService>((ref) {
           .read(groupToolsProvider)
           .sendBlockedReason(chatNavAlias(key), text),
       notice: (text) => showToast(text),
+      undoNotice: (text, undo) => showUndoToast(text, undo),
+      chatName: (kind, id) {
+        final app = ref.read(appStateProvider);
+        if (kind == 'dm') {
+          final nym = app.users[id]?.nym;
+          final base = nym == null || nym.isEmpty
+              ? id.substring(0, 8)
+              : stripPubkeySuffix(nym);
+          return '$base#${getPubkeySuffix(id)}';
+        }
+        for (final g in app.groups) {
+          if (g.id == id) return g.name;
+        }
+        return id.substring(0, 8);
+      },
       onChanged: () {
         if (bump) return;
         bump = true;

@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/i18n/i18n.dart';
+import '../../features/pms/upload_activity.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -104,25 +106,25 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
     Widget content = const SizedBox.shrink();
     if (active) {
       final visible = pubkeys.take(3).toList();
-      final List<InlineSpan> spans;
-      if (pubkeys.length == 1) {
-        // A verified bot is "thinking" rather than "typing".
-        final isBot =
-            ref.read(nostrControllerProvider).isVerifiedBot(pubkeys[0]);
-        spans = [
-          ...typerSpans(pubkeys[0]),
-          TextSpan(text: ' is ${isBot ? 'thinking' : 'typing'}'),
-        ];
-      } else if (pubkeys.length == 2) {
-        spans = [
-          ...typerSpans(pubkeys[0]),
-          const TextSpan(text: ' and '),
-          ...typerSpans(pubkeys[1]),
-          const TextSpan(text: ' are typing'),
-        ];
-      } else {
-        spans = [TextSpan(text: '${pubkeys.length} people are typing')];
-      }
+      final prefix = '${widget.storageKey ?? app.view.storageKey}|';
+      final tpl = UploadActivity.label([
+        for (final pk in pubkeys)
+          (
+            activity: app.typingActivity['$prefix$pk'],
+            bot: pubkeys.length == 1 && controller.isVerifiedBot(pk),
+          ),
+      ]);
+      final spans = <InlineSpan>[
+        for (final part in _splitTemplate(tr(tpl)))
+          if (part == '{nym}')
+            ...typerSpans(pubkeys[0])
+          else if (part == '{other}')
+            ...(pubkeys.length > 1 ? typerSpans(pubkeys[1]) : const <InlineSpan>[])
+          else if (part == '{n}')
+            TextSpan(text: '${pubkeys.length}')
+          else if (part.isNotEmpty)
+            TextSpan(text: part),
+      ];
       content = Padding(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
         child: Row(
@@ -191,6 +193,18 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
   }
 }
 
+List<String> _splitTemplate(String tpl) {
+  final out = <String>[];
+  var last = 0;
+  for (final m in RegExp(r'\{nym\}|\{other\}|\{n\}').allMatches(tpl)) {
+    out.add(tpl.substring(last, m.start));
+    out.add(m.group(0)!);
+    last = m.end;
+  }
+  out.add(tpl.substring(last));
+  return out;
+}
+
 class _TypingDots extends StatefulWidget {
   const _TypingDots({required this.color});
   final Color color;
@@ -221,7 +235,30 @@ class _TypingDotsState extends State<_TypingDots>
 
   @override
   Widget build(BuildContext context) {
-    // Keeps the per-frame dot repaint inside this row instead of the surrounding pane.
+    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (still) {
+      if (_ctrl.isAnimating) _ctrl.stop();
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < 3; i++) ...[
+            if (i > 0) const SizedBox(width: 3),
+            Opacity(
+              opacity: 0.6,
+              child: Container(
+                width: 5,
+                height: 5,
+                decoration: BoxDecoration(
+                  color: widget.color,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+    if (!_ctrl.isAnimating) _ctrl.repeat();
     return RepaintBoundary(
         child: AnimatedBuilder(
       animation: _ctrl,

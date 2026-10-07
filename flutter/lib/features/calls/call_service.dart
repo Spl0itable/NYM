@@ -11,6 +11,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/relays.dart';
+import '../../core/utils/nym_utils.dart';
 import '../../models/group.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -21,8 +22,13 @@ import '../notifications/notification_sounds.dart';
 import '../group_tools/group_tools.dart';
 import '../group_tools/group_tools_providers.dart';
 import '../chat_lock/chat_lock_providers.dart';
+import 'call_history.dart';
+import 'call_history_providers.dart';
+import 'call_nym.dart' show callPeerName;
+import 'call_platform.dart';
 import 'call_signaling.dart';
 import 'call_state.dart';
+import 'call_wake.dart';
 
 class _Peer {
   _Peer({required this.pc, required this.nym});
@@ -35,7 +41,10 @@ class _Peer {
   RTCRtpSender? videoSender;
   String nym;
   bool connected = false;
+  bool restarting = false;
   bool sharing = false; // peer is screen-sharing
+  bool? videoOn;
+  bool renegotiate = false;
 }
 
 class _ActiveCall {
@@ -50,7 +59,7 @@ class _ActiveCall {
   });
 
   final String callId;
-  final CallKind kind;
+  CallKind kind;
   bool isGroup;
   final String? groupId;
   List<String> members; // includes self
@@ -67,6 +76,9 @@ class _ActiveCall {
   int startedAt = 0;
   Timer? ringTimeout;
   Timer? timerInterval;
+  Timer? lostTimer;
+  bool viaLink = false;
+  final Map<String, List<RTCIceCandidate>> earlyIce = {};
   final List<CallChatMessage> chatLog = [];
   int chatUnread = 0;
 
@@ -83,10 +95,34 @@ class _ActiveCall {
   final Map<String, Timer> chatTypers = {};
 
   bool shareRestricted = false;
+  CallRecord? ch;
   String? presenter;
   final Set<String> presentRequests = {};
 
   int videoInputCount = 0;
+  bool speakerOn = false;
+  bool headset = false;
+  bool speakerTouched = false;
+  bool upgradingVideo = false;
+  final Map<String, bool> peerVideo = {};
+  final Set<String> declined = {};
+}
+
+class _LeftCall {
+  _LeftCall({
+    required this.callId,
+    required this.groupId,
+    required this.kind,
+    required this.members,
+    required this.remaining,
+  });
+
+  final String callId;
+  final String groupId;
+  final CallKind kind;
+  final List<String> members;
+  final Set<String> remaining;
+  final int at = CallService.clock();
 }
 
 class _IncomingCall {
@@ -108,13 +144,34 @@ class _IncomingCall {
   final String nym;
   final List<String> members;
   final Set<String> acceptedPeers = {};
+  final int chAt = CallService.clock();
   Timer? timeout;
+  bool accepting = false;
 }
 
 class CallService {
   CallService(this._ref) {
     _self = _ref.read(nostrControllerProvider).identity?.pubkey ?? '';
     _ref.read(nostrControllerProvider).setCallSignalHandler(handleSignal);
+    try {
+      final p = _ref.read(callPlatformProvider);
+      p.onHangupRequest = end;
+      p.onAnswer = (id) {
+        if (_incoming?.callId == id) unawaited(answer());
+      };
+      p.onDecline = (id) {
+        if (_incoming?.callId == id) reject();
+      };
+      p.onMute = (muted) {
+        if (_active != null && _active!.muted != muted) toggleMute();
+      };
+      p.onRingCheck = ringCheck;
+      p.onRingToken = (platform, token, env) async {
+        await _ref
+            .read(ringRegistrationProvider)
+            .onToken(platform: platform, token: token, env: env);
+      };
+    } catch (_) {}
     // Hydrate seen calls so a call already handled or relay-replayed isn't re-rung.
     unawaited(_hydrateSeenCalls());
   }
@@ -149,6 +206,264 @@ class CallService {
 
   void _system(String message) => onSystemMessage?.call(message);
 
+  static int _wallClock() => DateTime.now().millisecondsSinceEpoch;
+
+  @visibleForTesting
+  static int Function() clock = _wallClock;
+
+  @visibleForTesting
+  static Future<MediaStream?> Function(CallKind kind)? fakeMedia;
+
+  @visibleForTesting
+  static Future<RTCPeerConnection> Function(Map<String, dynamic> config)?
+      peerConnectionFactory;
+
+  @visibleForTesting
+  static Duration callLostAfter = const Duration(seconds: 30);
+
+  final Map<String, Future<void>> _connecting = {};
+  bool _starting = false;
+
+  @visibleForTesting
+  set debugSelf(String pubkey) => _self = pubkey;
+
+  @visibleForTesting
+  void debugPeerConnected() => _onPeerConnected();
+
+  Future<bool> Function()? ringCatchUp;
+
+  Future<Map<String, dynamic>?> ringCheck() async {
+    if (_incoming == null) {
+      try {
+        final catchUp = ringCatchUp ??
+            () => _ref.read(nostrControllerProvider).runBackgroundCatchUp();
+        await catchUp();
+      } catch (_) {}
+      for (var i = 0; i < 20 && _incoming == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+    final inc = _incoming;
+    if (inc == null) return null;
+    return {
+      'callId': inc.callId,
+      'name': _incomingName(inc),
+      'video': inc.kind == CallKind.video,
+      'group': inc.isGroup,
+    };
+  }
+
+  String _incomingName(_IncomingCall inc) {
+    var name = _peerLabel(inc.from, inc.nym);
+    if (inc.isGroup && inc.groupId != null) {
+      final g = _groupById(inc.groupId!);
+      if (g != null && g.name.isNotEmpty) name = g.name;
+    }
+    try {
+      final lock = _ref.read(chatLockProvider);
+      if (lock.notificationIsLocked(
+          'call', inc.isGroup ? (inc.groupId ?? '') : inc.from, inc.from)) {
+        return lock.redact(name, '', true).title;
+      }
+    } catch (_) {}
+    return name;
+  }
+
+  String? _shownIncoming;
+
+  void _syncIncomingUi() {
+    final inc = _incoming;
+    final shown = _shownIncoming;
+    if (inc?.callId == shown) return;
+    final p = _platformOrNull();
+    if (shown != null) {
+      _shownIncoming = null;
+      final answered = _active?.callId == shown;
+      if (p != null) unawaited(p.endIncoming(shown, answered: answered));
+    }
+    if (inc != null && !inc.accepting) {
+      _shownIncoming = inc.callId;
+      if (p != null) {
+        unawaited(p.showIncoming(
+          callId: inc.callId,
+          name: _incomingName(inc),
+          body: inc.kind == CallKind.video
+              ? tr('Incoming video call')
+              : tr('Incoming audio call'),
+          video: inc.kind == CallKind.video,
+          group: inc.isGroup,
+        ));
+      }
+    }
+  }
+
+  CallPlatform? _platformOrNull() {
+    try {
+      return _ref.read(callPlatformProvider);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _initAudioRoute(_ActiveCall ac) async {
+    final p = _platformOrNull();
+    if (p == null || !p.canRouteAudio) return;
+    ac.speakerOn = ac.kind == CallKind.video;
+    final headset = await p.headsetConnected();
+    if (_active != ac) return;
+    ac.headset = headset;
+    if (headset) ac.speakerOn = false;
+    await p.setSpeaker(ac.speakerOn);
+    p.watchAudioDevices(() => unawaited(_onAudioDevicesChanged(ac)));
+    if (_active == ac) _publish();
+  }
+
+  Future<void> _onAudioDevicesChanged(_ActiveCall ac) async {
+    final p = _platformOrNull();
+    if (p == null || _active != ac) return;
+    final headset = await p.headsetConnected();
+    if (_active != ac || headset == ac.headset) return;
+    ac.headset = headset;
+    ac.speakerOn = headset ? false : ac.kind == CallKind.video;
+    await p.setSpeaker(ac.speakerOn);
+    if (_active == ac) _publish();
+  }
+
+  Future<void> toggleSpeaker() async {
+    final ac = _active;
+    final p = _platformOrNull();
+    if (ac == null || p == null || !p.canRouteAudio) return;
+    ac.speakerOn = !ac.speakerOn;
+    ac.speakerTouched = true;
+    _publish();
+    await p.setSpeaker(ac.speakerOn);
+  }
+
+  void _watchLocalTracks(_ActiveCall ac) {
+    try {
+      for (final t in ac.localStream.getTracks()) {
+        _watchLocalTrack(ac, t);
+      }
+    } catch (_) {}
+  }
+
+  void _watchLocalTrack(_ActiveCall ac, MediaStreamTrack track) {
+    try {
+      track.onEnded = () => unawaited(_onLocalTrackEnded(ac, track));
+    } catch (_) {}
+  }
+
+  Future<void> _onLocalTrackEnded(_ActiveCall ac, MediaStreamTrack track) async {
+    if (_active != ac) return;
+    try {
+      if (!ac.localStream.getTracks().contains(track)) return;
+    } catch (_) {
+      return;
+    }
+    if (track.kind == 'audio') {
+      _system(tr('Microphone access was lost, so the call ended'));
+      end();
+      return;
+    }
+    try {
+      await ac.localStream.removeTrack(track);
+    } catch (_) {}
+    if (!ac.sharing) {
+      for (final peer in ac.peers.values) {
+        try {
+          await peer.videoSender?.replaceTrack(null);
+        } catch (_) {}
+      }
+    }
+    if (_active != ac) return;
+    ac.cameraOff = true;
+    for (final pk in ac.members.where((pk) => pk != _self)) {
+      _send(pk, CallSignal.video(callId: ac.callId, on: false));
+    }
+    _system(tr('Camera access was lost. The call continues with audio.'));
+    _refreshOngoing(ac);
+    _publish();
+  }
+
+  void _startOngoing(_ActiveCall ac) {
+    if (_active != ac) return;
+    _watchLocalTracks(ac);
+    unawaited(_initAudioRoute(ac));
+    _refreshOngoing(ac);
+  }
+
+  void _refreshOngoing(_ActiveCall ac) {
+    if (_active != ac) return;
+    try {
+      unawaited(_ref.read(callPlatformProvider).startOngoing(
+            video: _hasCamera(ac),
+            title: tr('Call in progress'),
+            text: tr('Tap to return to the call'),
+            hangup: tr('Hang up'),
+          ));
+    } catch (_) {}
+  }
+
+  void _stopOngoing() {
+    final p = _platformOrNull();
+    if (p == null) return;
+    p.watchAudioDevices(null);
+    unawaited(p.stopOngoing());
+  }
+
+  void _chRecord(CallRecord r) {
+    try {
+      _ref.read(callHistoryProvider.notifier).record(r);
+    } catch (_) {}
+  }
+
+  void _chBegin(_ActiveCall ac, String dir, String peer, [int? at]) {
+    final r = CallRecord(
+      id: ac.callId,
+      peer: peer,
+      group: ac.isGroup ? (ac.groupId ?? '') : '',
+      kind: ac.kind.wire,
+      dir: dir,
+      at: at ?? clock(),
+    );
+    ac.ch = r;
+    _chRecord(r);
+  }
+
+  void _chFinish(_ActiveCall ac) {
+    final r = ac.ch;
+    if (r == null) return;
+    ac.ch = null;
+    final dur = ac.startedAt > 0
+        ? (clock() - ac.startedAt) ~/ 1000
+        : 0;
+    _chRecord(r.copyWith(dur: dur));
+  }
+
+  void _chMissed(String callId, String from, CallKind kind, bool isGroup,
+      String? groupId, [int? whenMs]) {
+    _chRecord(CallRecord(
+      id: callId,
+      peer: from,
+      group: isGroup ? (groupId ?? '') : '',
+      kind: kind.wire,
+      dir: 'in',
+      at: whenMs ?? clock(),
+      missed: true,
+    ));
+  }
+
+  void _chDeclined(_IncomingCall inc) {
+    _chRecord(CallRecord(
+      id: inc.callId,
+      peer: inc.from,
+      group: inc.isGroup ? (inc.groupId ?? '') : '',
+      kind: inc.kind.wire,
+      dir: 'in',
+      at: inc.chAt,
+    ));
+  }
+
   /// Records a missed call keyed `missed-call-$callId` so it is never recorded twice; [whenMs] defaults to now.
   void _recordMissedCall({
     required String callId,
@@ -160,6 +475,7 @@ class CallService {
     int? whenMs,
   }) {
     if (callerPubkey.isEmpty) return;
+    _chMissed(callId, callerPubkey, kind, isGroup, groupId, whenMs);
     final niceKind = kind == CallKind.video ? tr('video') : tr('audio');
     var body = tr('Missed {kind} call', {'kind': niceKind});
     if (isGroup && groupId != null) {
@@ -168,7 +484,7 @@ class CallService {
         body += tr(' in {group}', {'group': g.name});
       }
     }
-    var title = callerNym.isNotEmpty ? callerNym : _nymFor(callerPubkey);
+    var title = _peerLabel(callerPubkey, callerNym);
     try {
       final lock = _ref.read(chatLockProvider);
       if (lock.notificationIsLocked(
@@ -309,8 +625,10 @@ class CallService {
       members: [_self, joiner],
       localStream: stream,
       status: 'outgoing',
-    );
+    )..viaLink = true;
     _active = active;
+    _chBegin(active, 'out', joiner);
+    _startOngoing(active);
     await _attachLocalPreview(stream);
     _send(joiner, {
       ...CallSignal.invite(
@@ -334,16 +652,20 @@ class CallService {
   /// Accepts the current incoming call.
   Future<void> answer() async {
     final inc = _incoming;
-    if (inc == null) return;
+    if (inc == null || inc.accepting) return;
+    inc.accepting = true;
     inc.timeout?.cancel();
-    // Silence the ringtone on accept.
     _stopRingtone();
-    // Remember the answer so re-deliveries or other devices don't re-ring or record a miss.
-    _markCallSeen(inc.callId, 'answered');
 
     final stream = await _getLocalMedia(inc.kind);
+    if (_incoming != inc) {
+      if (stream != null) _releaseStream(stream);
+      return;
+    }
+    _markCallSeen(inc.callId, stream != null ? 'answered' : 'declined');
     if (stream == null) {
       _send(inc.from, CallSignal.reject(inc.callId, 'media'));
+      _chDeclined(inc);
       _incoming = null;
       _publishIdle();
       return;
@@ -360,7 +682,10 @@ class CallService {
       status: 'connecting',
     );
     _active = active;
+    _chBegin(active, 'in', inc.from, inc.chAt);
+    _startOngoing(active);
     _incoming = null;
+    _armWatchdog(active);
     await _attachLocalPreview(stream);
 
     // Broadcast accept to the other members, then connect.
@@ -384,15 +709,90 @@ class CallService {
     // Remember the decline so re-deliveries don't re-ring.
     _markCallSeen(inc.callId, 'declined');
     _send(inc.from, CallSignal.reject(inc.callId, 'declined'));
+    _chDeclined(inc);
     _incoming = null;
     _publishIdle();
+  }
+
+  _LeftCall? _left;
+
+  static const Duration rejoinWindow = Duration(hours: 3);
+
+  bool canRejoinGroupCall(String groupId) {
+    final l = _left;
+    if (l == null || l.groupId != groupId) return false;
+    if (_active != null || _incoming != null) return false;
+    if (l.remaining.isEmpty) return false;
+    return clock() - l.at <= rejoinWindow.inMilliseconds;
+  }
+
+  void _onLeftCallHangup(String sender, Map<String, dynamic> data) {
+    final l = _left;
+    if (l == null || l.callId != data['callId']) return;
+    l.remaining.remove(sender);
+    if (l.remaining.isEmpty) {
+      _left = null;
+      if (_active == null && _incoming == null) _publishIdle();
+    }
+  }
+
+  Future<void> rejoinGroupCall(String groupId) async {
+    if (!canRejoinGroupCall(groupId) || _starting) return;
+    final l = _left!;
+    _starting = true;
+    MediaStream? stream;
+    try {
+      stream = await _getLocalMedia(l.kind);
+    } finally {
+      _starting = false;
+    }
+    if (stream == null) return;
+    if (_active != null || _incoming != null || _left != l) {
+      _releaseStream(stream);
+      return;
+    }
+    _left = null;
+    final active = _ActiveCall(
+      callId: l.callId,
+      kind: l.kind,
+      isGroup: true,
+      groupId: l.groupId,
+      members: List.of(l.members),
+      localStream: stream,
+      status: 'connecting',
+    );
+    _active = active;
+    _startOngoing(active);
+    await _attachLocalPreview(stream);
+    for (final pk in active.members.where((pk) => pk != _self)) {
+      _send(pk, CallSignal.accept(active.callId));
+    }
+    _publish();
+    for (final pk in l.remaining) {
+      await _connectToPeer(pk);
+    }
+    _publish();
   }
 
   /// Ends the active call.
   void end() {
     final ac = _active;
+    if (ac != null &&
+        ac.isGroup &&
+        ac.groupId != null &&
+        ac.status != 'outgoing' &&
+        ac.peers.isNotEmpty) {
+      _left = _LeftCall(
+        callId: ac.callId,
+        groupId: ac.groupId!,
+        kind: ac.kind,
+        members: List.of(ac.members),
+        remaining: ac.peers.keys.toSet(),
+      );
+    }
     if (ac != null) {
       for (final pk in ac.members.where((pk) => pk != _self)) {
+        if (ac.status == 'outgoing') _send(pk, CallSignal.cancel(ac.callId));
         _send(pk, CallSignal.hangup(ac.callId));
       }
     }
@@ -434,13 +834,129 @@ class CallService {
     _publish();
   }
 
-  /// Toggles the camera (video calls only).
-  void toggleCamera() {
+  Future<void> toggleCamera() async {
     final ac = _active;
-    if (ac == null || ac.kind != CallKind.video) return;
+    if (ac == null) return;
+    if (!_hasCamera(ac)) {
+      await _upgradeToVideo(ac);
+      return;
+    }
     ac.cameraOff = !ac.cameraOff;
     for (final t in ac.localStream.getVideoTracks()) {
       t.enabled = !ac.cameraOff;
+    }
+    for (final pk in ac.members.where((pk) => pk != _self)) {
+      _send(pk, CallSignal.video(callId: ac.callId, on: !ac.cameraOff));
+    }
+    _publish();
+  }
+
+  static bool _hasCamera(_ActiveCall ac) {
+    try {
+      return ac.localStream.getVideoTracks().isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<MediaStreamTrack?> _getCameraTrack() async {
+    final fake = fakeMedia;
+    MediaStream? stream;
+    if (fake != null) {
+      stream = await fake(CallKind.video);
+    } else {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          'audio': false,
+          'video': {
+            'width': {'ideal': 1280},
+            'height': {'ideal': 720},
+            'facingMode': 'user',
+          },
+        });
+      } catch (e) {
+        _system(tr('Could not access {device}: {error}',
+            {'device': tr('camera'), 'error': e}));
+        return null;
+      }
+    }
+    if (stream == null) return null;
+    final videos = stream.getVideoTracks();
+    final track = videos.isNotEmpty ? videos.first : null;
+    for (final t in stream.getTracks()) {
+      if (t != track) {
+        try {
+          await t.stop();
+        } catch (_) {}
+      }
+    }
+    return track;
+  }
+
+  Future<void> _upgradeToVideo(_ActiveCall ac) async {
+    if (ac.upgradingVideo) return;
+    ac.upgradingVideo = true;
+    MediaStreamTrack? track;
+    try {
+      track = await _getCameraTrack();
+    } finally {
+      ac.upgradingVideo = false;
+    }
+    if (track == null) return;
+    if (_active != ac) {
+      try {
+        await track.stop();
+      } catch (_) {}
+      return;
+    }
+    _watchLocalTrack(ac, track);
+    try {
+      await ac.localStream.addTrack(track);
+    } catch (_) {}
+    ac.kind = CallKind.video;
+    ac.cameraOff = false;
+    ac.facingMode = 'user';
+    for (final entry in ac.peers.entries.toList()) {
+      final peer = entry.value;
+      try {
+        if (peer.videoSender != null) {
+          if (!ac.sharing) await peer.videoSender!.replaceTrack(track);
+          continue;
+        }
+        peer.videoSender = await peer.pc.addTrack(track, ac.localStream);
+        await _makeOffer(entry.key);
+      } catch (_) {}
+    }
+    for (final pk in ac.members.where((pk) => pk != _self)) {
+      _send(pk, CallSignal.video(callId: ac.callId, on: true));
+    }
+    await _attachLocalPreview(ac.localStream);
+    _refreshOngoing(ac);
+    await _videoSpeakerDefault(ac);
+    _publish();
+  }
+
+  Future<void> _videoSpeakerDefault(_ActiveCall ac) async {
+    final p = _platformOrNull();
+    if (p == null || !p.canRouteAudio) return;
+    if (ac.headset || ac.speakerTouched || ac.speakerOn) return;
+    ac.speakerOn = true;
+    await p.setSpeaker(true);
+  }
+
+  void _onVideo(String sender, Map<String, dynamic> data) {
+    final ac = _active;
+    if (ac == null || ac.callId != data['callId']) return;
+    if (!ac.members.contains(sender)) return;
+    final on = data['on'] == true;
+    ac.peerVideo[sender] = on;
+    ac.peers[sender]?.videoOn = on;
+    if (on && ac.kind != CallKind.video) {
+      ac.kind = CallKind.video;
+      unawaited(_videoSpeakerDefault(ac).then((_) {
+        if (_active == ac) _publish();
+      }));
+      unawaited(_refreshVideoInputCount());
     }
     _publish();
   }
@@ -450,7 +966,7 @@ class CallService {
     final ac = _active;
     if (ac == null || ac.kind != CallKind.video || ac.sharing) return;
     if (ac.switchingCamera) return;
-    final track = ac.localStream.getVideoTracks().isNotEmpty
+    final track = _hasCamera(ac)
         ? ac.localStream.getVideoTracks().first
         : null;
     if (track == null) return;
@@ -520,7 +1036,7 @@ class CallService {
     final ac = _active;
     final emoji = data['emoji'];
     if (ac == null || ac.callId != data['callId'] || emoji is! String) return;
-    if (emoji.isEmpty) return;
+    if (emoji.isEmpty || !ac.members.contains(sender)) return;
     // Register the sender's custom emoji defs so the shortcode resolves.
     _ingestEmojiTags(data['emojiTags']);
     _pushFly(emoji, pubkey: sender);
@@ -593,7 +1109,8 @@ class CallService {
     if (ac == null ||
         ac.callId != data['callId'] ||
         mid is! String ||
-        emoji is! String) {
+        emoji is! String ||
+        !ac.members.contains(sender)) {
       return;
     }
     // Drop blocked users' chat reactions.
@@ -647,6 +1164,7 @@ class CallService {
   void _onChatTyping(String sender, Map<String, dynamic> data) {
     final ac = _active;
     if (ac == null || ac.callId != data['callId'] || sender == _self) return;
+    if (!ac.members.contains(sender)) return;
     if (!_typingAllowed(ac)) return;
     if (data['status'] == 'stop') {
       ac.chatTypers.remove(sender)?.cancel();
@@ -696,7 +1214,7 @@ class CallService {
     final ac = _active;
     final mid = data['mid'];
     if (ac == null || ac.callId != data['callId'] || mid is! String) return;
-    if (sender == _self) return;
+    if (sender == _self || !ac.members.contains(sender)) return;
     final idx = ac.chatLog.indexWhere((m) => m.mid == mid && m.isSelf);
     if (idx < 0) return;
     final readers = ac.chatReaders.putIfAbsent(mid, () => {});
@@ -725,8 +1243,22 @@ class CallService {
     String? groupId,
     required List<String> targets,
   }) async {
-    final stream = await _getLocalMedia(kind);
+    if (_starting) {
+      _system(tr('Already in a call'));
+      return;
+    }
+    _starting = true;
+    MediaStream? stream;
+    try {
+      stream = await _getLocalMedia(kind);
+    } finally {
+      _starting = false;
+    }
     if (stream == null) return;
+    if (_active != null || _incoming != null) {
+      _releaseStream(stream);
+      return;
+    }
 
     final callId = genCallId();
     final members = [_self, ...targets];
@@ -740,6 +1272,8 @@ class CallService {
       status: 'outgoing',
     );
     _active = active;
+    _chBegin(active, 'out', isGroup ? '' : targets.first);
+    _startOngoing(active);
     await _attachLocalPreview(stream);
 
     final invite = CallSignal.invite(
@@ -752,6 +1286,7 @@ class CallService {
     for (final pk in targets) {
       _send(pk, invite);
     }
+    _ringWakes(targets);
     _publish(statusText: isGroup ? tr('Ringing group…') : tr('Calling…'));
 
     // No answer within 45s: cancel and say "No answer".
@@ -768,12 +1303,26 @@ class CallService {
 
   /// Entry point for decoded kind-25053 rumors.
   void handleSignal(Map<String, dynamic> rumor) {
+    if (_self.isEmpty) {
+      try {
+        _self = _ref.read(nostrControllerProvider).identity?.pubkey ?? '';
+      } catch (_) {}
+    }
     final sender = rumor['pubkey'] as String?;
     if (sender == null || sender == _self) return;
     // Blocked users can't ring, join or signal.
     if (_isBlocked(sender)) return;
+    if (callSignalExpired(
+        rumor['tags'], DateTime.now().millisecondsSinceEpoch ~/ 1000)) {
+      return;
+    }
     final data = _decodePayload(rumor);
     if (data == null) return;
+    if (data.containsKey('wake')) {
+      try {
+        _ref.read(callWakeBookProvider).remember(_self, sender, data['wake']);
+      } catch (_) {}
+    }
     // Invite freshness comes from the rumor's created_at; the payload has no timestamp.
     final createdAt = (rumor['created_at'] as num?)?.toInt() ?? 0;
     final type = data['type'];
@@ -824,6 +1373,9 @@ class CallService {
         break;
       case 'share':
         _onShare(sender, data);
+        break;
+      case 'video':
+        _onVideo(sender, data);
         break;
       case 'present-state':
         _onPresentState(sender, data);
@@ -999,6 +1551,11 @@ class CallService {
       if (s == 'answered' && cur.s != 'answered') nowAnswered.add(key);
     });
     _persistSeenCalls(map);
+    for (final id in nowAnswered) {
+      try {
+        _ref.read(callHistoryProvider.notifier).answeredElsewhere(id);
+      } catch (_) {}
+    }
     // Retract any missed-call notification already surfaced.
     if (retract != null) {
       for (final id in nowAnswered) {
@@ -1060,11 +1617,25 @@ class CallService {
     // Skip calls already handled here or elsewhere, stopping relay replays from re-ringing.
     if (_hasSeenCall(callId)) return;
     final linkJoin = _ref.read(groupToolsProvider).linkJoinMatches(sender, data);
+    final ac0 = _active;
+    final glare = callGlare(
+      self: _self,
+      sender: sender,
+      activeCallId: ac0?.callId,
+      activeStatus: ac0?.status,
+      activeIsGroup: ac0?.isGroup ?? false,
+      activeIsLink: ac0?.viaLink ?? false,
+      activeMembers: ac0?.members ?? const [],
+      inviteCallId: callId,
+      inviteIsGroup: data['isGroup'] == true,
+      inviteIsLink: data['link'] != null,
+    );
 
     // acceptCalls preference gate.
     final pref = _ref.read(settingsProvider).acceptCalls;
     final friend = _isFriend(sender);
     if (!linkJoin &&
+        glare == null &&
         !shouldRingForInvite(acceptCalls: pref, isFriend: friend)) {
       return;
     }
@@ -1094,10 +1665,24 @@ class CallService {
     // Record a fresh ring as pending so relay replays short-circuit.
     _markCallSeen(callId, 'pending');
 
+    if (glare == 'keep') return;
+    if (glare == 'yield') _endCall();
+
     if (_active != null || _incoming != null) {
       // Busy: mark missed and bounce the caller.
       _markCallSeen(callId, 'missed');
       _send(sender, CallSignal.reject(callId, 'busy'));
+      final busyNym = (data['nym'] as String?) ?? _nymFor(sender);
+      _missedToast(sender, busyNym, data['isGroup'] == true,
+          data['groupId'] as String?);
+      _recordMissedCall(
+        callId: callId,
+        callerPubkey: sender,
+        callerNym: busyNym,
+        kind: CallKind.fromWire(data['kind']),
+        isGroup: data['isGroup'] == true,
+        groupId: data['groupId'] as String?,
+      );
       return;
     }
 
@@ -1131,8 +1716,8 @@ class CallService {
       members: members,
     );
     _incoming = inc;
-    if (linkJoin) {
-      _ref.read(groupToolsProvider).consumeLinkJoin();
+    if (linkJoin || glare == 'yield') {
+      if (linkJoin) _ref.read(groupToolsProvider).consumeLinkJoin();
       unawaited(answer());
       return;
     }
@@ -1145,7 +1730,7 @@ class CallService {
         _stopRingtone();
         // Surface "Missed call from X" and record it.
         _markCallSeen(inc.callId, 'missed');
-        _system(tr('Missed call from {name}', {'name': inc.nym}));
+        _missedToast(inc.from, inc.nym, inc.isGroup, inc.groupId);
         _recordMissedCall(
           callId: inc.callId,
           callerPubkey: inc.from,
@@ -1167,6 +1752,7 @@ class CallService {
       if (ac.status == 'outgoing') {
         ac.status = 'connecting';
         ac.ringTimeout?.cancel();
+        _armWatchdog(ac);
         _publish(statusText: tr('Connecting…'));
       }
       _connectToPeer(sender);
@@ -1187,6 +1773,14 @@ class CallService {
       _system(
           data['reason'] == 'busy' ? tr('User is busy') : tr('Call declined'));
       _endCall();
+      return;
+    }
+    ac.declined.add(sender);
+    if (ac.status != 'outgoing') return;
+    final others = ac.members.where((pk) => pk != _self).toList();
+    if (others.isNotEmpty && others.every(ac.declined.contains)) {
+      _system(tr('Everyone declined the call'));
+      _endCall();
     }
   }
 
@@ -1199,7 +1793,7 @@ class CallService {
       _stopRingtone();
       // A cancelled ring is a missed call.
       _markCallSeen(inc.callId, 'missed');
-      _system(tr('Missed call from {name}', {'name': inc.nym}));
+      _missedToast(inc.from, inc.nym, inc.isGroup, inc.groupId);
       _recordMissedCall(
         callId: inc.callId,
         callerPubkey: inc.from,
@@ -1213,6 +1807,15 @@ class CallService {
   }
 
   void _onHangup(String sender, Map<String, dynamic> data) {
+    _onLeftCallHangup(sender, data);
+    final inc = _incoming;
+    if (inc != null &&
+        inc.callId == data['callId'] &&
+        !inc.isGroup &&
+        sender == inc.from) {
+      _onCancel(sender, data);
+      return;
+    }
     final ac = _active;
     if (ac == null || ac.callId != data['callId']) return;
     if (!ac.members.contains(sender)) return;
@@ -1232,7 +1835,17 @@ class CallService {
     if (!ac.peers.containsKey(sender)) await _connectToPeer(sender);
     final peer = ac.peers[sender];
     if (peer == null) return;
+    final collision = offerCollision(
+      selfPubkey: _self,
+      peerPubkey: sender,
+      signalingState: _signalingName(peer.pc.signalingState),
+    );
+    if (collision == 'ignore') return;
     try {
+      if (collision == 'rollback') {
+        await peer.pc.setLocalDescription(RTCSessionDescription('', 'rollback'));
+        peer.renegotiate = true;
+      }
       final sdp = data['sdp'] as Map;
       await peer.pc.setRemoteDescription(
           RTCSessionDescription(sdp['sdp'] as String?, sdp['type'] as String?));
@@ -1247,8 +1860,31 @@ class CallService {
             sdpType: answer.type ?? 'answer',
             sdp: answer.sdp ?? '',
           ));
+      if (peer.renegotiate) {
+        peer.renegotiate = false;
+        unawaited(_makeOffer(sender));
+      }
     } catch (e) {
       debugPrint('CallService offer error: $e');
+    }
+  }
+
+  static String _signalingName(RTCSignalingState? s) {
+    switch (s) {
+      case RTCSignalingState.RTCSignalingStateStable:
+        return 'stable';
+      case RTCSignalingState.RTCSignalingStateHaveLocalOffer:
+        return 'have-local-offer';
+      case RTCSignalingState.RTCSignalingStateHaveRemoteOffer:
+        return 'have-remote-offer';
+      case RTCSignalingState.RTCSignalingStateHaveLocalPrAnswer:
+        return 'have-local-pranswer';
+      case RTCSignalingState.RTCSignalingStateHaveRemotePrAnswer:
+        return 'have-remote-pranswer';
+      case RTCSignalingState.RTCSignalingStateClosed:
+        return 'closed';
+      case null:
+        return 'stable';
     }
   }
 
@@ -1274,10 +1910,11 @@ class CallService {
 
   Future<void> _onIce(String sender, Map<String, dynamic> data) async {
     final ac = _active;
-    if (ac == null || !ac.members.contains(sender)) return;
+    if (ac == null || ac.callId != data['callId']) return;
+    if (!ac.members.contains(sender)) return;
     final peer = ac.peers[sender];
     final c = data['candidate'];
-    if (peer == null || c is! Map) return;
+    if (c is! Map) return;
     // Ignore the empty end-of-gathering marker.
     final candStr = c['candidate'] as String?;
     if (candStr == null || candStr.isEmpty) return;
@@ -1286,6 +1923,11 @@ class CallService {
       c['sdpMid'] as String?,
       (c['sdpMLineIndex'] as num?)?.toInt(),
     );
+    if (peer == null) {
+      final list = ac.earlyIce.putIfAbsent(sender, () => []);
+      if (list.length < 64) list.add(candidate);
+      return;
+    }
     if (peer.haveRemote) {
       try {
         await peer.pc.addCandidate(candidate);
@@ -1298,6 +1940,7 @@ class CallService {
   void _onShare(String sender, Map<String, dynamic> data) {
     final ac = _active;
     if (ac == null || ac.callId != data['callId']) return;
+    if (!ac.members.contains(sender)) return;
     final peer = ac.peers[sender];
     if (peer != null) peer.sharing = data['on'] == true;
     _publish();
@@ -1307,7 +1950,7 @@ class CallService {
     final ac = _active;
     final text = data['text'];
     if (ac == null || ac.callId != data['callId'] || text is! String) return;
-    if (_isBlocked(sender)) return;
+    if (!ac.members.contains(sender) || _isBlocked(sender)) return;
     // An inbound message ends that peer's typing state.
     _clearTyping(sender);
     ac.chatLog.add(CallChatMessage(
@@ -1320,17 +1963,41 @@ class CallService {
     _publish();
   }
 
-  Future<void> _connectToPeer(String peerPubkey) async {
+  Future<void> _connectToPeer(String peerPubkey) {
     final ac = _active;
-    if (ac == null || peerPubkey == _self) return;
-    if (ac.peers.containsKey(peerPubkey)) return;
-
-    final pc = await createPeerConnection({
-      'iceServers': IceServers.servers,
+    if (ac == null || peerPubkey == _self) return Future.value();
+    if (ac.peers.containsKey(peerPubkey)) return Future.value();
+    final key = '${ac.callId}/$peerPubkey';
+    final pending = _connecting[key];
+    if (pending != null) return pending;
+    final f = _openPeer(ac, peerPubkey).whenComplete(() {
+      _connecting.remove(key);
     });
+    _connecting[key] = f;
+    return f;
+  }
+
+  Future<void> _openPeer(_ActiveCall ac, String peerPubkey) async {
+    if (fakeMedia != null && peerConnectionFactory == null) return;
+
+    final config = <String, dynamic>{'iceServers': IceServers.servers};
+    final factory = peerConnectionFactory;
+    final pc = factory != null
+        ? await factory(config)
+        : await createPeerConnection(config);
     final peer = _Peer(pc: pc, nym: _nymFor(peerPubkey));
     await peer.renderer.initialize();
+    if (_active != ac) {
+      try {
+        await pc.close();
+      } catch (_) {}
+      peer.renderer.dispose();
+      return;
+    }
     ac.peers[peerPubkey] = peer;
+    peer.videoOn = ac.peerVideo[peerPubkey];
+    final early = ac.earlyIce.remove(peerPubkey);
+    if (early != null) peer.pendingCandidates.addAll(early);
 
     for (final track in ac.localStream.getTracks()) {
       final sender = await pc.addTrack(track, ac.localStream);
@@ -1352,6 +2019,10 @@ class CallService {
         } catch (_) {}
       }
       _send(peerPubkey, CallSignal.share(callId: ac.callId, on: true));
+    }
+    if (ac.kind == CallKind.video &&
+        _hasCamera(ac)) {
+      _send(peerPubkey, CallSignal.video(callId: ac.callId, on: !ac.cameraOff));
     }
     // As a mod, sync presenter state to the new peer.
     if (_isCallMod(ac) && (ac.shareRestricted || ac.presenter != null)) {
@@ -1383,12 +2054,29 @@ class CallService {
       if (_active != ac || ac.peers[peerPubkey] != peer) return;
       if (event.streams.isNotEmpty) {
         peer.stream = event.streams.first;
+        if (event.track.kind == 'video') peer.renderer.srcObject = null;
         peer.renderer.srcObject = peer.stream;
       }
       _publish();
     };
     pc.onConnectionState = (s) {
       if (_active != ac || ac.peers[peerPubkey] != peer) return;
+      if (!ac.isGroup) {
+        if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+          peer.restarting = false;
+          ac.lostTimer?.cancel();
+          ac.lostTimer = null;
+        } else if (s ==
+                RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
+            s == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+          _armWatchdog(ac);
+          if (!peer.restarting &&
+              isOfferer(selfPubkey: _self, peerPubkey: peerPubkey)) {
+            peer.restarting = true;
+            unawaited(_makeOffer(peerPubkey, iceRestart: true));
+          }
+        }
+      }
       if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         peer.connected = true;
         _onPeerConnected();
@@ -1410,12 +2098,18 @@ class CallService {
     }
   }
 
-  Future<void> _makeOffer(String peerPubkey) async {
+  Future<void> _makeOffer(String peerPubkey, {bool iceRestart = false}) async {
     final ac = _active;
     final peer = ac?.peers[peerPubkey];
     if (ac == null || peer == null) return;
+    if (iceRestart &&
+        peer.pc.signalingState != RTCSignalingState.RTCSignalingStateStable) {
+      return;
+    }
     try {
-      final offer = await peer.pc.createOffer();
+      final offer = iceRestart
+          ? await peer.pc.createOffer({'iceRestart': true})
+          : await peer.pc.createOffer();
       await peer.pc.setLocalDescription(offer);
       _send(
           peerPubkey,
@@ -1453,12 +2147,27 @@ class CallService {
     }
   }
 
+  void _armWatchdog(_ActiveCall ac) {
+    if (ac.isGroup || ac.lostTimer != null) return;
+    ac.lostTimer = Timer(callLostAfter, () {
+      ac.lostTimer = null;
+      if (_active != ac) return;
+      if (ac.peers.values.any((p) =>
+          p.pc.connectionState ==
+          RTCPeerConnectionState.RTCPeerConnectionStateConnected)) {
+        return;
+      }
+      _system(tr('Call connection lost'));
+      end();
+    });
+  }
+
   void _onPeerConnected() {
     final ac = _active;
     if (ac == null) return;
     if (ac.status != 'active') {
       ac.status = 'active';
-      ac.startedAt = DateTime.now().millisecondsSinceEpoch;
+      ac.startedAt = clock();
       ac.timerInterval?.cancel();
       ac.timerInterval = Timer.periodic(const Duration(seconds: 1), (_) {
         _publish();
@@ -1510,7 +2219,7 @@ class CallService {
   Future<void> _stopScreenShare() async {
     final ac = _active;
     if (ac == null || !ac.sharing) return;
-    final cam = ac.localStream.getVideoTracks().isNotEmpty
+    final cam = _hasCamera(ac)
         ? ac.localStream.getVideoTracks().first
         : null;
     for (final peer in ac.peers.values) {
@@ -1537,8 +2246,11 @@ class CallService {
   void _endCall() {
     final ac = _active;
     if (ac != null) {
+      _chFinish(ac);
       ac.ringTimeout?.cancel();
       ac.timerInterval?.cancel();
+      ac.lostTimer?.cancel();
+      ac.lostTimer = null;
       for (final t in ac.chatTypers.values) {
         t.cancel();
       }
@@ -1569,6 +2281,7 @@ class CallService {
       }
     }
     _active = null;
+    _stopOngoing();
     _flyReactions.clear();
     // Every teardown path silences the ring.
     _stopRingtone();
@@ -1576,7 +2289,17 @@ class CallService {
     _publishIdle();
   }
 
+  void _releaseStream(MediaStream stream) {
+    for (final t in stream.getTracks()) {
+      try {
+        t.stop();
+      } catch (_) {}
+    }
+  }
+
   Future<MediaStream?> _getLocalMedia(CallKind kind) async {
+    final fake = fakeMedia;
+    if (fake != null) return fake(kind);
     try {
       final constraints = kind == CallKind.video
           ? {
@@ -1605,6 +2328,7 @@ class CallService {
   }
 
   Future<void> _attachLocalPreview(MediaStream stream) async {
+    if (fakeMedia != null) return;
     if (!_localRendererReady) {
       await _localRenderer.initialize();
       _localRendererReady = true;
@@ -1615,9 +2339,57 @@ class CallService {
   }
 
   Future<bool> _send(String to, Map<String, dynamic> payload) {
+    final wake = _ownWakeFor(to);
     return _ref
         .read(nostrControllerProvider)
-        .sendCallSignal(to: to, payload: payload);
+        .sendCallSignal(
+            to: to,
+            payload: wake == null ? payload : {...payload, 'wake': wake},
+            groupId: _signalGroupId(payload['callId']));
+  }
+
+  String? _ownWakeFor(String peer) {
+    try {
+      final own = _ref.read(ringRegistrationProvider).wakeFor(_self);
+      if (own == null) return null;
+      final share = shouldShareWake(
+        acceptCalls: _ref.read(settingsProvider).acceptCalls,
+        isFriend: _isFriend(peer),
+        registered: true,
+      );
+      return share ? own : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _ringWakes(List<String> targets) {
+    try {
+      final book = _ref.read(callWakeBookProvider);
+      final client = _ref.read(ringClientProvider);
+      for (final pk in targets) {
+        final wake = book.wakeFor(_self, pk);
+        if (wake != null) unawaited(client.ring(wake));
+      }
+    } catch (_) {}
+  }
+
+  String? _signalGroupId(Object? callId) {
+    final ac = _active;
+    if (ac != null &&
+        ac.isGroup &&
+        ac.groupId != null &&
+        (callId == null || ac.callId == callId)) {
+      return ac.groupId;
+    }
+    final inc = _incoming;
+    if (inc != null &&
+        inc.isGroup &&
+        inc.groupId != null &&
+        (callId == null || inc.callId == callId)) {
+      return inc.groupId;
+    }
+    return null;
   }
 
   Group? _groupById(String id) {
@@ -1634,6 +2406,27 @@ class CallService {
 
   bool _isBlocked(String pubkey) =>
       _ref.read(appStateProvider).blockedUsers.contains(pubkey);
+
+  String _peerLabel(String pubkey, [String? hint]) {
+    var name = hint != null && hint.isNotEmpty ? stripPubkeySuffix(hint) : 'nym';
+    try {
+      name = callPeerName(_ref.read(appStateProvider), pubkey, hint);
+    } catch (_) {}
+    return '$name#${getPubkeySuffix(pubkey)}';
+  }
+
+  void _missedToast(String pubkey, String? hint,
+      [bool isGroup = false, String? groupId]) {
+    try {
+      final lock = _ref.read(chatLockProvider);
+      if (lock.notificationIsLocked(
+          'call', isGroup ? (groupId ?? '') : pubkey, pubkey)) {
+        _system(lock.redact('', '', true).body);
+        return;
+      }
+    } catch (_) {}
+    _system(tr('Missed call from {name}', {'name': _peerLabel(pubkey, hint)}));
+  }
 
   String _nymFor(String pubkey) {
     final users = _ref.read(usersProvider);
@@ -1738,6 +2531,7 @@ class CallService {
   void _onPresentRequest(String sender, Map<String, dynamic> data) {
     final ac = _active;
     if (ac == null || ac.callId != data['callId'] || !_isCallMod(ac)) return;
+    if (!ac.members.contains(sender)) return;
     ac.presentRequests.add(sender);
     _system(tr('{name} requested to present', {'name': _nymFor(sender)}));
     _publish();
@@ -1815,10 +2609,15 @@ class CallService {
   }
 
   void _publishIdle() {
-    state.value = CallState.idle;
+    _syncIncomingUi();
+    final l = _left;
+    state.value = l != null && canRejoinGroupCall(l.groupId)
+        ? CallState(rejoinGroupId: l.groupId)
+        : CallState.idle;
   }
 
   void _publish({String? statusText}) {
+    _syncIncomingUi();
     final inc = _incoming;
     if (inc != null) {
       state.value = CallState(
@@ -1851,7 +2650,8 @@ class CallService {
               pubkey: e.key,
               nym: e.value.nym,
               connected: e.value.connected,
-              hasVideo: (e.value.stream?.getVideoTracks().isNotEmpty) ?? false,
+              hasVideo: e.value.videoOn != false &&
+                  ((e.value.stream?.getVideoTracks().isNotEmpty) ?? false),
               sharing: e.value.sharing,
             ))
         .toList();
@@ -1884,7 +2684,8 @@ class CallService {
       peerNym: peer != null && peer.isNotEmpty ? _nymFor(peer) : null,
       participants: participants,
       muted: ac.muted,
-      cameraOff: ac.cameraOff,
+      cameraOff: ac.cameraOff || !_hasCamera(ac),
+      hasCamera: _hasCamera(ac),
       sharing: ac.sharing,
       switchingCamera: ac.switchingCamera,
       videoInputCount: ac.videoInputCount,
@@ -1905,6 +2706,15 @@ class CallService {
       presentRequests: Set.of(ac.presentRequests),
       isMod: _isCallMod(ac),
       canShareScreen: _canShareScreen(ac),
+      speakerOn: ac.speakerOn,
+      headset: ac.headset,
+      canRouteAudio: _platformOrNull()?.canRouteAudio ?? false,
+      ringing: phase == CallPhase.ringing
+          ? ac.members
+              .where((pk) =>
+                  pk != _self && !ac.peers.containsKey(pk) && !_isBlocked(pk))
+              .toList()
+          : const [],
     );
   }
 

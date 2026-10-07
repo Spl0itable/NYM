@@ -130,8 +130,43 @@ Object.assign(NYM.prototype, {
         if (!message || !message.threadRoot) return false;
         if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
         if (!this._threadRootExistsFor(message)) return false;
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        const key = this._threadConvKeyForMessage(message);
+        if (V && typeof this._notifView === 'function' && key) {
+            return !V.threadOpen(this._notifView(), { key, root: message.threadRoot });
+        }
         const at = this.activeThread;
         return !(at && at.rootId === message.threadRoot);
+    },
+
+    _notifSeesMessage(message, key) {
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        if (!V || typeof this._notifView !== 'function' || !key) return false;
+        const root = (message && message.threadRoot && this.threadsEnabled() && this._threadRootExistsFor(message))
+            ? message.threadRoot : '';
+        return V.sees(this._notifView(), { key, root });
+    },
+
+        _threadConvKeyForMessage(msg) {
+        if (!msg) return '';
+        if (msg.isPM) {
+            return msg.conversationKey ||
+                (msg.isGroup && msg.groupId ? this.getGroupConversationKey(msg.groupId)
+                    : (msg.conversationPubkey ? this.getPMConversationKey(msg.conversationPubkey) : '')) || '';
+        }
+        return msg._storageKey || (msg.geohash ? `#${msg.geohash}` : (msg.channel || ''));
+    },
+
+    _threadReplyJoinedByMe(message) {
+        if (!message || !message.threadRoot) return false;
+        const list = this._threadListForMessage(message);
+        if (!list) return false;
+        return list.some(m => m && m !== message && m.threadRoot === message.threadRoot &&
+            m.id !== message.id && (!!m.isOwn || (!!this.pubkey && m.pubkey === this.pubkey)));
+    },
+
+    _threadReplyForMe(message) {
+        return this._threadReplyRootIsMine(message) || this._threadReplyJoinedByMe(message);
     },
 
     // Replies in a thread the user started notify like a mention.
@@ -157,8 +192,16 @@ Object.assign(NYM.prototype, {
     _threadReplyElevated(message) {
         if (!message || !message.threadRoot) return false;
         if (typeof this.threadsEnabled !== 'function' || !this.threadsEnabled()) return false;
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        const input = {
+            kind: 'channel', thread: true, mention: false,
+            ownRoot: this._threadReplyRootIsMine(message),
+            ownReply: this._threadReplyJoinedByMe(message),
+            threadMentionsOnly: !!this.threadNotifyMentionsOnly
+        };
+        if (V) return V.addressed(input);
         if (this.threadNotifyMentionsOnly) return false;
-        return this._threadReplyRootIsMine(message);
+        return input.ownRoot || input.ownReply;
     },
 
     // Keyed on the list's identity and length so push/splice and reassignments invalidate it.
@@ -343,6 +386,7 @@ Object.assign(NYM.prototype, {
         this._threadContainer = container;
         this._renderThreadView(container);
         this._setThreadComposerHint(true);
+        this._threadMarkOpenSeen();
 
         if (opts.push !== false) {
             this._pushNavigation({
@@ -614,6 +658,52 @@ Object.assign(NYM.prototype, {
             }
             const countEl = row.querySelector('.thread-indicator-count');
             if (countEl) countEl.textContent = count === 1 ? '1 reply' : `${this.abbreviateNumber(count)} replies`;
+            const btn = row.querySelector('.thread-indicator');
+            const key = sampleMsg ? this._threadConvKeyForMessage(sampleMsg) : '';
+            if (btn && key && typeof this._threadHasUnreadNotif === 'function') {
+                this._applyThreadIndicatorNew(btn, this._threadHasUnreadNotif(key, rootId));
+            }
+        });
+    },
+
+    _threadMarkOpenSeen() {
+        const at = this.activeThread;
+        if (!at || !at.ctx || typeof this._markThreadNotificationsSeen !== 'function') return;
+        if (typeof document !== 'undefined' && document.hidden) return;
+        this._markThreadNotificationsSeen(at.ctx.storageKey, at.rootId);
+    },
+
+    _threadIndicatorKeyFor(el) {
+        const msgEl = el && el.closest ? el.closest('.message[data-message-id]') : null;
+        if (!msgEl) return null;
+        const ctx = this._threadCtxForElement(msgEl);
+        return ctx && ctx.storageKey ? { key: ctx.storageKey, root: msgEl.dataset.messageId } : null;
+    },
+
+    _applyThreadIndicatorNew(btn, isNew) {
+        if (!btn) return;
+        btn.classList.toggle('thread-indicator-new', !!isNew);
+        let badge = btn.querySelector('.thread-indicator-badge');
+        if (isNew && !badge) {
+            badge = document.createElement('span');
+            badge.className = 'thread-indicator-badge';
+            badge.textContent = typeof this.uiText === 'function' ? this.uiText('New') : 'New';
+            const count = btn.querySelector('.thread-indicator-count');
+            if (count && count.nextSibling) btn.insertBefore(badge, count.nextSibling);
+            else btn.appendChild(badge);
+        } else if (!isNew && badge) {
+            badge.remove();
+        }
+    },
+
+    _refreshThreadNewMarks() {
+        if (typeof document === 'undefined' || typeof this._threadHasUnreadNotif !== 'function') return;
+        const btns = document.querySelectorAll('.message[data-message-id] > .thread-indicator-row > .thread-indicator');
+        if (!btns || !btns.length) return;
+        btns.forEach(btn => {
+            if (btn.closest('.thread-view-active')) return;
+            const where = this._threadIndicatorKeyFor(btn);
+            this._applyThreadIndicatorNew(btn, !!where && this._threadHasUnreadNotif(where.key, where.root));
         });
     },
 
@@ -637,6 +727,10 @@ Object.assign(NYM.prototype, {
         const indicator = this._buildThreadIndicator(rootId);
         const countEl = indicator.querySelector('.thread-indicator-count');
         if (countEl) countEl.textContent = count === 1 ? '1 reply' : `${this.abbreviateNumber(count)} replies`;
+        const key = this._threadConvKeyForMessage(message);
+        if (key && typeof this._threadHasUnreadNotif === 'function') {
+            this._applyThreadIndicatorNew(indicator.querySelector('.thread-indicator'), this._threadHasUnreadNotif(key, rootId));
+        }
         messageEl.appendChild(indicator);
     },
 

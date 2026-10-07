@@ -22,7 +22,10 @@ class NymBackgroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // startForeground() must happen within seconds of the start request or the system kills the app.
         val usesMesh = intent?.getBooleanExtra(EXTRA_MESH, false) ?: false
-        startForegroundCompat(usesMesh)
+        if (!startForegroundSafely(usesMesh)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         acquireWakeLock()
 
         // Not sticky: a system restart would bring back the notification without the Flutter engine.
@@ -35,6 +38,10 @@ class NymBackgroundService : Service() {
         super.onTaskRemoved(rootIntent)
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelfSafely()
+    }
+
     override fun onDestroy() {
         releaseWakeLock()
         super.onDestroy()
@@ -44,6 +51,21 @@ class NymBackgroundService : Service() {
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun startForegroundSafely(usesMesh: Boolean): Boolean {
+        try {
+            startForegroundCompat(usesMesh)
+            return true
+        } catch (t: Throwable) {
+            if (!usesMesh) return false
+        }
+        return try {
+            startForegroundCompat(false)
+            true
+        } catch (t: Throwable) {
+            false
+        }
     }
 
     private fun startForegroundCompat(usesMesh: Boolean) {

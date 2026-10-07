@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -12,20 +13,25 @@ import '../core/theme/nym_metrics.dart';
 import '../features/calls/call_overlay.dart';
 import '../features/calls/call_providers.dart';
 import '../features/calls/incoming_call.dart';
-import '../features/mesh/mesh_controller.dart' show meshScreenOpenProvider;
+import '../features/mesh/mesh_controller.dart'
+    show MeshController, meshScreenOpenProvider;
+import '../core/constants/storage_keys.dart';
+import '../features/i18n/i18n.dart';
+import '../features/layout/info_dock_host.dart';
+import '../features/layout/layout_model.dart';
 import '../features/mesh/mesh_screen.dart';
 import '../features/nymbot/bot_credits_modal.dart';
 import '../features/nymbot/nymbot_providers.dart'
     show BotBuyRequest, botBuyRequestProvider, botChatControllerProvider;
 import '../features/onboarding/tutorial_overlay.dart';
+import '../features/search/unified_search_panel.dart';
+import '../features/settings/settings_screen.dart';
+import '../features/shortcuts/shortcuts.dart';
 import '../services/location/geolocation.dart';
-import '../widgets/context_menu/context_menu_actions.dart';
-import '../widgets/context_menu/context_menu_panel.dart';
-import '../widgets/context_menu/group_context_menu_panel.dart';
-import '../core/utils/nym_utils.dart';
 import '../state/app_state.dart';
 import '../state/nostr_controller.dart';
 import '../state/settings_provider.dart';
+import '../state/view_history.dart';
 import '../widgets/context_menu/interaction_hooks.dart';
 import '../widgets/chat/chat_pane.dart';
 import '../widgets/sidebar/sidebar.dart';
@@ -50,6 +56,8 @@ class HomeShellState extends ConsumerState<HomeShell>
   /// True while a narrow layout is mounted, so the tutorial driver knows the drawer matters.
   bool _narrow = false;
 
+  bool _phone = false;
+
   /// Dedicated edge-swipe threshold, not the user-tunable message `swipeThreshold`.
   static const double _sidebarSwipeThreshold = 50;
 
@@ -67,6 +75,9 @@ class HomeShellState extends ConsumerState<HomeShell>
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_onGlobalKey);
+    _viewSwitches = ref.read(appStateProvider.notifier).viewSwitches
+      ..addListener(_onViewSwitch);
     // Fresh target keys so a disposed shell's GlobalKeys can't reparent here.
     TutorialTargets.reset();
     // Constructing the CallService registers the inbound call-signal handler.
@@ -76,6 +87,103 @@ class HomeShellState extends ConsumerState<HomeShell>
       // For an identity ready before mount; the selfPubkey listener covers later logins.
       _bindBotEngine();
     });
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onGlobalKey);
+    _viewSwitches?.removeListener(_onViewSwitch);
+    super.dispose();
+  }
+
+  ValueNotifier<int>? _viewSwitches;
+
+  void _onViewSwitch() {
+    if (_phone && _drawerOpen && mounted) setState(() => _drawerOpen = false);
+  }
+
+  void _recordCurrentView() {
+    ref.read(viewHistoryProvider).record(
+        chatViewEntry(ref.read(currentViewProvider), ref.read(activeThreadProvider)));
+  }
+
+  bool _stepHistory(int delta) =>
+      stepViewHistory(ProviderScope.containerOf(context, listen: false), delta);
+
+  bool _goChat(String dir) {
+    final order = ref.read(sidebarNavOrderProvider);
+    if (order.isEmpty) return false;
+    final unread = ref.read(unreadCountsProvider);
+    final keys = [for (final v in order) shortcutNavKey(v)];
+    final want = shortcutNavTarget(
+      keys,
+      shortcutNavKey(ref.read(currentViewProvider)),
+      dir,
+      [
+        for (final v in order)
+          if (shortcutUnreadFor(unread, v) > 0) shortcutNavKey(v),
+      ],
+    );
+    if (want == null) return false;
+    ref.read(appStateProvider.notifier).switchView(order[keys.indexOf(want)]);
+    return true;
+  }
+
+  bool _onGlobalKey(KeyEvent e) {
+    if (!mounted || e is! KeyDownEvent) return false;
+    final focus = FocusManager.instance.primaryFocus;
+    final focusCtx = focus?.context;
+    final inText = focusCtx != null &&
+        (focusCtx.widget is EditableText ||
+            focusCtx.findAncestorWidgetOfExactType<EditableText>() != null);
+    final composer = ComposerShortcutHooks.focus;
+    final inComposer = composer != null && identical(focus, composer);
+    final hk = HardwareKeyboard.instance;
+    final action = shortcutAction(
+      key: shortcutKeyName(e) ?? '',
+      ctrl: hk.isControlPressed,
+      meta: hk.isMetaPressed,
+      alt: hk.isAltPressed,
+      shift: hk.isShiftPressed,
+      mac: shortcutsUseMac,
+      inText: inText,
+      inComposer: inComposer,
+      composerEmpty: inComposer,
+    );
+    if (action == null || action == 'editLast') return false;
+    if (action == 'search') {
+      UnifiedSearchPanel.open(context);
+      return true;
+    }
+    final routeAbove = Navigator.of(context).canPop() ||
+        !(ModalRoute.of(context)?.isCurrent ?? true);
+    if (routeAbove) return false;
+    switch (action) {
+      case 'settings':
+        SettingsScreen.open(context);
+        return true;
+      case 'help':
+        showShortcutSheet(context);
+        return true;
+      case 'prevChat':
+        return _goChat('prev');
+      case 'nextChat':
+        return _goChat('next');
+      case 'nextUnread':
+        return _goChat('nextUnread');
+      case 'back':
+        return _stepHistory(-1);
+      case 'forward':
+        return _stepHistory(1);
+      case 'escape':
+        if (inText) return false;
+        if (ref.read(activeThreadProvider) != null) {
+          ref.read(activeThreadProvider.notifier).state = null;
+          return true;
+        }
+        return false;
+    }
+    return false;
   }
 
   /// Keeps the Nymbot engine alive from boot, binds it to the identity, and sends the one-time welcome PM.
@@ -169,7 +277,7 @@ class HomeShellState extends ConsumerState<HomeShell>
       _edgeSwipePointer = null;
       // An open drawer closes first, then a thread backs out, and only then does the drawer open.
       if (_drawerOpen) {
-        setState(() => _drawerOpen = false);
+        if (!_phone) setState(() => _drawerOpen = false);
         return;
       }
       if (ref.read(activeThreadProvider) != null) {
@@ -196,26 +304,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     _openConversationMenu(app);
   }
 
-  /// Channels have no header menu, so the swipe does nothing there.
-  void _openConversationMenu(AppState app) {
-    final view = app.view;
-    if (view.kind == ViewKind.group) {
-      GroupContextMenuPanel.show(context, view.id);
-      return;
-    }
-    if (view.kind != ViewKind.pm || view.id.isEmpty) return;
-    final controller = ref.read(nostrControllerProvider);
-    ContextMenuPanel.show(
-      context,
-      target: CtxTarget(
-        pubkey: view.id,
-        nym: stripPubkeySuffix(app.users[view.id]?.nym ?? ''),
-        isSelf: view.id == app.selfPubkey,
-        isBot: controller.isVerifiedBot(view.id),
-        profileOnly: true,
-      ),
-    );
-  }
+  void _openConversationMenu(AppState app) => openConversationInfo(context, ref);
 
   /// Any touch lift disarms.
   void _edgePointerEnd(PointerEvent e) {
@@ -226,6 +315,22 @@ class HomeShellState extends ConsumerState<HomeShell>
 
   @override
   Widget build(BuildContext context) {
+    if (ref.read(viewHistoryProvider).isEmpty) _recordCurrentView();
+    ref.listen<ChatView>(currentViewProvider, (_, next) => _recordCurrentView());
+    ref.listen<ActiveThread?>(activeThreadProvider, (_, next) => _recordCurrentView());
+    ref.listen<bool>(meshScreenOpenProvider, (prev, next) {
+      if (prev == next) return;
+      if (next) {
+        ref.read(viewHistoryProvider).record(const ViewHistoryEntry.mesh());
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || ref.read(meshScreenOpenProvider)) return;
+          if (ref.read(viewHistoryProvider).current?.mesh ?? false) {
+            _recordCurrentView();
+          }
+        });
+      }
+    });
     // Always-mounted gift listener: bind the bot chat, open the prefilled gift modal, consume the request.
     ref.listen<GiftCreditsRequest?>(giftCreditsRequestProvider, (prev, next) {
       if (next == null) return;
@@ -283,6 +388,11 @@ class HomeShellState extends ConsumerState<HomeShell>
       if (prev != next && ref.read(meshScreenOpenProvider)) {
         ref.read(meshScreenOpenProvider.notifier).state = false;
       }
+      if (prev != next) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) followConversationInfo(context, ref);
+        });
+      }
     });
 
     final c = context.nym;
@@ -290,15 +400,18 @@ class HomeShellState extends ConsumerState<HomeShell>
     // The drawer governs the 0–1024 range; two panes only above 1024.
     final isWide = width > NymDimens.tabletBreakpoint;
     _narrow = !isWide;
+    _phone = width <= kPhoneMax;
 
     final useColumns = ref.watch(settingsProvider.select((s) => s.useColumns));
     final isGhost =
         ref.watch(settingsProvider.select((s) => s.theme == NymThemeKey.ghost));
 
     // Back unwinds thread, mesh screen and drawer in swipe order, leaving the app only when nothing is open.
-    final canLeave = !(_drawerOpen ||
-        ref.watch(meshScreenOpenProvider) ||
-        ref.watch(activeThreadProvider) != null);
+    final canLeave = _phone
+        ? _drawerOpen && !_meshShown
+        : !(_drawerOpen ||
+            _meshShown ||
+            ref.watch(activeThreadProvider) != null);
     return PopScope(
       canPop: canLeave,
       onPopInvokedWithResult: (didPop, _) {
@@ -327,8 +440,29 @@ class HomeShellState extends ConsumerState<HomeShell>
     ));
   }
 
+  void _meshBackToList() {
+    ref.read(meshScreenOpenProvider.notifier).state = false;
+    if (!_drawerOpen && mounted) setState(() => _drawerOpen = true);
+  }
+
+  bool get _meshShown =>
+      MeshController.isSupportedPlatform && ref.watch(meshScreenOpenProvider);
+
   /// Closes the innermost open thing, one per press.
   void _popInApp() {
+    if (_phone) {
+      if (ref.read(meshScreenOpenProvider)) {
+        _meshBackToList();
+        return;
+      }
+      if (_drawerOpen) return;
+      if (ref.read(activeThreadProvider) != null) {
+        ref.read(activeThreadProvider.notifier).state = null;
+        return;
+      }
+      if (mounted) setState(() => _drawerOpen = true);
+      return;
+    }
     if (_drawerOpen) {
       if (mounted) setState(() => _drawerOpen = false);
       return;
@@ -354,40 +488,92 @@ class HomeShellState extends ConsumerState<HomeShell>
     );
   }
 
+  double? _sidebarW;
+
   Widget _wide(BuildContext context, bool useColumns) {
     // The mesh screen swaps in like any view; the persistent sidebar needs no hamburger.
-    final meshOpen = ref.watch(meshScreenOpenProvider);
+    final meshOpen = _meshShown;
+    final kv = ref.read(keyValueStoreProvider);
+    final sidebarW = _sidebarW ??=
+        clampSidebarWidth(kv.getString(StorageKeys.sidebarWidth)).toDouble();
     return Row(
       children: [
-        const SizedBox(width: NymDimens.sidebarWidth, child: Sidebar()),
+        SizedBox(
+          width: sidebarW,
+          child: Stack(
+            children: [
+              const Positioned.fill(child: Sidebar()),
+              Positioned(
+                top: 0,
+                bottom: 0,
+                right: 0,
+                width: 6,
+                child: Semantics(
+                  label: tr('Resize sidebar'),
+                  value: '${sidebarW.round()}',
+                  slider: true,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      key: const ValueKey('sidebarResizer'),
+                      behavior: HitTestBehavior.opaque,
+                      dragStartBehavior: DragStartBehavior.down,
+                      onHorizontalDragUpdate: (d) => setState(() => _sidebarW =
+                          clampSidebarWidth((_sidebarW ?? sidebarW) + d.delta.dx)
+                              .toDouble()),
+                      onHorizontalDragEnd: (_) => kv.setString(
+                          StorageKeys.sidebarWidth, '${(_sidebarW ?? sidebarW).round()}'),
+                      onDoubleTap: () {
+                        setState(() => _sidebarW = kSidebarDefault.toDouble());
+                        kv.setString(StorageKeys.sidebarWidth, '$kSidebarDefault');
+                      },
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
         Expanded(
           child: meshOpen ? const MeshScreen() : _content(context, useColumns),
         ),
+        const InfoDockHost(),
       ],
     );
   }
 
   Widget _mobile(BuildContext context, bool useColumns) {
     // The edge swipe is phone-only (≤768px).
-    final phone = MediaQuery.of(context).size.width <= 768;
+    final width = MediaQuery.of(context).size.width;
+    final phone = width <= kPhoneMax;
+    final hideChat = phone && _drawerOpen;
     // A raw Listener over the whole shell, drawer included, so the swipe never loses to scrollables.
     final stack = Stack(
       children: [
         Positioned.fill(
-          child: _content(context, useColumns, compact: true),
+          child: ExcludeSemantics(
+            key: const ValueKey('phoneChatPage'),
+            excluding: hideChat,
+            child: _content(context, useColumns, compact: true),
+          ),
         ),
 
         // Mesh overlay beneath the scrim and drawer, so the sidebar opens over it.
-        if (ref.watch(meshScreenOpenProvider))
+        if (!phone && _meshShown)
           Positioned.fill(
-            child: MeshScreen(
-              onOpenSidebar: () => setState(() => _drawerOpen = true),
+            child: ExcludeSemantics(
+              excluding: hideChat,
+              child: MeshScreen(
+                onOpenSidebar: () => setState(() => _drawerOpen = true),
+              ),
             ),
           ),
 
         // Snapping dim backdrop (no fade); 0.35 in solid-ui light mode, else 0.6. Tap to close.
-        if (_drawerOpen)
+        if (_drawerOpen && !phone)
           GestureDetector(
+            key: const ValueKey('drawerScrim'),
             onTap: () => setState(() => _drawerOpen = false),
             child: Container(
               color: Colors.black.withValues(
@@ -407,12 +593,12 @@ class HomeShellState extends ConsumerState<HomeShell>
           curve: Curves.linear,
           offset: _drawerOpen ? Offset.zero : const Offset(-1, 0),
           child: SizedBox(
-            width: NymDimens.sidebarDrawerWidth,
+            width: phone ? width : NymDimens.sidebarDrawerWidth,
             height: double.infinity,
             // Rightward-only drop shadow, not a Material elevation.
             child: DecoratedBox(
               decoration: BoxDecoration(
-                boxShadow: _drawerOpen
+                boxShadow: _drawerOpen && !phone
                     ? [
                         BoxShadow(
                           offset: const Offset(10, 0),
@@ -426,18 +612,26 @@ class HomeShellState extends ConsumerState<HomeShell>
               child: DecoratedBox(
                 position: DecorationPosition.foreground,
                 decoration: BoxDecoration(
-                  border: Border(
-                    left: BorderSide(color: context.nym.glassBorder),
-                  ),
+                  border: phone
+                      ? null
+                      : Border(
+                          left: BorderSide(color: context.nym.glassBorder),
+                        ),
                 ),
                 child: Sidebar(
                   compact: true,
-                  onItemSelected: () => setState(() => _drawerOpen = false),
+                  onItemSelected: phone
+                      ? null
+                      : () => setState(() => _drawerOpen = false),
                 ),
               ),
             ),
           ),
         ),
+        if (phone && _meshShown)
+          Positioned.fill(
+            child: MeshScreen(onBackToList: _meshBackToList),
+          ),
       ],
     );
     return Listener(

@@ -290,7 +290,7 @@
                 }
                 btn.classList.remove('send-btn-verifying');
                 btn.removeAttribute('aria-busy');
-                if (this.connected) btn.disabled = false;
+                btn.disabled = false;
                 if (input.dataset.attestPrevPlaceholder) {
                     input.setAttribute('data-placeholder', input.dataset.attestPrevPlaceholder);
                 }
@@ -341,7 +341,7 @@
             const sameView = queued.pm === !!this.inPMMode
                 && queued.channel === this.currentChannel
                 && queued.geohash === this.currentGeohash;
-            if (!sameView || !this.connected || typeof this.sendMessage !== 'function') return;
+            if (!sameView || typeof this.sendMessage !== 'function') return;
             const send = () => { try { this.sendMessage(); } catch (_) { } };
             if (typeof setTimeout === 'function') setTimeout(send, 0); else send();
         },

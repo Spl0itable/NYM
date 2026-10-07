@@ -59,6 +59,7 @@
                 text: this._composerText(),
                 attachments: (this._composerAttachments || []).length,
                 editing: !!this.pendingEdit,
+                quoting: !!this.pendingQuote,
                 busy: !!this._composerSendQueued,
                 recording: !!this._voiceRec,
             });

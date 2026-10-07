@@ -232,3 +232,33 @@ class ListAnchorKeeper {
     }
   }
 }
+
+class KeepReadingPhysics extends ScrollPhysics {
+  const KeepReadingPhysics({super.parent});
+
+  @override
+  KeepReadingPhysics applyTo(ScrollPhysics? ancestor) =>
+      KeepReadingPhysics(parent: buildParent(ancestor));
+
+  @override
+  double adjustPositionForNewDimensions({
+    required ScrollMetrics oldPosition,
+    required ScrollMetrics newPosition,
+    required bool isScrolling,
+    required double velocity,
+  }) {
+    final shift = oldPosition.viewportDimension - newPosition.viewportDimension;
+    if (shift != 0 &&
+        newPosition.axisDirection == AxisDirection.up &&
+        oldPosition.extentBefore > 1) {
+      return (oldPosition.pixels + shift).clamp(
+          newPosition.minScrollExtent, newPosition.maxScrollExtent);
+    }
+    return super.adjustPositionForNewDimensions(
+      oldPosition: oldPosition,
+      newPosition: newPosition,
+      isScrolling: isScrolling,
+      velocity: velocity,
+    );
+  }
+}

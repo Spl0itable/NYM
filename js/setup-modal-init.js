@@ -9,6 +9,11 @@
     }
     if (!needsSetup) return;
     document.documentElement.classList.add('nym-needs-setup');
+    try {
+        if (localStorage.getItem('nym_ui_language_chosen') !== 'true' && !localStorage.getItem('nym_ui_language')) {
+            document.documentElement.classList.add('nym-first-lang');
+        }
+    } catch (e) { }
     document.addEventListener('DOMContentLoaded', function () {
         var modal = document.getElementById('setupModal');
         if (modal) modal.classList.add('active');

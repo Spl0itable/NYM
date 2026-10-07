@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../services/api/api_config.dart';
 import '../../services/storage/revocable_prefs.dart';
 
 import 'emoji_data.dart';
@@ -131,7 +132,7 @@ CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
 
 /// Proxied emoji image URL, or [url] verbatim when no proxy base is configured.
 String proxiedEmojiUrl(String url, String? proxyBase) {
-  if (proxyBase == null || proxyBase.isEmpty) return url;
+  if (ApiConfig.directMedia || proxyBase == null || proxyBase.isEmpty) return url;
   return '$proxyBase?emoji=1&url=${Uri.encodeQueryComponent(url)}';
 }
 

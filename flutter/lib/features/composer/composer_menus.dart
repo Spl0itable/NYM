@@ -7,6 +7,8 @@ import '../../widgets/anchored_popup.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import 'composer_model.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 class ComposerIcons {
   const ComposerIcons._();
@@ -132,25 +134,15 @@ Future<String?> showComposerMenu(
   final width = MediaQuery.sizeOf(context).width;
   final list = ComposerMenuList(kind: kind, label: label, entries: entries);
   if (menuPresentation(width) == 'sheet' || anchor == null) {
-    final c = context.nym;
-    return showModalBottomSheet<String>(
-      context: context,
+    return showNymBottomSheet<String>(
+      context,
+      (_) => Padding(
+        key: ValueKey('$kind-menu-sheet'),
+        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+        child: list,
+      ),
       useRootNavigator: true,
-      backgroundColor: c.bgSecondary,
       barrierColor: const Color(0x73000000),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius:
-            BorderRadius.vertical(top: Radius.circular(NymRadius.lg)),
-      ),
-      builder: (_) => SafeArea(
-        top: false,
-        child: Padding(
-          key: ValueKey('$kind-menu-sheet'),
-          padding: const EdgeInsets.all(10),
-          child: list,
-        ),
-      ),
     );
   }
   return Navigator.of(context, rootNavigator: true).push<String>(
@@ -394,7 +386,7 @@ class _EmojiInputButtonState extends State<EmojiInputButton> {
     final lit = widget.open || (_hover && widget.enabled);
     return Opacity(
       opacity: widget.enabled ? (lit ? 1.0 : 0.6) : 0.4,
-      child: Tooltip(
+      child: NymTooltip(
         message: tr('Emoji and GIFs'),
         child: Semantics(
           button: true,

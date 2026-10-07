@@ -17,6 +17,22 @@ class GeoView {
   static const double minZoom = 1;
   static const double maxZoom = 16;
 
+  static GeoView lerp(GeoView a, GeoView b, double t) {
+    final za = math.log(a.zoom), zb = math.log(b.zoom);
+    return GeoView(
+      cx: a.cx + (b.cx - a.cx) * t,
+      cy: a.cy + (b.cy - a.cy) * t,
+      zoom: math.exp(za + (zb - za) * t),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is GeoView && other.cx == cx && other.cy == cy && other.zoom == zoom;
+
+  @override
+  int get hashCode => Object.hash(cx, cy, zoom);
+
   GeoView copyWith({double? cx, double? cy, double? zoom}) =>
       GeoView(cx: cx ?? this.cx, cy: cy ?? this.cy, zoom: zoom ?? this.zoom);
 

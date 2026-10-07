@@ -3,21 +3,106 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
+import 'dart:ui' show DartPluginRegistrant;
 
 import 'app.dart';
 import 'core/constants/storage_keys.dart';
 import 'core/theme/nym_theme.dart';
 import 'features/accounts/account_host.dart';
 import 'features/accounts/account_runtime.dart';
+import 'features/calls/call_platform.dart';
+import 'features/calls/call_providers.dart';
 import 'features/accounts/inactive_probe.dart';
 import 'features/identity/vault_settings_modal.dart' show identityVaultProvider;
 import 'features/identity/vault_boot_unlock.dart';
+import 'features/notifications/background_wake.dart';
 import 'services/platform/background_refresh.dart';
 import 'services/storage/secure_store.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
 
 Future<void> main() async {
+  _installErrorReporting();
+
+  // Catch otherwise-fatal async errors (e.g. offline WebSocket DNS failures) so they don't kill the app.
+  await runZonedGuarded(() async {
+    final session = await bootAccountSession();
+
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    runApp(
+      AccountHost(
+        session: session,
+        builder: () => const _BootUnlockGate(),
+      ),
+    );
+  }, _reportZoneError);
+}
+
+@pragma('vm:entry-point')
+Future<void> backgroundRefreshMain() async {
+  _installErrorReporting();
+  DartPluginRegistrant.ensureInitialized();
+  final clock = Stopwatch()..start();
+  await runZonedGuarded(() async {
+    ProviderContainer? container;
+    try {
+      container = (await bootAccountSession()).container;
+    } catch (e) {
+      debugPrint('[BackgroundWake] boot failed: ${e.runtimeType}');
+    }
+    final booted = container;
+    if (booted != null) {
+      try {
+        booted.read(callServiceProvider).ringCatchUp =
+            () => BackgroundWake.runIn(booted);
+      } catch (_) {}
+    }
+    await serveBackgroundWake(
+      BackgroundRefreshService(),
+      () async => container == null ? false : BackgroundWake.runIn(container),
+      elapsed: clock.elapsed,
+    );
+  }, _reportZoneError);
+}
+
+@pragma('vm:entry-point')
+Future<void> ringMain() async {
+  _installErrorReporting();
+  DartPluginRegistrant.ensureInitialized();
+  await runZonedGuarded(() async {
+    ProviderContainer? container;
+    try {
+      container = (await bootAccountSession()).container;
+    } catch (e) {
+      debugPrint('[Ring] boot failed: ${e.runtimeType}');
+    }
+    final booted = container;
+    if (booted != null) {
+      try {
+        booted.read(callServiceProvider).ringCatchUp =
+            () => BackgroundWake.runIn(booted);
+      } catch (_) {}
+    }
+    try {
+      await const MethodChannel(CallPlatform.channelName)
+          .invokeMethod<void>('ready', {'booted': booted != null});
+    } catch (_) {}
+  }, _reportZoneError);
+}
+
+Future<AccountSession> bootAccountSession() async {
+  final prefs = await SharedPreferences.getInstance();
+  await SecureStore.settleInstall(prefs);
+  final runtime = AccountRuntime(prefs: prefs);
+  await runtime.boot();
+  return AccountSession(
+    runtime: runtime,
+    probe: InactiveProbe(prefs: prefs),
+  );
+}
+
+void _installErrorReporting() {
   WidgetsFlutterBinding.ensureInitialized();
 
   FlutterError.onError = (details) {
@@ -25,29 +110,11 @@ Future<void> main() async {
     debugPrint('[FlutterError] ${details.exceptionAsString()}');
     if (details.stack != null) debugPrint(details.stack.toString());
   };
+}
 
-  // Catch otherwise-fatal async errors (e.g. offline WebSocket DNS failures) so they don't kill the app.
-  await runZonedGuarded(() async {
-    final prefs = await SharedPreferences.getInstance();
-    await SecureStore.settleInstall(prefs);
-    final runtime = AccountRuntime(prefs: prefs);
-    await runtime.boot();
-
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-
-    runApp(
-      AccountHost(
-        session: AccountSession(
-          runtime: runtime,
-          probe: InactiveProbe(prefs: prefs),
-        ),
-        builder: () => const _BootUnlockGate(),
-      ),
-    );
-  }, (error, stack) {
-    debugPrint('[Zone] Unhandled async error: $error');
-    debugPrint(stack.toString());
-  });
+void _reportZoneError(Object error, StackTrace stack) {
+  debugPrint('[Zone] Unhandled async error: $error');
+  debugPrint(stack.toString());
 }
 
 /// Runs identity-vault unlock before `nostrControllerProvider.init()` reads any secret.

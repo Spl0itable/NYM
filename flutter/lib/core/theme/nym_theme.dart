@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'nym_colors.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 Color _hex(String h) {
   var s = h.replaceFirst('#', '');
@@ -26,11 +27,11 @@ const Map<NymThemeKey, _Accents> _themeAccents = {
   ),
   NymThemeKey.matrix: _Accents(
     ['#00ff00', '#00ffff', '#00ff00', '#00BD00', '#00ffaa', '#f7931a'],
-    ['#007a00', '#007a7a', '#006600', '#558855', '#004d00', '#c47a15'],
+    ['#007a00', '#007a7a', '#006600', '#477247', '#004d00', '#c47a15'],
   ),
   NymThemeKey.amber: _Accents(
     ['#ffb000', '#ffd700', '#ffb000', '#cc8800', '#ffcc00', '#ffa500'],
-    ['#9a6a00', '#8a7200', '#7a5500', '#8a7a55', '#5a3a00', '#b87300'],
+    ['#8b5f00', '#8a7200', '#7a5500', '#756848', '#5a3a00', '#b87300'],
   ),
   NymThemeKey.cyber: _Accents(
     ['#ff00ff', '#00ffff', '#ff00ff', '#DB16DB', '#ff66ff', '#ffaa00'],
@@ -38,12 +39,12 @@ const Map<NymThemeKey, _Accents> _themeAccents = {
   ),
   NymThemeKey.hacker: _Accents(
     ['#00ffff', '#00ff00', '#00ffff', '#01c2c2', '#66ffff', '#00ff88'],
-    ['#007a7a', '#007a00', '#006666', '#558888', '#004d4d', '#009955'],
+    ['#007a7a', '#007a00', '#006666', '#467070', '#004d4d', '#009955'],
   ),
   // Ghost uses applyTheme()'s inline values, which beat the CSS class (dark textDim #cccccc).
   NymThemeKey.ghost: _Accents(
     ['#ffffff', '#cccccc', '#ffffff', '#cccccc', '#ffffff', '#dddddd'],
-    ['#333333', '#555555', '#222222', '#777777', '#000000', '#999999'],
+    ['#333333', '#555555', '#222222', '#696969', '#000000', '#999999'],
   ),
 };
 
@@ -99,7 +100,7 @@ NymColors resolveNymColors({
   // Ghost light-mode greys from `body.light-mode.theme-ghost`, which wins over `.light-mode`.
   if (theme == NymThemeKey.ghost && isLight) {
     warning = _hex('#555555');
-    danger = _hex('#888888');
+    danger = _hex('#cc0000');
     purple = _hex('#777777');
     blue = _hex('#666666');
     border = _hex('#999999');
@@ -148,6 +149,7 @@ NymColors resolveNymColors({
     solidUi: solidUi,
     bubbleSelfBg: bubbleSelfBg,
     bubbleOtherBg: bubbleOtherBg,
+    fieldPlaceholder: theme == NymThemeKey.cyber && !isLight ? _hex('#e64ce6') : null,
   );
 }
 
@@ -205,6 +207,7 @@ ThemeData buildNymThemeData(NymColors c) {
       selectionColor: c.primary.withValues(alpha: 0.3),
       selectionHandleColor: c.primary,
     ),
+    tooltipTheme: const TooltipThemeData(waitDuration: NymTooltipTiming.wait),
     extensions: [c],
   );
 }

@@ -5,6 +5,7 @@ Object.assign(NYM.prototype, {
     },
 
     async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot, anon) {
+        if (typeof this.aiConsentAllowed === 'function' && !this.aiConsentAllowed('nymbot')) return anon ? 'failed' : undefined;
         const anonModel = anon ? window.NymAnonNymbot : null;
         if (anon && !anonModel) return 'unavailable';
         if (!this._getApiHost()) return anon ? 'unavailable' : undefined;
@@ -312,6 +313,7 @@ Object.assign(NYM.prototype, {
             '/q':             { aliasOf: '/quote',                      fn: (args) => this.cmdQuote(args) },
             '/brb':           { desc: 'Set away message',               cat: 'misc',       fn: (args) => this.cmdBRB(args) },
             '/back':          { desc: 'Clear away message',             cat: 'misc',       fn: () => this.cmdBack() },
+            '/search':        { desc: 'Search this chat',               cat: 'misc',       fn: (args) => this.cmdSearch(args) },
             '/zap':           { desc: 'Zap profile',                    cat: 'misc',       fn: (args) => this.cmdZap(args) },
             '/block':         { desc: 'Block user/#channel',            cat: 'pms',        fn: (args) => this.cmdBlock(args) },
             '/unblock':       { desc: 'Unblock user/#channel',          cat: 'pms',        fn: (args) => this.cmdUnblock(args) },
@@ -1307,52 +1309,15 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const message = args.trim();
-        this.awayMessages.set(this.pubkey, message);
+        const state = await this.setAwayState(args.trim());
 
-        if (this.users.has(this.pubkey)) {
-            this.users.get(this.pubkey).status = 'away';
-        }
-
-        this.displaySystemMessage(`Away message set: "${message}"`);
+        this.displaySystemMessage(`Away message set: "${state.message}"`);
         this.displaySystemMessage('You will auto-reply to mentions in ALL channels while away');
-
-        this.publishPresence('away', message);
-
-        const keysToRemove = [];
-        for (let i = 0; i < sessionStorage.length; i++) {
-            const key = sessionStorage.key(i);
-            if (key && key.startsWith(`brb_universal_${this.pubkey}_`)) {
-                keysToRemove.push(key);
-            }
-        }
-        keysToRemove.forEach(key => sessionStorage.removeItem(key));
-
-        this.updateUserList();
     },
 
     async cmdBack() {
-        if (this.awayMessages.has(this.pubkey)) {
-            this.awayMessages.delete(this.pubkey);
-
-            if (this.users.has(this.pubkey)) {
-                this.users.get(this.pubkey).status = 'online';
-            }
-
+        if (await this.clearAwayState()) {
             this.displaySystemMessage('Away message cleared - you are back!');
-
-            this.publishPresence('online');
-
-            const keysToRemove = [];
-            for (let i = 0; i < sessionStorage.length; i++) {
-                const key = sessionStorage.key(i);
-                if (key && key.startsWith(`brb_universal_${this.pubkey}_`)) {
-                    keysToRemove.push(key);
-                }
-            }
-            keysToRemove.forEach(key => sessionStorage.removeItem(key));
-
-            this.updateUserList();
         } else {
             this.displaySystemMessage('You were not away');
         }

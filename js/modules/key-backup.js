@@ -13,6 +13,17 @@
     const NAME_RE = /^nym_bk_[0-9a-f-]{36}\.bin$/;
     const LIMIT_KEY = 'nym_key_backup_failures';
     const MAX_DELAY_S = 300;
+    const CLOUDKIT = {
+        SCRIPT_URL: 'https://cdn.apple-cloudkit.com/ck/2/cloudkit.js',
+        CONTAINER: 'iCloud.com.nym.bar',
+        ENVIRONMENT: 'production',
+        RECORD_TYPE: 'KeyBackup',
+        FIELDS: ['payload', 'format', 'updatedAt'],
+        SORT_BY: { fieldName: 'updatedAt', ascending: false },
+        NAME_RE: /^nymbk-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        BUTTON_ID: 'apple-sign-in-button',
+        MAX_PAGES: 20,
+    };
 
     const enc = new TextEncoder();
 
@@ -130,7 +141,7 @@
         try { return window.NostrTools.getPublicKey(secretKey); } catch (_) { return null; }
     }
 
-    function newFileName() {
+    function newUuid() {
         let id;
         if (crypto.randomUUID) {
             id = crypto.randomUUID();
@@ -141,7 +152,25 @@
             const h = toHex(b);
             id = h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
         }
-        return 'nym_bk_' + id.toLowerCase() + '.bin';
+        return id.toLowerCase();
+    }
+
+    function newFileName() {
+        return 'nym_bk_' + newUuid() + '.bin';
+    }
+
+    function newRecordName() {
+        return 'nymbk-' + newUuid();
+    }
+
+    function appleFirst(nav) {
+        const n = nav || globalThis.navigator || {};
+        const data = n.userAgentData;
+        if (data && typeof data.platform === 'string' && data.platform) return /^(macOS|iOS)$/i.test(data.platform);
+        const ua = String(n.userAgent || '');
+        if (/iPhone|iPad|iPod/.test(ua)) return true;
+        if (/Macintosh/.test(ua) && Number(n.maxTouchPoints) > 1) return true;
+        return /Macintosh/.test(ua);
     }
 
     function createGoogleAuth(opts) {
@@ -275,14 +304,159 @@
         return { list, download, upload, remove };
     }
 
+    function cloudKitError(e) {
+        if (e instanceof BackupError) return e;
+        const code = e && e.ckErrorCode;
+        if (code === 'AUTHENTICATION_REQUIRED' || code === 'AUTHENTICATION_FAILED' || code === 'ACCESS_DENIED') return new BackupError('auth', code);
+        if (code === 'NETWORK_ERROR' || code === 'SERVICE_UNAVAILABLE' || code === 'TRY_AGAIN_LATER' || code === 'THROTTLED') return new BackupError('network', code);
+        if (code === 'QUOTA_EXCEEDED') return new BackupError('quota');
+        return new BackupError('icloud', code || '');
+    }
+
+    function createCloudKitAuth(opts) {
+        const ui = opts.ui;
+        const containerIdentifier = opts.containerIdentifier || CLOUDKIT.CONTAINER;
+        const apiToken = opts.apiToken;
+        const environment = opts.environment || CLOUDKIT.ENVIRONMENT;
+        const loadScript = opts.loadScript || ((u) => window.loadScriptOnce(u));
+        let container = null;
+        let recordName = null;
+
+        async function open() {
+            if (container) return container;
+            try { await loadScript(CLOUDKIT.SCRIPT_URL); } catch (_) { throw new BackupError('ckjs'); }
+            const CK = window.CloudKit;
+            if (!CK || typeof CK.configure !== 'function') throw new BackupError('ckjs');
+            try {
+                CK.configure({
+                    containers: [{
+                        containerIdentifier,
+                        apiTokenAuth: { apiToken, persist: false, signInButton: { id: CLOUDKIT.BUTTON_ID, theme: 'black' } },
+                        environment,
+                    }],
+                });
+                container = CK.getContainer(containerIdentifier);
+            } catch (_) {
+                container = null;
+            }
+            if (!container || typeof container.setUpAuth !== 'function') throw new BackupError('ckjs');
+            return container;
+        }
+
+        async function accountId() {
+            if (recordName) return recordName;
+            const c = await open();
+            let identity;
+            try {
+                identity = await ui.appleSignIn({
+                    title: t(SA.signInTitle),
+                    text: t(SA.signInText),
+                    buttonId: CLOUDKIT.BUTTON_ID,
+                    start: async () => (await c.setUpAuth()) || c.whenUserSignsIn(),
+                });
+            } catch (e) {
+                throw cloudKitError(e);
+            }
+            if (identity == null) throw new BackupError('cancelled');
+            const name = identity.userRecordName;
+            if (typeof name !== 'string' || !name) throw new BackupError('auth');
+            recordName = name;
+            return name;
+        }
+
+        function database() {
+            if (!container || !recordName) throw new BackupError('auth');
+            return container.privateCloudDatabase;
+        }
+
+        function signOut() {
+            const c = container;
+            recordName = null;
+            if (c && typeof c.signOut === 'function') {
+                try { c.signOut(); } catch (_) { }
+            }
+        }
+
+        return { accountId, database, signOut };
+    }
+
+    function createCloudKitStore(auth) {
+        const cache = new Map();
+
+        async function run(op) {
+            let res;
+            try { res = await op(); } catch (e) { throw cloudKitError(e); }
+            if (res && res.hasErrors) throw cloudKitError((res.errors && res.errors[0]) || null);
+            return res;
+        }
+
+        function fieldValue(r, name) {
+            const f = r && r.fields && r.fields[name];
+            return f ? f.value : undefined;
+        }
+
+        async function list() {
+            const db = auth.database();
+            const out = [];
+            cache.clear();
+            let res = await run(() => db.performQuery(
+                { recordType: CLOUDKIT.RECORD_TYPE, sortBy: [Object.assign({}, CLOUDKIT.SORT_BY)] },
+                { desiredKeys: CLOUDKIT.FIELDS.slice() },
+            ));
+            for (let page = 1; ; page++) {
+                for (const r of (res && res.records) || []) {
+                    const payload = fieldValue(r, 'payload');
+                    if (!r || typeof r.recordName !== 'string' || !CLOUDKIT.NAME_RE.test(r.recordName)) continue;
+                    if (typeof payload !== 'string' || !payload) continue;
+                    const at = Number(fieldValue(r, 'updatedAt'));
+                    const modifiedTime = Number.isFinite(at) ? new Date(at).toISOString() : '';
+                    cache.set(r.recordName, payload);
+                    out.push({ id: r.recordName, modifiedTime, payload });
+                }
+                if (!(res && res.moreComing) || page >= CLOUDKIT.MAX_PAGES) break;
+                const prev = res;
+                res = await run(() => db.performQuery(prev));
+            }
+            return out;
+        }
+
+        async function download(id) {
+            if (!cache.has(id)) throw new BackupError('icloud', 'missing');
+            return cache.get(id);
+        }
+
+        async function upload(payload) {
+            const db = auth.database();
+            const recordName = newRecordName();
+            await run(() => db.saveRecords([{
+                recordType: CLOUDKIT.RECORD_TYPE,
+                recordName,
+                fields: {
+                    payload: { value: payload },
+                    format: { value: FORMAT },
+                    updatedAt: { value: Date.now() },
+                },
+            }]));
+            return { id: recordName, name: recordName };
+        }
+
+        async function remove(id) {
+            const db = auth.database();
+            await run(() => db.deleteRecords([{ recordName: id }]));
+            cache.delete(id);
+        }
+
+        return { list, download, upload, remove };
+    }
+
     async function loadBackups(drive) {
         const files = await drive.list();
         const out = [];
         for (const f of files) {
             try {
-                out.push({ id: f.id, modifiedTime: f.modifiedTime || '', payload: await drive.download(f.id) });
+                out.push({ id: f.id, modifiedTime: f.modifiedTime || '', payload: typeof f.payload === 'string' ? f.payload : await drive.download(f.id) });
             } catch (e) {
-                if (e && (e.code === 'auth' || e.code === 'network' || e.code === 'cancelled')) throw e;
+                if (e && (e.code === 'auth' || e.code === 'network' || e.code === 'cancelled' || e.code === 'quota')) throw e;
             }
         }
         return out;
@@ -394,13 +568,49 @@
         pqMismatch: 'The post-quantum recovery code in your backup doesn\'t match this account, so it wasn\'t restored. You\'re signed in. To add the right code, paste it in View or Edit Nym\'s Details.',
     };
 
+    const SA = Object.assign({}, S, {
+        connecting: 'Connecting to Apple…',
+        signInTitle: 'Sign in with Apple',
+        signInText: 'Apple\'s sign-in opens in a new window. Your Apple Account password goes only to Apple, and Nymchat is told only an ID for your iCloud, never your email or name.',
+        unlockText: 'Enter the PIN you chose when you backed up your key to Apple.',
+        createText: 'Your key stays yours. Apple only stores an encrypted copy, which it can\'t read without your PIN.',
+        createWarning: 'Your PIN can\'t be recovered. If you forget it, the backup can\'t be opened. Anyone who has both your Apple account and your PIN can get your key.',
+        replaceText: 'This key already has a backup in your Apple account. Replace it with a new one protected by this PIN?',
+        backedUpText: 'Your key is backed up to your Apple account. To restore it on another device, choose Continue with Apple and enter your PIN.',
+        backedUpPqText: 'Your key and your post-quantum recovery code are backed up to your Apple account. To restore them on another device, choose Continue with Apple and enter your PIN.',
+        removeTitle: 'Remove Apple backups',
+        removeEmpty: 'There are no Nymchat key backups in this Apple account.',
+        removeOne: 'Delete this key\'s backup from your Apple account?',
+        removeMany: 'Delete {n} backups of this key from your Apple account?',
+        removedText: 'This key\'s backups were deleted from your Apple account.',
+        errorTitle: 'Apple backup',
+        errLoad: 'Couldn\'t load Apple sign-in. Check your connection and try again.',
+        errAuth: 'Apple sign-in failed or expired. Please try again.',
+        errNetwork: 'Couldn\'t reach iCloud. Check your connection and try again.',
+        errICloud: 'iCloud returned an error. Please try again later.',
+        errQuota: 'Your iCloud storage is full. Free up space and try again.',
+        errOther: 'Something went wrong with the Apple backup. Please try again.',
+    });
+
+    function stringsFor(provider) {
+        return provider === 'apple' ? SA : S;
+    }
+
     function t(s, vars) {
         if (!vars) return s;
         return s.replace(/\{(\w+)\}/g, (m, k) => (vars[k] != null ? String(vars[k]) : m));
     }
 
-    function errorText(e) {
+    function errorText(e, provider) {
         const code = e && e.code;
+        if (provider === 'apple') {
+            if (code === 'ckjs') return t(SA.errLoad);
+            if (code === 'auth' || code === 'account') return t(SA.errAuth);
+            if (code === 'network') return t(SA.errNetwork);
+            if (code === 'quota') return t(SA.errQuota);
+            if (code === 'icloud') return t(SA.errICloud);
+            return t(SA.errOther);
+        }
         if (code === 'gsi') return t(S.errGsi);
         if (code === 'popup') return t(S.errPopup);
         if (code === 'auth' || code === 'account') return t(S.errAuth);
@@ -425,9 +635,14 @@
         }
     }
 
+    function providerOf(ctx) {
+        return ctx && ctx.provider === 'apple' ? 'apple' : 'google';
+    }
+
     async function restoreFromBackups(ctx) {
         const { ui, limiter, accountId, backups, importKey } = ctx;
-        const salt = await backupSalt(CONTEXTS.google, accountId);
+        const S = stringsFor(providerOf(ctx));
+        const salt = await backupSalt(CONTEXTS[providerOf(ctx)], accountId);
         let error = '';
         for (;;) {
             const pin = await askPinChecked(ui, limiter, {
@@ -458,6 +673,7 @@
 
     async function createAndBackUp(ctx) {
         const { ui, drive, accountId, importKey, newSecretKey } = ctx;
+        const S = stringsFor(providerOf(ctx));
         const makePq = ctx.newPqCode || newPqCode;
         const pin = await ui.askPin({
             mode: 'create', title: t(S.createTitle), text: t(S.createText), warning: t(S.createWarning), okLabel: t(S.backUp),
@@ -466,7 +682,7 @@
         ui.busy(t(S.encrypting));
         const secret = newSecretKey();
         const pq = makePq();
-        const key = await deriveBackupKey(pin, await backupSalt(CONTEXTS.google, accountId));
+        const key = await deriveBackupKey(pin, await backupSalt(CONTEXTS[providerOf(ctx)], accountId));
         let payload;
         try { payload = encryptBundle(secret, pq, key); } finally { wipe(key); }
         try {
@@ -484,6 +700,7 @@
 
     async function continueWithGoogle(ctx) {
         const { ui, auth, drive } = ctx;
+        const S = stringsFor(providerOf(ctx));
         ui.busy(t(S.connecting));
         const accountId = await auth.accountId();
         ui.busy(t(S.checking));
@@ -494,6 +711,7 @@
 
     async function backUpKey(ctx) {
         const { ui, auth, drive, secretKey, pubkey } = ctx;
+        const S = stringsFor(providerOf(ctx));
         const pq = validPq(ctx.pq) ? ctx.pq : null;
         try {
             ui.busy(t(S.connecting));
@@ -503,7 +721,7 @@
             });
             if (pin == null || !validPin(pin)) return false;
             ui.busy(t(S.encrypting));
-            const key = await deriveBackupKey(pin, await backupSalt(CONTEXTS.google, accountId));
+            const key = await deriveBackupKey(pin, await backupSalt(CONTEXTS[providerOf(ctx)], accountId));
             try {
                 const backups = await loadBackups(drive);
                 const same = matchBackups(backups, key).filter((c) => {
@@ -530,6 +748,7 @@
 
     async function removeBackups(ctx) {
         const { ui, auth, drive, limiter, pubkey } = ctx;
+        const S = stringsFor(providerOf(ctx));
         ui.busy(t(S.connecting));
         const accountId = await auth.accountId();
         ui.busy(t(S.checking));
@@ -538,7 +757,7 @@
             await ui.notice({ title: t(S.removeTitle), text: t(S.removeEmpty) });
             return false;
         }
-        const salt = await backupSalt(CONTEXTS.google, accountId);
+        const salt = await backupSalt(CONTEXTS[providerOf(ctx)], accountId);
         let error = '';
         for (;;) {
             const pin = await askPinChecked(ui, limiter, {
@@ -576,6 +795,21 @@
         }
     }
 
+    function signedOutAfter(flow) {
+        return async function (ctx) {
+            const next = Object.assign({}, ctx, { provider: 'apple' });
+            try {
+                return await flow(next);
+            } finally {
+                try { if (ctx.auth && typeof ctx.auth.signOut === 'function') ctx.auth.signOut(); } catch (_) { }
+            }
+        };
+    }
+
+    const continueWithApple = signedOutAfter(continueWithGoogle);
+    const appleBackUpKey = signedOutAfter(backUpKey);
+    const appleRemoveBackups = signedOutAfter(removeBackups);
+
     function clientId() {
         try { return typeof GOOGLE_WEB_CLIENT_ID === 'string' ? GOOGLE_WEB_CLIENT_ID.trim() : ''; } catch (_) { return ''; }
     }
@@ -586,6 +820,19 @@
 
     function enabled() {
         return !!clientId() && !inNativeShell() && !!(window.crypto && crypto.subtle);
+    }
+
+    function appleConfig() {
+        const read = (f) => { try { const v = f(); return typeof v === 'string' ? v.trim() : ''; } catch (_) { return ''; } };
+        return {
+            containerIdentifier: read(() => APPLE_CLOUDKIT_CONTAINER),
+            apiToken: read(() => APPLE_CLOUDKIT_API_TOKEN),
+        };
+    }
+
+    function appleEnabled() {
+        const c = appleConfig();
+        return !!c.containerIdentifier && !!c.apiToken && !inNativeShell() && !!(window.crypto && crypto.subtle);
     }
 
     function hasLocalKey() {
@@ -718,6 +965,19 @@
                     setTimeout(() => { try { p1.focus(); } catch (_) { } }, 30);
                 });
             },
+            appleSignIn(opts) {
+                return new Promise((resolve, reject) => {
+                    settle(null);
+                    let done = false;
+                    const finish = (fn, v) => { if (done) return; done = true; pending = null; fn(v); };
+                    pending = (v) => finish(resolve, v);
+                    const mount = el('div', 'nm-kb-apple-signin');
+                    mount.id = opts.buttonId;
+                    render(opts.title, [el('p', 'form-hint nm-vault-text', opts.text), mount],
+                        [button(t(S.cancel), 'icon-btn', () => settle(null))]);
+                    Promise.resolve().then(opts.start).then((v) => finish(resolve, v), (e) => finish(reject, e));
+                });
+            },
             pick(candidates) {
                 return ask(() => {
                     const list = el('div', 'nm-kb-list');
@@ -793,22 +1053,24 @@
         }
     }
 
-    async function runWithUi(flow, extra) {
-        if (running || !enabled()) return false;
+    async function runWithUi(flow, extra, provider) {
+        const apple = provider === 'apple';
+        if (running || !(apple ? appleEnabled() : enabled())) return false;
         running = true;
-        const ui = createOverlayUi();
+        const strings = stringsFor(provider);
+        const ui = createOverlayUi(t(strings.errorTitle));
         let handoff = null;
         let result = false;
         try {
-            const auth = googleAuth();
+            const auth = apple ? createCloudKitAuth(Object.assign({ ui }, appleConfig())) : googleAuth();
             const ctx = Object.assign({
-                ui, auth, drive: createDrive(auth), limiter: createLimiter(),
+                ui, auth, drive: apple ? createCloudKitStore(auth) : createDrive(auth), limiter: createLimiter(),
                 importKey: async (hex, restored) => { handoff = { hex, restored }; },
             }, extra);
             result = await flow(ctx);
         } catch (e) {
             handoff = null;
-            if (!(e && e.code === 'cancelled')) await ui.notice({ title: t(S.errorTitle), text: errorText(e) });
+            if (!(e && e.code === 'cancelled')) await ui.notice({ title: t(strings.errorTitle), text: errorText(e, provider) });
         } finally {
             ui.close();
             running = false;
@@ -832,15 +1094,22 @@
         });
     }
 
-    function startBackUp() {
+    function startBackUp(provider) {
         if (!hasLocalKey()) return Promise.resolve(false);
         const n = window.nym;
-        return runWithUi(backUpKey, { secretKey: new Uint8Array(n.privkey), pubkey: n.pubkey, pq: currentPq() });
+        return runWithUi(provider === 'apple' ? appleBackUpKey : backUpKey,
+            { secretKey: new Uint8Array(n.privkey), pubkey: n.pubkey, pq: currentPq() }, provider);
     }
 
-    function startRemove() {
+    function startRemove(provider) {
         if (!hasLocalKey()) return Promise.resolve(false);
-        return runWithUi(removeBackups, { pubkey: window.nym.pubkey });
+        return runWithUi(provider === 'apple' ? appleRemoveBackups : removeBackups, { pubkey: window.nym.pubkey }, provider);
+    }
+
+    function startContinueWithApple() {
+        return runWithUi(continueWithApple, {
+            newSecretKey: () => window.NostrTools.generateSecretKey(),
+        }, 'apple');
     }
 
     function passkeyOn() {
@@ -850,11 +1119,22 @@
 
     function refreshGroup() {
         if (typeof document === 'undefined') return;
-        const any = hasLocalKey() && (enabled() || passkeyOn());
+        const any = hasLocalKey() && (enabled() || appleEnabled() || passkeyOn());
         const group = document.getElementById('keyBackupGroup');
         if (group) group.classList.toggle('nm-hidden', !any);
         const link = document.getElementById('keyBackupSettingsLink');
         if (link) link.classList.toggle('nm-hidden', !any);
+    }
+
+    function orderButtons(doc, first) {
+        const pairs = [['setupAppleBackup', 'setupGoogleBackup'], ['appleBackupSettings', 'googleBackupSettings']];
+        for (const [appleId, googleId] of pairs) {
+            const a = doc.getElementById(appleId);
+            const g = doc.getElementById(googleId);
+            if (!a || !g || !a.parentNode || a.parentNode !== g.parentNode) continue;
+            if (first) a.parentNode.insertBefore(a, g);
+            else g.parentNode.insertBefore(g, a);
+        }
     }
 
     function refresh() {
@@ -864,6 +1144,12 @@
         if (setup) setup.classList.toggle('nm-hidden', !on);
         const settings = document.getElementById('googleBackupSettings');
         if (settings) settings.classList.toggle('nm-hidden', !(on && hasLocalKey()));
+        const appleOn = appleEnabled();
+        const appleSetup = document.getElementById('setupAppleBackup');
+        if (appleSetup) appleSetup.classList.toggle('nm-hidden', !appleOn);
+        const appleSettings = document.getElementById('appleBackupSettings');
+        if (appleSettings) appleSettings.classList.toggle('nm-hidden', !(appleOn && hasLocalKey()));
+        try { orderButtons(document, appleFirst()); } catch (_) { }
         refreshGroup();
     }
 
@@ -879,8 +1165,11 @@
 
     const ACTIONS = (window.NYM_ACTIONS = window.NYM_ACTIONS || {});
     ACTIONS.continueWithGoogle = function () { startContinueWithGoogle(); };
-    ACTIONS.googleBackUpKey = function () { startBackUp(); };
-    ACTIONS.googleRemoveBackups = function () { startRemove(); };
+    ACTIONS.googleBackUpKey = function () { startBackUp('google'); };
+    ACTIONS.googleRemoveBackups = function () { startRemove('google'); };
+    ACTIONS.continueWithApple = function () { startContinueWithApple(); };
+    ACTIONS.appleBackUpKey = function () { startBackUp('apple'); };
+    ACTIONS.appleRemoveBackups = function () { startRemove('apple'); };
     ACTIONS.openKeyBackupDetails = function () { openBackupDetails(); };
 
     window.NymKeyBackup = {
@@ -890,6 +1179,8 @@
         encryptBundle, decryptBundle, decryptSecret,
         newFileName, createGoogleAuth, createDrive, loadBackups, matchBackups, createLimiter,
         continueWithGoogle, backUpKey, removeBackups, finishSignIn,
+        CLOUDKIT, newRecordName, appleFirst, orderButtons, createCloudKitAuth, createCloudKitStore,
+        continueWithApple, appleBackUpKey, appleRemoveBackups, appleEnabled, errorText, appleStrings: SA,
         enabled, hasLocalKey, refresh, strings: S,
         shared: {
             t, localize, shortNpub, createOverlayUi, inNativeShell, hasLocalKey, wipe,

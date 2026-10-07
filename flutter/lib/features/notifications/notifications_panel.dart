@@ -22,12 +22,21 @@ import '../i18n/i18n.dart';
 import 'notification_route_target.dart';
 import 'notification_routing.dart';
 import '../messages/format/message_content.dart';
+import '../../widgets/common/nym_focusable.dart';
 import '../messages/format/nym_format.dart' show NymFormat;
 import '../chat_lock/chat_lock.dart' show ChatLockStrings;
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/nym_icons.dart';
+import '../chat_lock/chat_lock_providers.dart';
+import '../layout/layout_model.dart';
+import '../settings/settings_screen.dart' show notificationSoundOptions;
+import '../settings/settings_widgets.dart' show FormSelect;
+import 'notifications_service.dart' show notificationsServiceProvider;
+import '../toasts/event_toast_prefs.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Opening doesn't clear the badge; rows are marked viewed once ≥60% visible, with unread state snapshotted before opening.
 Future<void> showNotificationsPanel(BuildContext context) {
-  // Snapshot before showDialog, ahead of the shell's on-open markAllViewed().
   final container = ProviderScope.containerOf(context);
   final all = container.read(notificationHistoryProvider).entries;
   // Filter at render time: drop entries older than 24h or from blocked senders, then sort newest first.
@@ -40,15 +49,15 @@ Future<void> showNotificationsPanel(BuildContext context) {
   // Frozen unread state per entry, as a public type.
   final viewedAtOpen = [for (final e in entries) e.viewed];
   final isLight = context.nym.isLight;
-  return showDialog<void>(
-    context: context,
-    barrierColor: isLight
-        ? const Color(0x73000000)
-        : const Color(0xBF000000),
-    builder: (_) => NotificationsPanel(
+  return showNymSheet<void>(
+    context,
+    (_) => NotificationsPanel(
       entries: entries,
       viewedAtOpen: viewedAtOpen,
     ),
+    barrierColor: isLight
+        ? const Color(0x73000000)
+        : const Color(0xBF000000),
   );
 }
 
@@ -75,7 +84,8 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
       _NotifRow(widget.entries[i], widget.viewedAtOpen[i]),
   ];
 
-  /// Local, so the modal reflects "Mark all as read" immediately.
+  bool _prefsOpen = false;
+
   late bool _hasUnread = _rows.any((r) => !r.viewed);
 
   /// Scroll viewport that ≥60% visibility is measured against.
@@ -160,107 +170,228 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
     Navigator.of(context).maybePop();
   }
 
+  String _groupTitle(String key, NotificationEntry entry) {
+    final lock = ref.read(chatLockProvider);
+    if (lock.notificationIsLocked(
+        entry.type, entry.route ?? '', entry.senderPubkey ?? '')) {
+      return lock.redact('', '', true).title;
+    }
+    final i = key.indexOf(':');
+    final kind = i > 0 ? key.substring(0, i) : key;
+    final id = i > 0 ? key.substring(i + 1) : '';
+    final app = ref.read(appStateProvider);
+    switch (kind) {
+      case 'channel':
+        return '#$id';
+      case 'group':
+        for (final g in app.groups) {
+          if (g.id == id && g.name.isNotEmpty) return g.name;
+        }
+        return tr('Group');
+      case 'pm':
+        final nym = stripPubkeySuffix(app.users[id]?.nym ?? 'nym');
+        return '$nym#${getPubkeySuffix(id)}';
+    }
+    return tr('Other');
+  }
+
+  List<Widget> _groupedRows(NymColors c) {
+    final keys = [
+      for (final r in _rows)
+        notifGroupKey(
+            r.entry.type, r.entry.route ?? '', r.entry.senderPubkey ?? ''),
+    ];
+    final out = <Widget>[];
+    for (final g in groupNotifications(keys)) {
+      final unread = g.items.where((i) => !_rows[i].viewed).length;
+      out.add(Padding(
+        key: ValueKey('notifGroup-${g.key}'),
+        padding: EdgeInsets.only(
+            top: out.isEmpty ? 0 : NymSpace.s3, bottom: NymSpace.s1),
+        child: Row(
+          children: [
+            Flexible(
+              child: Text(
+                _groupTitle(g.key, _rows[g.items.first].entry),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: c.textDim,
+                  fontSize: NymType.sm,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            if (unread > 0) ...[
+              const SizedBox(width: NymSpace.s2),
+              Container(
+                key: ValueKey('notifGroupUnread-${g.key}'),
+                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                padding: const EdgeInsets.symmetric(horizontal: 5),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: c.primary,
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Text('$unread',
+                    style: TextStyle(color: c.bg, fontSize: NymType.xs)),
+              ),
+            ],
+          ],
+        ),
+      ));
+      for (final i in g.items) {
+        out.add(_NotificationRow(
+          key: _rows[i].key,
+          entry: _rows[i].entry,
+          viewed: _rows[i].viewed,
+          isLast: i == g.items.last,
+          onTap: () => _openEntry(_rows[i].entry),
+        ));
+      }
+    }
+    return out;
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
 
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: MediaQuery.of(context).size.width * 0.9,
-          constraints: const BoxConstraints(maxWidth: 500, maxHeight: 640),
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            borderRadius: NymRadius.rxl,
-            border: Border.all(color: c.glassBorder),
-            boxShadow: c.isLight
-                ? const [
-                    BoxShadow(
-                      color: Color(0x1F000000),
-                      blurRadius: 40,
-                      offset: Offset(0, 8),
-                    ),
-                  ]
-                : [
-                    const BoxShadow(
-                      color: Color(0x80000000),
-                      blurRadius: 32,
-                      offset: Offset(0, 8),
-                    ),
-                    BoxShadow(
-                        color: c.primary.withValues(alpha: 0.1),
-                        blurRadius: 20),
-                    BoxShadow(
-                        color: Colors.white.withValues(alpha: 0.05),
-                        spreadRadius: 1),
-                  ],
-          ),
-          child: Stack(
-            children: [
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // This modal's header has no bottom rule; the toggle block below carries it.
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(32, 32, 32, 10),
-                    child: Text(
-                      tr('NOTIFICATIONS'),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                  // Enable, group mentions-only and friends-only checkboxes.
-                  const _NotifToggles(),
-                  if (_hasUnread)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 8, 24, 0),
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: _MarkReadBtn(onTap: _markAllRead),
-                      ),
-                    ),
-                  Flexible(
-                    child: _rows.isEmpty
-                        ? Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 40, 20, 40),
-                            child: Text(
-                              tr('No notifications in the last 24 hours'),
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: c.textDim, fontSize: 14),
-                            ),
-                          )
-                        : ListView.builder(
-                            key: _bodyKey,
-                            controller: _scroll,
-                            shrinkWrap: true,
-                            padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
-                            itemCount: _rows.length,
-                            itemBuilder: (ctx, i) => _NotificationRow(
-                              // Geometry handle for the visibility pass.
-                              key: _rows[i].key,
-                              entry: _rows[i].entry,
-                              viewed: _rows[i].viewed,
-                              isLast: i == _rows.length - 1,
-                              onTap: () => _openEntry(_rows[i].entry),
-                            ),
-                          ),
-                  ),
-                ],
-              ),
-              Positioned(
-                top: 14,
-                right: 14,
-                child: _CloseChip(
-                  onTap: () => Navigator.of(context).maybePop(),
+    final body = Stack(
+      children: [
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(32, 32, 96, 10),
+              child: Text(
+                tr('NOTIFICATIONS'),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
                 ),
               ),
+            ),
+            if (_hasUnread)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 0, 24, NymSpace.s2),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [_MarkReadBtn(onTap: _markAllRead)],
+                ),
+              ),
+            Flexible(
+              child: CustomScrollView(
+                key: _bodyKey,
+                controller: _scroll,
+                shrinkWrap: true,
+                slivers: [
+                  if (_prefsOpen)
+                    const SliverToBoxAdapter(child: _NotifToggles()),
+                  if (_rows.isEmpty)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 40, 20, 40),
+                        child: Text(
+                          tr('No notifications in the last 24 hours'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: c.textDim, fontSize: 14),
+                        ),
+                      ),
+                    )
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+                      sliver: SliverList(
+                        delegate: SliverChildListDelegate(_groupedRows(c)),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        Positioned(
+          top: 12,
+          right: 14,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              NymTooltip(
+                message: tr('Notification settings'),
+                child: Semantics(
+                  button: true,
+                  expanded: _prefsOpen,
+                  label: tr('Notification settings'),
+                  child: InkWell(
+                    key: const ValueKey('notifPrefsBtn'),
+                    borderRadius: NymRadius.rxs,
+                    onTap: () => setState(() => _prefsOpen = !_prefsOpen),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: _prefsOpen
+                            ? c.primaryA(0.1)
+                            : Colors.transparent,
+                        borderRadius: NymRadius.rxs,
+                      ),
+                      child: NymSvgIcon(NymIcons.settings,
+                          size: 18,
+                          color: _prefsOpen ? c.primary : c.textDim),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              _CloseChip(
+                onTap: () => Navigator.of(context).maybePop(),
+              ),
             ],
+          ),
+        ),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      body,
+      (body) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: MediaQuery.of(context).size.width * 0.9,
+            constraints: const BoxConstraints(maxWidth: 500, maxHeight: 640),
+            decoration: BoxDecoration(
+              color: c.bgSecondary,
+              borderRadius: NymRadius.rxl,
+              border: Border.all(color: c.glassBorder),
+              boxShadow: c.isLight
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x1F000000),
+                        blurRadius: 40,
+                        offset: Offset(0, 8),
+                      ),
+                    ]
+                  : [
+                      const BoxShadow(
+                        color: Color(0x80000000),
+                        blurRadius: 32,
+                        offset: Offset(0, 8),
+                      ),
+                      BoxShadow(
+                          color: c.primary.withValues(alpha: 0.1),
+                          blurRadius: 20),
+                      BoxShadow(
+                          color: Colors.white.withValues(alpha: 0.05),
+                          spreadRadius: 1),
+                    ],
+            ),
+            child: body,
           ),
         ),
       ),
@@ -386,6 +517,33 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
               kv.setString(StorageKeys.notifyFriendsOnly, '$v');
             },
           ),
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Row(
+              children: [
+                Text(tr('Notification Sound'),
+                    style: TextStyle(color: c.textDim, fontSize: 13)),
+                const SizedBox(width: 12),
+                Flexible(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 240),
+                    child: FormSelect<String>(
+                      key: const Key('notifSoundSelect'),
+                      value: ref.watch(settingsProvider.select((s) => s.sound)),
+                      items: notificationSoundOptions(),
+                      onChanged: (v) {
+                        ref.read(settingsProvider.notifier).setSound(v);
+                        final svc = ref.read(notificationsServiceProvider);
+                        svc.resetSoundDedupe();
+                        unawaited(svc.playSound(v).catchError((_) {}));
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const EventToastPrefsSection(),
         ],
       ),
     );
@@ -523,12 +681,13 @@ class _NotificationRow extends ConsumerStatefulWidget {
   /// Prefer the entry's carried context label, else derive one from its type; call bodies need none.
   String? _contextLabel() {
     final carried = entry.contextLabel;
+    if (carried == 'PM thread') return tr('Private message thread');
     if (carried != null && carried.isNotEmpty) return carried;
     switch (entry.type) {
       case 'call':
         return entry.body.startsWith('Missed') ? null : tr('Call');
       case 'pm':
-        return tr('PM');
+        return tr('Private message');
       case 'reaction':
         return tr('Reaction');
       case 'mention':
@@ -739,31 +898,34 @@ class _CloseChipState extends State<_CloseChip> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hover
-                ? c.danger.withValues(alpha: 0.12)
-                : Colors.white.withValues(alpha: 0.05),
-            border: Border.all(
-              color: _hover ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+    return NymFocusable(
+      onActivate: widget.onTap,
+      tooltip: tr('Close'),
+      excludeChildSemantics: true,
+      radius: const BorderRadius.all(Radius.circular(16)),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hover
+                  ? c.danger.withValues(alpha: 0.12)
+                  : Colors.white.withValues(alpha: 0.05),
+              border: Border.all(
+                color: _hover ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+              ),
             ),
-          ),
-          child: Text(
-            '✕',
-            style: TextStyle(
+            child: Icon(
+              Icons.close,
+              size: 16,
               color: _hover ? c.danger : c.textDim,
-              fontSize: 16,
-              height: 1,
             ),
           ),
         ),

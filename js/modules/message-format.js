@@ -641,7 +641,7 @@
                 const link = parseCallLinkToken(token);
                 if (!link) return match;
                 const name = escapeHtml(String(link.n || '').replace(/[\x00-\x1F\x7F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40) || 'call');
-                const callSvg = `<svg class="inline-group-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14l4-4"/><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"/><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"/></svg>`;
+                const callSvg = G.NymCallLinkIcon.svg({ cls: 'inline-group-ico' });
                 return `<span class="channel-link call-link-chip" data-action="gtJoinCallLink" data-call-link="${escapeHtml(token)}">${callSvg}${link.k === 'video' ? 'Join video call' : 'Join voice call'}: ${name}</span>`;
             }
         );

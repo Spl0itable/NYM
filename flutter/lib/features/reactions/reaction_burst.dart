@@ -12,6 +12,7 @@ class ReactionBurst {
   static const _sparkCount = 10;
 
   static void play(BuildContext context, Offset globalCenter, String emoji) {
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return;
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
     late OverlayEntry entry;

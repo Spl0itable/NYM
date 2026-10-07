@@ -39,9 +39,8 @@ class _BootGateState extends ConsumerState<BootGate> {
   void initState() {
     super.initState();
     _needsSetup = _computeNeedsSetup();
-    final kv = ref.read(keyValueStoreProvider);
     _languageChosen =
-        kv.getBool(StorageKeys.uiLanguageChosen, defaultValue: false);
+        !needsFirstRunLanguage(ref.read(keyValueStoreProvider));
   }
 
   /// Needs setup when there is no saved login method and auto-ephemeral isn't opted into.

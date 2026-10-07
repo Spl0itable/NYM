@@ -23,6 +23,14 @@
 	<array>
 		<string>Default</string>
 	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.nym.bar</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
 		<string>applinks:web.nymchat.app</string>

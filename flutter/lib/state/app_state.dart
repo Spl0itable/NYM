@@ -3,12 +3,15 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show ValueNotifier;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/event_kinds.dart';
 import '../core/constants/history_window.dart';
 import '../core/utils/nym_utils.dart';
+import '../features/sync/sync_merge.dart'
+    show SyncMergeCaps, tsMapMerge, tsMapNorm;
 import '../features/channels/channel_manager.dart';
 import '../features/chat_tools/chat_tools.dart'
     show ChatToolsLimits, EditCandidate, editVerdict;
@@ -27,6 +30,7 @@ import '../features/groups/group_logic.dart';
 import '../features/i18n/i18n.dart';
 import '../features/messages/server_quiet.dart';
 import '../features/messages/spam_filter.dart';
+import '../features/notifications/notify_view.dart';
 import '../features/nymbot/bot_runs.dart' show anchorBotReply;
 import '../features/messages/trust_graph.dart';
 import '../features/pms/pm_logic.dart';
@@ -212,6 +216,7 @@ class AppState {
     this.proxyMode = true,
     this.displayRev = 0,
     Map<String, int>? typing,
+    Map<String, String>? typingActivity,
     Map<String, Poll>? polls,
     Map<String, MessageZaps>? zaps,
     Set<String>? pinnedChannels,
@@ -226,7 +231,9 @@ class AppState {
     Set<String>? nymchatPubkeys,
     Set<String>? nymchatVouches,
     Set<String>? trustedPubkeys,
+    Set<String>? archiveUnavailable,
   })  : typing = typing ?? <String, int>{},
+        typingActivity = typingActivity ?? <String, String>{},
         polls = polls ?? <String, Poll>{},
         zaps = zaps ?? <String, MessageZaps>{},
         pinnedChannels = pinnedChannels ?? <String>{},
@@ -240,7 +247,8 @@ class AppState {
         blockedKeywords = blockedKeywords ?? <String>{},
         nymchatPubkeys = nymchatPubkeys ?? <String>{},
         nymchatVouches = nymchatVouches ?? <String>{},
-        trustedPubkeys = trustedPubkeys ?? <String>{};
+        trustedPubkeys = trustedPubkeys ?? <String>{},
+        archiveUnavailable = archiveUnavailable ?? <String>{};
 
   final String selfPubkey;
   final String selfNym;
@@ -270,6 +278,8 @@ class AppState {
 
   /// `<storageKey>|<pubkey>` → typing-stop expiry (ms since epoch).
   final Map<String, int> typing;
+
+  final Map<String, String> typingActivity;
 
   /// pollId → Poll (kind 30078 `nym-poll`); channel-only.
   final Map<String, Poll> polls;
@@ -311,6 +321,13 @@ class AppState {
 
   /// Pubkeys trusted by sending at least two messages this session.
   final Set<String> trustedPubkeys;
+
+  final Set<String> archiveUnavailable;
+
+  bool get channelHistoryMissing {
+    if (proxyMode || view.kind != ViewKind.channel) return false;
+    return archiveUnavailable.contains(view.id.toLowerCase());
+  }
 
   final ChatView view;
 
@@ -426,6 +443,7 @@ class AppState {
         proxyMode: proxyMode ?? this.proxyMode,
         displayRev: displayRev ?? this.displayRev,
         typing: typing,
+        typingActivity: typingActivity,
         polls: polls,
         zaps: zaps,
         pinnedChannels: pinnedChannels,
@@ -440,6 +458,7 @@ class AppState {
         nymchatPubkeys: nymchatPubkeys,
         nymchatVouches: nymchatVouches,
         trustedPubkeys: trustedPubkeys,
+        archiveUnavailable: archiveUnavailable,
       );
 
   /// Test/demo only; production uses [AppState.empty] / [AppState.live].
@@ -1198,6 +1217,18 @@ class AppStateNotifier extends StateNotifier<AppState> {
   void setProxyMode(bool proxy) {
     if (proxy == state.proxyMode) return;
     state = state.copyWith(proxyMode: proxy);
+  }
+
+  void setChannelArchiveAvailable(Iterable<String> names, bool ok) {
+    var changed = false;
+    for (final raw in names) {
+      final name = raw.toLowerCase();
+      if (name.isEmpty) continue;
+      changed |= ok
+          ? state.archiveUnavailable.remove(name)
+          : state.archiveUnavailable.add(name);
+    }
+    if (changed) state = state.copyWith();
   }
 
   // Web of trust ("nym-vouch").
@@ -3009,6 +3040,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     required bool typing,
     int? expiresAtMs,
     String? nym,
+    String? activity,
   }) {
     // Seed an unknown typer's nym from the `n` tag so the row isn't "Someone".
     if (typing &&
@@ -3022,8 +3054,14 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (typing) {
       state.typing[k] =
           expiresAtMs ?? DateTime.now().millisecondsSinceEpoch + 5000;
+      if (activity != null && activity.isNotEmpty) {
+        state.typingActivity[k] = activity;
+      } else {
+        state.typingActivity.remove(k);
+      }
     } else {
       state.typing.remove(k);
+      state.typingActivity.remove(k);
     }
     // Ambient: the typing indicator is its own widget.
     runAmbient(_scheduleEmit);
@@ -3193,6 +3231,8 @@ class AppStateNotifier extends StateNotifier<AppState> {
 
   int get viewSwitchCount => _viewSwitchCount;
 
+  final ValueNotifier<int> viewSwitches = ValueNotifier<int>(0);
+
   ChatView get currentView => state.view;
 
   AppState get currentState => state;
@@ -3214,6 +3254,7 @@ class AppStateNotifier extends StateNotifier<AppState> {
     if (viewGateFn != null && !viewGateFn(state.view, view)) return;
     _forceNewColumnHint = forceNewColumn;
     _viewSwitchCount++;
+    viewSwitches.value = _viewSwitchCount;
     final entering = onViewEntering;
     if (entering != null) {
       try {
@@ -4675,9 +4716,44 @@ bool threadReplyHidden({
     return false;
   }
   if (threadRootMessage(state, storageKey, threadRoot) == null) return false;
-  return openThread == null ||
-      openThread.rootId != threadRoot ||
-      openThread.view.storageKey != storageKey;
+  return !NotifyView.threadOpen(
+    NotifyViewState(
+      thread: openThread == null
+          ? null
+          : NotifyThread(
+              key: openThread.view.storageKey, root: openThread.rootId),
+    ),
+    NotifyEvent(key: storageKey, root: threadRoot),
+  );
+}
+
+bool threadJoinedByMe({
+  required AppState state,
+  required String storageKey,
+  required String? threadRoot,
+  String? excludeId,
+}) {
+  if (!appThreadsEnabled) return false;
+  if (threadRoot == null || threadRoot.isEmpty || storageKey.isEmpty) {
+    return false;
+  }
+  final list = state.messages[storageKey] ?? const <Message>[];
+  for (final m in list) {
+    if (m.threadRoot != threadRoot || !m.isOwn) continue;
+    if (excludeId != null && m.id == excludeId) continue;
+    return true;
+  }
+  return false;
+}
+
+String notifyRootFor(AppState state, String storageKey, String? threadRoot) {
+  if (!appThreadsEnabled) return '';
+  if (threadRoot == null || threadRoot.isEmpty || storageKey.isEmpty) {
+    return '';
+  }
+  return threadRootMessage(state, storageKey, threadRoot) == null
+      ? ''
+      : threadRoot;
 }
 
 /// True when the thread's root is the user's own message, so replies notify like a mention.
@@ -5270,8 +5346,200 @@ class NotificationHistoryNotifier
     }
   }
 
+  NotifyViewState Function()? currentView;
+
+  Map<String, int> _threadLastRead = <String, int>{};
+  bool _threadLastReadLoaded = false;
+  static const String _threadLastReadStoreKey = 'nym_thread_last_read';
+
+  Map<String, int> get _threadReads {
+    final prefs = _prefs;
+    if (!_threadLastReadLoaded && prefs != null) {
+      _threadLastReadLoaded = true;
+      try {
+        final raw = prefs.getString(_threadLastReadStoreKey);
+        if (raw != null && raw.isNotEmpty) {
+          final decoded = jsonDecode(raw);
+          final cutoff =
+              DateTime.now().millisecondsSinceEpoch ~/ 1000 - 48 * 60 * 60;
+          if (decoded is Map) {
+            decoded.forEach((k, v) {
+              if (k is String && v is num && v.toInt() > cutoff) {
+                _threadLastRead.putIfAbsent(k, () => v.toInt());
+              }
+            });
+          }
+        }
+      } catch (_) {}
+    }
+    return _threadLastRead;
+  }
+
+  void Function()? onThreadReadChanged;
+
+  Map<String, int> threadReadsForSync() =>
+      tsMapNorm(_threadReads, SyncMergeCaps.threadLastRead);
+
+  void applyRemoteThreadReads(Object? raw) {
+    final cur = threadReadsForSync();
+    final cutoff = DateTime.now().millisecondsSinceEpoch ~/ 1000 - 48 * 60 * 60;
+    final merged = tsMapMerge(cur, raw, SyncMergeCaps.threadLastRead);
+    final next = <String, int>{
+      for (final e in merged.entries)
+        if (e.value > cutoff || cur[e.key] == e.value) e.key: e.value,
+    };
+    if (jsonEncode(tsMapNorm(next)) == jsonEncode(cur)) return;
+    _threadLastRead = next;
+    try {
+      _prefs?.setString(_threadLastReadStoreKey, jsonEncode(_threadLastRead));
+    } catch (_) {}
+    var changed = false;
+    var seenGrew = false;
+    for (final e in state.entries) {
+      if (e.viewed) continue;
+      final ev = _entryEvent(e);
+      if (ev.key.isEmpty || ev.root.isEmpty) continue;
+      final t = next['${ev.key}|${ev.root}'];
+      if (t == null || e.ts ~/ 1000 > t) continue;
+      e.viewed = true;
+      changed = true;
+      if (_rememberSeen(e)) seenGrew = true;
+    }
+    if (!changed) return;
+    final entries = List.of(state.entries);
+    state = state.copyWith(entries: entries, unread: _countUnread(entries));
+    _persist();
+    if (seenGrew) _persistSeenKeys();
+  }
+
+  bool _setThreadRead(String key, String root, int tsSec) {
+    if (key.isEmpty || root.isEmpty) return false;
+    final reads = _threadReads;
+    final k = '$key|$root';
+    if ((reads[k] ?? 0) >= tsSec) return false;
+    reads[k] = tsSec;
+    if (reads.length > 500) {
+      final newest = reads.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      _threadLastRead = {for (final e in newest.take(500)) e.key: e.value};
+    }
+    try {
+      _prefs?.setString(_threadLastReadStoreKey, jsonEncode(_threadLastRead));
+    } catch (_) {}
+    onThreadReadChanged?.call();
+    return true;
+  }
+
+  String _entryKey(NotificationEntry n) =>
+      NotifyView.storageKeyFor(n.type, n.route ?? '');
+
+  NotifyEvent _entryEvent(NotificationEntry n) {
+    final key = _entryKey(n);
+    var root = '';
+    final ref = _ref;
+    if (ref != null) {
+      try {
+        root = notifyRootFor(ref.read(appStateProvider), key, n.threadRoot);
+      } catch (_) {
+        root = '';
+      }
+    } else if (appThreadsEnabled) {
+      root = n.threadRoot ?? '';
+    }
+    return NotifyEvent(key: key, root: root);
+  }
+
+  NotifyViewState _view() {
+    final f = currentView;
+    if (f == null) return const NotifyViewState();
+    try {
+      return f();
+    } catch (_) {
+      return const NotifyViewState();
+    }
+  }
+
+  Set<String> unreadThreadKeys() {
+    final lastRead = _channelLastReadSnapshot();
+    final cutoff = DateTime.now().millisecondsSinceEpoch - _maxAgeMs;
+    final out = <String>{};
+    for (final e in state.entries) {
+      final root = e.threadRoot;
+      if (root == null || root.isEmpty || e.viewed) continue;
+      if (e.ts <= cutoff || e.receivedAt <= _lastReadTimeMs) continue;
+      if (_blocked.contains(e.senderPubkey)) continue;
+      if (_alreadySeenByWatermark(e, lastRead)) continue;
+      final key = _entryKey(e);
+      if (key.isNotEmpty) out.add('$key|$root');
+    }
+    return out;
+  }
+
+  void markThreadSeen(String storageKey, String root) {
+    if (storageKey.isEmpty || root.isEmpty) return;
+    if (_hydrating) {
+      _pendingRecords.add(() => markThreadSeen(storageKey, root));
+      return;
+    }
+    _setThreadRead(
+        storageKey, root, DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    var changed = false;
+    var seenGrew = false;
+    for (final e in state.entries) {
+      if (e.viewed || e.threadRoot != root) continue;
+      if (_entryKey(e) != storageKey) continue;
+      e.viewed = true;
+      changed = true;
+      if (_rememberSeen(e)) seenGrew = true;
+    }
+    if (!changed) return;
+    final entries = List.of(state.entries);
+    state = state.copyWith(entries: entries, unread: _countUnread(entries));
+    _persist();
+    if (seenGrew) {
+      _persistSeenKeys();
+      onSeenChanged?.call();
+    }
+  }
+
+  bool landsViewed({
+    required String type,
+    required String title,
+    required String body,
+    String? route,
+    int? ts,
+    String? eventId,
+    String? senderPubkey,
+    String? threadRoot,
+  }) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final raw = ts ?? now;
+    final probe = NotificationEntry(
+      type: type,
+      title: title,
+      body: body,
+      ts: raw > now ? now : raw,
+      receivedAt: now,
+      route: route,
+      eventId: eventId,
+      senderPubkey: senderPubkey,
+      threadRoot: threadRoot,
+    );
+    return _isSeen(probe) ||
+        probe.receivedAt <= _lastReadTimeMs ||
+        _seenNow(probe) ||
+        _alreadySeenByWatermark(probe, _channelLastReadSnapshot());
+  }
+
+  bool _seenNow(NotificationEntry e) => NotifyView.sees(_view(), _entryEvent(e));
+
   /// True when the source conversation's read watermark is at or after this notification.
   bool _alreadySeenByWatermark(NotificationEntry n, Map<String, int> lastRead) {
+    final ev = _entryEvent(n);
+    if (ev.key.isNotEmpty && ev.root.isNotEmpty) {
+      final t = _threadReads['${ev.key}|${ev.root}'] ?? 0;
+      return t > 0 && n.ts ~/ 1000 <= t;
+    }
     final route = n.route;
     if (lastRead.isEmpty || route == null || route.isEmpty || n.ts <= 0) {
       return false;
@@ -5375,11 +5643,21 @@ class NotificationHistoryNotifier
       threadRoot: threadRoot,
     );
     // Land pre-viewed when seen on another device or under a read watermark; remember newly viewed keys.
+    final seenNow = _seenNow(entry);
     if (_isSeen(entry) ||
+        seenNow ||
         entry.receivedAt <= _lastReadTimeMs ||
         _alreadySeenByWatermark(entry, _channelLastReadSnapshot())) {
       entry.viewed = true;
       if (_rememberSeen(entry)) _persistSeenKeys();
+    }
+    if (seenNow) {
+      final ev = _entryEvent(entry);
+      if (ev.root.isNotEmpty) {
+        final sec = stamp ~/ 1000;
+        final nowSec = now ~/ 1000;
+        _setThreadRead(ev.key, ev.root, sec > nowSec ? sec : nowSec);
+      }
     }
     // Insert in newest-first order; the cap and sync read the list positionally.
     final kept = [
@@ -5403,10 +5681,23 @@ class NotificationHistoryNotifier
     var changed = false;
     var seenGrew = false;
     final cutoffMs = tsSec != null ? tsSec * 1000 : null;
+    final view = _view();
+    final open = view.thread;
+    if (view.focused &&
+        open != null &&
+        (open.key == route ||
+            NotifyView.storageKeyFor('channel', route) == open.key ||
+            NotifyView.storageKeyFor('pm', route) == open.key ||
+            NotifyView.storageKeyFor('group', route) == open.key)) {
+      _setThreadRead(open.key, open.root,
+          tsSec ?? DateTime.now().millisecondsSinceEpoch ~/ 1000);
+    }
     for (final e in state.entries) {
       if (e.viewed) continue;
       if (e.route != route) continue;
       if (cutoffMs != null && e.ts > cutoffMs) continue;
+      final ev = _entryEvent(e);
+      if (ev.root.isNotEmpty && !NotifyView.sees(view, ev)) continue;
       e.viewed = true;
       changed = true;
       if (_rememberSeen(e)) seenGrew = true;
@@ -5747,6 +6038,11 @@ final notificationHistoryProvider = StateNotifierProvider<
     NotificationHistoryNotifier, NotificationHistoryState>(
   (ref) => NotificationHistoryNotifier(ref),
 );
+
+final threadNewRepliesProvider = Provider<Set<String>>((ref) {
+  ref.watch(notificationHistoryProvider);
+  return ref.read(notificationHistoryProvider.notifier).unreadThreadKeys();
+});
 
 // Live custom emoji (NIP-30), persisted under the PWA's cache keys.
 

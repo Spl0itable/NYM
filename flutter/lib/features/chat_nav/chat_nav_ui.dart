@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../../core/theme/nym_colors.dart';
@@ -14,19 +15,18 @@ import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
 import '../../widgets/sidebar/sidebar_row_gestures.dart';
 import '../i18n/i18n.dart';
+import '../day_separators/day_separator.dart';
 import 'chat_nav.dart';
 import 'chat_nav_providers.dart';
 import 'chat_nav_service.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 class ChatNavIcons {
   const ChatNavIcons._();
 
   static const String _open =
       '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">';
-  static const String pin =
-      '$_open<path d="M6 2h4l-.8 4 2.8 3H4l2.8-3z"/><line x1="8" y1="9" x2="8" y2="14"/></svg>';
-  static const String unpin =
-      '$_open<path d="M6 2h4l-.8 4 2.8 3H4l2.8-3z"/><line x1="8" y1="9" x2="8" y2="14"/><line x1="2.5" y1="2.5" x2="13.5" y2="13.5"/></svg>';
   static const String up = '$_open<polyline points="4 10 8 6 12 10"/></svg>';
   static const String down = '$_open<polyline points="4 6 8 10 12 6"/></svg>';
   static const String clock =
@@ -35,22 +35,37 @@ class ChatNavIcons {
       '$_open<line x1="8" y1="13" x2="8" y2="3"/><polyline points="4 7 8 3 12 7"/></svg>';
   static const String arrowDown =
       '$_open<line x1="8" y1="3" x2="8" y2="13"/><polyline points="4 9 8 13 12 9"/></svg>';
+  static const String _pillArrow =
+      '<svg viewBox="3.25 2.25 9.5 11.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">';
+  static const String pillArrowUp =
+      '$_pillArrow<line x1="8" y1="13" x2="8" y2="3"/><polyline points="4 7 8 3 12 7"/></svg>';
+  static const String pillArrowDown =
+      '$_pillArrow<line x1="8" y1="3" x2="8" y2="13"/><polyline points="4 9 8 13 12 9"/></svg>';
+  static const String pillAt =
+      '<svg viewBox="0.625 0.625 22.75 22.75" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></svg>';
+  static const double pillGap = 5;
+  static const double pillPad = 12;
   static const String anon =
       '$_open<circle cx="8" cy="6" r="3"/><path d="M2.5 14c.8-2.6 2.9-4 5.5-4s4.7 1.4 5.5 4"/><line x1="2.5" y1="2.5" x2="13.5" y2="13.5"/></svg>';
 }
 
 class ChatNavDivider extends StatelessWidget {
-  const ChatNavDivider({super.key});
+  const ChatNavDivider({super.key, this.cover});
+
+  final DayFloatCover? cover;
+
+  static const double pad = 8;
 
   @override
   Widget build(BuildContext context) {
+    cover?.track(context);
     final c = context.nym;
     final line = Expanded(
       child: Container(height: 1, color: c.danger.withValues(alpha: 0.6)),
     );
     return Padding(
       key: const ValueKey('chat-nav-divider'),
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(vertical: pad),
       child: Semantics(
         container: true,
         label: tr(ChatNavStrings.newMessages),
@@ -457,6 +472,44 @@ class ChatNavListBinding with WidgetsBindingObserver {
   }
 }
 
+class ChatFloatInset extends ConsumerStatefulWidget {
+  const ChatFloatInset({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  ConsumerState<ChatFloatInset> createState() => _ChatFloatInsetState();
+}
+
+class _ChatFloatInsetState extends ConsumerState<ChatFloatInset> {
+  double _lift = 0;
+  bool _queued = false;
+
+  void _queue() {
+    if (_queued) return;
+    _queued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _queued = false;
+      if (!mounted) return;
+      final box = context.findRenderObject();
+      if (box is! RenderBox || !box.hasSize || !box.attached) return;
+      final bottom = box.localToGlobal(Offset(0, box.size.height)).dy;
+      final next = floatLiftOver(ref.read(composerHintTopProvider), bottom);
+      if ((next - _lift).abs() > 0.5) setState(() => _lift = next);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.watch(composerHintTopProvider);
+    _queue();
+    return Padding(
+      padding: EdgeInsets.only(bottom: ChatFabs.floatBottom + _lift),
+      child: widget.child,
+    );
+  }
+}
+
 class ChatNavFabs extends ConsumerWidget {
   const ChatNavFabs({
     super.key,
@@ -530,7 +583,7 @@ class _JumpPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Tooltip(
+    return NymTooltip(
       message: tr(ChatNavStrings.jumpFirst),
       child: Semantics(
         button: true,
@@ -545,17 +598,19 @@ class _JumpPill extends StatelessWidget {
             onTap: onTap,
             child: Container(
               height: 32,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: ChatNavIcons.pillPad),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  NymSvgIcon(
-                    down ? ChatNavIcons.arrowDown : ChatNavIcons.arrowUp,
+                  SvgPicture.string(
+                    down ? ChatNavIcons.pillArrowDown : ChatNavIcons.pillArrowUp,
                     key: ValueKey(down ? 'chat-nav-jump-down' : 'chat-nav-jump-up'),
-                    size: 14,
-                    color: c.primary,
+                    width: 8.26,
+                    height: 10,
+                    theme: SvgTheme(currentColor: c.primary),
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: ChatNavIcons.pillGap),
                   Flexible(
                     child: Text(
                       label,
@@ -588,7 +643,7 @@ class _MentionFab extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final label = '${tr(ChatNavStrings.mentions)} ($count)';
-    return Tooltip(
+    return NymTooltip(
       message: tr(ChatNavStrings.mentions),
       child: Semantics(
         button: true,
@@ -603,20 +658,19 @@ class _MentionFab extends StatelessWidget {
             onTap: onTap,
             child: Container(
               height: 32,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: ChatNavIcons.pillPad),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    '@',
-                    style: TextStyle(
-                      color: c.primary,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      height: 1,
-                    ),
+                  SvgPicture.string(
+                    ChatNavIcons.pillAt,
+                    key: const ValueKey('chat-nav-mention-icon'),
+                    width: 10,
+                    height: 10,
+                    theme: SvgTheme(currentColor: c.primary),
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: ChatNavIcons.pillGap),
                   Text(
                     '$count',
                     key: const ValueKey('chat-nav-mention-count'),
@@ -658,23 +712,23 @@ class ChatNavRowBadges extends ConsumerWidget {
       children: [
         if (pinned)
           Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Tooltip(
-              message: tr(ChatNavStrings.pinned),
-              child: NymSvgIcon(ChatNavIcons.pin,
+            padding: const EdgeInsets.only(left: 5),
+            child: NymTooltip(
+              message: tr(ChatNavStrings.favorited),
+              child: NymSvgIcon(NymIcons.starFilled,
                   key: const ValueKey('chat-pin-icon'),
                   size: 14,
                   color: c.textDim),
             ),
           ),
         if (mention)
-          Tooltip(
+          NymTooltip(
             message: tr(ChatNavStrings.mentions),
             child: Container(
               key: const ValueKey('chat-mention-badge'),
               width: 18,
               height: 18,
-              margin: const EdgeInsets.only(right: 4),
+              margin: const EdgeInsets.only(left: 5),
               decoration: BoxDecoration(color: c.primary, shape: BoxShape.circle),
               alignment: Alignment.center,
               child: Text(
@@ -698,10 +752,15 @@ List<SidebarQuickMenuItem> chatNavSidebarItems(WidgetRef ref, String storageKey)
   final k = pinKeyForChat(storageKey);
   if (k.isEmpty || k == 'c:nymchat') return const [];
   final pinned = nav.isChatPinned(k);
+  final channel = pinParse(k)?.kind == 'channel';
   return [
     SidebarQuickMenuItem(
-      label: tr(pinned ? ChatNavStrings.unpin : ChatNavStrings.pin),
-      svg: pinned ? ChatNavIcons.unpin : ChatNavIcons.pin,
+      label: channel
+          ? tr(pinned ? ChatNavStrings.unfavorite : ChatNavStrings.favorite)
+          : tr(pinned
+              ? ChatNavStrings.unfavoriteChat
+              : ChatNavStrings.favoriteChat),
+      svg: pinned ? NymIcons.starFilled : NymIcons.starOutline,
       onSelected: () => nav.togglePin(k),
     ),
     if (pinned && nav.canMovePin(k, -1))
@@ -747,10 +806,10 @@ Future<void> showSendMenu(
 
 Future<void> _showPanel(BuildContext context, Widget child) {
   final isLight = context.nym.isLight;
-  return showDialog<void>(
-    context: context,
+  return showNymSheet<void>(
+    context,
+    (_) => child,
     barrierColor: isLight ? const Color(0x73000000) : const Color(0xBF000000),
-    builder: (_) => child,
   );
 }
 
@@ -764,46 +823,51 @@ class _PanelShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final size = MediaQuery.of(context).size;
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: size.width * 0.92,
-          constraints:
-              BoxConstraints(maxWidth: 520, maxHeight: size.height * 0.88),
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            borderRadius: NymRadius.rxl,
-            border: Border.all(color: c.glassBorder),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title.toUpperCase(),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: tr('Close'),
-                    onPressed: () => Navigator.of(context).maybePop(),
-                    icon: Icon(Icons.close, size: 18, color: c.textDim),
-                  ),
-                ],
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title.toUpperCase(),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
               ),
-              Divider(color: c.glassBorder, height: 16),
-              Flexible(child: child),
-            ],
+            ),
+            IconButton(
+              tooltip: tr('Close'),
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            ),
+          ],
+        ),
+        Divider(color: c.glassBorder, height: 16),
+        Flexible(child: child),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 16), child: body),
+      (body) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: size.width * 0.92,
+            constraints:
+                BoxConstraints(maxWidth: 520, maxHeight: size.height * 0.88),
+            decoration: BoxDecoration(
+              color: c.bgSecondary,
+              borderRadius: NymRadius.rxl,
+              border: Border.all(color: c.glassBorder),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: body,
           ),
         ),
       ),

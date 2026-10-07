@@ -12,6 +12,13 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+def ringFcmProperties = new Properties()
+def ringFcmPropertiesFile = rootProject.file('fcm.properties')
+def ringFcmEnabled = ringFcmPropertiesFile.exists()
+if (ringFcmEnabled) {
+    ringFcmProperties.load(new FileInputStream(ringFcmPropertiesFile))
+}
+
 android {
     namespace = "com.nym.bar"
     compileSdk = 36
@@ -43,12 +50,27 @@ android {
         // unchanged.
         minSdk = 24
         targetSdk = 36
-        versionCode = 413
+        versionCode = 542
         versionName = flutter.versionName
         
         // Support all ABIs - AGP 8.9.1 automatically handles 16 KB alignment
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64'
+        }
+
+        if (ringFcmEnabled) {
+            resValue "string", "fcm_app_id", ringFcmProperties['appId']
+            resValue "string", "fcm_api_key", ringFcmProperties['apiKey']
+            resValue "string", "fcm_project_id", ringFcmProperties['projectId']
+            resValue "string", "fcm_sender_id", ringFcmProperties['senderId']
+        }
+    }
+
+    sourceSets {
+        main {
+            if (ringFcmEnabled) {
+                java.srcDirs += 'src/fcm/kotlin'
+            }
         }
     }
 
@@ -88,4 +110,8 @@ dependencies {
     implementation 'androidx.biometric:biometric:1.1.0'
     implementation 'androidx.credentials:credentials:1.6.0'
     implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
+
+    if (ringFcmEnabled) {
+        implementation 'com.google.firebase:firebase-messaging:24.1.1'
+    }
 }

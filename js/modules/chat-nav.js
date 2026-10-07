@@ -39,19 +39,24 @@
         jumpFirst: 'Jump to first unread',
         nNew: '{n} new',
         mentions: 'Unread mentions',
-        pin: 'Pin',
-        unpin: 'Unpin',
+        favoriteChat: 'Favorite',
+        unfavoriteChat: 'Unfavorite',
         moveUp: 'Move up',
         moveDown: 'Move down',
-        pinCap: 'You can pin up to {n} chats. Unpin one first.',
-        pinned: 'Pinned',
+        favorite: 'Favorite channel',
+        unfavorite: 'Unfavorite channel',
+        favorited: 'Favorited',
+        unfavorited: 'Unfavorited #{channel}',
+        favoriteCap: 'You can have up to {n} favorite channels. Remove one first.',
+        favoriteChatCap: 'You can have up to {n} favorite chats. Remove one first.',
+        unfavoritedChat: 'Unfavorited {name}',
         sendLater: 'Send later',
         scheduled: 'Scheduled',
         held: 'Held by Nymchat until it sends',
-        heldDetail: 'Nymchat holds a copy that is already signed and, for DMs and groups, already encrypted. It cannot read or change it.',
+        heldDetail: 'Nymchat holds a copy that is already signed and, for PMs and groups, already encrypted. It cannot read or change it.',
         meshBlocked: "Send later needs the internet. This chat is on the Bluetooth mesh only.",
         offlineBlocked: "Send later needs the internet. You're offline.",
-        signerBlocked: 'Send later in DMs and groups needs your key on this device.',
+        signerBlocked: 'Send later in PMs and groups needs your key on this device.',
         serverBlocked: "Send later isn't available without the Nymchat server.",
         past: 'Pick a time in the future.',
         soon: 'Pick a time at least a minute from now.',
@@ -131,7 +136,7 @@
     }
 
     const JUMP = Object.freeze({ bottomPx: 48, landPx: 8, markMax: 200, storeMax: 300, storeIds: 50 });
-    const FABS = Object.freeze({ order: Object.freeze(['mention', 'jump', 'bottom']), gap: 8, right: 24, rightPhone: 16, rightColumn: 16, phoneMax: 768 });
+    const FABS = Object.freeze({ order: Object.freeze(['mention', 'jump', 'bottom']), gap: 8, right: 24, rightPhone: 16, rightColumn: 16, phoneMax: 768, floatBottom: 16 });
 
     function markIndex(bottoms, viewTop, viewBottom, count) {
         const get = typeof bottoms === 'function' ? bottoms : (i) => num(bottoms[i]);
@@ -509,12 +514,18 @@
         return normalizePins(state).order.indexOf(k) >= 0;
     }
 
+    function pinSection(k) {
+        const p = pinParse(k);
+        return p && p.kind === 'channel' ? 'channel' : 'chat';
+    }
+
     function pinAdd(state, k, nowMs, opts) {
         const s = normalizePins(state);
         if (!pinParse(k)) return { state: s, error: 'invalid' };
         if (s.order.indexOf(k) >= 0) return { state: s, error: null };
         const cap = opts && num(opts.cap) > 0 ? num(opts.cap) : LIMITS.pinMax;
-        if (s.order.length >= cap) return { state: s, error: 'cap' };
+        const section = pinSection(k);
+        if (s.order.filter((x) => pinSection(x) === section).length >= cap) return { state: s, error: 'cap' };
         const at = Math.max(num(nowMs), (s.removed[k] || 0) + 1, (s.items[k] || 0) + 1);
         s.items[k] = at;
         delete s.removed[k];
@@ -616,11 +627,19 @@
             for (const k of rk.slice(0, Math.ceil(rk.length / 4))) delete s.removed[k];
             return true;
         }
-        if (Array.isArray(s.order) && s.order.length > LIMITS.pinMax) {
-            const drop = s.order.slice(LIMITS.pinMax);
-            s.order = s.order.slice(0, LIMITS.pinMax);
-            for (const k of drop) if (s.items) delete s.items[k];
-            return true;
+        if (Array.isArray(s.order)) {
+            const seen = { channel: 0, chat: 0 };
+            const keep = [];
+            const drop = [];
+            for (const k of s.order) {
+                const sec = pinSection(k);
+                if (seen[sec] < LIMITS.pinMax) { seen[sec]++; keep.push(k); } else drop.push(k);
+            }
+            if (drop.length) {
+                s.order = keep;
+                for (const k of drop) if (s.items) delete s.items[k];
+                return true;
+            }
         }
         return false;
     }
@@ -863,7 +882,7 @@
         unseenRows, unseenCount, unseenFirst, jumpText, markStoreNorm,
         emptyMentions, normalizeMentions, mentionAdd, mentionSeen, mentionMark, mentionClear, mentionPrune, mentionDrop,
         mentionNext, mentionCount, mentionScan,
-        pinKey, pinParse, pinKeyForChat, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,
+        pinKey, pinParse, pinKeyForChat, pinSection, emptyPins, normalizePins, pinList, isPinned, pinAdd, pinRemove,
         pinMove, pinReorderWithin, mergePins, pinImportLegacy, pinChannels, pinSort, trimPinnedPayload,
         scheduleCheck, scheduleErrorText, schedulePresets, scheduleInputValue, scheduleParseInput, wrapTime,
         scheduleRelays, scheduleSizeError, scheduleNoteJson, scheduleNoteParse, scheduleChatKey, scheduleChatOf,

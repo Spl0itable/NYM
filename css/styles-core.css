@@ -76,6 +76,7 @@
     --bg-tertiary: rgba(20, 20, 35, 0.9);
     --text: #00ff00;
     --text-dim: #8a8a9a;
+    --msg-text: #cccccc;
     --text-bright: #00ffaa;
     --border: rgb(from var(--primary) r g b / 0.2);
     --font-mono: 'Courier New', 'Consolas', 'Monaco', monospace;
@@ -88,6 +89,19 @@
     --radius-md: 16px;
     --radius-lg: 20px;
     --radius-xl: 24px;
+    --fs-xs: 11px;
+    --fs-sm: 12px;
+    --fs-md: 13px;
+    --fs-lg: 15px;
+    --fs-xl: 17px;
+    --fs-2xl: 22px;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
@@ -177,4 +191,18 @@ body::after {
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
+}
+
+:focus-visible:not(input:not([type="checkbox"], [type="radio"], [type="range"], [type="button"], [type="submit"], [type="reset"]), textarea, select, [contenteditable="true"], [contenteditable=""], [data-dialog-panel]) {
+    outline: 2px solid var(--secondary) !important;
+    outline-offset: 2px !important;
+}
+
+.channel-item:focus-visible,
+.pm-item:focus-visible {
+    outline-offset: -2px !important;
+}
+
+[data-dialog-panel]:focus {
+    outline: none;
 }

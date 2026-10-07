@@ -44,6 +44,8 @@ class ApiConfig {
   /// HTTP proxy base used by the API client.
   static String proxyBaseUrl() => 'https://$apiHost/api/proxy';
 
+  static bool directMedia = false;
+
   /// The UA header is what satisfies the `isNymchatClient` gate.
   static Map<String, String> get defaultHeaders => {'User-Agent': userAgent};
 }

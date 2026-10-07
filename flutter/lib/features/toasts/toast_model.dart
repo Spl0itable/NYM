@@ -18,6 +18,7 @@ class ToastConfig {
   static const int readableChars = 80;
   static const int msPerExtraChar = 40;
   static const double swipeDismissPx = 60;
+  static const int undoMs = 5000;
   static const double offsetPx = 12;
   static const double gutterPx = 16;
   static const double maxWidthPx = 480;
@@ -87,6 +88,7 @@ class ToastItem {
     required this.expiresAt,
     this.paused = false,
     this.remaining = 0,
+    this.action,
   });
 
   final int id;
@@ -96,6 +98,7 @@ class ToastItem {
   final int expiresAt;
   final bool paused;
   final int remaining;
+  final String? action;
 
   ToastItem copyWith({int? expiresAt, bool? paused, int? remaining}) =>
       ToastItem(
@@ -106,6 +109,7 @@ class ToastItem {
         expiresAt: expiresAt ?? this.expiresAt,
         paused: paused ?? this.paused,
         remaining: remaining ?? this.remaining,
+        action: action,
       );
 
   Map<String, Object?> toJson() => {
@@ -115,6 +119,7 @@ class ToastItem {
         'expiresAt': expiresAt,
         'paused': paused,
         'remaining': remaining,
+        if (action != null) 'action': action,
       };
 }
 
@@ -155,9 +160,12 @@ Map<String, int> _prune(Map<String, int> recent, int now) => {
         if (now - e.value < ToastConfig.dedupeMs) e.key: e.value,
     };
 
-ToastPush pushToast(ToastQueue q, String text, ToastKind? kind, int now) {
+ToastPush pushToast(ToastQueue q, String text, ToastKind? kind, int now,
+    {String? action}) {
   final k = kind ?? classifyToast(text);
-  final key = _keyOf(text, k);
+  final label = action?.trim();
+  final hasAction = label != null && label.isNotEmpty;
+  final key = hasAction ? '${k.name}\u0001${q.seq + 1}' : _keyOf(text, k);
   final recent = _prune(q.recent, now);
   final liveIdx = q.toasts.indexWhere((t) => t.key == key);
   if (liveIdx >= 0) {
@@ -186,7 +194,8 @@ ToastPush pushToast(ToastQueue q, String text, ToastKind? kind, int now) {
       key: key,
       text: normalizeToastText(text),
       kind: k,
-      expiresAt: now + toastDurationMs(text, k),
+      expiresAt: now + (hasAction ? ToastConfig.undoMs : toastDurationMs(text, k)),
+      action: hasAction ? label : null,
     ),
   ];
   final evicted = <int>[];

@@ -77,8 +77,47 @@ def strip_private_broadcast_picker(installer)
   Pod::UI.puts '[nym] stripped private buttonPressed: from flutter_webrtc'.green
 end
 
+def use_public_ice_server_initializer(installer)
+  root = File.realpath(File.join(__dir__, '.symlinks', 'plugins', 'flutter_webrtc'))
+  target = File.join(root, 'ios', 'Classes', 'FlutterWebRTCPlugin.m')
+  return unless File.exist?(target)
+
+  src = File.read(target, encoding: 'UTF-8')
+  pattern = /\[\[RTCIceServer alloc\] initWithURLStrings:urls\];/
+  return unless src =~ pattern
+
+  File.write(target, src.gsub(pattern, '[[RTCIceServer alloc] initWithURLStrings:urls username:nil credential:nil];'))
+  Pod::UI.puts '[nym] flutter_webrtc now uses the three-argument RTCIceServer initializer'.green
+end
+
+def patch_ice_server_initializer_at_build(installer)
+  target = installer.pods_project.targets.find { |t| t.name == 'flutter_webrtc' }
+  return unless target
+
+  name = '[nym] RTCIceServer initializer'
+  return if target.shell_script_build_phases.any? { |p| p.name == name }
+
+  phase = target.new_shell_script_build_phase(name)
+  phase.shell_path = '/bin/sh'
+  phase.shell_script = <<~'SH'
+    set -e
+    src="$(cd "${PODS_ROOT}/../.symlinks/plugins/flutter_webrtc/ios/Classes" && pwd -P)/FlutterWebRTCPlugin.m"
+    /usr/bin/sed -i '' 's/\[\[RTCIceServer alloc\] initWithURLStrings:urls\];/[[RTCIceServer alloc] initWithURLStrings:urls username:nil credential:nil];/' "$src"
+    if /usr/bin/grep -Eq 'initWithURLStrings:[A-Za-z_]+[[:space:]]*\]' "$src"; then
+      echo "error: flutter_webrtc still calls initWithURLStrings: in $src"
+      exit 1
+    fi
+  SH
+  target.build_phases.move(phase, 0)
+  target.build_configurations.each do |config|
+    config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+  end
+end
+
 post_install do |installer|
   strip_private_broadcast_picker(installer)
+  use_public_ice_server_initializer(installer)
+  patch_ice_server_initializer_at_build(installer)
 
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)

@@ -497,15 +497,12 @@ Object.assign(NYM.prototype, {
             }
             const alreadyNotified = this.channelNotificationTracking.get(channelKey).has(event.id);
 
-            // BRB auto-response, only for new messages.
-            if (!isHistorical && this.isMentioned(event.content) && this.awayMessages.has(this.pubkey)) {
-                const responseKey = `brb_universal_${this.pubkey}_${nym}`;
-                if (!sessionStorage.getItem(responseKey)) {
-                    sessionStorage.setItem(responseKey, '1');
-
-                    const response = `@${nym} [Auto-Reply] ${this.awayMessages.get(this.pubkey)}`;
-                    await this.publishMessage(response, geohash, geohash);
-                }
+            const awayNow = !isHistorical && typeof this.awayState === 'function' ? this.awayState() : null;
+            if (awayNow && awayNow.enabled) {
+                this._awayMaybeAutoReply({
+                    nym, geohash, senderPubkey: event.pubkey,
+                    mentioned: this.isMentioned(event.content), historical: isHistorical
+                });
             }
 
             if (geohash && !this.channels.has(geohash) && !this.isChannelBlocked(geohash, geohash)) {
@@ -607,12 +604,8 @@ Object.assign(NYM.prototype, {
                 }
 
                 const _notifStorageKey = geohash ? `#${geohash}` : message.channel;
-                const _notifCurrentKey = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
-                // Collapsed thread replies are off screen, so they must not count as already seen.
-                const _threadHidden = typeof this._threadReplyHidden === 'function' &&
-                    this._threadReplyHidden(message);
-                const _isViewingChannel = !this.inPMMode &&
-                    _notifStorageKey === _notifCurrentKey && !_threadHidden;
+                const _seesNow = typeof this._notifSeesMessage === 'function' &&
+                    this._notifSeesMessage(message, _notifStorageKey);
 
                 // Channels notify on @mention, plus replies in threads the user started (unless threadNotifyMentionsOnly).
                 const _threadElevated = typeof this._threadReplyElevated === 'function' &&
@@ -640,7 +633,7 @@ Object.assign(NYM.prototype, {
                     !this.blockedUsers.has(event.pubkey) &&
                     !isHistorical &&
                     !alreadyNotified &&
-                    (document.hidden || !_isViewingChannel);
+                    !_seesNow;
 
                 if (shouldNotify) {
                     this.channelNotificationTracking.get(channelKey).add(event.id);
@@ -1366,7 +1359,106 @@ Object.assign(NYM.prototype, {
 
         const ttlTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'ttl' && t[1]);
         const ttl = ttlTag ? parseInt(ttlTag[1], 10) : 0;
-        return status ? { status, groupId, ttl: ttl > 0 ? ttl : 0, pubkey: rumor.pubkey } : null;
+        const UA = window.NymUploadActivity;
+        const decoded = UA ? UA.decode(rumor.tags) : null;
+        const activity = decoded ? decoded.activity : null;
+        return status ? { status, groupId, ttl: ttl > 0 ? ttl : 0, pubkey: rumor.pubkey, activity } : null;
+    },
+
+    _activityTargetNow() {
+        if (this.inPMMode) {
+            if (this.currentGroup) return { group: this.currentGroup };
+            if (this.currentPM) return { pm: this.currentPM };
+            return null;
+        }
+        return this.currentGeohash ? { geohash: this.currentGeohash } : null;
+    },
+
+    _activityDest(target) {
+        const t = target || this._activityTargetNow();
+        if (!t) return null;
+        if (t.group) {
+            if (!this._canSendGiftWraps() || !this.isTypingIndicatorAllowedFor('group')) return null;
+            return { key: `group:${t.group}`, group: t.group };
+        }
+        if (t.pm) {
+            if (!this._canSendGiftWraps() || !this.isTypingIndicatorAllowedFor('pm')) return null;
+            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(t.pm)) return null;
+            return { key: `pm:${t.pm}`, pm: t.pm };
+        }
+        if (t.geohash) {
+            if (!this.isTypingIndicatorAllowedFor('channel') || !this._canPublishChannelEvent()) return null;
+            return { key: `channel:${t.geohash}`, geohash: t.geohash };
+        }
+        return null;
+    },
+
+    _chatActivityFor(key) {
+        if (!this._chatActivities) return null;
+        let found = null;
+        for (const a of this._chatActivities.values()) {
+            if (a.dest.key === key && a.pubkey === this.pubkey) found = a.kind;
+        }
+        return found;
+    },
+
+    beginChatActivity(kind, target) {
+        const UA = window.NymUploadActivity;
+        if (!UA || !UA.isKind(kind)) return null;
+        const dest = this._activityDest(target);
+        if (!dest) return null;
+        if (!this._chatActivities) this._chatActivities = new Map();
+        if (!this._chatActivityTimers) this._chatActivityTimers = new Map();
+        this._chatActivitySeq = (this._chatActivitySeq || 0) + 1;
+        const token = this._chatActivitySeq;
+        this._chatActivities.set(token, { kind, dest, pubkey: this.pubkey });
+        this._publishChatActivity(dest);
+        if (!this._chatActivityTimers.has(dest.key)) {
+            this._chatActivityTimers.set(dest.key, setInterval(() => this._publishChatActivity(dest), UA.REFRESH_MS));
+        }
+        return token;
+    },
+
+    endChatActivity(token) {
+        if (token == null || !this._chatActivities || !this._chatActivities.has(token)) return;
+        const { dest, pubkey } = this._chatActivities.get(token);
+        this._chatActivities.delete(token);
+        if (pubkey !== this.pubkey) return this._dropChatActivitiesOfOtherKeys();
+        if (this._chatActivityFor(dest.key)) {
+            this._publishChatActivity(dest);
+            return;
+        }
+        const timer = this._chatActivityTimers && this._chatActivityTimers.get(dest.key);
+        if (timer) clearInterval(timer);
+        if (this._chatActivityTimers) this._chatActivityTimers.delete(dest.key);
+        if (this._pmTypingStartedFor) this._pmTypingStartedFor.delete(dest.key);
+        if (dest.geohash && this._channelTypingStartedFor) this._channelTypingStartedFor.delete(dest.geohash);
+        this._typingThrottleTime = 0;
+        if (dest.geohash) this._sendChannelTypingEvent('stop', dest.geohash);
+        else this._sendTypingEventTo(dest, 'stop', null);
+    },
+
+    _dropChatActivitiesOfOtherKeys() {
+        if (!this._chatActivities) return;
+        for (const [token, a] of this._chatActivities) {
+            if (a.pubkey !== this.pubkey) this._chatActivities.delete(token);
+        }
+        if (!this._chatActivityTimers) return;
+        for (const [key, timer] of this._chatActivityTimers) {
+            if (!this._chatActivityFor(key)) {
+                clearInterval(timer);
+                this._chatActivityTimers.delete(key);
+            }
+        }
+    },
+
+    _publishChatActivity(dest) {
+        this._dropChatActivitiesOfOtherKeys();
+        const kind = this._chatActivityFor(dest.key);
+        if (!kind) return;
+        if (!this._activityDest(dest.pm ? { pm: dest.pm } : dest.group ? { group: dest.group } : { geohash: dest.geohash })) return;
+        if (dest.geohash) this._sendChannelTypingEvent('start', dest.geohash, kind);
+        else this._sendTypingEventTo(dest, 'start', kind);
     },
 
     handleTypingSignal() {
@@ -1415,31 +1507,42 @@ Object.assign(NYM.prototype, {
     },
 
     async _sendTypingEvent(status) {
+        const dest = this.currentGroup ? { key: `group:${this.currentGroup}`, group: this.currentGroup }
+            : this.currentPM ? { key: `pm:${this.currentPM}`, pm: this.currentPM } : null;
+        if (!dest) return;
+        const activity = this._chatActivityFor(dest.key);
+        if (activity && status === 'stop') return;
+        return this._sendTypingEventTo(dest, status, activity);
+    },
+
+    async _sendTypingEventTo(dest, status, activity) {
         if (!this._canSendGiftWraps()) return;
 
         const now = Math.floor(Date.now() / 1000);
-        const tags = [['typing', status]];
-        if (status === 'start') tags.push(['ttl', String(Math.floor(this._typingExpireMs / 1000))]);
+        const UA = window.NymUploadActivity;
+        const ttlSec = Math.floor(this._typingExpireMs / 1000);
+        const tags = UA ? UA.encode(status, activity, ttlSec)
+            : (status === 'start' ? [['typing', status], ['ttl', String(ttlSec)]] : [['typing', status]]);
 
-        if (this.currentGroup) {
-            const group = this.groupConversations.get(this.currentGroup);
+        if (dest.group) {
+            const group = this.groupConversations.get(dest.group);
             if (!group) return;
-            tags.push(['g', this.currentGroup]);
+            tags.push(['g', dest.group]);
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length === 0) return;
 
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
             // Ephemeral keys so typing wraps don't expose the real-pubkey membership set to relays.
-            await this._sendGiftWrapsAsync(otherMembers, rumor, null, this.currentGroup);
-        } else if (this.currentPM) {
-            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(this.currentPM)) return;
-            tags.push(['p', this.currentPM]);
+            await this._sendGiftWrapsAsync(otherMembers, rumor, null, dest.group);
+        } else if (dest.pm) {
+            if (this.botAnonSuppressSendTo && this.botAnonSuppressSendTo(dest.pm)) return;
+            tags.push(['p', dest.pm]);
             const rumor = { kind: 69420, created_at: now, tags, content: '', pubkey: this.pubkey };
             if (this.privkey) {
-                const wrapped = await this._pmSignalWrapAsync(rumor, this.currentPM);
+                const wrapped = await this._pmSignalWrapAsync(rumor, dest.pm);
                 this.sendDMToRelays(['EVENT', wrapped]);
             } else {
-                await this._sendGiftWrapsAsync([this.currentPM], rumor, null);
+                await this._sendGiftWrapsAsync([dest.pm], rumor, null);
             }
         }
     },
@@ -1484,7 +1587,7 @@ Object.assign(NYM.prototype, {
                 this.renderTypingIndicator();
             }, ttlMs);
 
-            convTypers.set(senderPubkey, { nym, timeout, timestamp: Date.now(), ttlMs });
+            convTypers.set(senderPubkey, { nym, timeout, timestamp: Date.now(), ttlMs, activity: parsed.activity || null });
         }
 
         this.renderTypingIndicator();
@@ -1562,14 +1665,16 @@ Object.assign(NYM.prototype, {
             if (!m) return `${this.escapeHtml(nym || '')}${flair}`;
             return `${this.escapeHtml(nym.slice(0, -5))}<span class="nym-suffix">#${m[1]}</span>${flair}`;
         };
-        if (typers.length === 1) {
-            const verb = this.isVerifiedBot(typers[0][0]) ? 'thinking' : 'typing';
-            textEl.innerHTML = `${fmtTyper(typers[0][0], typers[0][1].nym)} is ${verb}`;
-        } else if (typers.length === 2) {
-            textEl.innerHTML = `${fmtTyper(typers[0][0], typers[0][1].nym)} and ${fmtTyper(typers[1][0], typers[1][1].nym)} are typing`;
-        } else {
-            textEl.textContent = `${typers.length} people are typing`;
-        }
+        const UA = window.NymUploadActivity;
+        const tpl = UA ? UA.label(typers.map(([pk, e]) => ({ activity: e.activity || null, bot: typers.length === 1 && this.isVerifiedBot(pk) })))
+            : (typers.length === 1 ? '{nym} is typing' : typers.length === 2 ? '{nym} and {other} are typing' : '{n} people are typing');
+        const shown = typeof this.uiText === 'function' ? this.uiText(tpl) : tpl;
+        textEl.innerHTML = String(shown).split(/(\{nym\}|\{other\}|\{n\})/).map((part) => {
+            if (part === '{nym}') return fmtTyper(typers[0][0], typers[0][1].nym);
+            if (part === '{other}') return typers[1] ? fmtTyper(typers[1][0], typers[1][1].nym) : '';
+            if (part === '{n}') return String(typers.length);
+            return this.escapeHtml(part);
+        }).join('');
 
         el.classList.add('active');
     },
@@ -1609,13 +1714,18 @@ Object.assign(NYM.prototype, {
             || (this.nostrLoginMethod === 'nip46' && typeof _nip46State !== 'undefined' && _nip46State && _nip46State.connected);
     },
 
-    async _sendChannelTypingEvent(status, geohash) {
+    async _sendChannelTypingEvent(status, geohash, activity) {
         if (!geohash || !this._canPublishChannelEvent()) return;
         const wire = this.channelWire(geohash);
+        const UA = window.NymUploadActivity;
+        const kind = activity === undefined ? this._chatActivityFor(`channel:${geohash}`) : activity;
+        if (!this._channelTypingLastAt) this._channelTypingLastAt = new Map();
+        const createdAt = Math.max(Math.floor(Date.now() / 1000), (this._channelTypingLastAt.get(geohash) || 0) + 1);
+        this._channelTypingLastAt.set(geohash, createdAt);
         const event = {
             kind: 24420,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
+            created_at: createdAt,
+            tags: UA ? UA.channelTags(status, kind, wire.tag, geohash, this.nym) : [
                 ['typing', status],
                 [wire.tag, geohash],
                 ['n', this.nym]
@@ -1646,6 +1756,7 @@ Object.assign(NYM.prototype, {
         this._sendChannelTypingEvent('start', geohash);
         this._typingStopTimer = setTimeout(() => {
             if (this._channelTypingStartedFor) this._channelTypingStartedFor.delete(geohash);
+            if (this._chatActivityFor(`channel:${geohash}`)) return;
             this._sendChannelTypingEvent('stop', geohash);
         }, 4000);
     },
@@ -1660,6 +1771,7 @@ Object.assign(NYM.prototype, {
         if (this._typingStopTimer) clearTimeout(this._typingStopTimer);
         this._typingThrottleTime = 0;
         this._channelTypingStartedFor.delete(targetGeohash);
+        if (this._chatActivityFor(`channel:${targetGeohash}`)) return;
         this._sendChannelTypingEvent('stop', targetGeohash);
     },
 
@@ -1678,6 +1790,9 @@ Object.assign(NYM.prototype, {
             else if (tag[0] === 'n') rawNym = tag[1];
         }
         if (!status || !geohash) return;
+        const UA = window.NymUploadActivity;
+        const decoded = UA ? UA.decode(event.tags) : null;
+        const activity = decoded ? decoded.activity : null;
         const baseNym = this.stripPubkeySuffix(rawNym || this.getNymFromPubkey(event.pubkey));
         const displayNym = `${baseNym}#${this.getPubkeySuffix(event.pubkey)}`;
         if (this.blockedUsers.has(event.pubkey)) return;
@@ -1697,7 +1812,7 @@ Object.assign(NYM.prototype, {
                 convTypers.delete(event.pubkey);
                 this.renderTypingIndicator();
             }, this._typingExpireMs);
-            convTypers.set(event.pubkey, { nym: displayNym, timeout, timestamp: Date.now() });
+            convTypers.set(event.pubkey, { nym: displayNym, timeout, timestamp: Date.now(), activity });
         }
         this.renderTypingIndicator();
     },
@@ -2662,9 +2777,6 @@ Object.assign(NYM.prototype, {
     async publishMessage(content, channel = this.currentChannel, geohash = this.currentGeohash, quoteData = null, threadRoot = null, opts = null) {
         try {
             const buildOnly = !!(opts && opts.buildOnly);
-            if (!this.connected && !buildOnly) {
-                throw new Error('Not connected to relay');
-            }
 
             const replayAt = opts && typeof opts.createdAt === 'number' && opts.createdAt > 0
                 ? opts.createdAt : 0;
@@ -2771,6 +2883,7 @@ Object.assign(NYM.prototype, {
                         this.recordEventProvenanceSource(signedEvent, 'THIS CLIENT');
                     }
                     this._replaceOptimisticMessage(tempId, signedEvent, storageKey, false);
+                    if (typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(signedEvent.id);
                     this.sendToRelay(["EVENT", signedEvent]);
                     if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
 
@@ -3107,6 +3220,7 @@ Object.assign(NYM.prototype, {
 
     recordOwnActivity() {
         if (!this.pubkey) return;
+        if (typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
 
         const now = Date.now();
         const existing = this.users.get(this.pubkey);
@@ -3140,9 +3254,17 @@ Object.assign(NYM.prototype, {
     },
 
     async publishStatusVisibility() {
+        if (typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
         const away = this.awayMessages && this.awayMessages.has(this.pubkey);
         const awayMsg = away ? (this.awayMessages.get(this.pubkey) || '') : '';
         return this.publishPresence(away ? 'away' : 'online', awayMsg);
+    },
+
+    _presenceStatusTags() {
+        if (this._statusMode() !== 'enabled') return [['status', 'hidden']];
+        if (typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
+        const away = this.awayMessages && this.awayMessages.get(this.pubkey);
+        return away ? [['status', 'away'], ['away', away]] : [['status', 'online']];
     },
 
     async publishAvatarUpdate(avatarUrl) {
@@ -3153,7 +3275,7 @@ Object.assign(NYM.prototype, {
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
                 ['n', this.nym],
-                ['status', this._statusMode() === 'enabled' ? 'online' : 'hidden'],
+                ...this._presenceStatusTags(),
                 ['avatar-update', avatarUrl]
             ];
 
@@ -3180,7 +3302,7 @@ Object.assign(NYM.prototype, {
                 ['d', 'nym-presence'],
                 ['t', 'nym-presence'],
                 ['n', this.nym],
-                ['status', this._statusMode() === 'enabled' ? 'online' : 'hidden'],
+                ...this._presenceStatusTags(),
                 ['shop-update', '1']
             ];
 

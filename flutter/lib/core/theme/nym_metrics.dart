@@ -16,6 +16,27 @@ class NymRadius {
   static const BorderRadius rxl = BorderRadius.all(Radius.circular(xl));
 }
 
+class NymType {
+  NymType._();
+  static const double xs = 11;
+  static const double sm = 12;
+  static const double md = 13;
+  static const double lg = 15;
+  static const double xl = 17;
+  static const double xxl = 22;
+}
+
+class NymSpace {
+  NymSpace._();
+  static const double s1 = 4;
+  static const double s2 = 8;
+  static const double s3 = 12;
+  static const double s4 = 16;
+  static const double s5 = 20;
+  static const double s6 = 24;
+  static const double s8 = 32;
+}
+
 class NymMotion {
   NymMotion._();
 

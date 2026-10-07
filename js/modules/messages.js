@@ -232,17 +232,11 @@ Object.assign(NYM.prototype, {
                 }
             }
 
-            const isMobile = window.innerWidth <= 768;
-            if (!isMobile && !el.querySelector('.msg-hover-buttons')) {
+            if (this._canHover() && !el.querySelector('.msg-hover-buttons')) {
                 const contentEl = el.querySelector(':scope > .message-content');
-                if (contentEl) {
-                    const hb = document.createElement('div');
-                    hb.className = 'msg-hover-buttons';
-                    const _threadHb = (typeof this.threadsEnabled === 'function' && this.threadsEnabled())
-                        ? `<button class="thread-msg-btn" data-action="openMessageThread" title="Reply in thread"><svg viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 3a7 7 0 1 0 3.394 13.124.75.75 0 0 1 .542-.074l2.794.68-.68-2.794a.75.75 0 0 1 .073-.542A7 7 0 0 0 10 3m-8.5 7a8.5 8.5 0 1 1 16.075 3.859l.904 3.714a.75.75 0 0 1-.906.906l-3.714-.904A8.5 8.5 0 0 1 1.5 10M6 8.25a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 6 8.25M6.75 11a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5z" clip-rule="evenodd"></path></svg></button>`
-                        : '';
-                    hb.innerHTML = `<button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${signedEvent.id}"><svg viewBox="0 0 20 20" class="nm-msg-2"><path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path></svg></button>${_threadHb}<button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate"><svg viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg></button>`;
-                    contentEl.appendChild(hb);
+                if (contentEl && typeof this._hoverBarHtml === 'function') {
+                    const threadable = typeof this.threadsEnabled === 'function' && this.threadsEnabled();
+                    contentEl.insertAdjacentHTML('beforeend', this._hoverBarHtml(signedEvent.id, { content: !!(msg && msg.content), threadable }));
                 }
             }
         }
@@ -989,28 +983,14 @@ Object.assign(NYM.prototype, {
             const isValidEventId = (message.isPM && message.nymMessageId)
                 || (message.id && /^[0-9a-f]{64}$/i.test(message.id));
             const reactionMsgId = (message.isPM && message.nymMessageId) ? message.nymMessageId : message.id;
-            const isMobile = window.innerWidth <= 768;
+            const canHover = this._canHover();
 
-            const threadHoverBtn = (typeof this.threadsEnabled === 'function' && this.threadsEnabled()) ? `
-        <button class="thread-msg-btn" data-action="openMessageThread" title="Reply in thread">
-            <svg viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 3a7 7 0 1 0 3.394 13.124.75.75 0 0 1 .542-.074l2.794.68-.68-2.794a.75.75 0 0 1 .073-.542A7 7 0 0 0 10 3m-8.5 7a8.5 8.5 0 1 1 16.075 3.859l.904 3.714a.75.75 0 0 1-.906.906l-3.714-.904A8.5 8.5 0 0 1 1.5 10M6 8.25a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 6 8.25M6.75 11a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5z" clip-rule="evenodd"></path>
-            </svg>
-        </button>` : '';
-            const hoverButtons = isValidEventId && !isMobile ? `
-    <div class="msg-hover-buttons">
-        <button class="reaction-btn" data-action="reactionShowPicker" data-message-id="${reactionMsgId}">
-            <svg viewBox="0 0 20 20" class="nm-msg-2">
-                <path fill-rule="evenodd" clip-rule="evenodd" d="M15.5 1a.75.75 0 0 1 .75.75v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2A.75.75 0 0 1 15.5 1m-13 10a6.5 6.5 0 0 1 7.166-6.466.75.75 0 0 0 .152-1.493 8 8 0 1 0 7.14 7.139.75.75 0 0 0-1.492.152A7 7 0 0 1 15.5 11a6.5 6.5 0 1 1-13 0m4.25-.5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m4.5 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5M9 15c1.277 0 2.553-.724 3.06-2.173.148-.426-.209-.827-.66-.827H6.6c-.452 0-.808.4-.66.827C6.448 14.276 7.724 15 9 15"></path>
-            </svg>
-        </button>${threadHoverBtn}
-        <button class="translate-msg-btn" data-action="translateHoverMessage" title="Translate">
-            <svg viewBox="0 0 24 24">
-                <path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/>
-            </svg>
-        </button>
-    </div>
-` : '';
+            const hoverButtons = isValidEventId && canHover && typeof this._hoverBarHtml === 'function'
+                ? this._hoverBarHtml(reactionMsgId, {
+                    content: !!message.content,
+                    threadable: !!(typeof this.threadsEnabled === 'function' && this.threadsEnabled() && !_threadRender),
+                })
+                : '';
 
             const _botAuthored = !!(message.isBot || this.isVerifiedBot(message.pubkey));
             const preformatted = _botAuthored ? null : (this._fmtCache && this._fmtCache.get(message.content));
@@ -1174,6 +1154,10 @@ Object.assign(NYM.prototype, {
     ${deliveryCheckmark}
 `;
 
+            if (message.isOwn && typeof this._isQueuedDomId === 'function' && this._isQueuedDomId(messageEl.dataset.messageId)) {
+                this._paintQueuedEl(messageEl, true);
+            }
+
             const authorClickable = messageEl.querySelector('.author-clickable');
             if (authorClickable) {
                 authorClickable.style.cursor = 'pointer';
@@ -1281,6 +1265,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        if (!_threadRender && !_cvContainer && typeof this._announceNewMessage === 'function') this._announceNewMessage(message, messageEl);
         this._updateBubbleGrouping(messageEl);
         if (message.isPM && typeof this._botRunDecorate === 'function') this._botRunDecorate(messageEl, message);
 
@@ -1357,7 +1342,7 @@ Object.assign(NYM.prototype, {
                     }
                 }
                 const firstAfterPrune = container.querySelector('[data-message-id]');
-                if (firstAfterPrune) this._updateBubbleGrouping(firstAfterPrune);
+                if (firstAfterPrune) this._settleBubbleHeadAfterPrune(container, firstAfterPrune);
             }
         }
 
@@ -1901,8 +1886,15 @@ Object.assign(NYM.prototype, {
             && !!prev.dataset.messageId;
         const ts = parseInt(el.dataset.timestamp) || 0;
         const prevTs = prev ? (parseInt(prev.dataset.timestamp) || 0) : 0;
-        const inWindow = samePrev && ts && prevTs && Math.abs(ts - prevTs) <= groupWindowMs;
+        const inWindow = samePrev && ts && prevTs && Math.abs(ts - prevTs) <= groupWindowMs && this._sameDayRows(prev, el);
         el.classList.toggle('bubble-grouped', !!inWindow);
+    },
+
+    _sameDayRows(a, b) {
+        const D = typeof window !== 'undefined' ? window.NymDayLabels : null;
+        if (!D || !a || !b || !a.dataset || !b.dataset) return true;
+        const now = Math.floor(Date.now() / 1000);
+        return D.dayKey(parseInt(a.dataset.createdAt) || 0, now) === D.dayKey(parseInt(b.dataset.createdAt) || 0, now);
     },
 
     _updateBubbleGrouping(messageEl) {
@@ -1915,6 +1907,8 @@ Object.assign(NYM.prototype, {
         // In column view, regroup the focused column's list rather than the single-view container.
         const container = messageEl.closest('.messages-list') ||
             (messageEl.parentNode === null ? document.getElementById('messagesContainer') : null);
+        if (container && this._appendToTailBubbleGroup(container, messageEl)) return;
+        if (container && this._regroupAround(container, messageEl)) return;
         if (container) {
             if (!this._bubbleRegroupQueue) this._bubbleRegroupQueue = new Set();
             this._bubbleRegroupQueue.add(container);
@@ -1932,6 +1926,113 @@ Object.assign(NYM.prototype, {
         }
         this._applyBubbleGroupingTo(messageEl);
         this._applyBubbleGroupingTo(messageEl.nextElementSibling);
+    },
+
+    _appendToTailBubbleGroup(container, el) {
+        if (el.parentNode !== container || container.lastElementChild !== el) return false;
+        if (this._bubbleRegroupQueue && this._bubbleRegroupQueue.has(container)) return false;
+        if (!el.dataset || !el.dataset.pubkey || !el.dataset.messageId) return false;
+        if (!document.body.classList.contains('chat-bubbles')) {
+            this._applyBubbleGroupingTo(el);
+            return true;
+        }
+        if (el.classList.contains('blocked-user-message')) return true;
+        const prev = el.previousElementSibling;
+        let stack = null;
+        if (prev && prev.classList.contains('message-group')) {
+            const s = prev.querySelector(':scope > .message-group-stack');
+            const last = s && s.lastElementChild;
+            if (last && !last.classList.contains('poll-message') && !el.classList.contains('poll-message') &&
+                last.dataset.pubkey === el.dataset.pubkey) {
+                const ts = parseInt(el.dataset.timestamp) || 0;
+                const lastTs = parseInt(last.dataset.timestamp) || 0;
+                if (ts && lastTs && Math.abs(ts - lastTs) <= 5 * 60 * 1000) stack = s;
+            }
+        } else if (prev && prev.classList.contains('message') && prev.dataset.messageId &&
+            !prev.classList.contains('blocked-user-message')) {
+            return false;
+        }
+        let wrapper;
+        if (stack) {
+            wrapper = stack.parentNode;
+            stack.appendChild(el);
+        } else {
+            wrapper = this._createMessageGroupWrapper(el);
+            container.insertBefore(wrapper, el);
+            wrapper.querySelector(':scope > .message-group-stack').appendChild(el);
+        }
+        this._applyBubbleGroupingTo(el);
+        this._syncAllAvatarOffsets([wrapper]);
+        return true;
+    },
+
+    _regroupAround(container, el) {
+        if (!document.body.classList.contains('chat-bubbles')) return false;
+        if (this._bubbleRegroupQueue && this._bubbleRegroupQueue.has(container)) return false;
+        if (!el.dataset || !el.dataset.pubkey || !el.dataset.messageId) return false;
+        const isGroup = (n) => !!(n && n.classList && n.classList.contains('message-group'));
+        let top = el;
+        if (el.parentNode !== container) {
+            const w = el.parentNode && el.parentNode.parentNode;
+            if (!isGroup(w) || w.parentNode !== container) return false;
+            top = w;
+        }
+        const range = [];
+        if (isGroup(top.previousElementSibling)) range.push(top.previousElementSibling);
+        range.push(top);
+        if (isGroup(top.nextElementSibling)) range.push(top.nextElementSibling);
+        const anchor = range[range.length - 1].nextSibling;
+        const msgs = [];
+        const salvaged = new Map();
+        for (const node of range) {
+            if (!isGroup(node)) { msgs.push(node); continue; }
+            const stack = node.querySelector(':scope > .message-group-stack');
+            if (this._groupResizeObserver && stack) this._groupResizeObserver.unobserve(stack);
+            const img = node.querySelector(':scope > .message-group-avatar > img.avatar-bubble');
+            const pk = node.dataset.pubkey || '';
+            if (pk && img) { if (!salvaged.has(pk)) salvaged.set(pk, []); salvaged.get(pk).push(img); }
+            if (stack) msgs.push(...Array.from(stack.children));
+        }
+        for (const node of range) if (isGroup(node)) node.remove();
+        const frag = document.createDocumentFragment();
+        const wrappers = [];
+        let group = null, lastPk = null, lastTs = 0;
+        for (const m of msgs) {
+            const isMsg = m.classList && m.classList.contains('message') && m.dataset.pubkey && m.dataset.messageId;
+            if (!isMsg || m.classList.contains('blocked-user-message')) {
+                frag.appendChild(m);
+                group = null; lastPk = null; lastTs = 0;
+                continue;
+            }
+            const ts = parseInt(m.dataset.timestamp) || 0;
+            const pk = m.dataset.pubkey;
+            const isPoll = m.classList.contains('poll-message');
+            const inWindow = !isPoll && pk === lastPk && lastTs && ts && Math.abs(ts - lastTs) <= 5 * 60 * 1000;
+            if (!inWindow || !group) {
+                const bin = salvaged.get(pk);
+                group = this._createMessageGroupWrapper(m, bin && bin.length ? bin.shift() : null);
+                frag.appendChild(group);
+                wrappers.push(group);
+            }
+            group.querySelector(':scope > .message-group-stack').appendChild(m);
+            if (isPoll) { group = null; lastPk = null; lastTs = 0; } else { lastPk = pk; lastTs = ts; }
+        }
+        container.insertBefore(frag, anchor);
+        for (const m of msgs) this._applyBubbleGroupingTo(m);
+        this._syncAllAvatarOffsets(wrappers);
+        return true;
+    },
+
+    _settleBubbleHeadAfterPrune(container, firstEl) {
+        for (const wrapper of Array.from(container.querySelectorAll(':scope > .message-group'))) {
+            const stack = wrapper.querySelector(':scope > .message-group-stack');
+            if (stack && stack.firstElementChild) continue;
+            if (this._groupResizeObserver && stack) this._groupResizeObserver.unobserve(stack);
+            wrapper.remove();
+        }
+        this._applyBubbleGroupingTo(firstEl);
+        const wrapper = firstEl.parentNode && firstEl.parentNode.parentNode;
+        if (wrapper && wrapper.classList && wrapper.classList.contains('message-group')) this._syncAllAvatarOffsets([wrapper]);
     },
 
     _lastTimestampedEl(container) {
@@ -1970,7 +2071,7 @@ Object.assign(NYM.prototype, {
             prev.classList.contains('blocked-user-message')) return false;
         const ts = parseInt(el.dataset.timestamp) || 0;
         const prevTs = parseInt(prev.dataset.timestamp) || 0;
-        return !!(ts && prevTs && Math.abs(ts - prevTs) <= 5 * 60 * 1000);
+        return !!(ts && prevTs && Math.abs(ts - prevTs) <= 5 * 60 * 1000 && this._sameDayRows(prev, el));
     },
 
     _scrollAnchorFor(container) {
@@ -2032,6 +2133,7 @@ Object.assign(NYM.prototype, {
         let currentGroup = null;
         let lastPubkey = null;
         let lastTs = 0;
+        let lastEl = null;
 
         for (const child of children) {
             const isMessage = child.classList && child.classList.contains('message')
@@ -2053,7 +2155,7 @@ Object.assign(NYM.prototype, {
             // Polls render as standalone bubbles and never merge with adjacent messages.
             const isPoll = child.classList.contains('poll-message');
             const sameAuthor = !isPoll && pk === lastPubkey;
-            const inWindow = sameAuthor && lastTs && ts && Math.abs(ts - lastTs) <= groupWindowMs;
+            const inWindow = sameAuthor && lastTs && ts && Math.abs(ts - lastTs) <= groupWindowMs && this._sameDayRows(lastEl, child);
 
             if (!inWindow || !currentGroup) {
                 const bin = salvagedAvatars.get(pk);
@@ -2069,6 +2171,7 @@ Object.assign(NYM.prototype, {
             } else {
                 lastPubkey = pk;
                 lastTs = ts;
+                lastEl = child;
             }
         }
 
@@ -2209,6 +2312,7 @@ Object.assign(NYM.prototype, {
         textEl.innerHTML = this.renderCustomEmojiInEscapedText(this.escapeHtml(truncated));
         preview.style.display = 'flex';
         const input = document.getElementById('messageInput');
+        if (typeof this.refreshComposerPrimary === 'function') this.refreshComposerPrimary();
         this._refreshComposerOffsets();
         input.focus();
     },
@@ -2217,6 +2321,7 @@ Object.assign(NYM.prototype, {
         this.pendingQuote = null;
         const preview = document.getElementById('quotePreview');
         if (preview) preview.style.display = 'none';
+        if (typeof this.refreshComposerPrimary === 'function') this.refreshComposerPrimary();
         this._refreshComposerOffsets();
     },
 
@@ -2277,8 +2382,6 @@ Object.assign(NYM.prototype, {
 
     async publishEditedChannelMessage(newContent, originalEventId) {
         try {
-            if (!this.connected) throw new Error('Not connected to relay');
-
             const channelKey = this.currentGeohash || 'nymchat';
             const wire = this.channelWire(channelKey);
 
@@ -2323,6 +2426,7 @@ Object.assign(NYM.prototype, {
 
             this.updateMessageInDOM(originalEventId, newContent);
 
+            if (typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(signedEvent.id, originalEventId);
             this.sendToRelay(['EVENT', signedEvent]);
 
             if (wire.isGeohash) this.ensureGeoRelayDelivery(signedEvent, channelKey);
@@ -2501,7 +2605,7 @@ Object.assign(NYM.prototype, {
                 enabled,
                 left: enabled ? (this.settings?.swipeLeftAction || 'quote') : 'none',
                 right: enabled ? (this.settings?.swipeRightAction || 'translate') : 'none',
-                threshold: Math.max(30, Math.min(120, parseInt(this.settings?.swipeThreshold || 60, 10) || 60))
+                threshold: window.NymMessageActions.swipeThresholdPx(parseInt(this.settings?.swipeThreshold || 60, 10) || 60)
             };
         };
 
@@ -2520,6 +2624,7 @@ Object.assign(NYM.prototype, {
             if (!cfg.enabled) return;
             const msgEl = e.target.closest('.message');
             if (!msgEl || !msgEl.dataset.messageId) return;
+            if (e.touches.length > 1) { currentEl = null; return; }
 
             startX = e.touches[0].clientX;
             startY = e.touches[0].clientY;
@@ -2531,27 +2636,46 @@ Object.assign(NYM.prototype, {
             thresholdHapticFired = false;
         }, { passive: true });
 
-        // Right swipes starting in this edge zone defer to the sidebar-open gesture.
         const EDGE_ZONE = 50;
-        // A larger initial horizontal travel makes accidental drags less likely.
         const SWIPE_START_THRESHOLD = 16;
+        const SCROLL_SLOP = 18;
+
+        const swipeFacts = (msgEl) => {
+            const contentEl = msgEl.querySelector('.message-content');
+            const pk = msgEl.dataset.pubkey || '';
+            return {
+                id: !!msgEl.dataset.messageId,
+                content: !!(msgEl.dataset.rawContent || (contentEl && contentEl.textContent.trim())),
+                author: !!pk,
+                self: !!pk && pk === this.pubkey,
+            };
+        };
 
         container.addEventListener('touchmove', (e) => {
             if (!currentEl) return;
+            if (e.touches.length > 1) {
+                if (!isSwiping) currentEl = null;
+                return;
+            }
             const cfg = getActions();
 
             const dx = e.touches[0].clientX - startX;
             const absDx = Math.abs(dx);
             const dy = Math.abs(e.touches[0].clientY - startY);
 
+            if (!isSwiping && dy > SCROLL_SLOP && absDx <= dy * 1.5) {
+                currentEl = null;
+                return;
+            }
             if (!isSwiping && absDx > SWIPE_START_THRESHOLD && absDx > dy * 1.5) {
                 direction = dx < 0 ? -1 : 1;
-                if (direction > 0 && startX < EDGE_ZONE) {
+                if ((direction > 0 && startX < EDGE_ZONE) || (direction < 0 && startX > window.innerWidth - EDGE_ZONE)) {
                     currentEl = null;
                     return;
                 }
                 const action = direction < 0 ? cfg.left : cfg.right;
-                if (!action || action === 'none' || !this._getSwipeActionConfig(action)) {
+                if (!action || !this._getSwipeActionConfig(action)
+                    || !window.NymMessageActions.swipeActionApplies(action, swipeFacts(currentEl))) {
                     currentEl = null;
                     return;
                 }
@@ -2560,7 +2684,7 @@ Object.assign(NYM.prototype, {
             if (!isSwiping) return;
 
             e.preventDefault();
-            swipeDistance = Math.min(absDx, 100);
+            swipeDistance = Math.min(Math.max(0, direction * dx), window.NymMessageActions.FOLLOW_CAP);
             const signed = direction < 0 ? -swipeDistance : swipeDistance;
             currentEl.style.transform = `translateX(${signed}px)`;
             currentEl.style.transition = 'none';
@@ -2589,7 +2713,7 @@ Object.assign(NYM.prototype, {
             indicator.classList.toggle('visible', pastThreshold);
             if (pastThreshold && !thresholdHapticFired) {
                 thresholdHapticFired = true;
-                window.nymHapticTap && window.nymHapticTap();
+                window.nymHaptic && window.nymHaptic('selection');
             } else if (!pastThreshold) {
                 thresholdHapticFired = false;
             }
@@ -2676,10 +2800,6 @@ Object.assign(NYM.prototype, {
             this.meshShouldCarry(this.currentGeohash || this.currentChannel);
         const meshPm = (!this.connected && this.inPMMode && !this.currentGroup && this.currentPM
             && typeof this.meshPmPeerId === 'function') ? this.meshPmPeerId(this.currentPM) : null;
-        if (!this.connected && !meshOnly && !meshPm) {
-            this.displaySystemMessage('Not connected to relay. Please wait...');
-            return;
-        }
         if (!this.pendingEdit && this.inPMMode && this.currentGroup && !content.startsWith('/')
             && typeof this._gtGroupSendBlocked === 'function') {
             const blocked = this._gtGroupSendBlocked(content, this.currentGroup);
@@ -2687,6 +2807,10 @@ Object.assign(NYM.prototype, {
                 this.displaySystemMessage(blocked);
                 return;
             }
+        }
+        if (!meshOnly && !this.attestBadge && !this._attestEnrolling && !this.inPMMode && !content.startsWith('/')
+            && typeof this.ensureAttestBadge === 'function') {
+            try { this.ensureAttestBadge(); } catch (_) { }
         }
         if (typeof this.composerVerifying === 'function' && this.composerVerifying()) {
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
@@ -2709,6 +2833,7 @@ Object.assign(NYM.prototype, {
             } else if (!edit.isPM) {
                 await this.publishEditedChannelMessage(content, edit.messageId);
             }
+            if (window.nymHaptic) window.nymHaptic('light');
 
             input.value = '';
             this.autoResizeTextarea(input);
@@ -2733,6 +2858,16 @@ Object.assign(NYM.prototype, {
             ? this._threadBotQuoteContext(threadRoot, this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel)
             : null;
 
+        if (typeof this.aiConsentEnsure === 'function' && !rawInput.startsWith('/')) {
+            const needsAi = (this.inPMMode && !this.currentGroup && this.currentPM)
+                ? this.aiConsentNeededForPM(rawInput, this.currentPM)
+                : (!this.inPMMode && !!this.currentGeohash && this.aiConsentNeededForChannel(rawInput, savedQuote || threadBotQuote));
+            if (needsAi && !(await this.aiConsentEnsure('nymbot'))) {
+                this.aiConsentBlocked('nymbot');
+                return;
+            }
+        }
+
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
             const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
@@ -2743,6 +2878,7 @@ Object.assign(NYM.prototype, {
 
         this.commandHistory.push(content);
         this.historyIndex = this.commandHistory.length;
+        if (window.nymHaptic) window.nymHaptic('light');
 
         if (content.startsWith('/')) {
             this.handleCommand(content);
@@ -2828,6 +2964,11 @@ Object.assign(NYM.prototype, {
             threadBot: !!threadBotQuote
         }));
 
+        if (askBot && typeof this.aiConsentEnsure === 'function' && !(await this.aiConsentEnsure('nymbot'))) {
+            this.aiConsentBlocked('nymbot');
+            return false;
+        }
+
         if (this.pendingQuote) {
             const textLines = this.pendingQuote.text.split('\n');
             const quoteLine = `> @${this.pendingQuote.author}: ${textLines[0]}` +
@@ -2858,7 +2999,7 @@ Object.assign(NYM.prototype, {
         this.sendChannelTypingStop();
         input.focus();
         if (sent) {
-            if (window.nymHapticTap) window.nymHapticTap();
+            if (window.nymHaptic) window.nymHaptic('light');
             if (typeof this.showToast === 'function') {
                 const label = window.NymComposer ? window.NymComposer.STRINGS.sentAnon : 'Sent anonymously';
                 this.showToast(typeof this.uiText === 'function' ? this.uiText(label) : label);
@@ -3313,12 +3454,13 @@ Object.assign(NYM.prototype, {
 
         if (filteredMessages.length === 0) {
             // Shimmer first; if nothing loads, settle into a note that clears when a message arrives.
-            this._showMessageSkeleton(container, () => this._appendEmptyNote(container, `No recent messages in ${displayName}`));
+            this._showMessageSkeleton(container, () => this._appendEmptyNote(container, this._channelEmptyText(displayName)));
             this.renderChannelPolls();
             return;
         }
 
         this.renderMessagesWithVirtualScroll(container, storageKey, true);
+        this._applyDirectHistoryNote(container);
 
         this.renderChannelPolls();
     },
@@ -3513,6 +3655,44 @@ Object.assign(NYM.prototype, {
         if (container._emptyNote) { container._emptyNote.remove(); container._emptyNote = null; }
     },
 
+    _directHistoryMissing() {
+        if (this.useRelayProxy || this.inPMMode || this._cvActive) return false;
+        const key = String(this.currentGeohash || this.currentChannel || '').toLowerCase();
+        return !!(key && this._archiveUnavailable && this._archiveUnavailable.has(key));
+    },
+
+    _channelEmptyText(displayName) {
+        if (this._directHistoryMissing()) return this.uiText("Earlier messages aren't available in direct connection mode");
+        return `No recent messages in ${displayName}`;
+    },
+
+    _applyDirectHistoryNote(container) {
+        if (!container) return;
+        const existing = container.querySelector(':scope > .msg-history-note');
+        if (!this._directHistoryMissing() || !container.querySelector('.message[data-message-id]')) {
+            if (existing) existing.remove();
+            return;
+        }
+        if (existing) return;
+        const note = document.createElement('div');
+        note.className = 'msg-empty-note msg-history-note';
+        note.textContent = this.uiText('Earlier messages may be incomplete in direct connection mode');
+        container.insertBefore(note, container.firstChild);
+    },
+
+    _refreshDirectHistoryNote(names) {
+        if (this.inPMMode || this._cvActive) return;
+        const key = String(this.currentGeohash || this.currentChannel || '').toLowerCase();
+        if (!key || (names && !names.includes(key))) return;
+        const container = document.getElementById('messagesContainer');
+        if (!container) return;
+        if (container._emptyNote) {
+            container._emptyNote.textContent = this._channelEmptyText(this.currentGeohash ? `#${this.currentGeohash}` : `#${this.currentChannel}`);
+            return;
+        }
+        this._applyDirectHistoryNote(container);
+    },
+
     // Tracked so displayMessage can drop it when a message arrives.
     _appendEmptyNote(container, text) {
         if (!container) return;
@@ -3678,7 +3858,8 @@ Object.assign(NYM.prototype, {
         } else if (existingNotice) {
             existingNotice.remove();
         }
-        this._recomputeAllBubbleGrouping(container);
+        const head = container.querySelector('[data-message-id]');
+        if (head) this._settleBubbleHeadAfterPrune(container, head);
         return true;
     },
 
@@ -3722,36 +3903,22 @@ Object.assign(NYM.prototype, {
     refreshMessages() {
         this.userColors.clear();
 
-        // Remove stale bitchat style elements so they regenerate for the current mode.
         this.cleanupBitchatStyles();
 
-        const container = document.getElementById('messagesContainer');
-        const messages = container.querySelectorAll('.message');
-
-        messages.forEach(msg => {
-            const pubkey = msg.dataset.pubkey;
-            const authorElement = msg.querySelector('.message-author');
-            const contentElement = msg.querySelector('.message-content');
-
-            const updateBitchatClass = (el) => {
-                if (!el) return;
-                const classesToRemove = [];
-                el.classList.forEach(cls => {
-                    if (cls.startsWith('bitchat-user-') || cls === 'bitchat-theme') {
-                        classesToRemove.push(cls);
-                    }
+        for (const root of this.themeRoots()) {
+            root.querySelectorAll('.message[data-pubkey]').forEach(msg => {
+                const colorClass = this.getUserColorClass(msg.dataset.pubkey);
+                [msg.querySelector('.message-author'), msg.querySelector('.message-content')].forEach(el => {
+                    if (!el) return;
+                    const stale = [];
+                    el.classList.forEach(cls => {
+                        if ((cls.startsWith('bitchat-user-') || cls === 'bitchat-theme') && cls !== colorClass) stale.push(cls);
+                    });
+                    stale.forEach(cls => el.classList.remove(cls));
+                    if (colorClass) el.classList.add(colorClass);
                 });
-                classesToRemove.forEach(cls => el.classList.remove(cls));
-
-                const colorClass = this.getUserColorClass(pubkey);
-                if (colorClass) {
-                    el.classList.add(colorClass);
-                }
-            };
-
-            updateBitchatClass(authorElement);
-            updateBitchatClass(contentElement);
-        });
+            });
+        }
 
         this.updateUserList();
     },
@@ -4257,7 +4424,7 @@ Object.assign(NYM.prototype, {
     },
 
     _buildFormatCtx() {
-        const proxyBase = (typeof this._getProxyBaseUrl === 'function' ? this._getProxyBaseUrl() : null) || null;
+        const proxyBase = (typeof this._mediaProxyBase === 'function' ? this._mediaProxyBase() : null) || null;
         const currentChannel = this.currentChannel || null;
         const currentGeohash = this.currentGeohash || null;
         const rev = this._formatCtxRev || 0;

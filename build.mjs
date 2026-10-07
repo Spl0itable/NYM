@@ -147,7 +147,8 @@ async function run() {
     if (rel === 'js/nostr-tools.js' || rel.startsWith('js/vendor/')) return 0;
     // Worker dependencies before workers, workers before their referrers.
     if (rel === 'js/modules/syntax-highlight.js' || rel === 'js/geo-decode.js'
-        || rel === 'js/modules/message-format.js' || rel === 'js/modules/media-notes.js') return 1;
+        || rel === 'js/modules/message-format.js' || rel === 'js/modules/media-notes.js'
+        || rel === 'js/modules/call-link-icon.js') return 1;
     if (rel === 'js/verify-worker.js' || rel === 'js/highlight-worker.js'
         || rel === 'js/geo-decode-worker.js' || rel === 'js/format-worker.js') return 2;
     return 3;
@@ -170,7 +171,11 @@ async function run() {
     if (!file.endsWith('.css')) continue;
     const rel = toPosix(path.relative(root, file));
     const src = await fs.readFile(file, 'utf8');
-    const { code } = await transform(src, { loader: 'css', minify: true, legalComments: 'none' });
+    const { code, warnings } = await transform(src, { loader: 'css', minify: true, legalComments: 'none' });
+    if (warnings.length) {
+      const w = warnings[0];
+      throw new Error(`${rel}:${w.location ? w.location.line : '?'} ${w.text}`);
+    }
     const hashed = hashedName(rel, code);
     await emit(hashed, code);
     assetMap.set(rel, hashed);
@@ -229,11 +234,14 @@ async function run() {
     'css/styles-components.css', 'css/styles-themes-responsive.css', 'css/styles-columns.css',
     'css/no-inline.css',
     'js/defer-css.js', 'js/accounts.js', 'js/theme-init.js', 'js/setup-modal-init.js',
-    'js/modules/inline-bindings.js', 'js/modules/dialog.js', 'js/nostr-tools.js',
+    'js/modules/call-link-icon.js', 'js/modules/menu-dots-icon.js',
+    'js/modules/inline-bindings.js', 'js/modules/dialog.js', 'js/modules/sheets.js',
+    'js/nostr-tools.js',
     'js/app.js', 'js/vendor/ml-kem.js', 'js/nym-crypto.js', 'js/modules/crypto-pool.js',
     'js/modules/pq.js',
     'js/modules/persistence.js', 'js/modules/key-vault.js', 'js/modules/panic.js',
     'js/modules/remote-panic.js', 'js/modules/remote-panic-ui.js',
+    'js/modules/ai-consent.js',
     'js/modules/attest.js', 'js/modules/filter-packs.js', 'js/modules/event-details.js',
     'js/modules/wrap-outbox.js',
     'js/modules/relays.js', 'js/modules/nostr-core.js', 'js/modules/users.js',

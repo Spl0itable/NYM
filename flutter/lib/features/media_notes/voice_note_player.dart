@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../calls/call_providers.dart';
+import '../calls/call_signaling.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/media_fallbacks.dart';
@@ -16,6 +18,7 @@ import 'media_note_files.dart';
 import 'media_note_stores.dart';
 import 'media_notes.dart';
 import 'transcription_service.dart';
+import 'voice_note_format.dart';
 
 final activeMediaNoteProvider = StateProvider<Object?>((ref) => null);
 
@@ -29,29 +32,53 @@ List<int> voiceBarLevels(MediaNote note) => note.waveform.isNotEmpty
     ? note.waveform
     : List<int>.filled(MediaNoteLimits.waveformBars, 8);
 
-bool canPlayVoiceMime(String mime, TargetPlatform platform) {
-  final m = baseMime(mime);
-  final apple = platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
-  if (apple && (m == 'audio/webm' || m == 'video/webm' || m == 'audio/ogg')) {
-    return false;
-  }
-  return true;
-}
-
 String transcribeLanguage() =>
     PlatformDispatcher.instance.locale.toLanguageTag();
 
 final modelClockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
+
+typedef VoiceNoteBytes = Future<Uint8List> Function(
+    MediaNote note, String? localPath);
+
+final voiceNoteBytesProvider =
+    Provider<VoiceNoteBytes>((ref) => (note, localPath) async {
+          if (localPath != null) return MediaNoteFiles.readLocal(localPath);
+          final urls = <String>[
+            note.url,
+            ...ref.read(mediaFallbacksProvider).fallbacksFor(note.url),
+          ];
+          Object? last;
+          for (final u in urls) {
+            try {
+              return await MediaNoteFiles.fetch(u);
+            } catch (e) {
+              last = e;
+            }
+          }
+          throw last ?? StateError('no source');
+        });
+
+typedef VoiceSessionPrep = Future<void> Function();
+
+final voiceSessionPrepProvider = Provider<VoiceSessionPrep>((ref) => () async {
+      final phase = ref.exists(callServiceProvider)
+          ? ref.read(callServiceProvider).state.value.phase
+          : CallPhase.idle;
+      if (!shouldUseVoicePlaybackSession(defaultTargetPlatform, phase)) return;
+      try {
+        await AudioPlayer.global.setAudioContext(voicePlaybackContext());
+      } catch (_) {}
+    });
 
 typedef VoiceNoteTempFile = Future<String> Function(
     MediaNote note, String? localPath);
 
 final voiceNoteTempFileProvider =
     Provider<VoiceNoteTempFile>((ref) => (note, localPath) async {
-          final bytes = localPath != null
-              ? await MediaNoteFiles.readLocal(localPath)
-              : await MediaNoteFiles.fetch(note.url);
-          return MediaNoteFiles.writeTemp(bytes, note.mime);
+          final bytes = await ref.read(voiceNoteBytesProvider)(note, localPath);
+          final f = voiceFileFor(bytes, note.mime, defaultTargetPlatform);
+          if (f == null) throw StateError(kVoiceAppleUnplayable);
+          return MediaNoteFiles.writeTempExt(f.bytes, f.ext);
         });
 
 class VoiceNotePlayer extends ConsumerStatefulWidget {
@@ -79,7 +106,9 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
   bool _playing = false;
   bool _loading = false;
   String? _failure;
+  bool _unplayable = false;
   String? _tempPath;
+  VoiceFile? _localFile;
   bool _sourceSet = false;
   String? _transcript;
   String? _transcriptNote;
@@ -142,11 +171,45 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
     return p;
   }
 
+  Future<bool> _prepareLocalFile() async {
+    if (_localFile != null) return true;
+    setState(() => _loading = true);
+    try {
+      final bytes =
+          await ref.read(voiceNoteBytesProvider)(widget.note, widget.localPath);
+      final f = voiceFileFor(bytes, widget.note.mime, defaultTargetPlatform);
+      if (f == null) {
+        if (mounted) {
+          setState(() {
+            _failure = tr(kVoiceAppleUnplayable);
+            _unplayable = true;
+          });
+        }
+        return false;
+      }
+      final path = await MediaNoteFiles.writeTempExt(f.bytes, f.ext);
+      if (!mounted) {
+        await MediaNoteFiles.deleteQuietly(path);
+        return false;
+      }
+      _tempPath = path;
+      _localFile = f;
+      return true;
+    } catch (_) {
+      if (mounted) setState(() => _failure = tr("Couldn't load"));
+      return false;
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   Future<bool> _setSource(AudioPlayer p) async {
     if (_sourceSet) return true;
-    if (!canPlayVoiceMime(widget.note.mime, defaultTargetPlatform)) {
-      setState(() => _failure = tr("Can't play this format here"));
-      return false;
+    final file = _localFile;
+    if (file != null) {
+      await p.setSource(DeviceFileSource(_tempPath!, mimeType: file.mime));
+      _sourceSet = true;
+      return true;
     }
     final local = widget.localPath;
     if (local != null) {
@@ -173,6 +236,12 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
 
   Future<void> _toggle() async {
     if (_failure != null) return;
+    if (!_playing &&
+        voicePlaysFromLocalFile(defaultTargetPlatform) &&
+        !await _prepareLocalFile()) {
+      return;
+    }
+    if (!mounted) return;
     final p = await _ensurePlayer();
     if (_playing) {
       await p.pause();
@@ -182,6 +251,7 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
     setState(() => _loading = true);
     try {
       if (!await _setSource(p)) return;
+      await ref.read(voiceSessionPrepProvider)();
       await p.setPlaybackRate(ref.read(voiceSpeedProvider));
       await p.resume();
     } catch (_) {
@@ -418,7 +488,8 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
     final frac = total > 0 ? (pos / total).clamp(0.0, 1.0) : 0.0;
     final idle = !_playing && _position == Duration.zero;
     final played = idle ? 0 : (frac * levels.length).round();
-    final timeText = _failure ?? formatClock(idle ? total : pos);
+    final clockText = formatClock(idle ? total : pos);
+    final timeText = _unplayable ? clockText : (_failure ?? clockText);
     return ConstrainedBox(
       constraints: BoxConstraints(maxWidth: widget.maxWidth),
       child: Container(
@@ -504,7 +575,7 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
                   timeText,
                   key: const ValueKey('voiceTime'),
                   style: TextStyle(
-                    color: _failure != null ? c.danger : c.textDim,
+                    color: _failure != null && !_unplayable ? c.danger : c.textDim,
                     fontSize: 12,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -524,6 +595,15 @@ class _VoiceNotePlayerState extends ConsumerState<VoiceNotePlayer> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (_unplayable)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        _failure!,
+                        key: const ValueKey('voiceUnplayable'),
+                        style: TextStyle(color: c.danger, fontSize: 12),
+                      ),
+                    ),
                   if (_transcript == null && _modelStage == null && !_modelRetry)
                     _SmallButton(
                       key: const ValueKey('voiceTranscribe'),

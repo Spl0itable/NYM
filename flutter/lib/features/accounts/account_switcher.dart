@@ -17,6 +17,8 @@ import '../identity/modal_chrome.dart';
 import '../toasts/toast_center.dart';
 import 'account_host.dart';
 import 'account_logic.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 String accountMethodLabel(String method) {
   switch (method) {
@@ -66,54 +68,39 @@ class _AccountSwitchButtonState extends ConsumerState<AccountSwitchButton> {
       onHover: (v) => setState(() => _hover = v),
       onFocusChange: (v) => setState(() => _focus = v),
       child: Container(
-        width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 36),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: lit
               ? (c.isLight
-                  ? Colors.black.withValues(alpha: 0.07)
-                  : Colors.white.withValues(alpha: 0.07))
-              : c.insetFill,
-          border: Border.all(color: lit ? c.primaryA(0.3) : c.glassBorder),
+                  ? Colors.black.withValues(alpha: 0.05)
+                  : c.primaryA(0.1))
+              : Colors.transparent,
           borderRadius: NymRadius.rsm,
-          boxShadow: lit && !c.isLight
-              ? [BoxShadow(color: c.primaryA(0.08), blurRadius: 15)]
-              : null,
         ),
-        child: Row(
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.center,
           children: [
-            NymSvgIcon(NymIcons.accountSwitch, size: 16, color: fg),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: fg,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.3,
-                  height: 1.2,
-                ),
-              ),
-            ),
+            NymSvgIcon(NymIcons.accountSwitch, size: 18, color: fg),
             ValueListenableBuilder<AccountIndex>(
               valueListenable: api.changes,
               builder: (context, index, _) {
                 final unread = index.accounts
                     .any((a) => a.id != index.active && a.unread > 0);
                 if (!unread) return const SizedBox.shrink();
-                return Padding(
-                  padding: const EdgeInsets.only(left: 10),
+                return Positioned(
+                  top: -7,
+                  right: -7,
                   child: Container(
                     key: const ValueKey('accountSwitchUnreadDot'),
-                    width: 8,
-                    height: 8,
+                    width: 9,
+                    height: 9,
                     decoration: BoxDecoration(
                       color: c.danger,
                       shape: BoxShape.circle,
+                      border: Border.all(color: c.bg, width: 2),
                     ),
                   ),
                 );
@@ -134,7 +121,7 @@ class _AccountSwitchButtonState extends ConsumerState<AccountSwitchButton> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            row,
+            NymTooltip(message: label, child: row),
             if (_focus && FocusManager.instance.highlightMode ==
                 FocusHighlightMode.traditional)
               Positioned(
@@ -145,9 +132,8 @@ class _AccountSwitchButtonState extends ConsumerState<AccountSwitchButton> {
                 child: IgnorePointer(
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      border: Border.all(color: c.primaryA(0.6), width: 2),
-                      borderRadius:
-                          const BorderRadius.all(Radius.circular(NymRadius.sm + 3)),
+                      border: Border.all(color: c.secondary, width: 2),
+                      borderRadius: NymRadius.rsm,
                     ),
                   ),
                 ),
@@ -160,37 +146,21 @@ class _AccountSwitchButtonState extends ConsumerState<AccountSwitchButton> {
 }
 
 Future<void> showAccountSwitcher(BuildContext context) {
-  final wide = MediaQuery.sizeOf(context).width >= 700;
-  if (wide) {
-    return showDialog<void>(
-      context: context,
-      builder: (ctx) => Dialog(
+  return showNymSheet<void>(context, (ctx) {
+    final panel = AccountSwitcherPanel(sheet: NymSheetScope.of(ctx));
+    return nymSheetOr(
+      ctx,
+      panel,
+      (panel) => Dialog(
         backgroundColor: Colors.transparent,
         insetPadding: const EdgeInsets.all(24),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
-          child: ModalChrome.box(ctx.nym,
-              child: const AccountSwitcherPanel(sheet: false)),
+          child: ModalChrome.box(ctx.nym, child: panel),
         ),
       ),
     );
-  }
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (ctx) => Container(
-      decoration: BoxDecoration(
-        color: ctx.nym.bgSecondary,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-        border: Border.all(color: ctx.nym.glassBorder),
-      ),
-      child: const SafeArea(
-        top: false,
-        child: AccountSwitcherPanel(sheet: true),
-      ),
-    ),
-  );
+  });
 }
 
 class AccountSwitcherPanel extends ConsumerStatefulWidget {
@@ -511,7 +481,7 @@ class _AccountRow extends StatelessWidget {
             if (active)
               Padding(
                 padding: const EdgeInsets.only(right: 4),
-                child: Tooltip(
+                child: NymTooltip(
                   message: tr('Active identity'),
                   child: Icon(Icons.check,
                       key: const ValueKey('accountActiveCheck'),

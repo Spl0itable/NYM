@@ -45,6 +45,7 @@ class NymColors extends ThemeExtension<NymColors> {
     this.solidUi = false,
     this._bubbleSelfBg,
     this._bubbleOtherBg,
+    this._fieldPlaceholder,
   });
 
   final Color primary; // accent / brand
@@ -71,8 +72,14 @@ class NymColors extends ThemeExtension<NymColors> {
   /// Solid-UI bubble fills; null in glass mode, where the getters use translucent bases.
   final Color? _bubbleSelfBg;
   final Color? _bubbleOtherBg;
+  final Color? _fieldPlaceholder;
 
   bool get isLight => brightness == Brightness.light;
+
+  Color get fieldPlaceholder => _fieldPlaceholder ?? textDim;
+
+  Color get messageText =>
+      isLight ? const Color(0xFF4A4A4A) : const Color(0xFFCCCCCC);
 
   /// Typed-input text color: pure white/black, not [text], which is accent-tinted in some themes.
   Color get inputText => isLight ? const Color(0xFF000000) : const Color(0xFFFFFFFF);
@@ -143,6 +150,7 @@ class NymColors extends ThemeExtension<NymColors> {
     bool? solidUi,
     Color? bubbleSelfBg,
     Color? bubbleOtherBg,
+    Color? fieldPlaceholder,
   }) {
     return NymColors(
       primary: primary ?? this.primary,
@@ -165,6 +173,7 @@ class NymColors extends ThemeExtension<NymColors> {
       solidUi: solidUi ?? this.solidUi,
       bubbleSelfBg: bubbleSelfBg ?? _bubbleSelfBg,
       bubbleOtherBg: bubbleOtherBg ?? _bubbleOtherBg,
+      fieldPlaceholder: fieldPlaceholder ?? _fieldPlaceholder,
     );
   }
 
@@ -192,6 +201,7 @@ class NymColors extends ThemeExtension<NymColors> {
       solidUi: t < 0.5 ? solidUi : other.solidUi,
       bubbleSelfBg: t < 0.5 ? _bubbleSelfBg : other._bubbleSelfBg,
       bubbleOtherBg: t < 0.5 ? _bubbleOtherBg : other._bubbleOtherBg,
+      fieldPlaceholder: Color.lerp(fieldPlaceholder, other.fieldPlaceholder, t),
     );
   }
 }

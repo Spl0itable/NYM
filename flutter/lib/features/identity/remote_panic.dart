@@ -21,15 +21,16 @@ class RemotePanicSignals {
 
   static int nowSec() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-  static Map<String, dynamic> marker(Uint8List sk, {int? at}) {
-    final t = RemotePanic.template(at ?? nowSec());
+  static Map<String, dynamic> marker(Uint8List sk,
+      {int? at, bool deleted = false}) {
+    final t = RemotePanic.template(at ?? nowSec(), deleted: deleted);
     final ev = schnorr.finalizeEvent(
       UnsignedEvent(
         pubkey: keys.getPublicKeyHex(sk),
         createdAt: t['created_at'] as int,
         kind: RemotePanic.kind,
-        tags: const [
-          ['d', RemotePanic.dTag]
+        tags: [
+          ['d', deleted ? RemotePanic.deleteDTag : RemotePanic.dTag]
         ],
         content: '',
       ),
@@ -61,14 +62,14 @@ class RemotePanicSignals {
   }
 
   static Future<Map<String, dynamic>?> markerVia(EventSigner signer,
-      {int? at}) async {
-    final t = RemotePanic.template(at ?? nowSec());
+      {int? at, bool deleted = false}) async {
+    final t = RemotePanic.template(at ?? nowSec(), deleted: deleted);
     final ev = await signer.sign(UnsignedEvent(
       pubkey: signer.pubkey,
       createdAt: t['created_at'] as int,
       kind: RemotePanic.kind,
-      tags: const [
-        ['d', RemotePanic.dTag]
+      tags: [
+        ['d', deleted ? RemotePanic.deleteDTag : RemotePanic.dTag]
       ],
       content: '',
     ));
@@ -103,8 +104,13 @@ class RemotePanicSignals {
         pubkey: pubkey,
         createdAt: r['created_at'] as int,
         kind: RemotePanic.kind,
-        tags: const [
-          ['d', RemotePanic.dTag]
+        tags: [
+          [
+            'd',
+            RemotePanic.isDeletion(marker)
+                ? RemotePanic.deleteDTag
+                : RemotePanic.dTag
+          ]
         ],
         content: r['content'] as String,
       ),
@@ -131,6 +137,7 @@ class RemotePanicSender {
     required this.send,
     required this.url,
     this.publish,
+    this.deleting = false,
   });
 
   factory RemotePanicSender.fromStore(
@@ -139,28 +146,34 @@ class RemotePanicSender {
         send,
     required String Function() url,
     bool Function(NostrEvent wrap)? publish,
+    bool deleting = false,
   }) =>
       RemotePanicSender(
         enabled: (i) => RemotePanicPrefs.enabledFor(kv, i),
         send: send,
         url: url,
         publish: publish,
+        deleting: deleting,
       );
 
   final bool Function(PanicIdentity identity) enabled;
   final Future<Map<String, dynamic>> Function(Map<String, dynamic> body) send;
   final String Function() url;
   final bool Function(NostrEvent wrap)? publish;
+  final bool deleting;
 
   final List<String> marked = [];
 
   Future<void> call(PanicIdentity identity, Uint8List sk) async {
-    if (!RemotePanic.shouldSend(enabled(identity), sk.length == 32)) return;
+    if (!RemotePanic.shouldSend(
+        deleting || enabled(identity), sk.length == 32)) {
+      return;
+    }
     if (identity.pubkey.isNotEmpty &&
         keys.getPublicKeyHex(sk) != identity.pubkey.toLowerCase()) {
       return;
     }
-    final m = RemotePanicSignals.marker(sk);
+    final m = RemotePanicSignals.marker(sk, deleted: deleting);
     final pub = publish;
     if (identity.active && pub != null) {
       try {
@@ -176,8 +189,8 @@ class RemotePanicSender {
     if (!identity.active || pubkey.isEmpty) return;
     if (signer is! Nip46SignerAdapter || !signer.connected) return;
     if (signer.pubkey != pubkey) return;
-    if (!RemotePanic.shouldSend(enabled(identity), true)) return;
-    final m = await RemotePanicSignals.markerVia(signer);
+    if (!RemotePanic.shouldSend(deleting || enabled(identity), true)) return;
+    final m = await RemotePanicSignals.markerVia(signer, deleted: deleting);
     if (m == null) return;
     final body = await RemotePanicSignals.markBodyVia(signer, m, url());
     if (body == null) return;

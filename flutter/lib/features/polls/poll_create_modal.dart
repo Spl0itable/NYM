@@ -7,6 +7,8 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../dm_polls/dm_polls_providers.dart';
 import '../i18n/i18n.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// Poll form is valid with a non-empty question and at least 2 non-empty options.
 bool pollFormValid(String question, List<String> options) {
@@ -20,12 +22,12 @@ class PollCreateModal extends ConsumerStatefulWidget {
 
   static Future<void> open(BuildContext context) {
     final isLight = context.nym.isLight;
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => const PollCreateModal(),
       barrierColor: isLight
           ? const Color(0x73000000)
           : const Color(0xBF000000),
-      builder: (_) => const PollCreateModal(),
     );
   }
 
@@ -42,6 +44,12 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
     TextEditingController(),
   ];
   bool _submitting = false;
+
+  bool get _dirty =>
+      !_submitting &&
+      (_questionController.text.trim().isNotEmpty ||
+          _optionControllers.any((o) => o.text.trim().isNotEmpty));
+
 
   @override
   void dispose() {
@@ -84,125 +92,135 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
     } else {
       await ref.read(dmPollsProvider).publish(view, question, options);
     }
-    if (mounted) Navigator.of(context).maybePop();
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480),
-        child: Container(
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            border: Border.all(color: c.glassBorder),
-            borderRadius: NymRadius.rxl,
-            boxShadow: c.isLight
-                ? const [
-                    BoxShadow(
-                      color: Color(0x1F000000),
-                      blurRadius: 40,
-                      offset: Offset(0, 8),
+    final body = Stack(
+      children: [
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              margin: NymSheetScope.of(context)
+                  ? const EdgeInsets.fromLTRB(32, 12, 56, 20)
+                  : const EdgeInsets.fromLTRB(32, 32, 32, 24),
+              padding: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: c.glassBorder)),
+              ),
+              child: Text(
+                tr('CREATE POLL'),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _label(c, tr('Question')),
+                    const SizedBox(height: 8),
+                    _FormInput(
+                      controller: _questionController,
+                      hint: tr('Ask a question...'),
+                      maxLength: 280,
+                      onChanged: (_) => setState(() {}),
                     ),
-                  ]
-                : [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.5),
-                      blurRadius: 32,
-                      offset: const Offset(0, 8),
-                    ),
-                    BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
-                    BoxShadow(
-                        color: Colors.white.withValues(alpha: 0.05),
-                        spreadRadius: 1),
-                  ],
-          ),
-          child: Stack(
-            children: [
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    margin: const EdgeInsets.fromLTRB(32, 32, 32, 24),
-                    padding: const EdgeInsets.only(bottom: 14),
-                    decoration: BoxDecoration(
-                      border: Border(bottom: BorderSide(color: c.glassBorder)),
-                    ),
-                    child: Text(
-                      tr('CREATE POLL'),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.5,
-                      ),
-                    ),
-                  ),
-                  Flexible(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _label(c, tr('Question')),
-                          const SizedBox(height: 8),
-                          _FormInput(
-                            controller: _questionController,
-                            hint: tr('Ask a question...'),
-                            maxLength: 280,
-                            onChanged: (_) => setState(() {}),
-                          ),
-                          const SizedBox(height: 20),
-                          _label(c, tr('Options')),
-                          const SizedBox(height: 8),
-                          for (var i = 0; i < _optionControllers.length; i++)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: _FormInput(
-                                      controller: _optionControllers[i],
-                                      hint: tr('Option {n}', {'n': i + 1}),
-                                      maxLength: 100,
-                                      onChanged: (_) => setState(() {}),
-                                    ),
-                                  ),
-                                  if (i >= 2) ...[
-                                    const SizedBox(width: 8),
-                                    _removeOptionBtn(c, i),
-                                  ],
-                                ],
+                    const SizedBox(height: 20),
+                    _label(c, tr('Options')),
+                    const SizedBox(height: 8),
+                    for (var i = 0; i < _optionControllers.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: _FormInput(
+                                controller: _optionControllers[i],
+                                hint: tr('Option {n}', {'n': i + 1}),
+                                maxLength: 100,
+                                onChanged: (_) => setState(() {}),
                               ),
                             ),
-                          if (_optionControllers.length < _maxOptions)
-                            _addOptionBtn(c),
-                          const SizedBox(height: 24),
-                        ],
+                            if (i >= 2) ...[
+                              const SizedBox(width: 8),
+                              _removeOptionBtn(c, i),
+                            ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        _cancelBtn(c),
-                        const SizedBox(width: 10),
-                        _createBtn(c),
-                      ],
-                    ),
-                  ),
+                    if (_optionControllers.length < _maxOptions)
+                      _addOptionBtn(c),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _cancelBtn(c),
+                  const SizedBox(width: 10),
+                  _createBtn(c),
                 ],
               ),
-              Positioned(top: 14, right: 14, child: _closeButton(c)),
-            ],
+            ),
+          ],
+        ),
+        Positioned(top: 14, right: 14, child: _closeButton(c)),
+      ],
+    );
+    return NymDiscardGuard(
+      isDirty: () => _dirty,
+      child: nymSheetOr(
+        context,
+        body,
+        (body) => Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Container(
+              decoration: BoxDecoration(
+                color: c.bgSecondary,
+                border: Border.all(color: c.glassBorder),
+                borderRadius: NymRadius.rxl,
+                boxShadow: c.isLight
+                    ? const [
+                        BoxShadow(
+                          color: Color(0x1F000000),
+                          blurRadius: 40,
+                          offset: Offset(0, 8),
+                        ),
+                      ]
+                    : [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.5),
+                          blurRadius: 32,
+                          offset: const Offset(0, 8),
+                        ),
+                        BoxShadow(color: c.primaryA(0.1), blurRadius: 20),
+                        BoxShadow(
+                            color: Colors.white.withValues(alpha: 0.05),
+                            spreadRadius: 1),
+                      ],
+              ),
+              child: body,
+            ),
           ),
         ),
       ),
@@ -221,7 +239,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
 
   Widget _closeButton(NymColors c) {
     return InkWell(
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: () => Navigator.of(context).pop(),
       borderRadius: const BorderRadius.all(Radius.circular(16)),
       child: Container(
         width: 32,
@@ -232,8 +250,8 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
           color: Colors.white.withValues(alpha: 0.05),
           border: Border.all(color: c.glassBorder),
         ),
-        child: Text('✕',
-            style: TextStyle(color: c.textDim, fontSize: 16, height: 1)),
+        child: Icon(Icons.close,
+            semanticLabel: tr('Close'), size: 16, color: c.textDim),
       ),
     );
   }
@@ -250,8 +268,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
           shape: BoxShape.circle,
           border: Border.all(color: c.glassBorder),
         ),
-        child: Text('✕',
-            style: TextStyle(color: c.textDim, fontSize: 12, height: 1)),
+        child: Icon(Icons.close, size: 12, color: c.textDim),
       ),
     );
   }
@@ -281,7 +298,7 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
 
   Widget _cancelBtn(NymColors c) {
     return InkWell(
-      onTap: () => Navigator.of(context).maybePop(),
+      onTap: () => Navigator.of(context).pop(),
       borderRadius: NymRadius.rxs,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -378,9 +395,7 @@ class _FormInputState extends State<_FormInput> {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: NymRadius.rsm,
-        boxShadow: focused
-            ? [BoxShadow(color: c.primaryA(0.06), spreadRadius: 3)]
-            : null,
+        boxShadow: NymField.ring(c, focused),
       ),
       child: TextField(
         controller: widget.controller,
@@ -388,28 +403,7 @@ class _FormInputState extends State<_FormInput> {
         maxLength: widget.maxLength,
         onChanged: widget.onChanged,
         style: TextStyle(color: c.inputText, fontSize: 15),
-        decoration: InputDecoration(
-          hintText: widget.hint,
-          hintStyle: TextStyle(color: c.textDim, fontSize: 15),
-          counterText: '',
-          isDense: true,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-          filled: true,
-          fillColor: Colors.white.withValues(alpha: focused ? 0.07 : 0.05),
-          border: OutlineInputBorder(
-            borderRadius: NymRadius.rsm,
-            borderSide: BorderSide(color: c.glassBorder),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rsm,
-            borderSide: BorderSide(color: c.glassBorder),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rsm,
-            borderSide: BorderSide(color: c.primaryA(0.3)),
-          ),
-        ),
+        decoration: NymField.decoration(c, hint: widget.hint).copyWith(counterText: ''),
       ),
     );
   }

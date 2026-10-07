@@ -1,9 +1,9 @@
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/haptics.dart';
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/i18n/i18n.dart';
@@ -14,6 +14,8 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../common/app_dialog.dart';
+import '../common/nym_action_sheet.dart';
+import '../context_menu/group_context_menu_panel.dart' show showGroupMenuSheet;
 import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/chat_lock/chat_lock_ui.dart';
 import '../nym_icons.dart';
@@ -66,11 +68,25 @@ List<SidebarQuickMenuItem> chatToolSidebarItems(
 Future<void> showSidebarQuickMenu(
   BuildContext context,
   Offset globalPosition,
-  List<SidebarQuickMenuItem> items,
-) async {
+  List<SidebarQuickMenuItem> items, {
+  String? groupId,
+}) async {
   if (items.isEmpty) return;
-  // The PWA's 30ms vibrate is a solid pulse, so mediumImpact rather than lightImpact.
-  HapticFeedback.mediumImpact();
+  Haptics.selection();
+
+  if (useNymActionSheet(context)) {
+    final entries = [
+      for (final a in items)
+        NymActionEntry<SidebarQuickMenuItem>(
+            label: a.label, svg: a.svg, value: a, danger: a.danger),
+    ];
+    final picked = groupId != null
+        ? await showGroupMenuSheet<SidebarQuickMenuItem>(
+            context, groupId, entries)
+        : await showNymActionSheet<SidebarQuickMenuItem>(context, entries);
+    picked?.onSelected();
+    return;
+  }
 
   final selected = await Navigator.of(context, rootNavigator: true)
       .push<SidebarQuickMenuItem>(

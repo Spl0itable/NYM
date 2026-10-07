@@ -12,7 +12,15 @@ import '../../core/crypto/nym_sync_builder.dart';
 import '../../models/settings.dart';
 import '../../features/chat_tools/chat_tools.dart'
     show ChatToolsKeys, trimSavedPayload;
-import '../../features/chat_nav/chat_nav.dart' show ChatNavKeys, trimPinnedPayload;
+import '../../features/chat_nav/chat_nav.dart'
+    show ChatNavKeys, markStoreNorm, trimPinnedPayload;
+import '../../features/sync/sync_merge.dart' show SyncMergeCaps, tsMapNorm;
+import '../../features/away/away_sync.dart';
+import '../../features/toasts/event_toast_settings_store.dart';
+import '../../features/media_notes/media_notes.dart' show parseSpeed, speedWire;
+import '../../features/sync/pref_stamps.dart';
+import '../attest/attest_badge.dart' show normalizeAppVerifiedFilter;
+import '../filter/filter_packs.dart' show kFilterPackIds;
 import '../../features/chat_lock/chat_lock.dart'
     show ChatLockKeys, trimLockedPayload;
 import '../../features/groups/group_logic.dart'
@@ -39,6 +47,10 @@ const int kPmDepositMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
 const int kPmDepositPersistMs = 300;
 
 const String kPmDepositStoreKey = 'pmDepositQueue';
+
+const String kCallsDTag = 'nymchat-calls';
+
+const String kGroupToolsDTag = 'nymchat-grouptools';
 
 class _Deposit {
   _Deposit(this.wrap, this.tier, this.seq, this.at, this.tries);
@@ -124,6 +136,10 @@ class StorageSync {
       'sidebarSectionOrder',
       // Filed under `appearance` as in the PWA, so it never lives in two categories.
       'uiLanguage',
+      'colorfulMessages',
+      'colorfulMessagesTs',
+      'pubkeyFormat',
+      'pubkeyFormatTs',
     ],
     'privacy': [
       'blockedUsers',
@@ -142,8 +158,13 @@ class StorageSync {
       'acceptCalls',
       'showStatus',
       'powDifficulty',
+      'appVerifiedFilter',
+      'filterPacks',
       'encryptAtRestPreferred',
       'remotePanic',
+      'spamFilterEnabled',
+      'spamFilterAggressive',
+      'spamFilterTs',
     ],
     'messaging': [
       'groupChatPMOnlyMode',
@@ -164,8 +185,15 @@ class StorageSync {
       'groupNotifyMentionsOnly',
       'threadNotifyMentionsOnly',
       'notifyFriendsOnly',
+      'eventToasts',
       'syncMLSHistory',
       'seenCalls',
+      'hidePreviews',
+      'hidePreviewsTs',
+      'voiceSpeed',
+      'voiceSpeedTs',
+      'keepCallHistory',
+      'keepCallHistoryTs',
     ],
     'channels': [
       'pinnedChannels',
@@ -181,6 +209,7 @@ class StorageSync {
     'data': [
       'lowDataMode',
       'backgroundConnectivity',
+      'backgroundConnectivityChosen',
       'cachePMs',
       'tutorialSeen',
       'botPmWelcomed',
@@ -255,6 +284,9 @@ class StorageSync {
       'lowDataMode': s.lowDataMode,
       'backgroundConnectivity': s.backgroundConnectivity,
       'cachePMs': s.cachePMs,
+      'uiLanguage': s.uiLanguage,
+      'hidePreviews': s.hidePreviews,
+      'colorfulMessages': s.colorfulMessages,
     };
 
     if (kv != null) {
@@ -309,17 +341,48 @@ class StorageSync {
         flat['swipeReactEmojiTs'] =
             kv.getInt(StorageKeys.swipeReactEmojiTs, defaultValue: 0);
       }
+      if (kv.contains(StorageKeys.backgroundConnectivity)) {
+        flat['backgroundConnectivityChosen'] = true;
+      } else {
+        flat.remove('backgroundConnectivity');
+      }
       flat['groupNotifyMentionsOnly'] =
           kv.getString(StorageKeys.groupNotifyMentionsOnly) == 'true';
       flat['threadNotifyMentionsOnly'] =
           kv.getString(StorageKeys.threadNotifyMentionsOnly) == 'true';
       flat['notifyFriendsOnly'] =
           kv.getString(StorageKeys.notifyFriendsOnly) == 'true';
+      if (kv.contains(StorageKeys.eventToasts)) {
+        flat['eventToasts'] = readEventToastSettings(kv).toJson();
+      }
       flat['tutorialSeen'] = kv.getString(StorageKeys.tutorialSeen) == 'true';
       flat['botPmWelcomed'] = kv.getString(StorageKeys.botpmWelcomed) == 'true';
       flat['botPmClearedAt'] =
           kv.getInt(StorageKeys.botpmClearedAt, defaultValue: 0);
       flat['botMaxRuns'] = kv.getInt(StorageKeys.botpmMaxRuns, defaultValue: 0);
+      flat['appVerifiedFilter'] =
+          normalizeAppVerifiedFilter(kv.getString(StorageKeys.appVerifiedFilter));
+      flat['filterPacks'] = _kvJsonList(kv, StorageKeys.filterPacks)
+          .where(kFilterPackIds.contains)
+          .toList();
+      flat['botAnonEnabled'] = kv.getString(StorageKeys.botAnonEnabled) == 'true';
+      final stamps = PrefStamps.read(kv);
+      flat['spamFilterEnabled'] =
+          kv.getBool(StorageKeys.spamFilterEnabled, defaultValue: true);
+      flat['spamFilterAggressive'] =
+          kv.getBool(StorageKeys.spamFilterAggressive, defaultValue: true);
+      flat['spamFilterTs'] = stamps['spamFilter'] ?? 0;
+      flat['hidePreviewsTs'] = stamps['hidePreviews'] ?? 0;
+      flat['colorfulMessagesTs'] = stamps['colorfulMessages'] ?? 0;
+      flat['pubkeyFormat'] =
+          kv.getString(StorageKeys.pubkeyFormat) == 'hex' ? 'hex' : 'npub';
+      flat['pubkeyFormatTs'] = stamps['pubkeyFormat'] ?? 0;
+      flat['voiceSpeed'] =
+          speedWire(parseSpeed(kv.getString(StorageKeys.voiceSpeed)));
+      flat['voiceSpeedTs'] = stamps['voiceSpeed'] ?? 0;
+      flat['keepCallHistory'] =
+          kv.getString(StorageKeys.keepCallHistory) != 'off';
+      flat['keepCallHistoryTs'] = stamps['keepCallHistory'] ?? 0;
     }
 
     // Landing channel: threaded JSON, then KV, then the PWA default; omitted without [kv] when invalid.
@@ -871,13 +934,18 @@ class StorageSync {
   }
 
   /// D1-only `nymchat-readstate` `{channelLastRead}`, keeping the newest 2000 positive entries; no-op when empty or unchanged.
-  Future<bool> readStateSet(Map<String, int> channelLastRead) async {
-    if (channelLastRead.isEmpty) return false;
+  Future<bool> readStateSet(
+    Map<String, int> channelLastRead, {
+    Map<String, int> threadLastRead = const {},
+    Map<String, dynamic> seenMarks = const {},
+  }) async {
     final entries = <MapEntry<String, int>>[
       for (final e in channelLastRead.entries)
         if (e.value > 0) MapEntry(e.key, e.value),
     ];
-    if (entries.isEmpty) return false;
+    if (entries.isEmpty && threadLastRead.isEmpty && seenMarks.isEmpty) {
+      return false;
+    }
     // Keep the most recently read conversations.
     entries.sort((a, b) => b.value.compareTo(a.value));
     const maxEntries = 2000;
@@ -886,12 +954,24 @@ class StorageSync {
     final map = <String, dynamic>{for (final e in capped) e.key: e.value};
     const dTag = 'nymchat-readstate';
     // Bare `{channelLastRead}` as in the PWA; `__cat` keeps the D1 column opaque.
-    final payload = <String, dynamic>{'channelLastRead': map};
-    return _setSettingsCategory(
-      d1Category(dTag),
-      jsonEncode(_withCat(payload, dTag)),
-    );
+    final payload = _mergeUnknownSectionKeys(dTag, <String, dynamic>{
+      'channelLastRead': map,
+      'threadLastRead': tsMapNorm(threadLastRead, SyncMergeCaps.threadLastRead),
+      'seenMarks': markStoreNorm(seenMarks),
+    });
+    final json = jsonEncode(_withCat(payload, dTag));
+    if (json == _readStateJson) return false;
+    final ok = await _setSettingsCategory(d1Category(dTag), json);
+    if (ok) {
+      _readStateJson = json;
+      try {
+        await publishSettingsChangedPing(const ['readstate']);
+      } catch (_) {}
+    }
+    return ok;
   }
+
+  String? _readStateJson;
 
   // Per-group sync categories, on the same hashed-column path; applied in [settingsGet].
 
@@ -955,6 +1035,23 @@ class StorageSync {
     }
   }
 
+  Future<bool> awaySyncSet(Map<String, dynamic> payload) async {
+    const dTag = AwaySync.dTag;
+    try {
+      final changed = await _publishCategoryWrap(payload, dTag);
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const ['away']);
+        } catch (_) {}
+        return true;
+      }
+      return _publishedSectionJson[dTag] ==
+          jsonEncode(_mergeUnknownSectionKeys(dTag, payload));
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> lockedSyncSet(Map<String, dynamic> locked) async {
     const dTag = ChatLockKeys.lockedDTag;
     final payload = <String, dynamic>{'lockedChats': locked};
@@ -981,6 +1078,105 @@ class StorageSync {
       'action': action,
       'pubkey': _pubkey,
     });
+  }
+
+  bool _hasSyncRow(String dTag) =>
+      _lastInboundSections.containsKey(dTag) ||
+      _publishedSectionJson.containsKey(dTag);
+
+  bool get hasCallsRow => _hasSyncRow(kCallsDTag);
+
+  bool callsDeletePending = false;
+
+  Future<bool> settingsDelete(String dTag) async {
+    if (_pubkey.isEmpty) return false;
+    final category = d1Category(dTag);
+    try {
+      final res = await _signedWrite(<String, dynamic>{
+        'action': 'settings-delete',
+        'pubkey': _pubkey,
+        'category': category,
+      });
+      if (res['ok'] != true) return false;
+    } catch (_) {
+      return false;
+    }
+    _lastSettingsHash.remove('${_pubkey}_$category');
+    _lastInboundSections.remove(dTag);
+    _publishedSectionJson.remove(dTag);
+    return true;
+  }
+
+  Future<bool> callsSyncSet(Map<String, dynamic>? calls) async {
+    if (calls == null) return false;
+    if (calls['on'] != true) {
+      if (!callsDeletePending && !_hasSyncRow(kCallsDTag)) return false;
+      final gone = await settingsDelete(kCallsDTag);
+      if (!gone) return false;
+      callsDeletePending = false;
+      try {
+        await publishSettingsChangedPing(const ['calls']);
+      } catch (_) {}
+      return true;
+    }
+    try {
+      final changed = await _publishCategoryWrap(
+          {'callHistory': calls}, kCallsDTag, trim: _trimCalls);
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const ['calls']);
+        } catch (_) {}
+      }
+      return changed;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static bool _trimCalls(Map<String, dynamic> p) {
+    final ch = p['callHistory'];
+    final items = ch is Map ? ch['items'] : null;
+    if (items is! List || items.length <= 1) return false;
+    (ch as Map)['items'] = items.sublist(0, max(1, (items.length * 0.9).floor()));
+    return true;
+  }
+
+  Future<bool> groupToolsSyncSet(Map<String, dynamic>? tools,
+      {bool hasData = true}) async {
+    if (tools == null) return false;
+    if (!hasData && !_hasSyncRow(kGroupToolsDTag)) return false;
+    try {
+      final changed = await _publishCategoryWrap(
+          {'groupTools': tools}, kGroupToolsDTag, trim: _trimGroupTools);
+      if (changed) {
+        try {
+          await publishSettingsChangedPing(const ['grouptools']);
+        } catch (_) {}
+      }
+      return changed;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static bool _trimGroupTools(Map<String, dynamic> p) {
+    final gt = p['groupTools'];
+    if (gt is! Map) return false;
+    final r = gt['rsvps'];
+    if (r is Map && r.length > 1) {
+      final ids = r.keys.toList();
+      for (final id in ids.sublist(max(1, (ids.length * 0.75).floor()))) {
+        r.remove(id);
+      }
+      return true;
+    }
+    final rem = gt['reminders'];
+    final gone = rem is Map ? rem['removed'] : null;
+    if (gone is Map && gone.isNotEmpty) {
+      gone.clear();
+      return true;
+    }
+    return false;
   }
 
   Future<void> botAnonSyncSet(Map<String, dynamic> payload) async {
@@ -1279,6 +1475,7 @@ class StorageSync {
     final decoded = <_DecodedCategory>[];
     var storedBlobs = 0;
     var pending = 0; // Rows that did not open.
+    _lastInboundSections.remove(kCallsDTag);
     for (final e in cats.entries) {
       final entry = e.value;
       if (entry is! Map) continue;
@@ -1341,6 +1538,9 @@ class StorageSync {
     Map<String, dynamic>? savedMessages;
     Map<String, dynamic>? pinnedChats;
     Map<String, dynamic>? lockedChats;
+    Map<String, dynamic>? callHistory;
+    Map<String, dynamic>? groupTools;
+    Object? awayStatus;
     final groupEphemeralKeys = <String, dynamic>{};
     final groupMessageHistory = <String, List<dynamic>>{};
     for (final d in decoded) {
@@ -1374,6 +1574,14 @@ class StorageSync {
       } else if (c == ChatLockKeys.lockedDTag) {
         final locked = d.payload['lockedChats'];
         if (locked is Map) lockedChats = locked.cast<String, dynamic>();
+      } else if (c == kCallsDTag) {
+        final ch = d.payload['callHistory'];
+        if (ch is Map) callHistory = ch.cast<String, dynamic>();
+      } else if (c == kGroupToolsDTag) {
+        final gt = d.payload['groupTools'];
+        if (gt is Map) groupTools = gt.cast<String, dynamic>();
+      } else if (c == AwaySync.dTag) {
+        awayStatus = d.payload[AwaySync.payloadKey];
       } else if (c == 'nymchat-botanon') {
         final anon = d.payload['botAnon'];
         if (anon is Map) botAnon = anon.cast<String, dynamic>();
@@ -1408,7 +1616,10 @@ class StorageSync {
         botAnon != null ||
         savedMessages != null ||
         pinnedChats != null ||
-        lockedChats != null;
+        lockedChats != null ||
+        callHistory != null ||
+        groupTools != null ||
+        awayStatus != null;
     if (toApply.isEmpty) {
       // Non-core payloads alone are still worth returning.
       return (notificationsPayload == null &&
@@ -1427,6 +1638,9 @@ class StorageSync {
               savedMessages: savedMessages,
               pinnedChats: pinnedChats,
               lockedChats: lockedChats,
+              callHistory: callHistory,
+              groupTools: groupTools,
+              awayStatus: awayStatus,
             );
     }
 
@@ -1448,6 +1662,9 @@ class StorageSync {
       savedMessages: savedMessages,
       pinnedChats: pinnedChats,
       lockedChats: lockedChats,
+      callHistory: callHistory,
+      groupTools: groupTools,
+      awayStatus: awayStatus,
     );
   }
 
@@ -2129,6 +2346,7 @@ class StorageSync {
     List<String> channelNames, {
     bool force = false,
     int sinceSec = 0,
+    void Function(bool ok)? onResult,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final names = <String>[];
@@ -2152,6 +2370,7 @@ class StorageSync {
         if (sinceSec > 0) 'since': sinceSec,
       });
     } catch (_) {
+      onResult?.call(false);
       return const [];
     }
     final events = <Map<String, dynamic>>[];
@@ -2159,7 +2378,26 @@ class StorageSync {
       if (item is! Map) continue;
       events.add(Map<String, dynamic>.from(item));
     }
+    onResult?.call(true);
     return events;
+  }
+
+  Future<List<Map<String, dynamic>>> channelPeek(String channel) async {
+    final name = channel.toLowerCase();
+    if (name.isEmpty) return const [];
+    StorageStream stream;
+    try {
+      stream = await _api.storageStream({
+        'action': 'channel-get',
+        'channel': name,
+      });
+    } catch (_) {
+      return const [];
+    }
+    return [
+      for (final item in stream.items)
+        if (item is Map) Map<String, dynamic>.from(item),
+    ];
   }
 
   /// One author's rows from an archived channel, unthrottled; callers must verify signatures since D1 is only a cache.
@@ -2684,8 +2922,15 @@ class SettingsLoadResult {
     this.savedMessages,
     this.pinnedChats,
     this.lockedChats,
+    this.callHistory,
+    this.groupTools,
+    this.awayStatus,
   });
   final Map<String, dynamic> payload;
+
+  final Map<String, dynamic>? callHistory;
+
+  final Map<String, dynamic>? groupTools;
   final int newestTs;
 
   /// Decoded `nymchat-groups` (group id to serialized group), applied additively; null when absent.
@@ -2704,6 +2949,8 @@ class SettingsLoadResult {
   final Map<String, dynamic>? pinnedChats;
 
   final Map<String, dynamic>? lockedChats;
+
+  final Object? awayStatus;
 
   /// Decrypted `nymchat-notifications` payload, merged additively regardless of the ts gate.
   final Map<String, dynamic>? notificationsPayload;

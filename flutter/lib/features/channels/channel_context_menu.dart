@@ -76,6 +76,8 @@ List<ChannelMenuAction> buildChannelMenuActions(
               );
         } else {
           controller.hideChannel(key);
+          showUndoToast(tr('#{channel} hidden', {'channel': key}),
+              () => controller.unhideChannel(key));
         }
       },
     ),

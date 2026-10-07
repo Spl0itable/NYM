@@ -68,7 +68,7 @@ class MediaNoteReasons {
   static const String onceOffline =
       "You're offline. View-once media needs the internet or the Bluetooth mesh.";
   static const String onceMeshUnsupported =
-      "This app can't send direct messages over the Bluetooth mesh, so view once is unavailable here.";
+      "This app can't send private messages over the Bluetooth mesh, so view once is unavailable here.";
   static const String onceMesh =
       'Sent over the encrypted Bluetooth mesh, up to 100 KB.';
   static const String hdOffline =
@@ -574,6 +574,8 @@ double parseSpeed(String? raw) {
   final v = double.tryParse(raw ?? '');
   return v != null && kVoiceSpeeds.contains(v) ? v : 1;
 }
+
+String speedWire(double v) => v == v.roundToDouble() ? '${v.toInt()}' : '$v';
 
 String speedLabel(double v) => '${v == 1.5 ? '1.5' : v.round().toString()}×';
 

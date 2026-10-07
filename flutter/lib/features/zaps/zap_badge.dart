@@ -13,6 +13,7 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import '../i18n/i18n.dart';
 import '../toasts/toast_center.dart';
 import 'zap_modal.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 const Color _kLightning = Color(0xFFF7931A);
 
@@ -66,7 +67,9 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     if (_lastTotal >= 0 && total > _lastTotal) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _shock.forward(from: 0);
+        if (!(MediaQuery.maybeDisableAnimationsOf(context) ?? false)) {
+          _shock.forward(from: 0);
+        }
         final box = _badgeKey.currentContext?.findRenderObject() as RenderBox?;
         if (box == null || !box.hasSize) return;
         ZapBurst.play(context, box.localToGlobal(box.size.center(Offset.zero)));
@@ -94,7 +97,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Tooltip(
+        NymTooltip(
           message: tooltip,
           // The constant inner pill is the cached `child`; transforms re-evaluate each tick.
           child: AnimatedBuilder(
@@ -253,7 +256,7 @@ class _QuickZapBtn extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Tooltip(
+    return NymTooltip(
       message: tr('Quick zap'),
       child: GestureDetector(
         onTap: onTap,
@@ -379,6 +382,7 @@ class ZapBurst {
   static const _boltCount = 9;
 
   static void play(BuildContext context, Offset globalCenter) {
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return;
     final overlay = Overlay.maybeOf(context, rootOverlay: true);
     if (overlay == null) return;
     late OverlayEntry entry;

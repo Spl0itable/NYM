@@ -1,15 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/composer/composer_model.dart';
 import '../../features/notifications/notifications_panel.dart';
+import '../../features/shortcuts/shortcuts.dart';
 import '../../features/group_tools/group_tools_ui.dart';
+import '../../features/calls/call_history_providers.dart';
+import '../../features/calls/call_history_ui.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -38,6 +42,7 @@ import '../../models/pm_conversation.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../features/layout/layout_model.dart' show kPhoneMax;
 import '../../state/settings_provider.dart';
 import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
@@ -46,15 +51,24 @@ import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/chat_lock/chat_lock.dart' show ChatLockStrings;
 import '../../features/chat_lock/chat_lock_providers.dart';
 import '../../features/chat_lock/chat_lock_ui.dart';
+import '../../features/search/unified_search_panel.dart';
 import '../nym_icons.dart';
+import 'sidebar_chrome.dart';
 import 'channel_list_item.dart';
+import 'conversation_avatar.dart';
 import 'pm_context_menu.dart';
 import 'pm_list_item.dart';
+import 'row_preview.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
 import 'sidebar_skeleton.dart';
+import '../common/list_empty_note.dart';
 import 'user_list_item.dart';
 import '../common/panic_hold_detector.dart';
+import '../common/nym_focusable.dart';
+import 'unread_pill.dart';
+import '../common/nym_field.dart';
+import '../common/nym_tooltip.dart';
 
 enum _SectionId { channels, pms, nyms }
 
@@ -89,9 +103,22 @@ class Sidebar extends ConsumerStatefulWidget {
 }
 
 class _SidebarState extends ConsumerState<Sidebar> {
+  Timer? _rowClock;
+
   final Set<_SectionId> _collapsed = {};
 
   late List<_SectionId> _order;
+
+  List<ChatView> _navOrder = const [];
+
+  void _publishNavOrder(List<ChatView> next) {
+    if (listEquals(next, _navOrder)) return;
+    _navOrder = next;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(sidebarNavOrderProvider.notifier).state = _navOrder;
+    });
+  }
 
   // Toggled by a 500ms long-press on a section title.
   bool _reorderMode = false;
@@ -132,12 +159,16 @@ class _SidebarState extends ConsumerState<Sidebar> {
     _skelTimer = Timer(const Duration(seconds: 8), () {
       if (mounted) setState(() => _skelTimedOut = true);
     });
+    _rowClock = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) ref.read(rowClockProvider.notifier).state++;
+    });
     // Persisted collapse and order are restored in didChangeDependencies, where ref.read is valid.
   }
 
   @override
   void dispose() {
     _skelTimer?.cancel();
+    _rowClock?.cancel();
     _scroll.dispose();
     super.dispose();
   }
@@ -312,6 +343,16 @@ class _SidebarState extends ConsumerState<Sidebar> {
         if (!chatLock.isConversationLocked(k)) entryByKey[k]!,
     ];
     final lockBadges = ref.watch(chatLockBadgesProvider);
+    _publishNavOrder([
+      for (final sec in _order)
+        if (sec == _SectionId.channels && !settings.groupChatPMOnlyMode)
+          for (final ch in channels) ChatView.channel(ch.key)
+        else if (sec == _SectionId.pms)
+          for (final e in pmEntries)
+            e.group != null
+                ? ChatView.group(e.group!.id)
+                : ChatView.pm(e.pm!.pubkey),
+    ]);
 
     bool secretOpened(String v) {
       if (!chatLock.matchesSecret(v)) return false;
@@ -438,10 +479,11 @@ class _SidebarState extends ConsumerState<Sidebar> {
             leadingIcon: _MiniIcon(
               key: TutorialTargets.keyFor(TutorialTarget.discoverIcon),
               svg: NymIcons.globe,
-              tooltip: tr('Explore geohash channels'),
+              tooltip: tr('Explore geohash channels globally'),
               onTap: _openDiscover,
             ),
             searchHint: tr('Search channels...'),
+            searchTooltip: tr('Search channels'),
             children: [
               for (final ch in r.rows)
                 ChannelListItem(
@@ -551,11 +593,26 @@ class _SidebarState extends ConsumerState<Sidebar> {
               ],
             ),
             searchHint: tr('Search PMs...'),
+            searchTooltip: tr('Search PMs'),
             children: [
               // No fixed Nymbot row: the bot appears here only once a real PM thread with it exists.
               if (showPmSkel)
                 for (final f in const [0.58, 0.70, 0.42])
-                  SidebarSkeletonRow.pm(barWidthFactor: f),
+                  SidebarSkeletonRow.pm(barWidthFactor: f)
+              else if (r.rows.isEmpty)
+                ListEmptyNote(
+                  key: const ValueKey('pm-empty'),
+                  text: pmEntries.isEmpty
+                      ? tr('No private messages yet')
+                      : tr('No matches'),
+                  actionLabel: pmEntries.isEmpty ? tr('Start one') : null,
+                  onAction: pmEntries.isEmpty
+                      ? () {
+                          widget.onItemSelected?.call();
+                          NewPmModal.open(context);
+                        }
+                      : null,
+                ),
               for (final e in r.rows)
                 if (e.group != null)
                   _GroupListItem(
@@ -638,10 +695,18 @@ class _SidebarState extends ConsumerState<Sidebar> {
             onSearchChanged: (v) => setState(() => _nymTerm = v),
             onLongPressTitle: _toggleReorderMode,
             searchHint: tr('Search nyms...'),
+            searchTooltip: tr('Search nyms'),
             children: [
               if (!_skelTimedOut && onlineUsers.isEmpty)
                 for (final f in const [0.70, 0.42, 0.50, 0.58, 0.70])
-                  SidebarSkeletonRow.nym(barWidthFactor: f),
+                  SidebarSkeletonRow.nym(barWidthFactor: f)
+              else if (nymRows.isEmpty)
+                ListEmptyNote(
+                  key: const ValueKey('nym-empty'),
+                  text: onlineUsers.isEmpty
+                      ? tr('No one else is here right now')
+                      : tr('No matches'),
+                ),
               for (final u in nymRows)
                 UserListItem(
                   user: u,
@@ -682,8 +747,13 @@ class _SidebarState extends ConsumerState<Sidebar> {
       ),
       child: SafeArea(
         right: false,
-        // Scrollbar thumb is transparent at rest and fades in while scrolling or hovering.
-        child: ScrollbarTheme(
+        top: false,
+        bottom: false,
+        child: Column(
+          children: [
+            _header(context, app.selfNym),
+            Expanded(
+              child: ScrollbarTheme(
           data: ScrollbarThemeData(
             thickness: const WidgetStatePropertyAll(6),
             radius: const Radius.circular(10),
@@ -703,7 +773,10 @@ class _SidebarState extends ConsumerState<Sidebar> {
               controller: _scroll,
               padding: EdgeInsets.zero,
               children: [
-                _header(context, app.selfNym),
+                UnifiedSearchButton(onTap: () {
+                  widget.onItemSelected?.call();
+                  UnifiedSearchPanel.open(context);
+                }),
                 if (widget.compact)
                   _SidebarActions(onItemSelected: widget.onItemSelected),
                 // PM/group-only mode hides the whole channels section.
@@ -711,13 +784,111 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   if (!(settings.groupChatPMOnlyMode &&
                       s == _SectionId.channels))
                     sectionFor(s),
-                const SizedBox(height: 12),
+                const SizedBox(height: NymSpace.s3),
               ],
             ),
           ),
         ),
+            ),
+            _footer(context),
+          ],
+        ),
       ),
     );
+  }
+
+  Widget _footer(BuildContext context) {
+    final c = context.nym;
+    final connectedRelays = ref.watch(
+      appStateProvider.select((s) => s.connectedRelays),
+    );
+    final proxyMode = ref.watch(
+      appStateProvider.select((s) => s.proxyMode),
+    );
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    final phone =
+        MediaQuery.sizeOf(context).width <= NymDimens.mobileBreakpoint;
+    final extent =
+        ref.watch(composerRestExtentProvider) ?? (phone ? 65 : 69) + bottom;
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: tr('Connection status and sidebar tools'),
+      child: Container(
+      key: const ValueKey('sidebarFooter'),
+      height: extent,
+      padding: EdgeInsets.fromLTRB(NymSpace.s2, 0, NymSpace.s2, bottom),
+      decoration: BoxDecoration(
+        color: c.isLight
+            ? Colors.white.withValues(alpha: 0.3)
+            : Colors.black.withValues(alpha: 0.15),
+        border: Border(top: BorderSide(color: c.glassBorder)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ConnectionStatusIndicator(
+                  connectedCount: connectedRelays,
+                  proxyMode: proxyMode,
+                ),
+                _MeshStatusIndicator(onItemSelected: widget.onItemSelected),
+              ],
+            ),
+          ),
+          const SizedBox(width: NymSpace.s2),
+          _editButton(context),
+        ],
+      ),
+      ),
+    );
+  }
+
+  Widget _editButton(BuildContext context) {
+    final c = context.nym;
+    final on = _reorderMode;
+    final label = on ? tr('Done') : tr('Edit sidebar');
+    final button = Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      child: Material(
+        color: on ? c.primary.withValues(alpha: 0.12) : Colors.transparent,
+        borderRadius: NymRadius.rsm,
+        child: InkWell(
+          key: const ValueKey('sidebarEditBtn'),
+          borderRadius: NymRadius.rsm,
+          hoverColor: c.primary.withValues(alpha: 0.1),
+          onTap: _toggleReorderMode,
+          child: Container(
+            height: 40,
+            constraints: const BoxConstraints(minWidth: 40),
+            padding: on
+                ? const EdgeInsets.symmetric(horizontal: NymSpace.s3)
+                : EdgeInsets.zero,
+            alignment: Alignment.center,
+            child: on
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      NymSvgIcon(kSidebarCheckSvg, size: 16, color: c.primary),
+                      const SizedBox(width: 6),
+                      Text(label,
+                          style: TextStyle(
+                              color: c.primary,
+                              fontSize: NymType.sm,
+                              fontWeight: FontWeight.w600)),
+                    ],
+                  )
+                : NymSvgIcon(kSidebarPencilSvg, size: 18, color: c.textDim),
+          ),
+        ),
+      ),
+    );
+    return NymTooltip(message: label, excludeFromSemantics: true, child: button);
   }
 
   Future<void> _openDiscover() async {
@@ -732,103 +903,90 @@ class _SidebarState extends ConsumerState<Sidebar> {
   /// Identity header: a tap opens the nick editor, a 2s hold triggers the panic wipe.
   Widget _header(BuildContext context, String nym) {
     final c = context.nym;
-    final connectedRelays = ref.watch(
-      appStateProvider.select((s) => s.connectedRelays),
-    );
-    final proxyMode = ref.watch(
-      appStateProvider.select((s) => s.proxyMode),
-    );
+    final self = ref.read(appStateProvider).selfPubkey;
+    final top = MediaQuery.paddingOf(context).top;
+    final extent = ref.watch(chatHeaderExtentProvider) ??
+        (MediaQuery.sizeOf(context).width <= NymDimens.mobileBreakpoint
+                ? 92
+                : 101) +
+            top;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+      key: const ValueKey('sidebarHeader'),
+      height: extent,
+      padding: EdgeInsets.fromLTRB(NymSpace.s3, top, NymSpace.s3, 0),
       decoration: BoxDecoration(
         color: c.isLight
             ? Colors.white.withValues(alpha: 0.3)
             : Colors.black.withValues(alpha: 0.15),
-        border: widget.compact
-            ? null
-            : Border(bottom: BorderSide(color: c.glassBorder)),
+        border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(height: 15),
-          // Bind only the nym box, not the status row: the raw Listener bypasses the gesture arena.
-          PanicHoldDetector(
-            onTap: () => NickEditModal.open(context),
-            onHold: () => _triggerPanic(context),
-            child: MouseRegion(
-              onEnter: (_) => setState(() => _nymHover = true),
-              onExit: (_) => setState(() => _nymHover = false),
-              child: Container(
-                key: TutorialTargets.keyFor(TutorialTarget.nymDisplay),
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: _nymHover
-                      ? (c.isLight
-                          ? Colors.black.withValues(alpha: 0.07)
-                          : Colors.white.withValues(alpha: 0.07))
-                      : c.insetFill,
-                  border: Border.all(
-                    color: _nymHover && !c.isLight
-                        ? c.primaryA(0.3)
-                        : c.glassBorder,
-                  ),
-                  borderRadius: NymRadius.rsm,
-                  boxShadow: _nymHover
-                      ? [BoxShadow(color: c.primaryA(0.08), blurRadius: 15)]
-                      : null,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      tr('YOUR NYM (CLICK TO EDIT)'),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: c.textDim,
-                        fontSize: 10,
-                        letterSpacing: 1.5,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        NymAvatar(
-                          seed: ref.read(appStateProvider).selfPubkey,
-                          size: 32,
-                          imageUrl: ref
-                              .read(appStateProvider)
-                              .users[ref.read(appStateProvider).selfPubkey]
-                              ?.profile
-                              ?.picture,
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _NymValueText(
-                            nym: nym,
-                            pubkey: ref.read(appStateProvider).selfPubkey,
+          Row(
+            key: const ValueKey('sidebarIdentityRow'),
+            children: [
+              Expanded(
+                child: PanicHoldDetector(
+                  onTap: () => NickEditModal.open(context),
+                  onHold: () => _triggerPanic(context),
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    onEnter: (_) => setState(() => _nymHover = true),
+                    onExit: (_) => setState(() => _nymHover = false),
+                    child: Semantics(
+                      button: true,
+                      label: tr('Your Nym (click to edit)'),
+                      child: NymTooltip(
+                        message: tr('Edit your profile'),
+                        triggerMode: TooltipTriggerMode.manual,
+                        child: Container(
+                          key: TutorialTargets.keyFor(TutorialTarget.nymDisplay),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: NymSpace.s2, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: _nymHover
+                                ? (c.isLight
+                                    ? Colors.black.withValues(alpha: 0.05)
+                                    : Colors.white.withValues(alpha: 0.07))
+                                : Colors.transparent,
+                            borderRadius: NymRadius.rsm,
+                          ),
+                          child: Row(
+                            children: [
+                              NymAvatar(
+                                seed: self,
+                                size: 36,
+                                imageUrl: ref
+                                    .read(appStateProvider)
+                                    .users[self]
+                                    ?.profile
+                                    ?.picture,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: _NymValueText(nym: nym, pubkey: self),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
+                      ),
                     ),
-                  ],
+                  ),
                 ),
               ),
-            ),
+              if (ref.watch(accountsProvider) != null) ...[
+                const SizedBox(width: NymSpace.s2),
+                const AccountSwitchButton(),
+              ],
+              if (widget.compact &&
+                  MediaQuery.sizeOf(context).width <= kPhoneMax) ...[
+                const SizedBox(width: NymSpace.s2),
+                const _IdentityBell(),
+              ],
+            ],
           ),
-          if (ref.watch(accountsProvider) != null) ...[
-            const SizedBox(height: 6),
-            const AccountSwitchButton(),
-          ],
-          const SizedBox(height: 10),
-          _ConnectionStatusIndicator(
-            connectedCount: connectedRelays,
-            proxyMode: proxyMode,
-          ),
-          _MeshStatusIndicator(onItemSelected: widget.onItemSelected),
-          const _TranslatingIndicator(),
         ],
       ),
     );
@@ -915,32 +1073,120 @@ class _ConnectionStatusIndicator extends StatelessWidget {
                 {'count': connectedCount}))
         : tr('Connecting...');
     final dotColor = connected ? c.primary : c.warning;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => RelayStatsModal.open(context),
-        child: Row(
-          key: TutorialTargets.keyFor(TutorialTarget.statusIndicator),
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: dotColor,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              style: TextStyle(color: c.textDim, fontSize: 11),
-            ),
-          ],
+    return _StatusRow(
+      key: TutorialTargets.keyFor(TutorialTarget.statusIndicator),
+      rowKey: const ValueKey('sidebarNetRow'),
+      onTap: () => RelayStatsModal.open(context),
+      tooltip: tr('View network stats'),
+      leading: Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: dotColor,
+          shape: BoxShape.circle,
         ),
       ),
+      label: label,
+      trailing: const _TranslatingIndicator(),
     );
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  const _StatusRow({
+    super.key,
+    required this.rowKey,
+    required this.onTap,
+    required this.leading,
+    required this.label,
+    required this.tooltip,
+    this.trailing,
+    this.trailingText,
+    this.selected = false,
+  });
+
+  final bool selected;
+  final Key rowKey;
+  final VoidCallback onTap;
+  final Widget leading;
+  final String label;
+  final String tooltip;
+  final Widget? trailing;
+  final String? trailingText;
+
+  static const double _fixed = NymSpace.s2 * 2 + 12 + 5;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final style = TextStyle(
+        color: selected ? c.primary : c.textDim, fontSize: NymType.xs);
+    final scaler = MediaQuery.textScalerOf(context);
+    final row = LayoutBuilder(builder: (context, box) {
+      final tail = trailingText == null
+          ? 0.0
+          : 6 +
+              (TextPainter(
+                text: TextSpan(
+                    text: trailingText,
+                    style: const TextStyle(fontSize: 10)),
+                textScaler: scaler,
+                textDirection: TextDirection.ltr,
+                maxLines: 1,
+              )..layout())
+                  .width;
+      final painter = TextPainter(
+        text: TextSpan(text: label, style: style),
+        textScaler: scaler,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout(maxWidth: math.max(0, box.maxWidth - _fixed - tail));
+      final full =
+          trailingText == null ? label : '$label · $trailingText';
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: NymTooltip(
+          message: painter.didExceedMaxLines ? full : tooltip,
+          excludeFromSemantics: true,
+          child: Material(
+            color: selected ? c.primaryA(0.12) : Colors.transparent,
+            borderRadius: NymRadius.rxs,
+            child: InkWell(
+              key: rowKey,
+              borderRadius: NymRadius.rxs,
+              hoverColor: c.primary.withValues(alpha: 0.08),
+              onTap: onTap,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 28),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: NymSpace.s2, vertical: NymSpace.s1),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(width: 12, child: Center(child: leading)),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: style,
+                      ),
+                    ),
+                    if (trailing != null) ...[
+                      const SizedBox(width: 6),
+                      trailing!,
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    });
+    return Semantics(selected: selected, child: row);
   }
 }
 
@@ -954,8 +1200,8 @@ class _TranslatingIndicator extends ConsumerWidget {
       return const SizedBox.shrink();
     }
     final c = context.nym;
-    return Padding(
-      padding: const EdgeInsets.only(top: 8),
+    return NymTooltip(
+      message: tr('Translating...'),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -966,15 +1212,6 @@ class _TranslatingIndicator extends ConsumerWidget {
               strokeWidth: 2,
               valueColor: AlwaysStoppedAnimation<Color>(c.primary),
               backgroundColor: c.textDim.withValues(alpha: 0.25),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              tr('Translating...'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: c.textDim, fontSize: 12),
             ),
           ),
         ],
@@ -1002,40 +1239,34 @@ class _MeshStatusIndicator extends ConsumerWidget {
         ? tr('Mesh off')
         : (peerCount == 0
             ? tr('Mesh · no peers')
-            : tr('Mesh · {count} peer(s)', {'count': peerCount}));
+            : (peerCount == 1
+                ? tr('Mesh · 1 peer')
+                : tr('Mesh · {count} peers', {'count': peerCount})));
+    final links = active && mesh.linkCount > 0
+        ? (mesh.linkCount == 1
+            ? tr('1 link')
+            : tr('{count} links', {'count': mesh.linkCount}))
+        : null;
     final color = active ? c.primary : c.textDim;
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Material(
-        color: Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () {
-            // Idempotent; an already-open overlay stays open.
-            ref.read(meshScreenOpenProvider.notifier).state = true;
-            onItemSelected?.call();
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                NymSvgIcon(NymIcons.bluetooth, size: 12, color: color),
-                const SizedBox(width: 5),
-                Text(label, style: TextStyle(color: c.textDim, fontSize: 11)),
-                if (active && mesh.linkCount > 0) ...[
-                  const SizedBox(width: 6),
-                  Text('${mesh.linkCount} link(s)',
-                      style: TextStyle(
-                          color: c.textDim.withValues(alpha: 0.7),
-                          fontSize: 10)),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
+    return _StatusRow(
+      selected: ref.watch(meshScreenOpenProvider),
+      rowKey: const ValueKey('sidebarMeshRow'),
+      onTap: () {
+        // Idempotent; an already-open overlay stays open.
+        ref.read(meshScreenOpenProvider.notifier).state = true;
+        onItemSelected?.call();
+      },
+      leading: NymSvgIcon(NymIcons.bluetooth, size: 12, color: color),
+      label: label,
+      tooltip: tr('Bluetooth mesh'),
+      trailingText: links,
+      trailing: links == null
+          ? null
+          : Text(links,
+              maxLines: 1,
+              softWrap: false,
+              style: TextStyle(
+                  color: c.textDim.withValues(alpha: 0.7), fontSize: 10)),
     );
   }
 }
@@ -1052,6 +1283,7 @@ class _SidebarActions extends ConsumerWidget {
         ref.watch(notificationHistoryProvider.select((s) => s.unread));
     final notifEnabled =
         ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
+    final missedCalls = ref.watch(callHistoryMissedProvider);
     void go(void Function() open) {
       onItemSelected?.call();
       open();
@@ -1062,7 +1294,6 @@ class _SidebarActions extends ConsumerWidget {
               key: const ValueKey('menu-notifications'),
               svg: NymIcons.bell,
               label: tr('Notifications'),
-              primary: true,
               badge: notifEnabled ? unread : 0,
               onTap: () => go(() => showNotificationsPanel(context)),
             ),
@@ -1070,20 +1301,19 @@ class _SidebarActions extends ConsumerWidget {
               key: const ValueKey('menu-saved'),
               svg: ChatToolIcons.saved,
               label: tr('Saved'),
-              primary: true,
               onTap: () => go(() => SavedMessagesPanel.open(context)),
             ),
           'calls' => _ActionButton(
               key: const ValueKey('gtCallsButton'),
-              svg: GroupToolIcons.calls,
+              svg: GroupToolIcons.callLink,
               label: tr('Calls'),
-              primary: true,
-              onTap: () => go(() => showGtCallLinks(context)),
+              badge: missedCalls,
+              onTap: () => go(() => showCallsScreen(context)),
             ),
-          'flair' => _ActionButton(
-              key: const ValueKey('menu-flair'),
-              svg: NymIcons.starFlair,
-              label: tr('Flair'),
+          'shop' => _ActionButton(
+              key: const ValueKey('menu-shop'),
+              svg: NymIcons.store,
+              label: tr('Shop'),
               onTap: () => go(() => ShopModal.open(context)),
             ),
           'settings' => _ActionButton(
@@ -1100,15 +1330,23 @@ class _SidebarActions extends ConsumerWidget {
             ),
         };
 
-    final rows = mainMenuRows('mobile').grid;
+    final phone = MediaQuery.sizeOf(context).width <= kPhoneMax;
+    final rows = [
+      for (final r in mainMenuRows('mobile').grid)
+        [
+          for (final id in r)
+            if (!(phone && id == 'notifications')) id,
+        ],
+    ];
     return Semantics(
       label: tr('Main menu'),
       container: true,
       child: Container(
         key: TutorialTargets.keyFor(TutorialTarget.mainMenu),
-        padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+        padding: const EdgeInsets.fromLTRB(
+            NymSpace.s2, NymSpace.s1, NymSpace.s2, 14),
         decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: c.glassBorder)),
+          border: Border(bottom: BorderSide(color: c.glassBorder)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1119,7 +1357,7 @@ class _SidebarActions extends ConsumerWidget {
                 key: ValueKey('menu-row-$i'),
                 children: [
                   for (var j = 0; j < rows[i].length; j++) ...[
-                    if (j > 0) const SizedBox(width: 6),
+                    if (j > 0) const SizedBox(width: 2),
                     tile(rows[i][j]),
                   ],
                 ],
@@ -1138,14 +1376,12 @@ class _ActionButton extends StatefulWidget {
     required this.svg,
     required this.label,
     required this.onTap,
-    this.primary = false,
     this.badge = 0,
   });
 
   final String svg;
   final String label;
   final VoidCallback onTap;
-  final bool primary;
   final int badge;
 
   @override
@@ -1158,18 +1394,12 @@ class _ActionButtonState extends State<_ActionButton> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final Color fill;
-    final Color borderColor;
-    final Color fg;
-    if (c.isLight) {
-      fill = Colors.black.withValues(alpha: _hover ? 0.06 : 0.03);
-      borderColor = _hover ? c.primary : Colors.black.withValues(alpha: 0.1);
-      fg = c.primary;
-    } else {
-      fill = _hover ? c.primaryA(0.12) : Colors.white.withValues(alpha: 0.05);
-      borderColor = _hover ? c.primaryA(0.3) : c.glassBorder;
-      fg = _hover ? c.primary : c.text;
-    }
+    final fill = _hover
+        ? (c.isLight
+            ? Colors.black.withValues(alpha: 0.05)
+            : c.primaryA(0.1))
+        : Colors.transparent;
+    final fg = c.isLight || _hover ? c.primary : c.text;
     return Expanded(
       child: MouseRegion(
         onEnter: (_) => setState(() => _hover = true),
@@ -1178,18 +1408,10 @@ class _ActionButtonState extends State<_ActionButton> {
           onTap: widget.onTap,
           borderRadius: NymRadius.rxs,
           child: Container(
-            padding: const EdgeInsets.fromLTRB(4, 10, 4, 8),
+            padding: const EdgeInsets.fromLTRB(2, NymSpace.s2, 2, 6),
             decoration: BoxDecoration(
               color: fill,
-              border: Border.all(
-                  color: widget.primary && !_hover
-                      ? c.primaryA(0.25)
-                      : borderColor),
               borderRadius: NymRadius.rxs,
-              // The hover glow applies in both modes, as the CSS cascade does.
-              boxShadow: _hover
-                  ? [BoxShadow(color: c.primaryA(0.1), blurRadius: 15)]
-                  : null,
             ),
             child: Column(
               children: [
@@ -1227,14 +1449,13 @@ class _ActionButtonState extends State<_ActionButton> {
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  widget.label.toUpperCase(),
+                  widget.label,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: fg,
-                    fontSize: 9,
+                    fontSize: NymType.xs,
                     fontWeight: FontWeight.w500,
-                    letterSpacing: 9 * 0.02,
                   ),
                 ),
               ],
@@ -1259,6 +1480,7 @@ class _NavSection extends StatelessWidget {
     required this.onSearchChanged,
     required this.onLongPressTitle,
     required this.searchHint,
+    required this.searchTooltip,
     required this.children,
     required this.reorderMode,
     required this.canMoveUp,
@@ -1278,6 +1500,7 @@ class _NavSection extends StatelessWidget {
   final ValueChanged<String> onSearchChanged;
   final VoidCallback onLongPressTitle;
   final String searchHint;
+  final String searchTooltip;
   final List<Widget> children;
   final bool reorderMode;
   final bool canMoveUp;
@@ -1291,7 +1514,7 @@ class _NavSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final pad = isUserList
-        ? const EdgeInsets.all(10)
+        ? const EdgeInsets.fromLTRB(12, 10, 12, 10)
         : const EdgeInsets.fromLTRB(12, 16, 12, 12);
     return Container(
       padding: pad,
@@ -1337,7 +1560,7 @@ class _NavSection extends StatelessWidget {
                   ],
                   _MiniIcon(
                     svg: NymIcons.search,
-                    tooltip: tr('Search'),
+                    tooltip: searchTooltip,
                     onTap: onToggleSearch,
                   ),
                   const SizedBox(width: 10),
@@ -1499,8 +1722,8 @@ class _ReorderBtnState extends State<_ReorderBtn> {
           onTap: widget.enabled ? widget.onTap : null,
           borderRadius: NymRadius.rxs,
           child: Container(
-            width: 18,
-            height: 18,
+            width: 32,
+            height: 32,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               // Fixed white fill in both modes; the CSS has no light override.
@@ -1509,7 +1732,7 @@ class _ReorderBtnState extends State<_ReorderBtn> {
             ),
             child: NymSvgIcon(
               widget.svg,
-              size: 12,
+              size: 14,
               color: hovered ? Colors.white : c.text,
             ),
           ),
@@ -1546,9 +1769,14 @@ class _MiniIconState extends State<_MiniIcon> {
       onExit: (_) => setState(() => _hover = false),
       child: InkWell(
         onTap: widget.onTap,
-        borderRadius: const BorderRadius.all(Radius.circular(4)),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        canRequestFocus: false,
+        excludeFromSemantics: true,
+        borderRadius: NymRadius.rxs,
+        child: SizedBox(
+          key: const ValueKey('sectionIconBox'),
+          width: 32,
+          height: 32,
+          child: Center(
           child: TweenAnimationBuilder<Color?>(
             tween: ColorTween(end: target),
             duration: const Duration(milliseconds: 200),
@@ -1559,12 +1787,16 @@ class _MiniIconState extends State<_MiniIcon> {
               color: color ?? target,
             ),
           ),
+          ),
         ),
       ),
     );
-    return widget.tooltip != null
-        ? Tooltip(message: widget.tooltip!, child: btn)
-        : btn;
+    return NymFocusable(
+      onActivate: widget.onTap,
+      tooltip: widget.tooltip,
+      radius: const BorderRadius.all(Radius.circular(4)),
+      child: btn,
+    );
   }
 }
 
@@ -1628,25 +1860,6 @@ class _PmEntry {
   final int lastMessageTime;
 }
 
-/// `{C}` is substituted with the resolved primary hex at render time.
-const String _groupGlyphSvg =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-    'stroke="{C}" stroke-width="1.75" stroke-linecap="round" '
-    'stroke-linejoin="round">'
-    '<circle cx="12" cy="7" r="2.75"/>'
-    '<path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/>'
-    '<circle cx="4.5" cy="9.5" r="2"/>'
-    '<path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/>'
-    '<circle cx="19.5" cy="9.5" r="2"/>'
-    '<path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>';
-
-String _hex(Color c) {
-  int ch(double v) => (v * 255).round() & 0xff;
-  return '#${ch(c.r).toRadixString(16).padLeft(2, '0')}'
-      '${ch(c.g).toRadixString(16).padLeft(2, '0')}'
-      '${ch(c.b).toRadixString(16).padLeft(2, '0')}';
-}
-
 /// Group row in the PM list; a hold opens the one-item "Leave conversation" menu.
 class _GroupListItem extends ConsumerWidget {
   const _GroupListItem({
@@ -1668,7 +1881,7 @@ class _GroupListItem extends ConsumerWidget {
   final VoidCallback onTap;
 
   void _leaveMenu(BuildContext context, WidgetRef ref, Offset at) {
-    showSidebarQuickMenu(context, at, [
+    showSidebarQuickMenu(context, at, groupId: group.id, [
       ...chatNavSidebarItems(ref, 'group-${group.id}'),
       ...chatLockSidebarItems(ref, 'group-${group.id}'),
       ...chatToolSidebarItems(context, 'group-${group.id}'),
@@ -1695,13 +1908,11 @@ class _GroupListItem extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final c = context.nym;
-    final avatarUrl = proxiedAvatarUrl(group.avatar);
     final name = group.name.isEmpty ? tr('Group') : group.name;
-    final otherMembers =
-        group.members.where((pk) => pk != selfPubkey).toList(growable: false);
     ref.watch(chatNavRevisionProvider);
     final pinned = !active &&
         ref.read(chatNavProvider).pinIndexOfChat('group-${group.id}') >= 0;
+    final preview = sidebarRowPreview(ref, 'group-${group.id}', 'group');
 
     final Widget row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
@@ -1714,8 +1925,9 @@ class _GroupListItem extends ConsumerWidget {
         builder: (context, hovered) => Stack(
           children: [
             Container(
-              constraints: const BoxConstraints(minHeight: 36),
-              padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 9, 12, 9),
+              key: const ValueKey('sidebarRowBox'),
+              constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
+              padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 6, 12, 6),
               decoration: BoxDecoration(
                 color: active
                     ? (c.isLight
@@ -1743,33 +1955,25 @@ class _GroupListItem extends ConsumerWidget {
               ),
               child: Row(
                 children: [
-                  if (avatarUrl != null && avatarUrl.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 4),
-                      child: ClipOval(
-                        child: NymAvatar(
-                          seed: group.id,
-                          size: 26,
-                          imageUrl: group.avatar,
-                        ),
-                      ),
-                    )
-                  else if (otherMembers.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: _GroupAvatarStack(
-                        members: otherMembers.take(3).toList(),
+                  KeyedSubtree(
+                    key: const ValueKey('sidebarLead'),
+                    child: GroupSidebarAvatar(
+                        group: group,
+                        selfPubkey: selfPubkey,
                         users: users,
-                      ),
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: _GroupIconWrap(c: c),
-                    ),
+                        size: kSidebarIcon),
+                  ),
+                  const SizedBox(width: kSidebarGap),
                   Expanded(
-                    // Long names wrap rather than ellipsize; flex:1 pushes the unread pill flush right.
-                    child: RichText(
+                    child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                    RichText(
+                      key: const ValueKey('sidebarName'),
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
                       text: TextSpan(
                         style: TextStyle(
                           color: c.textDim,
@@ -1791,21 +1995,31 @@ class _GroupListItem extends ConsumerWidget {
                         ],
                       ),
                     ),
+                    if (preview.text.isNotEmpty)
+                      rowPreviewLine(context, preview.text, 'group'),
+                    ],
+                    ),
                   ),
+                  rowTimeLabel(context, preview.time),
                   ChatNavRowBadges(storageKey: 'group-${group.id}'),
                   if (unread > 0) ...[
                     const SizedBox(width: 5),
-                    _GroupUnreadPill(count: unread),
+                    SidebarUnreadPill(count: unread),
                   ],
-                  const SizedBox(width: 2),
-                  SidebarRowMenuButton(
-                    semanticLabel: 'Group menu',
-                    onShowMenu: (pos) {
-                      _leaveMenu(context, ref, pos);
-                      return true;
-                    },
-                  ),
+                  const SizedBox(width: kSidebarMenuReserve),
                 ],
+              ),
+            ),
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: 0,
+              child: SidebarRowMenuButton(
+                semanticLabel: 'Group menu',
+                onShowMenu: (pos) {
+                  _leaveMenu(context, ref, pos);
+                  return true;
+                },
               ),
             ),
             if (active)
@@ -1843,118 +2057,6 @@ class _GroupListItem extends ConsumerWidget {
         return true;
       },
       child: row,
-    );
-  }
-}
-
-/// Up to 3 overlapping member avatars plus a corner group-glyph badge.
-class _GroupAvatarStack extends StatelessWidget {
-  const _GroupAvatarStack({required this.members, required this.users});
-
-  final List<String> members;
-  final Map<String, User> users;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    return SizedBox(
-      width: 34,
-      height: 22,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (var i = 0; i < members.length && i < 3; i++)
-            Positioned(
-              left: i * 9.0,
-              top: 0,
-              child: Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: c.bg, width: 1),
-                ),
-                child: ClipOval(
-                  child: NymAvatar(
-                    seed: members[i],
-                    size: 18,
-                    imageUrl: users[members[i]]?.profile?.picture,
-                  ),
-                ),
-              ),
-            ),
-          Positioned(
-            right: -4,
-            bottom: -3,
-            child: Container(
-              width: 13,
-              height: 13,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                shape: BoxShape.circle,
-                border: Border.all(color: c.primaryA(0.3), width: 1),
-              ),
-              child: SvgPicture.string(
-                _groupGlyphSvg.replaceAll('{C}', _hex(c.primary)),
-                width: 8,
-                height: 8,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Fallback icon used only when the group has no other members.
-class _GroupIconWrap extends StatelessWidget {
-  const _GroupIconWrap({required this.c});
-  final NymColors c;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 26,
-      height: 26,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: c.primaryA(0.10),
-        border: Border.all(color: c.primaryA(0.25), width: 1),
-      ),
-      child: SvgPicture.string(
-        _groupGlyphSvg.replaceAll('{C}', _hex(c.primary)),
-        width: 14,
-        height: 14,
-      ),
-    );
-  }
-}
-
-class _GroupUnreadPill extends StatelessWidget {
-  const _GroupUnreadPill({required this.count});
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    return Container(
-      constraints: const BoxConstraints(minWidth: 30),
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: c.primary,
-        borderRadius: const BorderRadius.all(Radius.circular(20)),
-      ),
-      child: Text(
-        count > 99 ? '99+' : '$count',
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: c.bg,
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          fontFeatures: const [FontFeature.tabularFigures()],
-        ),
-      ),
     );
   }
 }
@@ -2129,23 +2231,10 @@ class _SearchFieldState extends State<_SearchField> {
     final c = context.nym;
     final hasValue = _controller.text.isNotEmpty;
     final focused = _focusNode.hasFocus;
-    // Light mode pins the fill with `!important`, even when focused.
-    final Color fill = c.isLight
-        ? Colors.black.withValues(alpha: 0.04)
-        : Colors.white.withValues(alpha: focused ? 0.08 : 0.05);
-    final Color restBorder =
-        c.isLight ? Colors.black.withValues(alpha: 0.1) : c.glassBorder;
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: NymRadius.rxs,
-        boxShadow: focused
-            ? [
-                BoxShadow(
-                  color: c.primaryA(c.isLight ? 0.1 : 0.06),
-                  spreadRadius: 3,
-                ),
-              ]
-            : null,
+        boxShadow: NymField.ring(c, focused),
       ),
       child: TextField(
         controller: _controller,
@@ -2159,13 +2248,11 @@ class _SearchFieldState extends State<_SearchField> {
           widget.onChanged(v);
           setState(() {});
         },
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: widget.hint,
-          hintStyle: TextStyle(color: c.textDim, fontSize: 12),
+        decoration: NymField.decoration(c,
+          hint: widget.hint,
+          fontSize: 12,
+          radius: NymRadius.rxs,
           contentPadding: const EdgeInsets.fromLTRB(12, 8, 28, 8),
-          filled: true,
-          fillColor: fill,
           suffixIcon: hasValue
               ? _SearchClear(onTap: () {
                   _controller.clear();
@@ -2174,20 +2261,7 @@ class _SearchFieldState extends State<_SearchField> {
                 })
               : null,
           suffixIconConstraints:
-              const BoxConstraints(minWidth: 28, minHeight: 0),
-          border: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: restBorder),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: restBorder),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.primaryA(0.30)),
-          ),
-        ),
+              const BoxConstraints(minWidth: 28, minHeight: 0)),
       ),
     );
   }
@@ -2215,15 +2289,101 @@ class _SearchClearState extends State<_SearchClear> {
         onTap: widget.onTap,
         child: Padding(
           padding: const EdgeInsets.only(right: 6),
-          child: Text(
-            '✕',
-            style: TextStyle(
-              color: _hover ? c.danger : c.textDim,
-              fontSize: 14,
-              height: 1,
-            ),
+          child: Icon(
+            Icons.close,
+            size: 14,
+            color: _hover ? c.danger : c.textDim,
           ),
         ),
+      ),
+    );
+  }
+}
+
+
+class _IdentityBell extends ConsumerStatefulWidget {
+  const _IdentityBell();
+
+  @override
+  ConsumerState<_IdentityBell> createState() => _IdentityBellState();
+}
+
+class _IdentityBellState extends ConsumerState<_IdentityBell> {
+  bool _hover = false;
+  bool _focus = false;
+
+  void _open() => showNotificationsPanel(context);
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final unread =
+        ref.watch(notificationHistoryProvider.select((s) => s.unread));
+    final enabled =
+        ref.watch(settingsProvider.select((s) => s.notificationsEnabled));
+    final count = enabled ? unread : 0;
+    final lit = _hover || _focus;
+    final label = tr('Notifications');
+    final button = InkWell(
+      borderRadius: NymRadius.rsm,
+      onTap: _open,
+      onHover: (v) => setState(() => _hover = v),
+      onFocusChange: (v) => setState(() => _focus = v),
+      child: Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: lit
+              ? (c.isLight
+                  ? Colors.black.withValues(alpha: 0.05)
+                  : c.primaryA(0.1))
+              : Colors.transparent,
+          borderRadius: NymRadius.rsm,
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.center,
+          children: [
+            NymSvgIcon(NymIcons.bell, size: 18, color: lit ? c.primary : c.textDim),
+            if (count > 0)
+              Positioned(
+                top: -13,
+                right: -15,
+                child: Container(
+                  key: const ValueKey('identityNotifBadge'),
+                  constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c.danger,
+                    borderRadius: const BorderRadius.all(Radius.circular(8)),
+                  ),
+                  child: Text(
+                    count > 99 ? '99+' : '$count',
+                    style: const TextStyle(
+                      color: Color(0xFFFFFFFF),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+    return Semantics(
+      key: const ValueKey('identityNotifBtn'),
+      container: true,
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      onTap: _open,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: NymTooltip(message: label, child: button),
       ),
     );
   }

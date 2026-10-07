@@ -7,7 +7,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../state/app_state.dart';
-import '../../widgets/common/keyboard_inset_dialog.dart';
+import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
 import '../i18n/i18n.dart';
@@ -37,12 +37,12 @@ Future<ChatLockPromptResult?> showChatLockPrompt(
   String? alt,
   String error = '',
 }) {
-  return showDialog<ChatLockPromptResult>(
-    context: context,
+  return showNymSheet<ChatLockPromptResult>(
+    context,
+    (_) => _ChatLockPrompt(
+        title: title, body: body, fields: fields, ok: ok, alt: alt, error: error),
     barrierDismissible: false,
     barrierColor: Colors.black.withValues(alpha: 0.7),
-    builder: (_) => _ChatLockPrompt(
-        title: title, body: body, fields: fields, ok: ok, alt: alt, error: error),
   );
 }
 
@@ -86,80 +86,77 @@ class _ChatLockPromptState extends State<_ChatLockPrompt> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return KeyboardInsetDialog(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Material(
-            color: Colors.transparent,
-            child: ModalChrome.box(
-              c,
-              child: Padding(
-                padding: const EdgeInsets.all(28),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+    return NymDiscardGuard(
+      isDirty: () => _ctl.any((t) => t.text.isNotEmpty),
+      child: ModalChrome.shell(
+        context,
+        maxWidth: 420,
+        scroll: true,
+        child: ModalChrome.box(
+          c,
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  widget.title.toUpperCase(),
+                  style: TextStyle(
+                    color: c.primary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(widget.body,
+                    style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5)),
+                for (var i = 0; i < widget.fields.length; i++) ...[
+                  const SizedBox(height: 12),
+                  ModalChrome.focusRing(
+                    c,
+                    child: TextField(
+                      key: ValueKey('chat-lock-field-$i'),
+                      controller: _ctl[i],
+                      autofocus: i == 0,
+                      obscureText: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      enableIMEPersonalizedLearning: false,
+                      keyboardType: TextInputType.visiblePassword,
+                      onSubmitted: (_) => _submit(),
+                      decoration:
+                          ModalChrome.inputDecoration(c, widget.fields[i]),
+                      style: TextStyle(color: c.inputText, fontSize: 15),
+                    ),
+                  ),
+                ],
+                if (widget.error.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(widget.error,
+                      key: const ValueKey('chat-lock-error'),
+                      style: TextStyle(color: c.danger, fontSize: 12)),
+                ],
+                const SizedBox(height: 22),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 10,
+                  runSpacing: 10,
                   children: [
-                    Text(
-                      widget.title.toUpperCase(),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Text(widget.body,
-                        style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5)),
-                    for (var i = 0; i < widget.fields.length; i++) ...[
-                      const SizedBox(height: 12),
-                      ModalChrome.focusRing(
-                        c,
-                        child: TextField(
-                          key: ValueKey('chat-lock-field-$i'),
-                          controller: _ctl[i],
-                          autofocus: i == 0,
-                          obscureText: true,
-                          autocorrect: false,
-                          enableSuggestions: false,
-                          enableIMEPersonalizedLearning: false,
-                          keyboardType: TextInputType.visiblePassword,
-                          onSubmitted: (_) => _submit(),
-                          decoration:
-                              ModalChrome.inputDecoration(c, widget.fields[i]),
-                          style: TextStyle(color: c.inputText, fontSize: 15),
-                        ),
-                      ),
-                    ],
-                    if (widget.error.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(widget.error,
-                          key: const ValueKey('chat-lock-error'),
-                          style: TextStyle(color: c.danger, fontSize: 12)),
-                    ],
-                    const SizedBox(height: 22),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        ModalChrome.iconButton(c, tr('Cancel'),
-                            () => Navigator.of(context).pop(), height: 42),
-                        if (widget.alt != null)
-                          ModalChrome.iconButton(
-                              c,
-                              widget.alt!,
-                              () => Navigator.of(context)
-                                  .pop(const ChatLockPromptResult(alt: true)),
-                              height: 42),
-                        ModalChrome.sendButton(c, widget.ok, _submit),
-                      ],
-                    ),
+                    ModalChrome.iconButton(c, tr('Cancel'),
+                        () => Navigator.of(context).pop(), height: 42),
+                    if (widget.alt != null)
+                      ModalChrome.iconButton(
+                          c,
+                          widget.alt!,
+                          () => Navigator.of(context)
+                              .pop(const ChatLockPromptResult(alt: true)),
+                          height: 42),
+                    ModalChrome.sendButton(c, widget.ok, _submit),
                   ],
                 ),
-              ),
+              ],
             ),
           ),
         ),
@@ -249,12 +246,12 @@ Future<bool> openLockedChats(BuildContext context, WidgetRef ref) async {
   }
   service.revealed = true;
   if (!context.mounted) return false;
-  final opened = await showDialog<ChatView>(
-    context: context,
+  final opened = await showNymSheet<ChatView>(
+    context,
+    (_) => const LockedChatsPanel(),
     barrierColor: context.nym.isLight
         ? const Color(0x73000000)
         : const Color(0xBF000000),
-    builder: (_) => const LockedChatsPanel(),
   );
   service.revealed = false;
   if (opened != null) {
@@ -277,79 +274,84 @@ class LockedChatsPanel extends ConsumerWidget {
     final service = ref.read(chatLockProvider);
     final keys = service.lockedKeys;
     final size = MediaQuery.of(context).size;
-    return ScreenPrivacyHold(
-      child: Center(
-        child: Material(
-          color: Colors.transparent,
-          child: Container(
-            width: size.width * 0.92,
-            constraints:
-                BoxConstraints(maxWidth: 520, maxHeight: size.height * 0.88),
-            decoration: BoxDecoration(
-              color: c.bgSecondary,
-              borderRadius: NymRadius.rxl,
-              border: Border.all(color: c.glassBorder),
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                tr(ChatLockStrings.lockedChats).toUpperCase(),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
             ),
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
+            IconButton(
+              tooltip: tr('Close'),
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            ),
+          ],
+        ),
+        Divider(color: c.glassBorder, height: 16),
+        Flexible(
+          child: keys.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Text(tr(ChatLockStrings.lockedEmpty),
+                      style: TextStyle(color: c.textDim, fontSize: 13)),
+                )
+              : ListView(
+                  shrinkWrap: true,
                   children: [
-                    Expanded(
-                      child: Text(
-                        tr(ChatLockStrings.lockedChats).toUpperCase(),
-                        style: TextStyle(
-                          color: c.primary,
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.2,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: tr('Close'),
-                      onPressed: () => Navigator.of(context).maybePop(),
-                      icon: Icon(Icons.close, size: 18, color: c.textDim),
-                    ),
+                    for (final k in keys) _LockedRow(lockKey: k),
                   ],
                 ),
-                Divider(color: c.glassBorder, height: 16),
-                Flexible(
-                  child: keys.isEmpty
-                      ? Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          child: Text(tr(ChatLockStrings.lockedEmpty),
-                              style: TextStyle(color: c.textDim, fontSize: 13)),
-                        )
-                      : ListView(
-                          shrinkWrap: true,
-                          children: [
-                            for (final k in keys) _LockedRow(lockKey: k),
-                          ],
-                        ),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    _PanelButton(
-                      label: tr(ChatLockStrings.settingsButton),
-                      onTap: () => ChatLockSettingsModal.open(context),
-                    ),
-                    _PanelButton(
-                      key: const ValueKey('chat-lock-now'),
-                      label: tr(ChatLockStrings.lockNow),
-                      onTap: () {
-                        Navigator.of(context).maybePop();
-                        service.lockNow();
-                      },
-                    ),
-                  ],
-                ),
-              ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _PanelButton(
+              label: tr(ChatLockStrings.settingsButton),
+              onTap: () => ChatLockSettingsModal.open(context),
+            ),
+            _PanelButton(
+              key: const ValueKey('chat-lock-now'),
+              label: tr(ChatLockStrings.lockNow),
+              onTap: () {
+                Navigator.of(context).maybePop();
+                service.lockNow();
+              },
+            ),
+          ],
+        ),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 16), child: body),
+      (body) => ScreenPrivacyHold(
+        child: Center(
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              width: size.width * 0.92,
+              constraints:
+                  BoxConstraints(maxWidth: 520, maxHeight: size.height * 0.88),
+              decoration: BoxDecoration(
+                color: c.bgSecondary,
+                borderRadius: NymRadius.rxl,
+                border: Border.all(color: c.glassBorder),
+              ),
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+              child: body,
             ),
           ),
         ),
@@ -471,10 +473,10 @@ class ChatLockSettingsModal extends ConsumerStatefulWidget {
       service.sessionEvent('unlock');
     }
     if (!context.mounted) return;
-    await showDialog<void>(
-      context: context,
+    await showNymSheet<void>(
+      context,
+      (_) => const ChatLockSettingsModal(),
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => const ChatLockSettingsModal(),
     );
   }
 
@@ -495,6 +497,16 @@ class _ChatLockSettingsModalState extends ConsumerState<ChatLockSettingsModal> {
     final hide = s['hide'] as Map;
     _code = TextEditingController(text: '${hide['code'] ?? ''}');
     _hide = hide['on'] == true;
+    _savedCode = _code.text;
+  }
+
+  late String _savedCode;
+
+  void _save(ChatLockService service) {
+    setState(() {
+      _error = service.setHide(_hide, _code.text);
+      if (_error.isEmpty) _savedCode = _code.text;
+    });
   }
 
   @override
@@ -509,114 +521,112 @@ class _ChatLockSettingsModalState extends ConsumerState<ChatLockSettingsModal> {
     final c = context.nym;
     final service = ref.read(chatLockProvider);
     final relock = service.relockMinutes;
-    return KeyboardInsetDialog(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Material(
-            color: Colors.transparent,
-            child: ModalChrome.box(
-              c,
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(28),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+    return NymDiscardGuard(
+      isDirty: () => _code.text != _savedCode,
+      child: ModalChrome.shell(
+        context,
+        maxWidth: 440,
+        child: ModalChrome.box(
+          c,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  tr(ChatLockStrings.settingsTitle).toUpperCase(),
+                  style: TextStyle(
+                    color: c.primary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(tr(ChatLockStrings.settingsHint),
+                    style: TextStyle(color: c.textDim, fontSize: 12, height: 1.5)),
+                const SizedBox(height: 18),
+                ModalChrome.formLabel(c, tr(ChatLockStrings.relockAfter)),
+                const SizedBox(height: 6),
+                DropdownButton<int>(
+                  key: const ValueKey('chat-lock-relock'),
+                  value: relock,
+                  isExpanded: true,
+                  dropdownColor: c.bgTertiary,
+                  style: TextStyle(color: c.text, fontSize: 14),
+                  items: [
+                    for (final o in relockOptions((s) => tr(s)))
+                      DropdownMenuItem<int>(value: o.value, child: Text(o.label)),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) service.relockMinutes = v;
+                  },
+                ),
+                const SizedBox(height: 16),
+                Material(
+                  type: MaterialType.transparency,
+                  child: CheckboxListTile(
+                    key: const ValueKey('chat-lock-hide'),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: _hide,
+                    onChanged: (v) => setState(() => _hide = v == true),
+                    title: Text(tr(ChatLockStrings.hideEntry),
+                        style: TextStyle(color: c.text, fontSize: 14)),
+                    subtitle: Text(tr(ChatLockStrings.hideEntryHint),
+                        style: TextStyle(color: c.textDim, fontSize: 11)),
+                  ),
+                ),
+                ModalChrome.focusRing(
+                  c,
+                  child: TextField(
+                    key: const ValueKey('chat-lock-code'),
+                    controller: _code,
+                    obscureText: true,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    enableIMEPersonalizedLearning: false,
+                    decoration: ModalChrome.inputDecoration(
+                        c, tr(ChatLockStrings.secretCode)),
+                    style: TextStyle(color: c.inputText, fontSize: 15),
+                  ),
+                ),
+                if (_error.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(_error, style: TextStyle(color: c.danger, fontSize: 12)),
+                ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
-                    Text(
-                      tr(ChatLockStrings.settingsTitle).toUpperCase(),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
+                    _PanelButton(
+                      key: const ValueKey('chat-lock-save-hide'),
+                      label: tr('Save'),
+                      onTap: () => _save(service),
                     ),
-                    const SizedBox(height: 12),
-                    Text(tr(ChatLockStrings.settingsHint),
-                        style: TextStyle(color: c.textDim, fontSize: 12, height: 1.5)),
-                    const SizedBox(height: 18),
-                    ModalChrome.formLabel(c, tr(ChatLockStrings.relockAfter)),
-                    const SizedBox(height: 6),
-                    DropdownButton<int>(
-                      key: const ValueKey('chat-lock-relock'),
-                      value: relock,
-                      isExpanded: true,
-                      dropdownColor: c.bgTertiary,
-                      style: TextStyle(color: c.text, fontSize: 14),
-                      items: [
-                        for (final o in relockOptions((s) => tr(s)))
-                          DropdownMenuItem<int>(value: o.value, child: Text(o.label)),
-                      ],
-                      onChanged: (v) {
-                        if (v != null) service.relockMinutes = v;
+                    if (service.hasPasscode)
+                      _PanelButton(
+                        label: tr(ChatLockStrings.resetPasscode),
+                        onTap: () => unawaited(service.changePasscode()),
+                      ),
+                    _PanelButton(
+                      label: tr(ChatLockStrings.lockNow),
+                      onTap: () {
+                        Navigator.of(context).pop();
+                        service.lockNow();
                       },
-                    ),
-                    const SizedBox(height: 16),
-                    CheckboxListTile(
-                      key: const ValueKey('chat-lock-hide'),
-                      contentPadding: EdgeInsets.zero,
-                      controlAffinity: ListTileControlAffinity.leading,
-                      value: _hide,
-                      onChanged: (v) => setState(() => _hide = v == true),
-                      title: Text(tr(ChatLockStrings.hideEntry),
-                          style: TextStyle(color: c.text, fontSize: 14)),
-                      subtitle: Text(tr(ChatLockStrings.hideEntryHint),
-                          style: TextStyle(color: c.textDim, fontSize: 11)),
-                    ),
-                    ModalChrome.focusRing(
-                      c,
-                      child: TextField(
-                        key: const ValueKey('chat-lock-code'),
-                        controller: _code,
-                        obscureText: true,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        enableIMEPersonalizedLearning: false,
-                        decoration: ModalChrome.inputDecoration(
-                            c, tr(ChatLockStrings.secretCode)),
-                        style: TextStyle(color: c.inputText, fontSize: 15),
-                      ),
-                    ),
-                    if (_error.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(_error, style: TextStyle(color: c.danger, fontSize: 12)),
-                    ],
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _PanelButton(
-                          key: const ValueKey('chat-lock-save-hide'),
-                          label: tr('Save'),
-                          onTap: () => setState(
-                              () => _error = service.setHide(_hide, _code.text)),
-                        ),
-                        if (service.hasPasscode)
-                          _PanelButton(
-                            label: tr(ChatLockStrings.resetPasscode),
-                            onTap: () => unawaited(service.changePasscode()),
-                          ),
-                        _PanelButton(
-                          label: tr(ChatLockStrings.lockNow),
-                          onTap: () {
-                            Navigator.of(context).maybePop();
-                            service.lockNow();
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                    Align(
-                      alignment: Alignment.center,
-                      child: ModalChrome.iconButton(
-                          c, tr('Close'), () => Navigator.of(context).pop()),
                     ),
                   ],
                 ),
-              ),
+                const SizedBox(height: 18),
+                Align(
+                  alignment: Alignment.center,
+                  child: ModalChrome.iconButton(
+                      c, tr('Close'), () => Navigator.of(context).pop()),
+                ),
+              ],
             ),
           ),
         ),

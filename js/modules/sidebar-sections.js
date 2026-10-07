@@ -28,7 +28,8 @@ Object.assign(NYM.prototype, {
         for (const id of this._sidebarSectionIds) {
             if (!finalOrder.includes(id) && byId.has(id)) finalOrder.push(id);
         }
-        for (const id of finalOrder) sidebar.appendChild(byId.get(id));
+        const footer = sidebar.querySelector(':scope > .sidebar-footer');
+        for (const id of finalOrder) sidebar.insertBefore(byId.get(id), footer);
         this._refreshSidebarReorderButtons();
     },
 
@@ -88,6 +89,7 @@ Object.assign(NYM.prototype, {
                 const isCollapsed = collapsed.has(el.dataset.section);
                 btn.title = isCollapsed ? 'Expand section' : 'Collapse section';
                 btn.setAttribute('aria-label', btn.title);
+                btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
             }
         }
     },
@@ -291,7 +293,7 @@ Object.assign(NYM.prototype, {
                 const items = this._buildSidebarMenuItems(itemEl);
                 if (!items.length) return;
                 fired = true;
-                window.nymHapticTap && window.nymHapticTap();
+                window.nymHaptic && window.nymHaptic('selection');
                 this._showSidebarActionMenu(items, x, y);
             }, 500);
         };

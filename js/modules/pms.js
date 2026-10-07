@@ -212,7 +212,7 @@ Object.assign(NYM.prototype, {
         let resolveCatchup;
         this._dmCatchupReady = new Promise(r => { resolveCatchup = r; });
 
-        const d1Available = !!(this._getApiHost && this._getApiHost());
+        const d1Available = typeof this._d1Backed === 'function' ? this._d1Backed() : !!(this._getApiHost && this._getApiHost());
         if (this.pubkey && this.lastPMSyncTime && !d1Available) {
             const since = Math.max(
                 this.lastPMSyncTime - 300,
@@ -393,6 +393,7 @@ Object.assign(NYM.prototype, {
                 this._archivePMEvent(selfWrapped);
             }
 
+            if (wrapped && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, nymMessageId);
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
             const pmList = this.pmMessages.get(conversationKey);
@@ -527,6 +528,7 @@ Object.assign(NYM.prototype, {
 
             // Show locally — reuse the rumor's created_at (now) so the local
             // message sorts identically to how the recipient sees it.
+            if (wrapped && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, nymMessageId);
             const conversationKey = this.getPMConversationKey(recipientPubkey);
             if (!this.pmMessages.has(conversationKey)) this.pmMessages.set(conversationKey, []);
             const extPmList = this.pmMessages.get(conversationKey);
@@ -938,7 +940,7 @@ Object.assign(NYM.prototype, {
             }
 
             if (rumor.kind === this.CALL_SIGNALING_KIND) {
-                if (!senderVerified) return;
+                if (!senderVerified || anonCandidates.length) return;
                 this.handleCallSignalingEvent({
                     id: event.id,
                     kind: rumor.kind,
@@ -1046,8 +1048,9 @@ Object.assign(NYM.prototype, {
             if (this.isTypingIndicator(rumor)) {
                 if (!senderVerified) return;
                 const rumorAge = Math.floor(Date.now() / 1000) - (rumor.created_at || 0);
-                if (rumorAge > this._typingExpireMs / 1000) return;
                 const parsed = this.parseTypingIndicator(rumor);
+                const UA = window.NymUploadActivity;
+                if (UA ? UA.isStale(rumorAge, parsed && parsed.ttl) : rumorAge > this._typingExpireMs / 1000) return;
                 this.handleTypingIndicatorEvent(parsed, senderPubkey, senderVerified);
                 return;
             }
@@ -1989,6 +1992,11 @@ Object.assign(NYM.prototype, {
             this._handleBotPM(String(content).trim(), null);
             return true;
         }
+        if (typeof this.aiConsentNeededForPM === 'function' && this.aiConsentNeededForPM(content, recipientPubkey)
+            && !(await this.aiConsentEnsure('nymbot'))) {
+            this.aiConsentBlocked('nymbot');
+            return false;
+        }
         const guardKey = (this.isVerifiedBot(recipientPubkey) && typeof this.botSendGuardTake === 'function')
             ? `${recipientPubkey}|${options.threadRoot || ''}|${content}` : null;
         if (guardKey && !this.botSendGuardTake(guardKey)) return true;
@@ -2001,7 +2009,6 @@ Object.assign(NYM.prototype, {
 
     async _sendPMOnce(content, recipientPubkey, options = {}) {
         try {
-            if (!this.connected) throw new Error('Not connected to relay');
             if (!content || !content.trim()) return false;
             if (this.isVerifiedBot(recipientPubkey) && this.botAnonEnabled && this.botAnonEnabled()) {
                 const blocked = this.botAnonBlockedReason();
@@ -3426,6 +3433,8 @@ Object.assign(NYM.prototype, {
             const pmList = document.getElementById('pmList');
             const item = document.createElement('div');
             item.className = 'pm-item list-item';
+            item.setAttribute('role', 'button');
+            item.tabIndex = 0;
             item.dataset.pubkey = pubkey;
             item.dataset.lastMessageTime = timestamp;
 
@@ -3449,7 +3458,7 @@ Object.assign(NYM.prototype, {
 <span class="pm-name">${this.escapeHtml(cleanBaseNym)}<span class="nym-suffix">#${suffix}</span>${flairHtml} ${verifiedBadge}${friendBadge}</span>
 <div class="channel-badges">
 ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
-<button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+<button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button">${NymMenuDotsIcon.svg({ size: 16 })}</button>
 </div>
 `;
             item.dataset.action = 'openPMItem';

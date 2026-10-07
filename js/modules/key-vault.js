@@ -117,7 +117,10 @@ Object.assign(NYM.prototype, {
       if (this.vaultEnabled() && this._vaultKey) {
         if (!this._vaultMem) this._vaultMem = new Map();
         this._vaultMem.set(name, val);
-        localStorage.setItem(name, await this._vaultEncrypt(val));
+        const key = this._vaultKey;
+        let blob = await this._vaultEncWith(key, val);
+        if (this._vaultKey && this._vaultKey !== key) blob = await this._vaultEncWith(this._vaultKey, val);
+        localStorage.setItem(name, blob);
       } else {
         localStorage.setItem(name, val);
       }
@@ -132,15 +135,17 @@ Object.assign(NYM.prototype, {
   _vb64(bytes) { let s = ''; const b = new Uint8Array(bytes); for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); },
   _vb64d(str) { const s = atob(str); const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; },
 
-  async _vaultEncrypt(plaintext) {
+  async _vaultEncrypt(plaintext) { return this._vaultEncWith(this._vaultKey, plaintext); },
+  async _vaultDecrypt(blob) { return this._vaultDecWith(this._vaultKey, blob); },
+  async _vaultEncWith(key, plaintext) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this._vaultKey, new TextEncoder().encode(plaintext));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext));
     return 'enc:v1:' + this._vb64(iv) + ':' + this._vb64(new Uint8Array(ct));
   },
-  async _vaultDecrypt(blob) {
+  async _vaultDecWith(key, blob) {
     const p = String(blob).split(':');
     if (p.length !== 4 || p[0] !== 'enc' || p[1] !== 'v1') throw new Error('bad blob');
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: this._vb64d(p[2]) }, this._vaultKey, this._vb64d(p[3]));
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: this._vb64d(p[2]) }, key, this._vb64d(p[3]));
     return new TextDecoder().decode(pt);
   },
 
@@ -345,6 +350,53 @@ Object.assign(NYM.prototype, {
     return true;
   },
 
+  async changeVaultPassword(current, next) {
+    if (!this.vaultEnabled() || this._vaultIsWebAuthn(this.vaultMethod())) return false;
+    if (String(next || '').length < 4) throw new Error('Use at least 4 characters.');
+    const saltB64 = localStorage.getItem('nym_vault_salt');
+    const check = localStorage.getItem('nym_vault_check');
+    if (!saltB64 || !check || !current) return false;
+    let oldKey;
+    try {
+      oldKey = await this._deriveKeyFromPassword(String(current), this._vb64d(saltB64));
+      if ((await this._vaultDecWith(oldKey, check)) !== 'nymchat-vault-ok') return false;
+    } catch (e) { return false; }
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await this._deriveKeyFromPassword(String(next), salt);
+    const writes = new Map();
+    for (const name of [...this._VAULT_KEYS, ...this._vaultExtraKeyNames()]) {
+      const blob = localStorage.getItem(name);
+      if (!blob || !String(blob).startsWith('enc:v1:')) continue;
+      writes.set(name, await this._vaultEncWith(key, await this._vaultDecWith(oldKey, blob)));
+    }
+    writes.set('nym_vault_check', await this._vaultEncWith(key, 'nymchat-vault-ok'));
+    writes.set('nym_vault_salt', this._vb64(salt));
+    const before = new Map();
+    for (const name of writes.keys()) before.set(name, localStorage.getItem(name));
+    try {
+      for (const [name, value] of writes) localStorage.setItem(name, value);
+    } catch (e) {
+      for (const [name, value] of before) {
+        try { if (value == null) localStorage.removeItem(name); else localStorage.setItem(name, value); } catch (e2) {}
+      }
+      throw e;
+    }
+    this._vaultKey = key;
+    if (typeof this._cacheGetAll === 'function') {
+      try {
+        const all = await this._cacheGetAll('pms');
+        for (const rec of all) {
+          if (!rec || !rec.key || rec.enc !== 'v1' || typeof rec.payload !== 'string') continue;
+          try {
+            const payload = await this._vaultEncWith(key, await this._vaultDecWith(oldKey, rec.payload));
+            await this._cachePut('pms', { key: rec.key, enc: 'v1', payload });
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    return true;
+  },
+
   // Escape hatch for a forgotten password; the encrypted identity is unrecoverable and discarded.
   resetVault() {
     for (const name of this._VAULT_KEYS) { try { localStorage.removeItem(name); } catch (e) {} }
@@ -382,67 +434,82 @@ Object.assign(NYM.prototype, {
     for (const name of [
       'nym_nostr_login_method', 'nym_nostr_login_pubkey', 'nym_nostr_login_npub',
       'nym_random_keypair_per_session', 'nym_auto_ephemeral', 'nym_auto_ephemeral_nick',
-      'nym_auto_ephemeral_channel', 'nym_purchases_cache', 'nym_active_style', 'nym_active_flair',
+      'nym_auto_ephemeral_channel', 'nym_last_view', 'nym_purchases_cache', 'nym_active_style', 'nym_active_flair',
       'nym_bio', 'nym_lightning_address_global', 'nym_avatar_url', 'nym_banner_url'
     ]) { try { localStorage.removeItem(name); } catch (e) {} }
     try { location.replace(location.origin + location.pathname); }
     catch (e) { try { location.reload(); } catch (e2) {} }
   },
 
-  // Called early in startup; blocks until the user unlocks or resets.
   async unlockVaultAtBoot() {
     if (!this.vaultEnabled() || this._vaultKey) return;
-    // Apply the saved theme first; this runs before initialize().
     try { this.applyColorMode(); } catch (e) {}
-    while (true) {
-      // null means the user chose to reset.
-      const password = await this._vaultPromptModal();
-      if (password === null) {
-        this._forgetIdentityAndReload();
-        return;
-      }
-      try {
-        await this.unlockVault(password);
-        return;
-      } catch (e) {
-        const retry = await this._vaultErrorModal(e && e.message ? e.message : 'Unlock failed.');
-        if (retry === 'reset') { this._forgetIdentityAndReload(); return; }
-      }
-    }
+    const result = await this._vaultPromptModal();
+    if (result === 'reset') this._forgetIdentityAndReload();
+  },
+
+  _vt(text, vars) {
+    return typeof this._ac === 'function' ? this._ac(text, vars) : text;
   },
 
   _vaultPromptModal() {
     return new Promise((resolve) => {
       const webauthn = this._vaultIsWebAuthn(this.vaultMethod());
       const isPasskey = this.vaultMethod() === 'passkey';
-      const o = this._vaultOverlay();
+      const o = this._vaultOverlay('gate');
       o.box.innerHTML =
-        '<div class="modal-header">Unlock your identity</div>' +
-        '<div class="modal-body">' +
-        '<p class="form-hint nm-vault-text">Your Nymchat identity key is encrypted on this device.' +
+        '<h1 class="nm-vault-title">Unlock your identity</h1>' +
+        '<p class="nm-vault-lede">Your Nymchat identity key is encrypted on this device.' +
         (webauthn ? (isPasskey ? ' Use your passkey to unlock.' : ' Use your biometric to unlock.') : '') + '</p>' +
-        (webauthn ? '' : '<div class="form-group"><input id="nymVaultPw" type="password" inputmode="numeric" autocomplete="off" placeholder="Password or PIN" class="form-input"></div>') +
-        '</div>' +
-        '<div class="modal-actions">' +
-        '<button id="nymVaultReset" class="icon-btn">Forget identity</button>' +
+        (webauthn ? '' : '<label class="nm-vault-label" for="nymVaultPw">Password or PIN</label>' +
+          '<input id="nymVaultPw" type="password" inputmode="numeric" autocomplete="off" class="form-input">') +
+        '<p id="nymVaultErr" class="nm-vault-error-line" role="alert" hidden></p>' +
+        '<div class="nm-vault-actions">' +
         '<button id="nymVaultGo" class="send-btn">Unlock</button>' +
-        '</div>';
+        '<button id="nymVaultReset" class="icon-btn">Forget identity</button>' +
+        '</div>' +
+        '<p id="nymVaultBusy" class="nm-vault-busy" role="status" hidden>Unlocking…</p>';
       this._vaultWordmark(o);
-      const go = async () => {
-        const pw = webauthn ? '' : (o.box.querySelector('#nymVaultPw').value || '');
-        o.close();
-        resolve(pw);
-      };
-      o.box.querySelector('#nymVaultGo').onclick = go;
-      o.box.querySelector('#nymVaultReset').onclick = async () => {
-        o.close();
-        const ok = await this._vaultConfirm(this._vaultForgetMessage(), { title: 'Forget identity', danger: true, okLabel: 'Forget' });
-        if (ok) resolve(null);
-        else this._vaultPromptModal().then(resolve);
-      };
       const inp = o.box.querySelector('#nymVaultPw');
+      const goBtn = o.box.querySelector('#nymVaultGo');
+      const resetBtn = o.box.querySelector('#nymVaultReset');
+      const err = o.box.querySelector('#nymVaultErr');
+      const busy = o.box.querySelector('#nymVaultBusy');
+      let working = false;
+      const setWorking = (on) => {
+        working = on;
+        busy.hidden = !on;
+        goBtn.disabled = on;
+        resetBtn.disabled = on;
+        if (inp) inp.disabled = on;
+      };
+      const go = async () => {
+        if (working) return;
+        err.hidden = true;
+        setWorking(true);
+        try {
+          await this.unlockVault(inp ? (inp.value || '') : '');
+        } catch (e) {
+          this._vaultKey = null;
+          setWorking(false);
+          err.textContent = this._vt(e && e.message ? e.message : 'Unlock failed.');
+          err.hidden = false;
+          if (inp) { inp.value = ''; inp.focus(); }
+          return;
+        }
+        o.close();
+        resolve('ok');
+      };
+      goBtn.onclick = go;
+      resetBtn.onclick = async () => {
+        if (working) return;
+        o.hide();
+        const ok = await this._vaultConfirm(this._vaultForgetMessage(), { title: 'Forget identity', danger: true, okLabel: 'Forget' });
+        if (ok) { o.close(); resolve('reset'); return; }
+        o.show();
+        if (inp) inp.focus();
+      };
       if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === 'Enter') go(); }; }
-      // We don't auto-fire the system authenticator sheet.
     });
   },
 
@@ -451,23 +518,6 @@ Object.assign(NYM.prototype, {
     if (!t) return 'This permanently deletes the encrypted identity on this device and starts a fresh one. Continue?';
     if (t.to) return this._ac('This permanently deletes {nym} and its data on this device, and you will switch to {next}. Continue?', { nym: t.from, next: t.to });
     return this._ac('This permanently deletes {nym} and its data on this device, and you will return to the welcome screen. Continue?', { nym: t.from });
-  },
-
-  _vaultErrorModal(msg) {
-    return new Promise((resolve) => {
-      const o = this._vaultOverlay();
-      o.box.innerHTML =
-        '<div class="modal-header">Unlock failed</div>' +
-        '<div class="modal-body"><p class="form-hint nm-vault-text"></p></div>' +
-        '<div class="modal-actions">' +
-        '<button id="nymVErReset" class="icon-btn">Forget identity</button>' +
-        '<button id="nymVErRetry" class="send-btn">Try again</button>' +
-        '</div>';
-      o.box.querySelector('p').textContent = msg;
-      this._vaultWordmark(o);
-      o.box.querySelector('#nymVErRetry').onclick = () => { o.close(); resolve('retry'); };
-      o.box.querySelector('#nymVErReset').onclick = () => { o.close(); resolve('reset'); };
-    });
   },
 
   _hasPersistedSecret() {
@@ -527,14 +577,19 @@ Object.assign(NYM.prototype, {
     } catch (e) {}
   },
 
-  _vaultOverlay() {
+  _vaultOverlay(kind) {
     const ov = document.createElement('div');
-    ov.className = 'modal active nm-vault-overlay';
+    ov.className = 'modal active nm-vault-overlay' + (kind === 'gate' ? ' nm-vault-gate' : '');
     const box = document.createElement('div');
     box.className = 'modal-content nm-vault-box';
     ov.appendChild(box);
     document.body.appendChild(ov);
-    return { box, close: () => { try { document.body.removeChild(ov); } catch (e) {} } };
+    return {
+      box,
+      close: () => { try { document.body.removeChild(ov); } catch (e) {} },
+      hide: () => { ov.style.display = 'none'; },
+      show: () => { ov.style.display = ''; }
+    };
   },
 
   async _verifyPassword(password) {
@@ -551,30 +606,122 @@ Object.assign(NYM.prototype, {
     } catch (e) { return false; }
   },
 
-  // Resolves true on success, false on failure, and null when the user cancels.
-  async _vaultReauth() {
-    if (this._vaultIsWebAuthn(this.vaultMethod())) {
-      return await this.testVaultUnlock();
-    }
-    return await new Promise((resolve) => {
-      const o = this._vaultOverlay();
-      o.box.innerHTML =
-        '<div class="modal-header">Confirm it\'s you</div>' +
+  _vaultMethodName() {
+    const m = this.vaultMethod();
+    if (m === 'passkey') return 'Passkey (device, security key, or synced)';
+    if (m === 'biometric') return 'Biometric (Face/Touch ID)';
+    return 'Password or PIN';
+  },
+
+  _vaultManage(o) {
+    const webauthn = this._vaultIsWebAuthn(this.vaultMethod());
+    const view = document.createElement('div');
+    view.className = 'nm-vault-view';
+    o.box.appendChild(view);
+    let working = false;
+    const field = (id, label, auto) =>
+      '<div class="form-group"><label class="form-label" for="' + id + '">' + label + '</label>' +
+      '<input id="' + id + '" type="password" autocomplete="' + auto + '" class="form-input"></div>';
+    const statusLine = '<p id="nymVStatus" class="form-hint nm-vault-status" role="status"></p>';
+    const status = (msg) => { const el = view.querySelector('#nymVStatus'); if (el) el.textContent = msg ? this._vt(msg) : ''; };
+    const lock = (on) => {
+      working = on;
+      view.querySelectorAll('button, input').forEach((el) => { el.disabled = on; });
+    };
+    const main = () => {
+      view.innerHTML =
+        '<div class="modal-header">Identity encryption</div>' +
+        '<div class="modal-body"><p class="form-hint nm-vault-text" id="nymVMethodText"></p></div>' +
+        '<div class="modal-actions nm-vault-manage-actions">' +
+        '<button id="nymVClose" class="icon-btn" data-sheet-close>Close</button>' +
+        (webauthn ? '' : '<button id="nymVChange" class="icon-btn">Change password or PIN</button>') +
+        '<button id="nymVDisable" class="send-btn danger">Turn off</button>' +
+        '</div>';
+      view.querySelector('#nymVMethodText').textContent =
+        this._vt('Your identity key is encrypted at rest ({method}).', { method: this._vt(this._vaultMethodName()) });
+      view.querySelector('#nymVClose').onclick = o.close;
+      const ch = view.querySelector('#nymVChange');
+      if (ch) ch.onclick = change;
+      view.querySelector('#nymVDisable').onclick = off;
+    };
+    const change = () => {
+      view.innerHTML =
+        '<div class="modal-header">Change password or PIN</div>' +
         '<div class="modal-body">' +
-        '<p class="form-hint nm-vault-text">Enter your password or PIN to turn off identity encryption.</p>' +
-        '<div class="form-group"><input id="nymReauthPw" type="password" inputmode="text" autocomplete="off" placeholder="Password or PIN" class="form-input"></div>' +
+        '<p class="form-hint nm-vault-text">Enter your current password or PIN, then choose a new one.</p>' +
+        field('nymVCur', 'Current password or PIN', 'current-password') +
+        field('nymVNew', 'New password or PIN', 'new-password') +
+        field('nymVNew2', 'Confirm', 'new-password') +
+        statusLine +
         '</div>' +
         '<div class="modal-actions">' +
-        '<button id="nymReauthCancel" class="icon-btn">Cancel</button>' +
-        '<button id="nymReauthGo" class="send-btn">Confirm</button>' +
+        '<button id="nymVCancel" class="icon-btn" data-sheet-close>Cancel</button>' +
+        '<button id="nymVChangeGo" class="send-btn">Change</button>' +
         '</div>';
-      const inp = o.box.querySelector('#nymReauthPw');
-      const go = async () => { const ok = await this._verifyPassword(inp.value || ''); o.close(); resolve(ok); };
-      o.box.querySelector('#nymReauthGo').onclick = go;
-      o.box.querySelector('#nymReauthCancel').onclick = () => { o.close(); resolve(null); };
-      inp.focus();
-      inp.onkeydown = (e) => { if (e.key === 'Enter') go(); };
-    });
+      const cur = view.querySelector('#nymVCur');
+      const next = view.querySelector('#nymVNew');
+      const next2 = view.querySelector('#nymVNew2');
+      const go = async () => {
+        if (working) return;
+        if (!cur.value) { status('Enter your password or PIN.'); return; }
+        if (next.value.length < 4) { status('Use at least 4 characters.'); return; }
+        if (next.value !== next2.value) { status('The two entries do not match.'); return; }
+        status('');
+        lock(true);
+        let ok = false;
+        try { ok = await this.changeVaultPassword(cur.value, next.value); } catch (e) { ok = false; }
+        lock(false);
+        if (!ok) { cur.value = ''; cur.focus(); status('Your current password or PIN is incorrect.'); return; }
+        o.close();
+        this._vaultAlert(this._vt('Password or PIN changed.'));
+      };
+      view.querySelector('#nymVCancel').onclick = o.close;
+      view.querySelector('#nymVChangeGo').onclick = go;
+      next2.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+      cur.focus();
+    };
+    const off = () => {
+      view.innerHTML =
+        '<div class="modal-header">Turn off identity encryption</div>' +
+        '<div class="modal-body">' +
+        (webauthn
+          ? '<p class="form-hint nm-vault-text">Confirm with your passkey or biometric to turn off identity encryption.</p>'
+          : '<p class="form-hint nm-vault-text">Enter your password or PIN to turn off identity encryption.</p>' +
+            field('nymVOffPw', 'Password or PIN', 'current-password')) +
+        statusLine +
+        '</div>' +
+        '<div class="modal-actions">' +
+        '<button id="nymVCancel" class="icon-btn" data-sheet-close>Cancel</button>' +
+        '<button id="nymVOffGo" class="send-btn danger">Turn off</button>' +
+        '</div>';
+      const pw = view.querySelector('#nymVOffPw');
+      const go = async () => {
+        if (working) return;
+        if (!this._vaultKey) { status('Unlock the app first, then turn off encryption.'); return; }
+        if (pw && !pw.value) { status('Enter your password or PIN.'); return; }
+        status('');
+        lock(true);
+        let ok = false;
+        try { ok = webauthn ? await this.testVaultUnlock() : await this._verifyPassword(pw.value); } catch (e) { ok = false; }
+        if (!ok) {
+          lock(false);
+          if (pw) { pw.value = ''; pw.focus(); }
+          status(webauthn ? 'Re-authentication failed. Encryption was not turned off.' : 'Your current password or PIN is incorrect.');
+          return;
+        }
+        try { await this.disableVault(); } catch (e) {
+          lock(false);
+          status(e && e.message ? e.message : 'Re-authentication failed. Encryption was not turned off.');
+          return;
+        }
+        o.close();
+        this._vaultAlert(this._vt('Encryption turned off.'));
+      };
+      view.querySelector('#nymVCancel').onclick = o.close;
+      view.querySelector('#nymVOffGo').onclick = go;
+      if (pw) { pw.onkeydown = (e) => { if (e.key === 'Enter') go(); }; pw.focus(); }
+    };
+    main();
   },
 
   async openVaultSettings() {
@@ -582,27 +729,9 @@ Object.assign(NYM.prototype, {
     const bio = (await this.biometricAvailable()) && !this._biometricRedundantWithPasskey();
     const passkey = this.webauthnAvailable();
     const o = this._vaultOverlay();
+    o.box.parentNode.setAttribute('data-sheet', '');
     if (enabled) {
-      o.box.innerHTML =
-        '<div class="modal-header">Identity encryption</div>' +
-        '<div class="modal-body"><p class="form-hint nm-vault-text">Your identity key is encrypted at rest (<span id="nymVMethodLabel"></span>).</p></div>' +
-        '<div class="modal-actions">' +
-        '<button id="nymVClose" class="icon-btn">Close</button>' +
-        '<button id="nymVDisable" class="send-btn danger">Turn off</button>' +
-        '</div>';
-      o.box.querySelector('#nymVMethodLabel').textContent = this.vaultMethod();
-      o.box.querySelector('#nymVClose').onclick = o.close;
-      o.box.querySelector('#nymVDisable').onclick = async () => {
-        try {
-          if (!this._vaultKey) { o.close(); this._vaultAlert('Unlock the app first, then turn off encryption.'); return; }
-          const auth = await this._vaultReauth();
-          if (auth === null) return;
-          if (auth !== true) { this._vaultAlert('Re-authentication failed. Encryption was not turned off.'); return; }
-          await this.disableVault();
-          o.close();
-          this._vaultAlert('Encryption turned off.');
-        } catch (e) { this._vaultAlert(e.message || 'Failed.'); }
-      };
+      this._vaultManage(o);
       return;
     }
     o.box.innerHTML =
@@ -618,19 +747,22 @@ Object.assign(NYM.prototype, {
       (bio ? '<option value="biometric">Biometric (Face/Touch ID)</option>' : '') +
       '</select>' +
       '</div>' +
-      '<div class="form-group"><input id="nymVPw" type="password" inputmode="text" autocomplete="new-password" placeholder="Choose a password" class="form-input"></div>' +
-      '<div class="form-group"><input id="nymVPw2" type="password" autocomplete="new-password" placeholder="Confirm" class="form-input"></div>' +
+      '<div class="form-group"><label class="form-label" id="nymVPwLabel" for="nymVPw">Choose a password</label><input id="nymVPw" type="password" inputmode="text" autocomplete="new-password" class="form-input"></div>' +
+      '<div class="form-group"><label class="form-label" for="nymVPw2">Confirm</label><input id="nymVPw2" type="password" autocomplete="new-password" class="form-input"></div>' +
       '<p id="nymVWaHint" class="form-hint nm-hidden">You\'ll be prompted to create/select a passkey. It must support the WebAuthn PRF extension; if it doesn\'t, pick a password or PIN instead.</p>' +
       (passkey ? '' : '<p class="form-hint">Passkey/biometric unlock isn\'t available in this browser/app, so password or PIN is used.</p>') +
+      '<p id="nymVStatus" class="form-hint nm-vault-status" role="status"></p>' +
       '</div>' +
       '<div class="modal-actions">' +
-      '<button id="nymVCancel" class="icon-btn">Cancel</button>' +
+      '<button id="nymVCancel" class="icon-btn" data-sheet-close>Cancel</button>' +
       '<button id="nymVEnable" class="send-btn">Enable</button>' +
       '</div>';
     const methodSel = o.box.querySelector('#nymVMethod');
     const pw = o.box.querySelector('#nymVPw');
     const pw2 = o.box.querySelector('#nymVPw2');
     const waHint = o.box.querySelector('#nymVWaHint');
+    const statusEl = o.box.querySelector('#nymVStatus');
+    const status = (msg) => { statusEl.textContent = msg; };
     const stripNonDigits = (el) => { if (methodSel.value === 'pin') el.value = el.value.replace(/[^0-9]/g, ''); };
     pw.addEventListener('input', () => stripNonDigits(pw));
     pw2.addEventListener('input', () => stripNonDigits(pw2));
@@ -642,7 +774,7 @@ Object.assign(NYM.prototype, {
       if (waHint) waHint.classList.toggle('nm-hidden', !isWa);
       pw.setAttribute('inputmode', isPin ? 'numeric' : 'text');
       pw2.setAttribute('inputmode', isPin ? 'numeric' : 'text');
-      pw.placeholder = isPin ? 'Choose a PIN code' : 'Choose a password';
+      o.box.querySelector('#nymVPwLabel').textContent = isPin ? 'Choose a PIN code' : 'Choose a password';
       if (isPin) { stripNonDigits(pw); stripNonDigits(pw2); }
     };
     methodSel.onchange = syncPwVisibility; syncPwVisibility();
@@ -651,8 +783,8 @@ Object.assign(NYM.prototype, {
       const method = this._vaultIsWebAuthn(methodSel.value) ? methodSel.value : 'password';
       try {
         if (!this._vaultIsWebAuthn(method)) {
-          if ((pw.value || '').length < 4) { this._vaultAlert('Use at least 4 characters.'); return; }
-          if (pw.value !== pw2.value) { this._vaultAlert('The two entries do not match.'); return; }
+          if ((pw.value || '').length < 4) { status('Use at least 4 characters.'); return; }
+          if (pw.value !== pw2.value) { status('The two entries do not match.'); return; }
         }
         const btn = o.box.querySelector('#nymVEnable');
         await this.enableVault(method, pw.value);
@@ -671,7 +803,7 @@ Object.assign(NYM.prototype, {
         }
         o.close();
         this._vaultAlert('Identity encryption enabled and verified. You\'ll be asked to unlock on next launch.');
-      } catch (e) { this._vaultAlert(e.message || 'Could not enable encryption.'); }
+      } catch (e) { status(e.message || 'Could not enable encryption.'); }
     };
   }
 

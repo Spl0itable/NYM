@@ -47,6 +47,17 @@ class BackgroundRefreshService {
     });
   }
 
+  Future<void> ready() async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod<void>('ready');
+    } on MissingPluginException {
+      return;
+    } catch (e) {
+      debugPrint('[BackgroundRefresh] ready failed: $e');
+    }
+  }
+
   /// Requests another window; [earliest] is a lower bound, and each request is consumed by firing.
   Future<void> schedule({
     Duration earliest = const Duration(minutes: 15),

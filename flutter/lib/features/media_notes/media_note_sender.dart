@@ -10,6 +10,7 @@ import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import '../mesh/mesh_bridge.dart';
 import '../mesh/mesh_controller.dart';
+import '../pms/upload_activity.dart';
 import '../toasts/toast_center.dart';
 import '../toasts/toast_model.dart';
 import 'media_notes.dart';
@@ -83,6 +84,8 @@ class MediaNoteSender {
     required this.sendMesh,
     required this.notice,
     MediaFileRead? readFile,
+    this.beginActivity,
+    this.endActivity,
   }) : readFile = readFile ?? ((path) => File(path).readAsBytes());
 
   factory MediaNoteSender.live(Ref ref) => MediaNoteSender(
@@ -115,6 +118,10 @@ class MediaNoteSender {
             showToast(text);
           }
         },
+        beginActivity: (kind, view) =>
+            ref.read(nostrControllerProvider).beginChatActivity(kind, view),
+        endActivity: (token) =>
+            ref.read(nostrControllerProvider).endChatActivity(token),
       );
 
   final MediaUpload upload;
@@ -122,6 +129,8 @@ class MediaNoteSender {
   final MediaMeshSend sendMesh;
   final MediaNotice notice;
   final MediaFileRead readFile;
+  final int? Function(String kind, ChatView view)? beginActivity;
+  final void Function(int? token)? endActivity;
 
   PendingMediaNote? failed;
   final ValueNotifier<String?> sending = ValueNotifier<String?>(null);
@@ -205,6 +214,8 @@ class MediaNoteSender {
           : noteUploadTypes(desc.kind, desc.mime);
       String? url;
       final errors = <String>[];
+      final activity =
+          beginActivity?.call(UploadActivity.kindForNote(desc.kind), target);
       try {
         for (final type in types.isEmpty ? [desc.mime] : types) {
           try {
@@ -218,6 +229,7 @@ class MediaNoteSender {
         }
       } finally {
         sending.value = null;
+        endActivity?.call(activity);
       }
       if (url == null || url.isEmpty) {
         throw StateError(errors.isEmpty ? 'upload failed' : errors.join('; '));

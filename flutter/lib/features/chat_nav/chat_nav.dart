@@ -77,23 +77,30 @@ class ChatNavStrings {
   static const String jumpFirst = 'Jump to first unread';
   static const String nNew = '{n} new';
   static const String mentions = 'Unread mentions';
-  static const String pin = 'Pin';
-  static const String unpin = 'Unpin';
+  static const String favoriteChat = 'Favorite';
+  static const String unfavoriteChat = 'Unfavorite';
   static const String moveUp = 'Move up';
   static const String moveDown = 'Move down';
-  static const String pinCap = 'You can pin up to {n} chats. Unpin one first.';
-  static const String pinned = 'Pinned';
+  static const String favorite = 'Favorite channel';
+  static const String unfavorite = 'Unfavorite channel';
+  static const String favorited = 'Favorited';
+  static const String unfavorited = 'Unfavorited #{channel}';
+  static const String favoriteCap =
+      'You can have up to {n} favorite channels. Remove one first.';
+  static const String favoriteChatCap =
+      'You can have up to {n} favorite chats. Remove one first.';
+  static const String unfavoritedChat = 'Unfavorited {name}';
   static const String sendLater = 'Send later';
   static const String scheduled = 'Scheduled';
   static const String held = 'Held by Nymchat until it sends';
   static const String heldDetail =
-      'Nymchat holds a copy that is already signed and, for DMs and groups, already encrypted. It cannot read or change it.';
+      'Nymchat holds a copy that is already signed and, for PMs and groups, already encrypted. It cannot read or change it.';
   static const String meshBlocked =
       'Send later needs the internet. This chat is on the Bluetooth mesh only.';
   static const String offlineBlocked =
       "Send later needs the internet. You're offline.";
   static const String signerBlocked =
-      'Send later in DMs and groups needs your key on this device.';
+      'Send later in PMs and groups needs your key on this device.';
   static const String serverBlocked =
       "Send later isn't available without the Nymchat server.";
   static const String past = 'Pick a time in the future.';
@@ -116,12 +123,17 @@ class ChatNavStrings {
         'jumpFirst': jumpFirst,
         'nNew': nNew,
         'mentions': mentions,
-        'pin': pin,
-        'unpin': unpin,
+        'favoriteChat': favoriteChat,
+        'unfavoriteChat': unfavoriteChat,
         'moveUp': moveUp,
         'moveDown': moveDown,
-        'pinCap': pinCap,
-        'pinned': pinned,
+        'favorite': favorite,
+        'unfavorite': unfavorite,
+        'favorited': favorited,
+        'unfavorited': unfavorited,
+        'favoriteCap': favoriteCap,
+        'favoriteChatCap': favoriteChatCap,
+        'unfavoritedChat': unfavoritedChat,
         'sendLater': sendLater,
         'scheduled': scheduled,
         'held': held,
@@ -291,6 +303,7 @@ class ChatFabs {
   static const double rightPhone = 16;
   static const double rightColumn = 16;
   static const double phoneMax = 768;
+  static const double floatBottom = 16;
 
   static Map<String, Object> toJson() => {
         'order': order,
@@ -299,6 +312,7 @@ class ChatFabs {
         'rightPhone': rightPhone,
         'rightColumn': rightColumn,
         'phoneMax': phoneMax,
+        'floatBottom': floatBottom,
       };
 }
 
@@ -833,6 +847,9 @@ bool isPinned(Object? state, String k) =>
 
 int _maxInt(List<num> xs) => xs.reduce((a, b) => a > b ? a : b).floor();
 
+String pinSection(String k) =>
+    pinParse(k)?.kind == 'channel' ? 'channel' : 'chat';
+
 ({Map<String, dynamic> state, String? error}) pinAdd(
     Object? state, String k, num nowMs,
     {int cap = 0}) {
@@ -841,7 +858,10 @@ int _maxInt(List<num> xs) => xs.reduce((a, b) => a > b ? a : b).floor();
   final order = _order(s);
   if (order.contains(k)) return (state: s, error: null);
   final limit = cap > 0 ? cap : ChatNavLimits.pinMax;
-  if (order.length >= limit) return (state: s, error: 'cap');
+  final section = pinSection(k);
+  if (order.where((x) => pinSection(x) == section).length >= limit) {
+    return (state: s, error: 'cap');
+  }
   final items = _items(s);
   final removed = _removed(s);
   final at = _maxInt([nowMs, (removed[k] ?? 0) + 1, (items[k] ?? 0) + 1]);
@@ -986,9 +1006,21 @@ bool trimPinnedPayload(Map<String, dynamic> p) {
     return true;
   }
   final order = s['order'];
-  if (order is List && order.length > ChatNavLimits.pinMax) {
-    final drop = order.sublist(ChatNavLimits.pinMax);
-    s['order'] = order.sublist(0, ChatNavLimits.pinMax);
+  if (order is List) {
+    final seen = <String, int>{'channel': 0, 'chat': 0};
+    final keep = [];
+    final drop = [];
+    for (final k in order) {
+      final sec = pinSection('$k');
+      if (seen[sec]! < ChatNavLimits.pinMax) {
+        seen[sec] = seen[sec]! + 1;
+        keep.add(k);
+      } else {
+        drop.add(k);
+      }
+    }
+    if (drop.isEmpty) return false;
+    s['order'] = keep;
     final items = s['items'];
     if (items is Map) {
       for (final k in drop) {

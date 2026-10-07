@@ -12,24 +12,30 @@ import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../core/utils/haptics.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
+import '../../features/layout/layout_model.dart';
 import '../../features/toasts/toast_center.dart';
 import '../../features/toasts/toast_model.dart';
 import '../common/css_focus_ring.dart';
+import '../common/nym_focusable.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
+import '../../features/ai_consent/ai_consent.dart';
 import '../../features/autocomplete/autocomplete_dropdown.dart';
 import '../../features/mesh/mesh_controller.dart';
 import '../../features/autocomplete/autocomplete_queries.dart';
 import '../../features/autocomplete/autocomplete_triggers.dart';
 import '../../features/autocomplete/pending_edit.dart';
+import '../../features/shortcuts/shortcuts.dart';
 import '../../features/group_tools/group_tools_service.dart' show GtChat;
 import '../../features/group_tools/group_tools_ui.dart';
 import '../../features/commands/command_handler.dart';
 import '../../features/commands/command_i18n.dart';
 import '../../features/commands/command_palette.dart';
 import '../../features/commands/command_registry.dart';
+import '../../features/composer/composer_conn.dart';
 import '../../features/composer/composer_menus.dart';
 import '../../features/composer/composer_model.dart';
 import '../../features/dm_polls/dm_polls_providers.dart';
@@ -40,6 +46,7 @@ import '../../features/emoji/emoji_picker.dart';
 import '../../features/emoji/gif_picker.dart';
 import '../../features/groups/group_logic.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
+import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/dev_nsec_modal.dart';
 import '../../features/media_notes/media_note_sender.dart';
@@ -55,11 +62,13 @@ import '../../features/messages/format/message_content.dart'
 import '../../features/messages/format/nym_format.dart' show NymFormat;
 import '../../features/messages/inline_network_image.dart';
 import '../../features/nymbot/nymbot_models.dart';
+import '../../features/pms/upload_activity.dart';
 import '../../features/polls/poll_create_modal.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../features/translate/translate_languages.dart';
 import '../../features/translate/translate_service.dart';
 import '../../features/zaps/zap_modal.dart';
+import '../../features/search/unified_search_panel.dart';
 import '../../models/user.dart' show UserStatus;
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -69,6 +78,10 @@ import 'composer_format.dart';
 import 'composer_markdown.dart';
 import 'message_row.dart' show GroupInfoMember, encodeGroupInfoSystemMessage;
 import '../../features/chat_lock/chat_lock_providers.dart';
+import '../common/hollow_bullet.dart';
+import '../common/nym_field.dart';
+import '../sidebar/sidebar_chrome.dart';
+import '../common/nym_tooltip.dart';
 
 /// Session-wide per-conversation drafts, kept outside the widget because the bot chat swaps [Composer] out.
 class ComposerDrafts {
@@ -98,6 +111,20 @@ class ComposerDrafts {
   }
 
   static String restore(String key) => _drafts[key] ?? '';
+}
+
+final composerOverhangProvider = StateProvider<double>((ref) => 0);
+
+class ComposerOverhangInset extends ConsumerWidget {
+  const ComposerOverhangInset({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) => Padding(
+        padding: EdgeInsets.only(bottom: ref.watch(composerOverhangProvider)),
+        child: child,
+      );
 }
 
 /// The message composer: input, toolbar buttons and send.
@@ -196,6 +223,28 @@ class _ComposerState extends ConsumerState<Composer> {
   VoiceRecordingController? _voice;
   ChatView? _voiceTarget;
   String _voiceRoute = 'online';
+  final Map<ComposerAttachment, (NostrController, int?)> _uploadActivities = {};
+  (NostrController, int?)? _voiceActivity;
+  (NostrController, int?)? _videoActivity;
+
+  (NostrController, int?) _beginActivity(String kind, ChatView view) {
+    final ctl = ref.read(nostrControllerProvider);
+    return (ctl, ctl.beginChatActivity(kind, view));
+  }
+
+  void _endActivity((NostrController, int?)? a) {
+    if (a == null) return;
+    a.$1.endChatActivity(a.$2);
+  }
+
+  void _endUploadActivity(ComposerAttachment a) =>
+      _endActivity(_uploadActivities.remove(a));
+
+  void _endAllUploadActivities() {
+    for (final a in _uploadActivities.keys.toList()) {
+      _endUploadActivity(a);
+    }
+  }
 
   String _currentMediaRoute(ChatView view) {
     final online = ref.read(appStateProvider).connectedRelays > 0 ||
@@ -287,6 +336,10 @@ class _ComposerState extends ConsumerState<Composer> {
           : tr(MediaNoteReasons.voiceNoMic));
       return false;
     }
+    if (mounted && _voice == rec && _voiceRoute != 'mesh') {
+      _endActivity(_voiceActivity);
+      _voiceActivity = _beginActivity('recording-voice', view);
+    }
     return true;
   }
 
@@ -302,6 +355,8 @@ class _ComposerState extends ConsumerState<Composer> {
       }
       return;
     }
+    _endActivity(_voiceActivity);
+    _voiceActivity = null;
     final target = _voiceTarget ?? ref.read(appStateProvider).view;
     final route = _voiceRoute;
     RecordedVoice? recorded;
@@ -342,7 +397,16 @@ class _ComposerState extends ConsumerState<Composer> {
     final onceAllowed = _mediaFeature('once').level != MediaFeatureLevel.off;
     final note = await showVideoNoteRecorder(context,
         onceAllowed: onceAllowed,
-        maxSeconds: st.maxSeconds ?? MediaNoteLimits.roundMaxSeconds);
+        maxSeconds: st.maxSeconds ?? MediaNoteLimits.roundMaxSeconds,
+        onRecording: (on) {
+      _endActivity(_videoActivity);
+      _videoActivity = null;
+      if (on && mounted && route != 'mesh') {
+        _videoActivity = _beginActivity('recording-video', view);
+      }
+    });
+    _endActivity(_videoActivity);
+    _videoActivity = null;
     if (note == null || !mounted) return;
     await ref.read(mediaNoteSenderProvider).sendRecording(
           path: note.path,
@@ -390,6 +454,16 @@ class _ComposerState extends ConsumerState<Composer> {
   /// Lets the dropdown clear the popout overhang too.
   final GlobalKey _popoutFieldKey = GlobalKey();
 
+  final GlobalKey _rootKey = GlobalKey();
+
+  final GlobalKey _popoutBoxKey = GlobalKey();
+
+  bool _overhangQueued = false;
+  final GlobalKey _hintKey = GlobalKey();
+  bool _hintQueued = false;
+  StateController<double?>? _hintTop;
+  double? _hintReported;
+
   /// Sent history for ↑/↓ recall on an empty input; newest last, capped.
   final List<String> _sentHistory = [];
 
@@ -425,6 +499,15 @@ class _ComposerState extends ConsumerState<Composer> {
 
   @override
   void dispose() {
+    final hintTop = _hintTop;
+    final reported = _hintReported;
+    if (hintTop != null && reported != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (hintTop.mounted && hintTop.state == reported) {
+          hintTop.state = null;
+        }
+      });
+    }
     // Stash the unsent input before unmounting; the PWA's single input never unmounts.
     _saveCurrentDraft();
     final voice = _voice;
@@ -432,7 +515,15 @@ class _ComposerState extends ConsumerState<Composer> {
     if (voice != null) {
       unawaited(voice.stop(send: false).whenComplete(voice.dispose));
     }
+    _endAllUploadActivities();
+    _endActivity(_voiceActivity);
+    _voiceActivity = null;
+    _endActivity(_videoActivity);
+    _videoActivity = null;
     _focus.removeListener(_onFocusChanged);
+    if (identical(ComposerShortcutHooks.focus, _focus)) {
+      ComposerShortcutHooks.focus = null;
+    }
     _controller.dispose();
     _focus.dispose();
     _fieldScroll.dispose();
@@ -539,6 +630,7 @@ class _ComposerState extends ConsumerState<Composer> {
     _activeDraftKey = ComposerDrafts.keyFor(ref.read(currentViewProvider));
     // Rebuild on focus change for the focus fill and ring.
     _focus.addListener(_onFocusChanged);
+    ComposerShortcutHooks.focus = _focus;
     // Register hooks so slash commands that open UI surfaces actually fire.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -556,6 +648,8 @@ class _ComposerState extends ConsumerState<Composer> {
     final controller = ref.read(nostrControllerProvider);
     return CommandHooks(
       openPoll: _openPoll,
+      openSearch: (q) => UnifiedSearchPanel.open(context,
+          scope: ref.read(currentViewProvider).storageKey, initialQuery: q),
       openPm: (pubkey, nym) => controller.startPM(pubkey, nym: nym),
       // Fresh LN-address resolve via the controller so an un-ingested profile can still be zapped.
       openZap: (pubkey, nym) async {
@@ -1155,7 +1249,7 @@ class _ComposerState extends ConsumerState<Composer> {
       // Only on an empty input (and not mid-edit), so arrows still move the caret in a draft.
       if (_pendingEdit == null && _controller.text.isEmpty) {
         if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-          _navigateHistory(-1);
+          if (!_editLastOwnMessage()) _navigateHistory(-1);
           return KeyEventResult.handled;
         }
         if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
@@ -1189,7 +1283,20 @@ class _ComposerState extends ConsumerState<Composer> {
   /// Wire-safety: every draft read headed for the wire must expand sentinel chars back to `:shortcode:`.
   String _draftText() => _controller.expand(_controller.text);
 
-  void _send() {
+  Future<bool> _consentFor(String content,
+      ({String author, String text, String fullText})? quote) async {
+    final controller = ref.read(nostrControllerProvider);
+    if (!controller.needsAiConsent(content)) return true;
+    if (await AiConsent.instance.ensure()) return true;
+    if (mounted) {
+      _pendingQuote = quote;
+      setState(() {});
+      _onSystemMessage(AiConsentStrings.offNotice);
+    }
+    return false;
+  }
+
+  Future<void> _send() async {
     final typed = _draftText();
     final controller = ref.read(nostrControllerProvider);
 
@@ -1203,6 +1310,7 @@ class _ComposerState extends ConsumerState<Composer> {
       _focus.requestFocus();
       if (trimmed.isEmpty || trimmed == edit.content.trim()) return;
       controller.editMessage(edit.messageId, trimmed);
+      Haptics.light();
       return;
     }
 
@@ -1229,13 +1337,18 @@ class _ComposerState extends ConsumerState<Composer> {
       final needsSpace = composed.isNotEmpty && !composed.endsWith(' ');
       composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
     }
+    final quote = _pendingQuote;
     final content = _composeOutgoing(composed);
+    if (!await _consentFor(content, quote)) return;
+    if (!mounted) return;
 
     // `?`/@Nymbot interception and `/` commands are handled inside sendCurrent.
     controller.sendCurrent(content);
+    Haptics.light();
     // Recall history records the final content, quote prepend included.
     _pushSentHistory(content);
     _controller.clear();
+    _endAllUploadActivities();
     _attachments.clear();
     _popout = false;
     _syncPopoutPortal();
@@ -1256,6 +1369,24 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   /// -1 is older, +1 newer; at `length` the input is the empty live draft.
+  bool _editLastOwnMessage() {
+    final app = ref.read(appStateProvider);
+    final list = app.messages[ref.read(currentViewProvider).storageKey];
+    if (list == null) return false;
+    for (var i = list.length - 1; i >= 0; i--) {
+      final m = list[i];
+      if (!m.isOwn || m.isSystemRow || m.isMeAction) continue;
+      if (m.id.isEmpty || m.content.isEmpty || m.id.startsWith('_optim_')) {
+        return false;
+      }
+      ref
+          .read(pendingEditProvider.notifier)
+          .request(messageId: m.id, content: m.content);
+      return true;
+    }
+    return false;
+  }
+
   void _navigateHistory(int delta) {
     if (_sentHistory.isEmpty) return;
     final next = (_historyIndex + delta).clamp(0, _sentHistory.length);
@@ -1285,7 +1416,7 @@ class _ComposerState extends ConsumerState<Composer> {
     return content;
   }
 
-  void _sendAnon() {
+  Future<void> _sendAnon() async {
     if (!_anonEligible) return;
     final typed = _draftText();
     if (hasPendingUploads) {
@@ -1301,14 +1432,18 @@ class _ComposerState extends ConsumerState<Composer> {
       final needsSpace = composed.isNotEmpty && !composed.endsWith(' ');
       composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
     }
+    final quote = _pendingQuote;
     final content = _composeOutgoing(composed);
+    if (!await _consentFor(content, quote)) return;
+    if (!mounted) return;
     unawaited(controller.sendCurrentPseudonymous(content).then((sent) {
       if (!sent) return;
-      HapticFeedback.lightImpact();
+      Haptics.light();
       showToast(tr(ComposerStrings.sentAnon));
     }));
     _pushSentHistory(content);
     _controller.clear();
+    _endAllUploadActivities();
     _attachments.clear();
     _popout = false;
     _syncPopoutPortal();
@@ -1346,6 +1481,7 @@ class _ComposerState extends ConsumerState<Composer> {
         if (!mounted) return;
         _pushSentHistory(content);
         _controller.clear();
+        _endAllUploadActivities();
         _attachments.clear();
         _pendingQuote = null;
         _popout = false;
@@ -1373,10 +1509,12 @@ class _ComposerState extends ConsumerState<Composer> {
   bool _uploadCancelled = false;
 
   void _removeAttachment2(ComposerAttachment a) {
+    _endUploadActivity(a);
     setState(() => _attachments.remove(a));
   }
 
   void clearAttachments() {
+    _endAllUploadActivities();
     if (_attachments.isEmpty) return;
     setState(() => _attachments.clear());
   }
@@ -1427,6 +1565,11 @@ class _ComposerState extends ConsumerState<Composer> {
         a.error = '';
       });
     }
+    if (mounted) {
+      _endUploadActivity(a);
+      _uploadActivities[a] =
+          _beginActivity(UploadActivity.kindForMime(a.contentType), _chatView());
+    }
     String? url;
     ComposerUploadVariant? variant;
     try {
@@ -1439,6 +1582,8 @@ class _ComposerState extends ConsumerState<Composer> {
     } catch (e) {
       url = null;
       a.error = e.toString();
+    } finally {
+      _endUploadActivity(a);
     }
     if (!mounted) return;
     if (_uploadCancelled) return;
@@ -1634,8 +1779,11 @@ class _ComposerState extends ConsumerState<Composer> {
     _rowPhone = phone;
     _rowGap = gap;
     final wantPill = _pillWanted;
-
-    return Container(
+    _queueOverhangSync();
+    _queueRestSync();
+    _queueHintSync();
+    final composer = Container(
+      key: _rootKey,
       decoration: BoxDecoration(
         color: c.glassBg,
         border: Border(top: BorderSide(color: c.glassBorder)),
@@ -1683,6 +1831,39 @@ class _ComposerState extends ConsumerState<Composer> {
         ),
       ),
     );
+    return Stack(
+      clipBehavior: Clip.none,
+      fit: StackFit.passthrough,
+      children: [
+        composer,
+        _ComposerConnHint(
+            phone: phone, anchor: _hintKey, onBuilt: _queueHintSync),
+      ],
+    );
+  }
+
+  void _queueHintSync() {
+    if (_hintQueued) return;
+    _hintQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _hintQueued = false;
+      if (!mounted) return;
+      final box = _hintKey.currentContext?.findRenderObject();
+      final next = box is RenderBox && box.hasSize && box.attached
+          ? box.localToGlobal(Offset.zero).dy
+          : null;
+      final StateController<double?> hintTop =
+          _hintTop ?? ref.read(composerHintTopProvider.notifier);
+      _hintTop = hintTop;
+      final prev = hintTop.state;
+      if (prev == next ||
+          (prev != null && next != null && (prev - next).abs() < 0.5)) {
+        return;
+      }
+      hintTop.state = next;
+      _hintReported = next;
+      _queueHintSync();
+    });
   }
 
   /// The chip slot is always present (collapsing to 0) so toggling never re-parents the TextField.
@@ -1894,6 +2075,7 @@ class _ComposerState extends ConsumerState<Composer> {
         text: _controller.text,
         attachments: _attachments.length,
         editing: _pendingEdit != null,
+        quoting: _pendingQuote != null,
         recording: _voice != null,
       ) ==
       'send';
@@ -2016,6 +2198,7 @@ class _ComposerState extends ConsumerState<Composer> {
         child: Material(
           type: MaterialType.transparency,
           child: SizedBox(
+            key: _popoutBoxKey,
             width: _anchorWidth(context),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2127,6 +2310,53 @@ class _ComposerState extends ConsumerState<Composer> {
 
   bool _offsetSettleQueued = false;
 
+  bool _restQueued = false;
+
+  void _queueRestSync() {
+    if (_restQueued) return;
+    _restQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restQueued = false;
+      if (!mounted ||
+          _popout ||
+          _focus.hasFocus ||
+          _controller.text.isNotEmpty ||
+          _chipBlock() != null) {
+        return;
+      }
+      final root = _liveBox(_rootKey);
+      if (root == null || !root.hasSize) return;
+      final rest = root.size.height;
+      final notifier = ref.read(composerRestExtentProvider.notifier);
+      final prev = notifier.state;
+      if (prev != null && (prev - rest).abs() < 0.5) return;
+      notifier.state = rest;
+    });
+  }
+
+  double _measureOverhang() {
+    if (!_popout) return 0;
+    final root = _liveBox(_rootKey);
+    final box = _liveBox(_popoutBoxKey);
+    if (root == null || box == null || !root.hasSize || !box.hasSize) return 0;
+    return math.max(0.0,
+        root.localToGlobal(Offset.zero).dy - box.localToGlobal(Offset.zero).dy);
+  }
+
+  void _queueOverhangSync() {
+    if (_overhangQueued) return;
+    _overhangQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _overhangQueued = false;
+      if (!mounted) return;
+      final next = _measureOverhang();
+      final overhang = ref.read(composerOverhangProvider.notifier);
+      if ((overhang.state - next).abs() < 0.01) return;
+      overhang.state = next;
+      _queueOverhangSync();
+    });
+  }
+
   /// The badge tooltip distinguishes developer from bot.
   MentionBadges _mentionBadges(String pubkey) {
     final controller = ref.read(nostrControllerProvider);
@@ -2235,11 +2465,12 @@ class _ComposerState extends ConsumerState<Composer> {
         // One line with ellipsis, or longer translated hints wrap and push the buttons down.
         hintMaxLines: 1,
         hintStyle: TextStyle(
-            color: (c.isLight ? Colors.black : Colors.white)
-                .withValues(alpha: 0.4),
+            color: NymField.placeholder(c),
             fontSize: fontSize),
         filled: true,
         fillColor: fill,
+        hoverColor: Colors.transparent,
+        focusColor: Colors.transparent,
         contentPadding: EdgeInsets.fromLTRB(
             _pillOn ? _pillTextPad : 16, 10, _pillWanted ? 16 : 38, 10),
         border: border,
@@ -2456,7 +2687,13 @@ class _ComposerState extends ConsumerState<Composer> {
       ));
     }
 
-    if (_pillWanted) {
+    final focused = _focus.hasFocus;
+    if (formatToolbarVisible(
+        draft: _pillWanted,
+        focused: focused,
+        overlay: _pillWanted &&
+            !focused &&
+            !(ModalRoute.isCurrentOf(context) ?? true))) {
       panels.add(_ToolbarEntrance(
         child: FormatToolbar(
           onTool: _applyFormatTool,
@@ -2577,29 +2814,11 @@ class _ComposerState extends ConsumerState<Composer> {
                         onChanged: (v) => setState(() => _translateQuery = v),
                         style: TextStyle(color: c.inputText, fontSize: 13),
                         cursorColor: c.isLight ? Colors.black : Colors.white,
-                        decoration: InputDecoration(
-                          isDense: true,
-                          hintText: tr('Search languages...'),
-                          hintStyle: TextStyle(color: c.textDim, fontSize: 13),
-                          filled: true,
-                          fillColor: c.isLight
-                              ? Colors.black.withValues(alpha: 0.04)
-                              : Colors.white.withValues(alpha: 0.05),
+                        decoration: NymField.decoration(c,
+                          hint: tr('Search languages...'),
+                          fontSize: 13,
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 7),
-                          border: OutlineInputBorder(
-                            borderRadius: NymRadius.rsm,
-                            borderSide: BorderSide(color: c.glassBorder),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: NymRadius.rsm,
-                            borderSide: BorderSide(color: c.glassBorder),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: NymRadius.rsm,
-                            borderSide: BorderSide(color: c.primary),
-                          ),
-                        ),
+                              horizontal: 10, vertical: 7)),
                       ),
                     ),
                     Flexible(
@@ -2790,6 +3009,7 @@ class _ComposerState extends ConsumerState<Composer> {
       text: _controller.text,
       attachments: _attachments.length,
       editing: _pendingEdit != null,
+      quoting: _pendingQuote != null,
       recording: _voice != null,
     );
     if (action == 'mic') return _micButton(bare: bare);
@@ -2977,8 +3197,10 @@ class _IconBtnState extends State<_IconBtn> {
     final shownBorder = widget.active
         ? c.danger
         : borderColor.withValues(alpha: borderColor.a * keep);
-    final btn = Tooltip(
-      message: widget.tooltip,
+    final btn = NymFocusable(
+      onActivate: enabled ? (widget.onTap ?? () {}) : null,
+      tooltip: widget.tooltip,
+      radius: NymRadius.rsm,
       child: MouseRegion(
         cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
         onEnter: enabled ? (_) => setState(() => _hover = true) : null,
@@ -2999,6 +3221,8 @@ class _IconBtnState extends State<_IconBtn> {
             borderRadius: NymRadius.rsm,
             child: InkWell(
               onTap: enabled ? (widget.onTap ?? () {}) : null,
+              canRequestFocus: false,
+              excludeFromSemantics: true,
               borderRadius: NymRadius.rsm,
               child: Container(
                 height: 42,
@@ -3044,6 +3268,7 @@ class _SendButton extends StatefulWidget {
 class _SendButtonState extends State<_SendButton> {
   bool _hover = false;
   bool _chevronHover = false;
+  bool _sendRing = false;
 
   Timer? _holdTimer;
   bool _menuFired = false;
@@ -3058,7 +3283,7 @@ class _SendButtonState extends State<_SendButton> {
   void _openMenu() {
     _menuFired = true;
     _suppressClickUntil = DateTime.now().add(const Duration(milliseconds: 800));
-    HapticFeedback.mediumImpact();
+    Haptics.selection();
     widget.onMenu();
   }
 
@@ -3154,19 +3379,32 @@ class _SendButtonState extends State<_SendButton> {
                 child: InkWell(
                   key: const ValueKey('composer-send'),
                   onTap: widget.enabled ? _handleTap : null,
+                  onFocusChange: (v) {
+                    final ring = v &&
+                        FocusManager.instance.highlightMode ==
+                            FocusHighlightMode.traditional;
+                    if (ring != _sendRing) setState(() => _sendRing = ring);
+                  },
+                  focusColor: Colors.transparent,
                   borderRadius: left,
-                  child: Tooltip(
+                  child: NymTooltip(
                     message: tr('Send'),
                     child: Semantics(
                       button: true,
                       label: tr('Send'),
                       excludeSemantics: true,
-                      child: Container(
-                        height: 42 - 2 * widget.inset,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        alignment: Alignment.center,
-                        child: NymSvgIcon(ComposerIcons.paperPlane,
-                            size: 18, color: c.primary),
+                      child: CssFocusRing(
+                        show: _sendRing,
+                        color: c.secondary,
+                        radius: left,
+                        width: NymFocusable.ringWidth,
+                        child: Container(
+                          height: 42 - 2 * widget.inset,
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          alignment: Alignment.center,
+                          child: NymSvgIcon(ComposerIcons.paperPlane,
+                              size: 18, color: c.primary),
+                        ),
                       ),
                     ),
                   ),
@@ -3177,7 +3415,7 @@ class _SendButtonState extends State<_SendButton> {
         ),
       ),
     );
-    final chevron = Tooltip(
+    final chevron = NymTooltip(
       message: tr('More send options'),
       child: MouseRegion(
         onEnter: (_) => setState(() => _chevronHover = true),
@@ -3486,7 +3724,7 @@ class _ChipCloseButtonState extends State<_ChipCloseButton> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Tooltip(
+    return NymTooltip(
       message: widget.tooltip,
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -3582,7 +3820,7 @@ class _TranslateInputButtonState extends State<_TranslateInputButton>
       );
     }
     // The pulse replaces the base opacity, so don't also apply the disabled dim.
-    return Tooltip(
+    return NymTooltip(
         message: tr('Translate text'),
         child: MouseRegion(
           cursor: widget.enabled
@@ -3955,12 +4193,20 @@ class EmojiSentinelController extends TextEditingController {
       if (run.type == 'ulist' || run.type == 'ulist2') {
         final markerAt = run.open.indexOf(RegExp(r'[-*]'));
         out.add(TextSpan(text: run.open.substring(0, markerAt), style: style));
-        out.add(WidgetSpan(
-          alignment: PlaceholderAlignment.baseline,
-          baseline: TextBaseline.alphabetic,
-          child: Text(run.type == 'ulist2' ? '\u25E6' : '\u2022',
-              style: style.copyWith(color: colors.textDim)),
-        ));
+        out.add(run.type == 'ulist2'
+            ? WidgetSpan(
+                alignment: PlaceholderAlignment.middle,
+                child: HollowBullet(
+                  color: colors.textDim,
+                  fontSize: style.fontSize ?? 14,
+                ),
+              )
+            : WidgetSpan(
+                alignment: PlaceholderAlignment.baseline,
+                baseline: TextBaseline.alphabetic,
+                child: Text('\u2022',
+                    style: style.copyWith(color: colors.textDim)),
+              ));
         out.add(TextSpan(text: run.open.substring(markerAt + 1), style: style));
       } else if (run.open.isNotEmpty) {
         out.add(TextSpan(text: run.open, style: mark));
@@ -4095,6 +4341,71 @@ class _InputMentionChip extends ConsumerWidget {
           supporterHeight: size,
         ),
       ],
+    );
+  }
+}
+
+class _ComposerConnHint extends ConsumerWidget {
+  const _ComposerConnHint(
+      {required this.phone, required this.anchor, required this.onBuilt});
+
+  final bool phone;
+  final GlobalKey anchor;
+  final VoidCallback onBuilt;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final open =
+        ref.watch(appStateProvider.select((s) => s.connectedRelays > 0));
+    final view = ref.watch(appStateProvider.select((s) => s.view));
+    ref.watch(meshControllerProvider);
+    final bridge = ref.read(meshControllerProvider.notifier).bridge;
+    final text = ComposerConnStrings.forState(composerConnState(
+      relayOpen: open,
+      meshCarries: bridge?.shouldSendOverMesh(view) ?? false,
+      deviceOffline: false,
+      connectFailed: composerConnectFailed(open ? 1 : 0),
+    ));
+    onBuilt();
+    if (text.isEmpty) {
+      return const Positioned(top: 0, left: 0, child: SizedBox.shrink());
+    }
+    final c = context.nym;
+    return Positioned(
+      left: phone ? 10 : 16,
+      right: phone ? 10 : 16,
+      top: 0,
+      child: IgnorePointer(
+        child: FractionalTranslation(
+          translation: const Offset(0, -1),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: KeyedSubtree(
+                key: anchor,
+                child: Container(
+                key: const ValueKey('composerConnHint'),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                decoration: BoxDecoration(
+                  color: c.bgTertiary,
+                  border: Border.all(color: c.glassBorder),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    tr(text),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: c.textDim, fontSize: 12, height: 1.35),
+                  ),
+                ),
+              ),
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

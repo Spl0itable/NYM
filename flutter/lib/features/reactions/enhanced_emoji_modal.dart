@@ -13,6 +13,9 @@ import '../emoji/emoji_data.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart';
+import '../../widgets/common/nym_focusable.dart';
+import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
@@ -195,11 +198,12 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
           if (_matchesCustom(e.shortcode)) _customCell(e.shortcode, e.url),
       ];
       if (cells.isEmpty) continue;
-      final star = (isOwn(pack) || isSubscribed(pack)) ? ' ★' : '';
+      final owned = isOwn(pack) || isSubscribed(pack);
       // An empty cached title still gets a section header.
       final packTitle = pack.title.isEmpty ? tr('Emoji pack') : pack.title;
       sections.add(_Section(
-        title: '$packTitle$star',
+        title: packTitle,
+        owned: owned,
         cells: cells,
         isFavorite: packFavSet.contains(pack.key),
         onToggleFavorite:
@@ -276,37 +280,17 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
 
   /// Search input; light mode forces the global input fill and border.
   Widget _search(NymColors c) {
-    final Color fill = c.isLight
-        ? Colors.black.withValues(alpha: 0.04)
-        : Colors.white.withValues(alpha: 0.05);
-    final Color borderColor =
-        c.isLight ? Colors.black.withValues(alpha: 0.1) : c.glassBorder;
     return TextField(
       controller: _searchController,
       onChanged: (v) => setState(() => _query = _sanitizeUserText(v).trim()),
       style: TextStyle(color: c.inputText, fontSize: 12),
       cursorColor: c.isLight ? Colors.black : Colors.white,
-      decoration: InputDecoration(
-        isDense: true,
-        hintText: tr('Search emoji...'),
-        hintStyle: TextStyle(color: c.textDim, fontSize: 12),
-        filled: true,
-        fillColor: fill,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        border: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: borderColor),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: borderColor),
-        ),
-        // No focus override, so the border stays glass.
-        focusedBorder: OutlineInputBorder(
-          borderRadius: NymRadius.rxs,
-          borderSide: BorderSide(color: borderColor),
-        ),
-      ),
+      decoration: NymField.decoration(c,
+          hint: tr('Search emoji...'),
+          fontSize: 12,
+          radius: NymRadius.rxs,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 7)),
     );
   }
 
@@ -376,11 +360,26 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
           child: Row(
             children: [
               Expanded(
-                child: Text(
-                  section.title.toUpperCase(),
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 10, color: c.textDim, letterSpacing: 1),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        section.title.toUpperCase(),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 10, color: c.textDim, letterSpacing: 1),
+                      ),
+                    ),
+                    if (section.owned) ...[
+                      const SizedBox(width: 4),
+                      NymSvgIcon(
+                        NymIcons.starFilled,
+                        key: const ValueKey('emoji-pack-owned-star'),
+                        size: 9,
+                        color: c.textDim,
+                      ),
+                    ],
+                  ],
                 ),
               ),
               if (section.onToggleFavorite != null)
@@ -416,10 +415,12 @@ class _Section {
     required this.cells,
     this.isFavorite = false,
     this.onToggleFavorite,
+    this.owned = false,
   });
   final String title;
   final List<Widget> cells;
   final bool isFavorite;
+  final bool owned;
 
   /// When non-null, a favorite star ends the title row.
   final VoidCallback? onToggleFavorite;
@@ -440,34 +441,36 @@ class _ModalCloseChipState extends State<_ModalCloseChip> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 28,
-          height: 28,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hover
-                ? const Color(0x1FFF4444)
-                : Colors.white.withValues(alpha: 0.05),
-            border: Border.all(
+    return NymFocusable(
+      onActivate: widget.onTap,
+      tooltip: tr('Close'),
+      excludeChildSemantics: true,
+      radius: const BorderRadius.all(Radius.circular(16)),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
               color: _hover
-                  ? const Color(0x4DFF4444)
-                  : c.glassBorder,
+                  ? const Color(0x1FFF4444)
+                  : Colors.white.withValues(alpha: 0.05),
+              border: Border.all(
+                color: _hover
+                    ? const Color(0x4DFF4444)
+                    : c.glassBorder,
+              ),
             ),
-          ),
-          child: Text(
-            '✕',
-            style: TextStyle(
+            child: Icon(
+              Icons.close,
+              size: 14,
               color: _hover ? c.danger : c.textDim,
-              fontSize: 14,
-              height: 1,
-              decoration: TextDecoration.none,
             ),
           ),
         ),
@@ -487,7 +490,7 @@ class _FavStar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Tooltip(
+    return NymTooltip(
       message: active ? tr('Unfavorite') : tr('Favorite'),
       child: InkWell(
         onTap: onTap,

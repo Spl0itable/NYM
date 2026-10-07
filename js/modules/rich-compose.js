@@ -651,6 +651,7 @@ Object.assign(NYM.prototype, {
         const idx = list.findIndex(a => a.id === id);
         if (idx < 0) return;
         const [rec] = list.splice(idx, 1);
+        if (typeof this._endAttachmentActivity === 'function') this._endAttachmentActivity(rec);
         // Safe to revoke only before upload completes; afterward the blob stands in for the hosted URL.
         if (rec && rec.status !== 'done') {
             try { URL.revokeObjectURL(rec.objectUrl); } catch (_) { }
@@ -672,6 +673,7 @@ Object.assign(NYM.prototype, {
 
     clearComposerAttachments() {
         for (const a of (this._composerAttachments || [])) {
+            if (typeof this._endAttachmentActivity === 'function') this._endAttachmentActivity(a);
             if (a.status !== 'done') {
                 try { URL.revokeObjectURL(a.objectUrl); } catch (_) { }
             }
@@ -702,7 +704,7 @@ Object.assign(NYM.prototype, {
             return;
         }
 
-        const proxyBase = typeof this._getProxyBaseUrl === 'function' ? this._getProxyBaseUrl() : null;
+        const proxyBase = typeof this._mediaProxyBase === 'function' ? this._mediaProxyBase() : null;
         const src = (url) => {
             const local = this._composerMediaBlobs && this._composerMediaBlobs.get(url);
             if (local) return local;
@@ -798,7 +800,7 @@ Object.assign(NYM.prototype, {
             const input = document.getElementById('messageInput');
             const match = this._composerMediaMatches(input ? input.value : '')[idx];
             if (!match) return;
-            const proxyBase = typeof this._getProxyBaseUrl === 'function' ? this._getProxyBaseUrl() : null;
+            const proxyBase = typeof this._mediaProxyBase === 'function' ? this._mediaProxyBase() : null;
             const full = proxyBase ? `${proxyBase}?url=${encodeURIComponent(match.url)}` : match.url;
             if (match.kind === 'video') this.expandVideo(full);
             else this.expandImage(full);

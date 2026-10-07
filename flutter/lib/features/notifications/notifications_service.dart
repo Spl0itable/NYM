@@ -15,6 +15,7 @@ import '../group_tools/group_tools.dart' show GroupTools;
 import '../i18n/i18n.dart';
 import '../messages/format/nym_format.dart' show NymFormat;
 import 'notification_sounds.dart';
+import 'notify_view.dart';
 
 /// Plays a rendered WAV tone; tests inject a no-op so no plugin is touched.
 abstract class TonePlayer {
@@ -124,6 +125,7 @@ bool shouldRecordNotification({
   bool groupMentionsOnly = false,
   bool isThreadReply = false,
   bool isOwnThreadRoot = false,
+  bool isOwnThreadReply = false,
   bool threadMentionsOnly = false,
 }) {
   if (!notificationsEnabled) return false;
@@ -133,25 +135,19 @@ bool shouldRecordNotification({
   if (isActiveView) return false;
   if (friendsOnly && !isFriend) return false;
 
-  if (isThreadReply) {
-    if (threadMentionsOnly) return isMention;
-    if (isMention || isOwnThreadRoot) return true;
-    // Nothing addressed the user; only a PM thread still qualifies.
-    return kind == NotifyKind.pm;
-  }
-
-  switch (kind) {
-    case NotifyKind.channel:
-      // Public channels only record on an @-mention.
-      return isMention;
-    case NotifyKind.group:
-      // Mentions-only mode suppresses non-mention group messages.
-      if (groupMentionsOnly && !isMention) return false;
-      return true;
-    case NotifyKind.pm:
-      // Any PM from another user qualifies.
-      return true;
-  }
+  return NotifyView.addressed(
+    kind: switch (kind) {
+      NotifyKind.channel => 'channel',
+      NotifyKind.group => 'group',
+      NotifyKind.pm => 'pm',
+    },
+    thread: isThreadReply,
+    mention: isMention,
+    ownRoot: isOwnThreadRoot,
+    ownReply: isOwnThreadReply,
+    threadMentionsOnly: threadMentionsOnly,
+    groupMentionsOnly: groupMentionsOnly,
+  );
 }
 
 /// Whether to raise a loud alert: [shouldRecordNotification] and not [isHistorical]; pure and IO-free.
@@ -169,6 +165,7 @@ bool shouldNotify({
   bool groupMentionsOnly = false,
   bool isThreadReply = false,
   bool isOwnThreadRoot = false,
+  bool isOwnThreadReply = false,
   bool threadMentionsOnly = false,
 }) {
   if (isHistorical) return false;
@@ -185,6 +182,7 @@ bool shouldNotify({
     groupMentionsOnly: groupMentionsOnly,
     isThreadReply: isThreadReply,
     isOwnThreadRoot: isOwnThreadRoot,
+    isOwnThreadReply: isOwnThreadReply,
     threadMentionsOnly: threadMentionsOnly,
   );
 }
@@ -301,6 +299,15 @@ class NotificationsService {
       unawaited(playSound(settings.sound));
     }
   }
+
+  bool alreadyAlerted({
+    required String title,
+    required String body,
+    required NotifyContext context,
+    bool exactOnly = false,
+  }) =>
+      _isReplayedOrSeen(
+          title: title, body: body, context: context, exactOnly: exactOnly);
 
   /// True when the event must not alert: older than 24h, already in bell history, or in the seen-map.
   bool _isReplayedOrSeen({

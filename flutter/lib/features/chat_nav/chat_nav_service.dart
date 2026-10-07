@@ -4,6 +4,7 @@ import 'dart:math';
 
 import '../../models/message.dart';
 import '../chat_tools/chat_tools_service.dart';
+import '../sync/sync_merge.dart' show marksMerge;
 import 'chat_nav.dart';
 
 class ChatNavEntry {
@@ -82,6 +83,8 @@ class ChatNavHooks {
     this.sendText,
     this.groupSendBlocked,
     this.notice,
+    this.undoNotice,
+    this.chatName,
     this.onChanged,
     this.now,
     this.random,
@@ -116,6 +119,8 @@ class ChatNavHooks {
   final Future<bool> Function(String key, String text)? sendText;
   final String? Function(String key, String text)? groupSendBlocked;
   final void Function(String text)? notice;
+  final void Function(String text, void Function() undo)? undoNotice;
+  final String Function(String kind, String id)? chatName;
   final void Function()? onChanged;
   final int Function()? now;
   final Random? random;
@@ -251,10 +256,39 @@ class ChatNavService {
 
   SeenMark storedMark(String key) => markNorm(_marks()[key]);
 
-  void _saveMark(String key, SeenMark mark) {
-    if (key.isEmpty || !(mark.at > 0)) return;
+  void Function()? onMarksChanged;
+
+  Map<String, Map<String, Object>> marksForSync() => markStoreNorm(_marks());
+
+  void applyRemoteMarks(Object? raw) {
+    final cur = marksForSync();
+    final merged = marksMerge(cur, raw);
+    if (jsonEncode(merged) == jsonEncode(cur)) return;
+    final store = _marks();
+    store
+      ..clear()
+      ..addAll(merged);
+    _markDirty = true;
+    _markWritten = _nowMs;
+    _prefs.write(_markKey, jsonEncode(markStoreNorm(store)));
+    var ms = mentions();
+    var changed = false;
+    merged.forEach((k, m) {
+      if (_entries.containsKey(k)) return;
+      final next = mentionMark(ms, k, m, _nowMs);
+      if (mentionCount(next, k) != mentionCount(ms, k)) {
+        ms = next;
+        changed = true;
+      }
+    });
+    if (changed) _setMentions(ms);
+  }
+
+  void _saveMark(String key, SeenMark incoming) {
+    if (key.isEmpty || !(incoming.at > 0)) return;
     final store = _marks();
     final prev = markNorm(store[key]);
+    final mark = markMax(prev, incoming);
     if (prev.at == mark.at && prev.ids.length == mark.ids.length) return;
     store[key] = {'at': mark.at, 'ids': [...mark.ids], 't': _nowMs};
     _markDirty = true;
@@ -267,6 +301,7 @@ class ChatNavService {
     _markWritten = _nowMs;
     _prefs.write(_markKey, jsonEncode(markStoreNorm(_marks())));
     _prefs.write(_firstSeenKey, jsonEncode(_firstSeen));
+    onMarksChanged?.call();
   }
 
   SeenMark? markFor(String key) => _entries[key]?.mark;
@@ -560,17 +595,39 @@ class ChatNavService {
     }
     var s = pinState();
     if (isPinned(s, key)) {
-      s = pinRemove(s, key, _nowMs);
+      final index = pinList(s).indexOf(key);
+      _commitPins(pinRemove(s, key, _nowMs));
+      final p = pinParse(key)!;
+      hooks.undoNotice?.call(
+        p.kind == 'channel'
+            ? t(ChatNavStrings.unfavorited, {'channel': p.id})
+            : t(ChatNavStrings.unfavoritedChat,
+                {'name': hooks.chatName?.call(p.kind, p.id) ?? p.id}),
+        () => restorePin(key, index),
+      );
+      return true;
     } else {
       final r = pinAdd(s, key, _nowMs);
       if (r.error == 'cap') {
-        _notice(t(ChatNavStrings.pinCap, {'n': ChatNavLimits.pinMax}));
+        _notice(t(
+            pinParse(key)!.kind == 'channel'
+                ? ChatNavStrings.favoriteCap
+                : ChatNavStrings.favoriteChatCap,
+            {'n': ChatNavLimits.pinMax}));
         return false;
       }
       s = r.state;
     }
     _commitPins(s);
     return true;
+  }
+
+  void restorePin(String key, int index) {
+    final s = pinState();
+    if (isPinned(s, key)) return;
+    final r = pinAdd(s, key, _nowMs);
+    if (r.error != null) return;
+    _commitPins(pinMove(r.state, key, index, _nowMs));
   }
 
   List<String> _sameList(String key) {

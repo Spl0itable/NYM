@@ -198,8 +198,26 @@
             return true;
         },
 
-        removeSavedMessage(id) {
-            this._savedPersist(C().removeSaved(this._savedLoad(), id, Date.now()));
+        removeSavedMessage(id, opts = {}) {
+            const before = this._savedLoad();
+            const entry = before && Array.isArray(before.items) ? before.items.find((e) => e && e.id === id) : null;
+            this._savedPersist(C().removeSaved(before, id, Date.now()));
+            this._savedRev = (this._savedRev || 0) + 1;
+            this._savedSetPending(this.savedMode() === 'sync');
+            this._renderSavedPanel();
+            this._savedSync();
+            if (entry && !opts.quiet && typeof this.showUndoToast === 'function') {
+                const copy = JSON.parse(JSON.stringify(entry));
+                this.showUndoToast(this._ct('Removed from Saved'), () => this.restoreSavedMessage(copy));
+            }
+        },
+
+        restoreSavedMessage(entry) {
+            if (!entry || !entry.id) return;
+            const state = this._savedLoad();
+            if (C().isSaved(state, entry.id)) return;
+            const now = Date.now();
+            this._savedPersist(C().addSaved(state, Object.assign({}, entry, { sv: Math.max(now, (Number(entry.sv) || 0) + 1) }), now));
             this._savedRev = (this._savedRev || 0) + 1;
             this._savedSetPending(this.savedMode() === 'sync');
             this._renderSavedPanel();
@@ -287,7 +305,7 @@
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const rows = items.map((e) => {
                 const when = this._formatFullTimestamp((e.at || 0) * 1000);
-                const chat = e.chat.t === 'channel' ? e.chat.n : e.chat.t === 'group' ? this._ct('Group: {name}', { name: e.chat.n }) : this._ct('DM with {name}', { name: e.chat.n });
+                const chat = e.chat.t === 'channel' ? e.chat.n : e.chat.t === 'group' ? this._ct('Group: {name}', { name: e.chat.n }) : this._ct('PM with {name}', { name: e.chat.n });
                 return `<div class="ct-saved-item" data-saved-id="${esc(e.id)}">
                     <div class="ct-saved-meta"><span class="ct-saved-author">${esc(e.a.n)}</span><span class="ct-saved-chat">${esc(chat)}</span><span class="ct-saved-time">${esc(when)}</span></div>
                     <div class="ct-saved-text message-content">${this.formatMessageWithQuotes(e.text, 0)}</div>

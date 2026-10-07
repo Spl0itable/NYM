@@ -46,6 +46,8 @@ import 'nym_format.dart';
 import 'discord_timestamp.dart';
 import 'video_message.dart';
 import '../../../core/utils/safe_url.dart';
+import '../../../widgets/common/hollow_bullet.dart';
+import '../../../widgets/common/nym_tooltip.dart';
 
 /// Shared stateless [ApiClient] for proxy URL construction; its builders do no network.
 final _proxyApi = ApiClient();
@@ -1009,7 +1011,7 @@ class TimestampChip extends StatefulWidget {
 }
 
 class _TimestampChipState extends State<TimestampChip> {
-  final GlobalKey<TooltipState> _tooltip = GlobalKey<TooltipState>();
+  final GlobalKey<NymTooltipState> _tooltip = GlobalKey<NymTooltipState>();
   bool _focused = false;
 
   @override
@@ -1035,7 +1037,7 @@ class _TimestampChipState extends State<TimestampChip> {
         setState(() => _focused = v);
         if (v) _tooltip.currentState?.ensureTooltipVisible();
       },
-      child: Tooltip(
+      child: NymTooltip(
         key: _tooltip,
         message: formatDiscordTimestamp(widget.seconds, 'F'),
         child: widget.style == 'R'
@@ -1093,13 +1095,18 @@ class _ListView extends StatelessWidget {
                 constraints: const BoxConstraints(minWidth: 20),
                 child: Padding(
                   padding: const EdgeInsets.only(right: 4),
-                  child: Text(
-                    block.ordered
-                        ? '${block.start + i}.'
-                        : (nested ? '\u25E6' : '\u2022'),
-                    textAlign: TextAlign.right,
-                    style: markerStyle,
-                  ),
+                  child: !block.ordered && nested
+                      ? HollowBullet(
+                          key: const ValueKey('md-nested-bullet'),
+                          color: markerStyle.color ?? const Color(0xFF888888),
+                          fontSize: markerStyle.fontSize ?? 14,
+                          lineHeight: markerStyle.height ?? 1.0,
+                        )
+                      : Text(
+                          block.ordered ? '${block.start + i}.' : '\u2022',
+                          textAlign: TextAlign.right,
+                          style: markerStyle,
+                        ),
                 ),
               ),
               Expanded(
@@ -1277,9 +1284,12 @@ class _InviteChip extends ConsumerWidget {
               child: CustomPaint(painter: _GroupIcoPainter(c.secondary)),
             ),
             SizedBox(width: size * 0.35),
-            Text(
-              tr('Join {name}', {'name': name}),
-              style: TextStyle(color: c.secondary, fontSize: size),
+            Flexible(
+              child: Text(
+                tr('Join {name}', {'name': name}),
+                softWrap: true,
+                style: TextStyle(color: c.secondary, fontSize: size),
+              ),
             ),
           ],
         ),
@@ -1314,11 +1324,14 @@ class _CallLinkChipView extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            NymSvgIcon(GroupToolIcons.calls, size: size, color: c.secondary),
+            NymSvgIcon(GroupToolIcons.callLink, size: size, color: c.secondary),
             SizedBox(width: size * 0.35),
-            Text(
-              '${video ? tr('Join video call') : tr('Join voice call')}: $name',
-              style: TextStyle(color: c.secondary, fontSize: size),
+            Flexible(
+              child: Text(
+                '${video ? tr('Join video call') : tr('Join voice call')}: $name',
+                softWrap: true,
+                style: TextStyle(color: c.secondary, fontSize: size),
+              ),
             ),
           ],
         ),

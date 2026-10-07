@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../services/storage/key_value_store.dart';
 import '../../state/settings_provider.dart';
+import '../sync/pref_stamps.dart';
 import 'media_notes.dart';
 
 abstract class MediaNotePrefs {
@@ -131,20 +132,31 @@ final transcriptStoreProvider = Provider<TranscriptStore>(
 final onceRevisionProvider = StateProvider<int>((ref) => 0);
 
 class VoiceSpeedController extends StateNotifier<double> {
-  VoiceSpeedController(this._prefs)
+  VoiceSpeedController(this._prefs, [this._onCycle])
       : super(parseSpeed(_prefs.read(MediaNoteKeys.speed)));
 
   final MediaNotePrefs _prefs;
+  final void Function()? _onCycle;
 
   double cycle() {
     final next = nextSpeed(state);
-    _prefs.write(MediaNoteKeys.speed, _speedString(next));
+    _prefs.write(MediaNoteKeys.speed, speedWire(next));
     state = next;
+    _onCycle?.call();
     return next;
   }
 
-  static String _speedString(double v) => v == v.roundToDouble() ? '${v.toInt()}' : '$v';
+  void applySynced(double v) {
+    if (!kVoiceSpeeds.contains(v)) return;
+    _prefs.write(MediaNoteKeys.speed, speedWire(v));
+    state = v;
+  }
 }
 
 final voiceSpeedProvider = StateNotifierProvider<VoiceSpeedController, double>(
-    (ref) => VoiceSpeedController(ref.watch(mediaNotePrefsProvider)));
+    (ref) => VoiceSpeedController(ref.watch(mediaNotePrefsProvider), () {
+          try {
+            PrefStamps.touch(ref.read(keyValueStoreProvider), 'voiceSpeed');
+            ref.read(settingsProvider.notifier).notifySyncedChange();
+          } catch (_) {}
+        }));

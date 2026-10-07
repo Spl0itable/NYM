@@ -1,0 +1,63 @@
+PODS:
+  - coinlib_flutter (0.7.0):
+    - Flutter
+    - FlutterMacOS
+  - Flutter (1.0.0)
+  - flutter_secure_storage (6.0.0):
+    - Flutter
+  - flutter_webrtc (0.12.6):
+    - Flutter
+    - WebRTC-SDK (= 125.6422.06)
+  - FMDB/Core (2.7.12)
+  - FMDB/SQLCipher (2.7.12):
+    - FMDB/Core
+    - SQLCipher (~> 4.6)
+  - sqflite_sqlcipher (0.0.1):
+    - Flutter
+    - FMDB/SQLCipher (~> 2.7.5)
+    - SQLCipher (= 4.10.0)
+  - SQLCipher (4.10.0):
+    - SQLCipher/standard (= 4.10.0)
+  - SQLCipher/common (4.10.0)
+  - SQLCipher/standard (4.10.0):
+    - SQLCipher/common
+  - WebRTC-SDK (125.6422.06)
+
+DEPENDENCIES:
+  - coinlib_flutter (from `.symlinks/plugins/coinlib_flutter/darwin`)
+  - Flutter (from `Flutter`)
+  - flutter_secure_storage (from `.symlinks/plugins/flutter_secure_storage/ios`)
+  - flutter_webrtc (from `.symlinks/plugins/flutter_webrtc/ios`)
+  - sqflite_sqlcipher (from `.symlinks/plugins/sqflite_sqlcipher/ios`)
+
+SPEC REPOS:
+  trunk:
+    - FMDB
+    - SQLCipher
+    - WebRTC-SDK
+
+EXTERNAL SOURCES:
+  coinlib_flutter:
+    :path: ".symlinks/plugins/coinlib_flutter/darwin"
+  Flutter:
+    :path: Flutter
+  flutter_secure_storage:
+    :path: ".symlinks/plugins/flutter_secure_storage/ios"
+  flutter_webrtc:
+    :path: ".symlinks/plugins/flutter_webrtc/ios"
+  sqflite_sqlcipher:
+    :path: ".symlinks/plugins/sqflite_sqlcipher/ios"
+
+SPEC CHECKSUMS:
+  coinlib_flutter: 9d665f3b5fe1809e02e89e56101ade6d0b27742c
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
+  flutter_secure_storage: 1ed9476fba7e7a782b22888f956cce43e2c62f13
+  flutter_webrtc: 57f32415b8744e806f9c2a96ccdb60c6a627ba33
+  FMDB: 728731dd336af3936ce00f91d9d8495f5718a0e6
+  sqflite_sqlcipher: 8e5bdaae6b2c254f8a277a564f07bc4e2a8642a3
+  SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
+  WebRTC-SDK: 79942c006ea64f6fb48d7da8a4786dfc820bc1db
+
+PODFILE CHECKSUM: 9eb14db65c3184a08e7485304525559205f280cc
+
+COCOAPODS: 1.16.2

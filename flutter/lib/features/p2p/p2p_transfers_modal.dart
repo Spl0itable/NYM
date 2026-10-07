@@ -7,6 +7,8 @@ import '../../state/app_state.dart';
 import '../i18n/i18n.dart';
 import 'p2p_models.dart';
 import 'p2p_service.dart';
+import '../../widgets/common/nym_focusable.dart';
+import '../../widgets/common/nym_sheet.dart';
 
 /// Lists seeding files and active transfers, rebuilding live from [P2PService].
 class P2PTransfersModal extends ConsumerWidget {
@@ -36,12 +38,12 @@ class P2PTransfersModal extends ConsumerWidget {
 
   static Future<void> open(BuildContext context, P2PService service) {
     final isLight = context.nym.isLight;
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => P2PTransfersModal(service: service),
       barrierColor: isLight
           ? const Color(0x73000000)
           : const Color(0xBF000000),
-      builder: (_) => P2PTransfersModal(service: service),
     );
   }
 
@@ -61,130 +63,133 @@ class P2PTransfersModal extends ConsumerWidget {
             final seeding = service.seeding;
             final transfers = service.transfers;
             final empty = seeding.isEmpty && transfers.isEmpty;
-            return Container(
-              width: MediaQuery.of(context).size.width * 0.9,
-              constraints: BoxConstraints(
-                maxWidth: 500,
-                maxHeight: MediaQuery.of(context).size.height * 0.9,
-              ),
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                borderRadius: NymRadius.rxl,
-                border: Border.all(color: c.glassBorder),
-                boxShadow: c.isLight
-                    ? const [
-                        BoxShadow(
-                          color: Color(0x1F000000),
-                          blurRadius: 40,
-                          offset: Offset(0, 8),
-                        ),
-                      ]
-                    : [
-                        const BoxShadow(
-                          color: Color(0x80000000),
-                          blurRadius: 32,
-                          offset: Offset(0, 8),
-                        ),
-                        BoxShadow(
-                            color: c.primary.withValues(alpha: 0.1),
-                            blurRadius: 20),
-                        BoxShadow(
-                            color: Colors.white.withValues(alpha: 0.05),
-                            spreadRadius: 1),
-                      ],
-              ),
-              child: Stack(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Container(
-                          margin: const EdgeInsets.only(bottom: 24),
-                          padding: const EdgeInsets.only(bottom: 14),
-                          decoration: BoxDecoration(
-                            border: Border(
-                                bottom: BorderSide(color: c.glassBorder)),
-                          ),
-                          child: Text(
-                            tr('P2P FILE TRANSFERS'),
-                            style: TextStyle(
-                              color: c.primary,
-                              fontSize: 22,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.5,
-                            ),
-                          ),
-                        ),
-                        // The list itself caps at 400, independent of the modal's 90% limit.
-                        Flexible(
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 400),
-                            child: empty
-                                ? Padding(
-                                    padding: const EdgeInsets.all(30),
-                                    child: Text(
-                                      tr('No active transfers'),
-                                      textAlign: TextAlign.center,
-                                      style: TextStyle(
-                                        color: c.textDim,
-                                        fontStyle: FontStyle.italic,
-                                      ),
-                                    ),
-                                  )
-                                : SingleChildScrollView(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        for (final entry in seeding.entries)
-                                          _SeedingRow(
-                                            offer: entry.value,
-                                            onStop: () => service.stopSeeding(
-                                              entry.key,
-                                              geohash: _currentGeohash(ref),
-                                              channelName:
-                                                  _currentNamedChannel(ref),
-                                            ),
-                                          ),
-                                        for (final t in transfers)
-                                          _TransferRow(
-                                            // Keyed by transfer id so the fill's width animation stays with its transfer.
-                                            key: ValueKey(t.transferId),
-                                            transfer: t,
-                                            onCancel: () => service
-                                                .cancelTransfer(t.transferId),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            _IconBtn(
-                              label: tr('Close'),
-                              onTap: () => Navigator.of(context).maybePop(),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+            final body = Stack(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                margin: const EdgeInsets.only(bottom: 24),
+                padding: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  border: Border(
+                      bottom: BorderSide(color: c.glassBorder)),
+                ),
+                child: Text(
+                  tr('P2P FILE TRANSFERS'),
+                  style: TextStyle(
+                    color: c.primary,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
                   ),
-                  Positioned(
-                    top: 14,
-                    right: 14,
-                    child: _CloseChip(
-                      onTap: () => Navigator.of(context).maybePop(),
-                    ),
+                ),
+              ),
+              Flexible(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 400),
+                  child: empty
+                      ? Padding(
+                          padding: const EdgeInsets.all(30),
+                          child: Text(
+                            tr('No active transfers'),
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: c.textDim,
+                              fontStyle: FontStyle.italic,
+                            ),
+                          ),
+                        )
+                      : SingleChildScrollView(
+                          child: Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment.stretch,
+                            children: [
+                              for (final entry in seeding.entries)
+                                _SeedingRow(
+                                  offer: entry.value,
+                                  onStop: () => service.stopSeeding(
+                                    entry.key,
+                                    geohash: _currentGeohash(ref),
+                                    channelName:
+                                        _currentNamedChannel(ref),
+                                  ),
+                                ),
+                              for (final t in transfers)
+                                _TransferRow(
+                                  key: ValueKey(t.transferId),
+                                  transfer: t,
+                                  onCancel: () => service
+                                      .cancelTransfer(t.transferId),
+                                ),
+                            ],
+                          ),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _IconBtn(
+                    label: tr('Close'),
+                    onTap: () => Navigator.of(context).maybePop(),
                   ),
                 ],
               ),
-            );
+            ],
+          ),
+        ),
+        Positioned(
+          top: 14,
+          right: 14,
+          child: _CloseChip(
+            onTap: () => Navigator.of(context).maybePop(),
+          ),
+        ),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      body,
+      (body) => Container(
+                width: MediaQuery.of(context).size.width * 0.9,
+                constraints: BoxConstraints(
+                  maxWidth: 500,
+                  maxHeight: MediaQuery.of(context).size.height * 0.9,
+                ),
+                decoration: BoxDecoration(
+                  color: c.bgSecondary,
+                  borderRadius: NymRadius.rxl,
+                  border: Border.all(color: c.glassBorder),
+                  boxShadow: c.isLight
+                      ? const [
+                          BoxShadow(
+                            color: Color(0x1F000000),
+                            blurRadius: 40,
+                            offset: Offset(0, 8),
+                          ),
+                        ]
+                      : [
+                          const BoxShadow(
+                            color: Color(0x80000000),
+                            blurRadius: 32,
+                            offset: Offset(0, 8),
+                          ),
+                          BoxShadow(
+                              color: c.primary.withValues(alpha: 0.1),
+                              blurRadius: 20),
+                          BoxShadow(
+                              color: Colors.white.withValues(alpha: 0.05),
+                              spreadRadius: 1),
+                        ],
+                ),
+                child: body,
+              ),
+    );
           },
         ),
       ),
@@ -434,31 +439,34 @@ class _CloseChipState extends State<_CloseChip> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hover
-                ? c.danger.withValues(alpha: 0.12)
-                : Colors.white.withValues(alpha: 0.05),
-            border: Border.all(
-              color: _hover ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+    return NymFocusable(
+      onActivate: widget.onTap,
+      tooltip: tr('Close'),
+      excludeChildSemantics: true,
+      radius: const BorderRadius.all(Radius.circular(16)),
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hover
+                  ? c.danger.withValues(alpha: 0.12)
+                  : Colors.white.withValues(alpha: 0.05),
+              border: Border.all(
+                color: _hover ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+              ),
             ),
-          ),
-          child: Text(
-            '✕',
-            style: TextStyle(
+            child: Icon(
+              Icons.close,
+              size: 16,
               color: _hover ? c.danger : c.textDim,
-              fontSize: 16,
-              height: 1,
             ),
           ),
         ),

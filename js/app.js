@@ -528,20 +528,7 @@
                 const seen = localStorage.getItem('nym_tutorial_seen') === 'true';
                 if (seen) return;
             }
-            const startNow = () => setTimeout(() => startTutorial(), 300);
-            const nymRef = window.nym;
-            const needPicker = !force && nymRef &&
-                typeof nymRef.showUiLanguagePicker === 'function' &&
-                typeof nymRef._uiLanguageChosen === 'function' && !nymRef._uiLanguageChosen();
-            if (needPicker) {
-                setTimeout(() => {
-                    nymRef.showUiLanguagePicker({ dismissible: true })
-                        .then(() => { nymRef._markUiLanguageChosen(); startNow(); })
-                        .catch(() => { nymRef._markUiLanguageChosen(); startNow(); });
-                }, 400);
-                return;
-            }
-            startNow();
+            setTimeout(() => startTutorial(), 300);
         } catch (_) {
             setTimeout(() => startTutorial(), 300);
         }
@@ -626,8 +613,8 @@ class NYM {
         this.nymchatPowFloor = 16;
         this.nymchatVouches = new Set();
         this._lastVouchPublishAt = 0;
-        this.spamFilterEnabled = true;
-        this.spamFilterAggressive = true;
+        this.spamFilterEnabled = localStorage.getItem('nym_spam_filter_enabled') !== 'false';
+        this.spamFilterAggressive = localStorage.getItem('nym_spam_filter_aggressive') !== 'false';
         this.connectionMode = 'ephemeral';
         this.currentChannel = 'nymchat';
         this.currentGeohash = '';
@@ -3584,6 +3571,7 @@ async function showSettings() {
             pendingReactEmoji = emoji;
             nym.settings.swipeReactEmoji = emoji;
             localStorage.setItem('nym_swipe_react_emoji', emoji);
+            localStorage.setItem('nym_swipe_react_emoji_ts', String(Math.floor(Date.now() / 1000)));
             renderEmojiPreview(emoji);
         });
     };
@@ -3834,10 +3822,11 @@ async function showSettings() {
     if (dmEnabledSel && dmTtlSel && dmTtlGroup) {
         dmEnabledSel.value = nym.settings.dmForwardSecrecyEnabled ? 'true' : 'false';
         dmTtlSel.value = String(nym.settings.dmTTLSeconds || 86400);
-        dmTtlGroup.style.display = nym.settings.dmForwardSecrecyEnabled ? 'block' : 'none';
+        dmTtlGroup.style.display = '';
+        dmTtlGroup.classList.toggle('nm-hidden', !nym.settings.dmForwardSecrecyEnabled);
 
         dmEnabledSel.onchange = () => {
-            dmTtlGroup.style.display = dmEnabledSel.value === 'true' ? 'block' : 'none';
+            dmTtlGroup.classList.toggle('nm-hidden', dmEnabledSel.value !== 'true');
         };
     }
 
@@ -3924,6 +3913,8 @@ async function showSettings() {
     if (appVerifiedSelect) {
         appVerifiedSelect.value = normalizeAppVerifiedFilter(localStorage.getItem('nym_app_verified_filter'));
     }
+
+    if (typeof nym._syncSpamFilterUi === 'function') nym._syncSpamFilterUi();
 
     const active = new Set(Array.isArray(nym.filterPacks) ? nym.filterPacks : []);
     document.querySelectorAll('[data-filter-pack]').forEach((box) => {
@@ -4320,14 +4311,33 @@ async function clearLocalStorageCache() {
     closeModal('settingsModal');
 }
 
-// Preserves identity, groups, PM history, ephemeral keys and cache; the settings-modal twin of the panic wipe.
-async function wipeThisDevice() {
-    const ok = await window.showAppConfirm(
-        'Wipe this device? Your key, your settings, your message history and your post-quantum recovery code go — here and on our servers. Credits on your key are not touched. This cannot be undone.',
-        { danger: true, okLabel: 'Wipe' });
+async function deleteAccountAndWipe() {
+    const ui = (text, vars) => {
+        let out = typeof nym.uiText === 'function' ? nym.uiText(text) : text;
+        if (vars) for (const k of Object.keys(vars)) out = out.split('{' + k + '}').join(String(vars[k]));
+        return out;
+    };
+    const plan = await nym.deleteAccountTargets();
+    const total = plan.jobs.length + plan.blocked;
+    const parts = [];
+    if (total > 1) parts.push(ui('This covers all {n} identities saved on this device.', { n: total }));
+    parts.push(ui('On this device: your keys, messages, settings and post-quantum recovery code.'));
+    parts.push(ui('On our servers: your synced settings, profile, PM and group archive, Nymbot conversations, scheduled messages, our copy of your public posts, your Nymbot credits and purchase records, reports you filed, and the spam-filter and app-check records about you.'));
+    if (plan.blocked === 1) parts.push(ui("1 identity is locked or uses a signer that isn't connected, so its server data can't be deleted from here. Switch to it and delete it first, or continue to remove it from this device only."));
+    else if (plan.blocked > 1) parts.push(ui("{n} identities are locked or use a signer that isn't connected, so their server data can't be deleted from here. Switch to each one and delete it first, or continue to remove them from this device only.", { n: plan.blocked }));
+    parts.push(ui('Other devices signed in to these identities will also be wiped the next time they connect.'));
+    parts.push(ui("Public relays: posts and messages you sent to Nostr relays are kept by the relay operators and can't be deleted by us."));
+    parts.push(ui('Key backups you saved to iCloud or Google Drive stay there. Delete them in that service if you no longer want them.'));
+    parts.push(ui('Any remaining Nymbot credits will be lost.'));
+    parts.push(ui('This cannot be undone.'));
+    const ok = await window.showAppConfirm(parts.join('\n\n'), {
+        title: ui('Delete account data and wipe device?'),
+        danger: true,
+        okLabel: ui('Delete')
+    });
     if (!ok) return;
     try { window.closeModal('settingsModal'); } catch (_) { }
-    nym.panicWipe();
+    nym.deleteAccountAndWipe(plan);
 }
 async function resetSettings() {
     if (!(await window.showAppConfirm('Reset all settings and preferences to defaults? This will reset theme, layout, wallpaper, sound, favorited/hidden/blocked channels, blocked users, and blocked keywords. Your login, group memberships, and PMs will be preserved.', { danger: true, okLabel: 'Reset' }))) {
@@ -4416,8 +4426,7 @@ function selectMessageLayout(layout) {
 function applyMessageLayout(layout) {
     document.body.classList.toggle('chat-bubbles', layout === 'bubbles');
     if (typeof nym !== 'undefined' && typeof nym._recomputeAllBubbleGrouping === 'function') {
-        const container = document.getElementById('messagesContainer');
-        if (container) nym._recomputeAllBubbleGrouping(container);
+        document.querySelectorAll('.messages-list').forEach(list => nym._recomputeAllBubbleGrouping(list));
     }
     if (layout === 'bubbles' && typeof nym !== 'undefined') {
         if (typeof nym._refreshBubbleRelativeTimes === 'function') nym._refreshBubbleRelativeTimes();
@@ -4508,6 +4517,10 @@ const NYMCHAT_VERSION = 'v3.75.545';
 const BUILD_REPO = 'https://github.com/Spl0itable/NYM';
 
 const GOOGLE_WEB_CLIENT_ID = '435441872913-ccmsrqp8nsi3vqm27cptpsld3kqb5i2g.apps.googleusercontent.com';
+
+const APPLE_CLOUDKIT_CONTAINER = 'iCloud.com.nym.bar';
+
+const APPLE_CLOUDKIT_API_TOKEN = 'db6bf0994a872362d6b7893f9ec739e38187271cd007f9a463ab6bb542d49be7';
 
 function runBuildVerification() {
     const statusEl = document.getElementById('aboutBuildStatus');
@@ -4817,9 +4830,10 @@ async function checkSavedConnection() {
             // Wait for synced settings so a returning user isn't re-prompted.
             startOnboardingWhenHydrated();
 
-            if (nym.settings.groupChatPMOnlyMode) {
+            const restoredView = !window.pendingChannel && typeof nym._restoreLastView === 'function' && nym._restoreLastView();
+            if (!restoredView && nym.settings.groupChatPMOnlyMode) {
                 setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
-            } else {
+            } else if (!restoredView) {
                 const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
                 if (savedChannel) {
                     try {
@@ -4961,9 +4975,10 @@ async function checkSavedConnection() {
             // Wait for synced settings so a returning user isn't re-prompted.
             startOnboardingWhenHydrated();
 
-            if (nym.settings.groupChatPMOnlyMode) {
+            const restoredView = !window.pendingChannel && typeof nym._restoreLastView === 'function' && nym._restoreLastView();
+            if (!restoredView && nym.settings.groupChatPMOnlyMode) {
                 setTimeout(() => nym.navigateToLatestPMOrGroup(), 500);
-            } else {
+            } else if (!restoredView) {
                 const savedChannel = localStorage.getItem('nym_auto_ephemeral_channel');
                 if (savedChannel) {
                     try {
@@ -4992,6 +5007,7 @@ async function checkSavedConnection() {
     }
     document.getElementById('setupModal').classList.add('active');
     updateSetupInviteBanner();
+    updateSetupDeletedNotice();
 }
 
 async function initializeNym() {
@@ -5087,7 +5103,7 @@ async function initializeNym() {
             }
         }
 
-        await nym.connectToRelays();
+        nym.connectToRelays();
 
         nym.applyCachedShopItemsToNewIdentity();
 
@@ -6157,6 +6173,10 @@ async function applyNostrSettingsAdditive(s) {
     nym._applyingRemoteSettings = true;
     try {
 
+    if (typeof nym._applySyncExtras === 'function') {
+        try { nym._applySyncExtras(s); } catch (_) { }
+    }
+
     // Merge seen-notification keys additively, then mark matching local entries viewed.
     if (s.seenNotifications && typeof s.seenNotifications === 'object') {
         try {
@@ -6440,6 +6460,9 @@ async function applyNostrSettingsAdditive(s) {
         } catch (_) { }
     }
 
+    if (s.awayStatus && typeof nym.applySyncedAway === 'function') {
+        try { await nym.applySyncedAway(s.awayStatus); } catch (_) { }
+    }
     if (s.savedMessages && typeof s.savedMessages === 'object' && typeof nym.applySyncedSaved === 'function') {
         try { nym.applySyncedSaved(s.savedMessages); } catch (_) { }
     }
@@ -6664,8 +6687,15 @@ async function applyNostrSettings(s) {
         localStorage.setItem('nym_swipe_threshold', String(s.swipeThreshold));
     }
     if (isValidSwipeReactEmoji(s.swipeReactEmoji)) {
-        nym.settings.swipeReactEmoji = s.swipeReactEmoji;
-        localStorage.setItem('nym_swipe_react_emoji', s.swipeReactEmoji);
+        const remoteTs = typeof s.swipeReactEmojiTs === 'number' ? Math.floor(s.swipeReactEmojiTs) : 0;
+        const localTs = parseInt(localStorage.getItem('nym_swipe_react_emoji_ts') || '0', 10) || 0;
+        if (remoteTs >= localTs) {
+            nym.settings.swipeReactEmoji = s.swipeReactEmoji;
+            localStorage.setItem('nym_swipe_react_emoji', s.swipeReactEmoji);
+            localStorage.setItem('nym_swipe_react_emoji_ts', String(remoteTs));
+        } else if (s.swipeReactEmoji !== nym.settings.swipeReactEmoji) {
+            setTimeout(() => { if (typeof nym.saveSyncedSettings === 'function') nym.saveSyncedSettings(); }, 1000);
+        }
     }
 
     if (s.wallpaperCustomUrl) {
@@ -6971,6 +7001,9 @@ async function applyNostrSettings(s) {
         nym.notifyFriendsOnly = s.notifyFriendsOnly;
         localStorage.setItem('nym_notify_friends_only', String(s.notifyFriendsOnly));
     }
+    if (s.eventToasts && typeof s.eventToasts === 'object' && typeof nym.applyEventToastSettings === 'function') {
+        nym.applyEventToastSettings(s.eventToasts);
+    }
 
     // Take the later of local vs relay.
     if (typeof s.notificationLastReadTime === 'number' && s.notificationLastReadTime > nym.notificationLastReadTime) {
@@ -7197,6 +7230,12 @@ async function applyNostrSettings(s) {
         nym.updateViewMoreButton('pmList');
     }
 
+    if (typeof nym._applyStampedPrefs === 'function') {
+        try {
+            if (nym._applyStampedPrefs(s)) setTimeout(() => nym._debouncedNostrSettingsSave(2000), 0);
+        } catch (_) { }
+    }
+
     nym._updateNotificationBadge();
     if (!nym._settingsSyncMessageShown) {
         nym._settingsSyncMessageShown = true;
@@ -7213,6 +7252,7 @@ async function signOut() {
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
     localStorage.removeItem('nym_auto_ephemeral_channel');
+    localStorage.removeItem('nym_last_view');
     nymSecretRemove('nym_session_nsec');
     localStorage.removeItem('nym_random_keypair_per_session');
     nymSecretRemove('nym_dev_nsec');
@@ -7621,6 +7661,20 @@ function updateSetupInviteBanner() {
 }
 window.updateSetupInviteBanner = updateSetupInviteBanner;
 
+function updateSetupDeletedNotice() {
+    const el = document.getElementById('setupDeletedNotice');
+    if (!el) return;
+    let raw = null;
+    try { raw = localStorage.getItem('nymnotice:deleted'); } catch (e) { raw = null; }
+    if (!raw || !window.nym || typeof nym._deletedNoticeHtml !== 'function') {
+        el.classList.add('nm-hidden');
+        return;
+    }
+    try { localStorage.removeItem('nymnotice:deleted'); } catch (e) { }
+    el.innerHTML = nym._deletedNoticeHtml(raw);
+    el.classList.remove('nm-hidden');
+}
+
 // Invite links opened while loaded only change the hash, so route them live here too.
 window.addEventListener('hashchange', () => {
     const call = window.location.hash.match(/^#call=([A-Za-z0-9_-]+)/);
@@ -7889,8 +7943,8 @@ function renderRelayStats() {
         } else if (nym._userDirectMode) {
             modeText = 'Direct';
             hint = typeof nym.uiText === 'function'
-                ? nym.uiText("Direct relay connections, chosen by you: relays see your IP address and the proxy's spam filtering doesn't apply.")
-                : "Direct relay connections, chosen by you: relays see your IP address and the proxy's spam filtering doesn't apply.";
+                ? nym.uiText("Direct relay connections, chosen by you: relays and media hosts see your IP address and the proxy's spam filtering doesn't apply.")
+                : "Direct relay connections, chosen by you: relays and media hosts see your IP address and the proxy's spam filtering doesn't apply.";
         } else if (connected > 0 || !nym.useRelayProxy) {
             modeText = 'Direct';
             hint = nym._poolFallbackActive
@@ -7966,7 +8020,7 @@ function drawThroughputGraph(history) {
     const points = 60;
     const stepX = w / (points - 1);
 
-    const primaryColor = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#00ff00';
+    const primaryColor = nym.themeToken('--primary', '#00ff00');
 
     const grad = ctx.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, hexToRgba(primaryColor, 0.25));
@@ -7998,7 +8052,7 @@ function drawThroughputGraph(history) {
     ctx.lineJoin = 'round';
     ctx.stroke();
 
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-dim').trim() || '#8a8a9a';
+    ctx.fillStyle = nym.themeToken('--text-dim', '#8a8a9a');
     ctx.font = '9px monospace';
     ctx.textAlign = 'right';
     ctx.fillText(maxVal + '/s', w - 2, 10);
@@ -8039,10 +8093,11 @@ function rsRenderRelayDetail(row, url, stats) {
         const labels = {
             'channel-get': 'Channel history', 'channel-activity': 'Channel activity',
             'channel-active': 'Active channels', 'channel-delete': 'Channel cleanup',
-            'pm-get': 'Direct messages', 'pm-put': 'Message backup',
+            'pm-get': 'Private messages', 'pm-put': 'Message backup',
             'pm-deposit': 'Message delivery', 'pm-delete': 'Message cleanup',
             'profile-get': 'Profiles', 'profile-set': 'Profile updates',
             'emoji-get': 'Emoji', 'settings-get': 'Settings', 'settings-set': 'Settings sync',
+            'settings-delete': 'Settings cleanup',
             'auth': 'Sign-in', 'other': 'Other'
         };
         // Fall back to a title-cased name so no raw hyphenated action ever shows.

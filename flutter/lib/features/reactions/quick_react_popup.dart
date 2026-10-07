@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/nym_icons.dart';
 import '../messages/format/message_content.dart';
 import '../../widgets/anchored_popup.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Default quick-react emojis, used to pad recents to six.
 const List<String> kQuickReactDefaults = ['👍', '❤️', '😂', '🔥', '👎', '😮'];
@@ -27,12 +29,14 @@ List<String> quickReactEmojis(List<String> recents) {
 /// One long-press quick-context row; [onTap] runs after the popup closes.
 class QuickContextItem {
   const QuickContextItem({
+    this.id,
     required this.label,
     required this.svg,
     required this.onTap,
     this.color = QuickContextItemColor.normal,
   });
 
+  final String? id;
   final String label;
 
   final String svg;
@@ -42,6 +46,28 @@ class QuickContextItem {
 
 /// Color variants: report `--warning`, danger.
 enum QuickContextItemColor { normal, report, danger }
+
+MenuTone quickItemTone(QuickContextItemColor c) {
+  switch (c) {
+    case QuickContextItemColor.report:
+      return MenuTone.report;
+    case QuickContextItemColor.danger:
+      return MenuTone.danger;
+    case QuickContextItemColor.normal:
+      return MenuTone.normal;
+  }
+}
+
+QuickContextItemColor quickItemColorFor(MenuTone t) {
+  switch (t) {
+    case MenuTone.report:
+      return QuickContextItemColor.report;
+    case MenuTone.danger:
+      return QuickContextItemColor.danger;
+    case MenuTone.normal:
+      return QuickContextItemColor.normal;
+  }
+}
 
 /// Long-press quick-context card shown below the quick-react pill.
 class QuickContextMenu extends StatelessWidget {
@@ -74,7 +100,13 @@ class QuickContextMenu extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [for (final it in items) _QuickContextRow(item: it)],
+          children: [
+            for (final it in items)
+              _QuickContextRow(
+                key: it.id == null ? null : ValueKey('msg-action-${it.id}'),
+                item: it,
+              ),
+          ],
         ),
       ),
     );
@@ -82,7 +114,7 @@ class QuickContextMenu extends StatelessWidget {
 }
 
 class _QuickContextRow extends StatefulWidget {
-  const _QuickContextRow({required this.item});
+  const _QuickContextRow({super.key, required this.item});
   final QuickContextItem item;
 
   @override
@@ -95,22 +127,9 @@ class _QuickContextRowState extends State<_QuickContextRow> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final Color fg;
-    final Color iconColor;
-    switch (widget.item.color) {
-      case QuickContextItemColor.report:
-        fg = c.warning;
-        iconColor = c.warning;
-        break;
-      case QuickContextItemColor.danger:
-        fg = c.danger;
-        iconColor = c.danger;
-        break;
-      case QuickContextItemColor.normal:
-        fg = c.text;
-        iconColor = c.textDim;
-        break;
-    }
+    final tone = quickItemTone(widget.item.color);
+    final Color fg = menuToneColor(tone, c);
+    final Color iconColor = tone == MenuTone.normal ? c.textDim : fg;
     final hoverBg = widget.item.color == QuickContextItemColor.danger
         ? const Color(0x1FFF4444)
         : c.hoverOverlay;
@@ -207,7 +226,7 @@ class QuickReactPopup extends StatelessWidget {
               onTap: onMore,
             ),
             if (menu != null)
-              Tooltip(
+              NymTooltip(
                 message: menuLabel,
                 child: expand(
                   child: NymSvgIcon(NymIcons.userOptions,
@@ -320,6 +339,7 @@ void showQuickReactPopup(
       menuLabel: menuLabel,
       contextItems: contextItems
           .map((it) => QuickContextItem(
+                id: it.id,
                 label: it.label,
                 svg: it.svg,
                 color: it.color,

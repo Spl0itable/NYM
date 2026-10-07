@@ -15,12 +15,12 @@ class CryptoVerifiedBadge extends StatelessWidget {
   final CryptoVerifyState state;
   final double size;
 
-  Color get _color {
+  Color _color(BuildContext context) {
     switch (state) {
       case CryptoVerifyState.verified:
         return const Color(0xFF2ECC71);
       case CryptoVerifyState.unverified:
-        return const Color(0xFFE74C3C);
+        return context.nym.warning;
       case CryptoVerifyState.unknown:
         return const Color(0xFF9AA0A6);
     }
@@ -38,7 +38,7 @@ class CryptoVerifiedBadge extends StatelessWidget {
           child: SizedBox(
             width: size,
             height: size,
-            child: CustomPaint(painter: _LockPainter(state, _color)),
+            child: CustomPaint(painter: _LockPainter(state, _color(context))),
           ),
         ),
       ),
@@ -134,7 +134,7 @@ void showVerificationPopup(BuildContext context, CryptoVerifyState state) {
       ),
     CryptoVerifyState.unverified => (
         tr('Unverified sender'),
-        const Color(0xFFE74C3C),
+        context.nym.warning,
         tr("This message uses a Bitchat-format seal signed with a throwaway, "
             "per-message key that has no binding to any long-term identity. The "
             "displayed sender is an unverified, self-asserted claim — treat the "

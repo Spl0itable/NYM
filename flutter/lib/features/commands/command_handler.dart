@@ -61,6 +61,7 @@ class CommandHooks {
     this.transferOwner,
     this.openDevNsecChallenge,
     this.openTimestampPicker,
+    this.openSearch,
   });
 
   final void Function()? openPoll;
@@ -97,6 +98,8 @@ class CommandHooks {
   final void Function()? openDevNsecChallenge;
 
   final void Function()? openTimestampPicker;
+
+  final void Function(String query)? openSearch;
 }
 
 /// Resolves `@nym`, `nym#xxxx` or 64-hex to a pubkey and display nym, or null.
@@ -276,6 +279,8 @@ class CommandDispatcher {
         engine.setAway(args.trim());
       case 'back':
         engine.clearAway();
+      case 'search':
+        hooks.openSearch?.call(args.trim());
       case 'zap':
         _zap(args);
       case 'poll':

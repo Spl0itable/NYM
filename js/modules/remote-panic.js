@@ -3,6 +3,7 @@
 
     const KIND = 30078;
     const D_TAG = 'nym-panic';
+    const DELETE_D_TAG = 'nym-account-deleted';
     const TTL_S = 90 * 86400;
     const FUTURE_SKEW_S = 600;
     const SETTING = 'remotePanic';
@@ -12,14 +13,24 @@
     const isInt = (n) => typeof n === 'number' && Number.isInteger(n);
     const isHex = (s, n) => typeof s === 'string' && s.length === n && /^[0-9a-f]+$/.test(s);
 
-    function template(at) {
-        return { kind: KIND, created_at: at, tags: [['d', D_TAG]], content: '' };
+    function template(at, deleted) {
+        return { kind: KIND, created_at: at, tags: [['d', deleted ? DELETE_D_TAG : D_TAG]], content: '' };
+    }
+
+    function dTagOf(ev) {
+        const t = ev && Array.isArray(ev.tags) && ev.tags[0];
+        return Array.isArray(t) ? t[1] : null;
+    }
+
+    function isDeletion(ev) {
+        return dTagOf(ev) === DELETE_D_TAG;
     }
 
     function fromRow(pubkey, row) {
         if (!row || typeof row !== 'object' || !isHex(pubkey, 64)) return null;
         if (!isInt(row.at) || !isHex(row.id, 64) || !isHex(row.sig, 128)) return null;
-        return clean({ ...template(row.at), pubkey, id: row.id, sig: row.sig });
+        if (row.d != null && row.d !== DELETE_D_TAG && row.d !== D_TAG) return null;
+        return clean({ ...template(row.at, row.d === DELETE_D_TAG), pubkey, id: row.id, sig: row.sig });
     }
 
     function shapeOk(ev) {
@@ -27,14 +38,14 @@
         if (ev.kind !== KIND || ev.content !== '' || !isInt(ev.created_at) || ev.created_at <= 0) return false;
         if (!Array.isArray(ev.tags) || ev.tags.length !== 1) return false;
         const t = ev.tags[0];
-        if (!Array.isArray(t) || t.length !== 2 || t[0] !== 'd' || t[1] !== D_TAG) return false;
+        if (!Array.isArray(t) || t.length !== 2 || t[0] !== 'd' || (t[1] !== D_TAG && t[1] !== DELETE_D_TAG)) return false;
         return isHex(ev.pubkey, 64) && isHex(ev.id, 64) && isHex(ev.sig, 128);
     }
 
     function clean(ev) {
         return {
             id: ev.id, pubkey: ev.pubkey, created_at: ev.created_at, kind: ev.kind,
-            tags: [['d', D_TAG]], content: '', sig: ev.sig
+            tags: [['d', isDeletion(ev) ? DELETE_D_TAG : D_TAG]], content: '', sig: ev.sig
         };
     }
 
@@ -45,8 +56,8 @@
 
     function decide(input, verify) {
         const i = input || {};
-        if (!i.enabled) return { action: 'ignore', reason: 'off' };
         const m = i.marker;
+        if (!i.enabled && !(m && isDeletion(m))) return { action: 'ignore', reason: 'off' };
         if (!m) return { action: 'ignore', reason: 'none' };
         if (!shapeOk(m)) return { action: 'ignore', reason: 'shape' };
         if (m.pubkey !== i.pubkey) return { action: 'ignore', reason: 'pubkey' };
@@ -55,19 +66,19 @@
         if (m.created_at <= i.loginAt) return { action: 'ignore', reason: 'before-login' };
         if (isInt(i.now) && m.created_at > i.now + FUTURE_SKEW_S) return { action: 'ignore', reason: 'future' };
         if (isInt(i.now) && i.now - m.created_at > TTL_S) return { action: 'ignore', reason: 'expired' };
-        return { action: 'wipe', reason: 'wipe' };
+        return { action: 'wipe', reason: isDeletion(m) ? 'deleted' : 'wipe' };
     }
 
     function rumor(marker) {
         return {
-            kind: KIND, created_at: marker.created_at, tags: [['d', D_TAG]],
+            kind: KIND, created_at: marker.created_at, tags: [['d', isDeletion(marker) ? DELETE_D_TAG : D_TAG]],
             content: JSON.stringify(clean(marker)), pubkey: marker.pubkey
         };
     }
 
     function isRumor(r) {
         if (!r || r.kind !== KIND || !Array.isArray(r.tags)) return false;
-        return r.tags.some((t) => Array.isArray(t) && t[0] === 'd' && t[1] === D_TAG);
+        return r.tags.some((t) => Array.isArray(t) && t[0] === 'd' && (t[1] === D_TAG || t[1] === DELETE_D_TAG));
     }
 
     function markerFromRumor(r) {
@@ -84,7 +95,7 @@
     }
 
     G.NymRemotePanic = {
-        KIND, D_TAG, TTL_S, FUTURE_SKEW_S, SETTING, LOGIN_KEY, CHECK_EVERY_MS,
-        template, fromRow, shapeOk, markerValid, decide, rumor, isRumor, markerFromRumor, shouldSend,
+        KIND, D_TAG, DELETE_D_TAG, TTL_S, FUTURE_SKEW_S, SETTING, LOGIN_KEY, CHECK_EVERY_MS,
+        template, isDeletion, fromRow, shapeOk, markerValid, decide, rumor, isRumor, markerFromRumor, shouldSend,
     };
 })();

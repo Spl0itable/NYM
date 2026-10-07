@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../common/nym_focusable.dart';
+
 /// Sidebar row gestures: a 500ms hold opens the menu, 10px drift cancels, right-click does nothing.
 class SidebarRowGestures extends StatefulWidget {
   const SidebarRowGestures({
@@ -93,7 +95,10 @@ class _SidebarRowGesturesState extends State<SidebarRowGestures> {
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: _onTap,
-          child: widget.builder(context, _hovered),
+          child: NymFocusable(
+            onActivate: widget.onTap,
+            child: widget.builder(context, _hovered),
+          ),
         ),
       ),
     );

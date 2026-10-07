@@ -18,7 +18,7 @@ Object.assign(NYM.prototype, {
                     const swipeDistance = touch.clientX - this.swipeStartX;
 
                     if (swipeDistance > this.swipeThreshold) {
-                        this.toggleSidebar();
+                        if (!document.getElementById('sidebar').classList.contains('open')) this.toggleSidebar();
                         this.swipeStartX = null;
                     }
                 }
@@ -883,7 +883,7 @@ Object.assign(NYM.prototype, {
         try {
             let data;
             let proxied = null;
-            const base = this._getProxyBaseUrl();
+            const base = this._mediaProxyBase();
             if (base) {
                 try {
                     proxied = await this._edgeFetch(`${base}?action=unfurl&url=${encodeURIComponent(url)}`);
@@ -1106,18 +1106,9 @@ Object.assign(NYM.prototype, {
         this.setupSwipeToReply();
         this.setupDoubleClickToReply();
 
-        document.addEventListener('keydown', (e) => {
-            if (e.altKey && e.key === 'ArrowLeft') {
-                e.preventDefault();
-                this.navigateBack();
-            } else if (e.altKey && e.key === 'ArrowRight') {
-                e.preventDefault();
-                this.navigateForward();
-            }
-        });
-
         // Browsers intercept mouse back/forward before JS, so use the History API (pushState in _pushNavigation).
         window.addEventListener('popstate', (e) => {
+            if (typeof this._phonePop === 'function' && this._phonePop(e)) return;
             if (e.state && e.state._nym_nav != null) {
                 const targetIndex = e.state._nym_nav;
                 if (targetIndex < this.navigationIndex) {
@@ -1237,7 +1228,7 @@ Object.assign(NYM.prototype, {
                     if (this._deleteRichMarker(input, e.key === 'Delete')) e.preventDefault();
                 } else if (e.key === 'ArrowUp' && input.value === '') {
                     e.preventDefault();
-                    this.navigateHistory(-1);
+                    if (!(typeof this.editLastOwnMessage === 'function' && this.editLastOwnMessage())) this.navigateHistory(-1);
                 } else if (e.key === 'ArrowDown' && input.value === '') {
                     e.preventDefault();
                     this.navigateHistory(1);
@@ -1413,7 +1404,7 @@ Object.assign(NYM.prototype, {
             window._nymMediaClickSuppressUntil = Date.now() + 800;
             const messageId = msgEl.dataset.messageId;
             if (!messageId) return;
-            window.nymHapticTap && window.nymHapticTap();
+            if (window.nymHaptic) window.nymHaptic('selection');
 
             const defaultEmojis = ['👍', '❤️', '😂', '🔥', '👎', '😮'];
             let quickEmojis = [];
@@ -1433,6 +1424,11 @@ Object.assign(NYM.prototype, {
             }
 
             document.querySelectorAll('.quick-react-popup, .quick-context-menu').forEach(el => el.remove());
+
+            if (typeof this.openMessageSheet === 'function' && this._msgSheetNarrow()) {
+                this.openMessageSheet(msgEl, quickEmojis);
+                return;
+            }
 
             document.querySelectorAll('.messages-container.has-long-press-highlight').forEach(el => el.classList.remove('has-long-press-highlight'));
             document.querySelectorAll('.message.long-press-highlight').forEach(el => el.classList.remove('long-press-highlight'));
@@ -1478,141 +1474,7 @@ Object.assign(NYM.prototype, {
             popup.style.left = left + 'px';
             popup.style.top = top + 'px';
 
-            const targetPubkey = msgEl.dataset.pubkey || '';
-            const baseAuthor = this.resolveDisplayNym(targetPubkey, msgEl.dataset.author || '');
-            const targetBaseNym = this.stripPubkeySuffix(baseAuthor);
-            const contentEl = msgEl.querySelector('.message-content');
-            const messageContent = msgEl.dataset.rawContent
-                || (contentEl ? this._extractNonQuotedText(contentEl) : '');
-            const isSelf = targetPubkey === this.pubkey;
-
-            const ctxItems = [];
-            if (!isSelf && targetPubkey) {
-                ctxItems.push({
-                    id: 'qctxSlap',
-                    label: 'Slap with Trout',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M 1 8 Q 3 4 8 4 Q 11 4 13 6 L 15 4.5 L 15 11.5 L 13 10 Q 11 12 8 12 Q 3 12 1 8 Z" /><circle cx="5" cy="7.5" r="0.7" fill="currentColor" stroke="none" /><path d="M 9 6.5 Q 10 8 9 9.5" stroke-linecap="round" /></svg>',
-                    action: () => { this.cmdSlap(targetPubkey); }
-                });
-                ctxItems.push({
-                    id: 'qctxHug',
-                    label: 'Give warm Hug',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="5" r="2" /><circle cx="10" cy="5" r="2" /><path d="M 2 14 C 2 10 4 9 6 9 C 7 9 7.5 9.5 8 10 C 8.5 9.5 9 9 10 9 C 12 9 14 10 14 14" stroke-linecap="round" stroke-linejoin="round" /><path d="M 4 11.5 Q 8 9 12 11.5" stroke-linecap="round" /></svg>',
-                    action: () => { this.cmdHug(targetPubkey); }
-                });
-            }
-            if (!isSelf && messageId && targetPubkey) {
-                ctxItems.push({
-                    id: 'qctxZap',
-                    label: 'Zap Bitcoin',
-                    cls: 'lightning',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M 9 2 L 4 9 H 7 L 7 14 L 12 7 H 9 Z" /></svg>',
-                    action: async () => {
-                        this.displaySystemMessage(`Checking if @${targetBaseNym} can receive zaps...`);
-                        try {
-                            const lnAddress = await this.fetchLightningAddressForUser(targetPubkey);
-                            if (lnAddress) {
-                                this.showZapModal(messageId, targetPubkey, targetBaseNym);
-                            } else {
-                                this.displaySystemMessage(`@${targetBaseNym} cannot receive zaps (no lightning address set)`);
-                            }
-                        } catch (error) {
-                            this.displaySystemMessage(`Failed to check if @${targetBaseNym} can receive zaps`);
-                        }
-                    }
-                });
-            }
-            if (messageId && this.threadsEnabled && this.threadsEnabled() && !msgEl.closest('.thread-view-active')) {
-                ctxItems.push({
-                    id: 'qctxThread',
-                    label: 'Reply in Thread',
-                    svg: '<svg width="16" height="16" viewBox="0 0 20 20"><path fill="currentColor" fill-rule="evenodd" d="M10 3a7 7 0 1 0 3.394 13.124.75.75 0 0 1 .542-.074l2.794.68-.68-2.794a.75.75 0 0 1 .073-.542A7 7 0 0 0 10 3m-8.5 7a8.5 8.5 0 1 1 16.075 3.859l.904 3.714a.75.75 0 0 1-.906.906l-3.714-.904A8.5 8.5 0 0 1 1.5 10M6 8.25a.75.75 0 0 1 .75-.75h6.5a.75.75 0 0 1 0 1.5h-6.5A.75.75 0 0 1 6 8.25M6.75 11a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 0-1.5z" clip-rule="evenodd"></path></svg>',
-                    action: () => { this.openMessageThread(msgEl); }
-                });
-            }
-            if (messageContent) {
-                ctxItems.push({
-                    id: 'qctxQuote',
-                    label: 'Quote Message',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M 3 6 C 3 4.5 4 3 6 3 C 6 4.5 5 5 4 5.5 C 3.5 5.8 3 6.3 3 7 L 3 9 L 6 9 L 6 6 Z" /><path d="M 9 6 C 9 4.5 10 3 12 3 C 12 4.5 11 5 10 5.5 C 9.5 5.8 9 6.3 9 7 L 9 9 L 12 9 L 12 6 Z" /></svg>',
-                    action: () => {
-                        const suffix = this.getPubkeySuffix(targetPubkey);
-                        const fullNym = `${targetBaseNym}#${suffix}`;
-                        this.setQuoteReply(fullNym, messageContent);
-                    }
-                });
-                ctxItems.push({
-                    id: 'qctxCopy',
-                    label: 'Copy Message',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="8" height="9" rx="1" /><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round" /></svg>',
-                    action: async () => {
-                        try {
-                            await navigator.clipboard.writeText(messageContent);
-                            this.displaySystemMessage('Message copied to clipboard');
-                        } catch (err) {
-                            this.displaySystemMessage('Failed to copy message');
-                        }
-                    }
-                });
-                ctxItems.push({
-                    id: 'qctxTranslate',
-                    label: 'Translate Message',
-                    svg: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>',
-                    action: () => {
-                        this.translateMessage(messageContent, messageId);
-                    }
-                });
-            }
-            if (isSelf && messageId && messageContent) {
-                ctxItems.push({
-                    id: 'qctxEdit',
-                    label: 'Edit Message',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M 11.5 2.5 L 13.5 4.5 L 5 13 L 2 14 L 3 11 Z" stroke-linejoin="round" /><path d="M 10 4 L 12 6" stroke-linecap="round" /></svg>',
-                    action: () => {
-                        this.startEditMessage({ messageId, content: messageContent, pubkey: targetPubkey });
-                    }
-                });
-            }
-            if (isSelf && messageId) {
-                ctxItems.push({
-                    id: 'qctxDelete',
-                    label: 'Delete Message',
-                    cls: 'danger',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M 3 5 L 13 5" stroke-linecap="round" /><path d="M 5 5 L 5 13 C 5 13.55 5.45 14 6 14 L 10 14 C 10.55 14 11 13.55 11 13 L 11 5" stroke-linejoin="round" /><path d="M 6.5 2 L 9.5 2" stroke-linecap="round" /><path d="M 7 7 L 7 11.5" stroke-linecap="round" /><path d="M 9 7 L 9 11.5" stroke-linecap="round" /></svg>',
-                    action: async () => {
-                        if (!(await window.showAppConfirm('Are you sure you want to delete this message? This will send a deletion request to relays.', { danger: true, okLabel: 'Delete' }))) return;
-                        this.publishDeletionEvent(messageId, this.inPMMode ? 1059 : this.channelWire(this.currentGeohash).kind).then(() => {
-                            this.displaySystemMessage('Deletion request sent to relays');
-                        });
-                    }
-                });
-            }
-
-            if (!isSelf && targetPubkey) {
-                ctxItems.push({
-                    id: 'qctxReport',
-                    label: 'Report',
-                    cls: 'report',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6" /><path d="M 8 5 L 8 8.5" stroke-linecap="round" stroke-width="2" /><circle cx="8" cy="10.5" r="0.8" fill="currentColor" stroke="none" /></svg>',
-                    action: () => {
-                        this.contextMenuData = {
-                            nym: targetBaseNym,
-                            pubkey: targetPubkey,
-                            content: messageContent,
-                            messageId,
-                            reactionId: messageId
-                        };
-                        this.openReportModal();
-                    }
-                });
-                ctxItems.push({
-                    id: 'qctxBlock',
-                    label: this.blockedUsers.has(targetPubkey) ? 'Unblock User' : 'Block User',
-                    cls: 'danger',
-                    svg: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6" /><line x1="3.75" y1="3.75" x2="12.25" y2="12.25" stroke-width="1.5" stroke-linecap="round" /></svg>',
-                    action: () => { this.cmdBlock(targetPubkey); }
-                });
-            }
+            const ctxItems = this.messageActionItems(msgEl).items;
 
             let quickCtxMenu = null;
             if (ctxItems.length > 0) {
@@ -1750,6 +1612,8 @@ Object.assign(NYM.prototype, {
             document.addEventListener('scroll', closeOnScroll, { passive: true, capture: true });
         };
 
+        this.openMessageActions = (msgEl, e) => showQuickReactPopup(msgEl, e || {});
+
         let msgLongPressStartX = 0;
         let msgLongPressStartY = 0;
         const MSG_LONG_PRESS_MOVE_THRESHOLD = 5;
@@ -1757,7 +1621,7 @@ Object.assign(NYM.prototype, {
         messagesEl.addEventListener('mousedown', (e) => {
             // Primary button only.
             if (e.button !== 0) return;
-            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .msg-hover-buttons, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
@@ -1769,7 +1633,7 @@ Object.assign(NYM.prototype, {
         });
 
         messagesEl.addEventListener('touchstart', (e) => {
-            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
+            if (e.target.closest('.reaction-badge, .add-reaction-btn, .reaction-btn, .msg-hover-buttons, .quick-react-popup, .group-readers, .group-reader-avatar, .group-reader-overflow')) return;
             const msgEl = e.target.closest('.message[data-message-id]');
             if (!msgEl) return;
             msgLongPressFired = false;
@@ -1931,6 +1795,55 @@ Object.assign(NYM.prototype, {
         wrapper.classList.toggle('composer-has-chip', !!preview);
         wrapper.style.setProperty('--ac-offset',
             (overhang + panelsH + uploadH + (previewH ? previewH + gap : 0)) + 'px');
+        if (container) {
+            const rise = (el) => {
+                let y = 0;
+                for (let n = el; n && n !== container; n = n.offsetParent) y += n.offsetTop;
+                return Math.max(0, -y);
+            };
+            const lift = Math.max(0, ...[input, panels, up, preview].filter((el) => el && el.offsetHeight > 0).map(rise));
+            container.style.setProperty('--composer-lift', lift + 'px');
+        }
+        this._syncFloatOffsets();
+    },
+
+    _scheduleFloatOffsets() {
+        if (this._floatRaf || typeof requestAnimationFrame !== 'function') return;
+        this._floatRaf = requestAnimationFrame(() => {
+            this._floatRaf = null;
+            this._syncFloatOffsets();
+        });
+    },
+
+    _syncFloatOffsets() {
+        if (typeof document === 'undefined') return;
+        const hint = document.getElementById('composerConnHint');
+        const hintTop = hint && !hint.hidden && hint.offsetHeight > 0 ? hint.getBoundingClientRect().top : Infinity;
+        const pairs = [[document.getElementById('messagesScroller'), document.getElementById('cnFabs')]];
+        document.querySelectorAll('#columnsStrip .cv-column').forEach((col) => {
+            pairs.push([col.querySelector('.cv-scroller'), col.querySelector(':scope > .cn-fabs')]);
+        });
+        if (!this._floatRO && typeof ResizeObserver !== 'undefined') {
+            this._floatRO = new ResizeObserver(() => this._scheduleFloatOffsets());
+        }
+        const px = (n) => (Math.round(n * 100) / 100) + 'px';
+        for (const [sc, fabs] of pairs) {
+            if (!sc) continue;
+            if (this._floatRO && !sc._floatWatched) {
+                sc._floatWatched = true;
+                this._floatRO.observe(sc);
+            }
+            const r = sc.getBoundingClientRect();
+            if (!r.height) continue;
+            const overlay = Math.max(0, r.bottom - hintTop);
+            const o = px(overlay);
+            if (sc.style.getPropertyValue('--float-overlay') !== o) sc.style.setProperty('--float-overlay', o);
+            const host = fabs && fabs.offsetParent;
+            if (!host) continue;
+            const hr = host.getBoundingClientRect();
+            const l = px(Math.max(0, hr.top + host.clientTop + host.clientHeight - r.bottom + overlay));
+            if (fabs.style.getPropertyValue('--float-lift') !== l) fabs.style.setProperty('--float-lift', l);
+        }
     },
 
     _renderContextMenuPubkey(pubkey) {

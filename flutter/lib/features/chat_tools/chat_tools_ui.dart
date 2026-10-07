@@ -30,6 +30,8 @@ import '../toasts/toast_center.dart';
 import 'chat_tools.dart';
 import 'chat_tools_providers.dart';
 import 'chat_tools_service.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 class ChatToolIcons {
   const ChatToolIcons._();
@@ -65,6 +67,7 @@ const List<String> kChatToolsStrings = <String>[
   'Saved messages',
   'Save message',
   'Remove from Saved',
+  'Removed from Saved',
   'Reply privately',
   'Keep in chat',
   'Unkeep',
@@ -88,7 +91,7 @@ const List<String> kChatToolsStrings = <String>[
   'No saved messages yet. Use Save message on any message to keep a private copy here.',
   "The original message isn't loaded on this device anymore.",
   'Group: {name}',
-  'DM with {name}',
+  'PM with {name}',
   'Edit history',
   "Earlier versions aren't available on this device.",
   "Earlier versions couldn't be found.",
@@ -329,11 +332,18 @@ class ChatToolsActions {
       return;
     }
     if (tools.isMessageSaved(found.msg)) {
-      tools.removeSavedEntry(found.msg.nymMessageId ?? found.msg.id);
+      removeSavedWithUndo(tools, found.msg.nymMessageId ?? found.msg.id);
       return;
     }
     tools.saveMessage(found.msg, chatInfoFor(s, found.key, from: found.msg),
         author: chatDisplayNym(s, found.msg.pubkey, found.msg.author));
+  }
+
+  static void removeSavedWithUndo(ChatToolsService tools, String id) {
+    final entry = tools.removeSavedEntry(id);
+    if (entry == null) return;
+    showUndoToast(
+        tr('Removed from Saved'), () => tools.restoreSavedEntry(entry));
   }
 
   static Future<void> toggleKeep(ChatToolsReader read, Message m) async {
@@ -376,10 +386,10 @@ class ChatToolsActions {
 
 Future<bool?> _showPanel(BuildContext context, Widget child) {
   final isLight = context.nym.isLight;
-  return showDialog<bool>(
-    context: context,
+  return showNymSheet<bool>(
+    context,
+    (_) => child,
     barrierColor: isLight ? const Color(0x73000000) : const Color(0xBF000000),
-    builder: (_) => child,
   );
 }
 
@@ -393,45 +403,50 @@ class _PanelShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final size = MediaQuery.of(context).size;
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: size.width * 0.92,
-          constraints: BoxConstraints(maxWidth: 560, maxHeight: size.height * 0.88),
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            borderRadius: NymRadius.rxl,
-            border: Border.all(color: c.glassBorder),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title.toUpperCase(),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: tr('Close'),
-                    onPressed: () => Navigator.of(context).maybePop(),
-                    icon: Icon(Icons.close, size: 18, color: c.textDim),
-                  ),
-                ],
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title.toUpperCase(),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
               ),
-              Divider(color: c.glassBorder, height: 16),
-              Flexible(child: child),
-            ],
+            ),
+            IconButton(
+              tooltip: tr('Close'),
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            ),
+          ],
+        ),
+        Divider(color: c.glassBorder, height: 16),
+        Flexible(child: child),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 16), child: body),
+      (body) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: size.width * 0.92,
+            constraints: BoxConstraints(maxWidth: 560, maxHeight: size.height * 0.88),
+            decoration: BoxDecoration(
+              color: c.bgSecondary,
+              borderRadius: NymRadius.rxl,
+              border: Border.all(color: c.glassBorder),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: body,
           ),
         ),
       ),
@@ -528,7 +543,7 @@ class SavedMessagesPanel extends ConsumerWidget {
                       ? '${chat['n']}'
                       : chat['t'] == 'group'
                           ? tr('Group: {name}', {'name': '${chat['n']}'})
-                          : tr('DM with {name}', {'name': '${chat['n']}'});
+                          : tr('PM with {name}', {'name': '${chat['n']}'});
                   final when = formatFullTimestamp(
                       DateTime.fromMillisecondsSinceEpoch(
                           ((e['at'] as num?)?.toInt() ?? 0) * 1000),
@@ -571,7 +586,8 @@ class SavedMessagesPanel extends ConsumerWidget {
                           _ToolButton(
                             label: tr('Remove'),
                             danger: true,
-                            onTap: () => tools.removeSavedEntry('${e['id']}'),
+                            onTap: () => ChatToolsActions.removeSavedWithUndo(
+                                tools, '${e['id']}'),
                           ),
                         ]),
                       ],
@@ -722,7 +738,7 @@ class KeptBadge extends ConsumerWidget {
       return const SizedBox.shrink();
     }
     final c = context.nym;
-    return Tooltip(
+    return NymTooltip(
       message: tr('Kept in chat: this message will not disappear'),
       child: Container(
         margin: const EdgeInsets.only(right: 4),

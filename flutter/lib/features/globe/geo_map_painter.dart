@@ -2,9 +2,13 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
+import '../../core/theme/nym_theme.dart';
 import '../../models/channel.dart';
+import 'geo_detail.dart';
+import 'geo_explore.dart';
 import 'geo_projection.dart';
 import 'geohash_channel.dart';
 import 'topojson.dart';
@@ -31,6 +35,8 @@ class GeoMapStyle {
     required this.primary,
     required this.warning,
     required this.joined,
+    required this.lake,
+    required this.river,
   });
 
   final Color ocean;
@@ -51,6 +57,8 @@ class GeoMapStyle {
   final Color primary;
   final Color warning;
   final Color joined;
+  final Color lake;
+  final Color river;
 
   factory GeoMapStyle.resolve({
     required bool isLight,
@@ -80,6 +88,8 @@ class GeoMapStyle {
       primary: primary,
       warning: warning,
       joined: const Color(0xFF28E07A),
+      lake: isLight ? const Color(0xFFD6E8F1) : const Color(0xFF0A131E),
+      river: isLight ? const Color(0xB35A96BE) : const Color(0x8C4678A0),
     );
   }
 }
@@ -149,10 +159,12 @@ class HeatmapInput {
     required this.view,
     required this.size,
     required this.points,
+    this.dpr = 1,
   });
 
   final GeoView view;
   final Size size;
+  final double dpr;
 
   final List<({double lng, double lat, int messages})> points;
 
@@ -160,7 +172,9 @@ class HeatmapInput {
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
     if (other is! HeatmapInput) return false;
-    if (view != other.view || size != other.size) return false;
+    if (view != other.view || size != other.size || dpr != other.dpr) {
+      return false;
+    }
     if (points.length != other.points.length) return false;
     for (var i = 0; i < points.length; i++) {
       final a = points[i], b = other.points[i];
@@ -175,6 +189,7 @@ class HeatmapInput {
   int get hashCode => Object.hash(
         view,
         size,
+        dpr,
         points.length,
         // Cheap activity signature so repaints track message changes.
         points.fold<int>(0, (h, p) => h ^ p.messages.hashCode),
@@ -186,7 +201,7 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   final points = input.points;
   if (points.isEmpty) return null;
 
-  const heatScale = 0.5;
+  final heatScale = 0.5 * input.dpr;
   final size = input.size;
   final view = input.view;
   final w2 = math.max(1, (size.width * heatScale).floor());
@@ -261,6 +276,10 @@ Future<ui.Image?> buildHeatmapImage(HeatmapInput input) async {
   return completer.future;
 }
 
+const double kSelectedRingRadius = 9;
+
+const Color kSavedMarkerColor = Color(0xFFF5C518);
+
 /// Paints the map in the PWA's order: ocean, graticule, countries, labels, heat or dots, day/night, grid, location.
 class GeoMapPainter extends CustomPainter {
   GeoMapPainter({
@@ -277,7 +296,40 @@ class GeoMapPainter extends CustomPainter {
     this.userLocation,
     this.heatmapImage,
     this.repaint,
+    this.selectedGeohash,
+    this.selectPulse,
+    this.clusters = const [],
+    this.recentGeohashes = const {},
+    this.ambient,
+    this.savedGeohashes = const {},
+    this.dpr = 1,
+    this.tiers = const [],
+    this.tierLabels = const [],
+    this.mapSize,
+    this.occupied = const [],
   }) : super(repaint: repaint);
+
+  final List<Rect> occupied;
+
+  final double dpr;
+
+  final List<GeoTierPaths?> tiers;
+
+  final List<List<GeoLabelFeature>?> tierLabels;
+
+  final Size? mapSize;
+
+  final String? selectedGeohash;
+
+  final double? selectPulse;
+
+  final List<GeoCluster> clusters;
+
+  final Set<String> recentGeohashes;
+
+  final double? ambient;
+
+  final Set<String> savedGeohashes;
 
   final GeoView view;
   final GeoMapStyle style;
@@ -314,19 +366,114 @@ class GeoMapPainter extends CustomPainter {
 
     _drawGraticule(canvas, size);
     _drawWorld(canvas, size);
-    // Admin-1 borders fade in from zoom 2.5, then country labels, then admin-1 labels at zoom 4+.
     _drawAdmin1(canvas, size);
-    _drawLabels(canvas, size);
-    _drawAdmin1Labels(canvas, size);
     if (heatmap) {
+      _drawPlaceLabels(canvas, size);
       _drawHeatmap(canvas, size);
     } else {
-      _drawCities(canvas, size);
+      _drawPlaceLabels(canvas, size);
+      _drawSaved(canvas, size);
+      _drawRecent(canvas, size);
       _drawChannels(canvas, size);
     }
     if (daynight) _drawDaynight(canvas, size);
     if (grid) _drawGrid(canvas, size);
+    _drawSelected(canvas, size);
     _drawUserLocation(canvas, size);
+  }
+
+  void _drawSaved(Canvas canvas, Size size) {
+    if (savedGeohashes.isEmpty) return;
+    final paint = Paint()
+      ..color = kSavedMarkerColor
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    final halo = Paint()
+      ..color = const Color(0x8C000000)
+      ..strokeWidth = 4
+      ..style = PaintingStyle.stroke;
+    for (final gh in savedGeohashes) {
+      final b = geoCellBounds(gh);
+      if (b == null) continue;
+      final p = view.project(
+          (b.lngLo + b.lngHi) / 2, (b.latLo + b.latHi) / 2, size);
+      if (!_inView(p, 12, size)) continue;
+      canvas.drawCircle(p, 7, halo);
+      canvas.drawCircle(p, 7, paint);
+    }
+  }
+
+  void _drawRecent(Canvas canvas, Size size) {
+    final t = ambient;
+    if (t == null || recentGeohashes.isEmpty) return;
+    final paint = Paint()
+      ..color = style.primary.withValues(alpha: (1 - t) * 0.6)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    for (final ch in channels) {
+      if (!recentGeohashes.contains(ch.geohash)) continue;
+      final p = view.project(ch.lng, ch.lat, size);
+      if (!_inView(p, 24, size)) continue;
+      canvas.drawCircle(p, 5 + 13 * t, paint);
+    }
+  }
+
+  void _drawSelected(Canvas canvas, Size size) {
+    final gh = selectedGeohash;
+    if (gh == null) return;
+    final b = geoCellBounds(gh);
+    if (b == null) return;
+    final tl = view.project(b.lngLo, b.latHi, size);
+    final br = view.project(b.lngHi, b.latLo, size);
+    final rect = Rect.fromPoints(tl, br);
+    if (rect.width >= 16 && rect.height >= 12) {
+      canvas.drawRect(rect, Paint()..color = style.primary.withValues(alpha: 0.08));
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..color = style.primary.withValues(alpha: 0.7)
+          ..strokeWidth = 1.5
+          ..style = PaintingStyle.stroke,
+      );
+    }
+    final p = view.project(
+        (b.lngLo + b.lngHi) / 2, (b.latLo + b.latHi) / 2, size);
+    if (!_inView(p, 40, size)) return;
+    final t = selectPulse;
+    if (t != null) {
+      canvas.drawCircle(
+        p,
+        kSelectedRingRadius + 22 * t,
+        Paint()
+          ..color = style.primary.withValues(alpha: (1 - t) * 0.8)
+          ..strokeWidth = 2
+          ..style = PaintingStyle.stroke,
+      );
+    }
+    canvas.drawCircle(
+      p,
+      kSelectedRingRadius,
+      Paint()
+        ..color = const Color(0x99000000)
+        ..strokeWidth = 5.5
+        ..style = PaintingStyle.stroke,
+    );
+    canvas.drawCircle(
+      p,
+      kSelectedRingRadius,
+      Paint()
+        ..color = const Color(0xE6FFFFFF)
+        ..strokeWidth = 3.5
+        ..style = PaintingStyle.stroke,
+    );
+    canvas.drawCircle(
+      p,
+      kSelectedRingRadius,
+      Paint()
+        ..color = style.primary
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke,
+    );
   }
 
   void _drawGraticule(Canvas canvas, Size size) {
@@ -351,170 +498,253 @@ class GeoMapPainter extends CustomPainter {
     canvas.drawPath(path, paint);
   }
 
+  int get tier => tierFor(mapSize ?? Size.zero);
+
+  int tierFor(Size size) {
+    var t = geoTierFor(view.scale(size));
+    while (t > 0 && (t >= tiers.length || tiers[t] == null)) {
+      t--;
+    }
+    return t;
+  }
+
+  void _withWorld(Canvas canvas, Size size, void Function(double s) body) {
+    final s = view.scale(size);
+    canvas.save();
+    canvas.translate(size.width / 2 - view.cx * s, size.height / 2 + view.cy * s);
+    canvas.scale(s);
+    body(s);
+    canvas.restore();
+  }
+
+  void _drawLayer(Canvas canvas, Size size, GeoLayerPaths lp, double s,
+      {Paint? fill, Paint? stroke, Paint? Function(int rank)? strokeFor}) {
+    final vb = geoViewBounds(view, size, padPx: 2);
+    final layer = lp.layer;
+    for (var p = 0; p < layer.partCount; p++) {
+      if (!geoPartVisible(layer, p, vb, s, minPx: kGeoMinPartPx)) continue;
+      final path = lp.paths[p];
+      if (fill != null) canvas.drawPath(path, fill);
+      final st = strokeFor != null ? strokeFor(layer.partRank[p]) : stroke;
+      if (st != null) canvas.drawPath(path, st);
+    }
+  }
+
   void _drawWorld(Canvas canvas, Size size) {
-    final fill = Paint()
-      ..color = style.land
-      ..style = PaintingStyle.fill;
-    final stroke = Paint()
-      ..color = style.border
-      ..strokeWidth = 0.5
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
-
-    for (final feat in features) {
-      final path = Path()..fillType = PathFillType.evenOdd;
-      for (final poly in feat.polygons) {
-        for (final ring in poly) {
-          if (ring.length < 2) continue;
-          var prevLng = ring[0][0];
-          final first = view.project(prevLng, ring[0][1], size);
-          path.moveTo(first.dx, first.dy);
-          for (var i = 1; i < ring.length; i++) {
-            final lng = ring[i][0];
-            final p = view.project(lng, ring[i][1], size);
-            // Don't draw the wrap-around seam across the antimeridian.
-            if ((lng - prevLng).abs() > 180) {
-              path.close();
-              path.moveTo(p.dx, p.dy);
-            } else {
-              path.lineTo(p.dx, p.dy);
-            }
-            prevLng = lng;
-          }
-          path.close();
-        }
-      }
-      canvas.drawPath(path, fill);
-      canvas.drawPath(path, stroke);
-    }
+    final t = tierFor(size);
+    final tp = t < tiers.length ? tiers[t] : null;
+    final countries = tp?.countries ?? geoPathsFor(features);
+    if (countries == null) return;
+    _withWorld(canvas, size, (s) {
+      final fill = Paint()
+        ..color = style.land
+        ..style = PaintingStyle.fill;
+      final stroke = Paint()
+        ..color = style.border
+        ..strokeWidth = 0.5 / s
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      _drawLayer(canvas, size, countries, s, fill: fill, stroke: stroke);
+      if (tp == null) return;
+      final lakeFill = Paint()
+        ..color = style.lake
+        ..style = PaintingStyle.fill;
+      final lakeStroke = Paint()
+        ..color = style.border.withValues(alpha: style.border.a * 0.8)
+        ..strokeWidth = 0.4 / s
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      _drawLayer(canvas, size, tp.lakes, s, fill: lakeFill, stroke: lakeStroke);
+      final major = Paint()
+        ..color = style.river
+        ..strokeWidth = 0.9 / s
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke;
+      final minor = Paint()
+        ..color = style.river
+        ..strokeWidth = 0.6 / s
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke;
+      _drawLayer(canvas, size, tp.rivers, s,
+          strokeFor: (rank) => rank <= 2 ? major : minor);
+    });
   }
 
-  void _drawLabels(Canvas canvas, Size size) {
-    if (features.isEmpty) return;
-    for (final feat in features) {
-      if (feat.name.isEmpty) continue;
-      final bb = feat.bounds;
-      final a = view.project(bb[0], bb[3], size);
-      final b = view.project(bb[2], bb[1], size);
-      final widthPx = (b.dx - a.dx).abs();
-      final heightPx = (b.dy - a.dy).abs();
-      final span = math.max(widthPx, heightPx);
-      final text = feat.name;
-      final minSpan = math.max(28.0, text.length * 5.0);
-      if (span < minSpan) continue;
-
-      final c = feat.centroid;
-      final p = view.project(c[0], c[1], size);
-      if (!_inView(p, 40, size)) continue;
-      _strokedText(canvas, text, p, 10, style.label, style.labelStroke, 3);
-    }
-  }
-
-  /// Admin-1 borders faded in over zoom 2.5–4.0 as open, bounds-culled strokes broken at the antimeridian.
   void _drawAdmin1(Canvas canvas, Size size) {
     if (view.zoom < _admin1ZoomThreshold || admin1Features.isEmpty) return;
     const fadeStart = _admin1ZoomThreshold;
     const fadeEnd = fadeStart + 1.5;
     final t = ((view.zoom - fadeStart) / (fadeEnd - fadeStart)).clamp(0.0, 1.0);
     if (t <= 0) return;
-
-    final stroke = Paint()
-      ..color = style.adminBorder.withValues(alpha: style.adminBorder.a * t)
-      ..strokeWidth = 0.4
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
-    for (final feat in admin1Features) {
-      final bb = feat.bounds;
-      final a = view.project(bb[0], bb[3], size);
-      final b = view.project(bb[2], bb[1], size);
-      if (b.dx < -10 ||
-          a.dx > size.width + 10 ||
-          b.dy < -10 ||
-          a.dy > size.height + 10) {
-        continue;
-      }
-      for (final poly in feat.polygons) {
-        for (final ring in poly) {
-          if (ring.length < 2) continue;
-          var prevLng = ring[0][0];
-          final first = view.project(prevLng, ring[0][1], size);
-          path.moveTo(first.dx, first.dy);
-          for (var i = 1; i < ring.length; i++) {
-            final lng = ring[i][0];
-            final p = view.project(lng, ring[i][1], size);
-            if ((lng - prevLng).abs() > 180) {
-              path.moveTo(p.dx, p.dy);
-            } else {
-              path.lineTo(p.dx, p.dy);
-            }
-            prevLng = lng;
-          }
-        }
-      }
-    }
-    canvas.drawPath(path, stroke);
+    final lp = geoPathsFor(admin1Features, closed: false);
+    if (lp == null) return;
+    _withWorld(canvas, size, (s) {
+      final stroke = Paint()
+        ..color = style.adminBorder.withValues(alpha: style.adminBorder.a * t)
+        ..strokeWidth = 0.4 / s
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      _drawLayer(canvas, size, lp, s, stroke: stroke);
+    });
   }
 
-  /// Admin-1 labels at zoom 4+, only where the projected span is at least max(40, name.length*5.5).
-  void _drawAdmin1Labels(Canvas canvas, Size size) {
-    if (view.zoom < 4 || admin1Features.isEmpty) return;
-    for (final feat in admin1Features) {
-      if (feat.name.isEmpty) continue;
-      final bb = feat.bounds;
+  List<GeoMapLabel> layoutLabels(Size size) {
+    final out = <GeoMapLabel>[];
+    final boxes = <GeoLabelBox>[];
+    final cands = <GeoMapLabel>[];
+    void add(GeoMapLabel? l) {
+      if (l == null) return;
+      cands.add(l);
+      boxes.add(l.box);
+    }
+
+    final t = tierFor(size);
+    final tl = t > 0 && t < tierLabels.length ? tierLabels[t] : null;
+    final countryFeats = tl ??
+        [
+          for (final f in features)
+            GeoLabelFeature(
+                name: f.name, bounds: f.bounds, centroid: f.centroid, area: f.area),
+        ];
+    for (final f in countryFeats) {
+      if (f.name.isEmpty) continue;
+      final bb = f.bounds;
       final a = view.project(bb[0], bb[3], size);
       final b = view.project(bb[2], bb[1], size);
       final span = math.max((b.dx - a.dx).abs(), (b.dy - a.dy).abs());
-      final text = feat.name;
-      final minSpan = math.max(40.0, text.length * 5.5);
-      if (span < minSpan) continue;
+      if (span < math.max(28.0, f.name.length * 5.0)) continue;
+      final p = view.project(f.centroid[0], f.centroid[1], size);
+      if (!_inView(p, 0, size)) continue;
+      add(_label(f.name, 'country', p, 11, FontWeight.w600, style.label, 3, size,
+          center: true));
+    }
 
-      final c = feat.centroid;
-      final p = view.project(c[0], c[1], size);
-      if (!_inView(p, 30, size)) continue;
-      _strokedText(canvas, text, p, 9, style.adminLabel, style.labelStroke, 2.5,
-          weight: FontWeight.w500);
+    if (!heatmap && view.zoom >= 3 && cities.isNotEmpty) {
+      final cutoff = geoCityRankCutoff(view.zoom);
+      for (final c in _citiesByPriority(cities)) {
+        if (c.rank > cutoff) break;
+        if (c.name.isEmpty) continue;
+        final p = view.project(c.lng, c.lat, size);
+        if (!_inView(p, 0, size)) continue;
+        final big = c.rank <= 2;
+        add(_label(c.name, 'city', p, big ? 10 : 9,
+            big ? FontWeight.w600 : FontWeight.w500, style.cityLabel, 2.5, size,
+            center: false));
+      }
+    }
+
+    if (view.zoom >= 4) {
+      for (final f in admin1Features) {
+        if (f.name.isEmpty) continue;
+        final bb = f.bounds;
+        final a = view.project(bb[0], bb[3], size);
+        final b = view.project(bb[2], bb[1], size);
+        final span = math.max((b.dx - a.dx).abs(), (b.dy - a.dy).abs());
+        if (span < math.max(40.0, f.name.length * 5.5)) continue;
+        final p = view.project(f.centroid[0], f.centroid[1], size);
+        if (!_inView(p, 0, size)) continue;
+        add(_label(f.name, 'admin1', p, 9, FontWeight.w500, style.adminLabel,
+            2.5, size,
+            center: true));
+      }
+    }
+
+    final blocked = [
+      for (final r in occupied) GeoLabelBox(r.left, r.top, r.right, r.bottom),
+    ];
+    for (final i in placeGeoLabels(boxes, blocked: blocked)) {
+      out.add(cands[i]);
+    }
+    return out;
+  }
+
+  GeoMapLabel? _label(String text, String kind, Offset p, double fontSize,
+      FontWeight weight, Color color, double halo, Size size,
+      {required bool center}) {
+    final tp =
+        _labelPainters(text, fontSize, weight, color, halo, style.labelStroke);
+    final w = tp.$2.width, h = tp.$2.height;
+    final box = center
+        ? GeoLabelBox(p.dx - w / 2 - 1, p.dy - h / 2, p.dx + w / 2 + 1, p.dy + h / 2)
+        : GeoLabelBox(p.dx - 2.5, p.dy - h / 2, p.dx + 4 + w + 1, p.dy + h / 2);
+    final fit = fitGeoLabelBox(box,
+        anchorX: p.dx, side: !center, width: size.width, height: size.height);
+    if (fit == null) return null;
+    return GeoMapLabel(
+        text: text,
+        kind: kind,
+        anchor: p,
+        box: fit.box,
+        center: center,
+        flipped: fit.flipped,
+        stroke: tp.$1,
+        fill: tp.$2);
+  }
+
+  void _drawPlaceLabels(Canvas canvas, Size size) {
+    if (!heatmap &&
+        view.zoom >= _cityZoomThreshold &&
+        view.zoom < 3 &&
+        cities.isNotEmpty) {
+      final dot = Paint()..color = style.cityDot;
+      final cutoff = geoCityRankCutoff(view.zoom);
+      for (final city in cities) {
+        if (city.rank > cutoff) break;
+        final p = view.project(city.lng, city.lat, size);
+        if (!_inView(p, 4, size)) continue;
+        canvas.drawCircle(p, 1.5, dot);
+      }
+    }
+    final dot = Paint()..color = style.cityDot;
+    for (final l in layoutLabels(size)) {
+      final cy = (l.box.y0 + l.box.y1) / 2;
+      if (l.center) {
+        final o = Offset((l.box.x0 + l.box.x1) / 2 - l.fill.width / 2,
+            cy - l.fill.height / 2);
+        l.stroke.paint(canvas, o);
+        l.fill.paint(canvas, o);
+      } else {
+        canvas.drawCircle(l.anchor, 1.5, dot);
+        final o = Offset(
+            l.flipped ? l.anchor.dx - 4 - l.fill.width : l.anchor.dx + 4,
+            cy - l.fill.height / 2);
+        l.stroke.paint(canvas, o);
+        l.fill.paint(canvas, o);
+      }
     }
   }
 
-  /// City dots at zoom 2.5+ filtered by a zoom-stepped rank cutoff, with labels from zoom 3.
-  void _drawCities(Canvas canvas, Size size) {
-    if (view.zoom < _cityZoomThreshold || cities.isEmpty) return;
-
-    // scalerank 0 is the largest; higher zoom shows smaller cities.
-    final rankCutoff = view.zoom < 3
-        ? 2
-        : view.zoom < 4
-            ? 4
-            : view.zoom < 6
-                ? 6
-                : view.zoom < 8
-                    ? 8
-                    : 10;
-
-    const dotR = 1.5;
-    final showLabels = view.zoom >= 3;
-    final dotPaint = Paint()..color = style.cityDot;
-
-    for (final city in cities) {
-      // Cities are rank-sorted ascending, so stop past the cutoff.
-      if (city.rank > rankCutoff) break;
-      final p = view.project(city.lng, city.lat, size);
-      if (!_inView(p, 80, size)) continue;
-
-      canvas.drawCircle(p, dotR, dotPaint);
-
-      if (showLabels && city.name.isNotEmpty) {
-        _strokedTextLeft(canvas, city.name, Offset(p.dx + 4, p.dy), 9,
-            style.cityLabel, style.labelStroke, 2.5);
-      }
-    }
+  void _drawClusterMarker(Canvas canvas, GeoCluster k) {
+    final p = Offset(k.x, k.y);
+    final r = 12.0 + math.min(6.0, math.log(k.count) / math.ln2 * 2);
+    canvas.drawCircle(p, r + 2, Paint()..color = const Color(0x8C000000));
+    canvas.drawCircle(p, r, Paint()..color = style.primary.withValues(alpha: 0.9));
+    final tp = TextPainter(
+      text: TextSpan(
+        text: '${k.count}',
+        style: const TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: Color(0xFF000000),
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, p - Offset(tp.width / 2, tp.height / 2));
   }
 
   void _drawChannels(Canvas canvas, Size size) {
     const baseR = 4.0;
+    final hidden = <String>{};
+    for (final k in clusters) {
+      if (k.count < 2) continue;
+      hidden.addAll(k.ids);
+      if (_inView(Offset(k.x, k.y), 24, size)) _drawClusterMarker(canvas, k);
+    }
     for (final ch in channels) {
+      if (hidden.contains(ch.geohash)) continue;
       final p = view.project(ch.lng, ch.lat, size);
       if (!_inView(p, 12, size)) continue;
       final isHover = hoveredGeohash != null && hoveredGeohash == ch.geohash;
@@ -721,44 +951,6 @@ class GeoMapPainter extends CustomPainter {
     tpFill.paint(canvas, offset);
   }
 
-  /// Left-aligned stroked label, left edge at [anchor].dx and vertically centered on [anchor].dy.
-  void _strokedTextLeft(
-    Canvas canvas,
-    String text,
-    Offset anchor,
-    double fontSize,
-    Color fill,
-    Color stroke,
-    double strokeWidth, {
-    FontWeight weight = FontWeight.w500,
-  }) {
-    TextPainter make(Paint fg) => TextPainter(
-          text: TextSpan(
-            text: text,
-            style: TextStyle(
-              fontSize: fontSize,
-              fontWeight: weight,
-              foreground: fg,
-            ),
-          ),
-          textAlign: TextAlign.left,
-          textDirection: TextDirection.ltr,
-        )..layout();
-
-    final strokePaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeJoin = StrokeJoin.round
-      ..color = stroke;
-    final fillPaint = Paint()..color = fill;
-
-    final tpStroke = make(strokePaint);
-    final tpFill = make(fillPaint);
-    final offset = Offset(anchor.dx, anchor.dy - tpFill.height / 2);
-    tpStroke.paint(canvas, offset);
-    tpFill.paint(canvas, offset);
-  }
-
   @override
   bool shouldRepaint(covariant GeoMapPainter old) =>
       old.view != view ||
@@ -772,5 +964,97 @@ class GeoMapPainter extends CustomPainter {
       old.hoveredGeohash != hoveredGeohash ||
       old.userLocation != userLocation ||
       old.heatmapImage != heatmapImage ||
+      old.selectedGeohash != selectedGeohash ||
+      old.selectPulse != selectPulse ||
+      old.clusters != clusters ||
+      old.recentGeohashes != recentGeohashes ||
+      old.ambient != ambient ||
+      old.savedGeohashes != savedGeohashes ||
+      old.dpr != dpr ||
+      !listEquals(old.tiers, tiers) ||
+      !listEquals(old.tierLabels, tierLabels) ||
+      !listEquals(old.occupied, occupied) ||
       old.style != style;
+}
+
+@immutable
+class GeoMapLabel {
+  const GeoMapLabel({
+    required this.text,
+    required this.kind,
+    required this.anchor,
+    required this.box,
+    required this.center,
+    required this.stroke,
+    required this.fill,
+    this.flipped = false,
+  });
+
+  final bool flipped;
+  final String text;
+  final String kind;
+  final Offset anchor;
+  final GeoLabelBox box;
+  final bool center;
+  final TextPainter stroke;
+  final TextPainter fill;
+}
+
+final Expando<GeoLayerPaths> _closedPaths = Expando<GeoLayerPaths>();
+final Expando<GeoLayerPaths> _openPaths = Expando<GeoLayerPaths>();
+
+GeoLayerPaths? geoPathsFor(List<GeoFeature> features, {bool closed = true}) {
+  if (features.isEmpty) return null;
+  final cache = closed ? _closedPaths : _openPaths;
+  return cache[features] ??=
+      buildGeoLayerPathsSync(geoLayerFromFeatures(features, closed: closed));
+}
+
+Future<void> prewarmGeoPaths(List<GeoFeature> features,
+    {bool closed = true}) async {
+  if (features.isEmpty) return;
+  final cache = closed ? _closedPaths : _openPaths;
+  if (cache[features] != null) return;
+  final built =
+      await buildGeoLayerPaths(geoLayerFromFeatures(features, closed: closed));
+  cache[features] ??= built;
+}
+
+final Expando<List<CityPoint>> _cityOrder = Expando<List<CityPoint>>();
+
+List<CityPoint> _citiesByPriority(List<CityPoint> cities) =>
+    _cityOrder[cities] ??= ([...cities]..sort((a, b) {
+        final r = a.rank.compareTo(b.rank);
+        return r != 0 ? r : b.pop.compareTo(a.pop);
+      }));
+
+final Map<String, (TextPainter, TextPainter)> _labelCache = {};
+
+(TextPainter, TextPainter) _labelPainters(String text, double fontSize,
+    FontWeight weight, Color color, double halo, Color haloColor) {
+  final key =
+      '$text|$fontSize|${weight.value}|${color.toARGB32()}|$halo|${haloColor.toARGB32()}';
+  final hit = _labelCache[key];
+  if (hit != null) return hit;
+  if (_labelCache.length > 1500) _labelCache.clear();
+  TextPainter make(Paint fg) => TextPainter(
+        text: TextSpan(
+          text: text,
+          style: TextStyle(
+              fontFamily: kSansFont,
+              fontSize: fontSize,
+              fontWeight: weight,
+              foreground: fg),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+  final stroke = make(Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = halo
+    ..strokeJoin = StrokeJoin.round
+    ..color = haloColor);
+  final fill = make(Paint()..color = color);
+  final out = (stroke, fill);
+  _labelCache[key] = out;
+  return out;
 }

@@ -1,11 +1,17 @@
 // Multiplexed relay pool: one client socket fans out to many relays, deduping frames by string extraction.
 
-import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake } from './_shared.js';
+import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 } from './_shared.js';
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
 import { spamEngine, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
+
+function bytesHex(b) {
+  let out = '';
+  for (let i = 0; i < b.length; i++) out += b[i].toString(16).padStart(2, '0');
+  return out;
+}
 
 
 // Reject private/loopback/link-local relay hosts so the proxy can't reach internal services (SSRF).
@@ -746,6 +752,20 @@ export async function onRequest(context) {
   }
 
   // Conservative match on `["<tagName>","` in the raw tags, without JSON.parse.
+  const syncPingTags = new Map();
+  function isSyncPingWrap(raw) {
+    const pTag = extractTagValue(raw, 'p');
+    const dTag = extractTagValue(raw, 'd');
+    if (!pTag || !dTag || !/^[0-9a-f]{64}$/.test(pTag)) return false;
+    let want = syncPingTags.get(pTag);
+    if (!want) {
+      want = bytesHex(sha256(new TextEncoder().encode(pTag + ':nymchat-sync-ping')));
+      if (syncPingTags.size > 64) syncPingTags.clear();
+      syncPingTags.set(pTag, want);
+    }
+    return dTag === want;
+  }
+
   function extractTagValue(raw, tagName) {
     const braceIdx = raw.indexOf('{');
     if (braceIdx === -1) return null;
@@ -1857,8 +1877,12 @@ export async function onRequest(context) {
           // Drop settings wraps off the relay stream (loaded from D1).
           if (evKind === 1059) {
             const kTag = extractTagValue(raw, 'k');
-            const dTag = kTag === 'nym-sync' ? null : extractTagValue(raw, 'd');
-            if (kTag === 'nym-sync' || (dTag && dTag.startsWith('nymchat-'))) return;
+            if (kTag === 'nym-sync') {
+              if (!isSyncPingWrap(raw)) return;
+            } else {
+              const dTag = extractTagValue(raw, 'd');
+              if (dTag && dTag.startsWith('nymchat-')) return;
+            }
           }
           info.eventCount++;
           if (archiveEnabled) {

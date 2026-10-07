@@ -21,11 +21,17 @@ import '../../services/api/api_client.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../i18n/i18n.dart';
+import '../nymbot/bot_credits_modal.dart' show kBotCreditsBuyNotice;
+import '../nymbot/nymbot_models.dart' show CreditTier;
+import '../nymbot/nymbot_providers.dart'
+    show botBuyRequestProvider, botChatControllerProvider;
 import 'cosmetics.dart' show CosmeticAura, cosmeticAuraFor;
 import 'shop_catalog.dart';
 import 'shop_controller.dart';
 import 'shop_models.dart';
 import 'shop_widgets.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// Live shop identity: pubkey, active signer (local or NIP-46) and privkey fallback; null when logged out.
 ShopIdentity? _shopIdentity(WidgetRef ref) {
@@ -62,15 +68,22 @@ String _errorMessage(Object e) {
   return e.toString();
 }
 
+const String kShopCreditsText =
+    'Credits pay for private messages with Nymbot. Standard and Pro credits '
+    'are charged on the tokens each reply uses.';
+
 /// Flair shop with tabbed item cards and a real Lightning invoice flow; recovery codes restore purchases.
 class ShopModal extends ConsumerStatefulWidget {
-  const ShopModal({super.key});
+  const ShopModal({super.key, this.initialTab = ShopTab.styles});
 
-  static Future<void> open(BuildContext context) {
-    return showDialog<void>(
-      context: context,
+  final ShopTab initialTab;
+
+  static Future<void> open(BuildContext context,
+      {ShopTab tab = ShopTab.styles}) {
+    return showNymSheet<void>(
+      context,
+      (_) => ShopModal(initialTab: tab),
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => const ShopModal(),
     );
   }
 
@@ -79,12 +92,16 @@ class ShopModal extends ConsumerStatefulWidget {
 }
 
 class _ShopModalState extends ConsumerState<ShopModal> {
-  ShopTab _tab = ShopTab.styles;
+  late ShopTab _tab = widget.initialTab;
+  final Map<ShopTab, GlobalKey> _tabKeys = {
+    for (final t in ShopTab.values) t: GlobalKey(),
+  };
   final _recoveryController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _revealTab());
     // Refresh the authoritative record on every open, and settle purchases paid while closed.
     final identity = _shopIdentity(ref);
     if (identity != null) {
@@ -105,43 +122,51 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return KeyboardInsetDialog(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 800),
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                borderRadius: NymRadius.rxl,
-                border: Border.all(color: c.glassBorder),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.4),
-                    blurRadius: 40,
-                    offset: const Offset(0, 20),
+    final body = Stack(
+      children: [
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _header(c),
+            _tabs(c),
+            Flexible(child: _body(c)),
+          ],
+        ),
+        ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
+      ],
+    );
+    return NymDiscardGuard(
+      isDirty: () => _recoveryController.text.trim().isNotEmpty,
+      child: nymSheetOr(
+        context,
+        body,
+        (body) => KeyboardInsetDialog(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 800),
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: c.bgSecondary,
+                    borderRadius: NymRadius.rxl,
+                    border: Border.all(color: c.glassBorder),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.4),
+                        blurRadius: 40,
+                        offset: const Offset(0, 20),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.9,
-                ),
-                child: Stack(
-                  children: [
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _header(c),
-                        _tabs(c),
-                        Flexible(child: _body(c)),
-                      ],
+                  clipBehavior: Clip.antiAlias,
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.9,
                     ),
-                    ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
-                  ],
+                    child: body,
+                  ),
                 ),
               ),
             ),
@@ -164,7 +189,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            tr('FLAIR'),
+            tr('Shop').toUpperCase(),
+            key: const ValueKey('shopTitle'),
             style: TextStyle(
               color: c.primary,
               fontSize: 24,
@@ -198,10 +224,12 @@ class _ShopModalState extends ConsumerState<ShopModal> {
               tr('Get addon packs to change the styling of your messages '
                   'and nickname that others will see across all channels '
                   '(only in the Nymchat app).'),
+              key: const ValueKey('shopSubtitle'),
               style: TextStyle(
                 color: c.textDim,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
+                height: 1.5,
               ),
             ),
           ),
@@ -220,23 +248,12 @@ class _ShopModalState extends ConsumerState<ShopModal> {
           child: TextField(
             controller: _recoveryController,
             style: TextStyle(color: c.inputText, fontSize: 13),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: tr('Recovery code'),
-              hintStyle: TextStyle(color: c.textDim, fontSize: 13),
+            decoration: NymField.decoration(c,
+              hint: tr('Recovery code'),
+              fontSize: 13,
+              radius: NymRadius.rxs,
               contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-              filled: true,
-              fillColor: Colors.white.withValues(alpha: 0.05),
-              border: OutlineInputBorder(
-                borderRadius: NymRadius.rxs,
-                borderSide: BorderSide(color: c.glassBorder),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: NymRadius.rxs,
-                borderSide: BorderSide(color: c.glassBorder),
-              ),
-            ),
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 9)),
           ),
         ),
         const SizedBox(width: 8),
@@ -307,8 +324,16 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     );
   }
 
+  void _revealTab() {
+    final ctx = _tabKeys[_tab]?.currentContext;
+    if (!mounted || ctx == null) return;
+    Scrollable.ensureVisible(ctx,
+        alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+  }
+
   void _selectTab(ShopTab t) {
     setState(() => _tab = t);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _revealTab());
     // Entering the limited tab starts the supply fetch.
     if (t == ShopTab.limited) {
       final ids = ShopCatalog.limited
@@ -324,8 +349,10 @@ class _ShopModalState extends ConsumerState<ShopModal> {
   Widget _tabButton(NymColors c, ShopTab t) {
     final active = _tab == t;
     return GestureDetector(
+      key: _tabKeys[t],
       onTap: () => _selectTab(t),
       child: Container(
+        key: ValueKey('shopTab-${t.name}'),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
         decoration: BoxDecoration(
           color: active ? c.primaryA(0.06) : Colors.transparent,
@@ -362,6 +389,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     }
     if (_tab == ShopTab.limited) {
       return _limitedBody(c, state);
+    }
+    if (_tab == ShopTab.credits) {
+      return _creditsBody(c);
     }
     final items = _itemsForTab(_tab, state);
     return SingleChildScrollView(
@@ -426,6 +456,45 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       onGift: () => _gift(item),
       onTransfer: () => _transfer(item),
     );
+  }
+
+  Widget _creditsBody(NymColors c) {
+    final text = TextStyle(color: c.textDim, fontSize: 14, height: 1.5);
+    return SingleChildScrollView(
+      key: const ValueKey('shopCredits'),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _categoryTitle(c, tr('Nymbot Credits')),
+          const SizedBox(height: 15),
+          if (botCreditPurchasesDisabled)
+            Text(tr(kBotCreditsBuyNotice), style: text)
+          else ...[
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Text(tr(kShopCreditsText), style: text),
+            ),
+            const SizedBox(height: 14),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: IntrinsicWidth(
+                key: const ValueKey('shopBuyCredits'),
+                child: _OrangePillButton(
+                    label: tr('BUY'), onTap: _buyCredits),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _buyCredits() {
+    final pro = ref.read(botChatControllerProvider).isPro;
+    ref
+        .read(botBuyRequestProvider.notifier)
+        .request(pro ? CreditTier.pro : CreditTier.standard);
   }
 
   /// Limited drops with supply gating, then bundles with chips and savings.
@@ -554,6 +623,8 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         return ShopCatalog.special;
       case ShopTab.limited:
         return [...ShopCatalog.limited, ...ShopCatalog.bundles];
+      case ShopTab.credits:
+        return const [];
       case ShopTab.inventory:
         return state.owned.keys
             .map(ShopCatalog.byId)
@@ -596,10 +667,10 @@ class _ShopModalState extends ConsumerState<ShopModal> {
 
   Future<void> _buy(ShopItem item) async {
     final identity = _shopIdentity(ref);
-    final granted = await showDialog<bool>(
-      context: context,
+    final granted = await showNymSheet<bool>(
+      context,
+      (_) => _InvoiceDialog(item: item, identity: identity),
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => _InvoiceDialog(item: item, identity: identity),
     );
     if (granted == true && mounted) {
       showToast(tr('{name} unlocked!', {'name': item.name}));
@@ -622,14 +693,14 @@ class _ShopModalState extends ConsumerState<ShopModal> {
       showPrice: true,
     );
     if (recipient == null || !mounted) return;
-    final granted = await showDialog<bool>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => _InvoiceDialog(
+    final granted = await showNymSheet<bool>(
+      context,
+      (_) => _InvoiceDialog(
         item: item,
         identity: identity,
         recipientPubkey: recipient,
       ),
+      barrierColor: Colors.black.withValues(alpha: 0.7),
     );
     // Only a settled claim confirms the gift.
     if (granted == true && mounted) {
@@ -687,10 +758,9 @@ class _ShopModalState extends ConsumerState<ShopModal> {
     required String ctaLabel,
     required bool showPrice,
   }) {
-    return showDialog<String>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => _RecipientPubkeyDialog(
+    return showNymSheet<String>(
+      context,
+      (_) => _RecipientPubkeyDialog(
         title: title,
         item: item,
         description: description,
@@ -699,6 +769,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
         ctaLabel: ctaLabel,
         showPrice: showPrice,
       ),
+      barrierColor: Colors.black.withValues(alpha: 0.7),
     );
   }
 }
@@ -1398,122 +1469,121 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return KeyboardInsetDialog(
-      child: Material(
-        color: Colors.transparent,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Container(
-            margin: const EdgeInsets.all(20),
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: c.bgSecondary,
-              borderRadius: NymRadius.rxl,
-              border: Border.all(color: c.glassBorder),
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          widget.title,
+          style: TextStyle(
+            color: c.text,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            ShopSvgIcon(svg: widget.item.icon, size: 24, color: c.text),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                widget.item.name,
+                style: TextStyle(
+                  color: c.text,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  widget.title,
-                  style: TextStyle(
-                    color: c.text,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+            if (widget.showPrice)
+              Text(
+                tr('{price} sats', {'price': widget.item.price}),
+                style: const TextStyle(
+                  color: Color(0xFFF7931A),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Text(
+          widget.description,
+          style: TextStyle(color: c.textDim, fontSize: 13),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _controller,
+          autofocus: true,
+          style: TextStyle(color: c.inputText, fontSize: 13),
+          decoration: NymField.decoration(c, hint: tr('Recipient npub or hex pubkey')),
+          onSubmitted: (_) => _submit(),
+        ),
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _error!,
+            style:
+                const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12),
+          ),
+        ],
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: _submit,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c.secondaryA(0.18),
+                    border: Border.all(color: c.secondaryA(0.4)),
+                    borderRadius: BorderRadius.circular(10),
                   ),
+                  child: Text(widget.ctaLabel,
+                      style: TextStyle(color: c.secondary)),
                 ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    ShopSvgIcon(svg: widget.item.icon, size: 24, color: c.text),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        widget.item.name,
-                        style: TextStyle(
-                          color: c.text,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    if (widget.showPrice)
-                      Text(
-                        tr('{price} sats', {'price': widget.item.price}),
-                        style: const TextStyle(
-                          color: Color(0xFFF7931A),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                  ],
+              ),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 10),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  border: Border.all(color: c.glassBorder),
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  widget.description,
-                  style: TextStyle(color: c.textDim, fontSize: 13),
+                child: Text(tr('Cancel'),
+                    style: TextStyle(color: c.textDim)),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+    return NymDiscardGuard(
+      isDirty: () => _controller.text.trim().isNotEmpty,
+      child: nymSheetOr(
+        context,
+        SingleChildScrollView(padding: const EdgeInsets.fromLTRB(24, 0, 24, 24), child: body),
+        (body) => KeyboardInsetDialog(
+          child: Material(
+            color: Colors.transparent,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Container(
+                margin: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: c.bgSecondary,
+                  borderRadius: NymRadius.rxl,
+                  border: Border.all(color: c.glassBorder),
                 ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _controller,
-                  autofocus: true,
-                  style: TextStyle(color: c.inputText, fontSize: 13),
-                  decoration: InputDecoration(
-                    hintText: tr('Recipient npub or hex pubkey'),
-                    hintStyle: TextStyle(color: c.textDim),
-                    enabledBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: c.glassBorder),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderSide: BorderSide(color: c.secondaryA(0.5)),
-                    ),
-                  ),
-                  onSubmitted: (_) => _submit(),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _error!,
-                    style:
-                        const TextStyle(color: Color(0xFFFF6B6B), fontSize: 12),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: _submit,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: c.secondaryA(0.18),
-                            border: Border.all(color: c.secondaryA(0.4)),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(widget.ctaLabel,
-                              style: TextStyle(color: c.secondary)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    GestureDetector(
-                      onTap: () => Navigator.of(context).pop(),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: c.glassBorder),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(tr('Cancel'),
-                            style: TextStyle(color: c.textDim)),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+                child: body,
+              ),
             ),
           ),
         ),
@@ -1810,50 +1880,55 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final recipient = widget.recipientPubkey;
-    return KeyboardInsetDialog(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: Material(
-            color: c.bgSecondary,
-            borderRadius: NymRadius.rxl,
-            clipBehavior: Clip.antiAlias,
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.of(context).size.height * 0.85,
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      recipient != null
-                          ? tr('Gifting: {name}', {'name': widget.item.name})
-                          : tr(
-                              'Purchasing: {name}', {'name': widget.item.name}),
-                      style: TextStyle(
-                        color: c.text,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      recipient != null
-                          ? tr('Price: {price} sats — gift to {pk}...', {
-                              'price': widget.item.price,
-                              'pk': recipient.substring(0, 8),
-                            })
-                          : tr('Price: {price} sats',
-                              {'price': widget.item.price}),
-                      style: TextStyle(color: c.warning, fontSize: 12),
-                    ),
-                    const SizedBox(height: 16),
-                    ..._phaseBody(c),
-                  ],
+    final body = SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            recipient != null
+                ? tr('Gifting: {name}', {'name': widget.item.name})
+                : tr(
+                    'Purchasing: {name}', {'name': widget.item.name}),
+            style: TextStyle(
+              color: c.text,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            recipient != null
+                ? tr('Price: {price} sats — gift to {pk}...', {
+                    'price': widget.item.price,
+                    'pk': recipient.substring(0, 8),
+                  })
+                : tr('Price: {price} sats',
+                    {'price': widget.item.price}),
+            style: TextStyle(color: c.warning, fontSize: 12),
+          ),
+          const SizedBox(height: 16),
+          ..._phaseBody(c),
+        ],
+      ),
+    );
+    return nymSheetOr(
+      context,
+      body,
+      (body) => KeyboardInsetDialog(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Material(
+              color: c.bgSecondary,
+              borderRadius: NymRadius.rxl,
+              clipBehavior: Clip.antiAlias,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(context).size.height * 0.85,
                 ),
+                child: body,
               ),
             ),
           ),

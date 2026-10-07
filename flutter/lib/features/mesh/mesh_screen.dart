@@ -5,26 +5,83 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
-import '../../features/notifications/notifications_panel.dart';
 import '../../services/mesh/mesh_peer.dart';
 import '../../services/mesh/transport/mesh_transport.dart';
 import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/chat/chat_pane.dart' show NymPageAction, NymPageHeader;
+import '../../widgets/common/list_empty_note.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_switch.dart';
+import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/nym_icons.dart';
+import '../../widgets/sidebar/channel_list_item.dart' show SidebarChannelTile;
+import '../../widgets/sidebar/sidebar_chrome.dart';
+import '../../widgets/sidebar/sidebar_row_gestures.dart';
 import '../i18n/i18n.dart';
-import 'mesh_bridge.dart' show kMeshNearbyChannel;
+import '../identity/modal_chrome.dart';
+import 'ghost_mode.dart';
 import 'ghost_mode_button.dart';
+import 'mesh_bridge.dart' show kMeshNearbyChannel;
 import 'mesh_controller.dart';
 import 'mesh_diagnostics.dart';
+import 'mesh_sheets.dart';
 
-/// Mesh status and peer discovery, rendered as an overlay inside the home shell (not a route) so the drawer opens over it.
+String meshStatusSubtitle(MeshUiState mesh,
+    {required bool enabled, required bool ghost}) {
+  String base;
+  if (!enabled) {
+    base = tr('Off');
+  } else if (mesh.error != null) {
+    base = tr('Mesh error');
+  } else if (mesh.availability == MeshTransportAvailability.unsupported) {
+    base = tr('Not supported on this device');
+  } else if (mesh.availability == MeshTransportAvailability.unauthorized) {
+    base = tr('Bluetooth permission needed');
+  } else if (mesh.availability == MeshTransportAvailability.poweredOff) {
+    base = tr('Bluetooth is off');
+  } else if (!mesh.running) {
+    base = tr('Starting…');
+  } else if (mesh.peers.isEmpty) {
+    base = tr('Searching · no peers yet');
+  } else {
+    final n = mesh.peers.length;
+    final l = mesh.linkCount;
+    base = [
+      n == 1 ? tr('1 peer') : tr('{count} peers', {'count': n}),
+      if (l > 0) l == 1 ? tr('1 link') : tr('{count} links', {'count': l}),
+    ].join(' · ');
+  }
+  if (enabled && ghost) return '$base · ${tr('Ghost Mode')}';
+  return base;
+}
+
+String meshPeerLine(MeshPeer peer, MeshPingState? ping) {
+  if (ping != null) {
+    if (ping.isWaiting) return tr('Pinging…');
+    if (ping.lost) return tr('No reply to ping');
+    final ms = ping.roundTripMs ?? 0;
+    final hops = ping.hops;
+    if (hops == null) return tr('{ms} ms', {'ms': ms});
+    if (hops == 1) return tr('1 hop · {ms} ms', {'ms': ms});
+    return tr('{hops} hops · {ms} ms', {'hops': hops, 'ms': ms});
+  }
+  return peer.isVerified ? tr('Verified') : tr('Not verified yet');
+}
+
+String _sanitizeGroupName(String raw) {
+  final lower = raw.trim().toLowerCase().replaceAll(RegExp(r'^#+'), '');
+  final cleaned = lower.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
+  return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
+}
+
 class MeshScreen extends ConsumerStatefulWidget {
-  const MeshScreen({super.key, this.onOpenSidebar});
+  const MeshScreen({super.key, this.onOpenSidebar, this.onBackToList});
 
-  /// Opens the shell drawer on compact layouts; null on wide layouts.
   final VoidCallback? onOpenSidebar;
+  final VoidCallback? onBackToList;
 
   @override
   ConsumerState<MeshScreen> createState() => _MeshScreenState();
@@ -35,206 +92,466 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
     ref.read(meshScreenOpenProvider.notifier).state = false;
   }
 
-  /// Lowercase letters and digits only, so a name resolves to the same room on every device; '' if nothing remains.
-  String _sanitizeGroupName(String raw) {
-    final lower = raw.trim().toLowerCase().replaceAll(RegExp(r'^#+'), '');
-    final cleaned =
-        lower.replaceAll(RegExp(r'[^\p{L}\p{N}]', unicode: true), '');
-    return cleaned.length > 40 ? cleaned.substring(0, 40) : cleaned;
-  }
-
-  /// Prompts for a group name and optional password, joins via the mesh controller, then opens it.
   Future<void> _promptJoinMeshGroup() async {
-    final nameCtrl = TextEditingController();
-    final passCtrl = TextEditingController();
-    final c = context.nym;
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: c.bgSecondary,
-        title: Text(tr('Mesh group'), style: TextStyle(color: c.text)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              style: TextStyle(color: c.inputText),
-              decoration: InputDecoration(
-                prefixText: '#',
-                prefixStyle: TextStyle(color: c.textDim),
-                hintText: tr('group name'),
-                hintStyle: TextStyle(color: c.textDim),
-              ),
-              onSubmitted: (_) => Navigator.of(ctx).pop(true),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: passCtrl,
-              obscureText: true,
-              style: TextStyle(color: c.inputText),
-              decoration: InputDecoration(
-                hintText: tr('password (optional — encrypts the group)'),
-                hintStyle: TextStyle(color: c.textDim),
-              ),
-              onSubmitted: (_) => Navigator.of(ctx).pop(true),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text(tr('Cancel'), style: TextStyle(color: c.textDim)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(tr('Join'), style: TextStyle(color: c.primary)),
-          ),
-        ],
-      ),
-    );
-    if (result != true || !mounted) return;
-    final name = _sanitizeGroupName(nameCtrl.text);
+    final result = await showMeshSheet<(String, String)>(
+        context, (_) => const _JoinSheet());
+    if (result == null || !mounted) return;
+    final name = _sanitizeGroupName(result.$1);
     if (name.isEmpty) return;
     await ref
         .read(meshControllerProvider.notifier)
-        .joinChannel(name, password: passCtrl.text);
+        .joinChannel(name, password: result.$2);
     if (!mounted) return;
     ref.read(appStateProvider.notifier).switchChannel(name);
+    _close();
+  }
+
+  void _openPeer(MeshPeer peer) {
+    final linked = peer.nostrLinkVerified &&
+        peer.nostrPubkey != null &&
+        peer.nostrPubkey!.length == 64;
+    final pubkey =
+        ref.read(meshControllerProvider.notifier).bridge?.openPeerDm(peer) ??
+            (linked ? peer.nostrPubkey!.toLowerCase() : null);
+    if (pubkey == null) return;
+    if (linked) {
+      ref
+          .read(appStateProvider.notifier)
+          .ensurePMConversation(pubkey, nym: peer.displayName);
+    }
+    ref.read(appStateProvider.notifier).switchView(ChatView.pm(pubkey));
     _close();
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Don't watch meshControllerProvider here; it ticks constantly while scanning.
-    return Scaffold(
-      backgroundColor: c.bg,
-      appBar: AppBar(
-        backgroundColor: c.bgSecondary,
-        foregroundColor: c.text,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        shape: Border(bottom: BorderSide(color: c.glassBorder)),
-        titleSpacing: 8,
-        automaticallyImplyLeading: false,
-        title: Row(
-          children: [
-            _MeshNavBtn(
-              svg: NymIcons.chevronLeft,
-              tooltip: tr('Go back'),
-              onTap: _close,
-            ),
-            _MeshNavBtn(
-              svg: NymIcons.chevronRight,
-              tooltip: tr('Go forward'),
-              // Nothing ahead of the overlay, so forward rests disabled.
-              onTap: null,
-            ),
-            const SizedBox(width: 4),
-            NymSvgIcon(NymIcons.bluetooth, size: 18, color: c.primary),
-            const SizedBox(width: 8),
-            Text(tr('Bluetooth Mesh'),
-                style: TextStyle(
-                    color: c.text, fontSize: 16, fontWeight: FontWeight.w600)),
-          ],
-        ),
-        actions: [
-          _MeshHeaderToggle(
-            svg: NymIcons.bell,
-            tooltip: tr('Notifications'),
-            badge: ref.watch(
-                    settingsProvider.select((s) => s.notificationsEnabled))
-                ? ref.watch(notificationHistoryProvider.select((s) => s.unread))
-                : 0,
-            onTap: () => showNotificationsPanel(context),
-          ),
-          if (widget.onOpenSidebar != null) ...[
-            const SizedBox(width: 8),
-            _MeshHeaderToggle(
-              svg: NymIcons.menu,
-              tooltip: tr('Menu'),
-              // Instance fields don't promote; the surrounding null check guarantees this.
-              onTap: widget.onOpenSidebar!,
-            ),
-          ],
-          const SizedBox(width: 12),
-        ],
-      ),
-      body: Column(
+    final enabled = ref.watch(settingsProvider.select((s) => s.meshEnabled));
+    final ghost = ref.watch(ghostModeProvider.select((s) => s.enabled));
+    final subtitle = ref.watch(meshControllerProvider.select(
+        (m) => meshStatusSubtitle(m, enabled: enabled, ghost: ghost)));
+    return Material(
+      color: c.bg,
+      child: Column(
         children: [
-          Consumer(builder: (context, ref, _) {
-            return _StatusBar(
-                mesh: ref.watch(meshControllerProvider), colors: c);
-          }),
-          // Public #mesh channel, mixing Nostr kind-20000 and Bluetooth-mesh messages.
-          ListTile(
-            leading: Container(
-              width: 38,
-              height: 38,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: c.primary.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
+          NymPageHeader(
+            tile: NymSvgIcon(NymIcons.bluetooth, size: 18, color: c.primary),
+            title: tr('Bluetooth mesh'),
+            subtitle: subtitle,
+            onBack: _close,
+            onBackToList: widget.onBackToList,
+            onOpenSidebar: widget.onOpenSidebar,
+            actions: [
+              NymPageAction(
+                key: const ValueKey('meshGhost'),
+                svg: NymIcons.ghost,
+                tooltip: ghost ? tr('Ghost Mode on') : tr('Ghost Mode off'),
+                active: ghost,
+                disabled: !enabled,
+                onTap: () => toggleGhostMode(context, ref),
               ),
-              child: Text('#',
-                  style: TextStyle(
-                      color: c.primary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 18)),
-            ),
-            title: Text('#mesh', style: TextStyle(color: c.text)),
-            subtitle: Text(tr('Public channel · everyone in range'),
-                style: TextStyle(color: c.textDim, fontSize: 12)),
-            trailing:
-                NymSvgIcon(NymIcons.bluetooth, size: 16, color: c.primary),
-            onTap: () {
-              ref
-                  .read(appStateProvider.notifier)
-                  .switchChannel(kMeshNearbyChannel);
-              // Explicit close: the shell's view listener won't fire if #mesh was already active.
-              _close();
-            },
+            ],
           ),
-          // Named mesh group: membership is by shared name, and a password makes it end-to-end encrypted over the air.
-          ListTile(
-            leading: Container(
-              width: 38,
-              height: 38,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: c.primary.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-              child: NymSvgIcon(NymIcons.groupAddMembers,
-                  size: 18, color: c.primary),
-            ),
-            title: Text(tr('Join or create a mesh group'),
-                style: TextStyle(color: c.text)),
-            subtitle: Text(tr('A named room · optional password for privacy'),
-                style: TextStyle(color: c.textDim, fontSize: 12)),
-            trailing: Icon(Icons.add, size: 18, color: c.primary),
-            onTap: _promptJoinMeshGroup,
-          ),
-          Divider(height: 1, color: c.border),
           Expanded(
             child: Consumer(builder: (context, ref, _) {
-              return _PeersList(
-                  mesh: ref.watch(meshControllerProvider), colors: c);
+              final mesh = ref.watch(meshControllerProvider);
+              return _MeshBody(
+                mesh: mesh,
+                enabled: enabled,
+                onOpenMeshChannel: () {
+                  ref
+                      .read(appStateProvider.notifier)
+                      .switchChannel(kMeshNearbyChannel);
+                  _close();
+                },
+                onJoin: _promptJoinMeshGroup,
+                onOpenPeer: _openPeer,
+              );
             }),
           ),
-          Divider(height: 1, color: c.border),
-          _MeshDiagnostics(colors: c),
+          Consumer(builder: (context, ref, _) {
+            return _MeshDiagnostics(mesh: ref.watch(meshControllerProvider));
+          }),
         ],
       ),
     );
   }
 }
 
-/// Collapsible live mesh log for devices without adb or Console access.
+class _MeshBody extends ConsumerWidget {
+  const _MeshBody({
+    required this.mesh,
+    required this.enabled,
+    required this.onOpenMeshChannel,
+    required this.onJoin,
+    required this.onOpenPeer,
+  });
+
+  final MeshUiState mesh;
+  final bool enabled;
+  final VoidCallback onOpenMeshChannel;
+  final VoidCallback onJoin;
+  final ValueChanged<MeshPeer> onOpenPeer;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.nym;
+    final textSize =
+        ref.watch(settingsProvider.select((s) => s.textSize)).toDouble();
+    final needsPermission =
+        enabled && mesh.availability == MeshTransportAvailability.unauthorized;
+    final poweredOff =
+        enabled && mesh.availability == MeshTransportAvailability.poweredOff;
+    final short = mesh.myPeerID == null
+        ? ''
+        : (mesh.myPeerID!.length > 8
+            ? mesh.myPeerID!.substring(0, 8)
+            : mesh.myPeerID!);
+    final String powerSub;
+    if (!enabled) {
+      powerSub = tr('Chat with people nearby, no internet needed');
+    } else if (needsPermission) {
+      powerSub = tr('Waiting for permission');
+    } else if (poweredOff) {
+      powerSub = tr('Turn on Bluetooth');
+    } else if (short.isEmpty) {
+      powerSub = tr('Starting…');
+    } else {
+      powerSub = tr('On · your mesh ID {id}', {'id': short});
+    }
+    final peers = [...mesh.peers]
+      ..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
+    final peersTitle = enabled && mesh.running && peers.isNotEmpty
+        ? tr('Peers nearby ({count})', {'count': peers.length})
+        : tr('Peers nearby');
+    final String? empty;
+    if (!enabled) {
+      empty = tr('Turn the mesh on to find people nearby.');
+    } else if (needsPermission) {
+      empty = tr('Allow Bluetooth to find people nearby.');
+    } else if (poweredOff) {
+      empty = tr('Turn on Bluetooth to find people nearby.');
+    } else if (peers.isEmpty) {
+      empty = tr(
+          'No one in range yet. Peers show up when another Nymchat device is nearby.');
+    } else {
+      empty = null;
+    }
+
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 720),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(8, 12, 8, 16),
+          children: [
+            Container(
+              margin: const EdgeInsets.fromLTRB(4, 4, 4, 16),
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              decoration: BoxDecoration(
+                color: NymField.fill(c),
+                borderRadius: NymRadius.rsm,
+                border: Border.all(color: NymField.border(c)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(tr('Mesh'),
+                            style: TextStyle(
+                                color: c.text,
+                                fontSize: NymType.md,
+                                fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text(powerSub,
+                            key: const ValueKey('meshPowerSub'),
+                            style: TextStyle(
+                                color: c.textDim, fontSize: NymType.sm)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Semantics(
+                    label: tr('Bluetooth mesh'),
+                    toggled: enabled,
+                    child: NymSwitch(
+                      key: const ValueKey('meshPowerSwitch'),
+                      value: enabled,
+                      onChanged: (v) =>
+                          ref.read(settingsProvider.notifier).setMeshEnabled(v),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (needsPermission || poweredOff)
+              Container(
+                key: const ValueKey('meshBanner'),
+                margin: const EdgeInsets.fromLTRB(4, 0, 4, 16),
+                padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+                decoration: BoxDecoration(
+                  color: c.warning.withValues(alpha: 0.08),
+                  borderRadius: NymRadius.rsm,
+                  border: Border.all(color: c.warning.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        needsPermission
+                            ? tr('Nymchat needs Bluetooth permission to find people nearby.')
+                            : tr('Turn on Bluetooth to find people nearby.'),
+                        style: TextStyle(
+                            color: c.text, fontSize: NymType.sm, height: 1.4),
+                      ),
+                    ),
+                    if (needsPermission) ...[
+                      const SizedBox(width: 10),
+                      ModalChrome.sendButton(
+                        c,
+                        tr('Allow'),
+                        () => ref
+                            .read(meshControllerProvider.notifier)
+                            .openSystemSettings(),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            _SectionTitle(tr('Channels')),
+            _MeshRow(
+              key: const ValueKey('meshChannelRow'),
+              textSize: textSize,
+              leading: const SidebarChannelTile(geohash: true),
+              title: Text('#mesh',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _nameStyle(c, textSize)),
+              sub: tr('Public · everyone in range'),
+              onTap: onOpenMeshChannel,
+            ),
+            _MeshRow(
+              key: const ValueKey('meshJoinRow'),
+              textSize: textSize,
+              leading: SidebarChannelTile(geohash: false, svg: NymIcons.plus),
+              title: Text(tr('Join or create a mesh group'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _nameStyle(c, textSize)),
+              sub: tr('Named room · optional password'),
+              onTap: onJoin,
+            ),
+            _SectionTitle(peersTitle),
+            if (empty != null)
+              KeyedSubtree(
+                key: const ValueKey('meshPeersEmpty'),
+                child: ListEmptyNote(text: empty),
+              )
+            else
+              for (final peer in peers)
+                _PeerRow(
+                  key: ValueKey('meshPeer-${peer.peerID}'),
+                  peer: peer,
+                  ping: mesh.pings[peer.peerID],
+                  textSize: textSize,
+                  onTap: () => onOpenPeer(peer),
+                ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+TextStyle _nameStyle(NymColors c, double textSize) => TextStyle(
+      color: c.text,
+      fontSize: textSize,
+      fontWeight: FontWeight.w400,
+      height: 1.3,
+    );
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.title);
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+      child: Semantics(
+        header: true,
+        child: Text(
+          title.toUpperCase(),
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: c.textDim,
+            fontSize: 10,
+            letterSpacing: 2,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MeshRow extends StatelessWidget {
+  const _MeshRow({
+    super.key,
+    required this.leading,
+    required this.title,
+    required this.sub,
+    required this.onTap,
+    required this.textSize,
+    this.trailing,
+    this.tooltip,
+  });
+
+  final Widget leading;
+  final Widget title;
+  final String sub;
+  final VoidCallback onTap;
+  final double textSize;
+  final Widget? trailing;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final hoverFill = c.isLight
+        ? Colors.black.withValues(alpha: 0.04)
+        : Colors.white.withValues(alpha: 0.06);
+    final text = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        title,
+        Padding(
+          padding: const EdgeInsets.only(top: 1),
+          child: Text(
+            sub,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: TextStyle(
+                color: c.textDim,
+                fontSize: NymType.sm,
+                height: kSidebarSubLine / NymType.sm),
+          ),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      child: NymFocusable(
+        onActivate: onTap,
+        radius: NymRadius.rxs,
+        child: SidebarRowGestures(
+          onTap: onTap,
+          onShowMenu: (_) => false,
+          builder: (context, hovered) => Container(
+            constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
+            padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 6, 6, 6),
+            decoration: BoxDecoration(
+              color: hovered ? hoverFill : Colors.transparent,
+              borderRadius: NymRadius.rxs,
+            ),
+            child: Row(
+              children: [
+                leading,
+                const SizedBox(width: kSidebarGap),
+                Expanded(
+                  child: tooltip == null
+                      ? text
+                      : NymTooltip(message: tooltip, child: text),
+                ),
+                ?trailing,
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PeerRow extends ConsumerWidget {
+  const _PeerRow({
+    super.key,
+    required this.peer,
+    required this.ping,
+    required this.textSize,
+    required this.onTap,
+  });
+
+  final MeshPeer peer;
+  final MeshPingState? ping;
+  final double textSize;
+  final VoidCallback onTap;
+
+  static final RegExp _hex64Re = RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.nym;
+    final pk = peer.nostrPubkey;
+    final display = (pk != null && _hex64Re.hasMatch(pk))
+        ? getNymFromPubkey(peer.displayName, pk)
+        : (peer.nickname == null || peer.nickname!.isEmpty
+            ? peer.peerID.substring(0, peer.peerID.length > 8 ? 8 : peer.peerID.length)
+            : peer.displayName);
+    final parts = splitNymSuffix(display);
+    final waiting = ping?.isWaiting ?? false;
+    return _MeshRow(
+      textSize: textSize,
+      tooltip: '${peer.displayName} · ${peer.peerID}',
+      leading: NymAvatar(
+        seed: pk ?? peer.peerID,
+        size: kSidebarIcon,
+        imageUrl: peer.avatarUrl,
+        label: peer.displayName,
+      ),
+      title: Text.rich(
+        TextSpan(
+          text: parts.base,
+          children: parts.suffix.isEmpty
+              ? null
+              : [
+                  TextSpan(
+                    text: parts.suffix,
+                    style: TextStyle(color: c.textDim.withValues(alpha: 0.7)),
+                  ),
+                ],
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: _nameStyle(c, textSize),
+      ),
+      sub: meshPeerLine(peer, ping),
+      onTap: onTap,
+      trailing: IconButton(
+        key: ValueKey('meshPing-${peer.peerID}'),
+        icon: NymSvgIcon(NymIcons.radar,
+            size: 16,
+            color: waiting ? c.textDim.withValues(alpha: 0.4) : c.textDim),
+        tooltip: tr('Ping'),
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+        onPressed: waiting
+            ? null
+            : () => ref.read(meshControllerProvider.notifier).ping(peer.peerID),
+      ),
+    );
+  }
+}
+
 class _MeshDiagnostics extends StatefulWidget {
-  const _MeshDiagnostics({required this.colors});
-  final NymColors colors;
+  const _MeshDiagnostics({required this.mesh});
+  final MeshUiState mesh;
 
   @override
   State<_MeshDiagnostics> createState() => _MeshDiagnosticsState();
@@ -243,375 +560,168 @@ class _MeshDiagnostics extends StatefulWidget {
 class _MeshDiagnosticsState extends State<_MeshDiagnostics> {
   bool _expanded = false;
 
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.colors;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        InkWell(
-          onTap: () => setState(() => _expanded = !_expanded),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-            child: Row(
-              children: [
-                NymSvgIcon(
-                  _expanded ? NymIcons.chevronDown : NymIcons.chevronRight,
-                  size: 14,
-                  color: c.textDim,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(tr('Mesh diagnostics'),
-                      style: TextStyle(
-                          color: c.textDim,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600)),
-                ),
-                if (_expanded) ...[
-                  TextButton(
-                    onPressed: () {
-                      final text =
-                          MeshDiagnostics.instance.entries.value.join('\n');
-                      Clipboard.setData(ClipboardData(text: text));
-                    },
-                    child: Text(tr('Copy'),
-                        style: TextStyle(color: c.primary, fontSize: 12)),
-                  ),
-                  TextButton(
-                    onPressed: MeshDiagnostics.instance.clear,
-                    child: Text(tr('Clear'),
-                        style: TextStyle(color: c.textDim, fontSize: 12)),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-        if (_expanded)
-          SizedBox(
-            height: 190,
-            child: ValueListenableBuilder<List<String>>(
-              valueListenable: MeshDiagnostics.instance.entries,
-              builder: (context, entries, _) {
-                if (entries.isEmpty) {
-                  return Center(
-                    child: Text(tr('No mesh activity yet'),
-                        style: TextStyle(color: c.textDim, fontSize: 12)),
-                  );
-                }
-                return ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  itemCount: entries.length,
-                  itemBuilder: (context, i) => Text(
-                    entries[i],
-                    style: TextStyle(
-                      color: entries[i].contains('DROPPED')
-                          ? const Color(0xFFE0736B)
-                          : (entries[i].contains('LANDED')
-                              ? const Color(0xFF6BCB77)
-                              : c.textDim),
-                      fontSize: 11,
-                      fontFamily: 'monospace',
-                      height: 1.35,
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-/// Small boxed back/forward chevron; disabled rests faint and ignores taps.
-class _MeshNavBtn extends StatelessWidget {
-  const _MeshNavBtn({required this.svg, this.onTap, this.tooltip});
-  final String svg;
-  final VoidCallback? onTap;
-  final String? tooltip;
+  List<String> _ids() => [
+        if (widget.mesh.myPeerID != null)
+          '${tr('Your mesh ID')}  ${widget.mesh.myPeerID}',
+        for (final p in widget.mesh.peers) '${p.displayName}  ${p.peerID}',
+      ];
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final disabled = onTap == null;
-    final btn = InkWell(
-      onTap: onTap,
-      borderRadius: const BorderRadius.all(Radius.circular(4)),
-      child: Container(
-        width: 28,
-        height: 28,
-        alignment: Alignment.center,
-        child: NymSvgIcon(
-          svg,
-          size: 18,
-          color: disabled ? c.textDim.withValues(alpha: 0.3) : c.textDim,
-        ),
-      ),
-    );
-    return tooltip != null ? Tooltip(message: tooltip!, child: btn) : btn;
-  }
-}
-
-/// Boxed header icon button with an optional unread badge.
-class _MeshHeaderToggle extends StatelessWidget {
-  const _MeshHeaderToggle({
-    required this.svg,
-    required this.onTap,
-    this.tooltip,
-    this.badge = 0,
-  });
-  final String svg;
-  final VoidCallback onTap;
-  final String? tooltip;
-  final int badge;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    final box = Container(
-      width: 40,
-      height: 40,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: c.isLight ? const Color(0xD9FFFFFF) : const Color(0xCC141423),
-        borderRadius: NymRadius.rsm,
-        border: Border.all(
-          color:
-              c.isLight ? Colors.black.withValues(alpha: 0.08) : c.glassBorder,
-        ),
-      ),
-      child: NymSvgIcon(svg, size: 20, color: c.primary),
-    );
-    final child = InkWell(
-      onTap: onTap,
-      borderRadius: NymRadius.rsm,
-      child: badge > 0
-          ? Stack(
-              clipBehavior: Clip.none,
-              children: [
-                box,
-                Positioned(
-                  top: -4,
-                  right: -4,
-                  child: Container(
-                    constraints:
-                        const BoxConstraints(minWidth: 16, minHeight: 16),
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: c.danger,
-                      borderRadius: const BorderRadius.all(Radius.circular(8)),
-                    ),
-                    child: Text(
-                      badge > 99 ? '99+' : '$badge',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: Color(0xFFFFFFFF),
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        height: 1,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            )
-          : box,
-    );
-    return tooltip != null ? Tooltip(message: tooltip!, child: child) : child;
-  }
-}
-
-class _StatusBar extends ConsumerWidget {
-  const _StatusBar({required this.mesh, required this.colors});
-  final MeshUiState mesh;
-  final NymColors colors;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final enabled = ref.watch(settingsProvider.select((s) => s.meshEnabled));
-    final needsPermission =
-        enabled && mesh.availability == MeshTransportAvailability.unauthorized;
+    final ids = _ids();
+    final mono = TextStyle(
+        color: c.textDim, fontSize: 11, fontFamily: 'monospace', height: 1.35);
     return Container(
-      color: colors.bgSecondary,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(_statusLabel(enabled),
-                    style: TextStyle(
-                        color: colors.text,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13)),
-                if (mesh.myPeerID != null)
-                  Text('You: ${mesh.myPeerID}  •  ${mesh.linkCount} link(s)',
-                      style: TextStyle(
-                          color: colors.textDim,
-                          fontSize: 11,
-                          fontFamily: 'monospace')),
-              ],
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: c.border)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            InkWell(
+              key: const ValueKey('meshDiagnostics'),
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+                child: Row(
+                  children: [
+                    NymSvgIcon(
+                      _expanded ? NymIcons.chevronDown : NymIcons.chevronRight,
+                      size: 14,
+                      color: c.textDim,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(tr('Mesh diagnostics'),
+                          style: TextStyle(
+                              color: c.textDim,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600)),
+                    ),
+                    if (_expanded) ...[
+                      TextButton(
+                        onPressed: () {
+                          final text = [
+                            ...ids,
+                            ...MeshDiagnostics.instance.entries.value,
+                          ].join('\n');
+                          Clipboard.setData(ClipboardData(text: text));
+                        },
+                        child: Text(tr('Copy'),
+                            style: TextStyle(color: c.primary, fontSize: 12)),
+                      ),
+                      TextButton(
+                        onPressed: MeshDiagnostics.instance.clear,
+                        child: Text(tr('Clear'),
+                            style: TextStyle(color: c.textDim, fontSize: 12)),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
-          ),
-          if (needsPermission)
-            TextButton(
-              onPressed: () => ref
-                  .read(meshControllerProvider.notifier)
-                  .openSystemSettings(),
-              child:
-                  Text(tr('Enable'), style: TextStyle(color: colors.primary)),
-            ),
-          GhostModeButton(colors: colors),
-          NymSwitch(
-            value: enabled,
-            onChanged: (v) =>
-                ref.read(settingsProvider.notifier).setMeshEnabled(v),
-          ),
-        ],
+            if (_expanded)
+              SizedBox(
+                height: 190,
+                child: ValueListenableBuilder<List<String>>(
+                  valueListenable: MeshDiagnostics.instance.entries,
+                  builder: (context, entries, _) {
+                    if (entries.isEmpty && ids.isEmpty) {
+                      return Center(
+                        child: Text(tr('No mesh activity yet'),
+                            style: TextStyle(color: c.textDim, fontSize: 12)),
+                      );
+                    }
+                    return ListView(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      children: [
+                        for (final line in ids)
+                          SelectableText(line,
+                              key: ValueKey('meshDiagId-$line'), style: mono),
+                        if (ids.isNotEmpty && entries.isNotEmpty)
+                          const SizedBox(height: 6),
+                        for (final e in entries)
+                          Text(
+                            e,
+                            style: mono.copyWith(
+                              color: e.contains('DROPPED')
+                                  ? const Color(0xFFE0736B)
+                                  : (e.contains('LANDED')
+                                      ? const Color(0xFF6BCB77)
+                                      : c.textDim),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
       ),
     );
-  }
-
-  String _statusLabel(bool enabled) {
-    if (!enabled) return tr('Mesh off');
-    if (mesh.error != null) return tr('Mesh error');
-    switch (mesh.availability) {
-      case MeshTransportAvailability.ready:
-        return mesh.running ? tr('Mesh active') : tr('Starting…');
-      case MeshTransportAvailability.poweredOff:
-        return tr('Turn on Bluetooth');
-      case MeshTransportAvailability.unauthorized:
-        return tr('Bluetooth permission needed');
-      case MeshTransportAvailability.unsupported:
-        return tr('Mesh not supported on this device');
-      case MeshTransportAvailability.unknown:
-        return tr('Starting…');
-    }
   }
 }
 
-class _PeersList extends ConsumerWidget {
-  const _PeersList({required this.mesh, required this.colors});
-  final MeshUiState mesh;
-  final NymColors colors;
-
-  static final RegExp _hex64Re =
-      RegExp(r'^[0-9a-f]{64}$', caseSensitive: false);
-
-  /// Peer name with its `#xxxx` suffix dimmed, derived from the verified pubkey when there is one.
-  Widget _peerName(MeshPeer peer, NymColors c) {
-    final pk = peer.nostrPubkey;
-    final display = (pk != null && _hex64Re.hasMatch(pk))
-        ? getNymFromPubkey(peer.displayName, pk)
-        : peer.displayName;
-    final parts = splitNymSuffix(display);
-    return Text.rich(
-      TextSpan(
-        text: parts.base,
-        children: parts.suffix.isEmpty
-            ? null
-            : [
-                TextSpan(
-                  text: parts.suffix,
-                  style: TextStyle(
-                    color: c.textDim.withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w400,
-                  ),
-                ),
-              ],
-      ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(color: c.text),
-    );
-  }
-
-  String _pingLabel(MeshPingState? ping) {
-    if (ping == null) return '';
-    if (ping.isWaiting) return '  • pinging…';
-    if (ping.lost) return '  • no reply';
-    final hops = ping.hops;
-    final hopLabel = hops == null ? '' : ', $hops hop${hops == 1 ? '' : 's'}';
-    return '  • ${ping.roundTripMs}ms$hopLabel';
-  }
-
-  void _openPeer(BuildContext context, WidgetRef ref, MeshPeer peer) {
-    final pubkey =
-        ref.read(meshControllerProvider.notifier).bridge?.openPeerDm(peer);
-    if (pubkey == null) return;
-    ref.read(appStateProvider.notifier).switchView(ChatView.pm(pubkey));
-    // Explicit close in case this DM was already active.
-    ref.read(meshScreenOpenProvider.notifier).state = false;
-  }
+class _JoinSheet extends StatefulWidget {
+  const _JoinSheet();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    if (mesh.peers.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Text(
-            tr('No peers discovered yet.\nMake sure Bluetooth is on.'),
-            textAlign: TextAlign.center,
-            style: TextStyle(color: colors.textDim, height: 1.5),
-          ),
+  State<_JoinSheet> createState() => _JoinSheetState();
+}
+
+class _JoinSheetState extends State<_JoinSheet> {
+  final _name = TextEditingController();
+  final _pass = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _pass.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.of(context).pop((_name.text, _pass.text));
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return MeshSheetFrame(
+      title: tr('Mesh group'),
+      actions: [
+        ModalChrome.iconButton(c, tr('Cancel'), () => Navigator.of(context).pop()),
+        KeyedSubtree(
+          key: const ValueKey('meshJoinSubmit'),
+          child: ModalChrome.sendButton(c, tr('Join'), _submit),
         ),
-      );
-    }
-    final peers = [...mesh.peers]
-      ..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
-    return ListView.separated(
-      itemCount: peers.length,
-      separatorBuilder: (_, _) => Divider(height: 1, color: colors.border),
-      itemBuilder: (_, i) {
-        final peer = peers[i];
-        final seed = peer.nostrPubkey ?? peer.peerID;
-        final ping = mesh.pings[peer.peerID];
-        return ListTile(
-          leading: NymAvatar(
-            seed: seed,
-            size: 38,
-            imageUrl: peer.avatarUrl,
-            label: peer.displayName,
+      ],
+      children: [
+        TextField(
+          key: const ValueKey('meshJoinName'),
+          controller: _name,
+          autofocus: true,
+          style: TextStyle(color: c.inputText),
+          decoration: NymField.decoration(c, hint: tr('Group name')).copyWith(
+            prefixText: '#',
+            prefixStyle: TextStyle(color: NymField.icon(c)),
           ),
-          title: _peerName(peer, colors),
-          subtitle: Text(
-            peer.peerID +
-                (peer.nostrLinkVerified ? '  • linked' : '') +
-                _pingLabel(ping),
-            style: TextStyle(
-                color: colors.textDim, fontSize: 11, fontFamily: 'monospace'),
-          ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // The echo shows whether a peer is actually in range, which the list can't.
-              IconButton(
-                icon: NymSvgIcon(NymIcons.radar,
-                    size: 16, color: colors.textDim),
-                tooltip: tr('Ping'),
-                // The default 48px tap target is too wide beside the lock.
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints:
-                    const BoxConstraints(minWidth: 34, minHeight: 34),
-                onPressed: ping?.isWaiting ?? false
-                    ? null
-                    : () => ref
-                        .read(meshControllerProvider.notifier)
-                        .ping(peer.peerID),
-              ),
-              NymSvgIcon(NymIcons.lock, size: 16, color: colors.purple),
-            ],
-          ),
-          onTap: () => _openPeer(context, ref, peer),
-        );
-      },
+          onSubmitted: (_) => _submit(),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          key: const ValueKey('meshJoinPassword'),
+          controller: _pass,
+          obscureText: true,
+          style: TextStyle(color: c.inputText),
+          decoration: NymField.decoration(c,
+              hint: tr('Password (optional, encrypts the group)')),
+          onSubmitted: (_) => _submit(),
+        ),
+      ],
     );
   }
 }

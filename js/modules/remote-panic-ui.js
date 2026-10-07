@@ -3,6 +3,7 @@
     const NT = () => window.NostrTools;
     const ENABLED_KEY = 'nym_remote_panic';
     const CLEAR_KEY = 'nym_panic_clear_pending';
+    const DELETED_NOTICE_KEY = 'nymnotice:deleted';
     const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
     const nowSec = () => Math.floor(Date.now() / 1000);
 
@@ -139,7 +140,7 @@
             const none = { mark: false, wrap: false };
             if (!R().shouldSend(!!o.enabled, !!(sign && pubkey))) return none;
             let marker;
-            try { marker = await sign({ ...R().template(nowSec()), pubkey }); } catch (_) { return none; }
+            try { marker = await sign({ ...R().template(nowSec(), !!o.deleted), pubkey }); } catch (_) { return none; }
             if (!R().markerValid(marker, pubkey, (ev) => NT().verifyEvent(ev))) return none;
             let wrap = false;
             if (o.secret) {
@@ -167,7 +168,7 @@
             if (verdict.action !== 'wipe') return false;
             this._remotePanicWiping = true;
             this._remotePanicSource = source;
-            try { await this.remotePanicWipeHere(pubkey); } catch (_) { }
+            try { await this.remotePanicWipeHere(pubkey, { deleted: verdict.reason === 'deleted' }); } catch (_) { }
             return true;
         },
 
@@ -185,7 +186,6 @@
                         try { localStorage.removeItem(CLEAR_KEY); } catch (_) { }
                     } catch (_) { }
                 }
-                if (!this.remotePanicEnabled()) return null;
                 const pubkey = this.pubkey;
                 let data;
                 try { data = await this._storageApiRequest('panic-check', {}); } catch (_) { return null; }
@@ -204,7 +204,41 @@
             this._remotePanicAct(marker, 'relay');
         },
 
-        async remotePanicWipeHere(pubkey) {
+        _deletedNoticeLabel(pubkey) {
+            let nym = '';
+            try {
+                const A = window.NymAccounts;
+                const a = A && typeof A.read === 'function' ? A.read().accounts.find((x) => x.pubkey === pubkey) : null;
+                nym = (a && a.nym) || (pubkey === this.pubkey ? this.nym : '') || '';
+            } catch (_) { nym = ''; }
+            nym = String(nym || '');
+            nym = typeof this.stripPubkeySuffix === 'function' ? this.stripPubkeySuffix(nym) : nym.replace(/#[0-9a-f]{4}$/i, '');
+            return JSON.stringify({ nym: nym.trim(), suffix: String(pubkey || '').slice(-4) });
+        },
+
+        _deletedNoticeHtml(raw) {
+            let info = null;
+            try { info = JSON.parse(raw); } catch (_) { info = null; }
+            const ui = (t) => (typeof this.uiText === 'function' ? this.uiText(t) : t);
+            const esc = (t) => (typeof this.escapeHtml === 'function' ? this.escapeHtml(t) : String(t));
+            if (!info || !info.nym) return esc(ui('This identity was deleted from another device.'));
+            const label = esc(info.nym) + (info.suffix ? '<span class="nym-suffix">#' + esc(info.suffix) + '</span>' : '');
+            return esc(ui('{nym} was deleted from another device.')).split('{nym}').join(label);
+        },
+
+        showDeletedNotice() {
+            let raw = null;
+            try { raw = localStorage.getItem(DELETED_NOTICE_KEY); } catch (_) { raw = null; }
+            if (!raw) return false;
+            try { localStorage.removeItem(DELETED_NOTICE_KEY); } catch (_) { }
+            if (typeof this.showToast === 'function') this.showToast(this._deletedNoticeHtml(raw), { html: true });
+            return true;
+        },
+
+        async remotePanicWipeHere(pubkey, opts) {
+            const deleted = !!(opts && opts.deleted);
+            const label = deleted ? this._deletedNoticeLabel(pubkey) : null;
+            if (deleted) { try { localStorage.setItem(DELETED_NOTICE_KEY, label); } catch (_) { } }
             const A = window.NymAccounts;
             let others = 0;
             try {
@@ -220,7 +254,20 @@
                 try { gone = await this.acctForget(); } catch (_) { gone = false; }
                 if (gone) return;
             }
-            await this.panicWipe({ localOnly: true });
+            if (!deleted) {
+                await this.panicWipe({ localOnly: true });
+                return;
+            }
+            await this.panicWipe({
+                localOnly: true,
+                finish: () => {
+                    try { localStorage.setItem(DELETED_NOTICE_KEY, label); } catch (_) { }
+                    setTimeout(() => {
+                        try { location.replace(location.origin + location.pathname); }
+                        catch (_) { try { location.reload(); } catch (_) { } }
+                    }, 600);
+                }
+            });
         },
 
         remotePanicStart() {
@@ -256,6 +303,7 @@
             const n = window.nym;
             if (n && n.pubkey && n.connected && typeof n.remotePanicStart === 'function') {
                 n.remotePanicStart();
+                n.showDeletedNotice();
                 n.remotePanicCheck();
             } else if (++tries < 600) setTimeout(boot, 1000);
         };

@@ -65,24 +65,30 @@ Object.assign(NYM.prototype, {
             });
         }
 
-        const windowHours = (typeof this._geohashActiveWindowHours === 'number' && this._geohashActiveWindowHours > 0)
-            ? Math.min(24, this._geohashActiveWindowHours) : 24;
+        const windowHours = window.NymGeoExplore
+            ? window.NymGeoExplore.normalizeWindowHours(this._geohashActiveWindowHours) : 24;
         const nowSec = Math.floor(Date.now() / 1000);
+        const cutoffMs = (nowSec - windowHours * 3600) * 1000;
 
         allGeohashes.forEach(geohash => {
             try {
                 // 24 hourly slots aligned with the D1 activity buckets (index 0 = the most recent hour).
                 const localBuckets = new Array(24).fill(0);
                 const allMsgs = this.messages.get(`#${geohash}`) || [];
+                const d1LastSec = (this._d1ChannelLast && this._d1ChannelLast.get(geohash.toLowerCase())) || 0;
+                let lastMs = Math.max((this.channelLastActivity && this.channelLastActivity.get(`#${geohash}`)) || 0, d1LastSec * 1000);
                 for (const m of allMsgs) {
                     if (m._spamGated) continue;
                     const ts = m.created_at || 0;
                     if (!ts) continue;
+                    if (ts * 1000 > lastMs) lastMs = ts * 1000;
                     let ageH = Math.floor((nowSec - ts) / 3600);
                     if (ageH < 0) ageH = 0;
                     if (ageH < 24) localBuckets[ageH]++;
                 }
-                const recentCount = this._combineGeohashActivity(geohash, localBuckets, windowHours);
+                let recentCount = this._combineGeohashActivity(geohash, localBuckets, windowHours);
+                const d1 = this._geohashD1Activity && this._geohashD1Activity.get(geohash.toLowerCase());
+                if (recentCount < 1 && (!Array.isArray(d1) || d1.length === 0) && lastMs >= cutoffMs) recentCount = 1;
                 if (recentCount < 1) return;
                 const coords = this.decodeGeohash(geohash);
                 this.geohashChannels.push({
@@ -90,7 +96,8 @@ Object.assign(NYM.prototype, {
                     lat: coords.lat,
                     lng: coords.lng,
                     messages: recentCount,
-                    isJoined: this.channels.has(geohash)
+                    isJoined: this.channels.has(geohash),
+                    lastActivityMs: lastMs
                 });
             } catch (e) {
             }
@@ -362,12 +369,13 @@ Object.assign(NYM.prototype, {
     },
 
     setGeohashActiveWindow(hours) {
-        let h = parseInt(hours, 10);
-        if (!Number.isFinite(h) || h < 1) h = 1;
-        if (h > 24) h = 24;
+        const parsed = parseInt(hours, 10);
+        const h = window.NymGeoExplore ? window.NymGeoExplore.normalizeWindowHours(parsed) : 24;
         this._geohashActiveWindowHours = h;
         document.querySelectorAll('.geohash-window-btn').forEach(b => {
-            b.classList.toggle('active', parseInt(b.dataset.hours, 10) === h);
+            const on = parseInt(b.dataset.hours, 10) === h;
+            b.classList.toggle('active', on);
+            b.setAttribute(b.getAttribute('role') === 'menuitemradio' ? 'aria-checked' : 'aria-pressed', on ? 'true' : 'false');
         });
         document.querySelectorAll('.geohash-window-select').forEach(s => {
             if (parseInt(s.value, 10) !== h) s.value = String(h);
@@ -375,6 +383,7 @@ Object.assign(NYM.prototype, {
         if (this.geohashMap) {
             this.geohashMap.updatePoints();
         }
+        if (typeof this._gxRenderLists === 'function') this._gxRenderLists();
     },
 
     async selectGeohashChannel(channel) {
@@ -415,7 +424,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this.joinSelectedGeohash();
         };
 
-        infoPanel.style.display = 'block';
+        infoPanel.style.display = 'flex';
+        if (typeof this._gxAfterSelect === 'function') this._gxAfterSelect(channel);
 
         try {
             const data = await this.fetchGeocode(channel.lat, channel.lng, 10);
@@ -439,9 +449,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     },
 
-    shareChannel() {
+    shareChannel(channelOverride) {
         const baseUrl = window.location.origin + window.location.pathname;
-        const channel = this.currentChannel || 'nymchat';
+        const channel = (typeof channelOverride === 'string' && channelOverride) || this.currentChannel || 'nymchat';
         const shareUrl = `${baseUrl}#${channel}`;
 
         document.getElementById('shareUrlInput').value = shareUrl;
@@ -474,6 +484,28 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     isValidGeohash(str) {
         return this.geohashRegex.test(str.toLowerCase());
+    },
+
+    _channelGlyphSvg(geohash, size) {
+        const px = size || 16;
+        const body = geohash
+            ? '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle>'
+            : '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>';
+        return `<svg class="channel-glyph" viewBox="0 0 24 24" width="${px}" height="${px}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+    },
+
+    _ensureChannelTile(item) {
+        if (!item || !item.closest('#channelList') || item.querySelector(':scope > .channel-tile')) return;
+        const tile = document.createElement('span');
+        tile.className = 'channel-tile';
+        tile.setAttribute('aria-hidden', 'true');
+        tile.innerHTML = this._channelGlyphSvg(!!this.channelGeohashKey(item.dataset.channel, item.dataset.geohash), 10);
+        item.insertBefore(tile, item.firstChild);
+    },
+
+    _channelKeyIsGeohash(key) {
+        const name = String(key || '').replace(/^#+/, '');
+        return !!name && this.isValidGeohash(name);
     },
 
     // Derived from the name rather than trusting callers, many of which pass a named channel as the geohash.
@@ -581,6 +613,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (entry.type === 'pm' && current.pubkey === entry.pubkey) return;
             if (entry.type === 'group' && current.groupId === entry.groupId) return;
             if (entry.type === 'thread' && current.rootId === entry.rootId) return;
+            if (entry.type === 'mesh') return;
         }
         this.navigationHistory = this.navigationHistory.slice(0, this.navigationIndex + 1);
         this.navigationHistory.push(entry);
@@ -616,6 +649,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     _navigateTo(entry) {
         this._navigating = true;
         try {
+            if (entry.type === 'mesh') {
+                if (typeof this.openMeshPanel === 'function') this.openMeshPanel();
+                return;
+            }
+            if (this._meshPageOpen && typeof this.closeMeshPage === 'function') this.closeMeshPage();
             if (entry.type === 'thread') {
                 if (typeof this._navOpenThread === 'function') this._navOpenThread(entry);
                 return;
@@ -775,8 +813,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         btn.disabled = false;
         const isFav = this.pinnedChannels && this.pinnedChannels.has(key);
         btn.classList.toggle('active', !!isFav);
-        const pinLabel = isFav ? 'Unpin channel' : 'Pin channel';
-        btn.title = typeof this.uiText === 'function' ? this.uiText(pinLabel) : pinLabel;
+        const favLabel = isFav ? 'Unfavorite channel' : 'Favorite channel';
+        btn.title = typeof this.uiText === 'function' ? this.uiText(favLabel) : favLabel;
         btn.setAttribute('aria-label', btn.title);
     },
 
@@ -797,6 +835,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             const geohash = item.dataset.geohash;
             key = geohash || channel;
 
+            this._ensureChannelTile(item);
             const pinBtn = item.querySelector('.pin-btn');
 
             if (this.pinnedChannels.has(key)) {
@@ -830,6 +869,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         const key = geohash || channel;
+        const hiding = !this.hiddenChannels.has(key);
 
         if (this.hiddenChannels.has(key)) {
             this.hiddenChannels.delete(key);
@@ -840,6 +880,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveHiddenChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         this.applyHiddenChannels();
+        if (hiding && typeof this.showUndoToast === 'function') {
+            const text = (typeof this.uiText === 'function' ? this.uiText('#{channel} hidden') : '#{channel} hidden').replace('{channel}', key);
+            this.showUndoToast(text, () => {
+                if (this.hiddenChannels.has(key)) this.toggleHideChannel(channel, geohash);
+            });
+        }
     },
 
     _withBulkChannelAdd(fn) {
@@ -1069,7 +1115,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             link.className = 'channel-location-link';
             const ghLower = safeGeohash.toLowerCase();
             link.setAttribute('href', `#${encodeURIComponent(ghLower)}`);
-            link.setAttribute('title', 'Show this location on the map');
+            link.setAttribute('aria-label', typeof this.uiText === 'function' ? this.uiText('Show this location on the map') : 'Show this location on the map');
+            link.setAttribute('data-tip', '');
             link.addEventListener('click', (e) => {
                 e.preventDefault();
                 if (typeof this.showGeohashExplorer === 'function') {
@@ -1453,6 +1500,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             resp = await this._storageApiStream('channel-get', since ? { channels: names, since } : { channels: names }, false);
         } catch (_) {
             for (const name of names) this._channelD1FetchedAt.delete(name);
+            this._noteArchiveResult(names, false);
             return false;
         }
 
@@ -1515,7 +1563,18 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Paint the active channel if its view settled empty before the archive arrived.
         if (applied) this._repaintActiveChannelIfEmpty(names);
+        this._noteArchiveResult(names, completed);
         return completed;
+    },
+
+    _noteArchiveResult(names, ok) {
+        if (!this._archiveUnavailable) this._archiveUnavailable = new Set();
+        for (const name of names) {
+            if (ok) this._archiveUnavailable.delete(name);
+            else this._archiveUnavailable.add(name);
+        }
+        if (typeof this._refreshDirectHistoryNote === 'function') this._refreshDirectHistoryNote(names);
+        if (!ok && typeof this._relayChannelBackfill === 'function') this._relayChannelBackfill(names);
     },
 
     _repaintActiveChannelIfEmpty(names) {
@@ -1707,6 +1766,8 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             this._clearSidebarSkel('channelList');
             const item = document.createElement('div');
             item.className = 'channel-item list-item';
+            item.setAttribute('role', 'button');
+            item.tabIndex = 0;
             item.dataset.channel = channel;
             // The routing key as registered (`geohash || channel` keys the store); not an "is geohash" flag.
             item.dataset.geohash = geohash;
@@ -1741,10 +1802,11 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 : 'Not a geohash';
 
             item.innerHTML = `
+    <span class="channel-tile" aria-hidden="true">${this._channelGlyphSvg(isGeo, 10)}</span>
     <span class="channel-name"${locationHint}>${displayName}<span class="channel-sub"></span></span>
     <div class="channel-badges">
         <span class="unread-badge nm-hidden">0</span>
-        <button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Channel menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+        <button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Channel menu" title="More" type="button">${NymMenuDotsIcon.svg({ size: 16 })}</button>
     </div>
 `;
 
@@ -1923,6 +1985,10 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             return;
         }
 
+        const wasCurrent = (this.currentChannel === channel && this.currentGeohash === geohash) ||
+            !!(geohash && this.currentGeohash === geohash);
+        const wasJoined = this.userJoinedChannels.has(key);
+
         this.channels.delete(key);
 
         this.userJoinedChannels.delete(key);
@@ -1943,7 +2009,23 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.saveUserChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
 
-        this.displaySystemMessage(`Left channel ${geohash ? '#' + geohash : '#' + channel}`);
+        const left = `Left channel ${geohash ? '#' + geohash : '#' + channel}`;
+        if (typeof this.showUndoToast === 'function') {
+            const text = (typeof this.uiText === 'function' ? this.uiText('Left channel #{channel}') : 'Left channel #{channel}').replace('{channel}', key);
+            this.showUndoToast(text, () => this.restoreLeftChannel(channel, geohash, wasCurrent, wasJoined));
+        } else {
+            this.displaySystemMessage(left);
+        }
+    },
+
+    restoreLeftChannel(channel, geohash = '', wasCurrent = false, wasJoined = true) {
+        const key = geohash || channel;
+        if (!key || this.channels.has(key) || this.isChannelBlocked(channel, geohash)) return;
+        this.addChannel(channel, geohash);
+        if (wasJoined) this.userJoinedChannels.add(key);
+        this.saveUserChannels();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (wasCurrent) this.switchChannel(channel, geohash);
     },
 
     // Cap on the joined-channel set.

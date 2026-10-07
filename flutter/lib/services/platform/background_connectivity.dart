@@ -3,6 +3,11 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+final backgroundConnectivityServiceProvider =
+    Provider<BackgroundConnectivityService>(
+        (ref) => BackgroundConnectivityService());
 
 /// Background keep-alive: an Android foreground service or an iOS background task; best-effort, never throws.
 class BackgroundConnectivityService {
@@ -15,7 +20,12 @@ class BackgroundConnectivityService {
   final MethodChannel _channel;
 
   /// Whether this platform can honor the setting; the UI hides it otherwise.
+  @visibleForTesting
+  static bool? debugSupportedOverride;
+
   static bool get isSupported {
+    final override = debugSupportedOverride;
+    if (override != null) return override;
     if (kIsWeb) return false;
     try {
       return Platform.isAndroid || Platform.isIOS;

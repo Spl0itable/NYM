@@ -5,10 +5,10 @@
     <meta charset="UTF-8">
     <!-- Fallback CSP -->
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
+        content="default-src 'self'; script-src 'self' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://accounts.google.com/gsi/client https://cdn.apple-cloudkit.com/ck/2/cloudkit.js; style-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob: https:; font-src 'self' data: https:; connect-src 'self' https: wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-src 'self' blob: https://challenges.cloudflare.com https://accounts.google.com/gsi/; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self' data:">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
-    <title>Nymchat — open the app</title>
+    <title>Nymchat — web app</title>
     <meta name="description" content="Open the Nymchat client: pseudonymous, end-to-end encrypted chat over Nostr, with no account and no registration. Runs in the browser.">
     <link rel="manifest"
         href="data:application/json;base64,eyJuYW1lIjoiTnltY2hhdCIsInNob3J0X25hbWUiOiJOeW1jaGF0Iiwic3RhcnRfdXJsIjoiaHR0cHM6Ly93ZWIubnltY2hhdC5hcHAiLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsInRoZW1lX2NvbG9yIjoiIzAwMDAwMCIsImJhY2tncm91bmRfY29sb3IiOiIjMDAwMDAwIiwiaWNvbnMiOlt7InNyYyI6Imh0dHBzOi8vbnltY2hhdC5hcHAvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiMTkyeDE5MiIsInR5cGUiOiJpbWFnZS9wbmcifSx7InNyYyI6Imh0dHBzOi8vbnltY2hhdC5hcHAvaW1hZ2VzL05ZTS1pY29uLnBuZyIsInNpemVzIjoiNTEyeDUxMiIsInR5cGUiOiJpbWFnZS9wbmcifV19">
@@ -18,7 +18,7 @@
     <link rel="apple-touch-icon" sizes="192x192" href="https://nymchat.app/images/android-chrome-192x192.png">
 
     <!-- Open Graph Meta Tags -->
-    <meta property="og:title" content="Nymchat — open the app">
+    <meta property="og:title" content="Nymchat — web app">
     <meta property="og:description" content="Open the Nymchat client: pseudonymous, end-to-end encrypted chat over Nostr, with no account and no registration. Runs in the browser.">
     <meta property="og:image" content="https://nymchat.app/images/NYM-banner.png">
     <meta property="og:image:width" content="1024">
@@ -29,7 +29,7 @@
     <meta property="og:site_name" content="Nymchat">
     <!-- `summary` shows the square image whole; `summary_large_image` would crop it. -->
     <meta name="twitter:card" content="summary">
-    <meta name="twitter:title" content="Nymchat — open the app">
+    <meta name="twitter:title" content="Nymchat — web app">
     <meta name="twitter:description" content="Open the Nymchat client: pseudonymous, end-to-end encrypted chat over Nostr, with no account and no registration. Runs in the browser.">
     <meta name="twitter:image" content="https://nymchat.app/images/NYM-banner.png">
     <meta name="twitter:image:alt" content="The Nymchat app icon: a wordmark drawn in green ASCII characters.">
@@ -96,10 +96,10 @@
 
     <!-- Context Menu Sidebar -->
     <div class="context-menu" id="contextMenu">
-        <button class="context-menu-back nm-hidden" id="ctxBackBtn" data-action="ctxBack" title="Back to group" aria-label="Back to group">
+        <button class="context-menu-back nm-hidden" id="ctxBackBtn" data-action="ctxBack" aria-label="Back to group" data-tip="">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
-        <button class="context-menu-close" id="ctxCloseBtn" title="Close">&#x2715;</button>
+        <button class="context-menu-close" id="ctxCloseBtn" aria-label="Close" data-tip="">&#x2715;</button>
         <img id="ctxBannerImg" class="context-menu-banner nm-hidden" src="" alt="" decoding="async" loading="lazy"
             data-action="expandImageFromSrcStop">
         <div class="context-menu-avatar-header" id="ctxAvatarHeader">
@@ -326,7 +326,7 @@
     <!-- Group Context Menu Sidebar -->
     <div class="context-menu-overlay" id="groupContextMenuOverlay" data-action="closeGroupContextMenu"></div>
     <div class="context-menu" id="groupContextMenu">
-        <button class="context-menu-close" id="grpCtxCloseBtn" data-action="closeGroupContextMenu" title="Close">&#x2715;</button>
+        <button class="context-menu-close" id="grpCtxCloseBtn" data-action="closeGroupContextMenu" aria-label="Close" data-tip="">&#x2715;</button>
         <div id="grpCtxDefaultBanner" class="context-menu-banner group-ctx-default-banner nm-hidden"></div>
         <img id="grpCtxBannerImg" class="context-menu-banner nm-pointer nm-hidden" src="" alt="" decoding="async" loading="lazy" data-action="expandImageFromSrcStop">
         <div class="context-menu-avatar-header">
@@ -354,12 +354,12 @@
     <!-- PM / Group Modal -->
     <div class="modal" id="newPMModal">
         <div class="modal-content nm-h-1">
-            <button class="modal-close" data-action="closeModal" data-modal-id="newPMModal">&#x2715;</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="newPMModal" aria-label="Close">&#x2715;</button>
             <div class="modal-header" id="newPMModalTitle">New Message</div>
             <div class="modal-body">
                 <div class="form-group">
                     <label class="form-label">To</label>
-                    <div class="pm-recipient-box" id="pmRecipientBox" data-action="focusPmRecipient">
+                    <div class="pm-recipient-box nm-field" id="pmRecipientBox" data-action="focusPmRecipient">
                         <div class="pm-recipient-chips" id="pmRecipientChips"></div>
                         <input type="text" class="pm-recipient-input" id="pmRecipientInput"
                             placeholder="Search nym or paste npub / hex pubkey..."
@@ -419,7 +419,7 @@
     <!-- Report Modal -->
     <div class="modal nm-hidden" id="reportModal">
         <div class="modal-content nm-h-5">
-            <button class="modal-close" data-action="closeReportModal">✕</button>
+            <button class="modal-close" data-action="closeReportModal" aria-label="Close">✕</button>
             <div class="modal-header">
                 <h2>Report User/Content</h2>
             </div>
@@ -445,7 +445,7 @@
                     <label class="nm-h-8">Additional Details
                         <span class="nm-h-2">(optional)</span>:</label>
                     <textarea id="reportDetails" rows="4"
-                        placeholder="Provide any additional context for this report..." class="nm-h-10"></textarea>
+                        placeholder="Provide any additional context for this report..." class="form-textarea nm-h-10"></textarea>
                 </div>
 
                 <div class="nm-h-11">
@@ -467,71 +467,61 @@
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <h1 class="visually-hidden">Nymchat — pseudonymous chat over Nostr</h1>
-                <pre class="logo-ascii nm-pointer" role="img" aria-label="Nymchat — log in with Nostr" data-action="openNostrLogin" title="Login with Nostr">
-                                            ##\                  ##\     
-                                            ## |                 ## |    
-#######\  ##\   ##\ ######\####\   #######\ #######\   ######\ ######\   
-##  __##\ ## |  ## |##  _##  _##\ ##  _____|##  __##\  \____##\\_##  _|  
-## |  ## |## |  ## |## / ## / ## |## /      ## |  ## | ####### | ## |    
-## |  ## |## |  ## |## | ## | ## |## |      ## |  ## |##  __## | ## |##\ 
-## |  ## |\####### |## | ## | ## |\#######\ ## |  ## |\####### | \####  |
-\__|  \__| \____## |\__| \__| \__| \_______|\__|  \__| \_______|  \____/ 
-          ##\   ## |                                                     
-          \######  |                                                     
-           \______/                                                      
-</pre>
-                <div class="nym-display" data-action="editNick">
+                <div class="sidebar-identity-row">
+                <div class="nym-display" data-action="editNick" data-tip="Edit your profile">
                     <div class="nym-label">Your Nym (click to edit)</div>
                     <div class="nym-identity is-loading">
                         <img id="sidebarAvatar" class="avatar nm-h-14"
                             src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Crect width='80' height='80' fill='%23222'/%3E%3C/svg%3E" alt=""
-                            decoding="async" width="32" height="32">
+                            decoding="async" width="36" height="36">
                         <div class="nym-value" id="currentNym">pseudonymous</div>
                         <span class="nym-sk-avatar" aria-hidden="true"></span>
                         <span class="nym-sk-name" aria-hidden="true"></span>
                     </div>
                 </div>
-                <button type="button" class="acct-switch-btn" id="acctSwitchBtn" data-action="openAccountSwitcher" title="Manage Identities" aria-label="Manage Identities">
+                <button type="button" class="acct-switch-btn" id="acctSwitchBtn" data-action="openAccountSwitcher" data-tip="Manage Identities" aria-label="Manage Identities">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="10" r="3"></circle><path d="M7.5 18a5 5 0 0 1 9 0"></path><path d="M3 12a9 9 0 0 1 15.4-6.4L21 8"></path><polyline points="21 3 21 8 16 8"></polyline><path d="M21 12a9 9 0 0 1-15.4 6.4L3 16"></path><polyline points="3 21 3 16 8 16"></polyline></svg>
                     <span class="acct-switch-label">Manage Identities</span>
                     <span class="acct-switch-dot nm-hidden" id="acctSwitchDot"></span>
                 </button>
-                <div class="status-indicator nm-pointer" data-action="openRelayStats" title="View network stats">
-                    <span class="status-dot" id="statusDot"></span>
-                    <span id="connectionStatus">Disconnected</span>
-                </div>
-                <button type="button" class="mesh-status-row nm-hidden" id="meshStatusRow"
-                    data-action="openMeshPanel" title="Bluetooth mesh">
-                    <svg class="mesh-status-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 7 10 10-5 5V2l5 5L7 17"></path></svg>
-                    <span id="meshStatusLabel">Mesh off</span>
-                    <span id="meshStatusLinks" class="mesh-status-links"></span>
+                <button type="button" class="acct-switch-btn identity-notif-btn" id="identityNotifBtn" data-action="openNotificationsModal" aria-label="Notifications" data-tip="">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                    <span class="notification-count-badge nm-hidden" id="notifBadgeIdentity">0</span>
                 </button>
+                </div>
             </div>
+
+            <button type="button" class="us-open" id="unifiedSearchBtn" data-action="openUnifiedSearchAndCloseSidebar" aria-label="Search messages, channels and nyms" aria-keyshortcuts="Control+K Meta+K">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>
+                <span class="us-open-label">Search messages, channels and nyms</span>
+                <kbd class="us-open-kbd" aria-hidden="true">Ctrl K</kbd>
+            </button>
 
             <div class="sidebar-actions" role="group" aria-label="Main menu">
                 <div class="menu-grid">
-                    <button class="icon-btn menu-tile menu-tile-primary" data-menu-item="notifications" data-action="openNotificationsAndCloseSidebar" title="Notifications" id="notificationsBtnMobile">
+                    <button class="icon-btn menu-tile" data-menu-item="notifications" data-action="openNotificationsAndCloseSidebar" id="notificationsBtnMobile" aria-label="Notifications" data-tip="">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                         <span class="btn-label">Notifications</span>
                         <span class="notification-count-badge nm-hidden" id="notifBadgeSidebar">0</span>
                     </button>
-                    <button class="icon-btn menu-tile menu-tile-primary" data-menu-item="saved" data-action="openSavedAndCloseSidebar" title="Saved messages" id="savedMessagesBtnMobile">
+                    <button class="icon-btn menu-tile" data-menu-item="saved" data-action="openSavedAndCloseSidebar" id="savedMessagesBtnMobile" aria-label="Saved messages" data-tip="">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4.5L6 21z"></path></svg>
                         <span class="btn-label">Saved</span>
                     </button>
-                    <button class="icon-btn menu-tile menu-tile-primary" data-menu-item="calls" data-action="gtOpenCallLinksAndCloseSidebar" title="Call links" id="callLinksBtnMobile">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14l4-4"></path><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"></path><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"></path></svg>
+                    <button class="icon-btn menu-tile" data-menu-item="calls" data-action="gtOpenCallLinksAndCloseSidebar" id="callLinksBtnMobile" aria-label="Calls" data-tip="">
+                        <svg data-call-link-icon width="16" height="16"></svg>
                         <span class="btn-label">Calls</span>
+                        <span class="notification-count-badge nm-hidden" id="callsBadgeSidebar">0</span>
                     </button>
-                    <button class="icon-btn menu-tile" data-menu-item="flair" data-action="openShopAndCloseSidebar" title="Flair">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                        <span class="btn-label">Flair</span>
+                    <button class="icon-btn menu-tile" data-menu-item="shop" data-action="openShopAndCloseSidebar" aria-label="Shop" data-tip="">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"></path><path d="M2 7h20"></path><path d="M22 7v3a2 2 0 0 1-2 2 2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"></path></svg>
+                        <span class="btn-label">Shop</span>
                     </button>
-                    <button class="icon-btn menu-tile" data-menu-item="settings" data-action="showSettingsAndCloseSidebar" title="Settings">
+                    <button class="icon-btn menu-tile" data-menu-item="settings" data-action="showSettingsAndCloseSidebar" aria-label="Settings" data-tip="">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                         <span class="btn-label">Settings</span>
                     </button>
-                    <button class="icon-btn menu-tile" data-menu-item="about" data-action="showAboutAndCloseSidebar" title="About">
+                    <button class="icon-btn menu-tile" data-menu-item="about" data-action="showAboutAndCloseSidebar" aria-label="About" data-tip="">
                         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                         <span class="btn-label">About</span>
                     </button>
@@ -540,33 +530,33 @@
 
             <div class="nav-section" data-section="channels">
                 <div class="nav-title">
-                    <span class="section-reorder-arrows" aria-hidden="true">
-                        <button class="section-reorder-btn" data-section-move="up" title="Move section up" aria-label="Move section up">
+                    <span class="section-reorder-arrows">
+                        <button class="section-reorder-btn" data-section-move="up" aria-label="Move section up" data-tip="">
                             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
                         </button>
-                        <button class="section-reorder-btn" data-section-move="down" title="Move section down" aria-label="Move section down">
+                        <button class="section-reorder-btn" data-section-move="down" aria-label="Move section down" data-tip="">
                             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                         </button>
                     </span>
                     <span class="nav-title-text">Public Channels</span>
-                    <span class="discover-icon" data-action="showGeohashExplorer"
-                        title="Explore geohash channels globally">
+                    <button type="button" class="discover-icon section-icon-btn" data-action="showGeohashExplorer"
+                        aria-label="Explore geohash channels globally" data-tip="">
                         <svg viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10" fill="none" stroke-width="2" />
                             <path
                                 d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
                                 fill="none" stroke-width="2" />
                         </svg>
-                    </span>
-                    <span class="search-icon" data-action="toggleSearch" data-search-target="channelSearch">
+                    </button>
+                    <button type="button" class="search-icon section-icon-btn" data-action="toggleSearch" data-search-target="channelSearch" aria-label="Search channels" data-tip="">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="m21 21-4.35-4.35"></path>
                         </svg>
-                    </span>
-                    <span class="collapse-icon" data-action="toggleSectionCollapse" data-section-target="channels" title="Collapse section" aria-label="Collapse section">
+                    </button>
+                    <button type="button" class="collapse-icon section-icon-btn" data-action="toggleSectionCollapse" data-section-target="channels" aria-expanded="true" aria-label="Collapse section" data-tip="">
                         <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    </span>
+                    </button>
                 </div>
                 <div class="search-input-wrapper" id="channelSearchWrapper">
                     <input type="text" class="search-input" id="channelSearch" placeholder="Search channels..."
@@ -576,11 +566,11 @@
                 </div>
                 <div id="channelSearchResults"></div>
                 <div class="channel-list" id="channelList">
-                    <div class="channel-item active" data-channel="nymchat" data-geohash="nymchat">
+                    <div class="channel-item active" data-channel="nymchat" data-geohash="nymchat" role="button" tabindex="0">
                         <span class="channel-name">#nymchat<span class="channel-sub"><span class="loc-city">Not a geohash</span></span></span>
                         <div class="channel-badges">
                             <span class="unread-badge nm-hidden">0</span>
-                            <button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Channel menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button>
+                            <button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Channel menu" type="button" data-tip=""><svg data-menu-dots-icon width="16" height="16"></svg></button>
                         </div>
                     </div>
                     <div class="sidebar-skeleton ssk-channel ssk-w3" aria-hidden="true"><span class="sk-bar"></span></div>
@@ -592,30 +582,30 @@
 
             <div class="nav-section" data-section="pms">
                 <div class="nav-title">
-                    <span class="section-reorder-arrows" aria-hidden="true">
-                        <button class="section-reorder-btn" data-section-move="up" title="Move section up" aria-label="Move section up">
+                    <span class="section-reorder-arrows">
+                        <button class="section-reorder-btn" data-section-move="up" aria-label="Move section up" data-tip="">
                             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
                         </button>
-                        <button class="section-reorder-btn" data-section-move="down" title="Move section down" aria-label="Move section down">
+                        <button class="section-reorder-btn" data-section-move="down" aria-label="Move section down" data-tip="">
                             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                         </button>
                     </span>
                     <span class="nav-title-text">Private Messages</span>
-                    <span class="search-icon new-pm-btn" data-action="openNewPMModal" title="New message">
+                    <button type="button" class="search-icon new-pm-btn section-icon-btn" data-action="openNewPMModal" aria-label="New message" data-tip="">
                         <svg viewBox="0 0 24 24">
                             <line x1="12" y1="5" x2="12" y2="19"></line>
                             <line x1="5" y1="12" x2="19" y2="12"></line>
                         </svg>
-                    </span>
-                    <span class="search-icon" data-action="toggleSearch" data-search-target="pmSearch" title="Search PMs">
+                    </button>
+                    <button type="button" class="search-icon section-icon-btn" data-action="toggleSearch" data-search-target="pmSearch" aria-label="Search PMs" data-tip="">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="m21 21-4.35-4.35"></path>
                         </svg>
-                    </span>
-                    <span class="collapse-icon" data-action="toggleSectionCollapse" data-section-target="pms" title="Collapse section" aria-label="Collapse section">
+                    </button>
+                    <button type="button" class="collapse-icon section-icon-btn" data-action="toggleSectionCollapse" data-section-target="pms" aria-expanded="true" aria-label="Collapse section" data-tip="">
                         <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    </span>
+                    </button>
                 </div>
                 <div class="search-input-wrapper" id="pmSearchWrapper">
                     <input type="text" class="search-input" id="pmSearch" placeholder="Search PMs..."
@@ -631,24 +621,24 @@
 
             <div class="user-list" id="userList" data-section="nyms">
                 <div class="nav-title">
-                    <span class="section-reorder-arrows" aria-hidden="true">
-                        <button class="section-reorder-btn" data-section-move="up" title="Move section up" aria-label="Move section up">
+                    <span class="section-reorder-arrows">
+                        <button class="section-reorder-btn" data-section-move="up" aria-label="Move section up" data-tip="">
                             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>
                         </button>
-                        <button class="section-reorder-btn" data-section-move="down" title="Move section down" aria-label="Move section down">
+                        <button class="section-reorder-btn" data-section-move="down" aria-label="Move section down" data-tip="">
                             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                         </button>
                     </span>
                     <span class="nav-title-text">Online Nyms</span>
-                    <span class="search-icon" data-action="toggleSearch" data-search-target="userSearch">
+                    <button type="button" class="search-icon section-icon-btn" data-action="toggleSearch" data-search-target="userSearch" aria-label="Search nyms" data-tip="">
                         <svg viewBox="0 0 24 24">
                             <circle cx="11" cy="11" r="8"></circle>
                             <path d="m21 21-4.35-4.35"></path>
                         </svg>
-                    </span>
-                    <span class="collapse-icon" data-action="toggleSectionCollapse" data-section-target="nyms" title="Collapse section" aria-label="Collapse section">
+                    </button>
+                    <button type="button" class="collapse-icon section-icon-btn" data-action="toggleSectionCollapse" data-section-target="nyms" aria-expanded="true" aria-label="Collapse section" data-tip="">
                         <svg viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    </span>
+                    </button>
                 </div>
                 <div class="search-input-wrapper" id="userSearchWrapper">
                     <input type="text" class="search-input" id="userSearch" placeholder="Search nyms..."
@@ -663,108 +653,180 @@
                     <div class="sidebar-skeleton ssk-nym ssk-w3" aria-hidden="true"><span class="sk-avatar"></span><span class="sk-bar"></span></div>
                 </div>
             </div>
+            <div class="sidebar-footer" id="sidebarFooter" role="group" aria-label="Connection status and sidebar tools">
+                <div class="sidebar-footer-status">
+                        <button type="button" class="status-indicator" data-action="openRelayStats" data-tip="View network stats">
+                            <span class="status-dot" id="statusDot"></span>
+                            <span id="connectionStatus">Disconnected</span>
+                        </button>
+                        <button type="button" class="mesh-status-row nm-hidden" id="meshStatusRow"
+                            data-action="openMeshPanel" data-tip="Bluetooth mesh">
+                            <svg class="mesh-status-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 7 10 10-5 5V2l5 5L7 17"></path></svg>
+                            <span id="meshStatusLabel">Mesh off</span>
+                            <span id="meshStatusLinks" class="mesh-status-links"></span>
+                        </button>
+                </div>
+                <button type="button" class="sidebar-edit-btn" id="sidebarEditBtn" data-action="toggleSidebarEdit" aria-pressed="false" aria-label="Edit sidebar">
+                    <svg class="sidebar-edit-pencil" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>
+                    <svg class="sidebar-edit-check" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                    <span class="sidebar-edit-label"></span>
+                </button>
+            </div>
         </aside>
+        <div class="sidebar-resizer" id="sidebarResizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" title="Drag to resize the sidebar" tabindex="0"></div>
 
         <main class="main-content">
             <header class="chat-header">
-                <div class="channel-info">
-                    <div class="nm-h-15">
-                        <div class="channel-header-controls">
-                            <div class="channel-nav-buttons">
-                                <button class="channel-nav-btn" id="channelBackBtn" data-action="navigateBack" title="Go back (Alt+Left)" disabled>
+                <div class="uh-left">
+                    <button type="button" class="uh-phone-menu" data-action="toggleSidebar" aria-label="Menu">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </button>
+                    <div class="channel-nav-buttons">
+                        <button class="channel-nav-btn" id="channelBackBtn" data-action="navigateBack" aria-label="Go back" data-tip-key="Alt+←" disabled>
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <polyline points="15 18 9 12 15 6"></polyline>
                                     </svg>
                                 </button>
-                                <button class="channel-nav-btn" id="channelForwardBtn" data-action="navigateForward" title="Go forward (Alt+Right)" disabled>
+                        <button class="channel-nav-btn" id="channelForwardBtn" data-action="navigateForward" aria-label="Go forward" data-tip-key="Alt+→" disabled>
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <polyline points="9 6 15 12 9 18"></polyline>
                                     </svg>
                                 </button>
-                            </div>
-                            <div class="channel-action-buttons">
-                                <button class="favorite-channel-btn" id="favoriteChannelBtn" data-action="toggleFavoriteCurrentChannel"
-                                    title="Pin channel">
-                                    <svg viewBox="0 0 24 24" width="18" height="18">
+                    </div>
+                    <button type="button" class="uh-phone-menu uh-mesh-back" data-action="meshBackToList" aria-label="Back to chats" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg></button>
+                </div>
+                <div class="uh-mid mesh-hdr-mid" id="meshHeaderMid">
+                    <span class="uh-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"></polyline></svg></span>
+                    <span class="uh-text">
+                        <span class="uh-title-row"><span class="uh-title">Bluetooth mesh</span></span>
+                        <span class="uh-sub" id="meshHeaderSub"></span>
+                    </span>
+                </div>
+                <div class="channel-title-wrap uh-mid" id="chatTitleBtn">
+                    <span class="uh-avatar" id="chatHeaderAvatar" aria-hidden="true"></span>
+                    <span class="uh-text">
+                        <span class="uh-title-row"><span class="uh-title" id="chatHeaderTitle"></span><svg class="uh-info" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></span>
+                        <span class="uh-sub" id="chatHeaderSub"></span>
+                    </span>
+                    <div class="uh-src" hidden>
+                        <div class="channel-title" id="currentChannel">#nymchat</div>
+                        <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
+                    </div>
+                </div>
+                <div class="channel-action-buttons uh-actions">
+                    <button class="share-channel-btn" id="shareChannelBtn" data-action="shareChannel"
+                                    aria-label="Share channel URL">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+                                </button>
+                    <button class="favorite-channel-btn" id="favoriteChannelBtn" data-action="toggleFavoriteCurrentChannel"
+                                    aria-label="Favorite channel">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                                         <path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z" />
                                     </svg>
                                 </button>
-                                <button class="share-channel-btn" id="shareChannelBtn" data-action="shareChannel"
-                                    title="Share channel URL">
-                                    <svg viewBox="0 0 24 24" width="18" height="18">
-                                        <path
-                                            d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z" />
-                                    </svg>
+                    <button class="info-panel-btn nm-hidden" id="infoPanelBtn" data-action="toggleInfoPanel"
+                                    aria-label="Conversation info" aria-pressed="false" data-tip="">
+                                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                                 </button>
-                                <button class="call-channel-btn nm-call-hidden" id="audioCallBtn" data-action="initiateAudioCall"
-                                    title="Start audio call">
+                    <button class="call-channel-btn nm-call-hidden" id="audioCallBtn" data-action="initiateAudioCall"
+                                    aria-label="Start audio call">
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
                                     </svg>
                                 </button>
-                                <button class="call-channel-btn nm-call-hidden" id="videoCallBtn" data-action="initiateVideoCall"
-                                    title="Start video call">
+                    <button class="call-channel-btn nm-call-hidden" id="videoCallBtn" data-action="initiateVideoCall"
+                                    aria-label="Start video call">
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <polygon points="23 7 16 12 23 17 23 7"></polygon>
                                         <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
                                     </svg>
                                 </button>
-                            </div>
-                        </div>
-                        <div class="channel-title-wrap">
-                            <div class="channel-title" id="currentChannel">#nymchat</div>
-                            <div class="channel-meta" id="channelMeta">0 nyms in channel</div>
-                        </div>
-                    </div>
+                    <button class="call-channel-btn call-rejoin-btn nm-call-hidden" id="rejoinCallBtn" data-action="rejoinGroupCall"
+                                    aria-label="Rejoin the call">
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                                    </svg>
+                                    <span>Rejoin</span>
+                                </button>
+                </div>
+                <div class="uh-actions mesh-hdr-actions">
+                    <button type="button" id="meshGhostBtn" data-action="meshToggleGhost" aria-label="Ghost Mode" aria-pressed="false" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V10a7 7 0 0 1 14 0v11l-2.33-2-2.34 2L12 19l-2.33 2-2.34-2Z"></path><path d="M9.5 10.5h.01M14.5 10.5h.01"></path></svg></button>
+                    <button type="button" id="meshAddBtn" data-action="meshAddPeer" aria-label="Add device" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 7 14 17 9 22 9 2 14 7 4 17"></polyline><path d="M19 8v6M16 11h6"></path></svg></button>
                 </div>
                 <div class="header-actions" role="group" aria-label="Main menu">
                     <div class="header-actions-row header-actions-primary">
-                        <button class="icon-btn notifications-btn" data-menu-item="notifications" data-action="openNotificationsModal" title="Notifications">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path> <path d="M13.73 21a2 2 0 0 1-3.46 0"></path> </svg>
-                            Notifications
+                        <button class="icon-btn header-icon-btn notifications-btn" data-menu-item="notifications" data-action="openNotificationsModal" aria-label="Notifications" data-tip="">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"> <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path> <path d="M13.73 21a2 2 0 0 1-3.46 0"></path> </svg>
                             <span class="notification-count-badge nm-hidden" id="notifBadgeDesktop">0</span>
                         </button>
-                        <button class="icon-btn" data-menu-item="saved" data-action="openSavedMessages" title="Saved messages" id="savedMessagesBtn">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4.5L6 21z"></path></svg>
-                            Saved
+                        <button class="icon-btn header-icon-btn" data-menu-item="shop" data-action="openShop" aria-label="Shop" data-tip="">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7"></path><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><path d="M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4"></path><path d="M2 7h20"></path><path d="M22 7v3a2 2 0 0 1-2 2 2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7"></path></svg>
                         </button>
-                        <button class="icon-btn" data-menu-item="calls" data-action="gtOpenCallLinks" title="Call links" id="callLinksBtn">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14l4-4"></path><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"></path><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"></path></svg>
-                            Calls
-                        </button>
-                    </div>
-                    <div class="header-actions-row">
-                        <button class="icon-btn" data-menu-item="flair" data-action="openShop" title="Flair">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
-                            Flair
-                        </button>
-                        <button class="icon-btn" data-menu-item="settings" data-action="showSettings" title="Settings">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                            Settings
-                        </button>
-                        <button class="icon-btn" data-menu-item="about" data-action="showAbout" title="About">
-                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-                            About
+                        <button class="icon-btn header-icon-btn" data-menu-item="settings" data-action="showSettings" aria-label="Settings" data-tip="">
+                            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                         </button>
                     </div>
                 </div>
                 <div class="mobile-header-actions">
-                    <button class="mobile-notif-toggle" data-action="openNotificationsModal" title="Notifications">
-                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <button class="mobile-notif-toggle" data-action="openNotificationsModal" aria-label="Notifications">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
                             <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
                         </svg>
                         <span class="notification-count-badge nm-hidden" id="notifBadgeMobile">0</span>
                     </button>
-                    <button class="mobile-menu-toggle" data-action="toggleSidebar" title="Menu">
-                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <button class="mobile-menu-toggle" data-action="toggleSidebar" aria-label="Menu">
+                        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="3" y1="6" x2="21" y2="6"></line>
                             <line x1="3" y1="12" x2="21" y2="12"></line>
                             <line x1="3" y1="18" x2="21" y2="18"></line>
                         </svg>
                     </button>
                 </div>
+                <div class="header-more">
+                            <button class="icon-btn header-icon-btn" id="headerMoreBtn" data-action="toggleHeaderMore" aria-label="More" aria-haspopup="menu" aria-expanded="false" aria-controls="headerMoreMenu" data-tip="">
+                                <svg data-menu-dots-icon="outline" width="18" height="18"></svg>
+                            </button>
+                            <div class="header-more-menu nm-hidden" id="headerMoreMenu" role="menu" aria-label="More">
+                                <button class="header-more-item" role="menuitem" data-menu-item="saved" data-action="openSavedMessages" id="savedMessagesBtn">
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-6-4.5L6 21z"></path></svg>
+                                    <span>Saved</span>
+                                </button>
+                                <button class="header-more-item" role="menuitem" data-menu-item="calls" data-action="gtOpenCallLinks" id="callLinksBtn">
+                                    <svg data-call-link-icon width="16" height="16"></svg>
+                                    <span>Calls</span>
+                                    <span class="notification-count-badge ch-more-badge nm-hidden" id="callsBadgeMore">0</span>
+                                </button>
+                                <button class="header-more-item" role="menuitem" data-menu-item="about" data-action="showAbout">
+                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                                    <span>About</span>
+                                </button>
+                            </div>
+                        </div>
             </header>
+            <script src="js/modules/call-link-icon.js"></script>
+            <script src="js/modules/menu-dots-icon.js"></script>
+
+            <section class="mesh-page" id="meshPage" hidden aria-label="Bluetooth mesh">
+                <div class="mesh-page-scroll">
+                    <div class="mesh-page-inner" id="meshPanelBody"></div>
+                </div>
+                <div class="mesh-diag" id="meshDiag">
+                    <div class="mesh-diag-bar">
+                        <button type="button" class="mesh-diag-toggle" data-action="meshToggleDiag" aria-expanded="false" aria-controls="meshLogBody">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"></polyline></svg>
+                            <span>Mesh diagnostics</span>
+                        </button>
+                        <button type="button" class="mesh-diag-act" data-action="meshCopyDiag">Copy</button>
+                        <button type="button" class="mesh-diag-act" data-action="meshClearDiag">Clear</button>
+                    </div>
+                    <pre class="mesh-log" id="meshLogBody" hidden></pre>
+                </div>
+            </section>
 
             <!-- Premium Nymbot control bar -->
             <div class="bot-control-bar nm-hidden" id="botControlBar">
@@ -795,7 +857,7 @@
                 </button>
             </div>
 
-            <div class="messages-container" id="messagesScroller"><div class="messages-list" id="messagesContainer"></div></div>
+            <div class="messages-container" id="messagesScroller"><div class="messages-list" id="messagesContainer" role="log" aria-live="off" aria-label="Messages"></div></div>
             <div class="cv-strip" id="columnsStrip">
                 <div class="cv-column cv-skeleton-col"><div class="cv-column-header"><span class="cv-col-icon"><span class="sk-bar sk-colicon"></span></span><span class="cv-col-title"><span class="sk-bar sk-coltitle"></span></span></div><div class="cv-column-scroller messages-container cv-scroller"><div class="cv-column-list messages-list cv-list"></div></div></div>
                 <div class="cv-column cv-skeleton-col"><div class="cv-column-header"><span class="cv-col-icon"><span class="sk-bar sk-colicon"></span></span><span class="cv-col-title"><span class="sk-bar sk-coltitle"></span></span></div><div class="cv-column-scroller messages-container cv-scroller"><div class="cv-column-list messages-list cv-list"></div></div></div>
@@ -811,7 +873,7 @@
 
             <div class="cn-fabs" id="cnFabs">
                 <button class="scroll-to-bottom-btn" id="scrollToBottomBtn" data-action="scrollToBottom"
-                    title="Scroll to bottom">
+                    aria-label="Scroll to bottom" data-tip="">
                     <svg viewBox="0 0 24 24" width="20" height="20">
                         <polyline points="6 9 12 15 18 9"></polyline>
                     </svg>
@@ -819,7 +881,7 @@
             </div>
 
             <div class="input-container">
-                <button class="icon-btn input-btn attach-btn" id="attachBtn" type="button" title="Attach" aria-label="Attach" aria-haspopup="menu" aria-controls="attachMenu" aria-expanded="false">
+                <button class="icon-btn input-btn attach-btn" id="attachBtn" type="button" aria-label="Attach" aria-haspopup="menu" aria-controls="attachMenu" aria-expanded="false" data-tip="">
                     <svg viewBox="0 0 24 24">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -832,7 +894,7 @@
                     <div class="command-palette" id="commandPalette" data-composer-dock></div>
                     <div class="command-palette kaomoji-autocomplete" id="kaomojiAutocomplete" data-composer-dock></div>
                     <div class="upload-progress" id="uploadProgress" data-composer-dock>
-                        <button class="upload-progress-close" data-action="cancelUpload" title="Cancel upload" aria-label="Cancel upload">
+                        <button class="upload-progress-close" data-action="cancelUpload" aria-label="Cancel upload" data-tip="">
                             <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
                                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -849,7 +911,7 @@
                             <span class="edit-preview-label">Editing message</span>
                             <span class="edit-preview-text" id="editPreviewText"></span>
                         </div>
-                        <button class="quote-preview-close" id="editPreviewClose" title="Cancel edit">
+                        <button class="quote-preview-close" id="editPreviewClose" aria-label="Cancel edit" data-tip="">
                             <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
                                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -862,7 +924,7 @@
                             <span class="quote-preview-author" id="quotePreviewAuthor"></span>
                             <span class="quote-preview-text" id="quotePreviewText"></span>
                         </div>
-                        <button class="quote-preview-close" id="quotePreviewClose" title="Cancel reply">
+                        <button class="quote-preview-close" id="quotePreviewClose" aria-label="Cancel reply" data-tip="">
                             <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none">
                                 <line x1="18" y1="6" x2="6" y2="18"></line>
                                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -872,20 +934,21 @@
                     <div class="composer-panels" id="composerPanels" data-composer-dock>
                         <div class="media-preview-strip nm-hidden" id="mediaPreviewStrip" data-sig=""></div>
                         <div class="format-toolbar nm-hidden" id="formatToolbar" role="toolbar" aria-label="Message formatting">
-                            <button class="format-tool emoji-input-btn" id="formatEmojiBtn" type="button" data-action="toggleEmojiPicker" title="Emoji and GIFs" aria-label="Emoji and GIFs" aria-haspopup="dialog" aria-expanded="false">
+                            <button class="format-tool emoji-input-btn" id="formatEmojiBtn" type="button" data-action="toggleEmojiPicker" aria-label="Emoji and GIFs" aria-haspopup="dialog" aria-expanded="false" data-tip="">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
                             </button>
-                            <button class="format-tool translate-input-btn" id="translateInputBtn" type="button" title="Translate text" aria-label="Translate text" aria-haspopup="listbox" aria-controls="translateInputDropdown" aria-expanded="false">
+                            <button class="format-tool translate-input-btn" id="translateInputBtn" type="button" aria-label="Translate text" aria-haspopup="listbox" aria-controls="translateInputDropdown" aria-expanded="false" data-tip="">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="m12.87 15.07-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7 1.62-4.33L19.12 17h-3.24z"/></svg>
                             </button>
                             <span class="format-tool-sep" aria-hidden="true"></span>
                         </div>
                     </div>
+                    <div class="composer-conn-hint" id="composerConnHint" role="status" aria-live="polite" hidden></div>
                     <div class="message-input-row">
-                        <div class="message-input input-disabled" id="messageInput" role="textbox" aria-multiline="true"
-                            contenteditable="false" data-placeholder="Message, / for commands, ? for Nymbot..."></div>
+                        <div class="message-input" id="messageInput" role="textbox" aria-multiline="true"
+                            contenteditable="true" data-placeholder="Message, / for commands, ? for Nymbot..."></div>
                         <div class="input-inline-actions" id="inputInlineActions">
-                            <button class="format-input-btn emoji-input-btn" id="emojiInputBtn" type="button" data-action="toggleEmojiPicker" title="Emoji and GIFs" aria-label="Emoji and GIFs" aria-haspopup="dialog" aria-expanded="false">
+                            <button class="format-input-btn emoji-input-btn" id="emojiInputBtn" type="button" data-action="toggleEmojiPicker" aria-label="Emoji and GIFs" aria-haspopup="dialog" aria-expanded="false" data-tip="">
                                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <circle cx="12" cy="12" r="10"></circle>
                                     <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
@@ -901,7 +964,7 @@
                 <div class="input-buttons">
                     <input type="file" class="file-input" id="fileInput" multiple accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime">
                     <input type="file" class="file-input" id="p2pFileInput">
-                    <button class="icon-btn input-btn media-voice-btn composer-action" id="voiceRecordBtn" type="button" title="Voice message" aria-label="Voice message">
+                    <button class="icon-btn input-btn media-voice-btn composer-action" id="voiceRecordBtn" type="button" aria-label="Voice message" data-tip="">
                         <svg viewBox="0 0 24 24">
                             <rect x="9" y="2" width="6" height="12" rx="3"></rect>
                             <path d="M5 10a7 7 0 0 0 14 0"></path>
@@ -909,8 +972,8 @@
                         </svg>
                     </button>
                     <div class="send-split composer-action" id="sendSplit">
-                        <button class="send-btn" id="sendBtn" title="Send" aria-label="Send" disabled hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></button>
-                        <button class="send-menu-btn" id="sendMenuBtn" type="button" hidden title="More send options" aria-haspopup="menu" aria-controls="sendMenu" aria-expanded="false" aria-label="More send options">
+                        <button class="send-btn" id="sendBtn" aria-label="Send" hidden data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></button>
+                        <button class="send-menu-btn" id="sendMenuBtn" type="button" hidden aria-haspopup="menu" aria-controls="sendMenu" aria-expanded="false" aria-label="More send options" data-tip="">
                             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="18 15 12 9 6 15"></polyline>
                             </svg>
@@ -962,13 +1025,12 @@
     <!-- Shop Modal -->
     <div class="shop-modal" id="shopModal">
         <div class="shop-content">
-            <button class="shop-close" data-action="closeShop">✕</button>
+            <button class="shop-close" data-action="closeShop" aria-label="Close">✕</button>
 
             <div class="shop-header">
-                <div class="shop-title">
-                    <span>FLAIR<br />
-                        <span class="nm-h-16">Get addon packs to change the styling of your messages and
-                            nickname that others will see across all channels (only in the Nymchat app).</span></span>
+                <div class="shop-heading">
+                    <div class="shop-title">Shop</div>
+                    <div class="shop-subtitle">Get addon packs to change the styling of your messages and nickname that others will see across all channels (only in the Nymchat app).</div>
                 </div>
                 <div class="shop-recovery">
                     <input type="text" id="recoveryCodeInput" placeholder="Recovery code">
@@ -981,6 +1043,7 @@
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="flair">Nickname Flair</button>
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="special">Special Items</button>
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="limited">Limited &amp; Bundles</button>
+                <button class="shop-tab" data-action="switchShopTab" data-shop-tab="credits">Nymbot Credits</button>
                 <button class="shop-tab" data-action="switchShopTab" data-shop-tab="inventory">My Items</button>
             </div>
 
@@ -991,10 +1054,10 @@
 
     <!-- Image/Video Modal -->
     <div class="image-modal" id="imageModal" data-action="closeImageModal" role="dialog" aria-modal="true" aria-label="Media viewer">
-        <button type="button" class="image-modal-close" id="imageModalCloseBtn" data-action="closeImageModal" title="Close" aria-label="Close">×</button>
-        <button type="button" class="image-modal-download" data-action="downloadModalMedia" title="Download" aria-label="Download">⤓</button>
-        <button type="button" class="image-modal-nav image-modal-prev nm-hidden" id="imageModalPrev" data-action="imageModalPrev" title="Previous" aria-label="Previous">‹</button>
-        <button type="button" class="image-modal-nav image-modal-next nm-hidden" id="imageModalNext" data-action="imageModalNext" title="Next" aria-label="Next">›</button>
+        <button type="button" class="image-modal-close" id="imageModalCloseBtn" data-action="closeImageModal" aria-label="Close" data-tip="">×</button>
+        <button type="button" class="image-modal-download" data-action="downloadModalMedia" aria-label="Download" data-tip="">⤓</button>
+        <button type="button" class="image-modal-nav image-modal-prev nm-hidden" id="imageModalPrev" data-action="imageModalPrev" aria-label="Previous" data-tip="">‹</button>
+        <button type="button" class="image-modal-nav image-modal-next nm-hidden" id="imageModalNext" data-action="imageModalNext" aria-label="Next" data-tip="">›</button>
         <img id="modalImage" src="" alt="Expanded image" decoding="async" loading="lazy">
         <video id="modalVideo" controls playsinline webkit-playsinline class="nm-hidden nm-h-17" data-action="videoModalStop"></video>
         <button type="button" class="image-modal-spoiler nm-hidden" id="modalSpoiler" data-action="imageModalRevealSpoiler">Spoiler, tap to reveal</button>
@@ -1004,7 +1067,7 @@
     <!-- Poll Modal -->
     <div class="modal" id="pollModal">
         <div class="modal-content nm-h-18">
-            <button class="modal-close" data-action="closeModal" data-modal-id="pollModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="pollModal" aria-label="Close">✕</button>
             <div class="modal-header">Create Poll</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -1032,7 +1095,7 @@
     <!-- P2P File Transfers Modal -->
     <div class="modal" id="p2pTransfersModal">
         <div class="modal-content p2p-modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="p2pTransfersModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="p2pTransfersModal" aria-label="Close">✕</button>
             <div class="modal-header">P2P File Transfers</div>
             <div class="modal-body">
                 <div class="p2p-transfers-list" id="p2pTransfersList">
@@ -1054,12 +1117,12 @@
             <div class="incoming-call-name" id="incomingCallName"></div>
             <div class="incoming-call-sub" id="incomingCallSub">Incoming call</div>
             <div class="incoming-call-actions">
-                <button class="incoming-call-btn decline" data-action="rejectIncomingCall" title="Decline">
+                <button class="incoming-call-btn decline" data-action="rejectIncomingCall" aria-label="Decline" data-tip="">
                     <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
                     </svg>
                 </button>
-                <button class="incoming-call-btn accept" data-action="acceptIncomingCall" title="Accept">
+                <button class="incoming-call-btn accept" data-action="acceptIncomingCall" aria-label="Accept" data-tip="">
                     <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
                     </svg>
@@ -1079,7 +1142,7 @@
             <div class="call-chat-panel" id="callChatPanel">
                 <div class="call-chat-header">
                     <span>Chat</span>
-                    <button class="call-chat-close" data-action="toggleCallChat" title="Close chat">✕</button>
+                    <button class="call-chat-close" data-action="toggleCallChat" aria-label="Close chat" data-tip="">✕</button>
                 </div>
                 <div class="call-chat-messages" id="callChatMessages"></div>
                 <div class="call-chat-typing" id="callChatTyping"></div>
@@ -1087,12 +1150,12 @@
                     <div class="call-mention-autocomplete" id="callMentionAutocomplete"></div>
                     <textarea id="callChatInput" class="call-chat-input" rows="1" placeholder="Message"
                         data-on-keydown="callChatKeydown" data-on-input="callChatInput"></textarea>
-                    <button class="call-chat-send" data-action="sendCallChat" title="Send">
+                    <button class="call-chat-send" data-action="sendCallChat" aria-label="Send" data-tip="">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"></path></svg>
                     </button>
                 </div>
             </div>
-            <button class="call-switch-cam-btn nm-call-hidden" id="callSwitchCamBtn" data-action="switchCamera" title="Switch camera">
+            <button class="call-switch-cam-btn nm-call-hidden" id="callSwitchCamBtn" data-action="switchCamera" aria-label="Switch camera" data-tip="">
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
                     <path d="M15.5 12.5a3.5 3.5 0 0 1-5.6 2.8M8.5 11.5a3.5 3.5 0 0 1 5.6-2.8"></path>
@@ -1104,21 +1167,31 @@
         <div class="call-reactions-fly" id="callReactionsFly"></div>
         <div class="call-reactions-bar" id="callReactionsBar"></div>
         <div class="call-presenter-menu" id="callPresenterMenu"></div>
+        <div class="call-presenter-menu call-output-menu" id="callOutputMenu"></div>
         <div class="call-controls">
-            <button class="call-control-btn" id="callMuteBtn" data-action="toggleCallMute" title="Mute microphone">
+            <button class="call-control-btn" id="callMuteBtn" data-action="toggleCallMute" aria-label="Mute microphone" data-tip="">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
                     <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
                     <line x1="12" y1="19" x2="12" y2="23"></line>
                 </svg>
+                <span class="call-btn-label">Mute</span>
             </button>
-            <button class="call-control-btn nm-call-hidden" id="callVideoBtn" data-action="toggleCallVideo" title="Turn off camera">
+            <button class="call-control-btn nm-call-hidden" id="callVideoBtn" data-action="toggleCallVideo" aria-label="Turn off camera" data-tip="">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="23 7 16 12 23 17 23 7"></polygon>
                     <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
                 </svg>
+                <span class="call-btn-label">Camera</span>
             </button>
-            <button class="call-control-btn nm-call-hidden" id="callShareBtn" data-action="toggleScreenShare" title="Share screen">
+            <button class="call-control-btn nm-call-hidden" id="callOutputBtn" data-action="toggleCallOutputMenu" aria-label="Audio output" data-tip="">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                </svg>
+                <span class="call-btn-label">Speaker</span>
+            </button>
+            <button class="call-control-btn nm-call-hidden" id="callShareBtn" data-action="toggleScreenShare" aria-label="Share screen" data-tip="">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
                     <line x1="8" y1="21" x2="16" y2="21"></line>
@@ -1126,33 +1199,38 @@
                     <polyline points="9 10 12 7 15 10"></polyline>
                     <line x1="12" y1="7" x2="12" y2="13"></line>
                 </svg>
+                <span class="call-btn-label">Share</span>
             </button>
-            <button class="call-control-btn" id="callReactBtn" data-action="toggleCallReactions" title="React">
+            <button class="call-control-btn" id="callReactBtn" data-action="toggleCallReactions" aria-label="React" data-tip="">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <circle cx="12" cy="12" r="10"></circle>
                     <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
                     <line x1="9" y1="9" x2="9.01" y2="9"></line>
                     <line x1="15" y1="9" x2="15.01" y2="9"></line>
                 </svg>
+                <span class="call-btn-label">React</span>
             </button>
-            <button class="call-control-btn" id="callChatBtn" data-action="toggleCallChat" title="Chat">
+            <button class="call-control-btn" id="callChatBtn" data-action="toggleCallChat" aria-label="Chat" data-tip="">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                 </svg>
+                <span class="call-btn-label">Chat</span>
                 <span class="call-btn-badge nm-call-hidden"></span>
             </button>
-            <button class="call-control-btn nm-call-hidden" id="callPresenterBtn" data-action="toggleCallPresenterMenu" title="Presenter controls">
+            <button class="call-control-btn nm-call-hidden" id="callPresenterBtn" data-action="toggleCallPresenterMenu" aria-label="Presenter controls" data-tip="">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
                     <circle cx="9" cy="7" r="4"></circle>
                     <path d="M22 11l-3 3-2-2"></path>
                 </svg>
+                <span class="call-btn-label">Presenter</span>
                 <span class="call-btn-badge nm-call-hidden"></span>
             </button>
-            <button class="call-control-btn hangup" id="callHangupBtn" data-action="hangupCall" title="End call">
+            <button class="call-control-btn hangup" id="callHangupBtn" data-action="hangupCall" aria-label="End call" data-tip="">
                 <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
                 </svg>
+                <span class="call-btn-label">Leave</span>
             </button>
         </div>
     </div>
@@ -1160,7 +1238,7 @@
     <!-- Developer Nsec Verification Modal -->
     <div class="modal" id="devNsecModal">
         <div class="modal-content">
-            <button class="modal-close" data-action="cancelDevNsec">✕</button>
+            <button class="modal-close" data-action="cancelDevNsec" aria-label="Close">✕</button>
             <div class="modal-header">Reserved Nickname</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -1179,22 +1257,44 @@
         </div>
     </div>
 
-    <!-- Relay Stats Modal -->
-    <div class="modal" id="meshModal">
-        <div class="modal-content mesh-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="meshModal">&#x2715;</button>
-            <div class="modal-header">Bluetooth Mesh</div>
+    <div class="modal" id="meshJoinModal" data-sheet>
+        <div class="modal-content mesh-sheet">
+            <button class="modal-close" data-action="closeModal" data-modal-id="meshJoinModal" aria-label="Close">&#x2715;</button>
+            <div class="modal-header">Mesh group</div>
             <div class="modal-body">
-                <div id="meshPanelBody"></div>
-                <div class="mesh-section-title">Radio log</div>
-                <pre class="mesh-log" id="meshLogBody"></pre>
+                <div class="form-group">
+                    <input type="text" class="form-input" id="meshJoinName" maxlength="41" placeholder="Group name" autocomplete="off" spellcheck="false" data-on-keydown="meshJoinKey">
+                </div>
+                <div class="form-group">
+                    <input type="password" class="form-input" id="meshJoinPassword" placeholder="Password (optional, encrypts the group)" autocomplete="off" data-on-keydown="meshJoinKey">
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" data-action="closeModal" data-modal-id="meshJoinModal">Cancel</button>
+                <button class="send-btn" id="meshJoinSubmit" data-action="meshJoinSubmit">Join</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="meshGhostModal" data-sheet>
+        <div class="modal-content mesh-sheet">
+            <button class="modal-close" data-action="closeModal" data-modal-id="meshGhostModal" aria-label="Close">&#x2715;</button>
+            <div class="modal-header">Enable Ghost Mode?</div>
+            <div class="modal-body">
+                <p class="mesh-sheet-text">Ghost Mode hides who you are on the Bluetooth mesh.</p>
+                <p class="mesh-sheet-text">Your device stops advertising your nym and your Nostr identity. It presents a throwaway name and key instead, and replaces them every few minutes, so nearby devices cannot recognize you or follow you between places.</p>
+                <p class="mesh-sheet-text">You can still send and receive messages. Anyone you talk to while it is on sees an anonymous identity, not your usual one, and will not be able to tell it was you. Turning it off restores your normal identity.</p>
+            </div>
+            <div class="modal-actions">
+                <button class="icon-btn" data-action="closeModal" data-modal-id="meshGhostModal">Cancel</button>
+                <button class="send-btn" id="meshGhostConfirm" data-action="meshGhostConfirm">Enable</button>
             </div>
         </div>
     </div>
 
     <div class="modal" id="relayStatsModal">
         <div class="modal-content relay-stats-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="relayStatsModal">&#x2715;</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="relayStatsModal" aria-label="Close">&#x2715;</button>
             <div class="modal-header">Network Stats</div>
             <div class="modal-body nm-h-36">
                 <div class="relay-stats-mode" id="rsConnectionMode">
@@ -1259,7 +1359,7 @@
     <!-- Nick Edit Modal -->
     <div class="modal nick-edit-modal" id="nickEditModal">
         <div class="modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="nickEditModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="nickEditModal" aria-label="Close">✕</button>
             <div class="modal-header">View or Edit Nym's Details</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -1280,8 +1380,8 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label">Nickname</label>
-                    <div class="nm-h-37">
-                        <input type="text" class="form-input nm-h-38" id="newNickInput" placeholder="Enter new nym"
+                    <div class="nm-h-37 nm-field">
+                        <input type="text" class="nm-h-38" id="newNickInput" placeholder="Enter new nym"
                             maxlength="20" data-on-input="updateFieldCharCount" data-char-count="newNickCharCount">
                         <span id="nickSuffixDisplay" class="nym-suffix nm-h-39"></span>
                     </div>
@@ -1359,8 +1459,8 @@
                         <label class="form-label nm-h-46">nsec (Nostr Private Key)</label>
                         <div class="nm-h-47">
                             <input type="password" class="form-input nm-h-48" id="revealedNsecValue" readonly>
-                            <button type="button" class="icon-btn nm-h-49" data-action="toggleNsecVisibility" id="nsecVisibilityBtn" title="Show/hide"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
-                            <button type="button" class="icon-btn nm-h-49" data-action="copyRevealedNsec" id="nsecCopyBtn" title="Copy"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
+                            <button type="button" class="icon-btn nm-h-49" data-action="toggleNsecVisibility" id="nsecVisibilityBtn" aria-label="Show/hide" data-tip=""><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
+                            <button type="button" class="icon-btn nm-h-49" data-action="copyRevealedNsec" id="nsecCopyBtn" aria-label="Copy" data-tip=""><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
                         </div>
                         </div>
                         <div id="pqRootReveal" class="nm-hidden">
@@ -1369,8 +1469,8 @@
                             <div class="form-hint">This code, not your nsec, is what makes your messages quantum-resistant. Copy it to any other device you use this account on — without it, that device can read new messages but not the quantum-resistant ones, and if you lose every device holding it, that history is gone for good. Store it with your nsec and never share it.</div>
                             <div class="nm-h-47">
                                 <input type="password" class="form-input nm-h-48" id="pqRootValue" readonly>
-                                <button type="button" class="icon-btn nm-h-49" data-action="togglePqRootVisibility" id="pqRootVisibilityBtn" title="Show/hide"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
-                                <button type="button" class="icon-btn nm-h-49" data-action="copyPqRoot" id="pqRootCopyBtn" title="Copy"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
+                                <button type="button" class="icon-btn nm-h-49" data-action="togglePqRootVisibility" id="pqRootVisibilityBtn" aria-label="Show/hide" data-tip=""><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><path d="M 1 8 C 3 4 6 3 8 3 C 10 3 13 4 15 8 C 13 12 10 13 8 13 C 6 13 3 12 1 8 Z"/><circle cx="8" cy="8" r="2.5"/></svg></button>
+                                <button type="button" class="icon-btn nm-h-49" data-action="copyPqRoot" id="pqRootCopyBtn" aria-label="Copy" data-tip=""><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" class="nm-vam"><rect x="5" y="5" width="8" height="9" rx="1"/><path d="M 3 10 L 3 4 C 3 3.45 3.45 3 4 3 L 9 3" stroke-linecap="round"/></svg></button>
                             </div>
                             <div class="form-hint" id="pqRootFingerprint"></div>
                             <details class="nm-h-24">
@@ -1406,6 +1506,13 @@
                         </div>
                         <div class="form-hint">Save an encrypted copy in your Google account, protected by a PIN you choose. Google can't read the copy without your PIN. Restore it on another device with Continue with Google.</div>
                     </div>
+                    <div class="nm-hidden nm-kb-section" id="appleBackupSettings">
+                        <div class="nm-kb-actions">
+                            <button type="button" class="icon-btn" id="appleBackUpBtn" data-action="appleBackUpKey">Back up to Apple</button>
+                            <button type="button" class="icon-btn" id="appleRemoveBackupsBtn" data-action="appleRemoveBackups">Remove backups</button>
+                        </div>
+                        <div class="form-hint">Save an encrypted copy in your Apple account's iCloud, protected by a PIN you choose. Apple can't read the copy without your PIN. Restore it on another device, in the iPhone app or any browser, with Continue with Apple.</div>
+                    </div>
                     <div class="nm-hidden nm-kb-section" id="passkeyBackupSettings">
                         <div class="nm-kb-actions">
                             <button type="button" class="icon-btn" id="passkeyBackUpBtn" data-action="passkeyBackUpKey">Back up with a passkey</button>
@@ -1428,7 +1535,7 @@
 
     <div class="modal acct-modal" id="accountSwitcherModal">
         <div class="modal-content acct-modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="accountSwitcherModal">&#x2715;</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="accountSwitcherModal" aria-label="Close">&#x2715;</button>
             <div class="modal-header">Identities</div>
             <div class="modal-body">
                 <div class="acct-list" id="acctList"></div>
@@ -1443,9 +1550,22 @@
     <div class="acct-switch-overlay" id="acctSwitchOverlay" aria-live="polite"><span class="loader"></span><span>Switching identity…</span></div>
 
     <!-- Initial Setup Modal -->
+    <div class="first-lang" id="firstLangScreen" role="dialog" aria-modal="true" aria-labelledby="firstLangTitle">
+        <div class="first-lang-card">
+            <header class="first-lang-head">
+                <h2 class="first-lang-title" id="firstLangTitle">Choose your language</h2>
+                <button type="button" class="first-lang-close" id="firstLangClose" aria-label="Close">&times;</button>
+            </header>
+            <p class="first-lang-lede">You can change this anytime in Settings.</p>
+            <input type="search" class="first-lang-search" id="firstLangSearch" placeholder="Search languages" autocomplete="off" spellcheck="false" data-sheet-ignore>
+            <div class="first-lang-list" id="firstLangList" data-no-i18n></div>
+            <p class="first-lang-empty nm-hidden" id="firstLangEmpty">No language by that name.</p>
+        </div>
+    </div>
+
     <div class="modal" id="setupModal">
         <div class="modal-content setup-modal-content">
-            <button class="modal-close nm-hidden" id="setupCloseBtn" data-action="closeModal" data-modal-id="setupModal">&#x2715;</button>
+            <button class="modal-close nm-hidden" id="setupCloseBtn" data-action="closeModal" data-modal-id="setupModal" aria-label="Close">&#x2715;</button>
             <div class="modal-header setup-modal-header">
                 <pre class="logo-ascii setup-logo nm-pointer" role="img" aria-label="Nymchat — log in with Nostr" data-action="openNostrLogin" title="Login with Nostr">
                                             ##\                  ##\
@@ -1463,6 +1583,7 @@
             </div>
             <div class="modal-body">
                 <div class="setup-invite-banner nm-hidden" id="setupInviteBanner"></div>
+                <div class="setup-invite-banner nm-hidden" id="setupDeletedNotice" role="status"></div>
                 <div class="setup-account-back nm-hidden" id="setupAccountBack">
                     <span>Adding another identity</span>
                     <button type="button" class="icon-btn" id="setupAccountBackBtn" data-action="acctCancelAdd"><span id="setupAccountBackLabel">Back to my identities</span></button>
@@ -1471,10 +1592,28 @@
                     <button type="button" class="setup-tab active" data-action="switchSetupTab" data-setup-tab="signup">Sign up</button>
                     <button type="button" class="setup-tab" data-action="switchSetupTab" data-setup-tab="login">Login</button>
                 </div>
+                <div class="setup-signup-lead" id="setupSignupLead" data-setup-only="signup">
+                <div class="form-group setup-nick-group" id="nymGroup">
+                    <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>
+                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
+                        maxlength="20" data-on-input="updateFieldCharCount" data-char-count="nymInputCharCount">
+                    <div class="input-char-count" id="nymInputCharCount">0/20</div>
+                    <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
+                </div>
+                    <div class="setup-enter-wrap" id="setupSignupActions">
+                        <button class="send-btn setup-enter-btn" id="enterNymBtn" data-action="initializeNym">Enter Nymchat</button>
+                    </div>
+                    <div class="setup-signup-tagline" id="setupSignupTagline">No email or phone. Add a photo, banner and bio any time.</div>
+                </div>
                 <div class="setup-brand" id="setupBrand">
+                <div class="setup-brand-title" id="setupBrandTitle" data-setup-only="signup">Keep a backup of your key</div>
                 <div id="setupGoogleBackup" class="nm-hidden setup-brand-row">
                     <button type="button" class="brand-btn brand-btn-google" id="setupGoogleBtn" data-action="continueWithGoogle"><svg class="brand-btn-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg><span>Continue with Google</span></button>
                     <div class="form-hint nm-h-24">Your key stays yours. Google only stores an encrypted copy, which it can't read without your PIN.</div>
+                </div>
+                <div id="setupAppleBackup" class="nm-hidden setup-brand-row">
+                    <button type="button" class="brand-btn brand-btn-apple" id="setupAppleBtn" data-action="continueWithApple"><svg class="brand-btn-icon" viewBox="-14 -5.5 111 111" aria-hidden="true" focusable="false"><path fill="currentColor" d="M41.64 28.73C37.66 28.73 31.51 24.24 25.03 24.4C16.47 24.51 8.63 29.33 4.22 36.96C-4.66 52.27 1.93 74.89 10.59 87.33C14.84 93.39 19.85 100.21 26.5 100C32.87 99.72 35.27 95.88 43 95.88C50.68 95.88 52.86 100 59.61 99.83C66.48 99.72 70.83 93.66 75.03 87.55C79.88 80.52 81.89 73.7 82 73.32C81.84 73.27 68.66 68.23 68.49 53.08C68.38 40.42 78.9 34.36 79.39 34.09C73.39 25.38 64.19 24.4 60.98 24.19C52.59 23.54 45.56 28.73 41.64 28.73ZM55.8 15.96C59.34 11.74 61.68 5.84 61.03 0C55.96 0.22 49.86 3.36 46.21 7.58C42.95 11.31 40.11 17.32 40.88 23.05C46.49 23.48 52.26 20.18 55.8 15.96Z"/></svg><span>Continue with Apple</span></button>
+                    <div class="form-hint nm-h-24">Your key stays yours. Apple only stores an encrypted copy, which it can't read without your PIN.</div>
                 </div>
                 <div id="setupPasskeyCreate" class="nm-hidden setup-brand-row setup-brand-passkey" data-setup-only="signup">
                     <button type="button" class="brand-btn brand-btn-passkey" id="setupPasskeyCreateBtn" data-action="createWithPasskey"><svg class="brand-btn-icon" viewBox="0 -960 960 960" aria-hidden="true" focusable="false"><path fill="currentColor" d="M120-160v-112q0-34 17.5-62.5T184-378q62-31 126-46.5T440-440q20 0 40 1.5t40 4.5q-4 58 21 109.5t73 84.5v80H120ZM760-40l-60-60v-186q-44-13-72-49.5T600-420q0-58 41-99t99-41q58 0 99 41t41 99q0 45-25.5 80T790-290l50 50-60 60 60 60-80 80ZM440-480q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47Zm300-80q17 0 28.5-11.5T780-600q0-17-11.5-28.5T740-640q-17 0-28.5 11.5T700-600q0 17 11.5 28.5T740-560Z"/></svg><span>Sign up with a passkey</span></button>
@@ -1484,17 +1623,12 @@
                     <button type="button" class="brand-btn brand-btn-passkey" id="setupPasskeyBtn" data-action="continueWithPasskey"><svg class="brand-btn-icon" viewBox="0 -960 960 960" aria-hidden="true" focusable="false"><path fill="currentColor" d="M120-160v-112q0-34 17.5-62.5T184-378q62-31 126-46.5T440-440q20 0 40 1.5t40 4.5q-4 58 21 109.5t73 84.5v80H120ZM760-40l-60-60v-186q-44-13-72-49.5T600-420q0-58 41-99t99-41q58 0 99 41t41 99q0 45-25.5 80T790-290l50 50-60 60 60 60-80 80ZM440-480q-66 0-113-47t-47-113q0-66 47-113t113-47q66 0 113 47t47 113q0 66-47 113t-113 47Zm300-80q17 0 28.5-11.5T780-600q0-17-11.5-28.5T740-640q-17 0-28.5 11.5T700-600q0 17 11.5 28.5T740-560Z"/></svg><span>Continue with a passkey</span></button>
                     <div class="form-hint nm-h-24">Sign in with a key you backed up with a passkey. The backup is encrypted, and only your passkey can unlock it.</div>
                 </div>
-                <div class="setup-brand-or">or</div>
+                <div class="setup-brand-or setup-tab-off" data-setup-only="login">or</div>
                 </div>
                 <div class="setup-tab-panel" id="setupSignupPanel">
-                <div class="form-group" id="nymGroup">
-                    <label class="form-label">Choose Your Nickname <span class="nm-h-2">(optional)</span></label>
-                    <input type="text" class="form-input" id="nymInput" placeholder="Leave empty for random nickname"
-                        maxlength="20" data-on-input="updateFieldCharCount" data-char-count="nymInputCharCount">
-                    <div class="input-char-count" id="nymInputCharCount">0/20</div>
-                    <div class="form-hint" id="nymHint">Your ephemeral pseudonym nickname for this session</div>
-
-                    <br/>
+                <details class="setup-profile-details" id="setupProfileDetails">
+                    <summary class="setup-profile-summary">Add a photo, banner and bio</summary>
+                    <div class="form-group setup-profile-fields">
                     <label class="form-label">Choose Your Avatar <span class="nm-h-2">(optional)</span></label>
                     <div class="avatar-upload-section">
                         <div class="avatar-preview-wrap">
@@ -1542,7 +1676,8 @@
                     </div>
                     <div class="input-char-count" id="setupBioCharCount">0/150</div>
                     <div class="form-hint">Short bio shown on your profile (max 150 characters)</div>
-                </div>
+                    </div>
+                </details>
                 </div>
 
                 <!-- Login panel (switches in place of the sign up fields) -->
@@ -1622,9 +1757,6 @@
                     </div>
                 </div>
             </div>
-            <div class="modal-actions nm-h-7" id="setupSignupActions">
-                <button class="send-btn" id="enterNymBtn" data-action="initializeNym">Enter</button>
-            </div>
             <span class="nm-dim" id="setupSignupTos">By entering, you agree to our <a href="https://nymchat.app/terms/"
                     target="_blank" rel="noopener" class="nm-secondary">Terms of Service</a> and <a
                     href="https://nymchat.app/privacy/" target="_blank" rel="noopener" class="nm-secondary">Privacy
@@ -1635,7 +1767,7 @@
     <!-- Event Details Modal -->
     <div class="modal" id="eventDetailsModal">
         <div class="modal-content event-details-content">
-            <button class="modal-close" data-action="closeEventDetails">✕</button>
+            <button class="modal-close" data-action="closeEventDetails" aria-label="Close">✕</button>
             <div class="modal-header">Event Details</div>
             <div class="modal-body">
                 <div id="eventDetailsBody" class="event-details-body"></div>
@@ -1650,7 +1782,7 @@
     <!-- Settings Modal -->
     <div class="modal" id="settingsModal">
         <div class="modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="settingsModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="settingsModal" aria-label="Close">✕</button>
             <div class="modal-header">Settings</div>
             <div class="modal-body">
                 <div class="settings-search">
@@ -1694,6 +1826,47 @@
                     </div>
 
                     <div class="form-group">
+                        <label class="form-label">Colorful Messages</label>
+                        <select class="form-select" id="colorfulMessagesSelect" data-on-change="onColorfulMessagesChange">
+                            <option value="off" selected>Disabled</option>
+                            <option value="on">Enabled</option>
+                        </select>
+                        <div class="form-hint">Tint message text with each sender's color. Off keeps text neutral and colors only the nym and avatar.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Message Layout</label>
+                        <div class="layout-grid" id="layoutGrid">
+                            <div class="layout-option selected" data-layout="bubbles" data-action="selectMessageLayout">
+                                <div class="layout-preview layout-preview-bubbles">
+                                    <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">alice<span class="nym-suffix">#e45f</span></span><span class="lp-bubble-text">hey there!</span></div>
+                                    <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-nick">you<span class="nym-suffix">#6si9</span></span><span class="lp-bubble-text">hello!</span></div>
+                                    <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">bob<span class="nym-suffix">#2t5g</span></span><span class="lp-bubble-text">what's up?</span></div>
+                                </div>
+                                <span class="layout-label">Bubbles (Default)</span>
+                            </div>
+                            <div class="layout-option" data-layout="irc" data-action="selectMessageLayout">
+                                <div class="layout-preview layout-preview-irc">
+                                    <div class="layout-line"><span class="lp-nick">&lt;alice<span class="nym-suffix">#e45f</span>&gt;</span> <span class="lp-msg">hey there!</span></div>
+                                    <div class="layout-line"><span class="lp-nick lp-self">&lt;you<span class="nym-suffix">#6si9</span>&gt;</span> <span class="lp-msg">hello!</span></div>
+                                    <div class="layout-line"><span class="lp-nick">&lt;bob<span class="nym-suffix">#2t5g</span>&gt;</span> <span class="lp-msg">what's up?</span></div>
+                                </div>
+                                <span class="layout-label">IRC Style</span>
+                            </div>
+                        </div>
+                        <div class="form-hint">Choose between classic IRC-style or modern chat bubbles</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Message Threads</label>
+                        <select class="form-select" id="threadsSelect" data-on-change="onThreadsEnabledChange">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled (classic flat view)</option>
+                        </select>
+                        <div class="form-hint">Group replies under their original message. Replies open in a thread view and the original shows a reply count. Disabling shows every message inline like before.</div>
+                    </div>
+
+                    <div class="form-group">
                         <label class="form-label">Chat View</label>
                         <div class="view-grid" id="viewGrid">
                             <div class="view-option selected" data-view="single" data-action="selectChatView">
@@ -1713,15 +1886,6 @@
                         </div>
                         <div class="form-hint">Single shows one conversation at a time. Column view shows channels, PMs, and group chats side by side in scrollable columns you can add, remove, and drag to reorder.</div>
                         <button class="nm-h-58" data-action="resetColumnView">Reset columns to defaults</button>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Message Threads</label>
-                        <select class="form-select" id="threadsSelect" data-on-change="onThreadsEnabledChange">
-                            <option value="true">Enabled</option>
-                            <option value="false">Disabled (classic flat view)</option>
-                        </select>
-                        <div class="form-hint">Group replies under their original message. Replies open in a thread view and the original shows a reply count. Disabling shows every message inline like before.</div>
                     </div>
 
                     <div class="form-group cv-only-setting">
@@ -1794,29 +1958,6 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Message Layout</label>
-                        <div class="layout-grid" id="layoutGrid">
-                            <div class="layout-option selected" data-layout="bubbles" data-action="selectMessageLayout">
-                                <div class="layout-preview layout-preview-bubbles">
-                                    <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">alice<span class="nym-suffix">#e45f</span></span><span class="lp-bubble-text">hey there!</span></div>
-                                    <div class="lp-bubble lp-bubble-self"><span class="lp-bubble-nick">you<span class="nym-suffix">#6si9</span></span><span class="lp-bubble-text">hello!</span></div>
-                                    <div class="lp-bubble lp-bubble-other"><span class="lp-bubble-nick">bob<span class="nym-suffix">#2t5g</span></span><span class="lp-bubble-text">what's up?</span></div>
-                                </div>
-                                <span class="layout-label">Bubbles (Default)</span>
-                            </div>
-                            <div class="layout-option" data-layout="irc" data-action="selectMessageLayout">
-                                <div class="layout-preview layout-preview-irc">
-                                    <div class="layout-line"><span class="lp-nick">&lt;alice<span class="nym-suffix">#e45f</span>&gt;</span> <span class="lp-msg">hey there!</span></div>
-                                    <div class="layout-line"><span class="lp-nick lp-self">&lt;you<span class="nym-suffix">#6si9</span>&gt;</span> <span class="lp-msg">hello!</span></div>
-                                    <div class="layout-line"><span class="lp-nick">&lt;bob<span class="nym-suffix">#2t5g</span>&gt;</span> <span class="lp-msg">what's up?</span></div>
-                                </div>
-                                <span class="layout-label">IRC Style</span>
-                            </div>
-                        </div>
-                        <div class="form-hint">Choose between classic IRC-style or modern chat bubbles</div>
-                    </div>
-
-                    <div class="form-group">
                         <label class="form-label">Visual Transparency</label>
                         <select class="form-select" id="transparencySelect" data-on-change="onTransparencyChange">
                             <option value="false">Solid</option>
@@ -1838,6 +1979,33 @@
                         </div>
                         <div class="form-hint">Adjust the size of all text across the app</div>
                     </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Show Timestamps</label>
+                        <select class="form-select" id="timestampSelect">
+                            <option value="true">Show</option>
+                            <option value="false">Hide</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" id="timeFormatGroup">
+                        <label class="form-label">Time Format</label>
+                        <select class="form-select" id="timeFormatSelect">
+                            <option value="24hr">24-hour (14:30)</option>
+                            <option value="12hr" selected>12-hour (2:30 PM)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" id="dateFormatGroup">
+                        <label class="form-label">Date Format</label>
+                        <select class="form-select" id="dateFormatSelect">
+                            <option value="default" selected>Default (May 28, 2026)</option>
+                            <option value="mdy">MM/DD/YYYY (05/28/2026)</option>
+                            <option value="dmy">DD/MM/YYYY (28/05/2026)</option>
+                            <option value="ymd">YYYY-MM-DD (2026-05-28)</option>
+                        </select>
+                        <div class="form-hint">Used in the full timestamp shown when tapping a message time</div>
+                    </div>
                     </div>
                 </div>
 
@@ -1853,6 +2021,27 @@
                         <div class="form-hint">Optionally protect your saved identity's (nsec) private key with a password, PIN, passkey, or biometric (Face/Touch ID) so it can't be read from this device without unlocking. Passkeys (synced or hardware security keys) and biometrics use WebAuthn where supported, with password/PIN as the universal fallback. On the unlock screen, holding the Nymchat wordmark for 2 seconds engages Panic Mode and wipes this device without unlocking.</div>
                     </div>
 
+                    <div class="form-group" id="aiConsentGroup">
+                        <label class="form-label" for="aiConsentSelect">Nymbot AI Processing</label>
+                        <select class="form-select" id="aiConsentSelect" data-on-change="onAiConsentChange">
+                            <option value="off" selected>Not allowed</option>
+                            <option value="on">Allowed</option>
+                        </select>
+                        <div class="form-hint">What is sent: to answer you, Nymbot sends what you ask it to AI services. That is your question or message, earlier messages in that Nymbot conversation, images and links you include and your nym. For a question in a channel it also sends the channel's recent messages from other people and the channel's approximate location. Allowing this also turns on AI translation, which sends text you choose to translate to our servers.</div>
+                        <div class="form-hint">Who receives it: the Nymbot service run by 21 Million LLC, which processes it on our servers. If you pick a Pro model or an image or video generator, it also goes to that model's maker, such as OpenAI, Anthropic, Google, xAI, Moonshot AI, Alibaba or MiniMax.</div>
+                        <div class="form-hint"><a href="/privacy/" target="_blank" rel="noopener">Privacy Policy</a></div>
+                    </div>
+
+                    <div class="form-group" id="aiTranslateGroup">
+                        <label class="form-label" for="aiTranslateSelect">AI Translation</label>
+                        <select class="form-select" id="aiTranslateSelect" data-on-change="onAiTranslateChange">
+                            <option value="off" selected>Not allowed</option>
+                            <option value="on">Allowed</option>
+                        </select>
+                        <div class="form-hint">What is sent: only the text you choose to translate, such as a message, a poll or your draft, and the language to translate it into.</div>
+                        <div class="form-hint">Who receives it: the Nymchat service run by 21 Million LLC, which translates it with AI models on our servers and sends the translation back. A translation may be cached for up to a day so repeats are faster, and it is not used for anything else.</div>
+                    </div>
+
                     <div class="form-group" id="chatLockSettingsGroup">
                         <label class="form-label">Chat Lock</label>
                         <button type="button" class="form-select nm-vault-settings-btn" id="chatLockSettingsBtn" data-action="openChatLockSettings">Chat lock settings…</button>
@@ -1866,6 +2055,24 @@
                             <option value="on">Enabled</option>
                         </select>
                         <div class="form-hint">When you hold "Your Nym" or the wordmark on the unlock screen for 2 seconds, every other device signed in as this identity also wipes this identity the next time it connects. Other identities on those devices are not touched. An encrypted identity that is still locked when you panic from the unlock screen can't send this signal.</div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Hide Previews</label>
+                        <select class="form-select" id="hidePreviewsSelect" data-on-change="onHidePreviewsChange">
+                            <option value="off" selected>Disabled</option>
+                            <option value="on">Enabled</option>
+                        </select>
+                        <div class="form-hint">Hide the last-message line under each chat in the sidebar. Previews come only from messages already on this device.</div>
+                    </div>
+
+                    <div class="form-group" id="keepCallHistoryGroup">
+                        <label class="form-label" for="keepCallHistorySelect">Keep call history</label>
+                        <select class="form-select" id="keepCallHistorySelect" data-on-change="onKeepCallHistoryChange">
+                            <option value="off">Disabled</option>
+                            <option value="on" selected>Enabled</option>
+                        </select>
+                        <div class="form-hint">Keep a list of your recent calls. It syncs encrypted to your other devices signed in with this identity, and each identity has its own list. Turning this off deletes the list on every device.</div>
                     </div>
 
                     <div class="form-group">
@@ -1886,10 +2093,19 @@
                         <div class="form-hint" id="incognitoKeyboardHint">Turn off autocomplete, autocorrect and spell check in message boxes. The browser can't ask your keyboard app to stop learning; only Android keyboards support that.</div>
                     </div>
 
+                    <div class="form-group" id="fallbackNoticeGroup">
+                        <label class="form-label">Direct Connection Notice</label>
+                        <select class="form-select" id="fallbackNoticeSelect" data-on-change="onFallbackNoticeChange">
+                            <option value="off">Disabled</option>
+                            <option value="on" selected>Enabled</option>
+                        </select>
+                        <div class="form-hint">Tell me when Nymchat falls back to direct relay connections because the proxy is unreachable. Relays can see your IP address in direct mode.</div>
+                    </div>
+
                     <div class="form-group nm-hidden" id="keyBackupSettingsLink">
                         <label class="form-label">Key Backup</label>
                         <button type="button" class="form-select nm-vault-settings-btn" id="keyBackupSettingsBtn" data-action="openKeyBackupDetails">Back up your key and recovery code…</button>
-                        <div class="form-hint">Back up to Google or with a passkey from View or Edit Nym's Details, next to your nsec and post-quantum recovery code.</div>
+                        <div class="form-hint">Back up to Google, to Apple or with a passkey from View or Edit Nym's Details, next to your nsec and post-quantum recovery code.</div>
                     </div>
 
                     <div class="form-group">
@@ -1914,15 +2130,32 @@
                         <div class="form-hint">Filters <strong>incoming</strong> messages by proof of work &mdash; it does not change what you send. Every message Nymchat sends is already mined to at least 16 bits, so 16 keeps Nymchat traffic and drops clients that do no work. Above 16 also hides messages from other Nymchat users, who mine at 16.</div>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Verified Nymchat Users Only</label>
-                        <select class="form-select" id="appVerifiedSelect">
-                            <option value="off" selected>Disabled</option>
-                            <option value="on">Enabled</option>
+                    <div class="form-group nm-hidden" id="autoEphemeralSettingGroup">
+                        <label class="form-label">Auto Ephemeral Mode on Restart</label>
+                        <select class="form-select" id="autoEphemeralSelect">
+                            <option value="false">Disabled</option>
+                            <option value="true">Enabled (auto sign-in)</option>
                         </select>
-                        <div class="form-hint">Filters <strong>incoming</strong> channel messages to senders who proved they are running Nymchat, on the web app or the phone apps. Scripted senders cannot prove it and are dropped. Your own messages, friends, and Nymbot are always shown.</div>
+                        <div class="form-hint">Automatically sign in with ephemeral mode on app restart</div>
                     </div>
 
+                    <div class="form-group">
+                        <label class="form-label">Random Nickname Style</label>
+                        <select class="form-select" id="nickStyleSelect">
+                            <option value="fancy">Fancy (adjective_noun)</option>
+                            <option value="simple">Simple (nym1234)</option>
+                        </select>
+                        <div class="form-hint">Style used when generating random nicknames</div>
+                    </div>
+                    </div>
+                </div>
+
+                <div class="settings-section" data-settings-section data-section-key="pms">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Private Messages</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div class="settings-section-body">
                     <div class="form-group">
                         <label class="form-label">Accept Private Messages &amp; Group Chat Requests</label>
                         <select class="form-select" id="acceptPMsSelect">
@@ -1941,7 +2174,7 @@
                             <option value="disabled">Disabled</option>
                         </select>
                         <div class="form-hint">Control who can ring you with an audio or video call. "Friends only" silently ignores calls from non-friends.</div>
-                        <div class="form-warning">⚠ Audio/video calls and P2P file sharing connect peers directly over WebRTC, which can reveal your true IP address to the other party. Use a VPN or Tor to help conceal it.</div>
+                        <div class="form-warning">⚠ Calls and P2P file sharing use WebRTC. On a direct connection, the other party can see your IP address. The connection servers we use for every call can see it too, and if a call is relayed, so can the relay server. Proxy mode does not hide your IP address in calls. Use a VPN or Tor to help conceal it.</div>
                     </div>
 
                     <div class="form-group">
@@ -1975,7 +2208,7 @@
                         </div>
                     </div>
 
-                    <div class="form-group" id="dmTTLGroup">
+                    <div class="form-group form-subgroup nm-hidden" id="dmTTLGroup">
                         <label class="form-label">Disappear After</label>
                         <select class="form-select" id="dmTTLSelect">
                             <option value="3600">1 hour</option>
@@ -2021,14 +2254,40 @@
                         </select>
                         <div class="form-hint">When enabled, online/away/offline status dots are shown on avatars and in user profiles. "Friends only" broadcasts a hidden status publicly while privately sharing your real status with people you've marked as friends, so only they can see it. When disabled, your status is hidden from everyone, but you can still see other people's status indicators.</div>
                     </div>
+                    </div>
+                </div>
+
+                <div class="settings-section" data-settings-section data-section-key="safety">
+                    <button type="button" class="settings-section-header" data-action="toggleSettingsSection" aria-expanded="true">
+                        <span>Safety &amp; Filtering</span>
+                        <svg class="settings-section-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </button>
+                    <div class="settings-section-body">
+                    <div class="form-group" id="spamFilterGroup">
+                        <label class="form-label" for="spamFilterSelect">Spam filter</label>
+                        <select class="form-select" id="spamFilterSelect" data-on-change="onSpamFilterChange">
+                            <option value="off">Disabled</option>
+                            <option value="on" selected>Enabled</option>
+                        </select>
+                        <div class="form-hint">Hides incoming messages that look like spam, starting with posts from known spam clients. Your own messages are never filtered.</div>
+                    </div>
+
+                    <div class="form-group" id="spamFilterAggressiveGroup">
+                        <label class="form-label" for="spamFilterAggressiveSelect">Aggressive filtering</label>
+                        <select class="form-select" id="spamFilterAggressiveSelect" data-on-change="onSpamFilterAggressiveChange">
+                            <option value="off">Disabled</option>
+                            <option value="on" selected>Enabled</option>
+                        </select>
+                        <div class="form-hint">Also hides keyboard-mash text, random-letter nyms and other spam patterns. Turn it off if real messages go missing. Needs the spam filter on.</div>
+                    </div>
 
                     <div class="form-group">
-                        <label class="form-label">Cache PMs &amp; Group Chats On Device</label>
-                        <select class="form-select" id="cachePMsSelect">
-                            <option value="true">Enabled</option>
-                            <option value="false">Disabled</option>
+                        <label class="form-label">Verified Nymchat Users Only</label>
+                        <select class="form-select" id="appVerifiedSelect">
+                            <option value="off" selected>Disabled</option>
+                            <option value="on">Enabled</option>
                         </select>
-                        <div class="form-hint">When enabled, decrypted private messages and group chats are stored on this device so they appear instantly on app launch. Disable if you'd rather not have decrypted message content kept at rest in app storage. Toggling off clears the existing cached PM/group data.</div>
+                        <div class="form-hint">Filters <strong>incoming</strong> channel messages to senders who proved they are running Nymchat, on the web app or the phone apps. Scripted senders cannot prove it and are dropped. Your own messages, friends, and Nymbot are always shown.</div>
                     </div>
 
                     <div class="form-group">
@@ -2053,11 +2312,14 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Friends</label>
-                        <div class="blocked-list" id="friendsList">
-                            <div class="nm-dim12">No friends added</div>
+                        <label class="form-label">Filter Packs</label>
+                        <div class="filter-pack-list" id="filterPackList">
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="profanity"><span class="filter-pack-name">Profanity</span><span class="filter-pack-desc">Swearing and slurs, in 28 languages. Matched as whole words, so Scunthorpe, classic, cocktail and analysis are not caught.</span></label>
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="scams"><span class="filter-pack-name">Scams &amp; spam</span><span class="filter-pack-desc">Seed-phrase requests, non-Bitcoin chain addresses, doubling offers, Telegram handoffs, lookalike links. Recognizes shapes, so it works in every language.</span></label>
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="crypto"><span class="filter-pack-name">Crypto shilling</span><span class="filter-pack-desc">Price hype, launch promotion and altcoin tickers &mdash; not crypto talk. Bitcoin, sats, zaps, nodes and wallets are explicitly allowed.</span></label>
+                            <label class="filter-pack"><input type="checkbox" data-filter-pack="politics"><span class="filter-pack-name">Politics</span><span class="filter-pack-desc">Party labels, political figures and charged coinages. Ordinary words like state, party, vote, left and right are allowed.</span></label>
                         </div>
-                        <div class="form-hint">Friends can have special privileges like bypassing image blur and message filters. Add friends from the context menu on any user.</div>
+                        <div class="form-hint">Ready-made keyword lists, applied like your own blocked keywords: a matching message is hidden, and so is one from a matching nym. Your friends and your own messages are never filtered. Each pack loads only when you turn it on.</div>
                     </div>
 
                     <div class="form-group">
@@ -2068,14 +2330,11 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Filter Packs</label>
-                        <div class="filter-pack-list" id="filterPackList">
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="profanity"><span class="filter-pack-name">Profanity</span><span class="filter-pack-desc">Swearing and slurs, in 28 languages. Matched as whole words, so Scunthorpe, classic, cocktail and analysis are not caught.</span></label>
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="scams"><span class="filter-pack-name">Scams &amp; spam</span><span class="filter-pack-desc">Seed-phrase requests, non-Bitcoin chain addresses, doubling offers, Telegram handoffs, lookalike links. Recognizes shapes, so it works in every language.</span></label>
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="crypto"><span class="filter-pack-name">Crypto shilling</span><span class="filter-pack-desc">Price hype, launch promotion and altcoin tickers &mdash; not crypto talk. Bitcoin, sats, zaps, nodes and wallets are explicitly allowed.</span></label>
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="politics"><span class="filter-pack-name">Politics</span><span class="filter-pack-desc">Party labels, political figures and charged coinages. Ordinary words like state, party, vote, left and right are allowed.</span></label>
+                        <label class="form-label">Friends</label>
+                        <div class="blocked-list" id="friendsList">
+                            <div class="nm-dim12">No friends added</div>
                         </div>
-                        <div class="form-hint">Ready-made keyword lists, applied like your own blocked keywords: a matching message is hidden, and so is one from a matching nym. Your friends and your own messages are never filtered. Each pack loads only when you turn it on.</div>
+                        <div class="form-hint">Friends can have special privileges like bypassing image blur and message filters. Add friends from the context menu on any user.</div>
                     </div>
                     </div>
                 </div>
@@ -2173,56 +2432,11 @@
                         </select>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Show Timestamps</label>
-                        <select class="form-select" id="timestampSelect">
-                            <option value="true">Show</option>
-                            <option value="false">Hide</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group" id="timeFormatGroup">
-                        <label class="form-label">Time Format</label>
-                        <select class="form-select" id="timeFormatSelect">
-                            <option value="24hr">24-hour (14:30)</option>
-                            <option value="12hr" selected>12-hour (2:30 PM)</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group" id="dateFormatGroup">
-                        <label class="form-label">Date Format</label>
-                        <select class="form-select" id="dateFormatSelect">
-                            <option value="default" selected>Default (May 28, 2026)</option>
-                            <option value="mdy">MM/DD/YYYY (05/28/2026)</option>
-                            <option value="dmy">DD/MM/YYYY (28/05/2026)</option>
-                            <option value="ymd">YYYY-MM-DD (2026-05-28)</option>
-                        </select>
-                        <div class="form-hint">Used in the full timestamp shown when tapping a message time</div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Random Nickname Style</label>
-                        <select class="form-select" id="nickStyleSelect">
-                            <option value="fancy">Fancy (adjective_noun)</option>
-                            <option value="simple">Simple (nym1234)</option>
-                        </select>
-                        <div class="form-hint">Style used when generating random nicknames</div>
-                    </div>
-
                     <div class="form-group" id="speechModelGroup">
                         <label class="form-label">Voice message transcription</label>
                         <div class="form-hint" id="speechModelStatus" role="status" aria-live="polite"></div>
                         <button class="icon-btn nm-h-73" id="speechTranscriptsClearBtn" data-action="nymSpeechTranscriptsClear">Delete saved transcripts</button>
                         <div class="form-hint">Transcription runs on this device. Your browser keeps the speech model after the first download and reuses it. Nymchat can't delete the model; your browser's settings can.</div>
-                    </div>
-
-                    <div class="form-group nm-hidden" id="autoEphemeralSettingGroup">
-                        <label class="form-label">Auto Ephemeral Mode on Restart</label>
-                        <select class="form-select" id="autoEphemeralSelect">
-                            <option value="false">Disabled</option>
-                            <option value="true">Enabled (auto sign-in)</option>
-                        </select>
-                        <div class="form-hint">Automatically sign in with ephemeral mode on app restart</div>
                     </div>
                     </div>
                 </div>
@@ -2295,7 +2509,7 @@
                     </button>
                     <div class="settings-section-body">
                     <div class="form-group mobile-only">
-                        <label class="form-label">Swipe Gestures (Mobile)</label>
+                        <label class="form-label">Swipe Gestures</label>
                         <select class="form-select" id="gesturesEnabledSelect">
                             <option value="true">Enabled</option>
                             <option value="false">Disabled</option>
@@ -2370,6 +2584,15 @@
                         <div class="form-hint">Reduces bandwidth by connecting to only 5 default relays and loading geo relays on-demand when entering channels</div>
                     </div>
 
+                    <div class="form-group">
+                        <label class="form-label">Cache PMs &amp; Group Chats On Device</label>
+                        <select class="form-select" id="cachePMsSelect">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                        <div class="form-hint">When enabled, decrypted private messages and group chats are stored on this device so they appear instantly on app launch. Disable if you'd rather not have decrypted message content kept at rest in app storage. Toggling off clears the existing cached PM/group data.</div>
+                    </div>
+
                     <div class="form-group nm-h-67">
                         <label class="form-label">Transfer Settings to Another User</label>
                         <div class="nm-h-68">
@@ -2408,10 +2631,10 @@
                     </div>
 
                     <div class="form-group nm-h-74">
-                        <button class="icon-btn nm-h-73" id="wipeDeviceBtn" data-action="wipeThisDevice">
-                            Wipe This Device
+                        <button class="send-btn danger nm-delete-account-btn" id="deleteAccountBtn" data-action="deleteAccountAndWipe">
+                            Delete account data and wipe device
                         </button>
-                        <div class="form-hint">Everything, permanently: your key, your settings, your message history and your post-quantum recovery code, on this device and on our servers. The same emergency wipe as holding your Nym for two seconds. Credits on your key are not touched. This cannot be undone.</div>
+                        <div class="form-hint">Deletes your account: your keys, settings, messages and post-quantum recovery code on this device, and your account data on our servers, including your Nymbot credits and purchase records, for every identity saved here. Other devices signed in to them are wiped too. Posts already on public relays stay there. Any remaining Nymbot credits will be lost. This cannot be undone.</div>
                     </div>
                     </div>
                     </div>
@@ -2430,7 +2653,7 @@
     <!-- Zap Modal -->
     <div class="modal zap-modal" id="zapModal">
         <div class="modal-content">
-            <button class="modal-close" data-action="closeZapModal">✕</button>
+            <button class="modal-close" data-action="closeZapModal" aria-label="Close">✕</button>
             <div class="modal-header">Send Lightning Zap</div>
             <div class="modal-body">
                 <div id="zapRecipientInfo" class="nm-h-75">
@@ -2506,7 +2729,7 @@
     <!-- Nymbot Pro Model Picker Modal -->
     <div class="modal" id="botModelModal">
         <div class="modal-content bot-model-modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="botModelModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="botModelModal" aria-label="Close">✕</button>
             <div class="modal-header">Nymbot Pro Model</div>
             <p class="bot-model-sub">Pick a frontier model to power every reply in this chat. Pro replies use separate Pro credits (100 sats each); standard routing picks the best model per task and uses standard credits.</p>
             <input type="search" class="bot-model-search" id="botModelSearch" placeholder="Search models…" autocomplete="off" spellcheck="false" aria-label="Search models">
@@ -2516,7 +2739,7 @@
 
     <div class="modal" id="botRunsModal">
         <div class="modal-content bot-runs-modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="botRunsModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="botRunsModal" aria-label="Close">✕</button>
             <div class="modal-header">Running now</div>
             <div class="form-group">
                 <label class="form-label" for="botMaxRunsSelect">Requests at once</label>
@@ -2540,7 +2763,7 @@
 
     <div class="modal" id="botAnonModal">
         <div class="modal-content">
-            <button class="modal-close" data-action="closeModal" data-modal-id="botAnonModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="botAnonModal" aria-label="Close">✕</button>
             <div class="modal-header">Anonymous Nymbot Chat</div>
             <p class="bot-modal-intro">Your premium chat is already end-to-end encrypted, but Nymbot still sees which pubkey is talking to it. Turn this on and every message, and every reply, travels under a throwaway key generated on this device — the same trick group chats use. Nymbot bills that key, answers it, and never learns your nym. Credits move across as blind vouchers Nymbot signs without seeing, so its own records cannot link the two.</p>
             <div class="form-group bot-toggle-row">
@@ -2583,7 +2806,7 @@
     <!-- Share Channel Modal -->
     <div class="modal" id="shareModal">
         <div class="modal-content share-modal">
-            <button class="modal-close" data-action="closeModal" data-modal-id="shareModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="shareModal" aria-label="Close">✕</button>
             <div class="modal-header">Share Channel</div>
             <div class="modal-body">
                 <div class="form-group">
@@ -2604,7 +2827,7 @@
     <!-- About Modal -->
     <div class="modal" id="aboutModal">
         <div class="modal-content about-modal">
-            <button class="modal-close" data-action="closeModal" data-modal-id="aboutModal">✕</button>
+            <button class="modal-close" data-action="closeModal" data-modal-id="aboutModal" aria-label="Close">✕</button>
             <div class="modal-header">Nymchat <span class="about-version" id="aboutVersion"></span></div>
             <div class="modal-body">
                 <div class="about-build" id="aboutBuild">
@@ -2727,6 +2950,7 @@
     <script defer src="js/defer-css.js"></script>
     <script defer src="js/modules/inline-bindings.js"></script>
     <script defer src="js/modules/dialog.js"></script>
+    <script defer src="js/modules/sheets.js"></script>
     <script defer src="js/nostr-tools.js"></script>
     <script defer src="js/app.js"></script>
     <script defer src="js/vendor/ml-kem.js"></script>
@@ -2738,11 +2962,13 @@
     <script defer src="js/modules/panic.js"></script>
     <script defer src="js/modules/remote-panic.js"></script>
     <script defer src="js/modules/remote-panic-ui.js"></script>
+    <script defer src="js/modules/ai-consent.js"></script>
     <script defer src="js/modules/attest.js"></script>
     <script defer src="js/modules/filter-packs.js"></script>
     <script defer src="js/modules/event-details.js"></script>
     <script defer src="js/modules/wrap-outbox.js"></script>
     <script defer src="js/modules/relays.js"></script>
+    <script defer src="js/modules/upload-activity.js"></script>
     <script defer src="js/modules/nostr-core.js"></script>
     <script defer src="js/modules/users.js"></script>
     <script defer src="js/modules/channels.js"></script>
@@ -2752,10 +2978,12 @@
     <script defer src="js/modules/group-tools.js"></script>
     <script defer src="js/modules/dm-polls.js"></script>
     <script defer src="js/modules/chat-nav.js"></script>
+    <script defer src="js/modules/day-labels.js"></script>
     <script defer src="js/modules/composer-model.js"></script>
     <script defer src="js/modules/anon-nymbot-model.js"></script>
     <script defer src="js/modules/chat-lock.js"></script>
     <script defer src="js/modules/message-format.js"></script>
+    <script defer src="js/modules/message-actions.js"></script>
     <script defer src="js/modules/toasts.js"></script>
     <script defer src="js/modules/mesh/mesh-protocol.js"></script>
     <script defer src="js/modules/mesh/mesh-crypto.js"></script>
@@ -2765,7 +2993,12 @@
     <script defer src="js/modules/mesh/mesh-extras.js"></script>
     <script defer src="js/modules/mesh/mesh-service.js"></script>
     <script defer src="js/modules/messages.js"></script>
+    <script defer src="js/modules/hover-bar.js"></script>
     <script defer src="js/modules/toasts-ui.js"></script>
+    <script defer src="js/modules/day-separators-ui.js"></script>
+    <script defer src="js/modules/list-empty-ui.js"></script>
+    <script defer src="js/modules/event-toasts.js"></script>
+    <script defer src="js/modules/event-toasts-ui.js"></script>
     <script defer src="js/brand-marks.js"></script>
     <script defer src="js/modules/pms.js"></script>
     <script defer src="js/modules/anon-bot.js"></script>
@@ -2778,6 +3011,8 @@
     <script defer src="js/modules/emoji.js"></script>
     <script defer src="js/modules/reactions.js"></script>
     <script defer src="js/modules/commands.js"></script>
+    <script defer src="js/modules/away-sync.js"></script>
+    <script defer src="js/modules/away-status.js"></script>
     <script defer src="js/modules/command-i18n.js"></script>
     <script defer src="js/modules/autocomplete.js"></script>
     <script defer src="js/modules/shop.js"></script>
@@ -2788,26 +3023,40 @@
     <script defer src="js/modules/rich-compose.js"></script>
     <script defer src="js/modules/media-ui.js"></script>
     <script defer src="js/modules/chat-tools-ui.js"></script>
+    <script defer src="js/modules/message-sheet.js"></script>
+    <script defer src="js/modules/phone-pages.js"></script>
     <script defer src="js/modules/group-tools-ui.js"></script>
+    <script defer src="js/modules/call-history.js"></script>
+    <script defer src="js/modules/sync-merge.js"></script>
+    <script defer src="js/modules/call-history-ui.js"></script>
     <script defer src="js/modules/i18n.js"></script>
     <script defer src="js/modules/sidebar-sections.js"></script>
     <script defer src="js/modules/columns.js"></script>
+    <script defer src="js/modules/notify-view.js"></script>
     <script defer src="js/modules/threads.js"></script>
     <script defer src="js/modules/polls.js"></script>
     <script defer src="js/modules/dm-polls-ui.js"></script>
     <script defer src="js/modules/nostr-cards.js"></script>
     <script defer src="js/geo-decode.js"></script>
+    <script defer src="js/modules/geo-explore.js"></script>
     <script defer src="js/modules/geohash-globe.js"></script>
     <script defer src="js/modules/notifications.js"></script>
     <script defer src="js/modules/settings.js"></script>
     <script defer src="js/modules/chat-nav-ui.js"></script>
     <script defer src="js/modules/chat-lock-ui.js"></script>
+    <script defer src="js/modules/unified-search.js"></script>
+    <script defer src="js/modules/unified-search-ui.js"></script>
+    <script defer src="js/modules/shortcuts.js"></script>
     <script defer src="js/modules/accounts-ui.js"></script>
     <script defer src="js/modules/composer-ui.js"></script>
+    <script defer src="js/modules/layout-model.js"></script>
+    <script defer src="js/modules/layout-ui.js"></script>
+    <script defer src="js/modules/tooltips.js"></script>
     <script defer src="js/modules/key-backup.js"></script>
     <script defer src="js/modules/passkey-backup.js"></script>
     <script defer src="js/modules/build-verify.js"></script>
     <script defer src="js/modules/canary-verify.js"></script>
+    <script defer src="js/modules/a11y.js"></script>
     <script defer src="js/sw-register.js"></script>
 
     <!-- QRCode + WebTorrent are injected on first use via window.loadScriptOnce -->
@@ -2815,9 +3064,15 @@
     <!-- Notifications Modal -->
     <div class="modal" id="notificationsModal">
         <div class="modal-content nm-h-36">
-            <button class="modal-close" data-action="closeNotificationsModal">&#x2715;</button>
+            <button class="modal-close" data-action="closeNotificationsModal" aria-label="Close">&#x2715;</button>
+            <button class="notif-prefs-btn" id="notifPrefsBtn" data-action="toggleNotifPrefs" type="button" aria-expanded="false" aria-controls="notifPrefs" aria-label="Notification settings" data-tip="">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
             <div class="modal-header nm-h-76">Notifications</div>
-            <div class="nm-h-77">
+            <div class="notif-toolbar">
+                <button class="notifications-mark-read-btn nm-hidden" id="markAllNotificationsReadBtn" data-action="markAllNotificationsRead" type="button">Mark all as read</button>
+            </div>
+            <div class="notif-prefs nm-hidden" id="notifPrefs">
                 <label class="nm-h-78">
                     <input type="checkbox" id="enableNotificationsCheckbox" checked data-on-change="toggleNotificationsEnabled" class="nm-h-79">
                     Enable notifications
@@ -2837,9 +3092,10 @@
                     <input type="checkbox" id="notifyFriendsOnlyCheckbox" data-on-change="toggleNotifyFriendsOnly" class="nm-h-79">
                     Only notify for messages from friends
                 </label>
-            </div>
-            <div class="notifications-mark-read-row">
-                <button class="notifications-mark-read-btn nm-hidden" id="markAllNotificationsReadBtn" data-action="markAllNotificationsRead" type="button">Mark all as read</button>
+                <div class="notif-sound-row">
+                    <label class="notif-sound-label" for="notifSoundSelect">Notification Sound</label>
+                    <select class="form-select notif-sound-select" id="notifSoundSelect" data-on-change="onNotifSoundChange"></select>
+                </div>
             </div>
             <div class="notifications-modal-body" id="notificationsModalBody">
                 <div class="notifications-empty">No notifications in the last 24 hours</div>

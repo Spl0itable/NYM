@@ -32,6 +32,13 @@ window.restoreSettingsSectionState = function () {
     var map;
     try { map = JSON.parse(localStorage.getItem('nym_settings_sections_collapsed') || '{}'); }
     catch (e) { map = {}; }
+    try {
+        if (!localStorage.getItem('nym_settings_sections_split')) {
+            if (map.privacy) { map.pms = 1; map.safety = 1; }
+            localStorage.setItem('nym_settings_sections_collapsed', JSON.stringify(map));
+            localStorage.setItem('nym_settings_sections_split', '1');
+        }
+    } catch (e) {}
     document.querySelectorAll('.settings-section[data-section-key]').forEach(function (sec) {
         var collapsed = !!map[sec.dataset.sectionKey];
         sec.classList.toggle('collapsed', collapsed);
@@ -51,7 +58,7 @@ window.filterSettings = function (query) {
         var headerSpan = sec.querySelector('.settings-section-header span');
         var sectionTitle = headerSpan ? headerSpan.textContent.toLowerCase() : '';
         var sectionMatches = !!q && sectionTitle.indexOf(q) !== -1;
-        var groups = sec.querySelectorAll('.settings-section-body > .form-group');
+        var groups = sec.querySelectorAll('.settings-section-body > .form-group, .settings-section-body > .settings-destructive > .form-group');
         var anyVisible = false;
         groups.forEach(function (g) {
             var text = (g.textContent || '').toLowerCase();
@@ -92,15 +99,18 @@ window.filterSettings = function (query) {
     document.addEventListener('error', markImgLoaded, true);
 })();
 
-window.nymHapticTap = function (ms) {
+window.NYM_HAPTIC_MS = { selection: 8, light: 15, medium: 30 };
+
+window.nymHaptic = function (kind) {
     try {
+        var ms = window.NYM_HAPTIC_MS[kind] || window.NYM_HAPTIC_MS.medium;
         if (window.Haptics && typeof window.Haptics.postMessage === 'function') {
             window.Haptics.postMessage('tap');
             return;
         }
-        if (navigator && typeof navigator.vibrate === 'function') {
-            navigator.vibrate(ms || 30);
-        }
+        if (!navigator || typeof navigator.vibrate !== 'function') return;
+        if (window.matchMedia && !window.matchMedia('(pointer: coarse)').matches) return;
+        navigator.vibrate(ms);
     } catch (_) { }
 };
 
@@ -285,6 +295,17 @@ window.nymHapticTap = function (ms) {
         'meshToggle':                 function () { nym().toggleMesh(); },
         'meshAddPeer':                function () { nym().addMeshPeer(); },
         'meshToggleGhost':            function () { var n = nym(); n.setMeshGhostMode(!(n._mesh && n._mesh.ghostEnabled)); },
+        'meshBackToList':             function () { nym().meshBackToList(); },
+        'closeMeshPage':              function () { nym().closeMeshPage(); },
+        'meshOpenChannel':            function () { nym().meshOpenChannel(); },
+        'meshOpenJoin':               function () { nym().openMeshJoin(); },
+        'meshOpenPeer':               function (_e, t) { nym().meshOpenPeer(t.dataset.peerId); },
+        'meshJoinSubmit':             function () { nym().meshJoinSubmit(); },
+        'meshJoinKey':                function (e) { if (e.key === 'Enter') { e.preventDefault(); nym().meshJoinSubmit(); } },
+        'meshGhostConfirm':           function () { nym().meshGhostConfirm(); },
+        'meshToggleDiag':             function () { nym().meshToggleDiag(); },
+        'meshCopyDiag':               function () { nym().meshCopyDiag(); },
+        'meshClearDiag':              function () { nym().meshClearDiag(); },
         'meshForgetPeer':             function (_e, t) { nym().meshForgetPeer(t.dataset.peerId); },
         'meshPingPeer':               function (_e, t) { nym().meshPingPeer(t.dataset.peerId); },
         'showGeohashExplorer':        function () { nym().showGeohashExplorer(); },
@@ -353,6 +374,9 @@ window.nymHapticTap = function (ms) {
         'callChatReactBadge':         function (_e, t) { nym().callChatReactBadge(t); },
         'selectCallMention':          function (_e, t) { nym().selectCallMention(t); },
         'toggleCallPresenterMenu':    function () { nym().toggleCallPresenterMenu(); },
+        'toggleCallOutputMenu':       function () { nym().toggleCallOutputMenu(); },
+        'rejoinGroupCall':            function () { nym().rejoinGroupCall(); },
+        'selectCallOutput':           function (_e, t) { nym().selectCallAudioOutput(t.dataset.deviceId); },
         'toggleScreenShareRestricted':function () { nym().toggleScreenShareRestricted(); },
         'makeCallPresenter':          function (_e, t) { nym().assignPresenter(t.dataset.pubkey); },
         'clearCallPresenter':         function () { nym().assignPresenter(null); },
@@ -443,7 +467,7 @@ window.nymHapticTap = function (ms) {
         'executeSettingsTransfer':    function () { nym().executeSettingsTransfer(); },
         'clearLocalStorageCache':     function () { window.clearLocalStorageCache(); },
         'resetSettings':              function () { window.resetSettings(); },
-        'wipeThisDevice':             function () { window.wipeThisDevice(); },
+        'deleteAccountAndWipe':       function () { window.deleteAccountAndWipe(); },
         'saveSettings':               function () { window.saveSettings(); },
         'onRandomKeypairChange':      function (_e, t) {
             var w = byId('hardcoreKeypairWarning');
@@ -489,9 +513,11 @@ window.nymHapticTap = function (ms) {
         'toggleGroupMentionsOnly':    function (_e, t) { nym().toggleGroupMentionsOnly(t.checked); },
         'toggleThreadMentionsOnly':   function (_e, t) { nym().toggleThreadMentionsOnly(t.checked); },
         'toggleNotifyFriendsOnly':    function (_e, t) { nym().toggleNotifyFriendsOnly(t.checked); },
+        'onNotifSoundChange':         function (_e, t) { nym().setNotificationSound(t.value); },
 
         'reactionShowPicker':         function (_e, t) { nym().showReactionPicker(t.dataset.messageId, t); },
         'translateHoverMessage':      function (_e, t) { nym().translateHoverMessage(t); },
+        'hoverBarAction':             function (_e, t) { nym().hoverBarAction(t); },
         'stopSeeding':                function (_e, t) { nym().stopSeeding(t.dataset.offerId); },
         'cancelTransfer':             function (_e, t) { nym().cancelTransfer(t.dataset.transferId); },
         'downloadTorrent':            function (_e, t) { nym().downloadTorrent(t.dataset.offerId); },

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -51,6 +52,20 @@ class UserCosmetics {
   bool get isRedacted => cosmetics.contains('cosmetic-redacted');
 
   static const UserCosmetics none = UserCosmetics();
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UserCosmetics &&
+          other.styleId == styleId &&
+          other.supporter == supporter &&
+          other.genesisEdition == genesisEdition &&
+          listEquals(other.flairIds, flairIds) &&
+          listEquals(other.cosmetics, cosmetics);
+
+  @override
+  int get hashCode => Object.hash(styleId, supporter, genesisEdition,
+      Object.hashAll(flairIds), Object.hashAll(cosmetics));
 }
 
 /// Self from the shop controller; others from D1 shop-status, falling back to presence fields. Pure, safe in `build`.

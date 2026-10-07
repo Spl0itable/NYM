@@ -15,6 +15,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
+import '../calls/call_history_ui.dart' show showCallsScreen;
 import '../calls/call_providers.dart';
 import '../calls/call_signaling.dart' show CallPhase;
 import '../channels/channel_share.dart' show kNymchatShareHost;
@@ -27,6 +28,8 @@ import '../toasts/toast_center.dart';
 import 'group_tools.dart';
 import 'group_tools_providers.dart';
 import 'group_tools_service.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_field.dart';
 
 class GroupToolIcons {
   const GroupToolIcons._();
@@ -41,14 +44,12 @@ class GroupToolIcons {
       '$_open<rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg>';
   static const String location =
       '$_open<path d="M8 14.5s4.5-4.2 4.5-8a4.5 4.5 0 0 0-9 0c0 3.8 4.5 8 4.5 8z"/><circle cx="8" cy="6.5" r="1.6"/></svg>';
-  static const String callLink =
-      '$_open<path d="M6.5 9.5l3-3"/><path d="M7 4.5l1.2-1.2a2.5 2.5 0 0 1 3.5 3.5L10.5 8"/><path d="M9 11.5l-1.2 1.2a2.5 2.5 0 0 1-3.5-3.5L5.5 8"/></svg>';
   static const String checkboxOn =
       '$_open<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M 5 8 L 7 10 L 11 5.5"/></svg>';
   static const String checkboxOff =
       '$_open<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/></svg>';
-  static const String calls =
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14l4-4"/><path d="M11 6l1.5-1.5a3.5 3.5 0 0 1 5 5L16 11"/><path d="M13 18l-1.5 1.5a3.5 3.5 0 0 1-5-5L8 13"/></svg>';
+  static const String callLink =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/><path d="M16.6 7.4l2.8-2.8" stroke-width="1.75"/><path d="M17.3 3.5l.5-.5a2.05 2.05 0 0 1 2.9 2.9l-.5.5" stroke-width="1.75"/><path d="M18.7 8.5l-.5.5a2.05 2.05 0 0 1-2.9-2.9l.5-.5" stroke-width="1.75"/></svg>';
 }
 
 const List<String> kGroupToolsStrings = <String>[
@@ -539,6 +540,10 @@ class GtMapPainter extends CustomPainter {
       old.minLat != minLat ||
       old.maxLat != maxLat ||
       old.features != features ||
+      old.sea != sea ||
+      old.land != land ||
+      old.edge != edge ||
+      old.pinColor != pinColor ||
       old.pin != pin ||
       old.accDeg != accDeg;
 }
@@ -866,10 +871,10 @@ class _GtSlowmodeBarState extends ConsumerState<GtSlowmodeBar> {
 
 Future<T?> _gtPanel<T>(BuildContext context, String title, Widget child) {
   final isLight = context.nym.isLight;
-  return showDialog<T>(
-    context: context,
+  return showNymSheet<T>(
+    context,
+    (_) => GtPanelShell(title: title, child: child),
     barrierColor: isLight ? const Color(0x73000000) : const Color(0xBF000000),
-    builder: (_) => GtPanelShell(title: title, child: child),
   );
 }
 
@@ -883,48 +888,53 @@ class GtPanelShell extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final size = MediaQuery.of(context).size;
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: size.width * 0.92,
-          constraints: BoxConstraints(
-            maxWidth: 560,
-            maxHeight: size.height * 0.88,
-          ),
-          decoration: BoxDecoration(
-            color: c.bgSecondary,
-            borderRadius: NymRadius.rxl,
-            border: Border.all(color: c.glassBorder),
-          ),
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title.toUpperCase(),
-                      style: TextStyle(
-                        color: c.primary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: tr('Close'),
-                    onPressed: () => Navigator.of(context).maybePop(),
-                    icon: Icon(Icons.close, size: 18, color: c.textDim),
-                  ),
-                ],
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                title.toUpperCase(),
+                style: TextStyle(
+                  color: c.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
               ),
-              Divider(color: c.glassBorder, height: 16),
-              Flexible(child: SingleChildScrollView(child: child)),
-            ],
+            ),
+            IconButton(
+              tooltip: tr('Close'),
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: Icon(Icons.close, size: 18, color: c.textDim),
+            ),
+          ],
+        ),
+        Divider(color: c.glassBorder, height: 16),
+        Flexible(child: SingleChildScrollView(child: child)),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 16), child: body),
+      (body) => Center(
+        child: Material(
+          color: Colors.transparent,
+          child: Container(
+            width: size.width * 0.92,
+            constraints: BoxConstraints(
+              maxWidth: 560,
+              maxHeight: size.height * 0.88,
+            ),
+            decoration: BoxDecoration(
+              color: c.bgSecondary,
+              borderRadius: NymRadius.rxl,
+              border: Border.all(color: c.glassBorder),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            child: body,
           ),
         ),
       ),
@@ -1382,135 +1392,140 @@ class _CreateEventBodyState extends ConsumerState<_CreateEventBody> {
     String two(int n) => n.toString().padLeft(2, '0');
     final dateLabel = '${_when.year}-${two(_when.month)}-${two(_when.day)}';
     final timeLabel = '${two(_when.hour)}:${two(_when.minute)}';
-    InputDecoration deco(String label) => InputDecoration(
+    InputDecoration deco(String label) => NymField.decoration(c).copyWith(
       labelText: label,
-      isDense: true,
       labelStyle: TextStyle(color: c.textDim, fontSize: 13),
     );
-    return Column(
-      key: const ValueKey('gtEventForm'),
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          key: const ValueKey('gtEventTitle'),
-          controller: _title,
-          maxLength: GroupToolsLimits.titleMax,
-          decoration: deco(tr('Title')),
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                key: const ValueKey('gtEventDate'),
-                onPressed: () async {
-                  final d = await showDatePicker(
-                    context: context,
-                    initialDate: _when,
-                    firstDate: DateTime(2000),
-                    lastDate: DateTime(2100),
-                  );
-                  if (d != null) {
-                    setState(
-                      () => _when = DateTime(
-                        d.year,
-                        d.month,
-                        d.day,
-                        _when.hour,
-                        _when.minute,
+    return NymDiscardGuard(
+      isDirty: () =>
+          _title.text.trim().isNotEmpty ||
+          _place.text.trim().isNotEmpty ||
+          _note.text.trim().isNotEmpty,
+      child: Column(
+        key: const ValueKey('gtEventForm'),
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            key: const ValueKey('gtEventTitle'),
+            controller: _title,
+            maxLength: GroupToolsLimits.titleMax,
+            decoration: deco(tr('Title')),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  key: const ValueKey('gtEventDate'),
+                  onPressed: () async {
+                    final d = await showDatePicker(
+                      context: context,
+                      initialDate: _when,
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime(2100),
+                    );
+                    if (d != null) {
+                      setState(
+                        () => _when = DateTime(
+                          d.year,
+                          d.month,
+                          d.day,
+                          _when.hour,
+                          _when.minute,
+                        ),
+                      );
+                    }
+                  },
+                  child: Text('${tr('Date')}: $dateLabel'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  key: const ValueKey('gtEventTime'),
+                  onPressed: () async {
+                    final t = await showTimePicker(
+                      context: context,
+                      initialTime: TimeOfDay(
+                        hour: _when.hour,
+                        minute: _when.minute,
                       ),
                     );
-                  }
-                },
-                child: Text('${tr('Date')}: $dateLabel'),
+                    if (t != null) {
+                      setState(
+                        () => _when = DateTime(
+                          _when.year,
+                          _when.month,
+                          _when.day,
+                          t.hour,
+                          t.minute,
+                        ),
+                      );
+                    }
+                  },
+                  child: Text('${tr('Time')}: $timeLabel'),
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: OutlinedButton(
-                key: const ValueKey('gtEventTime'),
-                onPressed: () async {
-                  final t = await showTimePicker(
-                    context: context,
-                    initialTime: TimeOfDay(
-                      hour: _when.hour,
-                      minute: _when.minute,
-                    ),
-                  );
-                  if (t != null) {
-                    setState(
-                      () => _when = DateTime(
-                        _when.year,
-                        _when.month,
-                        _when.day,
-                        t.hour,
-                        t.minute,
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(
+                tr('Time zone'),
+                style: TextStyle(color: c.textDim, fontSize: 13),
+              ),
+              const SizedBox(width: 8),
+              DropdownButton<int>(
+                key: const ValueKey('gtEventTz'),
+                value: _offset,
+                dropdownColor: c.bgSecondary,
+                items: [
+                  for (final o in offs)
+                    DropdownMenuItem(
+                      value: o,
+                      child: Text(
+                        o == _deviceOffset
+                            ? '${GroupTools.tzLabel(o)} · ${tr('this device')}'
+                            : GroupTools.tzLabel(o),
                       ),
-                    );
-                  }
-                },
-                child: Text('${tr('Time')}: $timeLabel'),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Text(
-              tr('Time zone'),
-              style: TextStyle(color: c.textDim, fontSize: 13),
-            ),
-            const SizedBox(width: 8),
-            DropdownButton<int>(
-              key: const ValueKey('gtEventTz'),
-              value: _offset,
-              dropdownColor: c.bgSecondary,
-              items: [
-                for (final o in offs)
-                  DropdownMenuItem(
-                    value: o,
-                    child: Text(
-                      o == _deviceOffset
-                          ? '${GroupTools.tzLabel(o)} · ${tr('this device')}'
-                          : GroupTools.tzLabel(o),
                     ),
-                  ),
-              ],
-              onChanged: (v) => setState(() => _offset = v ?? _offset),
-            ),
-          ],
-        ),
-        TextField(
-          key: const ValueKey('gtEventPlace'),
-          controller: _place,
-          maxLength: GroupToolsLimits.placeMax,
-          decoration: deco(tr('Place (optional)')),
-        ),
-        TextField(
-          key: const ValueKey('gtEventNote'),
-          controller: _note,
-          maxLength: GroupToolsLimits.noteMax,
-          decoration: deco(tr('Note (optional)')),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            GtButton(
-              label: tr('Cancel'),
-              onTap: () => Navigator.of(context).pop(),
-            ),
-            const SizedBox(width: 8),
-            GtButton(
-              key: const ValueKey('gtEventCreate'),
-              label: tr('Create event'),
-              primary: true,
-              onTap: _submit,
-            ),
-          ],
-        ),
-      ],
+                ],
+                onChanged: (v) => setState(() => _offset = v ?? _offset),
+              ),
+            ],
+          ),
+          TextField(
+            key: const ValueKey('gtEventPlace'),
+            controller: _place,
+            maxLength: GroupToolsLimits.placeMax,
+            decoration: deco(tr('Place (optional)')),
+          ),
+          TextField(
+            key: const ValueKey('gtEventNote'),
+            controller: _note,
+            maxLength: GroupToolsLimits.noteMax,
+            decoration: deco(tr('Note (optional)')),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              GtButton(
+                label: tr('Cancel'),
+                onTap: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(width: 8),
+              GtButton(
+                key: const ValueKey('gtEventCreate'),
+                label: tr('Create event'),
+                primary: true,
+                onTap: _submit,
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1883,97 +1898,102 @@ class _CreateCallLinkBodyState extends ConsumerState<_CreateCallLinkBody> {
         ],
       );
     }
-    return Column(
-      key: const ValueKey('gtCallLinkForm'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        TextField(
-          controller: _name,
-          maxLength: GroupToolsLimits.linkNameMax,
-          decoration: InputDecoration(labelText: tr('Name'), isDense: true),
-        ),
-        Row(
-          children: [
-            ChoiceChip(
-              key: const ValueKey('gtKindAudio'),
-              label: Text(tr('Voice')),
-              selected: _kind == 'audio',
-              onSelected: (_) => setState(() => _kind = 'audio'),
-            ),
-            const SizedBox(width: 8),
-            ChoiceChip(
-              key: const ValueKey('gtKindVideo'),
-              label: Text(tr('Video')),
-              selected: _kind == 'video',
-              onSelected: (_) => setState(() => _kind = 'video'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Text(tr('Expires')),
-            const SizedBox(width: 8),
-            DropdownButton<int>(
-              key: const ValueKey('gtCallLinkExpiry'),
-              value: _exp,
-              items: [
-                for (final s in GroupTools.callLinkExpirySec)
-                  DropdownMenuItem(
-                    value: s,
-                    child: Text(tr(GroupTools.expiryLabel(s))),
-                  ),
-              ],
-              onChanged: (v) => setState(() => _exp = v ?? _exp),
-            ),
-          ],
-        ),
-        _hint(
-          context,
-          tr(
-            'Anyone with the link can ask to join. You admit each person, and you can revoke the link at any time.',
+    return NymDiscardGuard(
+      isDirty: () =>
+          _created == null &&
+          _name.text != GroupTools.sanitizeName(widget.name),
+      child: Column(
+        key: const ValueKey('gtCallLinkForm'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _name,
+            maxLength: GroupToolsLimits.linkNameMax,
+            decoration: NymField.decoration(context.nym).copyWith(labelText: tr('Name')),
           ),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            GtButton(
-              label: tr('Cancel'),
-              onTap: () => Navigator.of(context).pop(),
+          Row(
+            children: [
+              ChoiceChip(
+                key: const ValueKey('gtKindAudio'),
+                label: Text(tr('Voice')),
+                selected: _kind == 'audio',
+                onSelected: (_) => setState(() => _kind = 'audio'),
+              ),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                key: const ValueKey('gtKindVideo'),
+                label: Text(tr('Video')),
+                selected: _kind == 'video',
+                onSelected: (_) => setState(() => _kind = 'video'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Text(tr('Expires')),
+              const SizedBox(width: 8),
+              DropdownButton<int>(
+                key: const ValueKey('gtCallLinkExpiry'),
+                value: _exp,
+                items: [
+                  for (final s in GroupTools.callLinkExpirySec)
+                    DropdownMenuItem(
+                      value: s,
+                      child: Text(tr(GroupTools.expiryLabel(s))),
+                    ),
+                ],
+                onChanged: (v) => setState(() => _exp = v ?? _exp),
+              ),
+            ],
+          ),
+          _hint(
+            context,
+            tr(
+              'Anyone with the link can ask to join. You admit each person, and you can revoke the link at any time.',
             ),
-            const SizedBox(width: 8),
-            GtButton(
-              key: const ValueKey('gtCreateCallLink'),
-              label: tr('Create link'),
-              primary: true,
-              onTap: () {
-                final link = ref
-                    .read(groupToolsProvider)
-                    .createCallLink(
-                      kind: _kind,
-                      expirySec: _exp,
-                      name: _name.text,
-                      groupId: widget.groupId,
-                    );
-                widget.onCreated?.call();
-                setState(() => _created = link);
-              },
-            ),
-          ],
-        ),
-      ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              GtButton(
+                label: tr('Cancel'),
+                onTap: () => Navigator.of(context).pop(),
+              ),
+              const SizedBox(width: 8),
+              GtButton(
+                key: const ValueKey('gtCreateCallLink'),
+                label: tr('Create link'),
+                primary: true,
+                onTap: () {
+                  final link = ref
+                      .read(groupToolsProvider)
+                      .createCallLink(
+                        kind: _kind,
+                        expirySec: _exp,
+                        name: _name.text,
+                        groupId: widget.groupId,
+                      );
+                  widget.onCreated?.call();
+                  setState(() => _created = link);
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
 
 Future<void> showGtCallLinks(BuildContext context) {
-  return _gtPanel<void>(context, tr('Call links'), const _CallLinksBody());
+  return showCallsScreen(context, links: true);
 }
 
-class _CallLinksBody extends ConsumerWidget {
-  const _CallLinksBody();
+class CallLinksBody extends ConsumerWidget {
+  const CallLinksBody({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

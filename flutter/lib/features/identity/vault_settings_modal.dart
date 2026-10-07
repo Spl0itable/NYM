@@ -8,6 +8,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../services/storage/secure_store.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../../widgets/common/nym_sheet.dart';
 import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import 'biometric_secret_store.dart';
@@ -26,10 +27,10 @@ class VaultSettingsModal extends ConsumerStatefulWidget {
   const VaultSettingsModal({super.key});
 
   static Future<void> open(BuildContext context) {
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => const VaultSettingsModal(),
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => const VaultSettingsModal(),
     );
   }
 
@@ -40,6 +41,11 @@ class VaultSettingsModal extends ConsumerStatefulWidget {
 class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   final _pw = TextEditingController();
   final _pw2 = TextEditingController();
+  final _cur = TextEditingController();
+  final _next = TextEditingController();
+  final _next2 = TextEditingController();
+  final _off = TextEditingController();
+  String _view = 'main';
   String _method = 'password';
   String? _error;
   bool _busy = false;
@@ -62,6 +68,10 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   void dispose() {
     _pw.dispose();
     _pw2.dispose();
+    _cur.dispose();
+    _next.dispose();
+    _next2.dispose();
+    _off.dispose();
     super.dispose();
   }
 
@@ -69,20 +79,31 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final vault = ref.watch(identityVaultProvider);
-    return KeyboardInsetDialog(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 420),
-          child: Material(
-            color: Colors.transparent,
-            child: ModalChrome.box(
-              c,
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: vault.isEnabled
-                    ? _enabledView(c, vault)
-                    : _setupView(c, vault),
+    final view = vault.isEnabled ? _enabledView(c, vault) : _setupView(c, vault);
+    return NymDiscardGuard(
+      isDirty: () =>
+          !_busy &&
+          [_pw, _pw2, _cur, _next, _next2, _off].any((t) => t.text.isNotEmpty),
+      child: nymSheetOr(
+        context,
+        SingleChildScrollView(
+          padding: ModalChrome.sheetPadding,
+          child: view,
+        ),
+        (_) => KeyboardInsetDialog(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Material(
+                color: Colors.transparent,
+                child: ModalChrome.box(
+                  c,
+                  child: Padding(
+                    padding: const EdgeInsets.all(32),
+                    child: view,
+                  ),
+                ),
               ),
             ),
           ),
@@ -91,7 +112,55 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     );
   }
 
+  String _methodName(IdentityVault vault) => vault.method == 'biometric'
+      ? tr('Biometric (Face/Touch ID)')
+      : tr('Password or PIN');
+
+  Widget _status(NymColors c) => _error == null
+      ? const SizedBox.shrink()
+      : Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
+        );
+
+  Widget _field(NymColors c, TextEditingController t, String hint,
+          {bool last = false, VoidCallback? onDone}) =>
+      Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: ModalChrome.focusRing(
+          c,
+          child: TextField(
+            controller: t,
+            obscureText: true,
+            enabled: !_busy,
+            keyboardType: TextInputType.visiblePassword,
+            textInputAction: last ? TextInputAction.done : TextInputAction.next,
+            onSubmitted: last && onDone != null ? (_) => onDone() : null,
+            style: TextStyle(color: c.inputText, fontSize: 15),
+            decoration: _decoration(c, hint),
+          ),
+        ),
+      );
+
+  void _go(String view) {
+    for (final t in [_cur, _next, _next2, _off]) {
+      t.clear();
+    }
+    setState(() {
+      _view = view;
+      _error = null;
+    });
+  }
+
+  Widget _spinner(NymColors c) => SizedBox(
+      width: 16,
+      height: 16,
+      child: CircularProgressIndicator(strokeWidth: 2, color: c.primary));
+
   Widget _enabledView(NymColors c, IdentityVault vault) {
+    if (_view == 'change') return _changeView(c, vault);
+    if (_view == 'off') return _offView(c, vault);
+    final isBio = vault.method == 'biometric';
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -99,10 +168,10 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
         _modalHeader(c, tr('Identity encryption')),
         Text(
           tr('Your identity key is encrypted at rest ({method}).',
-              {'method': vault.method}),
+              {'method': _methodName(vault)}),
           style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
         ),
-        if (vault.method == 'biometric' && !vault.biometricProtected) ...[
+        if (isBio && !vault.biometricProtected) ...[
           const SizedBox(height: 12),
           Text(
             tr("This device can't keep the biometric key in its secure "
@@ -112,20 +181,98 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
             style: TextStyle(color: c.textDim, fontSize: 11),
           ),
         ],
-        if (_error != null) ...[
-          const SizedBox(height: 8),
-          Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
-        ],
+        _status(c),
+        const SizedBox(height: 24),
+        Wrap(
+          alignment: WrapAlignment.center,
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            ModalChrome.iconButton(
+                c, tr('Close'), () => Navigator.of(context).pop(),
+                height: 42),
+            if (!isBio)
+              ModalChrome.iconButton(c, tr('Change password or PIN'),
+                  _busy ? null : () => _go('change'),
+                  height: 42),
+            ModalChrome.sendButton(
+                c, tr('Turn off'), _busy ? null : () => _go('off'),
+                danger: true),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _changeView(NymColors c, IdentityVault vault) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _modalHeader(c, tr('Change password or PIN')),
+        Text(
+          tr('Enter your current password or PIN, then choose a new one.'),
+          style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
+        ),
+        const SizedBox(height: 6),
+        _field(c, _cur, tr('Current password or PIN')),
+        _field(c, _next, tr('New password or PIN')),
+        _field(c, _next2, tr('Confirm'),
+            last: true, onDone: () => _change(vault)),
+        _status(c),
         const SizedBox(height: 24),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ModalChrome.iconButton(
-                c, tr('Close'), () => Navigator.of(context).pop()),
+                c, tr('Cancel'), () => Navigator.of(context).pop()),
             const SizedBox(width: 10),
             ModalChrome.sendButton(
-                c, tr('Turn off'), _busy ? null : () => _disable(vault),
-                danger: true),
+              c,
+              tr('Change'),
+              _busy ? null : () => _change(vault),
+              child: _busy ? _spinner(c) : null,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _offView(NymColors c, IdentityVault vault) {
+    final isBio = vault.method == 'biometric';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _modalHeader(c, tr('Turn off identity encryption')),
+        Text(
+          isBio
+              ? tr('Confirm with your passkey or biometric to turn off identity '
+                  'encryption.')
+              : tr('Enter your password or PIN to turn off identity encryption.'),
+          style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
+        ),
+        if (!isBio) ...[
+          const SizedBox(height: 6),
+          _field(c, _off, tr('Password or PIN'),
+              last: true, onDone: () => _disable(vault)),
+        ],
+        _status(c),
+        const SizedBox(height: 24),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ModalChrome.iconButton(
+                c, tr('Cancel'), () => Navigator.of(context).pop()),
+            const SizedBox(width: 10),
+            ModalChrome.sendButton(
+              c,
+              tr('Turn off'),
+              _busy ? null : () => _disable(vault),
+              danger: true,
+              child: _busy ? _spinner(c) : null,
+            ),
           ],
         ),
       ],
@@ -304,45 +451,73 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     }
   }
 
-  Future<void> _disable(IdentityVault vault) async {
-    setState(() => _error = null);
-    String password = '';
-    if (vault.method != 'biometric') {
-      // Re-verify the password or PIN in a separate prompt, then disable only on success.
-      final entered = await showAppPrompt(
-        context,
-        tr('Enter your password or PIN to turn off identity encryption.'),
-        title: tr("Confirm it's you"),
-        okLabel: tr('Confirm'),
-        placeholder: tr('Password or PIN'),
-      );
-      if (entered == null) return; // canceled
-      final ok = await vault.verifyPassword(entered);
-      if (!mounted) return;
-      if (!ok) {
-        setState(() => _error =
-            tr('Re-authentication failed. Encryption was not turned off.'));
-        return;
-      }
-      password = entered;
+  Future<void> _change(IdentityVault vault) async {
+    if (_busy) return;
+    String? problem;
+    if (_cur.text.isEmpty) {
+      problem = tr('Enter your password or PIN.');
+    } else if (_next.text.length < 4) {
+      problem = tr('Use at least 4 characters.');
+    } else if (_next.text != _next2.text) {
+      problem = tr('The two entries do not match.');
     }
-    setState(() => _busy = true);
+    if (problem != null) {
+      setState(() => _error = problem);
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    bool ok;
     try {
-      if (vault.method == 'biometric') {
+      ok = await vault.changePassword(_cur.text, _next.text);
+    } catch (_) {
+      ok = false;
+    }
+    if (!mounted) return;
+    if (!ok) {
+      _cur.clear();
+      setState(() {
+        _busy = false;
+        _error = tr('Your current password or PIN is incorrect.');
+      });
+      return;
+    }
+    Navigator.of(context).pop();
+    await showAppAlert(context, tr('Password or PIN changed.'));
+  }
+
+  Future<void> _disable(IdentityVault vault) async {
+    if (_busy) return;
+    final isBio = vault.method == 'biometric';
+    if (!isBio && _off.text.isEmpty) {
+      setState(() => _error = tr('Enter your password or PIN.'));
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      if (isBio) {
         await vault.disableBiometric();
       } else {
-        await vault.disable(password);
+        await vault.disable(_off.text);
       }
       if (!mounted) return;
       Navigator.of(context).pop();
       await showAppAlert(context, tr('Encryption turned off.'));
     } catch (e) {
       if (!mounted) return;
+      _off.clear();
       setState(() {
         _busy = false;
         _error = e is BiometricVaultException
             ? e.message
-            : tr('Re-authentication failed. Encryption was not turned off.');
+            : isBio
+                ? tr('Re-authentication failed. Encryption was not turned off.')
+                : tr('Your current password or PIN is incorrect.');
       });
     }
   }

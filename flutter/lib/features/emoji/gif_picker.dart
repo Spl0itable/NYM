@@ -21,6 +21,7 @@ import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart' show InlineNetworkImage;
 import 'modal_close_chip.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// Requests go through the backend proxy, which attaches the key, so the user's IP never reaches Giphy.
 const String kGiphyApiKey = kApiGiphyApiKey;
@@ -330,12 +331,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
     final field = DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: NymRadius.rxs,
-        boxShadow: focused
-            ? [
-                BoxShadow(
-                    color: c.primaryA(0.06), blurRadius: 0, spreadRadius: 3),
-              ]
-            : null,
+        boxShadow: NymField.ring(c, focused),
       ),
       child: TextField(
         controller: _searchController,
@@ -345,29 +341,12 @@ class _GifPickerState extends ConsumerState<GifPicker>
         style:
             TextStyle(color: c.isLight ? c.text : c.textBright, fontSize: 12),
         cursorColor: c.isLight ? Colors.black : Colors.white,
-        decoration: InputDecoration(
-          isDense: true,
-          hintText: tr('Search GIFs...'),
-          hintStyle: TextStyle(color: c.textDim, fontSize: 12),
-          filled: true,
-          fillColor: focused
-              ? Colors.white.withValues(alpha: 0.07)
-              : Colors.white.withValues(alpha: 0.05),
+        decoration: NymField.decoration(c,
+          hint: tr('Search GIFs...'),
+          fontSize: 12,
+          radius: NymRadius.rxs,
           contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          border: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.glassBorder),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.glassBorder),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: NymRadius.rxs,
-            borderSide: BorderSide(color: c.primaryA(0.3)),
-          ),
-        ),
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
       ),
     );
     return Container(

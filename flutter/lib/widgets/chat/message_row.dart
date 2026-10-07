@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +11,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../../core/constants/relays.dart';
 import '../../core/crypto/bech32_codec.dart' show encodeNevent;
+import '../../features/layout/layout_model.dart';
 import '../../features/toasts/toast_center.dart';
 import 'event_details_sheet.dart';
 import '../../core/theme/nym_colors.dart';
@@ -20,6 +23,7 @@ import '../../features/chat_tools/chat_tools_service.dart'
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/commands/command_i18n.dart';
+import '../../features/composer/composer_conn.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/messages/flood_tracker.dart';
 import '../../features/messages/format/message_content.dart';
@@ -31,6 +35,10 @@ import '../../features/shop/cosmetics.dart';
 import '../../features/reactions/quick_context_items.dart';
 import '../../features/threads/thread_view.dart' show openMessageThread;
 import '../../features/reactions/quick_react_popup.dart';
+import '../../features/reactions/message_action_sheet.dart';
+import '../../features/reactions/message_actions.dart';
+import '../../core/utils/haptics.dart';
+import '../common/nym_sheet.dart';
 import '../../features/reactions/reaction_burst.dart';
 import 'relative_time_ticker.dart';
 import '../../features/reactions/reactors_modal.dart';
@@ -44,10 +52,12 @@ import '../../models/settings.dart';
 import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../services/relay/queued_sends.dart';
 import '../../services/storage/mesh_file_store.dart';
 import '../../state/settings_provider.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
+import 'hover_bar_controller.dart';
 import 'bitchat_user_color.dart';
 import 'crypto_pq_badge.dart';
 import 'crypto_verified_badge.dart';
@@ -62,6 +72,11 @@ import '../../features/dm_polls/dm_poll_card.dart';
 import '../../features/media_notes/media_note_host.dart';
 import '../../features/media_notes/media_note_view.dart';
 import '../../features/media_notes/media_note_sender.dart';
+import '../common/nym_focusable.dart';
+import '../../features/chat_nav/chat_nav.dart';
+import '../../features/chat_nav/chat_nav_providers.dart';
+import 'composer.dart' show composerOverhangProvider;
+import '../common/nym_tooltip.dart';
 
 String formatTime(DateTime t, String timeFormat) {
   final h24 = t.hour;
@@ -244,7 +259,6 @@ class MessageRow extends ConsumerStatefulWidget {
   /// Storage key of the hosting list so a quote tap jumps that list; null in the single-chat view.
   final String? scrollKey;
 
-  /// Columns-deck variant: IRC rows stack vertically and hover buttons stack.
   final bool columnsMode;
 
   /// Set on a group's last message to key the bubble, so the gliding avatar aligns to it, not the group foot.
@@ -286,6 +300,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   /// Desktop hover state; only set on hover-capable platforms.
   bool _hovered = false;
+  bool _barFocused = false;
 
   /// Whether subscribed to the shared 30s [RelativeTimeTicker].
   bool _relativeTickerSubscribed = false;
@@ -298,8 +313,141 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   final SpoilerRevealController _spoilers = SpoilerRevealController();
 
+  final GlobalKey _barHostKey = GlobalKey();
+  final GlobalKey _barAnchorKey = GlobalKey();
+  final GlobalKey _barKey = GlobalKey();
+  final GlobalKey _barLineKey = GlobalKey();
+  final OverlayPortalController _barPortal = OverlayPortalController();
+  bool _barActive = false;
+  Offset? _barPos;
+
+  @override
+  void initState() {
+    super.initState();
+    _barPortal.show();
+    HoverBarController.instance.addListener(_onHoverBarChange);
+  }
+
+  void _onHoverBarChange() {
+    final on = identical(HoverBarController.instance.active, this);
+    if (on == _barActive || !mounted) return;
+    setState(() {
+      _barActive = on;
+      if (on) _barPos = _computeBarPos();
+    });
+  }
+
+  Rect? _firstLineRect(RenderBox anchor, RenderBox host) {
+    RenderParagraph? para;
+    void visit(RenderObject o) {
+      if (para != null) return;
+      if (o is RenderParagraph) {
+        para = o;
+        return;
+      }
+      o.visitChildren(visit);
+    }
+
+    visit(anchor);
+    final p = para;
+    if (p == null || !p.hasSize) return null;
+    final len = p.text.toPlainText(includeSemanticsLabels: false).length;
+    if (len == 0) return null;
+    final boxes = p.getBoxesForSelection(
+        TextSelection(baseOffset: 0, extentOffset: len));
+    if (boxes.isEmpty) return null;
+    final top = boxes.first.top;
+    var r = boxes.first.toRect();
+    for (final b in boxes.skip(1)) {
+      if ((b.top - top).abs() > 4) break;
+      r = r.expandToInclude(b.toRect());
+    }
+    return MatrixUtils.transformRect(p.getTransformTo(host), r);
+  }
+
+  Offset? _computeBarPos() {
+    final host = _barHostKey.currentContext?.findRenderObject();
+    final anchorObj = _barAnchorKey.currentContext?.findRenderObject();
+    final barObj = _barKey.currentContext?.findRenderObject();
+    if (host is! RenderBox || anchorObj is! RenderBox || barObj is! RenderBox) {
+      return null;
+    }
+    if (!host.hasSize || !anchorObj.hasSize || !barObj.hasSize) return null;
+    final bubbles = settings.useBubbles;
+    var anchor = MatrixUtils.transformRect(
+        anchorObj.getTransformTo(host), Offset.zero & anchorObj.size);
+    if (!bubbles) anchor = _firstLineRect(anchorObj, host) ?? anchor;
+    final bw = math.min(barObj.size.width, hoverBarWidth(_barButtons.length));
+    final bh = barObj.size.height;
+    var clip = host.globalToLocal(Offset.zero) & MediaQuery.sizeOf(context);
+    final scrollBox = Scrollable.maybeOf(context)?.context.findRenderObject();
+    if (scrollBox is RenderBox && scrollBox.hasSize) {
+      final view = MatrixUtils.transformRect(
+          scrollBox.getTransformTo(host), Offset.zero & scrollBox.size);
+      clip = clip.intersect(view);
+    }
+    const edge = kHoverBarEdge;
+    _barAvailablePx = clip.width - 2 * edge;
+    final top = math.max(clip.top + edge, 0.0);
+    final lineObj = !bubbles && widget.columnsMode
+        ? _barLineKey.currentContext?.findRenderObject()
+        : null;
+    double x;
+    double y;
+    if (lineObj is RenderBox && lineObj.hasSize) {
+      final line = MatrixUtils.transformRect(
+          lineObj.getTransformTo(host), Offset.zero & lineObj.size);
+      final box = MatrixUtils.transformRect(
+          anchorObj.getTransformTo(host), Offset.zero & anchorObj.size);
+      x = box.right - bw;
+      y = line.center.dy - bh / 2;
+    } else if (bubbles) {
+      return hoverBarSpot(anchor, clip, bw, bh,
+          self: message.isOwn, columns: widget.columnsMode);
+    } else {
+      x = anchor.right + kHoverBarOverlap;
+      y = anchor.top - bh + 8;
+    }
+    x = math.min(x, clip.right - edge - bw);
+    x = math.max(x, clip.left + edge);
+    y = math.max(y, top);
+    y = math.min(y, host.size.height - bh);
+    y = math.max(y, 0);
+    return Offset(x.roundToDouble(), y.roundToDouble());
+  }
+
+  bool get _barThreadable =>
+      appThreadsEnabled &&
+      widget.showThreadAffordances &&
+      (message.threadRoot != null || threadEligibleRoot(message));
+
+  double _barAvailablePx = double.infinity;
+
+  List<String> get _barButtons => hoverBarButtons(
+        buildMessageActions(MsgActionFacts(
+          isSelf: message.isOwn,
+          hasId: true,
+          hasContent: message.content.isNotEmpty,
+          threadable: _barThreadable,
+        )).map((a) => a.id).toList(),
+        hasId: true,
+        availablePx: _barAvailablePx,
+      );
+
+  void _hoverEnter() {
+    setState(() => _hovered = true);
+    HoverBarController.instance.request(this);
+  }
+
+  void _hoverExit() {
+    setState(() => _hovered = false);
+    HoverBarController.instance.request(null);
+  }
+
   @override
   void dispose() {
+    HoverBarController.instance.removeListener(_onHoverBarChange);
+    HoverBarController.instance.release(this);
     _spoilers.dispose();
     if (_relativeTickerSubscribed) {
       RelativeTimeTicker.instance.removeListener(_onRelativeTick);
@@ -318,7 +466,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   /// Null gives the identicon fallback.
   String? get _authorPicture =>
-      ref.watch(usersProvider)[message.pubkey]?.profile?.picture;
+      ref.watch(usersProvider
+          .select((u) => u[message.pubkey]?.profile?.picture));
 
   bool get _isVerified {
     final controller = ref.read(nostrControllerProvider);
@@ -384,8 +533,17 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       widget.showThreadAffordances &&
       (message.threadRoot != null || threadEligibleRoot(message));
 
+  bool get _threadHasNewReply {
+    final key =
+        widget.scrollKey ?? ref.read(appStateProvider).view.storageKey;
+    final root = threadKeyForMessage(message);
+    if (key.isEmpty || root.isEmpty) return false;
+    return ref.watch(threadNewRepliesProvider).contains('$key|$root');
+  }
+
   Widget _threadIndicator(BuildContext context, int count) {
     final c = context.nym;
+    final isNew = _threadHasNewReply;
     return Padding(
       padding: const EdgeInsets.only(top: 5),
       child: InkWell(
@@ -395,9 +553,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-            color: c.primaryA(0.06),
+            color: c.primaryA(isNew ? 0.12 : 0.06),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: c.primaryA(0.25)),
+            border: Border.all(color: c.primaryA(isNew ? 0.4 : 0.25)),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -414,6 +572,27 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                   fontWeight: FontWeight.w600,
                 ),
               ),
+              if (isNew) ...[
+                const SizedBox(width: 6),
+                Container(
+                  constraints:
+                      const BoxConstraints(minWidth: 18, minHeight: 18),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c.primary,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Text(
+                    tr('New'),
+                    style: TextStyle(
+                      color: c.bg,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -428,9 +607,6 @@ class _MessageRowState extends ConsumerState<MessageRow> {
 
   /// Only above the mobile breakpoint and for messages with a usable reaction id.
   bool _hoverButtonsEligible(BuildContext context) {
-    if (MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint) {
-      return false;
-    }
     if (message.isPM && (message.nymMessageId?.isNotEmpty ?? false)) {
       return true;
     }
@@ -559,6 +735,15 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   }
 
   /// Per-user color for a non-self author in the Bitchat theme only; applied to both nym and body.
+  bool get _hasTextFlair {
+    final cos = _cosmetics;
+    return cos.styleId != null || cos.supporter || cos.cosmetics.isNotEmpty;
+  }
+
+  Color _bodyColor(NymColors c) => settings.colorfulMessages || _hasTextFlair
+      ? (_bitchatColor(c) ?? c.text)
+      : c.messageText;
+
   Color? _bitchatColor(NymColors c) {
     if (message.isOwn) return null;
     if (settings.theme != NymThemeKey.bitchat) return null;
@@ -661,7 +846,6 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (message.isMeAction) return _buildActionMessage(context);
     Widget row =
         settings.useBubbles ? _buildBubble(context) : _buildIrc(context);
-    // Hover-capable devices track row hover and overlay the quick-react/translate buttons at top-right.
     final p = Theme.of(context).platform;
     final touchPlatform =
         p == TargetPlatform.android || p == TargetPlatform.iOS;
@@ -669,42 +853,58 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       final withButtons = _hoverButtonsEligible(context);
       Widget hoverChild = row;
       if (withButtons) {
-        hoverChild = Stack(
-          clipBehavior: Clip.none,
-          children: [
-            row,
-            Positioned(
-              top: 5,
-              right: 10,
-              child: IgnorePointer(
-                ignoring: !_hovered,
-                child: AnimatedOpacity(
-                  opacity: _hovered ? 1 : 0,
-                  duration: NymMotion.transition,
-                  curve: NymMotion.curve,
-                  child: _MsgHoverButtons(
-                    onReact: widget.onReactionPicker == null
-                        ? null
-                        : () => widget.onReactionPicker!.call(message),
-                    onTranslate: _showTranslated,
-                    onThread: appThreadsEnabled &&
-                            widget.showThreadAffordances &&
-                            (message.threadRoot != null ||
-                                threadEligibleRoot(message))
-                        ? () => openMessageThread(ref, message,
-                            storageKey: widget.scrollKey)
-                        : null,
-                    vertical: widget.columnsMode,
-                  ),
-                ),
-              ),
-            ),
-          ],
+        final pos = (_barActive || _barFocused) ? _barPos : null;
+        final bar = AnimatedOpacity(
+          key: _barKey,
+          opacity: (_barActive || _barFocused) ? 1 : 0,
+          duration: NymMotion.transition,
+          curve: NymMotion.curve,
+          child: _MsgHoverButtons(
+            buttons: _barButtons,
+            onFocusChange: (v) {
+              if (v == _barFocused) return;
+              setState(() {
+                _barFocused = v;
+                if (v && !_barActive) _barPos = _computeBarPos();
+              });
+            },
+            onReact: widget.onReactionPicker == null
+                ? null
+                : () => widget.onReactionPicker!.call(message),
+            onReply: () => _runSheetAction(context, MsgAction.reply),
+            onThread: _barThreadable
+                ? () => openMessageThread(ref, message,
+                    storageKey: widget.scrollKey)
+                : null,
+            onMore: (r) => _onMessageLongPress(context, r.center),
+          ),
+        );
+        final barLayer = IgnorePointer(
+          ignoring: !(_barActive || _barFocused),
+          child: MouseRegion(
+            onEnter: (_) => _hoverEnter(),
+            onExit: (_) => _hoverExit(),
+            child: bar,
+          ),
+        );
+        hoverChild = OverlayPortal.overlayChildLayoutBuilder(
+          controller: _barPortal,
+          overlayChildBuilder: (context, info) {
+            final at = MatrixUtils.transformPoint(info.childPaintTransform,
+                pos ?? Offset(info.childSize.width - 10, 0));
+            return Positioned(
+              left: pos == null ? null : at.dx,
+              right: pos == null ? info.overlaySize.width - at.dx : null,
+              top: at.dy,
+              child: barLayer,
+            );
+          },
+          child: KeyedSubtree(key: _barHostKey, child: row),
         );
       }
       row = MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
+        onEnter: (_) => _hoverEnter(),
+        onExit: (_) => _hoverExit(),
         child: hoverChild,
       );
     }
@@ -712,7 +912,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (!message.isOwn &&
         !message.isPM &&
         !message.isHistorical &&
-        ref.watch(floodTrackerProvider).isFlooding(message.pubkey)) {
+        ref.watch(floodTrackerProvider
+            .select((f) => f.isFlooding(message.pubkey)))) {
       row = Opacity(opacity: 0.2, child: row);
     }
     // IRC rows take a whole-row thread tap; in bubble mode only the bubble is the target.
@@ -1109,8 +1310,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       ),
     );
     // Content-targeted styles, watermarks and cosmetics decorate this box, not the row; reactions sit outside it.
-    Widget contentBody =
-        _bodyContent(context, _bitchatColor(c) ?? c.text, fontSize, deco: deco);
+    Widget contentBody = KeyedSubtree(
+      key: _barAnchorKey,
+      child: _bodyContent(context, _bodyColor(c), fontSize, deco: deco),
+    );
     // Frost's icy fill applies only when no message style is active.
     Color? contentFill = deco?.contentBackgroundFor(bubble: false);
     if (contentFill == null && !_styleClassActive) {
@@ -1206,10 +1409,13 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (timeItem != null) ...[
-            timeItem,
+            KeyedSubtree(key: _barLineKey, child: timeItem),
             const SizedBox(height: 5),
           ],
-          authorItem,
+          if (timeItem == null)
+            KeyedSubtree(key: _barLineKey, child: authorItem)
+          else
+            authorItem,
           const SizedBox(height: 10),
           SizedBox(width: double.infinity, child: contentColumn),
         ],
@@ -1269,7 +1475,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             targetLang: _translateLangOverride,
           ),
         if (_showReaderAvatars) _readerAvatars(context),
-        if (self && message.isPM && !message.isGroup) _deliveryTicks(context),
+        if (self) _deliveryFooter(context),
       ],
     );
 
@@ -1345,6 +1551,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // Prism/hologram/frost overlays are content-scoped and painted by the content box, not the row.
     return _SwipeToAct(
       settings: settings,
+      applies: _swipeApplies,
       onAction: (a) => _dispatchSwipeAction(context, a),
       onDoubleTap: _quoteReply,
       // Quick-react popup anchored to the press point.
@@ -1449,7 +1656,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            _bodyContent(context, _bitchatColor(c) ?? c.text, fontSize,
+            _bodyContent(context, _bodyColor(c), fontSize,
                 deco: deco, bubble: true),
             const SizedBox(height: 4),
             ExcludeSemantics(
@@ -1459,7 +1666,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             ),
           ],
         ),
-        Positioned(right: 0, bottom: 0, child: timeLine),
+        Positioned(
+            right: 0,
+            bottom: 0,
+            child: timeLine),
       ],
     );
 
@@ -1470,7 +1680,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       final screenW = MediaQuery.of(context).size.width;
       final availW = box.maxWidth.isFinite ? box.maxWidth : screenW;
       final pct = screenW <= NymDimens.mobileBreakpoint ? 0.90 : 0.85;
-      final capW = (availW * pct).clamp(180.0, double.infinity);
+      final capW = (widget.columnsMode && screenW > NymDimens.mobileBreakpoint
+              ? availW - kColumnsBubbleGutter
+              : availW * pct)
+          .clamp(180.0, double.infinity);
       return ConstrainedBox(
         constraints: BoxConstraints(minWidth: 180, maxWidth: capW),
         child: _decorateBubble(
@@ -1524,18 +1737,21 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           // Key the bubble itself so the group avatar aligns to it; in bubble mode only the bubble opens the thread.
           child: KeyedSubtree(
             key: widget.bubbleAnchorKey,
-            child: _threadTapEligible
-                ? GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => openMessageThread(ref, message,
-                        storageKey: widget.scrollKey, silent: true),
-                    child: bubble,
-                  )
-                : bubble,
+            child: KeyedSubtree(
+              key: _barAnchorKey,
+              child: _threadTapEligible
+                  ? GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => openMessageThread(ref, message,
+                          storageKey: widget.scrollKey, silent: true),
+                      child: bubble,
+                    )
+                  : bubble,
+            ),
           ),
         ),
         // Delivery ticks sit on their own right-aligned line below the bubble, as in IRC.
-        if (self && message.isPM && !message.isGroup) _deliveryTicks(context),
+        if (self) _deliveryFooter(context),
         if (_showTranslation)
           MessageTranslation(
             content: message.content,
@@ -1579,6 +1795,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     // The whole row (name, bubble, extras) slides with a swipe, like the PWA.
     final swiped = _SwipeToAct(
       settings: settings,
+      applies: _swipeApplies,
       onAction: (a) => _dispatchSwipeAction(context, a),
       onDoubleTap: _quoteReply,
       // Quick-react popup anchored to the press point.
@@ -1753,8 +1970,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           Builder(
             builder: (avatarContext) => GestureDetector(
               onLongPress: () {
-                // A solid 30ms pulse, so mediumImpact.
-                HapticFeedback.mediumImpact();
+                Haptics.selection();
                 _showSeenBy(avatarContext);
               },
               child: Row(
@@ -1855,7 +2071,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     ));
     // Buzz and burst on add as soon as it lands locally; a rate-limited toggle stays silent.
     if (!wasReacted && _selfReactedLocally(r.emoji)) {
-      HapticFeedback.mediumImpact();
+      Haptics.light();
       // Post-frame so the badge is laid out; falls back to the message center.
       ReactionBurst.playAtBadge(context, message.id, r.emoji,
           fallbackCenter: _globalCenterOfContext(context));
@@ -1868,7 +2084,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   }
 
   void _showReactors(BuildContext context, MessageReaction r, Rect rect) {
-    HapticFeedback.mediumImpact();
+    Haptics.selection();
     final app = ref.read(appStateProvider);
     final users = ref.read(usersProvider);
     final map =
@@ -1908,21 +2124,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     );
   }
 
-  void _onMessageLongPress(BuildContext context, Offset at) {
-    HapticFeedback.mediumImpact();
-    // Zero-size anchor at the press point reproduces the PWA's `clientX - w/2, clientY - 55` placement.
-    final rect = Rect.fromCenter(center: at, width: 0, height: 0);
-    // Recents first, padded with the defaults, deduped.
-    final recents = ref.read(recentEmojisProvider);
-    showQuickReactPopup(
-      context,
-      anchorRect: rect,
-      // Spotlight the pressed message's bounds, distinct from the press-point anchor.
-      spotlightRect: _globalRectOfContext(context),
-      emojis: quickReactEmojis(recents),
-      onReact: (emoji) => _quickReact(context, emoji),
-      onMore: () => widget.onReactionPicker?.call(message),
-      contextItems: buildQuickContextItems(
+  List<QuickContextItem> _sheetItems(BuildContext context) =>
+      buildQuickContextItems(
         context,
         ref,
         message,
@@ -1931,30 +2134,74 @@ class _MessageRowState extends ConsumerState<MessageRow> {
               messageId: message.id,
               content: message.content,
             ),
-        onThread: appThreadsEnabled &&
-                widget.showThreadAffordances &&
-                (message.threadRoot != null || threadEligibleRoot(message))
+        onThread: _barThreadable
             ? () =>
                 openMessageThread(ref, message, storageKey: widget.scrollKey)
             : null,
-      ),
+      );
+
+  void _runSheetAction(BuildContext context, MsgAction action) {
+    for (final item in _sheetItems(context)) {
+      if (item.id == action.id) {
+        item.onTap();
+        return;
+      }
+    }
+  }
+
+  void _onMessageLongPress(BuildContext context, Offset at) {
+    Haptics.selection();
+    final rect = Rect.fromCenter(center: at, width: 0, height: 0);
+    final recents = ref.read(recentEmojisProvider);
+    final emojis = quickReactEmojis(recents);
+    final items = _sheetItems(context);
+    final picker = widget.onReactionPicker;
+    final onMore = picker == null ? null : () => picker(message);
+    if (useNymSheet(context)) {
+      final nym = _baseNym(_displayNym());
+      showMessageActionSheet(
+        context,
+        preview: MessageSheetPreview(
+          pubkey: message.pubkey,
+          nym: nym,
+          suffix: message.pubkey.isEmpty ? '' : getPubkeySuffix(message.pubkey),
+          time: formatTime(message.dateTime, settings.timeFormat),
+          content: message.content,
+          avatarUrl: ref.read(usersProvider)[message.pubkey]?.profile?.picture,
+        ),
+        emojis: emojis,
+        onReact: (emoji) => _quickReact(context, emoji),
+        onMore: onMore,
+        items: items,
+      );
+      return;
+    }
+    showQuickReactPopup(
+      context,
+      anchorRect: rect,
+      spotlightRect: _globalRectOfContext(context),
+      emojis: emojis,
+      onReact: (emoji) => _quickReact(context, emoji),
+      onMore: onMore ?? () {},
+      contextItems: items,
     );
   }
 
   void _quickReact(BuildContext context, String emoji) {
     final controller = ref.read(nostrControllerProvider);
     final view = ref.read(currentViewProvider);
-    final already = reactions.any((r) => r.emoji == emoji && r.userReacted);
+    final already = _selfReactedLocally(emoji) ||
+        reactions.any((r) => r.emoji == emoji && r.userReacted);
     ref.read(recentEmojisProvider.notifier).record(emoji);
+    if (already) return;
     unawaited(controller.toggleReaction(
       message.id,
       emoji,
       target: reactionTargetFor(message),
       kind: inferOriginalKind(message, view: view),
     ));
-    // Buzz and burst with the optimistic add, before any publish.
-    if (!already && _selfReactedLocally(emoji)) {
-      HapticFeedback.mediumImpact();
+    if (_selfReactedLocally(emoji)) {
+      Haptics.light();
       ReactionBurst.playAtBadge(context, message.id, emoji,
           fallbackCenter: _globalCenterOfContext(context));
     }
@@ -1967,6 +2214,20 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (m == null) return null;
     final code = m.group(1)!;
     return ref.watch(liveCustomEmojiProvider.select((s) => s.codeToUrl[code]));
+  }
+
+  bool _swipeApplies(String action) {
+    final self = ref.read(appStateProvider).selfPubkey;
+    return swipeActionApplies(
+      action,
+      MsgActionFacts(
+        isSelf: message.isOwn ||
+            (message.pubkey.isNotEmpty && message.pubkey == self),
+        hasId: message.id.isNotEmpty,
+        hasContent: message.content.isNotEmpty,
+        hasAuthor: message.pubkey.isNotEmpty,
+      ),
+    );
   }
 
   /// Runs the committed swipe action through the same paths as the long-press menu.
@@ -2131,6 +2392,20 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     double fontSize, {
     MessageStyleDecoration? deco,
     bool bubble = false,
+  }) =>
+      ConstrainedBox(
+        key: const ValueKey('messageReadCap'),
+        constraints: BoxConstraints(maxWidth: readWidthPx(fontSize)),
+        child: _contentBody(context, color, fontSize,
+            deco: deco, bubble: bubble),
+      );
+
+  Widget _contentBody(
+    BuildContext context,
+    Color color,
+    double fontSize, {
+    MessageStyleDecoration? deco,
+    bool bubble = false,
   }) {
     final blur = _shouldBlurImages();
     var displayContent = message.content;
@@ -2198,6 +2473,35 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     return body;
   }
 
+  Widget _deliveryFooter(BuildContext context) {
+    return ListenableBuilder(
+      listenable: QueuedSends.instance,
+      builder: (context, _) {
+        final q = QueuedSends.instance;
+        if (q.hasQueued &&
+            (q.isQueued(message.id) || q.isQueued(message.nymMessageId))) {
+          return _queuedTag(context);
+        }
+        if (message.isPM && !message.isGroup) return _deliveryTicks(context);
+        return const SizedBox.shrink();
+      },
+    );
+  }
+
+  Widget _queuedTag(BuildContext context) {
+    return Padding(
+      key: const ValueKey('msgQueuedTag'),
+      padding: const EdgeInsets.only(top: 2, right: 4),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Text(
+          tr(ComposerConnStrings.queued),
+          style: TextStyle(color: context.nym.textDim, fontSize: 11),
+        ),
+      ),
+    );
+  }
+
   Widget _deliveryTicks(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 2, right: 4),
@@ -2211,19 +2515,19 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   Widget _ticksGlyph(BuildContext context) {
     final c = context.nym;
     // PWA delivery glyphs: read ✓✓ blue, delivered ✓ green, sent ✓ dim, failed ! red.
-    String glyph;
+    IconData glyph;
     Color color;
     switch (message.deliveryStatus) {
       case DeliveryStatus.read:
-        glyph = '✓✓';
+        glyph = Icons.done_all;
         color = const Color(0xFF2196F3);
         break;
       case DeliveryStatus.delivered:
-        glyph = '✓';
+        glyph = Icons.done;
         color = const Color(0xFF4CAF50);
         break;
       case DeliveryStatus.sent:
-        glyph = '✓';
+        glyph = Icons.done;
         color = c.textDim;
         break;
       case DeliveryStatus.failed:
@@ -2233,7 +2537,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _retryFailedPm,
-            child: Tooltip(
+            child: NymTooltip(
               message: tr('Failed to send - click to retry'),
               child: Text(
                 '!',
@@ -2250,10 +2554,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       case DeliveryStatus.sending:
         return const SizedBox.shrink();
     }
-    return Text(
-      glyph,
-      style: TextStyle(color: color, fontSize: 10, height: 1),
-    );
+    return Icon(glyph, size: 12, color: color);
   }
 
   /// Drops the failed bubble and sends a fresh copy to the stored peer (or the active PM peer).
@@ -2625,8 +2926,8 @@ class _BotThinkSectionState extends State<_BotThinkSection> {
                     duration: const Duration(milliseconds: 250),
                     curve: Curves.fastOutSlowIn,
                     turns: _expanded ? 0.25 : 0,
-                    child: Text('▸',
-                        style: TextStyle(color: c.textDim, fontSize: fs)),
+                    child: NymSvgIcon(NymIcons.revealArrowRight,
+                        size: fs, color: c.textDim),
                   ),
                   const SizedBox(width: 6),
                   Text(tr('💭 Reasoning'),
@@ -2734,50 +3035,76 @@ class _ScrollFlashOverlayState extends State<_ScrollFlashOverlay>
   }
 }
 
-/// Desktop hover quick-action buttons at a message's top-right; the host fades them with row hover.
+Color hoverBarFill(NymColors c) =>
+    Color.alphaBlend(c.bgSecondary, c.bg.withValues(alpha: 1));
+
 class _MsgHoverButtons extends StatelessWidget {
   const _MsgHoverButtons({
+    required this.buttons,
     required this.onReact,
-    required this.onTranslate,
-    this.onThread,
-    this.vertical = false,
+    required this.onReply,
+    required this.onThread,
+    required this.onMore,
+    this.onFocusChange,
   });
 
-  /// Null leaves the button rendered but inert.
+  final List<String> buttons;
+  final ValueChanged<bool>? onFocusChange;
   final VoidCallback? onReact;
-  final VoidCallback onTranslate;
-
-  /// Null hides the button (threads disabled, or already inside a thread view).
+  final VoidCallback? onReply;
   final VoidCallback? onThread;
-
-  final bool vertical;
+  final ValueChanged<Rect> onMore;
 
   @override
   Widget build(BuildContext context) {
-    final children = [
-      _HoverActionButton(svg: NymIcons.addReaction, onTap: onReact),
-      SizedBox(width: vertical ? 0 : 4, height: vertical ? 4 : 0),
-      if (onThread != null) ...[
-        _HoverActionButton(
-          svg: NymIcons.thread,
-          onTap: onThread,
-          tooltip: tr('Reply in thread'),
-        ),
-        SizedBox(width: vertical ? 0 : 4, height: vertical ? 4 : 0),
+    Widget button(String id) {
+      switch (id) {
+        case 'react':
+          return _HoverActionButton(
+            svg: NymIcons.addReaction,
+            onTap: onReact,
+            tooltip: tr('React'),
+            onFocusChange: onFocusChange,
+          );
+        case 'reply':
+          return _HoverActionButton(
+            svg: msgActionSvg(MsgAction.reply),
+            onTap: onReply,
+            tooltip: tr('Reply'),
+            onFocusChange: onFocusChange,
+          );
+        case 'thread':
+          return _HoverActionButton(
+            svg: NymIcons.thread,
+            onTap: onThread,
+            tooltip: tr('Reply in Thread'),
+            onFocusChange: onFocusChange,
+          );
+        default:
+          return Builder(
+            builder: (ctx) => _HoverActionButton(
+              svg: NymIcons.rowMenu,
+              tooltip: tr('More'),
+              onFocusChange: onFocusChange,
+              onTap: () {
+                final box = ctx.findRenderObject();
+                if (box is! RenderBox || !box.hasSize) return;
+                onMore(box.localToGlobal(Offset.zero) & box.size);
+              },
+            ),
+          );
+      }
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < buttons.length; i++) ...[
+          if (i > 0) const SizedBox(width: kHoverBarGap),
+          button(buttons[i]),
+        ],
       ],
-      _HoverActionButton(
-        svg: NymIcons.translate,
-        onTap: onTranslate,
-        tooltip: tr('Translate'),
-      ),
-    ];
-    return vertical
-        ? Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: children,
-          )
-        : Row(mainAxisSize: MainAxisSize.min, children: children);
+    );
   }
 }
 
@@ -2786,10 +3113,12 @@ class _HoverActionButton extends StatefulWidget {
     required this.svg,
     required this.onTap,
     this.tooltip,
+    this.onFocusChange,
   });
   final String svg;
   final VoidCallback? onTap;
   final String? tooltip;
+  final ValueChanged<bool>? onFocusChange;
 
   @override
   State<_HoverActionButton> createState() => _HoverActionButtonState();
@@ -2797,13 +3126,13 @@ class _HoverActionButton extends StatefulWidget {
 
 class _HoverActionButtonState extends State<_HoverActionButton> {
   bool _hover = false;
+  bool _focus = false;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final restFill = c.isLight
-        ? const Color(0xD9FFFFFF)
-        : const Color(0xCC141423);
+    final restFill = hoverBarFill(c);
+    final lit = _hover || _focus;
     final restBorder =
         c.isLight ? Colors.black.withValues(alpha: 0.08) : c.glassBorder;
     final btn = MouseRegion(
@@ -2817,17 +3146,26 @@ class _HoverActionButtonState extends State<_HoverActionButton> {
           curve: NymMotion.curve,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: _hover ? Colors.white.withValues(alpha: 0.08) : restFill,
+            color: lit
+                ? Color.alphaBlend(c.text.withValues(alpha: 0.08), restFill)
+                : restFill,
             borderRadius: NymRadius.rxs,
-            border: Border.all(color: _hover ? c.primaryA(0.3) : restBorder),
+            border: Border.all(color: lit ? c.primaryA(0.3) : restBorder),
           ),
           child: NymSvgIcon(widget.svg, size: 16, color: c.text),
         ),
       ),
     );
-    return widget.tooltip != null
-        ? Tooltip(message: widget.tooltip!, child: btn)
-        : btn;
+    return NymFocusable(
+      onActivate: widget.onTap,
+      tooltip: widget.tooltip,
+      excludeChildSemantics: true,
+      onFocusChange: (v) {
+        if (v != _focus) setState(() => _focus = v);
+        widget.onFocusChange?.call(v);
+      },
+      child: btn,
+    );
   }
 }
 
@@ -3162,7 +3500,7 @@ class _TimestampTextState extends State<_TimestampText> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _openPopup,
-        child: Tooltip(
+        child: NymTooltip(
           message: widget.fullTimestamp,
           // Hover-only: tap opens the popup and long-press belongs to quick-react.
           triggerMode: TooltipTriggerMode.manual,
@@ -3826,8 +4164,7 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
   }
 }
 
-/// Sticky group avatar: rests at the group's foot, or pins 8px above the viewport bottom while the group spans it.
-class _StickyGroupAvatar extends StatefulWidget {
+class _StickyGroupAvatar extends ConsumerStatefulWidget {
   const _StickyGroupAvatar({
     required this.pubkey,
     required this.imageUrl,
@@ -3843,12 +4180,14 @@ class _StickyGroupAvatar extends StatefulWidget {
   final GlobalKey? bubbleKey;
 
   @override
-  State<_StickyGroupAvatar> createState() => _StickyGroupAvatarState();
+  ConsumerState<_StickyGroupAvatar> createState() =>
+      _StickyGroupAvatarState();
 }
 
-class _StickyGroupAvatarState extends State<_StickyGroupAvatar> {
-  static const double _stickyGap = 8;
+class _StickyGroupAvatarState extends ConsumerState<_StickyGroupAvatar> {
   static const double _avatar = 32;
+  double? _seenHintTop;
+  double _seenOverhang = 0;
 
   /// Value unused; bumps only drive the rebuild.
   final ValueNotifier<int> _tick = ValueNotifier<int>(0);
@@ -3902,7 +4241,7 @@ class _StickyGroupAvatarState extends State<_StickyGroupAvatar> {
   }
 
   /// Clamping to `[0, maxTop]` is CSS sticky bounded by the containing block.
-  double _computeTop(double maxTop) {
+  double _computeTop(double maxTop, double? hintTop) {
     final scrollable = Scrollable.maybeOf(context);
     final track = context.findRenderObject();
     if (scrollable != null && track is RenderBox && track.hasSize) {
@@ -3910,7 +4249,13 @@ class _StickyGroupAvatarState extends State<_StickyGroupAvatar> {
       if (viewport is RenderBox && viewport.hasSize) {
         final trackTop =
             track.localToGlobal(Offset.zero, ancestor: viewport).dy;
-        final desired = viewport.size.height - _stickyGap - _avatar - trackTop;
+        final lift = floatLiftOver(hintTop,
+            viewport.localToGlobal(Offset(0, viewport.size.height)).dy);
+        final desired = viewport.size.height -
+            ChatFabs.floatBottom -
+            lift -
+            _avatar -
+            trackTop;
         return desired.clamp(0.0, maxTop);
       }
     }
@@ -3927,6 +4272,15 @@ class _StickyGroupAvatarState extends State<_StickyGroupAvatar> {
         imageUrl: widget.imageUrl,
       ),
     );
+    final hintTop = ref.watch(composerHintTopProvider);
+    final overhang = ref.watch(composerOverhangProvider);
+    if (hintTop != _seenHintTop || overhang != _seenOverhang) {
+      _seenHintTop = hintTop;
+      _seenOverhang = overhang;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _tick.value++;
+      });
+    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final trackHeight = constraints.maxHeight;
@@ -3940,7 +4294,7 @@ class _StickyGroupAvatarState extends State<_StickyGroupAvatar> {
               children: [
                 Positioned(
                   left: 0,
-                  top: _computeTop(maxTop),
+                  top: _computeTop(maxTop, hintTop),
                   width: _avatar,
                   height: _avatar,
                   child: child!,
@@ -4047,6 +4401,7 @@ class _BubbleSnapInState extends State<_BubbleSnapIn>
 class _SwipeToAct extends StatefulWidget {
   const _SwipeToAct({
     required this.settings,
+    required this.applies,
     required this.onAction,
     required this.onDoubleTap,
     required this.onLongPressStart,
@@ -4057,6 +4412,8 @@ class _SwipeToAct extends StatefulWidget {
   });
 
   final Settings settings;
+
+  final bool Function(String action) applies;
 
   final ValueChanged<String> onAction;
   final VoidCallback onDoubleTap;
@@ -4079,18 +4436,7 @@ class _SwipeToActState extends State<_SwipeToAct>
     with SingleTickerProviderStateMixin {
   static const double _swipeStart = 16;
   static const double _edgeZone = 50;
-  static const double _followCap = 100;
-
-  /// A direction resolving to anything else (including 'none') abandons the gesture.
-  static const Set<String> _knownActions = {
-    'quote',
-    'translate',
-    'copy',
-    'react',
-    'zap',
-    'slap',
-    'hug',
-  };
+  static const double _followCap = kSwipeFollowCap;
 
   // Created in initState: a lazy field would create a ticker during dispose for never-swiped rows.
   late final AnimationController _settle;
@@ -4123,8 +4469,7 @@ class _SwipeToActState extends State<_SwipeToAct>
     super.dispose();
   }
 
-  double get _threshold =>
-      widget.settings.swipeThreshold.clamp(30, 120).toDouble();
+  double get _threshold => swipeThresholdPx(widget.settings.swipeThreshold);
 
   void _setDx(double v) {
     setState(() => _dx = v);
@@ -4157,15 +4502,16 @@ class _SwipeToActState extends State<_SwipeToAct>
       if (_travel.abs() <= dy * 1.5) return;
       // Locked here; dragging back across the origin can't flip the action.
       final dir = _travel < 0 ? -1 : 1;
-      // Right swipes from the left edge defer to the sidebar-open gesture.
-      if (dir > 0 && _startX < _edgeZone) {
+      final width = MediaQuery.sizeOf(context).width;
+      if ((dir > 0 && _startX < _edgeZone) ||
+          (dir < 0 && _startX > width - _edgeZone)) {
         _abandoned = true;
         return;
       }
       final action = dir < 0
           ? widget.settings.swipeLeftAction
           : widget.settings.swipeRightAction;
-      if (!_knownActions.contains(action)) {
+      if (!widget.applies(action)) {
         _abandoned = true;
         return;
       }
@@ -4173,10 +4519,10 @@ class _SwipeToActState extends State<_SwipeToAct>
       _action = action;
       _active = true;
     }
-    final double dist = _travel.abs().clamp(0.0, _followCap);
+    final double dist = (_dir * _travel).clamp(0.0, _followCap);
     final past = dist >= _threshold;
     if (past && !_thresholdFired) {
-      HapticFeedback.mediumImpact();
+      Haptics.selection();
       _thresholdFired = true;
     } else if (!past) {
       _thresholdFired = false;
@@ -4343,9 +4689,9 @@ class _SwipeToActState extends State<_SwipeToAct>
       result = RawGestureDetector(
         behavior: HitTestBehavior.translucent,
         gestures: <Type, GestureRecognizerFactory>{
-          HorizontalDragGestureRecognizer: GestureRecognizerFactoryWithHandlers<
-              HorizontalDragGestureRecognizer>(
-            () => HorizontalDragGestureRecognizer(
+          _SwipeDragRecognizer: GestureRecognizerFactoryWithHandlers<
+              _SwipeDragRecognizer>(
+            () => _SwipeDragRecognizer(
               supportedDevices: const {PointerDeviceKind.touch},
             ),
             (r) => r
@@ -4360,6 +4706,49 @@ class _SwipeToActState extends State<_SwipeToAct>
       );
     }
     return result;
+  }
+}
+
+class _SwipeDragRecognizer extends HorizontalDragGestureRecognizer {
+  _SwipeDragRecognizer({super.supportedDevices});
+
+  static const double _ratio = 1.5;
+
+  final Map<int, Offset> _moved = {};
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    _moved[event.pointer] = Offset.zero;
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerMoveEvent) {
+      _moved[event.pointer] = (_moved[event.pointer] ?? Offset.zero) + event.delta;
+    } else if (event is PointerUpEvent || event is PointerCancelEvent) {
+      _moved.remove(event.pointer);
+    }
+    super.handleEvent(event);
+  }
+
+  @override
+  bool hasSufficientGlobalDistanceToAccept(
+    PointerDeviceKind pointerDeviceKind,
+    double? deviceTouchSlop,
+  ) {
+    if (!super.hasSufficientGlobalDistanceToAccept(
+        pointerDeviceKind, deviceTouchSlop)) {
+      return false;
+    }
+    final total = _moved.values.fold(Offset.zero, (a, b) => a + b);
+    return total.dx.abs() > total.dy.abs() * _ratio;
+  }
+
+  @override
+  void dispose() {
+    _moved.clear();
+    super.dispose();
   }
 }
 

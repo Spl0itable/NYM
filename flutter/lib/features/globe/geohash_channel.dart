@@ -4,25 +4,23 @@ import 'package:flutter/foundation.dart';
 
 import '../../models/channel.dart';
 import '../../state/app_state.dart';
+import 'geo_explore.dart';
 
 /// A geohash channel on the globe: center, recent message heat and joined state.
 @immutable
-class GeohashChannelPoint {
+class GeohashChannelPoint extends GeoActivity {
   const GeohashChannelPoint({
-    required this.geohash,
-    required this.lat,
-    required this.lng,
-    required this.messages,
+    required super.geohash,
+    required super.lat,
+    required super.lng,
+    required super.messages,
     required this.isJoined,
+    this.lastActivityMs = 0,
   });
 
-  final String geohash;
-  final double lat;
-  final double lng;
-
-  /// Recent message count within the active window.
-  final int messages;
   final bool isJoined;
+
+  final int lastActivityMs;
 }
 
 /// Seed geohash channels always offered as globe candidates; inlined to avoid importing nostr_controller.dart.
@@ -51,6 +49,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
   final cutoffMs = nowMs - windowHours * 3600 * 1000;
 
   final counts = <String, int>{};
+  final lastMs = <String, int>{};
 
   // Candidates: seeds, registered channels, channels with messages, and D1-active geohashes; all gated on in-window activity.
   final candidates = <String>{};
@@ -87,11 +86,13 @@ List<GeohashChannelPoint> buildGeohashChannels(
     // Hourly buckets aligned with D1 (index 0 = latest); spam-gated messages don't count.
     final localBuckets = List<int>.filled(24, 0);
     final list = state.messages['#$gh'];
+    var newest = state.channelLastActivity['#$gh'] ?? 0;
     if (list != null) {
       for (final m in list) {
         if (m.spamGated || state.isMessageFiltered(m)) continue;
         final ts = m.timestamp;
         if (ts <= 0) continue;
+        if (ts > newest) newest = ts;
         var ageH = (nowMs - ts) ~/ (3600 * 1000);
         if (ageH < 0) ageH = 0;
         if (ageH < 24) localBuckets[ageH]++;
@@ -111,6 +112,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
       if (d1LastMs >= cutoffMs) total = kD1ActiveHeatFloor;
     }
     counts[gh] = total;
+    lastMs[gh] = newest;
   }
 
   // Joined = registered channels plus pinned, so favorited geohashes show "Go to Channel" instead of "Join".
@@ -132,6 +134,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
       lng: center.lng,
       messages: n,
       isJoined: joined.contains(gh),
+      lastActivityMs: lastMs[gh] ?? 0,
     ));
   });
   return out;

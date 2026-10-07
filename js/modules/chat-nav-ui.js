@@ -3,13 +3,14 @@
     const nowSec = () => Math.floor(Date.now() / 1000);
     const ico = (p, size) => `<svg width="${size || 16}" height="${size || 16}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="nm-ico8">${p}</svg>`;
     const ICONS = {
-        pin: ico('<path d="M6 2h4l-.8 4 2.8 3H4l2.8-3z"/><line x1="8" y1="9" x2="8" y2="14"/>'),
-        unpin: ico('<path d="M6 2h4l-.8 4 2.8 3H4l2.8-3z"/><line x1="8" y1="9" x2="8" y2="14"/><line x1="2.5" y1="2.5" x2="13.5" y2="13.5"/>'),
         up: ico('<polyline points="4 10 8 6 12 10"/>'),
         down: ico('<polyline points="4 6 8 10 12 6"/>'),
+        star: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg>',
+        starFilled: '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2 L14.9 8.6 L22 9.3 L16.5 14 L18.2 21 L12 17.3 L5.8 21 L7.5 14 L2 9.3 L9.1 8.6 Z"/></svg>',
         clock: ico('<circle cx="8" cy="8" r="6"/><polyline points="8 4.5 8 8 10.5 9.5"/>'),
-        arrowUp: ico('<line x1="8" y1="13" x2="8" y2="3"/><polyline points="4 7 8 3 12 7"/>', 14),
-        arrowDown: ico('<line x1="8" y1="3" x2="8" y2="13"/><polyline points="4 9 8 13 12 9"/>', 14),
+        arrowUp: '<svg class="cn-ico" width="8.26" height="10" viewBox="3.25 2.25 9.5 11.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="13" x2="8" y2="3"/><polyline points="4 7 8 3 12 7"/></svg>',
+        arrowDown: '<svg class="cn-ico" width="8.26" height="10" viewBox="3.25 2.25 9.5 11.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="3" x2="8" y2="13"/><polyline points="4 9 8 13 12 9"/></svg>',
+        at: '<svg class="cn-ico cn-at" width="10" height="10" viewBox="0.625 0.625 22.75 22.75" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></svg>',
         anon: ico('<circle cx="8" cy="6" r="3"/><path d="M2.5 14c.8-2.6 2.9-4 5.5-4s4.7 1.4 5.5 4"/><line x1="2.5" y1="2.5" x2="13.5" y2="13.5"/>'),
     };
     const MENTION_SAVE_MS = 400;
@@ -127,16 +128,17 @@
         },
 
         _cnSaveMark(key, mark) {
-            const m = N().markNorm(mark);
-            if (!key || !(m.at > 0)) return;
+            if (!key || !(N().markNorm(mark).at > 0)) return;
             const store = this._cnMarkStore();
             const prev = N().markNorm(store[key]);
+            const m = N().markMax(prev, mark);
             if (prev.at === m.at && prev.ids.length === m.ids.length) return;
             store[key] = { at: m.at, ids: m.ids, t: Date.now() };
             if (this._cnMarkTimer) return;
             this._cnMarkTimer = setTimeout(() => {
                 this._cnMarkTimer = null;
                 try { localStorage.setItem(this._cnMarkKey(), JSON.stringify(N().markStoreNorm(this._cnMarkStore()))); } catch (_) { }
+                if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
             }, MENTION_SAVE_MS);
         },
 
@@ -231,7 +233,8 @@
                             const now = this._cnContextFor(key);
                             const mark = now && now.container.querySelector('.cn-divider');
                             if (mark) {
-                                mark.scrollIntoView({ block: 'start' });
+                                const sc = now.scroller;
+                                if (sc) sc.scrollTop += mark.getBoundingClientRect().top - sc.getBoundingClientRect().top;
                                 if (ctx.col) ctx.col._atBottom = false;
                                 else this.userScrolledUp = true;
                             }
@@ -379,7 +382,7 @@
                 at.type = 'button';
                 at.className = 'cn-mention-fab nm-hidden';
                 at.dataset.action = 'cnJumpMention';
-                at.innerHTML = '<span class="cn-at">@</span><span class="cn-at-count"></span>';
+                at.innerHTML = ICONS.at + '<span class="cn-at-count"></span>';
                 host.appendChild(at);
             }
             const slots = { mention: at, jump, bottom: host.querySelector('.scroll-to-bottom-btn, .cv-scroll-bottom') };
@@ -431,7 +434,6 @@
             const n = N().mentionCount(this._cnMentions(), key);
             at.classList.toggle('nm-hidden', n <= 0);
             at.querySelector('.cn-at-count').textContent = n > 0 ? String(n) : '';
-            at.title = this._cn(N().STRINGS.mentions);
             at.setAttribute('aria-label', this._cn(N().STRINGS.mentions) + (n ? ' (' + n + ')' : ''));
         },
 
@@ -457,6 +459,7 @@
         _cnBindScroll(ctx) {
             const sc = ctx.scroller;
             this._cnKeepAnchor(sc, ctx.container);
+            if (typeof this._dsBind === 'function') this._dsBind(sc, ctx.container);
             if (!sc || sc._cnBound) return;
             sc._cnBound = true;
             let pending = false;
@@ -788,6 +791,15 @@
             return N().isPinned(this._pinState(), pinKey);
         },
 
+        _pinChatNameHtml(p) {
+            const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+            if (p.kind === 'dm') {
+                return typeof this.getNymHtmlFromPubkey === 'function' ? this.getNymHtmlFromPubkey(p.id) : esc(p.id.slice(0, 8));
+            }
+            const g = this.groupConversations && this.groupConversations.get(p.id);
+            return esc(g && g.name ? g.name : p.id.slice(0, 8));
+        },
+
         _pinKeyForItem(itemEl) {
             if (!itemEl) return '';
             if (itemEl.classList.contains('channel-item')) return N().pinKey('channel', itemEl.dataset.geohash || itemEl.dataset.channel);
@@ -806,11 +818,19 @@
             const now = Date.now();
             let state = this._pinState();
             if (N_.isPinned(state, pinKey)) {
-                state = N_.pinRemove(state, pinKey, now);
+                const index = N_.pinList(state).indexOf(pinKey);
+                this._pinCommit(N_.pinRemove(state, pinKey, now));
+                const p = N_.pinParse(pinKey);
+                if (typeof this.showUndoToast === 'function') {
+                    const undo = () => this.restorePinChat(pinKey, index);
+                    if (p.kind === 'channel') this.showUndoToast(this._cn(N_.STRINGS.unfavorited, { channel: p.id }), undo);
+                    else this.showUndoToast(this._cn(N_.STRINGS.unfavoritedChat, { name: this._pinChatNameHtml(p) }), undo, { html: true });
+                }
+                return true;
             } else {
                 const r = N_.pinAdd(state, pinKey, now);
                 if (r.error === 'cap') {
-                    this._cnNotice(this._cn(N_.STRINGS.pinCap, { n: N_.LIMITS.pinMax }));
+                    this._cnNotice(this._cn(N_.pinParse(pinKey).kind === 'channel' ? N_.STRINGS.favoriteCap : N_.STRINGS.favoriteChatCap, { n: N_.LIMITS.pinMax }));
                     return false;
                 }
                 state = r.state;
@@ -819,7 +839,17 @@
             return true;
         },
 
-        movePinnedChat(pinKey, dir) {
+        restorePinChat(pinKey, index) {
+            const N_ = N();
+            const state = this._pinState();
+            if (N_.isPinned(state, pinKey)) return;
+            const r = N_.pinAdd(state, pinKey, Date.now());
+            if (r.error) return;
+            this._pinCommit(N_.pinMove(r.state, pinKey, index, Date.now()));
+            if (typeof this._refreshFavoriteChannelBtn === 'function') this._refreshFavoriteChannelBtn();
+        },
+
+                movePinnedChat(pinKey, dir) {
             const state = this._pinState();
             const order = N().pinList(state);
             const p = N().pinParse(pinKey);
@@ -918,8 +948,8 @@
             if (on && !icon) {
                 icon = document.createElement('span');
                 icon.className = 'chat-pin-icon';
-                icon.innerHTML = ICONS.pin;
-                icon.title = this._cn(N().STRINGS.pinned);
+                icon.innerHTML = ICONS.starFilled;
+                icon.title = this._cn(N().STRINGS.favorited);
                 const badges = row.querySelector('.channel-badges');
                 if (badges) badges.insertBefore(icon, badges.firstChild);
                 else row.appendChild(icon);
@@ -1028,7 +1058,7 @@
                 if (f.t === 'wait' && g) {
                     g.timer = setTimeout(() => this._pinTouchEvent({ t: 'arm' }), f.ms);
                 } else if (f.t === 'armed' && g) {
-                    if (window.nymHapticTap) window.nymHapticTap();
+                    if (window.nymHaptic) window.nymHaptic('selection');
                     g.row.classList.add('chat-pin-armed');
                     if (g.scroller) g.scroller.classList.add('chat-pin-lock');
                 } else if (f.t === 'start' && g) {
@@ -1048,7 +1078,7 @@
                     this._pinTouchEnd(true);
                     const items = this._buildSidebarMenuItems(row);
                     if (items.length) {
-                        if (window.nymHapticTap) window.nymHapticTap();
+                        if (window.nymHaptic) window.nymHaptic('selection');
                         this._showSidebarActionMenu(items, f.x, f.y);
                     }
                 } else if (f.t === 'abort') {
@@ -1120,9 +1150,11 @@
             const k = this._pinKeyForItem(itemEl);
             if (!k || k === 'c:nymchat') return [];
             const pinned = this.isChatPinned(k);
-            const items = [{ label: this._cn(pinned ? N().STRINGS.unpin : N().STRINGS.pin), svg: pinned ? ICONS.unpin : ICONS.pin, action: () => this.togglePinChat(k) }];
+            const isChannel = N().pinParse(k).kind === 'channel';
+            const items = isChannel
+                ? [{ label: this._cn(pinned ? N().STRINGS.unfavorite : N().STRINGS.favorite), svg: pinned ? ICONS.starFilled : ICONS.star, action: () => this.togglePinChat(k) }]
+                : [{ label: this._cn(pinned ? N().STRINGS.unfavoriteChat : N().STRINGS.favoriteChat), svg: pinned ? ICONS.starFilled : ICONS.star, action: () => this.togglePinChat(k) }];
             if (pinned) {
-                const isChannel = N().pinParse(k).kind === 'channel';
                 const same = this.pinnedChatKeys().filter((x) => (N().pinParse(x).kind === 'channel') === isChannel);
                 const i = same.indexOf(k);
                 if (i > 0) items.push({ label: this._cn(N().STRINGS.moveUp), svg: ICONS.up, action: () => this.movePinnedChat(k, -1) });
@@ -1649,7 +1681,7 @@
                 fired = true;
                 window._slSuppressSendUntil = Date.now() + 800;
                 try { btn.dispatchEvent(new Event('mouseleave')); } catch (_) { }
-                if (window.nymHapticTap) window.nymHapticTap();
+                if (window.nymHaptic) window.nymHaptic('selection');
                 this._slSendMenu(x, y);
             };
             const start = (e) => {

@@ -18,6 +18,7 @@ import 'cosmetics.dart'
         messageStyleDecoration;
 import 'shop_catalog.dart';
 import 'shop_models.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Renders a catalog item's inline SVG tinted to [color] via `currentColor`.
 class ShopSvgIcon extends StatelessWidget {
@@ -1005,7 +1006,7 @@ class RecoveryCodeRow extends StatelessWidget {
               showToast(tr('Copied recovery code'));
             }
           },
-          child: Tooltip(
+          child: NymTooltip(
             message: tr('Click to copy'),
             child: Text(
               code,

@@ -1,5 +1,6 @@
 importScripts('/js/modules/syntax-highlight.js');
 importScripts('/js/modules/media-notes.js');
+importScripts('/js/modules/call-link-icon.js');
 importScripts('/js/modules/message-format.js');
 
 let emojiMap = null;

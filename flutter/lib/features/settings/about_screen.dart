@@ -21,6 +21,7 @@ import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
 import 'build_integrity.dart';
 import 'settings_widgets.dart';
+import '../../widgets/common/nym_sheet.dart';
 
 /// Bundled fallback version, shown until the live version resolves; keep in sync with `NYMCHAT_VERSION` at release.
 const String kAboutVersion = 'v3.75.545';
@@ -307,13 +308,13 @@ class AboutScreen extends ConsumerStatefulWidget {
     String? initialTopic,
     String? initialMessage,
   }) {
-    return showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => AboutScreen(
+    return showNymSheet<void>(
+      context,
+      (_) => AboutScreen(
         initialTopic: initialTopic,
         initialMessage: initialMessage,
       ),
+      barrierColor: Colors.black.withValues(alpha: 0.7),
     );
   }
 
@@ -402,135 +403,142 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
     final viewInsets = MediaQuery.of(context).viewInsets;
     final visibleHeight =
         MediaQuery.of(context).size.height - viewInsets.bottom;
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 150),
-      curve: Curves.easeOut,
-      padding: EdgeInsets.only(bottom: viewInsets.bottom),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: Material(
-              color: Colors.transparent,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: c.bgSecondary,
-                  borderRadius: NymRadius.rxl,
-                  border: Border.all(color: c.glassBorder),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.4),
-                      blurRadius: 40,
-                      offset: const Offset(0, 20),
+    final body = Stack(
+      children: [
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _header(c),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildPanel(c),
+                    const SizedBox(height: 10),
+                    _canaryPanel(c),
+                    _description(c),
+                    _links(c),
+                    _license(c),
+                    const SizedBox(height: 20),
+                    Container(height: 1, color: c.glassBorder),
+                    const SizedBox(height: 20),
+                    Text(
+                      tr('Contact the developer'),
+                      style: TextStyle(
+                        color: c.text,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                    const SizedBox(height: 4),
+                    Text(
+                      tr('Send feedback, a question, or a bug report. '
+                          'Your message is delivered as an encrypted '
+                          'private message to the Nymchat developer.'),
+                      style: TextStyle(
+                          color: c.textDim,
+                          fontSize: 11,
+                          height: 1.4),
+                    ),
+                    const SizedBox(height: 16),
+                    FormGroup(
+                      label: tr('Topic'),
+                      child: FormSelect<String>(
+                        value: _topic,
+                        items: [
+                          (
+                            value: 'General feedback',
+                            label: tr('General feedback')
+                          ),
+                          (
+                            value: 'Bug report',
+                            label: tr('Bug report')
+                          ),
+                          (
+                            value: 'Feature request',
+                            label: tr('Feature request')
+                          ),
+                          (
+                            value: 'Question',
+                            label: tr('Question')
+                          ),
+                          (
+                            value: 'Spam false positive',
+                            label: tr('Spam false positive')
+                          ),
+                        ],
+                        onChanged: (v) =>
+                            setState(() => _topic = v),
+                      ),
+                    ),
+                    FormGroup(
+                      label: tr('Message'),
+                      child: _messageBox(),
+                    ),
+                    if (_status != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          _status!,
+                          style: TextStyle(
+                            color: _statusOk
+                                ? c.secondary
+                                : c.danger,
+                            fontSize: 12,
+                            height: 1.4,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
-                clipBehavior: Clip.antiAlias,
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    // Leave ~40px of breathing room.
-                    maxHeight:
-                        (visibleHeight - 40).clamp(200.0, visibleHeight) * 0.98,
-                  ),
-                  child: Stack(
-                    children: [
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _header(c),
-                          Flexible(
-                            child: SingleChildScrollView(
-                              padding: const EdgeInsets.fromLTRB(28, 0, 28, 8),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  _buildPanel(c),
-                                  const SizedBox(height: 10),
-                                  _canaryPanel(c),
-                                  _description(c),
-                                  _links(c),
-                                  _license(c),
-                                  const SizedBox(height: 20),
-                                  Container(height: 1, color: c.glassBorder),
-                                  const SizedBox(height: 20),
-                                  Text(
-                                    tr('Contact the developer'),
-                                    style: TextStyle(
-                                      color: c.text,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    tr('Send feedback, a question, or a bug report. '
-                                        'Your message is delivered as an encrypted '
-                                        'private message to the Nymchat developer.'),
-                                    style: TextStyle(
-                                        color: c.textDim,
-                                        fontSize: 11,
-                                        height: 1.4),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  FormGroup(
-                                    label: tr('Topic'),
-                                    child: FormSelect<String>(
-                                      value: _topic,
-                                      items: [
-                                        (
-                                          value: 'General feedback',
-                                          label: tr('General feedback')
-                                        ),
-                                        (
-                                          value: 'Bug report',
-                                          label: tr('Bug report')
-                                        ),
-                                        (
-                                          value: 'Feature request',
-                                          label: tr('Feature request')
-                                        ),
-                                        (
-                                          value: 'Question',
-                                          label: tr('Question')
-                                        ),
-                                        (
-                                          value: 'Spam false positive',
-                                          label: tr('Spam false positive')
-                                        ),
-                                      ],
-                                      onChanged: (v) =>
-                                          setState(() => _topic = v),
-                                    ),
-                                  ),
-                                  FormGroup(
-                                    label: tr('Message'),
-                                    child: _messageBox(),
-                                  ),
-                                  if (_status != null)
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 4),
-                                      child: Text(
-                                        _status!,
-                                        style: TextStyle(
-                                          color: _statusOk
-                                              ? c.secondary
-                                              : c.danger,
-                                          fontSize: 12,
-                                          height: 1.4,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
-                          _actions(c),
-                        ],
+              ),
+            ),
+            _actions(c),
+          ],
+        ),
+        ModalChrome.closeChip(
+            c, () => Navigator.of(context).pop()),
+      ],
+    );
+    return NymDiscardGuard(
+      isDirty: () => _messageController.text.trim().isNotEmpty,
+      child: nymSheetOr(
+        context,
+        body,
+        (body) => AnimatedPadding(
+          duration: const Duration(milliseconds: 150),
+          curve: Curves.easeOut,
+          padding: EdgeInsets.only(bottom: viewInsets.bottom),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 500),
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: c.bgSecondary,
+                      borderRadius: NymRadius.rxl,
+                      border: Border.all(color: c.glassBorder),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          blurRadius: 40,
+                          offset: const Offset(0, 20),
+                        ),
+                      ],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxHeight:
+                            (visibleHeight - 40).clamp(200.0, visibleHeight) * 0.98,
                       ),
-                      ModalChrome.closeChip(
-                          c, () => Navigator.of(context).maybePop()),
-                    ],
+                      child: body,
+                    ),
                   ),
                 ),
               ),
@@ -928,7 +936,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
         children: [
           NymOutlineButton(
             label: tr('Close'),
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: () => Navigator.of(context).pop(),
           ),
           const SizedBox(width: 10),
           Opacity(

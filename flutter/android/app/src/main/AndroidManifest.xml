@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Core connectivity -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
@@ -42,6 +43,7 @@
 
     <!-- Notifications (local + future FCM). POST_NOTIFICATIONS needed on API 33+ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
     <!-- Exact-alarm-free scheduling; receive boot for rescheduled notifications -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
@@ -59,7 +61,8 @@
         android:maxSdkVersion="32"/>
     <!-- gal: saving images/videos to the gallery on legacy API levels -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29"/>
+        android:maxSdkVersion="29"
+        tools:replace="android:maxSdkVersion"/>
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"/>
 
     <!-- Hardware features are optional so the app installs on devices lacking them -->
@@ -141,6 +144,22 @@
             android:exported="false"
             android:stopWithTask="true"
             android:foregroundServiceType="dataSync|connectedDevice"/>
+        <receiver
+            android:name=".NymCallActionReceiver"
+            android:exported="false"/>
+        <service
+            android:name=".fcm.NymRingMessagingService"
+            android:exported="false"
+            tools:ignore="MissingClass">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT"/>
+            </intent-filter>
+        </service>
+        <service
+            android:name=".NymCallService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="microphone|camera"/>
         <!-- Play Integrity: the Google Cloud project number verdicts are issued
              under. A string resource, not a literal: the number overflows the
              32-bit int aapt would otherwise parse it as, and PlayIntegrity.kt
@@ -153,6 +172,9 @@
             android:value="2" />
     </application>
     <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>

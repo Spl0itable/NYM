@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../day_separators/day_separator.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -54,6 +55,9 @@ import 'brand_tile.dart';
 import 'nymbot_providers.dart';
 import '../../services/storage/revocable_prefs.dart';
 import '../chat_lock/chat_lock_providers.dart';
+import '../../widgets/chat/list_anchor.dart';
+import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Private Nymbot chat over the canonical bot PM thread, with tier/model switching and credit buying.
 class BotChatScreen extends ConsumerStatefulWidget {
@@ -285,6 +289,9 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       }
     }
 
+    final dayStarts = dayStartIndexes(
+        units, (MessageGroupEntry e) => e.message.createdAt);
+
     return ColoredBox(
       color: containerColor,
       child: Stack(
@@ -293,12 +300,20 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
             child: ListView.builder(
               controller: _scroll,
               reverse: true,
+              physics: const KeepReadingPhysics(),
               // Dragging the list dismisses the keyboard.
               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
               itemCount: units.length,
               itemBuilder: (context, revIndex) {
-                final unit = units[units.length - 1 - revIndex];
+                final forward = units.length - 1 - revIndex;
+                final unit = units[forward];
+                final separator = dayStarts.contains(forward)
+                    ? DaySeparator(
+                        createdAt: unit.first.message.createdAt,
+                        useBubbles: settings.useBubbles,
+                      )
+                    : null;
                 // Keyed by the group's lead id so appended replies don't re-create visible rows and restart their snap-in.
                 final group = MessageGroup(
                   key: ValueKey('botgroup_${unit.first.message.id}'),
@@ -308,11 +323,18 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                       showReactionPicker(context, ref, msg),
                 );
                 final last = unit.last.message;
-                if (!hasStatus(last)) return group;
+                if (!hasStatus(last)) {
+                  if (separator == null) return group;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [separator, group],
+                  );
+                }
                 if (!last.isOwn) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      ?separator,
                       group,
                       BotRunOfferView(id: last.replyTo!.toLowerCase(), colors: c),
                     ],
@@ -323,6 +345,7 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
                   key: _runKeys.putIfAbsent(runId, GlobalKey.new),
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    ?separator,
                     group,
                     BotRunStatusView(id: runId, colors: c),
                   ],
@@ -349,7 +372,8 @@ class _BotChatScreenState extends ConsumerState<BotChatScreen> {
       !prev.isMeAction &&
       !cur.isMeAction &&
       prev.pubkey == cur.pubkey &&
-      (cur.createdAt - prev.createdAt).abs() <= _groupWindowSec;
+      (cur.createdAt - prev.createdAt).abs() <= _groupWindowSec &&
+      DayClock.instance.sameDay(prev.createdAt, cur.createdAt);
 
   void _showBuy(BuildContext context) {
     // Buy mode of the shared credits modal; Pro preselected when a Pro model is pinned.
@@ -551,7 +575,7 @@ class _BotControlBar extends StatelessWidget {
           ),
           if (runsCount > 0 && onStopAll != null) ...[
             SizedBox(width: gap),
-            Tooltip(
+            NymTooltip(
               message: tr('Stop every reply in this chat'),
               child: Semantics(
                 button: true,
@@ -1616,29 +1640,11 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
                         onChanged: (v) => setState(() => _translateQuery = v),
                         style: TextStyle(color: c.inputText, fontSize: 13),
                         cursorColor: c.isLight ? Colors.black : Colors.white,
-                        decoration: InputDecoration(
-                          isDense: true,
-                          hintText: tr('Search languages...'),
-                          hintStyle: TextStyle(color: c.textDim, fontSize: 13),
-                          filled: true,
-                          fillColor: c.isLight
-                              ? Colors.black.withValues(alpha: 0.04)
-                              : Colors.white.withValues(alpha: 0.05),
+                        decoration: NymField.decoration(c,
+                          hint: tr('Search languages...'),
+                          fontSize: 13,
                           contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 7),
-                          border: OutlineInputBorder(
-                            borderRadius: NymRadius.rsm,
-                            borderSide: BorderSide(color: c.glassBorder),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: NymRadius.rsm,
-                            borderSide: BorderSide(color: c.glassBorder),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: NymRadius.rsm,
-                            borderSide: BorderSide(color: c.primary),
-                          ),
-                        ),
+                              horizontal: 10, vertical: 7)),
                       ),
                     ),
                     Flexible(
@@ -1846,8 +1852,7 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
         isDense: true,
         hintText: tr('Message, / for commands, ? for Nymbot...'),
         hintStyle: TextStyle(
-            color: (c.isLight ? Colors.black : Colors.white)
-                .withValues(alpha: 0.4),
+            color: NymField.placeholder(c),
             fontSize: phone ? 16 : 15),
         filled: true,
         fillColor: flatFill,
@@ -2243,7 +2248,7 @@ class _BotIconBtnState extends State<_BotIconBtn> {
               letterSpacing: 0.5,
             ),
           );
-    return Tooltip(
+    return NymTooltip(
       message: widget.tooltip,
       child: MouseRegion(
         onEnter: (_) => setState(() => _hover = true),
@@ -2321,7 +2326,7 @@ class _BotSendButtonState extends State<_BotSendButton> {
                   ? [BoxShadow(color: c.primaryA(0.10), blurRadius: 15)]
                   : null,
             ),
-            child: Tooltip(
+            child: NymTooltip(
               message: tr('Send'),
               child: Semantics(
                 button: true,
@@ -2398,7 +2403,7 @@ class _BotTranslateButtonState extends State<_BotTranslateButton>
     }
     return Opacity(
       opacity: widget.enabled ? (_hover ? 1.0 : 0.6) : 0.4,
-      child: Tooltip(
+      child: NymTooltip(
         message: tr('Translate text'),
         child: MouseRegion(
           cursor: widget.enabled
@@ -2888,22 +2893,13 @@ class _ProModelPickerSheetState extends State<ProModelPickerSheet> {
                 onChanged: (v) =>
                     setState(() => _query = v.trim().toLowerCase()),
                 style: TextStyle(color: c.text, fontSize: 13),
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText: tr('Search models…'),
-                  hintStyle: TextStyle(color: c.textDim, fontSize: 13),
-                  prefixIcon: Icon(Icons.search, size: 18, color: c.textDim),
+                decoration: NymField.decoration(c,
+                  hint: tr('Search models…'),
+                  fontSize: 13,
+                  radius: BorderRadius.circular(8),
+                  prefixIcon: Icon(Icons.search, size: 18, color: NymField.icon(c)),
                   contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: c.border),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: c.primary),
-                  ),
-                ),
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
               ),
             ),
             // Only the models scroll; header and search stay.
@@ -3094,16 +3090,10 @@ class _AnonModalState extends ConsumerState<_AnonModal> {
                       controller: _amount,
                       keyboardType: TextInputType.number,
                       style: TextStyle(color: c.inputText, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: tr('credits'),
-                        hintStyle: TextStyle(color: c.textDim),
-                        isDense: true,
-                        filled: true,
-                        fillColor: c.bgTertiary,
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
-                        border: const OutlineInputBorder(),
-                      ),
+                      decoration: NymField.decoration(c,
+                          hint: tr('credits'),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10)),
                     ),
                   ),
                   const SizedBox(width: 8),

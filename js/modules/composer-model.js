@@ -12,11 +12,11 @@
 
     const ATTACH_ORDER = Object.freeze(['photo', 'file', 'location', 'videoNote', 'poll', 'event']);
 
-    const SHEET_MAX_WIDTH = 768;
+    const SHEET_MAX_WIDTH = 1024;
 
     const MAIN_MENU = Object.freeze({
         primary: Object.freeze(['notifications', 'saved', 'calls']),
-        secondary: Object.freeze(['flair', 'settings', 'about']),
+        secondary: Object.freeze(['shop', 'settings', 'about']),
     });
 
     function item(id, extra) {
@@ -46,7 +46,7 @@
     function primaryAction(state) {
         const s = state || {};
         if (s.recording) return 'mic';
-        if (s.editing || s.busy) return 'send';
+        if (s.editing || s.quoting || s.busy) return 'send';
         if ((s.attachments || 0) > 0) return 'send';
         return String(s.text || '').trim() ? 'send' : 'mic';
     }
@@ -83,8 +83,14 @@
         return e.key === 'ContextMenu' || (e.key === 'F10' && !!e.shiftKey);
     }
 
-    function mainMenuRows() {
-        return { grid: [MAIN_MENU.primary.slice(), MAIN_MENU.secondary.slice()] };
+    const HEADER_OVERFLOW = Object.freeze(['saved', 'calls', 'about']);
+
+    function mainMenuRows(layout) {
+        const all = MAIN_MENU.primary.concat(MAIN_MENU.secondary);
+        if (layout === 'desktop') {
+            return { grid: [all.filter((id) => !HEADER_OVERFLOW.includes(id))], overflow: HEADER_OVERFLOW.slice() };
+        }
+        return { grid: [all], overflow: [] };
     }
 
     G.NymComposer = {

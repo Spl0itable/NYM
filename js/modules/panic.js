@@ -25,7 +25,7 @@ Object.assign(NYM.prototype, {
       timer = setTimeout(() => {
         timer = null;
         this._panicFired = true;
-        if (window.nymHapticTap) window.nymHapticTap();
+        if (window.nymHaptic) window.nymHaptic('medium');
         fire();
       }, this._PANIC_HOLD_MS);
     };
@@ -179,6 +179,159 @@ Object.assign(NYM.prototype, {
     out.skipped = skipped;
   },
 
+  _DELETE_GAP_MIN_MS: 1500,
+
+  _DELETE_GAP_SPAN_MS: 2500,
+
+  _DELETE_SEND_MS: 12000,
+
+  async deleteAccountTargets() {
+    const out = { jobs: [], blocked: 0 };
+    const A = window.NymAccounts;
+    let others = [];
+    try {
+      if (A && typeof A.read === 'function') {
+        others = A.read().accounts.filter((a) => a.pubkey && a.pubkey !== this.pubkey && a.method !== 'anonymous');
+      }
+    } catch (e) { others = []; }
+    if (this.pubkey) {
+      const live = !!this.privkey || this.nostrLoginMethod === 'extension' || this.nostrLoginMethod === 'nip46';
+      if (live) out.jobs.push({ pubkey: this.pubkey, active: true });
+      else out.blocked++;
+    }
+    const signers = await Promise.all(others.map((a) => this._panicOtherSigner(a).catch(() => null)));
+    others.forEach((a, i) => {
+      if (signers[i]) out.jobs.push({ pubkey: a.pubkey, account: a, sign: signers[i] });
+      else out.blocked++;
+    });
+    return out;
+  },
+
+  _deleteRandom(n) {
+    try {
+      const a = new Uint32Array(1);
+      crypto.getRandomValues(a);
+      return a[0] % n;
+    } catch (e) {
+      return Math.floor(Math.random() * n);
+    }
+  },
+
+  _deleteGapMs() {
+    return this._DELETE_GAP_MIN_MS + this._deleteRandom(this._DELETE_GAP_SPAN_MS + 1);
+  },
+
+  async _deleteSend(body) {
+    const apiHost = this._getApiHost && this._getApiHost();
+    if (!apiHost) return false;
+    let timer = null;
+    try {
+      const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+      if (ctl) timer = setTimeout(() => { try { ctl.abort(); } catch (e) {} }, this._DELETE_SEND_MS);
+      const res = await this._edgeFetch(`https://${apiHost}/api/storage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        credentials: 'omit',
+        cache: 'no-store',
+        signal: ctl ? ctl.signal : undefined
+      });
+      let data = null;
+      try { data = await res.json(); } catch (e) { data = null; }
+      return !!(res && res.ok && data && data.ok === true);
+    } catch (e) {
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  },
+
+  _deleteGoQuiet() {
+    try {
+      if (this.relayPool && typeof this.relayPool.forEach === 'function') {
+        this.relayPool.forEach((relay) => { try { relay && relay.ws && relay.ws.close(); } catch (e) {} });
+      }
+    } catch (e) {}
+    try { if (this.proxyWs && this.proxyWs.close) this.proxyWs.close(); } catch (e) {}
+  },
+
+  async _deleteMark(job) {
+    if (typeof this.remotePanicSignal !== 'function') return false;
+    let sign = job.sign;
+    let secret = null;
+    if (job.active) {
+      secret = this.privkey || null;
+      sign = secret
+        ? (ev) => Promise.resolve(window.NostrTools.finalizeEvent(ev, secret))
+        : (ev) => this.signEvent(ev);
+    }
+    try {
+      const out = await this.remotePanicSignal(sign, job.pubkey, { enabled: true, deleted: true, secret });
+      return !!(out && out.mark);
+    } catch (e) { return false; }
+  },
+
+  async _deleteOne(job) {
+    let auth = null;
+    const marked = await this._deleteMark(job);
+    if (job.active) {
+      auth = await this._signBotAuth('account-purge', 'storage');
+      this._deleteGoQuiet();
+      await new Promise((r) => setTimeout(r, 400));
+    } else {
+      auth = await job.sign(this._panicAuthTemplate(job.pubkey));
+    }
+    if (!auth || auth.pubkey !== job.pubkey) return false;
+    const purged = await this._deleteSend(this._panicPurgeBody('nymchat', job.pubkey, auth));
+    return purged && marked;
+  },
+
+  async deleteAccountAndWipe(targets) {
+    if (this._panicking || this._deletingAccount) return;
+    this._deletingAccount = true;
+    const plan = targets || await this.deleteAccountTargets();
+    const ui = this._panicShowOverlay(this._panicText('Deleting'));
+    const jobs = plan.jobs.filter((j) => !j.active);
+    for (let i = jobs.length - 1; i > 0; i--) {
+      const j = this._deleteRandom(i + 1);
+      const t = jobs[i]; jobs[i] = jobs[j]; jobs[j] = t;
+    }
+    jobs.push(...plan.jobs.filter((j) => j.active));
+    let missed = plan.blocked;
+    for (let i = 0; i < jobs.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, this._deleteGapMs()));
+      ui.setStatus(jobs.length === 1
+        ? this._panicText('Deleting your account data on our servers…')
+        : this._panicText('Deleting account data on our servers: identity {i} of {n}…', { i: i + 1, n: jobs.length }));
+      let ok = false;
+      try { ok = await this._deleteOne(jobs[i]); } catch (e) { ok = false; }
+      if (!ok) missed++;
+    }
+    const lines = [missed === 0
+      ? this._panicText('Your keys, messages and settings are gone from this device, and your account data is gone from our servers.')
+      : (missed === 1
+        ? this._panicText("Your keys, messages and settings are gone from this device. Your account data is gone from our servers, except for 1 identity we couldn't reach.")
+        : this._panicText("Your keys, messages and settings are gone from this device. Your account data is gone from our servers, except for {n} identities we couldn't reach.", { n: missed })),
+    this._panicText('Posts already on public relays stay there.')];
+    const title = this._panicText('Account data deleted');
+    const button = this._panicText('Done');
+    await this.panicWipe({
+      localOnly: true,
+      ui,
+      finish: (shown) => {
+        const sweep = () => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} };
+        sweep();
+        setInterval(sweep, 250);
+        try { window.addEventListener('pagehide', sweep); } catch (e) {}
+        shown.done(title, lines, button, () => {
+          sweep();
+          try { location.replace(location.origin + location.pathname); }
+          catch (e) { try { location.reload(); } catch (e2) {} }
+        });
+      }
+    });
+  },
+
   async panicWipe(opts) {
     if (this._panicking) return;
     this._panicking = true;
@@ -191,7 +344,7 @@ Object.assign(NYM.prototype, {
       if (A && typeof A.pageDb === 'function') accountDbs.push(A.pageDb('nym-cache'));
     } catch (e) {}
 
-    const ui = this._panicShowOverlay();
+    const ui = (opts && opts.ui) || this._panicShowOverlay();
 
     // Bounded: a wipe that waits on the network is a wipe that did not happen.
     const purge = { skipped: null };
@@ -220,7 +373,7 @@ Object.assign(NYM.prototype, {
     try { if (this.proxyWs && this.proxyWs.close) this.proxyWs.close(); } catch (e) {}
 
     try {
-      this.privkey = null; this.pubkey = null;
+      this.privkey = null; this.pubkey = null; this._chStore = null;
       this._vaultKey = null; this._vaultMem = null; this._botAuthCache = null;
     } catch (e) {}
     // The sweep below takes the stored PQ root; this drops the decoded copy that rebuilds every ML-KEM key.
@@ -285,6 +438,9 @@ Object.assign(NYM.prototype, {
 
     try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
     try { ui.setStatus('Keys destroyed.'); } catch (e) {}
+    if (opts && typeof opts.finish === 'function') {
+      try { opts.finish(ui); return; } catch (e) {}
+    }
     const minMs = 1500;
     const wait = Math.max(250, minMs - (Date.now() - startedAt));
     setTimeout(() => {
@@ -320,16 +476,17 @@ Object.assign(NYM.prototype, {
   },
 
   // Backdrop stays opaque so sensitive content is hidden while destruction runs.
-  _panicShowOverlay() {
+  _panicShowOverlay(heading) {
     let interval = null;
     let statusEl = null;
+    let ov = null;
     try {
-      const ov = document.createElement('div');
+      ov = document.createElement('div');
       ov.className = 'nm-panic-overlay';
 
       const title = document.createElement('div');
       title.className = 'nm-panic-title';
-      title.textContent = 'Encrypting';
+      title.textContent = heading || 'Encrypting';
 
       const grid = document.createElement('div');
       grid.className = 'nm-panic-grid';
@@ -372,7 +529,33 @@ Object.assign(NYM.prototype, {
 
     return {
       setStatus: (text) => { try { if (statusEl) statusEl.textContent = text; } catch (e) {} },
-      stop: () => { try { if (interval) clearInterval(interval); } catch (e) {} }
+      stop: () => { try { if (interval) clearInterval(interval); } catch (e) {} },
+      done: (title, lines, button, onClick) => {
+        try { if (interval) clearInterval(interval); } catch (e) {}
+        if (!ov) return;
+        ov.textContent = '';
+        const panel = document.createElement('div');
+        panel.className = 'nm-delete-done';
+        panel.setAttribute('role', 'alertdialog');
+        panel.setAttribute('aria-labelledby', 'nmDeleteDoneTitle');
+        const h = document.createElement('h2');
+        h.id = 'nmDeleteDoneTitle';
+        h.textContent = title;
+        panel.appendChild(h);
+        for (const line of lines || []) {
+          const p = document.createElement('p');
+          p.textContent = line;
+          panel.appendChild(p);
+        }
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'send-btn';
+        b.textContent = button;
+        b.addEventListener('click', () => { try { onClick(); } catch (e) {} });
+        panel.appendChild(b);
+        ov.appendChild(panel);
+        try { b.focus(); } catch (e) {}
+      }
     };
   },
 

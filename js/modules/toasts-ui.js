@@ -6,23 +6,55 @@
             if (!T() || typeof document === 'undefined' || !document.body) return null;
             const raw = String(content == null ? '' : content);
             if (!raw.trim()) return null;
+            if (!opts._released && typeof this._toastShouldHold === 'function' && this._toastShouldHold()) {
+                if (!this._toastHeld) this._toastHeld = [];
+                this._toastHeld.push({ content: raw, opts: Object.assign({}, opts), at: Date.now() });
+                this._toastWatchHeld();
+                return null;
+            }
             const html = !!opts.html;
             const plain = html ? this._toastPlain(raw) : raw;
             const source = typeof this.uiSourceOf === 'function' ? this.uiSourceOf(plain) : plain;
             const kind = opts.kind || T().classify(source);
             const now = Date.now();
-            const r = T().push(this._toastQueue || T().emptyQueue(), plain, kind, now);
+            const action = opts.action && typeof opts.onAction === 'function' ? String(opts.action) : null;
+            const r = T().push(this._toastQueue || T().emptyQueue(), plain, kind, now, action);
             this._toastQueue = r.state;
-            for (const id of r.evicted) this._toastRemoveEl(id);
-            if (!r.deduped) this._toastMount(r.id, raw, html);
+            for (const id of r.evicted) this._toastDrop(id);
+            if (!r.deduped) {
+                if (action) {
+                    if (!this._toastActions) this._toastActions = new Map();
+                    this._toastActions.set(r.id, opts.onAction);
+                }
+                this._toastMount(r.id, raw, html);
+            }
             this._toastArm();
             return r.id;
+        },
+
+        showUndoToast(text, onUndo, opts = {}) {
+            const label = typeof this.uiText === 'function' ? this.uiText('Undo') : 'Undo';
+            return this.showToast(text, Object.assign({ kind: 'info' }, opts, { action: label, onAction: onUndo }));
+        },
+
+        runToastAction(id) {
+            const fn = this._toastActions && this._toastActions.get(id);
+            if (this._toastActions) this._toastActions.delete(id);
+            this.dismissToast(id);
+            if (typeof fn === 'function') {
+                try { fn(); } catch (_) { }
+            }
+        },
+
+        _toastDrop(id) {
+            if (this._toastActions) this._toastActions.delete(id);
+            this._toastRemoveEl(id);
         },
 
         dismissToast(id) {
             if (!this._toastQueue) return;
             this._toastQueue = T().dismiss(this._toastQueue, id);
-            this._toastRemoveEl(id);
+            this._toastDrop(id);
             this._toastArm();
         },
 
@@ -33,6 +65,9 @@
         },
 
         _toastHost() {
+            if (typeof this._etStack === 'function') {
+                try { this._etStack(); this._etPlace(); } catch (_) { }
+            }
             let host = document.getElementById('nymToasts');
             if (!host) {
                 host = document.createElement('div');
@@ -67,6 +102,18 @@
             close.title = label;
             close.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
             el.appendChild(body);
+            if (t.action) {
+                const act = document.createElement('button');
+                act.type = 'button';
+                act.className = 'nym-toast-action';
+                act.textContent = t.action;
+                act.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.runToastAction(id);
+                });
+                el.appendChild(act);
+                el.classList.add('has-action');
+            }
             el.appendChild(close);
             this._toastWire(el, id);
             this._toastHost().appendChild(el);
@@ -122,6 +169,7 @@
             el.addEventListener('click', (e) => {
                 if (el.dataset.swiped) return;
                 if (Math.abs(dx) > 6) { dx = 0; return; }
+                if (e.target.closest('.nym-toast-action')) return;
                 if (e.target.closest('a, [data-action]:not(.nym-toast-close)') && !e.target.closest('.nym-toast-close')) return;
                 this.dismissToast(id);
             });
@@ -148,7 +196,7 @@
                 this._toastTimer = null;
                 const r = T().expire(this._toastQueue, Date.now());
                 this._toastQueue = r.state;
-                for (const id of r.expired) this._toastRemoveEl(id);
+                for (const id of r.expired) this._toastDrop(id);
                 this._toastArm();
             }, Math.max(0, next - Date.now()) + 5);
         },

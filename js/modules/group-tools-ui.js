@@ -7,10 +7,11 @@
         requests: ico('<circle cx="6" cy="5.5" r="2.5"/><path d="M2 14c0-3 2-4.5 4-4.5s4 1.5 4 4.5"/><path d="M12 4v4M10 6h4"/>'),
         event: ico('<rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/>'),
         location: ico('<path d="M8 14.5s4.5-4.2 4.5-8a4.5 4.5 0 0 0-9 0c0 3.8 4.5 8 4.5 8z"/><circle cx="8" cy="6.5" r="1.6"/>'),
-        callLink: ico('<path d="M6.5 9.5l3-3"/><path d="M7 4.5l1.2-1.2a2.5 2.5 0 0 1 3.5 3.5L10.5 8"/><path d="M9 11.5l-1.2 1.2a2.5 2.5 0 0 1-3.5-3.5L5.5 8"/>'),
+        callLink: window.NymCallLinkIcon.svg({ size: 16, cls: 'nm-ico8' }),
     };
     const RSVP_KEY = 'nym_gt_rsvps_';
     const REMINDER_KEY = 'nym_gt_reminders';
+    const REMINDER_REMOVED_KEY = 'nym_gt_reminders_removed';
     const CALL_LINKS_KEY = 'nym_gt_call_links_';
     const PENDING_JOINS_KEY = 'nym_gt_pending_joins_';
     const LIVE_KEY = 'nym_gt_live_share';
@@ -522,6 +523,57 @@
             const ids = Object.keys(s);
             if (ids.length > 300) for (const id of ids.slice(0, ids.length - 300)) delete s[id];
             save(RSVP_KEY + (this.pubkey || ''), s);
+            this._gtSyncChanged();
+        },
+
+        _gtSyncChanged() {
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(3000);
+        },
+
+        _gtRemindersRemoved() {
+            if (!this._gtRemGone) this._gtRemGone = load(REMINDER_REMOVED_KEY, {}) || {};
+            return this._gtRemGone;
+        },
+
+        _buildGroupToolsSync() {
+            const M = window.NymSyncMerge;
+            if (!M || !this.pubkey) return null;
+            const rsvps = M.rsvpMerge(this._gtRsvpStore(), {});
+            const reminders = M.remindersMerge({ items: this._gtReminders(), removed: this._gtRemindersRemoved() }, null);
+            const callLinks = M.callLinksMerge(this._gtCallLinks(), null);
+            const empty = !Object.keys(rsvps).length && !Object.keys(reminders.items).length
+                && !Object.keys(reminders.removed).length && !callLinks.length;
+            const had = (this._lastInboundSections && this._lastInboundSections['nymchat-grouptools'])
+                || (this._publishedSectionJson && this._publishedSectionJson['nymchat-grouptools']);
+            if (empty && !had) return null;
+            return { rsvps, reminders, callLinks };
+        },
+
+        _applyGroupToolsSync(g) {
+            const M = window.NymSyncMerge;
+            if (!M || !this.pubkey || !g || typeof g !== 'object') return;
+            const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+            const rs = this._gtRsvpStore();
+            const nextRs = M.rsvpMerge(rs, g.rsvps);
+            const changedEvents = Object.keys(nextRs).filter((id) => !same(rs[id], nextRs[id]));
+            if (changedEvents.length || Object.keys(rs).length !== Object.keys(nextRs).length) {
+                this._gtRsvps = nextRs;
+                save(RSVP_KEY + this.pubkey, nextRs);
+                for (const id of changedEvents) this._gtRefreshEventCards(id);
+            }
+            const rem = M.remindersMerge({ items: this._gtReminders(), removed: this._gtRemindersRemoved() }, g.reminders);
+            if (!same(M.remindersNorm({ items: this._gtReminders(), removed: this._gtRemindersRemoved() }), rem)) {
+                this._gtRem = rem.items;
+                this._gtRemGone = rem.removed;
+                save(REMINDER_KEY, rem.items);
+                save(REMINDER_REMOVED_KEY, rem.removed);
+                this._gtArmReminders();
+            }
+            const links = M.callLinksMerge(this._gtCallLinks(), g.callLinks);
+            if (!same(M.callLinksMerge(this._gtCallLinks(), null), links)) {
+                this._gtLinks = links;
+                save(CALL_LINKS_KEY + this.pubkey, links);
+            }
         },
 
         _gtApplyRsvpRumor(rumor, groupId, senderPubkey) {
@@ -583,11 +635,19 @@
             const rem = this._gtReminders();
             const ev = this._gtFindEvent(groupId, eventId);
             if (value === '' || value == null || !ev) {
+                if (rem[eventId]) {
+                    const gone = this._gtRemindersRemoved();
+                    gone[eventId] = Math.max(Date.now(), (rem[eventId].t || 0) + 1);
+                    save(REMINDER_REMOVED_KEY, gone);
+                }
                 delete rem[eventId];
             } else {
                 const offset = parseInt(value, 10);
                 if (T().REMINDER_OFFSETS_MIN.indexOf(offset) < 0) return;
-                rem[eventId] = { offset, start: ev.start, title: ev.title, groupId, fired: false };
+                const gone = this._gtRemindersRemoved();
+                const t = Math.max(Date.now(), (gone[eventId] || 0) + 1);
+                if (gone[eventId]) { delete gone[eventId]; save(REMINDER_REMOVED_KEY, gone); }
+                rem[eventId] = { offset, start: ev.start, title: ev.title, groupId, fired: false, t };
                 const at = T().reminderAt(ev.start, offset);
                 if (at * 1000 <= Date.now()) this._gtNotice(this._gx('That reminder time has already passed.'));
                 else this._gtNotice(this._gx('Reminder set: {label}.', { label: this._gx(T().reminderLabel(offset)) }));
@@ -597,6 +657,7 @@
             }
             save(REMINDER_KEY, rem);
             this._gtArmReminders();
+            this._gtSyncChanged();
         },
 
         _gtArmReminders() {
@@ -766,8 +827,23 @@
             }
         },
 
+        _gtWatchTheme() {
+            if (this._gtThemeSub || typeof this.onThemeChange !== 'function') return;
+            this._gtThemeSub = this.onThemeChange(() => {
+                for (const root of this.themeRoots()) this._gtDrawMaps(root);
+                if (this._gtPick) this._gtDrawPick();
+            });
+        },
+
+        _gtThemeSig() {
+            return typeof this.themeSignature === 'function' ? this.themeSignature() : '1';
+        },
+
         async _gtDrawMaps(root) {
-            const canvases = (root || document).querySelectorAll ? (root || document).querySelectorAll('canvas.gt-map:not([data-drawn])') : [];
+            this._gtWatchTheme();
+            const all = (root || document).querySelectorAll ? (root || document).querySelectorAll('canvas.gt-map') : [];
+            const sig = this._gtThemeSig();
+            const canvases = [...all].filter((c) => c.dataset.drawn !== sig);
             if (!canvases.length) return;
             const features = await this._gtWorld();
             canvases.forEach((c) => {
@@ -775,7 +851,7 @@
                 const lon = parseFloat(c.dataset.lon);
                 const acc = parseFloat(c.dataset.acc) || 0;
                 const frame = T().mapFrame(lat, lon, acc);
-                c.dataset.drawn = '1';
+                c.dataset.drawn = this._gtThemeSig();
                 this._gtDrawFrame(c, frame, { lat, lon }, acc / 111320, features);
             });
         },
@@ -1034,6 +1110,7 @@
 
         _gtSaveCallLinks() {
             save(CALL_LINKS_KEY + (this.pubkey || ''), this._gtCallLinks());
+            this._gtSyncChanged();
         },
 
         _gtCallLinkUrl(link) {
@@ -1085,8 +1162,11 @@
         },
 
         openCallLinks() {
+            this.openCalls('links');
+        },
+
+        _gtRenderCallLinks(body) {
             const esc = (s) => this.escapeHtml(String(s));
-            const { body } = this._ctModal('gtCallLinksModal', this._gx('Call links'));
             const links = this._gtCallLinks();
             const now = nowSec();
             const rows = links.map((l) => {
@@ -1221,6 +1301,8 @@
                 startedAt: 0, timerInterval: null, ringTimeout: null, gtLinkId: link.id,
             };
             this._initCallExtras(this.activeCall);
+            if (typeof this._watchLocalTracks === 'function') this._watchLocalTracks(this.activeCall);
+            if (typeof this._chBegin === 'function') this._chBegin(this.activeCall, 'out', joiner);
             this._sendCallSignal(joiner, { type: 'invite', callId, kind: link.kind, isGroup: false, groupId: null, members: this.activeCall.members.slice(), link: link.id });
             this._showCallOverlay();
             this._setCallStatus(this._gx('Connecting…'));
@@ -1488,8 +1570,8 @@
             gtCreateEvent: function (_e, t) { if (disabled(t)) return; nym().closeGroupContextMenu(); nym().openCreateEvent(t.dataset.groupId); },
             gtShareLocationGroup: function (_e, t) { if (disabled(t)) return; nym().closeGroupContextMenu(); nym().openShareLocation({ type: 'group', id: t.dataset.groupId }); },
             gtCreateCallLinkGroup: function (_e, t) { if (disabled(t)) return; nym().closeGroupContextMenu(); nym().openCreateCallLink({ groupId: t.dataset.groupId }); },
-            gtOpenCallLinks: function () { nym().openCallLinks(); },
-            gtOpenCallLinksAndCloseSidebar: function () { nym().openCallLinks(); if (typeof nym().closeSidebar === 'function') nym().closeSidebar(); },
+            gtOpenCallLinks: function () { nym().openCalls(); },
+            gtOpenCallLinksAndCloseSidebar: function () { nym().openCalls(); if (typeof nym().closeSidebar === 'function') nym().closeSidebar(); },
             gtNewCallLink: function () { nym()._ctCloseModal('gtCallLinksModal'); nym().openCreateCallLink(nym()._gtCurrentChat() ? (nym().currentGroup ? { groupId: nym().currentGroup } : { pubkey: nym().currentPM }) : {}); },
             gtCopyCallLink: function (_e, t) { nym().gtCopyCallLink(t.dataset.linkId); },
             gtSendCallLink: function (_e, t) { nym().gtSendCallLink(t.dataset.linkId); },

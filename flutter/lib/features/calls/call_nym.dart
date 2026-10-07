@@ -9,6 +9,13 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/context_menu/profile_badges.dart';
 import '../i18n/i18n.dart';
 
+String callPeerName(AppState app, String pubkey, [String? hint]) {
+  for (final c in app.pmConversations) {
+    if (c.pubkey == pubkey) return pickDisplayNym(app.users[pubkey]?.nym, c.nym);
+  }
+  return pickDisplayNym(app.users[pubkey]?.nym, hint);
+}
+
 /// Decorated call nym (suffix, flair, verified and friend badges); [self] renders a plain "You".
 class CallNym extends ConsumerWidget {
   const CallNym({

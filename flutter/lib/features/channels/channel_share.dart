@@ -8,6 +8,7 @@ import '../../features/identity/modal_chrome.dart';
 import '../../models/channel.dart';
 import '../../state/settings_provider.dart';
 import '../i18n/i18n.dart';
+import '../../widgets/common/nym_sheet.dart';
 
 /// Canonical PWA host for shared links; `app.nymchat.app` does not exist.
 const String kNymchatShareHost = 'https://web.nymchat.app';
@@ -33,14 +34,14 @@ class ShareChannelModal extends StatefulWidget {
     final solidUi =
         ProviderScope.containerOf(context).read(settingsProvider).solidUi;
     final isLight = context.nym.isLight;
-    return showDialog<void>(
-      context: context,
+    return showNymSheet<void>(
+      context,
+      (_) => ShareChannelModal(channelKey: channelKey),
       barrierColor: !solidUi
           ? Colors.black.withValues(alpha: 0.7)
           : isLight
               ? const Color(0x73000000)
               : const Color(0xBF000000),
-      builder: (_) => ShareChannelModal(channelKey: channelKey),
     );
   }
 
@@ -56,102 +57,106 @@ class _ShareChannelModalState extends State<ShareChannelModal> {
     final c = context.nym;
     final url = buildChannelShareUrl(widget.channelKey);
 
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 500),
-        child: Stack(
-          children: [
-            ModalChrome.box(
-              c,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ModalChrome.header(c, tr('Share Channel')),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ModalChrome.formLabel(c, tr('Channel URL')),
-                        const SizedBox(height: 20),
-                        IntrinsicHeight(
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              // Readonly field with forced #fff/#000 text, matching the global input color override.
-                              Expanded(
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 10),
-                                  alignment: Alignment.centerLeft,
-                                  decoration: BoxDecoration(
+    final body = Stack(
+      children: [
+        ModalChrome.box(
+          c,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ModalChrome.header(c, tr('Share Channel')),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ModalChrome.formLabel(c, tr('Channel URL')),
+                    const SizedBox(height: 20),
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 10),
+                              alignment: Alignment.centerLeft,
+                              decoration: BoxDecoration(
+                                color: c.isLight
+                                    ? const Color(0x0A000000)
+                                    : const Color(0x0DFFFFFF),
+                                border: Border.all(
                                     color: c.isLight
-                                        ? const Color(0x0A000000)
-                                        : const Color(0x0DFFFFFF),
-                                    border: Border.all(
-                                        color: c.isLight
-                                            ? const Color(0x1A000000)
-                                            : c.glassBorder),
-                                    borderRadius: NymRadius.rsm,
-                                  ),
-                                  child: Text(
-                                    url,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: c.isLight
-                                          ? const Color(0xFF000000)
-                                          : const Color(0xFFFFFFFF),
-                                      fontSize: 13,
-                                      fontFamily: 'monospace',
-                                    ),
-                                  ),
+                                        ? const Color(0x1A000000)
+                                        : c.glassBorder),
+                                borderRadius: NymRadius.rsm,
+                              ),
+                              child: Text(
+                                url,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: c.isLight
+                                      ? const Color(0xFF000000)
+                                      : const Color(0xFFFFFFFF),
+                                  fontSize: 13,
+                                  fontFamily: 'monospace',
                                 ),
                               ),
-                              const SizedBox(width: 10),
-                              _CopyButton(
-                                copied: _copied,
-                                onTap: () async {
-                                  await Clipboard.setData(
-                                      ClipboardData(text: url));
-                                  if (!mounted) return;
-                                  setState(() => _copied = true);
-                                  Future.delayed(const Duration(seconds: 2),
-                                      () {
-                                    if (mounted) {
-                                      setState(() => _copied = false);
-                                    }
-                                  });
-                                },
-                              ),
-                            ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          tr('Share this URL to invite others to this channel'),
-                          style: TextStyle(color: c.textDim, fontSize: 11),
-                        ),
-                        const SizedBox(height: 20),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            ModalChrome.iconButton(c, tr('Close'),
-                                () => Navigator.of(context).maybePop()),
-                          ],
-                        ),
+                          const SizedBox(width: 10),
+                          _CopyButton(
+                            copied: _copied,
+                            onTap: () async {
+                              await Clipboard.setData(
+                                  ClipboardData(text: url));
+                              if (!mounted) return;
+                              setState(() => _copied = true);
+                              Future.delayed(const Duration(seconds: 2),
+                                  () {
+                                if (mounted) {
+                                  setState(() => _copied = false);
+                                }
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      tr('Share this URL to invite others to this channel'),
+                      style: TextStyle(color: c.textDim, fontSize: 11),
+                    ),
+                    const SizedBox(height: 20),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ModalChrome.iconButton(c, tr('Close'),
+                            () => Navigator.of(context).maybePop()),
                       ],
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
-          ],
+            ],
+          ),
+        ),
+        ModalChrome.closeChip(c, () => Navigator.of(context).maybePop()),
+      ],
+    );
+    return nymSheetOr(
+      context,
+      SingleChildScrollView(child: body),
+      (body) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 500),
+          child: body,
         ),
       ),
     );

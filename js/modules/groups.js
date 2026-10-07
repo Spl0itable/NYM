@@ -1836,7 +1836,7 @@ Object.assign(NYM.prototype, {
             if (msg.threadRoot && this.threadsEnabled()) {
                 if (this._threadReplySuppressed(msg) && !mentionsAll) return;
                 if (!this.isMentioned(messageContent) && !mentionsAll &&
-                    !this._threadReplyRootIsMine(msg)) return;
+                    !this._threadReplyForMe(msg)) return;
             } else if (this.groupNotifyMentionsOnly && !this.isMentioned(messageContent) && !mentionsAll) {
                 return;
             }
@@ -2454,6 +2454,7 @@ Object.assign(NYM.prototype, {
                         if (this.pqPeerIsRootSeeded(pubkey)) rootCount++;
                     }
                     const tier = tierFor(pubkey);
+                    if (opts.queuedDom && typeof this._anyRelayOpen === 'function' && !this._anyRelayOpen()) this._noteQueuedSend(wrapped.id, opts.queuedDom);
                     this.sendDMToRelays(['EVENT', wrapped], { tier });
                     this._recordGiftWrapId(sharedId, wrapped.id);
                     if (depositToD1) this._depositPMEvent(wrapped, tier);
@@ -2642,7 +2643,7 @@ Object.assign(NYM.prototype, {
             this.displayMessage(msg);
         }
 
-        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId);
+        await this._sendGiftWrapsAsync(group.members, rumor, expirationTs, groupId, { queuedDom: nymMessageId });
         // Post-quantum only if every member got a PQ wrap; one classical copy exposes the plaintext.
         const coverage = this.pqGroupCoverageFor(nymMessageId);
         if (coverage) {
@@ -3471,6 +3472,8 @@ Object.assign(NYM.prototype, {
             const pmList = document.getElementById('pmList');
             const item = document.createElement('div');
             item.className = 'pm-item group-item list-item';
+            item.setAttribute('role', 'button');
+            item.tabIndex = 0;
             item.dataset.groupId = groupId;
             item.dataset.lastMessageTime = timestamp;
             item.innerHTML = this._buildGroupItemHTML(groupId, name, allMembers);
@@ -3543,15 +3546,17 @@ Object.assign(NYM.prototype, {
         return this.getProxiedMediaUrl(g.avatar);
     },
 
-    _buildGroupItemHTML(groupId, name, members) {
+    _groupGlyphSvg(cls) {
+        return `<svg class="${cls || 'group-chat-icon'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+    },
+
+    _groupAvatarHtml(groupId, members) {
         const otherMembers = members.filter(pk => pk !== this.pubkey);
         const displayMembers = otherMembers.slice(0, 3);
-        const memberCount = members.length;
-
-        const groupSvg = `<svg class="group-chat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="2.75"/><path d="M5 21v-1.5a7 7 0 0 1 14 0V21"/><circle cx="4.5" cy="9.5" r="2"/><path d="M1 20v-1a4.5 4.5 0 0 1 5.5-4.35"/><circle cx="19.5" cy="9.5" r="2"/><path d="M23 20v-1a4.5 4.5 0 0 0-5.5-4.35"/></svg>`;
+        const groupSvg = this._groupGlyphSvg();
 
         const customAvatar = this.getGroupAvatarUrl(groupId);
-        const avatarStackHtml = customAvatar
+        return customAvatar
             ? `<div class="group-avatar-wrap"><img src="${this.escapeHtml(customAvatar)}" class="group-custom-avatar" alt="" decoding="async" loading="lazy" data-error-action="groupImgError"></div>`
             : displayMembers.length > 0
                 ? `<div class="group-avatar-stack">${displayMembers.map((pk) => {
@@ -3559,8 +3564,13 @@ Object.assign(NYM.prototype, {
                     return `<img src="${this.escapeHtml(this.getAvatarUrl(pk))}" class="group-avatar-stack-img" data-avatar-pubkey="${sk}" alt="" decoding="async" loading="lazy">`;
                 }).join('')}<span class="group-icon-badge">${groupSvg}</span></div>`
                 : `<div class="group-icon-wrap">${groupSvg}</div>`;
+    },
 
-        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span><button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg></button></div>`;
+    _buildGroupItemHTML(groupId, name, members) {
+        const memberCount = members.length;
+        const avatarStackHtml = this._groupAvatarHtml(groupId, members);
+
+        return `${avatarStackHtml}<span class="pm-name">${this.escapeHtml(name)}<span class="group-member-count"> · ${this.abbreviateNumber(memberCount)}</span></span><div class="channel-badges"><span class="unread-badge nm-hidden">0</span><button class="row-menu-btn" data-action="sidebarRowMenu" aria-label="Conversation menu" title="More" type="button">${NymMenuDotsIcon.svg({ size: 16 })}</button></div>`;
     },
 
     // Waterfall: each reader's avatar appears only on the latest message they've read.
@@ -3769,7 +3779,7 @@ Object.assign(NYM.prototype, {
             e.stopPropagation();
             timer = setTimeout(() => {
                 timer = null;
-                window.nymHapticTap && window.nymHapticTap();
+                window.nymHaptic && window.nymHaptic('selection');
                 this.showChannelReadersModal(messageId, el);
             }, 500);
         };
@@ -3822,7 +3832,7 @@ Object.assign(NYM.prototype, {
             e.stopPropagation();
             timer = setTimeout(() => {
                 timer = null;
-                window.nymHapticTap && window.nymHapticTap();
+                window.nymHaptic && window.nymHaptic('selection');
                 this.showReadersModal(nymMessageId, el);
             }, 500);
         };

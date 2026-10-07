@@ -13,6 +13,7 @@ import '../i18n/i18n.dart';
 import 'call_nym.dart';
 import 'call_providers.dart';
 import 'call_signaling.dart';
+import '../../widgets/common/nym_tooltip.dart';
 
 /// Mount once near the app root; renders nothing unless an incoming call is presented.
 class IncomingCallModal extends ConsumerWidget {
@@ -237,7 +238,7 @@ class _RoundActionButtonState extends State<_RoundActionButton> {
       glyph =
           Transform.rotate(angle: widget.rotation * 2 * math.pi, child: glyph);
     }
-    return Tooltip(
+    return NymTooltip(
       message: widget.tooltip,
       child: MouseRegion(
         onEnter: (_) => setState(() => _hover = true),

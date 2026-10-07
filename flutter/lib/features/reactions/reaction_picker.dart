@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/utils/haptics.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
@@ -52,7 +52,7 @@ void showReactionPicker(
             kind: inferOriginalKind(message, view: view),
           );
           if (ok && !already) {
-            HapticFeedback.mediumImpact();
+            Haptics.light();
             if (context.mounted) {
               // Anchor at the message's reaction badge, which mounts this frame from the optimistic add.
               ReactionBurst.playAtBadge(context, message.id, emoji);

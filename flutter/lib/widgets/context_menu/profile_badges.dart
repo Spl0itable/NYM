@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/nym_colors.dart';
+import '../common/nym_tooltip.dart';
 
 /// The blue verified checkmark badge shown after a verified developer or bot nym.
 class VerifiedBadge extends StatelessWidget {
@@ -29,7 +30,7 @@ class VerifiedBadge extends StatelessWidget {
       ),
     );
     final t = tooltip;
-    return (t == null || t.isEmpty) ? badge : Tooltip(message: t, child: badge);
+    return (t == null || t.isEmpty) ? badge : NymTooltip(message: t, child: badge);
   }
 }
 

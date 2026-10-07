@@ -36,6 +36,59 @@ bool isOfferer({required String selfPubkey, required String peerPubkey}) {
   return selfPubkey.compareTo(peerPubkey) < 0;
 }
 
+String? callGlare({
+  required String self,
+  required String sender,
+  required String? activeCallId,
+  required String? activeStatus,
+  required bool activeIsGroup,
+  required bool activeIsLink,
+  required List<String> activeMembers,
+  required String? inviteCallId,
+  required bool inviteIsGroup,
+  required bool inviteIsLink,
+}) {
+  if (activeCallId == null || activeIsGroup || inviteIsGroup) return null;
+  if (activeStatus != 'outgoing' || activeIsLink || inviteIsLink) return null;
+  if (inviteCallId == null || inviteCallId.isEmpty) return null;
+  if (activeCallId == inviteCallId) return null;
+  final peer = activeMembers.firstWhere((pk) => pk != self, orElse: () => '');
+  if (peer != sender) return null;
+  return activeCallId.compareTo(inviteCallId) < 0 ? 'keep' : 'yield';
+}
+
+String offerCollision({
+  required String selfPubkey,
+  required String peerPubkey,
+  required String signalingState,
+}) {
+  if (signalingState == 'stable' || signalingState == 'have-remote-offer') {
+    return 'answer';
+  }
+  if (signalingState == 'have-local-offer') {
+    return selfPubkey.compareTo(peerPubkey) < 0 ? 'ignore' : 'rollback';
+  }
+  return 'ignore';
+}
+
+const int kCallInviteTtlSec = 86400;
+const int kCallSignalTtlSec = 600;
+
+int callSignalTtl(Object? type) =>
+    type == 'invite' ? kCallInviteTtlSec : kCallSignalTtlSec;
+
+bool callSignalExpired(Object? tags, int nowSec) {
+  if (tags is! List) return false;
+  for (final t in tags) {
+    if (t is List && t.length > 1 && t[0] == 'expiration') {
+      final raw = '${t[1]}';
+      if (!RegExp(r'^\d+$').hasMatch(raw)) return false;
+      return nowSec > int.parse(raw);
+    }
+  }
+  return false;
+}
+
 /// `acceptCalls` gate: 'disabled' never rings, 'friends' only for friends, 'enabled' always.
 bool shouldRingForInvite({
   required String acceptCalls,
@@ -116,6 +169,10 @@ class CallSignal {
           'sdpMLineIndex': sdpMLineIndex,
         },
       };
+
+  static Map<String, dynamic> video(
+          {required String callId, required bool on}) =>
+      {'type': 'video', 'callId': callId, 'on': on};
 
   static Map<String, dynamic> share(
           {required String callId, required bool on}) =>

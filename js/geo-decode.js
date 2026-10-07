@@ -216,7 +216,111 @@
         return 'Open ocean';
     }
 
+    function layerBuilder(closed) {
+        const coords = [], ringOff = [0], partRing = [0], bbox = [], partLen = [], partRank = [];
+        return {
+            addPart(rings, rank) {
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, len = 0, added = 0;
+                for (const ring of rings) {
+                    if (!ring || ring.length < 2) continue;
+                    for (let i = 0; i < ring.length; i++) {
+                        const x = ring[i][0], y = ring[i][1];
+                        coords.push(x, y);
+                        if (x < minX) minX = x;
+                        if (x > maxX) maxX = x;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                        if (i > 0) {
+                            const dx = x - ring[i - 1][0];
+                            if (Math.abs(dx) <= 180) len += Math.hypot(dx, y - ring[i - 1][1]);
+                        }
+                    }
+                    ringOff.push(coords.length / 2);
+                    added++;
+                }
+                if (!added) return;
+                partRing.push(ringOff.length - 1);
+                bbox.push(minX, minY, maxX, maxY);
+                partLen.push(len);
+                partRank.push(rank || 0);
+            },
+            build() {
+                return {
+                    coords: new Float32Array(coords), ringOff: new Int32Array(ringOff), partRing: new Int32Array(partRing),
+                    bbox: new Float32Array(bbox), partLen: new Float32Array(partLen), partRank: new Int32Array(partRank), closed
+                };
+            }
+        };
+    }
+
+    function layerFromFeatures(features, closed) {
+        const b = layerBuilder(closed !== false);
+        for (const f of (features || [])) {
+            const polys = f.type === 'Polygon' ? [f.coordinates] : f.coordinates;
+            for (const poly of polys) b.addPart(poly, 0);
+        }
+        return b.build();
+    }
+
+    function decodeTier(topo) {
+        if (!topo || !topo.arcs) return null;
+        const tx = topo.transform || { scale: [1, 1], translate: [0, 0] };
+        const sx = tx.scale[0], sy = tx.scale[1], dx = tx.translate[0], dy = tx.translate[1];
+        const arcs = topo.arcs.map((arc) => {
+            let x = 0, y = 0;
+            return arc.map(([ax, ay]) => { x += ax; y += ay; return [x * sx + dx, y * sy + dy]; });
+        });
+        const stitch = (idxs) => {
+            const out = [];
+            for (let i = 0; i < idxs.length; i++) {
+                const k = idxs[i];
+                const a = k >= 0 ? arcs[k] : arcs[~k].slice().reverse();
+                for (let j = i === 0 ? 0 : 1; j < a.length; j++) out.push(a[j]);
+            }
+            return out;
+        };
+        const objects = topo.objects || {};
+        const geoms = (name) => (objects[name] && objects[name].geometries) || [];
+        const rankOf = (g) => (g.properties && typeof g.properties.rank === 'number') ? g.properties.rank : 0;
+        const countries = layerBuilder(true), lakes = layerBuilder(true), rivers = layerBuilder(false);
+        const labels = [];
+        for (const [name, builder] of [['countries', countries], ['lakes', lakes]]) {
+            for (const g of geoms(name)) {
+                const polys = g.type === 'Polygon' ? [g.arcs] : (g.type === 'MultiPolygon' ? g.arcs : []);
+                const built = [];
+                for (const p of polys) {
+                    const poly = p.map(stitch);
+                    builder.addPart(poly, rankOf(g));
+                    built.push(poly);
+                }
+                const label = name === 'countries' && g.properties && g.properties.name;
+                if (label && built.length) {
+                    const feat = { type: 'MultiPolygon', name: label, coordinates: built };
+                    annotateFeature(feat);
+                    labels.push({ name: label, bounds: feat.bounds, centroid: feat.centroid, area: feat.area });
+                }
+            }
+        }
+        for (const g of geoms('rivers')) {
+            const lines = g.type === 'LineString' ? [g.arcs] : (g.type === 'MultiLineString' ? g.arcs : []);
+            rivers.addPart(lines.map(stitch), rankOf(g));
+        }
+        labels.sort((a, b) => b.area - a.area);
+        return { countries: countries.build(), lakes: lakes.build(), rivers: rivers.build(), countryLabels: labels };
+    }
+
+    function tierTransfer(t) {
+        if (!t || !t.countries) return [];
+        const out = [];
+        for (const k of ['countries', 'lakes', 'rivers']) {
+            const l = t[k];
+            out.push(l.coords.buffer, l.ringOff.buffer, l.partRing.buffer, l.bbox.buffer, l.partLen.buffer, l.partRank.buffer);
+        }
+        return out;
+    }
+
     function decodeByKind(kind, json) {
+        if (kind === 'tier') return decodeTier(json);
         if (kind === 'world') return decodeWorld(json);
         if (kind === 'admin1') return decodeAdmin1(json);
         if (kind === 'cities') return decodeCities(json);
@@ -225,6 +329,7 @@
 
     (typeof self !== 'undefined' ? self : window).NymGeoDecode = {
         decodeTopoJson, annotateFeature, decodeWorld, decodeAdmin1, decodeCities, decodeByKind,
+        decodeTier, layerFromFeatures, tierTransfer,
         pointInFeature, countryAt, nearestCountry, describeRegion
     };
 })();

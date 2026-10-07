@@ -4,11 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/utils/haptics.dart';
 import '../../core/utils/secret_screen.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/toasts/toast_center.dart';
 import '../../state/settings_provider.dart';
 import 'keyboard_inset_dialog.dart';
+import 'nym_field.dart';
 
 /// Shared confirm, alert and prompt dialogs, the native port of the PWA's `dialog.js`.
 
@@ -30,6 +32,7 @@ Future<bool> showAppConfirm(
   String? cancelLabel,
   bool danger = false,
 }) async {
+  if (danger) Haptics.medium();
   final res = await showDialog<AppDialogResult>(
     context: context,
     barrierColor: _barrierColor(context),
@@ -53,6 +56,7 @@ Future<AppConfirmResult> showAppConfirmWithCheckbox(
   String? cancelLabel,
   bool danger = false,
 }) async {
+  if (danger) Haptics.medium();
   final res = await showDialog<AppDialogResult>(
     context: context,
     barrierColor: _barrierColor(context),
@@ -448,8 +452,6 @@ class _AppDialogState extends State<_AppDialog> {
     } else {
       counterColor = c.textDim.withValues(alpha: 0.6);
     }
-    // Light mode forces the input fill with `!important`, so there is no focus fill lift.
-    final baseBorder = c.isLight ? const Color(0x1A000000) : c.glassBorder;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -493,30 +495,7 @@ class _AppDialogState extends State<_AppDialog> {
                       : const Color(0xFFFFFFFF),
                   fontSize: 15,
                 ),
-                decoration: InputDecoration(
-                  isDense: true,
-                  hintText:
-                      widget.placeholder.isEmpty ? null : widget.placeholder,
-                  hintStyle: TextStyle(color: c.textDim),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                  filled: true,
-                  fillColor: c.isLight
-                      ? const Color(0x0A000000)
-                      : Colors.white.withValues(alpha: focused ? 0.07 : 0.05),
-                  border: OutlineInputBorder(
-                    borderRadius: NymRadius.rsm,
-                    borderSide: BorderSide(color: baseBorder),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: NymRadius.rsm,
-                    borderSide: BorderSide(color: baseBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: NymRadius.rsm,
-                    borderSide: BorderSide(color: c.primaryA(0.3)),
-                  ),
-                ),
+                decoration: NymField.decoration(c, hint: widget.placeholder),
               ),
             ),
           ),

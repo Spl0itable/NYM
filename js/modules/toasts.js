@@ -9,6 +9,7 @@
         readableChars: 80,
         msPerExtraChar: 40,
         swipeDismissPx: 60,
+        undoMs: 5000,
     });
 
     const KINDS = Object.freeze(['info', 'success', 'error']);
@@ -73,9 +74,10 @@
         return out;
     }
 
-    function push(state, text, kind, now) {
+    function push(state, text, kind, now, action) {
         const k = kindOf(kind || classify(text));
-        const key = keyOf(text, k);
+        const label = typeof action === 'string' && action.trim() ? action.trim() : null;
+        const key = label ? k + '\u0001' + (state.seq + 1) : keyOf(text, k);
         const recent = prune(state.recent, now);
         const live = state.toasts.find((t) => t.key === key);
         if (live) {
@@ -95,10 +97,11 @@
             key,
             text: normalize(text),
             kind: k,
-            expiresAt: now + durationFor(text, k),
+            expiresAt: now + (label ? CONFIG.undoMs : durationFor(text, k)),
             paused: false,
             remaining: 0,
         };
+        if (label) toast.action = label;
         let toasts = state.toasts.concat([toast]);
         const evicted = [];
         while (toasts.length > CONFIG.maxVisible) {

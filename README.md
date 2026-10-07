@@ -86,6 +86,7 @@ The web app is served as static files plus a set of Cloudflare Pages Functions u
 - **Flood Protection**: Automatic spam prevention.
 - **Image Blur**: Option to blur images from other users until clicked.
 - **Group Roles**: Owners and moderators can kick, ban, unban, promote and demote moderators, and transfer ownership. Role checks run both when sending and on every received moderation event.
+- **Delete account**: Settings → Data & Backup → "Delete account data and wipe device" deletes every saved identity's account data from our servers (including Nymbot credits, purchase records, filed reports and spam-filter records), one identity at a time and each signed by its own key, then wipes the device and confirms "Account data deleted". A signed marker left for each identity makes its other devices wipe it too. Posts already on public relays stay there, and any remaining Nymbot credits are lost.
 - **Panic Wipe**: Press and hold the "Your Nym" section for 2 seconds to immediately destroy all local data on the device. There is no confirmation, so it can be triggered fast. It encrypts every local storage value with a random one-time key that is then discarded, overwrites the values with junk, clears localStorage and sessionStorage, overwrites and deletes all IndexedDB databases, clears the caches, unregisters the service worker, and reloads to a fresh first-run state. A short animation shows the progress. A normal single tap still opens the nick editor. If you also use Identity Encryption, any bytes that survive deletion are ciphertext under a key nobody holds.
 
 ### Customization
@@ -379,3 +380,5 @@ Copyright © 21 Million LLC
 Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See the [LICENSE](LICENSE) file for the full text, or https://www.gnu.org/licenses/agpl-3.0.html.
 
 [NOTICE](NOTICE) adds two additional terms under AGPL-3.0 section 7: any copy or modified version not distributed by 21 Million LLC must show the attribution "Based on Nymchat by 21 Million LLC" with a link to the original source, https://github.com/Spl0itable/NYM, in its NOTICE file and on its About screen, and modified versions must mark themselves as modified. The original app shows the credit "© 21 Million LLC" instead. [AGENTS.md](AGENTS.md) explains what that means for a fork.
+
+Map data in `data/` (and the Flutter app's `assets/data/`) comes from [Natural Earth](https://www.naturalearthdata.com/), which is in the public domain, through [world-atlas](https://github.com/topojson/world-atlas) (ISC license) for country outlines. The geohash explorer draws it on the device and loads it only from our own origin; no map tiles or third-party map servers are used.

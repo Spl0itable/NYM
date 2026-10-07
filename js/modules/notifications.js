@@ -67,10 +67,13 @@ Object.assign(NYM.prototype, {
         };
         if (lockedChat) entry.locked = true;
         const previouslySeen = this._isNotificationSeen(entry);
+        const seenNow = this._notifSees(channelInfo);
         entry.viewed = previouslySeen
+            || seenNow
             || receivedAt <= (this.notificationLastReadTime || 0)
             || this._notificationAlreadySeen(channelInfo, ts);
         if (entry.viewed) this._rememberNotificationSeen(entry);
+        if (seenNow) this._noteThreadRead(channelInfo, ts);
         this.notificationHistory.push(entry);
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         this.notificationHistory = this.notificationHistory.filter(n => n.timestamp > cutoff24h);
@@ -81,13 +84,15 @@ Object.assign(NYM.prototype, {
             this._debouncedNostrSettingsSave(8000);
         }
 
-        if (previouslySeen) return;
+        if (entry.viewed) return;
+
+        const toastDecision = typeof this._etConsider === 'function' ? this._etConsider(entry, false) : null;
 
         if (this.settings.sound !== 'none') {
             this.playSound(this.settings.sound);
         }
 
-        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        if ((!toastDecision || toastDecision.system) && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             try {
                 const notification = new Notification(titleToShow, {
                     body: body,
@@ -184,6 +189,37 @@ Object.assign(NYM.prototype, {
         this._saveNotificationHistorySoon();
         this._updateNotificationBadge();
         this._refreshNotificationsModalIfOpen();
+        if (!entry.viewed && typeof this._etConsider === 'function') this._etConsider(entry, true);
+    },
+
+    _openNotificationTarget(n) {
+        const info = n && n.channelInfo;
+        if (!info) return;
+        if (info.type === 'pm') {
+            this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
+        } else if (info.type === 'group') {
+            this.openGroup(info.groupId);
+        } else if (info.type === 'geohash') {
+            this.switchChannel(info.channel, info.geohash);
+        } else if (info.type === 'reaction') {
+            if (info.sourceType === 'pm' && info.sourcePubkey) {
+                this.openUserPM(this.getNymFromPubkey(info.sourcePubkey), info.sourcePubkey);
+            } else if (info.sourceType === 'group' && info.sourceGroupId) {
+                this.openGroup(info.sourceGroupId);
+            } else if (info.sourceType === 'geohash' && info.sourceGeohash) {
+                this.switchChannel(info.sourceChannel, info.sourceGeohash);
+            }
+        } else if (info.type === 'call') {
+            if (info.isGroup && info.groupId) {
+                this.openGroup(info.groupId);
+            } else if (info.pubkey) {
+                this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
+            }
+        }
+        if (info.threadRoot && typeof this.openThreadFromNotification === 'function') {
+            this.openThreadFromNotification(info);
+        }
+        this.closeNotificationsModal();
     },
 
     _refreshNotificationsModalIfOpen() {
@@ -344,8 +380,134 @@ Object.assign(NYM.prototype, {
         return null;
     },
 
-    _notificationAlreadySeen(channelInfo, tsMs) {
+    _notifView() {
+        const focused = typeof document === 'undefined' || !document.hidden;
+        const keys = [];
+        if (this._cvActive && Array.isArray(this._cvColumns)) {
+            for (const c of this._cvColumns) if (c && c.key) keys.push(c.key);
+        } else if (this.inPMMode) {
+            if (this.currentGroup) keys.push(this.getGroupConversationKey(this.currentGroup));
+            else if (this.currentPM) keys.push(this.getPMConversationKey(this.currentPM));
+        } else {
+            const k = this.currentGeohash ? `#${this.currentGeohash}` : this.currentChannel;
+            if (k) keys.push(k);
+        }
+        const at = this.activeThread;
+        const threadsOn = typeof this.threadsEnabled !== 'function' || this.threadsEnabled();
+        const thread = (threadsOn && at && at.rootId && at.ctx && at.ctx.storageKey &&
+            this._threadContainer && keys.includes(at.ctx.storageKey))
+            ? { key: at.ctx.storageKey, root: at.rootId } : null;
+        return { focused, keys, thread };
+    },
+
+    _notifThreadRootOf(channelInfo) {
+        if (!channelInfo || !channelInfo.threadRoot) return '';
+        if (typeof this.threadsEnabled === 'function' && !this.threadsEnabled()) return '';
+        return String(channelInfo.threadRoot);
+    },
+
+    _notifEvent(channelInfo) {
+        const key = this._notificationConvKey(channelInfo) || '';
+        let root = this._notifThreadRootOf(channelInfo);
+        if (root && key && typeof this.threadKeyForMessage === 'function') {
+            const list = key.startsWith('pm-') || key.startsWith('group-')
+                ? (this.pmMessages && this.pmMessages.get(key))
+                : (this.messages && this.messages.get(key));
+            const known = Array.isArray(list) && list.some(m => m && !m.threadRoot && this.threadKeyForMessage(m) === root);
+            if (!known) root = '';
+        }
+        return { key, root };
+    },
+
+    _notifSees(channelInfo) {
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        if (!V || !channelInfo) return false;
+        return V.sees(this._notifView(), this._notifEvent(channelInfo));
+    },
+
+    _threadReadKey(convKey, root) {
+        return `${convKey}|${root}`;
+    },
+
+    _loadThreadLastRead() {
+        const map = new Map();
+        try {
+            const raw = localStorage.getItem('nym_thread_last_read');
+            const parsed = raw ? JSON.parse(raw) : null;
+            const cutoff = Math.floor(Date.now() / 1000) - 48 * 60 * 60;
+            if (parsed && typeof parsed === 'object') {
+                for (const [k, v] of Object.entries(parsed)) {
+                    if (typeof v === 'number' && v > cutoff) map.set(k, v);
+                }
+            }
+        } catch (_) { }
+        return map;
+    },
+
+    _threadLastReadMap() {
+        if (!this.threadLastRead) this.threadLastRead = this._loadThreadLastRead();
+        return this.threadLastRead;
+    },
+
+    _setThreadLastRead(convKey, root, tsSec) {
+        if (!convKey || !root) return false;
+        const map = this._threadLastReadMap();
+        const k = this._threadReadKey(convKey, root);
+        if ((map.get(k) || 0) >= tsSec) return false;
+        map.set(k, tsSec);
+        if (map.size > 500) {
+            const newest = [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 500);
+            this.threadLastRead = new Map(newest);
+        }
+        try { localStorage.setItem('nym_thread_last_read', JSON.stringify(Object.fromEntries(this.threadLastRead))); } catch (_) { }
+        if (typeof this._syncReadStateToD1 === 'function') this._syncReadStateToD1();
+        return true;
+    },
+
+    _noteThreadRead(channelInfo, tsMs) {
+        const root = this._notifThreadRootOf(channelInfo);
         const key = this._notificationConvKey(channelInfo);
+        if (!root || !key) return;
+        const sec = Math.max(Math.floor((tsMs || 0) / 1000), Math.floor(Date.now() / 1000));
+        this._setThreadLastRead(key, root, sec);
+    },
+
+    _markThreadNotificationsSeen(convKey, root) {
+        if (!convKey || !root) return;
+        const nowSec = Math.floor(Date.now() / 1000);
+        this._setThreadLastRead(convKey, root, nowSec);
+        let changed = false;
+        for (const n of (this.notificationHistory || [])) {
+            if (!n || n.viewed) continue;
+            if (this._notifThreadRootOf(n.channelInfo) !== root) continue;
+            if (this._notificationConvKey(n.channelInfo) !== convKey) continue;
+            n.viewed = true;
+            this._rememberNotificationSeen(n, false);
+            changed = true;
+        }
+        if (changed) {
+            this._saveSeenNotificationKeys();
+            this._saveNotificationHistory();
+            this._updateNotificationBadge();
+            this._refreshNotificationsModalIfOpen();
+            if (typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(4000);
+        }
+        if (typeof this._refreshThreadNewMarks === 'function') this._refreshThreadNewMarks();
+    },
+
+    _threadHasUnreadNotif(convKey, root) {
+        if (!convKey || !root) return false;
+        return this._unreadNotifications().some(n =>
+            this._notifThreadRootOf(n.channelInfo) === root &&
+            this._notificationConvKey(n.channelInfo) === convKey);
+    },
+
+    _notificationAlreadySeen(channelInfo, tsMs) {
+        const { key, root } = this._notifEvent(channelInfo);
+        if (key && root) {
+            const t = this._threadLastReadMap().get(this._threadReadKey(key, root)) || 0;
+            return !!t && Math.floor((tsMs || 0) / 1000) <= t;
+        }
         if (!key || !this.channelLastRead) return false;
         const seen = this.channelLastRead.get(key) || 0;
         if (!seen) return false;
@@ -366,11 +528,19 @@ Object.assign(NYM.prototype, {
     },
 
     _markConversationNotificationsSeen(convKey, tsSec) {
-        if (!convKey || !Array.isArray(this.notificationHistory) || !this.notificationHistory.length) return;
+        if (!convKey) return;
+        const V = typeof self !== 'undefined' ? self.NymNotifyView : null;
+        const view = this._notifView();
+        if (view.focused && view.thread && view.thread.key === convKey) {
+            this._setThreadLastRead(convKey, view.thread.root, tsSec);
+        }
+        if (!Array.isArray(this.notificationHistory) || !this.notificationHistory.length) return;
         let changed = false;
         for (const n of this.notificationHistory) {
             if (n.viewed) continue;
             if (this._notificationConvKey(n.channelInfo) !== convKey) continue;
+            const root = this._notifEvent(n.channelInfo).root;
+            if (root && !(V && V.sees(view, { key: convKey, root }))) continue;
             if (Math.floor((n.timestamp || 0) / 1000) > tsSec) continue;
             n.viewed = true;
             this._rememberNotificationSeen(n, false);
@@ -481,12 +651,14 @@ Object.assign(NYM.prototype, {
     },
 
     _doUpdateNotificationBadge() {
+        if (typeof this._refreshThreadNewMarks === 'function') this._refreshThreadNewMarks();
         const desktopBadge = document.getElementById('notifBadgeDesktop');
         const mobileBadge = document.getElementById('notifBadgeMobile');
         const sidebarBadge = document.getElementById('notifBadgeSidebar');
+        const identityBadge = document.getElementById('notifBadgeIdentity');
 
         if (!this.notificationsEnabled) {
-            [desktopBadge, mobileBadge, sidebarBadge].forEach(badge => {
+            [desktopBadge, mobileBadge, sidebarBadge, identityBadge].forEach(badge => {
                 if (badge) badge.classList.add('nm-hidden');
             });
             return;
@@ -494,7 +666,7 @@ Object.assign(NYM.prototype, {
 
         const unreadCount = this._unreadNotifications().length;
 
-        [desktopBadge, mobileBadge, sidebarBadge].forEach(badge => {
+        [desktopBadge, mobileBadge, sidebarBadge, identityBadge].forEach(badge => {
             if (!badge) return;
             if (unreadCount > 0) {
                 badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
@@ -518,6 +690,12 @@ Object.assign(NYM.prototype, {
         if (threadMentionsCheckbox) threadMentionsCheckbox.checked = this.threadNotifyMentionsOnly;
         const friendsOnlyCheckbox = document.getElementById('notifyFriendsOnlyCheckbox');
         if (friendsOnlyCheckbox) friendsOnlyCheckbox.checked = this.notifyFriendsOnly;
+        const notifSound = document.getElementById('notifSoundSelect');
+        const settingsSound = document.getElementById('soundSelect');
+        if (notifSound) {
+            if (settingsSound && notifSound.options.length !== settingsSound.options.length) notifSound.innerHTML = settingsSound.innerHTML;
+            notifSound.value = this.settings.sound;
+        }
 
         // Sort ascending since replay and sync merges can leave the array out of order.
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
@@ -597,9 +775,8 @@ Object.assign(NYM.prototype, {
                             ? `<span class="notification-item-context">in a thread in ${where}</span>`
                             : `<span class="notification-item-context">in ${where}</span>`;
                     } else if (n.channelInfo.type === 'pm') {
-                        contextHtml = inThread
-                            ? `<span class="notification-item-context">PM thread</span>`
-                            : `<span class="notification-item-context">PM</span>`;
+                        const dmLabel = this.escapeHtml(this.uiText(inThread ? 'Private message thread' : 'Private message'));
+                        contextHtml = `<span class="notification-item-context">${dmLabel}</span>`;
                     } else if (n.channelInfo.type === 'reaction') {
                         contextHtml = `<span class="notification-item-context">Reaction</span>`;
                     } else if (n.channelInfo.type === 'call') {
@@ -629,34 +806,7 @@ Object.assign(NYM.prototype, {
                     </div>
                 `;
                 if (n.channelInfo) {
-                    const info = n.channelInfo;
-                    item.onclick = () => {
-                        if (info.type === 'pm') {
-                            this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
-                        } else if (info.type === 'group') {
-                            this.openGroup(info.groupId);
-                        } else if (info.type === 'geohash') {
-                            this.switchChannel(info.channel, info.geohash);
-                        } else if (info.type === 'reaction') {
-                            if (info.sourceType === 'pm' && info.sourcePubkey) {
-                                this.openUserPM(this.getNymFromPubkey(info.sourcePubkey), info.sourcePubkey);
-                            } else if (info.sourceType === 'group' && info.sourceGroupId) {
-                                this.openGroup(info.sourceGroupId);
-                            } else if (info.sourceType === 'geohash' && info.sourceGeohash) {
-                                this.switchChannel(info.sourceChannel, info.sourceGeohash);
-                            }
-                        } else if (info.type === 'call') {
-                            if (info.isGroup && info.groupId) {
-                                this.openGroup(info.groupId);
-                            } else if (info.pubkey) {
-                                this.openUserPM(info.nym || n.senderNym || n.title, info.pubkey);
-                            }
-                        }
-                        if (info.threadRoot && typeof this.openThreadFromNotification === 'function') {
-                            this.openThreadFromNotification(info);
-                        }
-                        this.closeNotificationsModal();
-                    };
+                    item.onclick = () => this._openNotificationTarget(n);
                 }
                 body.appendChild(item);
             }

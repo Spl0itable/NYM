@@ -233,6 +233,7 @@
             try { localStorage.setItem(NM().SPEED_KEY, String(next)); } catch (_) { }
             document.querySelectorAll('.nym-voice-speed').forEach((b) => { b.textContent = NM().speedLabel(next); });
             if (this._voiceAudio) this._voiceAudio.playbackRate = next;
+            if (typeof this.notePrefChanged === 'function') this.notePrefChanged('voiceSpeed');
             return next;
         },
 
@@ -971,6 +972,7 @@
                 return;
             }
             rec.startedAt = Date.now();
+            if (rec.route !== 'mesh') rec.activity = this._beginNoteActivity('recording-voice', rec.target);
             try {
                 const AC = window.AudioContext || window.webkitAudioContext;
                 rec.audioCtx = new AC();
@@ -1048,6 +1050,8 @@
         async _finishVoiceCapture(rec) {
             if (rec.stopped) return rec.blob;
             rec.stopped = true;
+            this._endNoteActivity(rec.activity);
+            rec.activity = null;
             rec.duration = Math.min(rec.maxSeconds, (Date.now() - rec.startedAt) / 1000);
             clearInterval(rec.sampleTimer);
             const run = rec.run;
@@ -1274,9 +1278,29 @@
             }
         },
 
+        _noteActivityTarget(target) {
+            if (!target) return null;
+            if (target.group) return { group: target.group };
+            if (target.pm) return { pm: target.pm };
+            if (target.geohash) return { geohash: target.geohash };
+            return null;
+        },
+
+        _beginNoteActivity(kind, target) {
+            const t = this._noteActivityTarget(target);
+            if (!t || typeof this.beginChatActivity !== 'function') return null;
+            return this.beginChatActivity(kind, t);
+        },
+
+        _endNoteActivity(token) {
+            if (token != null && typeof this.endChatActivity === 'function') this.endChatActivity(token);
+        },
+
         async _uploadAndSendNote(desc, bytes, target, once, label) {
             const M = NM();
             this._lastFailedNote = null;
+            const UA = window.NymUploadActivity;
+            let activity = UA ? this._beginNoteActivity(UA.kindForNote(desc.kind), target) : null;
             try {
                 let body = bytes;
                 let secret = null;
@@ -1296,6 +1320,8 @@
                         errs.push((e && e.message) || 'upload failed');
                     }
                 }
+                this._endNoteActivity(activity);
+                activity = null;
                 if (!url) throw new Error(errs.join('; ') || 'upload failed');
                 const full = M.attachDescriptor(url, Object.assign({}, desc, once ? Object.assign({ once: true }, secret) : {}));
                 if (!full) throw new Error('descriptor');
@@ -1309,6 +1335,8 @@
                 const html = msg + ' <button type="button" class="nym-retry-note" data-action="nymRetryNote">' + this.escapeHtml(this._mt('Retry')) + '</button>';
                 if (typeof this.showToast === 'function') this.showToast(html, { html: true, kind: 'error' });
                 this.displaySystemMessage(html, 'system', { html: true, feed: true });
+            } finally {
+                this._endNoteActivity(activity);
             }
         },
 
@@ -1709,6 +1737,7 @@
             vn.recorder.start(500);
             vn.startedAt = Date.now();
             vn.state = 'recording';
+            if (this._mediaRoute() !== 'mesh') vn.activity = this._beginNoteActivity('recording-video', vn.target);
             vn.tick = setInterval(() => {
                 const secs = (Date.now() - vn.startedAt) / 1000;
                 if (secs >= vn.maxSeconds) this._videoNoteStop();
@@ -1721,6 +1750,8 @@
             const vn = this._videoNote;
             if (!vn || vn.state !== 'recording') return;
             clearInterval(vn.tick);
+            this._endNoteActivity(vn.activity);
+            vn.activity = null;
             vn.duration = Math.min(vn.maxSeconds, (Date.now() - vn.startedAt) / 1000);
             vn.state = 'stopping';
             try { vn.recorder.stop(); } catch (_) { }
@@ -1767,6 +1798,8 @@
             this._videoNote = null;
             if (vn) {
                 clearInterval(vn.tick);
+                this._endNoteActivity(vn.activity);
+                vn.activity = null;
                 try { if (vn.recorder && vn.recorder.state !== 'inactive') vn.recorder.stop(); } catch (_) { }
                 if (vn.stream) vn.stream.getTracks().forEach((t) => t.stop());
                 if (vn.reviewUrl) { try { URL.revokeObjectURL(vn.reviewUrl); } catch (_) { } }

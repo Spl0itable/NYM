@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 
 import '../../services/api/api_client.dart';
+import '../ai_consent/ai_consent.dart';
 
 /// Message translation via our own proxy only; emoji, mentions and URLs pass through untouched.
 class TranslateService {
-  TranslateService({this._api});
+  TranslateService({this._api, this._gated = true});
   final ApiClient? _api;
+  final bool _gated;
 
   /// One emoji unit: flag pair, keycap, or pictographic glyph with optional VS, skin tone, ZWJ and tags.
   static const String _emojiUnit =
@@ -30,6 +32,9 @@ class TranslateService {
 
   /// Translates [text] with auto-detected source; returns [text] with `'auto'` when nothing is translatable; throws on failure.
   Future<TranslationResult> translate(String text, String targetLang) async {
+    if (_gated && !await AiConsent.translation.ensure()) {
+      throw TranslateException(TranslateConsentStrings.offNotice);
+    }
     // Shield emoji so the upstream can't strip or reorder them.
     final shield = _shieldEmojis(text);
 

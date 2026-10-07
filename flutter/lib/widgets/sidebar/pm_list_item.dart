@@ -15,8 +15,11 @@ import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
 import '../nym_icons.dart';
 import 'pm_context_menu.dart';
+import 'row_preview.dart';
+import 'sidebar_chrome.dart';
 import 'sidebar_row_gestures.dart';
 import 'sidebar_row_menu_button.dart';
+import 'unread_pill.dart';
 
 /// A sidebar PM thread row; unlike the chat header it has no status dot.
 class PMListItem extends ConsumerWidget {
@@ -56,6 +59,9 @@ class PMListItem extends ConsumerWidget {
     final pinned = !active &&
         ref.read(chatNavProvider).pinIndexOfChat('pm-${pubkey.toLowerCase()}') >= 0;
 
+    final preview = pubkey.isEmpty
+        ? (text: '', time: '', ts: 0)
+        : sidebarRowPreview(ref, 'pm-${pubkey.toLowerCase()}', 'pm');
     final Widget row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: SidebarRowGestures(
@@ -68,8 +74,9 @@ class PMListItem extends ConsumerWidget {
         builder: (context, hovered) => Stack(
           children: [
             Container(
-              constraints: const BoxConstraints(minHeight: 36),
-              padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 9, 12, 9),
+              key: const ValueKey('sidebarRowBox'),
+              constraints: const BoxConstraints(minHeight: kSidebarRowMinH),
+              padding: EdgeInsets.fromLTRB(hovered ? 14 : 12, 6, 12, 6),
               decoration: BoxDecoration(
                 color: active
                     ? (c.isLight
@@ -97,11 +104,20 @@ class PMListItem extends ConsumerWidget {
               ),
               child: Row(
                 children: [
-                  NymAvatar(seed: pubkey, size: 26, imageUrl: picture),
-                  const SizedBox(width: 4),
+                  SizedBox(
+                    key: const ValueKey('sidebarLead'),
+                    width: kSidebarIcon,
+                    height: kSidebarIcon,
+                    child: NymAvatar(
+                        seed: pubkey, size: kSidebarIcon, imageUrl: picture),
+                  ),
+                  const SizedBox(width: kSidebarGap),
                   Expanded(
-                    // Long names wrap rather than ellipsize, and badges sit inside the name span so they wrap with it.
-                    child: Text.rich(
+                    child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                    Text.rich(
                       TextSpan(
                         children: [
                           TextSpan(text: base),
@@ -159,6 +175,10 @@ class PMListItem extends ConsumerWidget {
                             ),
                         ],
                       ),
+                      key: const ValueKey('sidebarName'),
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: c.textDim,
                         fontSize: textSize,
@@ -166,26 +186,36 @@ class PMListItem extends ConsumerWidget {
                         height: 1.3,
                       ),
                     ),
+                    if (preview.text.isNotEmpty)
+                      rowPreviewLine(context, preview.text, 'pm'),
+                    ],
+                    ),
                   ),
+                  rowTimeLabel(context, preview.time),
                   if (pubkey.isNotEmpty)
                     ChatNavRowBadges(
                         storageKey: 'pm-${pubkey.toLowerCase()}'),
                   if (unread > 0) ...[
                     const SizedBox(width: 5),
-                    _UnreadPill(count: unread),
+                    SidebarUnreadPill(count: unread),
                   ],
-                  if (pubkey.isNotEmpty) ...[
-                    const SizedBox(width: 2),
-                    SidebarRowMenuButton(
-                      onShowMenu: (pos) {
-                        showPmContextMenu(context, ref, pubkey, pos);
-                        return true;
-                      },
-                    ),
-                  ],
+                  if (pubkey.isNotEmpty)
+                    const SizedBox(width: kSidebarMenuReserve),
                 ],
               ),
             ),
+            if (pubkey.isNotEmpty)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: SidebarRowMenuButton(
+                  onShowMenu: (pos) {
+                    showPmContextMenu(context, ref, pubkey, pos);
+                    return true;
+                  },
+                ),
+              ),
             if (active)
               Positioned(
                 left: 0,
@@ -252,30 +282,3 @@ class _SupportLabel extends StatelessWidget {
   }
 }
 
-class _UnreadPill extends StatelessWidget {
-  const _UnreadPill({required this.count});
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    return Container(
-      constraints: const BoxConstraints(minWidth: 30),
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-      decoration: BoxDecoration(
-        color: c.primary,
-        borderRadius: const BorderRadius.all(Radius.circular(20)),
-      ),
-      child: Text(
-        count > 99 ? '99+' : '$count',
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: c.bg,
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          fontFeatures: const [FontFeature.tabularFigures()],
-        ),
-      ),
-    );
-  }
-}

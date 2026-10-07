@@ -14,6 +14,7 @@ import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import 'nymbot_models.dart';
 import 'nymbot_providers.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// Shown instead of the purchase UI where credits can't be sold; named so a test can hold the i18n catalog to it.
 const String kBotCreditsBuyNotice =
@@ -399,27 +400,12 @@ class _BotCreditsModalState extends ConsumerState<BotCreditsModal> {
       keyboardType: TextInputType.number,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
       style: TextStyle(color: c.inputText, fontSize: 14),
-      decoration: InputDecoration(
-        hintText: tr('Custom amount (sats)'),
-        hintStyle: TextStyle(color: c.textDim),
-        isDense: true,
-        filled: true,
-        fillColor: c.bgTertiary,
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: c.border),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: c.border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: BorderSide(color: c.lightning),
-        ),
-      ),
+      decoration: NymField.decoration(c,
+          hint: tr('Custom amount (sats)'),
+          fontSize: 14,
+          radius: BorderRadius.circular(8),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
     );
   }
 

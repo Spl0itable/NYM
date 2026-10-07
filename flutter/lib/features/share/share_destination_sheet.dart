@@ -5,7 +5,10 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../state/app_state.dart';
 import '../../widgets/context_menu/interaction_hooks.dart';
+import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
+import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_field.dart';
 
 class SharedPayload {
   const SharedPayload({this.text, this.filePaths = const []});
@@ -23,11 +26,9 @@ Future<void> showShareDestinationSheet(
   SharedPayload payload,
 ) {
   if (payload.isEmpty) return Future.value();
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (_) => _ShareDestinationSheet(payload: payload),
+  return showNymBottomSheet<void>(
+    context,
+    (_) => _ShareDestinationSheet(payload: payload),
   );
 }
 
@@ -92,9 +93,8 @@ class _ShareDestinationSheetState
         final label = '#${ch.isGeohash ? ch.geohashKey : ch.channel}';
         rows.add(_row(
             c,
-            Text('#',
-                style:
-                    TextStyle(color: c.primary, fontWeight: FontWeight.w700)),
+            NymSvgIcon(channelGlyphSvg(geohash: ch.isGeohash),
+                size: 18, color: c.primary),
             label,
             () => _deliverTo(ChatView.channel(ch.key))));
       }
@@ -144,78 +144,45 @@ class _ShareDestinationSheetState
         ? tr('{n} file(s)', {'n': '${widget.payload.filePaths.length}'})
         : (widget.payload.text ?? '');
 
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: Container(
-        constraints:
-            BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
-        decoration: BoxDecoration(
-          color: c.bgSecondary,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-          border: Border.all(color: c.glassBorder),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(tr('Share to…'),
+                  style: TextStyle(
+                      color: c.text,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700)),
+              if (preview.trim().isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(preview,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: c.textDim, fontSize: 12)),
+              ],
+            ],
+          ),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 10),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                  color: c.textDim.withValues(alpha: 0.4),
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(tr('Share to…'),
-                      style: TextStyle(
-                          color: c.text,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700)),
-                  if (preview.trim().isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(preview,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: c.textDim, fontSize: 12)),
-                  ],
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: TextField(
-                onChanged: (v) => setState(() => _query = v),
-                style: TextStyle(color: c.inputText),
-                decoration: InputDecoration(
-                  isDense: true,
-                  prefixIcon: Icon(Icons.search, size: 18, color: c.textDim),
-                  hintText: tr('Search conversations'),
-                  hintStyle: TextStyle(color: c.textDim),
-                  filled: true,
-                  fillColor: c.bg,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: c.glassBorder),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(10),
-                    borderSide: BorderSide(color: c.glassBorder),
-                  ),
-                ),
-              ),
-            ),
-            Flexible(
-              child: ListView(
-                  padding: const EdgeInsets.only(bottom: 20), children: rows),
-            ),
-          ],
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: TextField(
+            onChanged: (v) => setState(() => _query = v),
+            style: TextStyle(color: c.inputText),
+            decoration: NymField.decoration(c,
+              hint: tr('Search conversations'),
+              radius: BorderRadius.circular(10),
+              prefixIcon: Icon(Icons.search, size: 18, color: NymField.icon(c))),
+          ),
         ),
-      ),
+        Flexible(
+          child: ListView(
+              padding: const EdgeInsets.only(bottom: 20), children: rows),
+        ),
+      ],
     );
   }
 

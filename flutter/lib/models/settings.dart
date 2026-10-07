@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/constants/storage_keys.dart';
 import '../core/theme/nym_colors.dart';
+import '../services/platform/background_connectivity.dart';
 import '../services/storage/key_value_store.dart';
 
 /// Color-mode preference (`nym_color_mode`).
@@ -52,6 +53,9 @@ class Settings {
     this.wallpaperType = 'geometric',
     this.notificationsEnabled = true,
     this.hideNonPinned = false,
+    this.hidePreviews = false,
+    this.colorfulMessages = false,
+    this.infoPanelOpen = false,
     this.columnsResetTick = 0,
   });
 
@@ -104,6 +108,12 @@ class Settings {
 
   /// Hide non-favorited channels from the sidebar; device-local, never synced.
   final bool hideNonPinned;
+
+  final bool hidePreviews;
+
+  final bool colorfulMessages;
+
+  final bool infoPanelOpen;
 
   /// Runtime-only counter bumped by `resetColumns()` so a mounted deck re-seeds; never persisted.
   final int columnsResetTick;
@@ -165,6 +175,9 @@ class Settings {
     String? wallpaperType,
     bool? notificationsEnabled,
     bool? hideNonPinned,
+    bool? hidePreviews,
+    bool? colorfulMessages,
+    bool? infoPanelOpen,
     int? columnsResetTick,
   }) {
     return Settings(
@@ -209,6 +222,9 @@ class Settings {
       wallpaperType: wallpaperType ?? this.wallpaperType,
       notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
       hideNonPinned: hideNonPinned ?? this.hideNonPinned,
+      hidePreviews: hidePreviews ?? this.hidePreviews,
+      colorfulMessages: colorfulMessages ?? this.colorfulMessages,
+      infoPanelOpen: infoPanelOpen ?? this.infoPanelOpen,
       columnsResetTick: columnsResetTick ?? this.columnsResetTick,
     );
   }
@@ -282,7 +298,7 @@ class Settings {
       threadsEnabled: kv.getBool(StorageKeys.threadsEnabled, defaultValue: true),
       lowDataMode: kv.getBool(StorageKeys.lowDataMode, defaultValue: false),
       backgroundConnectivity: kv.getBool(StorageKeys.backgroundConnectivity,
-          defaultValue: false),
+          defaultValue: BackgroundConnectivityService.isSupported),
       // On by default; the radio only starts once Bluetooth permission is granted.
       meshEnabled: kv.getBool(StorageKeys.meshEnabled, defaultValue: true),
       textSize: kv.getInt(StorageKeys.textSize, defaultValue: 15),
@@ -309,6 +325,9 @@ class Settings {
       notificationsEnabled:
           (kv.getString(StorageKeys.notificationsEnabled) ?? 'true') != 'false',
       hideNonPinned: kv.getBool(StorageKeys.hideNonPinned, defaultValue: false),
+      hidePreviews: kv.getBool(StorageKeys.hidePreviews, defaultValue: false),
+      colorfulMessages: kv.getBool(StorageKeys.colorfulMessages, defaultValue: false),
+      infoPanelOpen: kv.getBool(StorageKeys.infoPanelOpen, defaultValue: false),
     );
   }
 }

@@ -127,6 +127,7 @@
             this.peers = new Map();
             this.pendingPlaintext = new Map();
             this.pendingEncrypted = new Map();
+            this.channelKeys = new Map();
             this.running = false;
             this.announceTimer = null;
             this.cleanupTimer = null;
@@ -238,7 +239,7 @@
             try {
                 const T = G.NostrTools;
                 const msgHex = await C().NostrLink.messageHex(this.identity.staticPublic);
-                const sig = T._secp256k1.schnorr.sign(P().fromHex(msgHex), epoch.nostrPrivkey);
+                const sig = T._schnorr.sign(P().fromHex(msgHex), epoch.nostrPrivkey);
                 return C().NostrLink.build(epoch.nostrPubkey, P().toHex(sig));
             } catch (_) {
                 return null;
@@ -698,7 +699,17 @@
             if (!this.running) throw new Error('mesh not running');
             const msgId = randomHex(8);
             if (channel) {
-                const payload = P().encodeBitchatMessage({
+                const key = this.channelKeys.get(C().channelWireName(channel));
+                const payload = P().encodeBitchatMessage(key ? {
+                    id: msgId,
+                    sender: this._displayNickname(),
+                    content: '',
+                    timestampMs: Date.now(),
+                    senderPeerID: this.identity.peerID,
+                    channel: C().channelWireName(channel),
+                    isEncrypted: true,
+                    encryptedContent: await C().channelEncrypt(key, content),
+                } : {
                     id: msgId,
                     sender: this._displayNickname(),
                     content,
@@ -998,9 +1009,24 @@
             });
         }
 
-        _handleChannelMessage(packet, senderPeerID) {
+        async setChannelPassword(channel, password) {
+            if (!password) return;
+            const wire = C().channelWireName(channel);
+            this.channelKeys.set(wire, await C().channelKey(password, wire));
+        }
+
+        hasChannelKey(channel) {
+            return this.channelKeys.has(C().channelWireName(channel));
+        }
+
+        async _handleChannelMessage(packet, senderPeerID) {
             const msg = P().decodeBitchatMessage(packet.payload);
-            if (!msg || msg.isEncrypted) return;
+            if (!msg || !msg.channel) return;
+            if (msg.isEncrypted) {
+                const key = this.channelKeys.get(C().channelWireName(msg.channel));
+                if (!key || !msg.encryptedContent) return;
+                try { msg.content = await C().channelDecrypt(key, msg.encryptedContent); } catch (_) { return; }
+            }
             const peer = this._touchPeer(senderPeerID);
             this.onPublicMessage({
                 // The sender's outbox republishes this as a `['nymmesh', id]` tag so receivers can drop the Nostr copy.

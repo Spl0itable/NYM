@@ -27,8 +27,14 @@ import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import 'context_menu_actions.dart';
+import '../../features/layout/info_dock.dart';
+import '../../features/layout/layout_model.dart';
 import 'context_menu_panel.dart';
 import 'menu_layer.dart';
+import '../common/nym_action_sheet.dart';
+import '../common/nym_sheet.dart';
+import '../common/nym_field.dart';
+import '../common/nym_tooltip.dart';
 
 /// Right-side group context-menu panel: header, role-gated owner/member controls, invite link, and member list.
 class GroupContextMenuPanel extends ConsumerStatefulWidget {
@@ -37,18 +43,26 @@ class GroupContextMenuPanel extends ConsumerStatefulWidget {
     required this.groupId,
     required this.animation,
     required this.onClose,
+    this.onDismiss,
+    this.docked = false,
   });
 
   final String groupId;
   final Animation<double> animation;
   final VoidCallback onClose;
+  final VoidCallback? onDismiss;
+  final bool docked;
 
   static Future<void> show(BuildContext context, String groupId) {
+    if (InfoDock.tryDock(context, DockedInfo.group(groupId))) {
+      return Future<void>.value();
+    }
+    final page = MediaQuery.sizeOf(context).width <= kPhoneMax;
     return showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
       barrierLabel: tr('group context menu'),
-      barrierColor: const Color(0x99000000),
+      barrierColor: page ? Colors.transparent : const Color(0x99000000),
       transitionDuration: const Duration(milliseconds: 150),
       pageBuilder: (ctx, anim, _) => const SizedBox.shrink(),
       transitionBuilder: (ctx, anim, _, _) => Align(
@@ -92,7 +106,12 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         : _content(c, s, group);
 
     final screenW = MediaQuery.of(context).size.width;
-    final panelW = (screenW * 0.85).clamp(0.0, 320.0);
+    final page = !widget.docked && screenW <= kPhoneMax;
+    final panelW = widget.docked
+        ? kDockWidth.toDouble()
+        : page
+            ? screenW
+            : (screenW * 0.85).clamp(0.0, 320.0);
 
     return SlideTransition(
       position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
@@ -103,15 +122,17 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
         height: double.infinity,
         child: Container(
           decoration: BoxDecoration(
-            color: c.glassBg,
-            border: Border(left: BorderSide(color: c.glassBorder)),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x66000000),
-                blurRadius: 24,
-                offset: Offset(-4, 0),
-              ),
-            ],
+            color: page ? c.bg : c.glassBg,
+            border: page ? null : Border(left: BorderSide(color: c.glassBorder)),
+            boxShadow: widget.docked || page
+                ? null
+                : const [
+                    BoxShadow(
+                      color: Color(0x66000000),
+                      blurRadius: 24,
+                      offset: Offset(-4, 0),
+                    ),
+                  ],
           ),
           child: Stack(
             children: [
@@ -123,7 +144,7 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
               Positioned(
                 top: MediaQuery.of(context).padding.top + 14,
                 right: 14,
-                child: CtxCloseButton(onTap: widget.onClose),
+                child: CtxCloseButton(onTap: widget.onDismiss ?? widget.onClose),
               ),
             ],
           ),
@@ -174,29 +195,28 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
               children: _actionRows(c, group, iAmOwner, iCanAdminister),
             ),
           ),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-            decoration: BoxDecoration(
-              border: Border(
-                top: BorderSide(color: c.hairline),
+          if (_transferMode) ...[
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: c.hairline),
+                ),
+              ),
+              child: Text(
+                tr('Select a member to make owner').toUpperCase(),
+                style: TextStyle(
+                  color: c.textDim,
+                  fontSize: 12,
+                  letterSpacing: 0.48,
+                ),
               ),
             ),
-            child: Text(
-              _transferMode
-                  ? tr('Select a member to make owner').toUpperCase()
-                  : tr('Members · {count}', {'count': group.members.length})
-                      .toUpperCase(),
-              style: TextStyle(
-                color: c.textDim,
-                fontSize: 12,
-                letterSpacing: 0.48,
-              ),
-            ),
-          ),
-          for (final pk in sorted)
-            // In transfer mode the owner can't pick themselves.
-            if (!_transferMode || pk != self) _memberRow(c, group, pk, self),
+            for (final pk in sorted)
+              if (pk != self) _memberRow(c, group, pk, self, iCanModerate),
+          ] else
+            ..._memberSections(c, group, sorted, self, iCanModerate),
           if (!_transferMode && iCanModerate && group.banned.isNotEmpty) ...[
             Container(
               width: double.infinity,
@@ -728,7 +748,52 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     );
   }
 
-  Widget _memberRow(NymColors c, Group group, String pubkey, String self) {
+  List<Widget> _memberSections(NymColors c, Group group, List<String> sorted,
+      String self, bool canModerate) {
+    String roleOf(String pk) {
+      if (group.createdBy == pk) return 'owner';
+      if (group.admins.contains(pk)) return 'admin';
+      if (group.mods.contains(pk)) return 'mod';
+      return 'member';
+    }
+
+    const titles = {
+      'owner': 'Owner',
+      'admins': 'Admins',
+      'mods': 'Mods',
+      'members': 'Members',
+    };
+    final out = <Widget>[];
+    final sections = memberSections([for (final pk in sorted) roleOf(pk)]);
+    for (var i = 0; i < sections.length; i++) {
+      final sec = sections[i];
+      out.add(Container(
+        key: ValueKey('memberSection-${sec.key}'),
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(
+            NymSpace.s4, NymSpace.s3, NymSpace.s4, NymSpace.s1),
+        decoration: i == 0
+            ? BoxDecoration(border: Border(top: BorderSide(color: c.hairline)))
+            : null,
+        child: Text(
+          '${tr(titles[sec.key]!)} · ${sec.items.length}'.toUpperCase(),
+          style: TextStyle(
+            color: c.textDim,
+            fontSize: NymType.xs,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.44,
+          ),
+        ),
+      ));
+      for (final idx in sec.items) {
+        out.add(_memberRow(c, group, sorted[idx], self, canModerate));
+      }
+    }
+    return out;
+  }
+
+  Widget _memberRow(NymColors c, Group group, String pubkey, String self,
+      [bool canModerate = false]) {
     final user = ref.watch(usersProvider)[pubkey];
     final base = stripPubkeySuffix(user?.nym ?? '');
     final suffix = getPubkeySuffix(pubkey);
@@ -737,14 +802,64 @@ class _GroupContextMenuPanelState extends ConsumerState<GroupContextMenuPanel> {
     final isAdmin = !isOwner && group.admins.contains(pubkey);
     final isMod = !isOwner && !isAdmin && group.mods.contains(pubkey);
 
+    final presence = user == null
+        ? 'offline'
+        : presenceClass(user
+            .effectiveStatus(
+                isVerifiedBot:
+                    ref.read(nostrControllerProvider).isVerifiedBot(pubkey))
+            .name);
+    final avatar = NymAvatar(
+      seed: pubkey,
+      size: 30,
+      imageUrl: user?.profile?.picture,
+      label: base.isNotEmpty ? base[0] : null,
+    );
     return _MemberTile(
       colors: c,
-      avatar: NymAvatar(
-        seed: pubkey,
-        size: 30,
-        imageUrl: user?.profile?.picture,
-        label: base.isNotEmpty ? base[0] : null,
-      ),
+      avatar: presence.isEmpty
+          ? avatar
+          : Stack(
+              clipBehavior: Clip.none,
+              children: [
+                avatar,
+                Positioned(
+                  right: -1,
+                  bottom: -1,
+                  child: Container(
+                    key: ValueKey('presence-$presence-$pubkey'),
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: presence == 'online'
+                          ? const Color(0xFF22C55E)
+                          : presence == 'away'
+                              ? c.warning
+                              : c.textDim,
+                      border: Border.all(color: c.bgTertiary, width: 2),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+      trailing: canModerate && !isSelf && !_transferMode
+          ? NymTooltip(
+              message: tr('Member actions'),
+              child: InkWell(
+                key: ValueKey('memberMore-$pubkey'),
+                borderRadius: NymRadius.rxs,
+                onTap: () => _onMemberTap(group, pubkey, base, isSelf),
+                child: SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: Center(
+                    child: NymSvgIcon(NymIcons.rowMenu, size: 16, color: c.textDim),
+                  ),
+                ),
+              ),
+            )
+          : null,
       base: base.isEmpty ? tr('(unknown)') : base,
       suffix: '#$suffix',
       isSelf: isSelf,
@@ -1080,10 +1195,10 @@ class _AddMembersDialog extends ConsumerStatefulWidget {
   final Group group;
 
   static Future<List<String>?> show(BuildContext context, Group group) {
-    return showDialog<List<String>>(
-      context: context,
+    return showNymSheet<List<String>>(
+      context,
+      (_) => _AddMembersDialog(group: group),
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      builder: (_) => _AddMembersDialog(group: group),
     );
   }
 
@@ -1133,137 +1248,126 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 440),
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              decoration: BoxDecoration(
-                color: c.bgSecondary,
-                borderRadius: NymRadius.rxl,
-                border: Border.all(color: c.glassBorder),
+    final body = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
+          child: Text(tr('Add Members'),
+              style: TextStyle(
+                  color: c.text,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700)),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_picked.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final r in _picked)
+                        _RecipientChip(
+                          nym: r.nym,
+                          onRemove: () => setState(() =>
+                              _picked.removeWhere(
+                                  (x) => x.pubkey == r.pubkey)),
+                        ),
+                    ],
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  tr('{n} spots left', {'n': '$_spotsLeft'}),
+                  key: const ValueKey('addMembersSpotsLeft'),
+                  style: TextStyle(
+                    color: _spotsLeft > 0 ? c.textDim : c.warning,
+                    fontSize: 12,
+                  ),
+                ),
               ),
-              clipBehavior: Clip.antiAlias,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+              Row(
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
-                    child: Text(tr('Add Members'),
-                        style: TextStyle(
-                            color: c.text,
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700)),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_picked.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: [
-                                for (final r in _picked)
-                                  _RecipientChip(
-                                    nym: r.nym,
-                                    onRemove: () => setState(() =>
-                                        _picked.removeWhere(
-                                            (x) => x.pubkey == r.pubkey)),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            tr('{n} spots left', {'n': '$_spotsLeft'}),
-                            key: const ValueKey('addMembersSpotsLeft'),
-                            style: TextStyle(
-                              color: _spotsLeft > 0 ? c.textDim : c.warning,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                controller: _controller,
-                                enabled: _spotsLeft > 0,
-                                style: TextStyle(color: c.inputText, fontSize: 14),
-                                onSubmitted: (_) => _add(),
-                                decoration: InputDecoration(
-                                  isDense: true,
-                                  hintText: tr('nym, pubkey, or npub'),
-                                  hintStyle: TextStyle(color: c.textDim),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 11),
-                                  filled: true,
-                                  fillColor: c.insetFill,
-                                  border: OutlineInputBorder(
-                                    borderRadius: NymRadius.rxs,
-                                    borderSide:
-                                        BorderSide(color: c.glassBorder),
-                                  ),
-                                  enabledBorder: OutlineInputBorder(
-                                    borderRadius: NymRadius.rxs,
-                                    borderSide:
-                                        BorderSide(color: c.glassBorder),
-                                  ),
-                                  focusedBorder: OutlineInputBorder(
-                                    borderRadius: NymRadius.rxs,
-                                    borderSide:
-                                        BorderSide(color: c.primaryA(0.3)),
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            TextButton(
-                              onPressed: _spotsLeft > 0 ? _add : null,
-                              child: Text(tr('Add'),
-                                  style: TextStyle(color: c.primary)),
-                            ),
-                          ],
-                        ),
-                      ],
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      enabled: _spotsLeft > 0,
+                      style: TextStyle(color: c.inputText, fontSize: 14),
+                      onSubmitted: (_) => _add(),
+                      decoration: NymField.decoration(c,
+                        hint: tr('nym, pubkey, or npub'),
+                        radius: NymRadius.rxs,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 11)),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 8, 16, 16),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: Text(tr('Cancel'),
-                              style: TextStyle(color: c.textDim)),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: c.primary,
-                            foregroundColor: c.bg,
-                          ),
-                          onPressed: _picked.isEmpty
-                              ? null
-                              : () => Navigator.of(context)
-                                  .pop(_picked.map((r) => r.pubkey).toList()),
-                          child: Text(tr('Add')),
-                        ),
-                      ],
-                    ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: _spotsLeft > 0 ? _add : null,
+                    child: Text(tr('Add'),
+                        style: TextStyle(color: c.primary)),
                   ),
                 ],
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 16, 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text(tr('Cancel'),
+                    style: TextStyle(color: c.textDim)),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: c.primary,
+                  foregroundColor: c.bg,
+                ),
+                onPressed: _picked.isEmpty
+                    ? null
+                    : () => Navigator.of(context)
+                        .pop(_picked.map((r) => r.pubkey).toList()),
+                child: Text(tr('Add')),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    return NymDiscardGuard(
+      isDirty: () => _picked.isNotEmpty || _controller.text.trim().isNotEmpty,
+      child: nymSheetOr(
+        context,
+        SingleChildScrollView(child: body),
+        (body) => Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: c.bgSecondary,
+                    borderRadius: NymRadius.rxl,
+                    border: Border.all(color: c.glassBorder),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: body,
+                ),
               ),
             ),
           ),
@@ -1296,11 +1400,128 @@ class _RecipientChip extends StatelessWidget {
           InkWell(
             onTap: onRemove,
             borderRadius: const BorderRadius.all(Radius.circular(10)),
-            child: Text('✕',
-                style: TextStyle(color: c.textDim, fontSize: 14, height: 1)),
+            child: Icon(Icons.close, size: 14, color: c.textDim),
           ),
         ],
       ),
+    );
+  }
+}
+
+
+Future<T?> showGroupMenuSheet<T>(
+  BuildContext context,
+  String groupId,
+  List<NymActionEntry<T>> entries, {
+  String label = 'Conversation menu',
+}) {
+  return showNymActionSheet<T>(
+    context,
+    entries,
+    label: label,
+    header: GroupSheetHeader(groupId: groupId),
+    expandable: true,
+    rowBuilder: (ctx, e, pick) {
+      final c = ctx.nym;
+      return CtxSheetActionRow(
+        key: e.key,
+        svg: e.svg,
+        label: e.label,
+        color: !e.enabled
+            ? c.textDim
+            : e.danger
+                ? c.danger
+                : c.text,
+        onTap: e.enabled ? pick : () {},
+      );
+    },
+  );
+}
+
+class GroupSheetHeader extends ConsumerWidget {
+  const GroupSheetHeader({super.key, required this.groupId});
+
+  final String groupId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.nym;
+    Group? group;
+    for (final g in ref.watch(appStateProvider).groups) {
+      if (g.id == groupId) group = g;
+    }
+    if (group == null) return const SizedBox.shrink();
+    final avatarUrl = proxiedAvatarUrl(group.avatar);
+    final glyph = Container(
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white.withValues(alpha: 0.06),
+      ),
+      child: NymSvgIcon(NymIcons.groupGlyph, size: 34, color: c.primary),
+    );
+    final icon = SizedBox(
+      width: 64,
+      height: 64,
+      child: (avatarUrl != null && avatarUrl.isNotEmpty)
+          ? ClipOval(
+              child: CachedNetworkImage(
+                imageUrl: avatarUrl,
+                fit: BoxFit.cover,
+                errorWidget: (_, _, _) => glyph,
+              ),
+            )
+          : glyph,
+    );
+    final count = group.members.length;
+    final description = (group.description ?? '').trim();
+    return Column(
+      key: const ValueKey('groupSheetHeader'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 16, 14, 14),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: c.hairline)),
+          ),
+          child: Column(
+            children: [
+              icon,
+              const SizedBox(height: 6),
+              Text(
+                group.name.isEmpty ? tr('Group') : group.name,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: c.secondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                tr('{n}/{max} members', {'n': count, 'max': kMaxGroupMembers}) +
+                    (count >= kMaxGroupMembers ? ' · ${tr('Full')}' : ''),
+                style: TextStyle(
+                  color: count >= kMaxGroupMembers ? c.warning : c.textDim,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (description.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: c.hairline)),
+            ),
+            child: Text(
+              description,
+              style: TextStyle(color: c.textDim, fontSize: 13, height: 1.5),
+            ),
+          ),
+        const SizedBox(height: 6),
+      ],
     );
   }
 }

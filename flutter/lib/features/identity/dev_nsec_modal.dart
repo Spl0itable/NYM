@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../widgets/common/keyboard_inset_dialog.dart';
+import '../../widgets/common/nym_sheet.dart';
 
 import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/crypto/keys.dart';
@@ -45,12 +45,11 @@ class DevNsecModal extends StatefulWidget {
   const DevNsecModal({super.key});
 
   static Future<DevNsecResult?> open(BuildContext context) {
-    return showDialog<DevNsecResult>(
-      context: context,
+    return showNymSheet<DevNsecResult>(
+      context,
+      (_) => const DevNsecModal(),
       barrierColor: Colors.black.withValues(alpha: 0.7),
-      // No backdrop dismiss; only Cancel or the close button close it.
       barrierDismissible: false,
-      builder: (_) => const DevNsecModal(),
     );
   }
 
@@ -80,83 +79,80 @@ class _DevNsecModalState extends State<DevNsecModal> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return KeyboardInsetDialog(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 500),
-          child: Material(
-            color: Colors.transparent,
-            child: Stack(
-              children: [
-                ModalChrome.box(
-                  c,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      ModalChrome.header(c, tr('Reserved Nickname')),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              tr('"Luxas" is reserved for the Nymchat developer.'),
-                              style: TextStyle(
-                                color: c.textDim,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 1.2,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              tr('Paste your nsec to verify your identity:'),
-                              style: TextStyle(color: c.textDim, fontSize: 11),
-                            ),
-                            const SizedBox(height: 8),
-                            ModalChrome.focusRing(
-                              c,
-                              child: TextField(
-                                controller: _nsec,
-                                obscureText: true,
-                                style: TextStyle(
-                                    color: c.inputText, fontSize: 15),
-                                decoration:
-                                    ModalChrome.inputDecoration(c, 'nsec1... or hex private key'),
-                              ),
-                            ),
-                            if (_error) ...[
-                              const SizedBox(height: 6),
-                              Text(
-                                tr('Invalid nsec - does not match the developer '
-                                    'pubkey.'),
-                                style: TextStyle(color: c.danger, fontSize: 12),
-                              ),
-                            ],
-                          ],
+    return NymDiscardGuard(
+      isDirty: () => _nsec.text.isNotEmpty,
+      child: ModalChrome.shell(
+        context,
+        maxWidth: 500,
+        scroll: true,
+        child: Stack(
+          children: [
+            ModalChrome.box(
+              c,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ModalChrome.header(c, tr('Reserved Nickname')),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(32, 0, 32, 0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          tr('"Luxas" is reserved for the Nymchat developer.'),
+                          style: TextStyle(
+                            color: c.textDim,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1.2,
+                          ),
                         ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            ModalChrome.iconButton(c, tr('Cancel'),
-                                () => Navigator.of(context).pop()),
-                            const SizedBox(width: 10),
-                            ModalChrome.sendButton(c, tr('Verify'), _verify),
-                          ],
+                        const SizedBox(height: 8),
+                        Text(
+                          tr('Paste your nsec to verify your identity:'),
+                          style: TextStyle(color: c.textDim, fontSize: 11),
                         ),
-                      ),
-                    ],
+                        const SizedBox(height: 8),
+                        ModalChrome.focusRing(
+                          c,
+                          child: TextField(
+                            controller: _nsec,
+                            obscureText: true,
+                            style: TextStyle(
+                                color: c.inputText, fontSize: 15),
+                            decoration:
+                                ModalChrome.inputDecoration(c, 'nsec1... or hex private key'),
+                          ),
+                        ),
+                        if (_error) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            tr('Invalid nsec - does not match the developer '
+                                'pubkey.'),
+                            style: TextStyle(color: c.danger, fontSize: 12),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
-                ),
-                ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
-              ],
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ModalChrome.iconButton(c, tr('Cancel'),
+                            () => Navigator.of(context).pop()),
+                        const SizedBox(width: 10),
+                        ModalChrome.sendButton(c, tr('Verify'), _verify),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
+            ModalChrome.closeChip(c, () => Navigator.of(context).pop()),
+          ],
         ),
       ),
     );

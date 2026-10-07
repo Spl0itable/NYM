@@ -35,7 +35,7 @@ class ComposerStrings {
     'Notifications',
     'Saved',
     'Calls',
-    'Flair',
+    'Shop',
     'Settings',
     'About',
   ];
@@ -50,7 +50,7 @@ const List<String> kAttachOrder = [
   'event',
 ];
 
-const double kComposerSheetMaxWidth = 768;
+const double kComposerSheetMaxWidth = 1024;
 
 const bool kPrivatePollsEnabled = true;
 
@@ -58,7 +58,7 @@ class MainMenuItems {
   const MainMenuItems._();
 
   static const List<String> primary = ['notifications', 'saved', 'calls'];
-  static const List<String> secondary = ['flair', 'settings', 'about'];
+  static const List<String> secondary = ['shop', 'settings', 'about'];
 
   static Map<String, List<String>> toJson() => {
         'primary': primary,
@@ -140,11 +140,12 @@ String primaryAction({
   String text = '',
   int attachments = 0,
   bool editing = false,
+  bool quoting = false,
   bool busy = false,
   bool recording = false,
 }) {
   if (recording) return 'mic';
-  if (editing || busy) return 'send';
+  if (editing || quoting || busy) return 'send';
   if (attachments > 0) return 'send';
   return text.trim().isNotEmpty ? 'send' : 'mic';
 }
@@ -193,12 +194,23 @@ bool isMenuKey(String key, {bool shift = false}) =>
     key == 'ContextMenu' || (key == 'F10' && shift);
 
 class MainMenuRows {
-  const MainMenuRows(this.grid);
+  const MainMenuRows(this.grid, [this.overflow = const []]);
 
   final List<List<String>> grid;
+  final List<String> overflow;
 
-  Map<String, Object> toJson() => {'grid': grid};
+  Map<String, Object> toJson() => {'grid': grid, 'overflow': overflow};
 }
 
-MainMenuRows mainMenuRows([String layout = 'mobile']) =>
-    const MainMenuRows([MainMenuItems.primary, MainMenuItems.secondary]);
+const List<String> kHeaderOverflow = ['saved', 'calls', 'about'];
+
+MainMenuRows mainMenuRows([String layout = 'mobile']) {
+  final all = [...MainMenuItems.primary, ...MainMenuItems.secondary];
+  if (layout == 'desktop') {
+    return MainMenuRows(
+      [all.where((id) => !kHeaderOverflow.contains(id)).toList()],
+      kHeaderOverflow,
+    );
+  }
+  return MainMenuRows([all]);
+}

@@ -437,7 +437,7 @@ class MeshBridge {
     final vis = visibleMessagesFor(_appState, storageKey).length;
     MeshDiagnostics.instance.log(
         '#chan rx peer=${msg.senderPeerID} key=$storageKey store=$before→$after '
-        'vis=$vis view=${_appState.view.storageKey} own=$isOwn '
+        'vis=$vis view=${_appState.view.kind == ViewKind.pm ? 'pm' : _appState.view.storageKey} own=$isOwn '
         '${landed ? 'LANDED' : 'DROPPED'}');
     if (landed && !isOwn) _maybeNotifyChannelMention(m, channelName);
   }

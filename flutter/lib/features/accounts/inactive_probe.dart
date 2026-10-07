@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -18,8 +19,15 @@ class InactiveProbe {
     ProbeTransportFactory? transport,
     this.window = const Duration(seconds: 8),
     int Function()? nowSec,
+    Duration Function()? stagger,
   })  : _transport = transport ?? _defaultTransport,
-        _nowSec = nowSec ?? _wallSec;
+        _nowSec = nowSec ?? _wallSec,
+        _stagger = stagger ?? defaultStagger;
+
+  static final Random _rng = Random();
+
+  static Duration defaultStagger() =>
+      Duration(milliseconds: 1000 + _rng.nextInt(11000));
 
   static const String seenKey = 'nym_probe_seen';
   static const String sinceKey = 'nym_probe_since';
@@ -30,6 +38,7 @@ class InactiveProbe {
   final ProbeTransportFactory _transport;
   final Duration window;
   final int Function() _nowSec;
+  final Duration Function() _stagger;
 
   static int _wallSec() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
@@ -63,6 +72,7 @@ class InactiveProbe {
         }
       }
     } catch (_) {}
+    await Future<void>.delayed(_stagger());
     final now = _nowSec();
     final direct = prefs.getString('nym_relay_direct_mode') == 'true';
     final pool = _transport(direct);

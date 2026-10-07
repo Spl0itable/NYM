@@ -668,6 +668,7 @@ class ApiClient {
 
   /// `GET /api/proxy?url=<encoded>` (optional `&emoji=1`).
   String mediaProxyUrl(String url, {bool emoji = false}) {
+    if (ApiConfig.directMedia) return url;
     final enc = Uri.encodeComponent(url);
     return emoji ? '$_baseUrl?emoji=1&url=$enc' : '$_baseUrl?url=$enc';
   }
@@ -685,20 +686,24 @@ class ApiClient {
       '$_baseUrl?action=geocode&lat=$lat&lng=$lng&zoom=$zoom&lang=$lang';
 
   /// `GET /api/proxy?action=giphy&q=<q>&api_key=<key>`
-  String giphySearchUrl(String query) =>
-      '$_baseUrl?action=giphy&q=${Uri.encodeComponent(query)}&api_key=${Uri.encodeComponent(_giphyApiKey)}';
+  String giphySearchUrl(String query) => ApiConfig.directMedia
+      ? 'https://api.giphy.com/v1/gifs/search?api_key=${Uri.encodeComponent(_giphyApiKey)}&q=${Uri.encodeComponent(query)}&limit=20&rating=g'
+      : '$_baseUrl?action=giphy&q=${Uri.encodeComponent(query)}&api_key=${Uri.encodeComponent(_giphyApiKey)}';
 
   /// `GET /api/proxy?action=giphy&trending=1&api_key=<key>`
-  String giphyTrendingUrl() =>
-      '$_baseUrl?action=giphy&trending=1&api_key=${Uri.encodeComponent(_giphyApiKey)}';
+  String giphyTrendingUrl() => ApiConfig.directMedia
+      ? 'https://api.giphy.com/v1/gifs/trending?api_key=${Uri.encodeComponent(_giphyApiKey)}&limit=20&rating=g'
+      : '$_baseUrl?action=giphy&trending=1&api_key=${Uri.encodeComponent(_giphyApiKey)}';
 
   /// `PUT /api/proxy?action=upload&server=<encoded>`
-  String blossomUploadUrl(String server) =>
-      '$_baseUrl?action=upload&server=${Uri.encodeComponent(server)}';
+  String blossomUploadUrl(String server) => ApiConfig.directMedia
+      ? '${server.replaceFirst(RegExp(r'/+$'), '')}/upload'
+      : '$_baseUrl?action=upload&server=${Uri.encodeComponent(server)}';
 
   /// `PUT /api/proxy?action=mirror&server=<encoded>`: asks a Blossom server to pull an uploaded blob.
-  String blossomMirrorUrl(String server) =>
-      '$_baseUrl?action=mirror&server=${Uri.encodeComponent(server)}';
+  String blossomMirrorUrl(String server) => ApiConfig.directMedia
+      ? '${server.replaceFirst(RegExp(r'/+$'), '')}/mirror'
+      : '$_baseUrl?action=mirror&server=${Uri.encodeComponent(server)}';
 
   /// `GET|POST /api/proxy?action=json&url=<encoded>`, the JSON privacy proxy.
   String jsonProxyUrl(String url) =>
@@ -845,6 +850,7 @@ class ApiClient {
   }
 
   Future<UnfurlResult> _unfurlFetch(String url) async {
+    if (ApiConfig.directMedia) return _unfurlDirect(url);
     final u = unfurlUrl(url);
     final res = await _client.get(Uri.parse(u), headers: _headers());
     _trackApiData('unfurl', sent: _bodyLen(u), recv: _bodyLen(res.bodyBytes));
@@ -855,6 +861,85 @@ class ApiClient {
         jsonDecode(_utf8Body(res)) as Map<String, dynamic>);
   }
 
+  Future<UnfurlResult> _unfurlDirect(String url) async {
+    final uri = Uri.parse(url);
+    final res = await _client.get(uri, headers: {
+      'Accept': 'text/html,application/xhtml+xml',
+      'User-Agent': ApiConfig.userAgentFor(uri),
+    });
+    final type = (res.headers['content-type'] ?? '').toLowerCase();
+    if (res.statusCode != 200 || !type.contains('text/html')) {
+      throw ApiException('unfurl', res.statusCode, 'no page preview');
+    }
+    return openGraphFromHtml(_utf8Body(res), url);
+  }
+
+  static UnfurlResult openGraphFromHtml(String html, String pageUrl) {
+    String? meta(String attr, String key) {
+      final k = RegExp.escape(key);
+      final a = RegExp('<meta[^>]+$attr=["\']$k["\'][^>]+content=["\']([^"\']+)["\']',
+              caseSensitive: false)
+          .firstMatch(html);
+      if (a != null) return a.group(1);
+      final b = RegExp('<meta[^>]+content=["\']([^"\']+)["\'][^>]+$attr=["\']$k["\']',
+              caseSensitive: false)
+          .firstMatch(html);
+      return b?.group(1);
+    }
+
+    String? get(String p) => meta('property', 'og:$p') ?? meta('name', 'twitter:$p');
+    String decode(String s) => s
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&amp;', '&');
+    String resolve(String? raw) {
+      if (raw == null || raw.isEmpty) return '';
+      try {
+        final u = Uri.parse(pageUrl).resolve(raw);
+        return (u.scheme == 'http' || u.scheme == 'https') ? u.toString() : '';
+      } catch (_) {
+        return '';
+      }
+    }
+
+    String clip(String s, int n) => s.length > n ? s.substring(0, n) : s;
+    final title = get('title') ??
+        RegExp(r'<title[^>]*>([^<]+)</title>', caseSensitive: false)
+            .firstMatch(html)
+            ?.group(1) ??
+        '';
+    final description = get('description') ?? meta('name', 'description') ?? '';
+    final fav = RegExp(
+                r'''<link[^>]+rel=["'](?:icon|shortcut icon)["'][^>]+href=["']([^"']+)["']''',
+                caseSensitive: false)
+            .firstMatch(html)
+            ?.group(1) ??
+        RegExp(r'''<link[^>]+href=["']([^"']+)["'][^>]+rel=["'](?:icon|shortcut icon)["']''',
+                caseSensitive: false)
+            .firstMatch(html)
+            ?.group(1);
+    return UnfurlResult(
+      url: pageUrl,
+      title: clip(decode(title), 300),
+      description: clip(decode(description), 500),
+      image: resolve(get('image')),
+      siteName: decode(get('site_name') ?? ''),
+      type: get('type') ?? '',
+      favicon: resolve(fav),
+    );
+  }
+
+  static bool blossomTypeAllowed(String type) =>
+      type == 'application/octet-stream' ||
+      const ['image/', 'video/', 'audio/'].any(type.startsWith);
+
+  Map<String, String> _blossomHeaders(Uri uri, Map<String, String> extra) =>
+      ApiConfig.directMedia
+          ? {'User-Agent': ApiConfig.userAgentFor(uri), 'Accept': 'application/json', ...extra}
+          : _headers(extra);
+
   /// PUTs a Blossom blob via the proxy with a kind-24242 [authHeader]; returns the Blossom JSON.
   Future<Map<String, dynamic>> uploadBlob(
     Uint8List bytes,
@@ -862,15 +947,22 @@ class ApiClient {
     String authHeader, {
     String contentType = 'application/octet-stream',
   }) async {
+    final type = contentType.split(';').first.trim().toLowerCase();
+    if (!blossomTypeAllowed(type)) {
+      throw ApiException('upload', 415, 'Content type not allowed: $type');
+    }
+    final uri = Uri.parse(blossomUploadUrl(server));
     final res = await _client.put(
-      Uri.parse(blossomUploadUrl(server)),
-      headers: _headers({
+      uri,
+      headers: _blossomHeaders(uri, {
         'Authorization': authHeader,
         'Content-Type': contentType,
       }),
       body: bytes,
     );
-    _trackApiData('upload', sent: bytes.length, recv: _bodyLen(res.bodyBytes));
+    if (!ApiConfig.directMedia) {
+      _trackApiData('upload', sent: bytes.length, recv: _bodyLen(res.bodyBytes));
+    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       final reason = (res.headers['x-reason'] ?? '').trim();
       throw ApiException(
@@ -886,16 +978,19 @@ class ApiClient {
     String authHeader,
   ) async {
     final payload = jsonEncode({'url': sourceUrl});
+    final uri = Uri.parse(blossomMirrorUrl(server));
     final res = await _client.put(
-      Uri.parse(blossomMirrorUrl(server)),
-      headers: _headers({
+      uri,
+      headers: _blossomHeaders(uri, {
         'Authorization': authHeader,
         'Content-Type': 'application/json',
       }),
       body: payload,
     );
-    _trackApiData('mirror',
-        sent: _bodyLen(payload), recv: _bodyLen(res.bodyBytes));
+    if (!ApiConfig.directMedia) {
+      _trackApiData('mirror',
+          sent: _bodyLen(payload), recv: _bodyLen(res.bodyBytes));
+    }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw ApiException('mirror', res.statusCode, _utf8Body(res));
     }

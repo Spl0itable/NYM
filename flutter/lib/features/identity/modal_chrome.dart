@@ -4,14 +4,48 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../widgets/common/keyboard_inset_dialog.dart';
+import '../../widgets/common/nym_sheet.dart';
 import '../i18n/i18n.dart';
+import '../../widgets/common/nym_focusable.dart';
+import '../../widgets/common/nym_field.dart';
 
 /// Shared modal chrome primitives matching the PWA's `.modal` CSS.
 class ModalChrome {
   ModalChrome._();
 
+  static const EdgeInsets sheetPadding = EdgeInsets.fromLTRB(24, 6, 24, 24);
+
+  static Widget shell(
+    BuildContext context, {
+    required double maxWidth,
+    double margin = 20,
+    bool scroll = false,
+    required Widget child,
+  }) {
+    if (NymSheetScope.of(context)) {
+      return scroll ? SingleChildScrollView(child: child) : child;
+    }
+    return KeyboardInsetDialog(
+      child: Padding(
+        padding: EdgeInsets.all(margin),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: Material(color: Colors.transparent, child: child),
+        ),
+      ),
+    );
+  }
+
   /// Outer modal card with no inner padding; [maxWidth] defaults to 500.
   static Widget box(NymColors c, {required Widget child}) {
+    return Builder(
+      builder: (context) =>
+          NymSheetScope.of(context) ? child : _box(c, child),
+    );
+  }
+
+  static Widget _box(NymColors c, Widget child) {
     return Container(
       decoration: BoxDecoration(
         color: c.bgSecondary,
@@ -48,11 +82,17 @@ class ModalChrome {
 
   /// Modal header: 22px primary uppercase with a 1px glass bottom rule.
   static Widget header(NymColors c, String title) {
+    return Builder(builder: (context) => _header(c, title, NymSheetScope.of(context)));
+  }
+
+  static Widget _header(NymColors c, String title, bool sheet) {
     return Container(
       // Full width and left-aligned, even inside a centering Column.
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(32, 32, 32, 14),
-      margin: const EdgeInsets.only(bottom: 24),
+      padding: sheet
+          ? const EdgeInsets.fromLTRB(32, 12, 56, 14)
+          : const EdgeInsets.fromLTRB(32, 32, 32, 14),
+      margin: EdgeInsets.only(bottom: sheet ? 20 : 24),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: c.glassBorder)),
       ),
@@ -84,6 +124,7 @@ class ModalChrome {
     VoidCallback? onTap, {
     bool danger = false,
     bool fullWidth = false,
+    bool large = false,
     Widget? child,
   }) {
     final btn = _SendButton(
@@ -91,6 +132,7 @@ class ModalChrome {
       label: label,
       onTap: onTap,
       danger: danger,
+      large: large,
       child: child,
     );
     return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
@@ -114,36 +156,8 @@ class ModalChrome {
     );
   }
 
-  /// Form input decoration; wrap the field in [focusRing] for the outer glow.
-  static InputDecoration inputDecoration(NymColors c, String hint) {
-    final baseBorder = c.isLight ? const Color(0x1A000000) : c.glassBorder;
-    return InputDecoration(
-      isDense: true,
-      hintText: hint.isEmpty ? null : hint,
-      hintStyle: TextStyle(color: c.textDim, fontSize: 15),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-      filled: true,
-      // Light mode forces the fill with `!important`, so the focus bump never applies.
-      fillColor: WidgetStateColor.resolveWith(
-        (states) => c.isLight
-            ? const Color(0x0A000000)
-            : Colors.white.withValues(
-                alpha: states.contains(WidgetState.focused) ? 0.07 : 0.05),
-      ),
-      border: OutlineInputBorder(
-        borderRadius: NymRadius.rsm,
-        borderSide: BorderSide(color: baseBorder),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: NymRadius.rsm,
-        borderSide: BorderSide(color: baseBorder),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: NymRadius.rsm,
-        borderSide: BorderSide(color: c.primaryA(0.3)),
-      ),
-    );
-  }
+  static InputDecoration inputDecoration(NymColors c, String hint) =>
+      NymField.decoration(c, hint: hint);
 
   /// Hard-edged 3px focus glow ring toggled by descendant focus.
   static Widget focusRing(NymColors c, {required Widget child}) {
@@ -214,6 +228,7 @@ class _SendButton extends StatefulWidget {
     required this.label,
     required this.onTap,
     required this.danger,
+    this.large = false,
     this.child,
   });
 
@@ -221,6 +236,7 @@ class _SendButton extends StatefulWidget {
   final String label;
   final VoidCallback? onTap;
   final bool danger;
+  final bool large;
   final Widget? child;
 
   @override
@@ -253,11 +269,11 @@ class _SendButtonState extends State<_SendButton> {
           child: AnimatedContainer(
             duration: NymMotion.transition,
             curve: NymMotion.curve,
-            height: 42,
+            height: widget.large ? 52 : 42,
             padding: const EdgeInsets.symmetric(horizontal: 22),
             decoration: BoxDecoration(
               color: fill,
-              borderRadius: NymRadius.rsm,
+              borderRadius: widget.large ? NymRadius.rmd : NymRadius.rsm,
               border: Border.all(color: border),
               boxShadow: hovered
                   ? [
@@ -278,9 +294,9 @@ class _SendButtonState extends State<_SendButton> {
                     widget.label.toUpperCase(),
                     style: TextStyle(
                       color: fg,
-                      fontSize: 12,
+                      fontSize: widget.large ? NymType.lg : 12,
                       fontWeight: FontWeight.w600,
-                      letterSpacing: 1.5,
+                      letterSpacing: widget.large ? 2 : 1.5,
                     ),
                   ),
             ),
@@ -378,31 +394,34 @@ class _CloseChipState extends State<_CloseChip> {
   @override
   Widget build(BuildContext context) {
     final c = widget.c;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          width: 32,
-          height: 32,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: _hover
-                ? c.danger.withValues(alpha: 0.12)
-                : Colors.white.withValues(alpha: 0.05),
-            border: Border.all(
-              color: _hover ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+    return NymFocusable(
+      onActivate: widget.onTap,
+      tooltip: tr('Close'),
+      excludeChildSemantics: true,
+      radius: const BorderRadius.all(Radius.circular(16)),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _hover
+                  ? c.danger.withValues(alpha: 0.12)
+                  : Colors.white.withValues(alpha: 0.05),
+              border: Border.all(
+                color: _hover ? c.danger.withValues(alpha: 0.3) : c.glassBorder,
+              ),
             ),
-          ),
-          child: Text(
-            '✕',
-            style: TextStyle(
+            child: Icon(
+              Icons.close,
+              size: 16,
               color: _hover ? c.danger : c.textDim,
-              fontSize: 16,
-              height: 1,
             ),
           ),
         ),

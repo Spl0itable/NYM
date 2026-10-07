@@ -14,10 +14,13 @@ class MediaNoteFiles {
 
   static final Random _rng = Random();
 
-  static Future<String> writeTemp(Uint8List bytes, String mime) async {
+  static Future<String> writeTemp(Uint8List bytes, String mime) =>
+      writeTempExt(bytes, extForMime(mime));
+
+  static Future<String> writeTempExt(Uint8List bytes, String ext) async {
     final dir = await getTemporaryDirectory();
     final name =
-        'nymnote_${DateTime.now().microsecondsSinceEpoch}_${_rng.nextInt(1 << 30)}.${extForMime(mime)}';
+        'nymnote_${DateTime.now().microsecondsSinceEpoch}_${_rng.nextInt(1 << 30)}.$ext';
     final f = File('${dir.path}/$name');
     await f.writeAsBytes(bytes, flush: true);
     return f.path;

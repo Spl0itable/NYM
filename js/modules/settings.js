@@ -7,18 +7,20 @@ const NYM_SETTINGS_SECTION_KEYS = {
     appearance: ['theme', 'sound', 'autoscroll', 'showTimestamps', 'timeFormat', 'dateFormat',
         'blurOthersImages', 'chatLayout', 'chatViewMode', 'columnsLayout', 'nickStyle', 'colorMode',
         'wallpaperType', 'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'columnsWallpaper',
-        'sidebarSectionOrder', 'uiLanguage'],
+        'sidebarSectionOrder', 'uiLanguage', 'colorfulMessages', 'colorfulMessagesTs', 'pubkeyFormat',
+        'pubkeyFormatTs'],
     privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
         'acceptCalls', 'showStatus', 'powDifficulty', 'appVerifiedFilter', 'filterPacks',
-        'encryptAtRestPreferred', 'remotePanic'],
+        'encryptAtRestPreferred', 'remotePanic', 'spamFilterEnabled', 'spamFilterAggressive', 'spamFilterTs'],
     messaging: ['groupChatPMOnlyMode', 'threadsEnabled', 'translateLanguage', 'translateFavoriteLanguages',
         'emojiPackFavorites', 'emojiCategoryFavorites', 'favoriteGifs', 'recentEmojis',
         'gesturesEnabled', 'swipeLeftAction', 'swipeRightAction', 'swipeThreshold',
-        'swipeReactEmoji', 'notificationsEnabled', 'groupNotifyMentionsOnly',
-        'threadNotifyMentionsOnly', 'notifyFriendsOnly',
-        'syncMLSHistory', 'seenCalls'],
+        'swipeReactEmoji', 'swipeReactEmojiTs', 'notificationsEnabled', 'groupNotifyMentionsOnly',
+        'threadNotifyMentionsOnly', 'notifyFriendsOnly', 'eventToasts',
+        'syncMLSHistory', 'seenCalls', 'hidePreviews', 'hidePreviewsTs', 'voiceSpeed', 'voiceSpeedTs',
+        'keepCallHistory', 'keepCallHistoryTs'],
     channels: ['pinnedChannels', 'userJoinedChannels', 'sortByProximity', 'pinnedLandingChannel',
         'hideNonPinned', 'closedPMs', 'leftGroups', 'closedPMTimes',
         'leftGroupTimes'],
@@ -27,6 +29,8 @@ const NYM_SETTINGS_SECTION_KEYS = {
 
 // Sealed classically, never to the root-derived key (a circular lock). Spec §5.1.
 const NYM_PQ_ROOT_CATEGORY = 'nymchat-pq-root';
+
+const NYM_PREF_STAMPS_KEY = 'nym_pref_sync_ts';
 
 // pq2 framing for the size budget: `pq2.` plus a fixed 1088-byte ML-KEM ciphertext, base64url.
 const PQ2_PREFIX_LEN = 4;
@@ -155,13 +159,19 @@ Object.assign(NYM.prototype, {
             swipeRightAction: this.settings.swipeRightAction || 'translate',
             swipeThreshold: this.settings.swipeThreshold || 60,
             ...(localStorage.getItem('nym_swipe_react_emoji')
-                ? { swipeReactEmoji: localStorage.getItem('nym_swipe_react_emoji') }
+                ? {
+                    swipeReactEmoji: localStorage.getItem('nym_swipe_react_emoji'),
+                    swipeReactEmojiTs: parseInt(localStorage.getItem('nym_swipe_react_emoji_ts') || '0', 10) || 0,
+                }
                 : {}),
             sidebarSectionOrder: this._getSidebarSectionOrder(),
             notificationsEnabled: this.notificationsEnabled !== false,
             groupNotifyMentionsOnly: this.groupNotifyMentionsOnly || false,
             threadNotifyMentionsOnly: this.threadNotifyMentionsOnly || false,
             notifyFriendsOnly: this.notifyFriendsOnly || false,
+            ...(typeof this.eventToastSettingsForSync === 'function' && this.eventToastSettingsForSync()
+                ? { eventToasts: this.eventToastSettingsForSync() }
+                : {}),
             closedPMs: Array.from(this.closedPMs || []),
             leftGroups: Array.from(this.leftGroups || []),
             closedPMTimes: this.closedPMTimes ? Object.fromEntries(this.closedPMTimes) : {},
@@ -177,8 +187,126 @@ Object.assign(NYM.prototype, {
             botPmClearedAt: this._getBotPmClearedAt() || 0,
             botMaxRuns: typeof this.botMaxRuns === 'function' ? this.botMaxRuns() : 0,
             encryptAtRestPreferred: localStorage.getItem('nym_encrypt_at_rest_pref') === '1',
-            remotePanic: typeof this.remotePanicEnabled === 'function' ? this.remotePanicEnabled() : false
+            remotePanic: typeof this.remotePanicEnabled === 'function' ? this.remotePanicEnabled() : false,
+            ...this._stampedPrefsForSync()
         };
+    },
+
+    _prefStamps() {
+        const M = window.NymSyncMerge;
+        try {
+            const raw = JSON.parse(localStorage.getItem(NYM_PREF_STAMPS_KEY) || '{}');
+            return M ? M.tsMapNorm(raw) : {};
+        } catch (_) { return {}; }
+    },
+
+    _prefStampSet(name, ts) {
+        const m = this._prefStamps();
+        if (ts > 0) m[name] = Math.floor(ts); else delete m[name];
+        try { localStorage.setItem(NYM_PREF_STAMPS_KEY, JSON.stringify(m)); } catch (_) { }
+    },
+
+    notePrefChanged(name) {
+        this._prefStampSet(name, Date.now());
+        this._debouncedNostrSettingsSave(1500);
+    },
+
+    _voiceSpeedWire(raw) {
+        const v = Number(raw);
+        return String([1, 1.5, 2].indexOf(v) >= 0 ? v : 1);
+    },
+
+    _stampedPrefsForSync() {
+        const ls = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+        const ts = this._prefStamps();
+        return {
+            spamFilterEnabled: ls('nym_spam_filter_enabled') !== 'false',
+            spamFilterAggressive: ls('nym_spam_filter_aggressive') !== 'false',
+            spamFilterTs: ts.spamFilter || 0,
+            hidePreviews: ls('nym_hide_previews') === '1',
+            hidePreviewsTs: ts.hidePreviews || 0,
+            colorfulMessages: ls('nym_colorful_messages') === '1',
+            colorfulMessagesTs: ts.colorfulMessages || 0,
+            pubkeyFormat: ls('nym_pubkey_format') === 'hex' ? 'hex' : 'npub',
+            pubkeyFormatTs: ts.pubkeyFormat || 0,
+            voiceSpeed: this._voiceSpeedWire(ls('nym_voice_speed')),
+            voiceSpeedTs: ts.voiceSpeed || 0,
+            keepCallHistory: ls('nym_keep_call_history') !== 'off',
+            keepCallHistoryTs: ts.keepCallHistory || 0
+        };
+    },
+
+    setSpamFilter(opts) {
+        const o = opts || {};
+        if (typeof o.enabled === 'boolean') this.spamFilterEnabled = o.enabled;
+        if (typeof o.aggressive === 'boolean') this.spamFilterAggressive = o.aggressive;
+        this._persistSpamFilter();
+        this._syncSpamFilterUi();
+        this.notePrefChanged('spamFilter');
+    },
+
+    _syncSpamFilterUi() {
+        if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return;
+        const on = this.spamFilterEnabled !== false;
+        const sel = document.getElementById('spamFilterSelect');
+        if (sel) sel.value = on ? 'on' : 'off';
+        const agg = document.getElementById('spamFilterAggressiveSelect');
+        if (agg) {
+            agg.value = this.spamFilterAggressive === false ? 'off' : 'on';
+            agg.disabled = !on;
+        }
+    },
+
+    _persistSpamFilter() {
+        try {
+            localStorage.setItem('nym_spam_filter_enabled', this.spamFilterEnabled === false ? 'false' : 'true');
+            localStorage.setItem('nym_spam_filter_aggressive', this.spamFilterAggressive === false ? 'false' : 'true');
+        } catch (_) { }
+    },
+
+    _applyStampedPrefs(s) {
+        const M = window.NymSyncMerge;
+        if (!M || !s || typeof s !== 'object') return false;
+        const stamps = this._prefStamps();
+        let skipped = false;
+        const ls = (k, v) => { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (_) { } };
+        const stamped = (name, keys, valid, set) => {
+            if (!keys.some((k) => k in s)) return;
+            if (!valid()) return;
+            const remote = s[name + 'Ts'];
+            if (!M.prefTake(stamps[name], remote)) { skipped = true; return; }
+            try { set(); } catch (_) { }
+            this._prefStampSet(name, typeof remote === 'number' && isFinite(remote) ? remote : 0);
+        };
+        stamped('spamFilter', ['spamFilterEnabled', 'spamFilterAggressive'],
+            () => typeof s.spamFilterEnabled === 'boolean' || typeof s.spamFilterAggressive === 'boolean', () => {
+                if (typeof s.spamFilterEnabled === 'boolean') this.spamFilterEnabled = s.spamFilterEnabled;
+                if (typeof s.spamFilterAggressive === 'boolean') this.spamFilterAggressive = s.spamFilterAggressive;
+                this._persistSpamFilter();
+                this._syncSpamFilterUi();
+            });
+        stamped('hidePreviews', ['hidePreviews'], () => typeof s.hidePreviews === 'boolean', () => {
+            if (window.NymLayout && typeof window.NymLayout.setHidePreviews === 'function') window.NymLayout.setHidePreviews(s.hidePreviews);
+            else ls('nym_hide_previews', s.hidePreviews ? '1' : null);
+        });
+        stamped('colorfulMessages', ['colorfulMessages'], () => typeof s.colorfulMessages === 'boolean', () => {
+            if (window.NymLayout && typeof window.NymLayout.setColorful === 'function') window.NymLayout.setColorful(s.colorfulMessages);
+            else ls('nym_colorful_messages', s.colorfulMessages ? '1' : null);
+        });
+        stamped('pubkeyFormat', ['pubkeyFormat'], () => s.pubkeyFormat === 'hex' || s.pubkeyFormat === 'npub', () => {
+            ls('nym_pubkey_format', s.pubkeyFormat);
+        });
+        stamped('voiceSpeed', ['voiceSpeed'], () => (typeof s.voiceSpeed === 'string' || typeof s.voiceSpeed === 'number') && [1, 1.5, 2].indexOf(Number(s.voiceSpeed)) >= 0, () => {
+            ls('nym_voice_speed', this._voiceSpeedWire(s.voiceSpeed));
+            if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function' && window.NymMediaNotes) {
+                document.querySelectorAll('.nym-voice-speed').forEach((b) => { b.textContent = window.NymMediaNotes.speedLabel(Number(s.voiceSpeed)); });
+            }
+        });
+        stamped('keepCallHistory', ['keepCallHistory'], () => typeof s.keepCallHistory === 'boolean', () => {
+            if (typeof this.setKeepCallHistory === 'function') this.setKeepCallHistory(s.keepCallHistory, { fromSync: true, ts: s.keepCallHistoryTs });
+            else ls('nym_keep_call_history', s.keepCallHistory ? null : 'off');
+        });
+        return skipped;
     },
 
     // Lowercased UUID is regex-safe.
@@ -655,8 +783,30 @@ Object.assign(NYM.prototype, {
             }
         } catch (_) { }
 
-        const sections = this._splitSettingsBySection(settingsData);
         const changed = [];
+        try {
+            if (await this._publishCallsRow(now)) changed.push('calls');
+        } catch (_) { }
+        try {
+            const gt = typeof this._buildGroupToolsSync === 'function' ? this._buildGroupToolsSync() : null;
+            if (gt) {
+                const trimGroupTools = (p) => {
+                    const r = p.groupTools.rsvps;
+                    const ids = Object.keys(r || {});
+                    if (ids.length > 1) {
+                        for (const id of ids.slice(Math.max(1, Math.floor(ids.length * 0.75)))) delete r[id];
+                        return true;
+                    }
+                    const gone = p.groupTools.reminders && p.groupTools.reminders.removed;
+                    const keys = Object.keys(gone || {});
+                    if (keys.length) { for (const k of keys) delete gone[k]; return true; }
+                    return false;
+                };
+                if (await this._publishCategoryWrap({ groupTools: gt }, 'nymchat-grouptools', now, [trimGroupTools])) changed.push('grouptools');
+            }
+        } catch (_) { }
+
+        const sections = this._splitSettingsBySection(settingsData);
         for (const [section, rawPayload] of Object.entries(sections)) {
             const dTag = `nymchat-settings-${section}`;
             const payload = this._mergeUnknownSectionKeys(dTag, rawPayload);
@@ -669,6 +819,120 @@ Object.assign(NYM.prototype, {
             }
         }
         await this._publishSettingsChangedPing(changed, now);
+    },
+
+    async _publishCallsRow(now) {
+        const calls = typeof this._chSyncPayload === 'function' ? this._chSyncPayload() : null;
+        if (!calls) return false;
+        if (!calls.on) {
+            if (!this._chDeletePending && !this._hasSyncRow('nymchat-calls')) return false;
+            const gone = await this._deleteSettingsCategory('nymchat-calls');
+            if (gone) this._chDeletePending = false;
+            return gone;
+        }
+        const trimOldestCalls = (p) => {
+            const arr = p.callHistory && p.callHistory.items;
+            if (!Array.isArray(arr) || arr.length <= 1) return false;
+            p.callHistory.items = arr.slice(0, Math.max(1, Math.floor(arr.length * 0.9)));
+            return true;
+        };
+        return this._publishCategoryWrap({ callHistory: calls }, 'nymchat-calls', now, [trimOldestCalls]);
+    },
+
+    async _deleteSettingsCategory(dTag) {
+        if (!this.pubkey || !this._getApiHost || !this._getApiHost()) return false;
+        try {
+            const category = await this._d1Category(dTag);
+            await this._storageApiRequest('settings-delete', { category });
+            try { localStorage.removeItem(`nym_settings_hash_${this.pubkey}_${category}`); } catch (_) { }
+            if (this._lastInboundSections) delete this._lastInboundSections[dTag];
+            if (this._publishedSectionJson) delete this._publishedSectionJson[dTag];
+            return true;
+        } catch (_) {
+            return false;
+        }
+    },
+
+    _hasSyncRow(dTag) {
+        return !!((this._lastInboundSections && this._lastInboundSections[dTag])
+            || (this._publishedSectionJson && this._publishedSectionJson[dTag]));
+    },
+
+    _applySyncExtras(s) {
+        if (!s || typeof s !== 'object') return;
+        if (s.threadLastRead && typeof s.threadLastRead === 'object') this._applyThreadLastReadSync(s.threadLastRead);
+        if (s.seenMarks && typeof s.seenMarks === 'object') this._applySeenMarksSync(s.seenMarks);
+        if (s.callHistory && typeof s.callHistory === 'object' && typeof this._chApplySynced === 'function') this._chApplySynced(s.callHistory);
+        if (s.groupTools && typeof s.groupTools === 'object' && typeof this._applyGroupToolsSync === 'function') this._applyGroupToolsSync(s.groupTools);
+    },
+
+    _threadReadsForSync() {
+        const M = window.NymSyncMerge;
+        if (!M || typeof this._threadLastReadMap !== 'function') return {};
+        return M.tsMapNorm(Object.fromEntries(this._threadLastReadMap()), M.CAPS.threadLastRead);
+    },
+
+    _applyThreadLastReadSync(raw) {
+        const M = window.NymSyncMerge;
+        if (!M || typeof this._threadLastReadMap !== 'function') return;
+        const cur = this._threadReadsForSync();
+        const cutoff = Math.floor(Date.now() / 1000) - 48 * 60 * 60;
+        const merged = M.tsMapMerge(cur, raw, M.CAPS.threadLastRead);
+        const next = {};
+        for (const [k, v] of Object.entries(merged)) if (v > cutoff || cur[k] === v) next[k] = v;
+        if (JSON.stringify(M.tsMapNorm(next)) === JSON.stringify(cur)) return;
+        this.threadLastRead = new Map(Object.entries(next));
+        try { localStorage.setItem('nym_thread_last_read', JSON.stringify(next)); } catch (_) { }
+        let changed = false;
+        if (typeof this._notifThreadRootOf === 'function' && typeof this._notificationConvKey === 'function') {
+            for (const n of (this.notificationHistory || [])) {
+                if (!n || n.viewed) continue;
+                const root = this._notifThreadRootOf(n.channelInfo);
+                const key = this._notificationConvKey(n.channelInfo);
+                const t = root && key ? next[`${key}|${root}`] : 0;
+                if (!t || Math.floor((n.timestamp || 0) / 1000) > t) continue;
+                n.viewed = true;
+                if (typeof this._rememberNotificationSeen === 'function') this._rememberNotificationSeen(n, false);
+                changed = true;
+            }
+        }
+        if (changed) {
+            try {
+                this._saveSeenNotificationKeys();
+                this._saveNotificationHistory();
+                this._updateNotificationBadge();
+                if (typeof this._refreshNotificationsModalIfOpen === 'function') this._refreshNotificationsModalIfOpen();
+            } catch (_) { }
+        }
+        if (typeof this._refreshThreadNewMarks === 'function') { try { this._refreshThreadNewMarks(); } catch (_) { } }
+    },
+
+    _seenMarksForSync() {
+        const N = window.NymChatNav;
+        if (!N || typeof this._cnMarkStore !== 'function') return {};
+        return N.markStoreNorm(this._cnMarkStore());
+    },
+
+    _applySeenMarksSync(raw) {
+        const M = window.NymSyncMerge;
+        const N = window.NymChatNav;
+        if (!M || !N || typeof this._cnMarkStore !== 'function') return;
+        const cur = this._seenMarksForSync();
+        const merged = M.marksMerge(cur, raw);
+        if (JSON.stringify(merged) === JSON.stringify(cur)) return;
+        const store = this._cnMarkStore();
+        for (const k of Object.keys(store)) delete store[k];
+        Object.assign(store, merged);
+        try { localStorage.setItem(this._cnMarkKey(), JSON.stringify(merged)); } catch (_) { }
+        if (typeof this._cnMentions !== 'function') return;
+        let state = this._cnMentions();
+        const keys = [];
+        for (const k of Object.keys(merged)) {
+            if (typeof this._cnContextFor === 'function' && this._cnContextFor(k)) continue;
+            const next = N.mentionMark(state, k, merged[k], Date.now());
+            if (N.mentionCount(next, k) !== N.mentionCount(state, k)) { state = next; keys.push(k); }
+        }
+        if (keys.length) this._cnSetMentions(state, keys);
     },
 
     _onSettingsChangedPing(ping, rumorTs) {
@@ -1213,12 +1477,13 @@ Object.assign(NYM.prototype, {
         if (!this._getApiHost || !this._getApiHost()) return;
         const flush = () => {
             this._readStateSyncTimer = null;
-            if (!this.channelLastRead || this.channelLastRead.size === 0) return;
+            const threadLastRead = this._threadReadsForSync();
+            const seenMarks = this._seenMarksForSync();
             let entries = [];
-            for (const [k, v] of this.channelLastRead) {
+            for (const [k, v] of (this.channelLastRead || [])) {
                 if (typeof k === 'string' && typeof v === 'number' && v > 0) entries.push([k, v]);
             }
-            if (entries.length === 0) return;
+            if (entries.length === 0 && !Object.keys(threadLastRead).length && !Object.keys(seenMarks).length) return;
             // Bound the payload: keep the most-recently-read conversations.
             const MAX_ENTRIES = 2000;
             if (entries.length > MAX_ENTRIES) {
@@ -1227,7 +1492,14 @@ Object.assign(NYM.prototype, {
             }
             const channelLastRead = {};
             for (const [k, v] of entries) channelLastRead[k] = v;
-            this._saveSettingsBlobToD1('nymchat-readstate', JSON.stringify({ channelLastRead }));
+            const payload = this._mergeUnknownSectionKeys('nymchat-readstate', { channelLastRead, threadLastRead, seenMarks });
+            const json = JSON.stringify(payload);
+            if (json === this._readStateJson) return;
+            this._saveSettingsBlobToD1('nymchat-readstate', json).then((ok) => {
+                if (!ok) return;
+                this._readStateJson = json;
+                this._publishSettingsChangedPing(['readstate'], Math.floor(Date.now() / 1000));
+            }).catch(() => { });
         };
         if (immediate) {
             if (this._readStateSyncTimer) { clearTimeout(this._readStateSyncTimer); this._readStateSyncTimer = null; }
@@ -1244,7 +1516,12 @@ Object.assign(NYM.prototype, {
         if (!pubkey) return Promise.resolve('failed');
         const inflight = this._settingsLoadInFlight;
         if (inflight && inflight.pubkey === pubkey) return inflight.promise;
-        const promise = this._settingsLoadFromD1Run(pubkey).finally(() => {
+        const promise = this._settingsLoadFromD1Run(pubkey).then(async (r) => {
+            if (r !== 'failed' && this.pubkey === pubkey && typeof this._chReconcileRow === 'function') {
+                try { await this._chReconcileRow(this._loadedCallsRow); } catch (_) { }
+            }
+            return r;
+        }).finally(() => {
             if (this._settingsLoadInFlight && this._settingsLoadInFlight.promise === promise) {
                 this._settingsLoadInFlight = null;
             }
@@ -1264,6 +1541,7 @@ Object.assign(NYM.prototype, {
         const cats = data && data.categories;
         if (!cats || typeof cats !== 'object') return 'failed';
 
+        this._loadedCallsRow = null;
         // Real category rides inside the blob as __cat; legacy rows fall back to the cleartext column.
         const decoded = [];
         let storedBlobs = 0;
@@ -1279,11 +1557,13 @@ Object.assign(NYM.prototype, {
                 // Kept so a later write can carry forward unknown keys (_mergeUnknownSectionKeys).
                 if (!this._lastInboundSections) this._lastInboundSections = {};
                 this._lastInboundSections[realCat] = { ...payload };
+                if (realCat === 'nymchat-calls') this._loadedCallsRow = (payload.callHistory && typeof payload.callHistory === 'object') ? payload.callHistory : {};
                 decoded.push({ realCat, payload, updatedAt: entry.updatedAt || 0 });
                 return true;
             } catch (_) { return false; }
         };
 
+        if (this._lastInboundSections) delete this._lastInboundSections['nymchat-calls'];
         for (const [cat, entry] of Object.entries(cats)) {
             if (!entry || !entry.blob) continue;
             storedBlobs++;
@@ -1392,6 +1672,19 @@ Object.assign(NYM.prototype, {
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
+    setNotificationSound(sound) {
+        if (!sound) return;
+        this.settings.sound = sound;
+        localStorage.setItem('nym_sound', sound);
+        const settingsSelect = document.getElementById('soundSelect');
+        if (settingsSelect) settingsSelect.value = sound;
+        const panelSelect = document.getElementById('notifSoundSelect');
+        if (panelSelect) panelSelect.value = sound;
+        this._lastSoundPlayedAt = 0;
+        if (typeof this.playSound === 'function') this.playSound(sound);
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+    },
+
     toggleNotifyFriendsOnly(enabled) {
         this.notifyFriendsOnly = enabled;
         localStorage.setItem('nym_notify_friends_only', String(enabled));
@@ -1399,6 +1692,7 @@ Object.assign(NYM.prototype, {
     },
 
     applyTheme(theme) {
+        this._appliedTheme = theme;
         document.body.classList.remove('theme-ghost', 'theme-bitchat');
 
         if (theme === 'ghost') {
@@ -1423,7 +1717,7 @@ Object.assign(NYM.prototype, {
                     primary: '#007a00',
                     secondary: '#007a7a',
                     text: '#006600',
-                    textDim: '#558855',
+                    textDim: '#477247',
                     textBright: '#004d00',
                     lightning: '#c47a15'
                 }
@@ -1438,10 +1732,10 @@ Object.assign(NYM.prototype, {
                     lightning: '#ffa500'
                 },
                 light: {
-                    primary: '#9a6a00',
+                    primary: '#8b5f00',
                     secondary: '#8a7200',
                     text: '#7a5500',
-                    textDim: '#8a7a55',
+                    textDim: '#756848',
                     textBright: '#5a3a00',
                     lightning: '#b87300'
                 }
@@ -1453,7 +1747,8 @@ Object.assign(NYM.prototype, {
                     text: '#ff00ff',
                     textDim: '#DB16DB',
                     textBright: '#ff66ff',
-                    lightning: '#ffaa00'
+                    lightning: '#ffaa00',
+                    fieldPlaceholder: '#e64ce6'
                 },
                 light: {
                     primary: '#990099',
@@ -1477,7 +1772,7 @@ Object.assign(NYM.prototype, {
                     primary: '#007a7a',
                     secondary: '#007a00',
                     text: '#006666',
-                    textDim: '#558888',
+                    textDim: '#467070',
                     textBright: '#004d4d',
                     lightning: '#009955'
                 }
@@ -1495,7 +1790,7 @@ Object.assign(NYM.prototype, {
                     primary: '#333333',
                     secondary: '#555555',
                     text: '#222222',
-                    textDim: '#777777',
+                    textDim: '#696969',
                     textBright: '#000000',
                     lightning: '#999999'
                 }
@@ -1520,7 +1815,7 @@ Object.assign(NYM.prototype, {
             }
         };
 
-        ['--primary', '--secondary', '--text', '--text-dim', '--text-bright', '--lightning'].forEach(v => {
+        ['--primary', '--secondary', '--text', '--text-dim', '--text-bright', '--lightning', '--field-placeholder'].forEach(v => {
             document.documentElement.style.removeProperty(v);
             document.body.style.removeProperty(v);
         });
@@ -1541,6 +1836,40 @@ Object.assign(NYM.prototype, {
             }
         }
         this.refreshMessages();
+        this._emitThemeChange();
+    },
+
+    onThemeChange(fn) {
+        if (typeof fn !== 'function') return () => { };
+        if (!this._themeListeners) this._themeListeners = new Set();
+        this._themeListeners.add(fn);
+        return () => { this._themeListeners.delete(fn); };
+    },
+
+    _emitThemeChange() {
+        if (!this._themeListeners) return;
+        for (const fn of [...this._themeListeners]) {
+            try { fn(); } catch (_) { }
+        }
+    },
+
+    themeToken(name, fallback) {
+        const v = getComputedStyle(document.body).getPropertyValue(name).trim();
+        return v || fallback || '';
+    },
+
+    themeSignature() {
+        return (this._appliedTheme || '') + (document.body.classList.contains('light-mode') ? ':l' : ':d');
+    },
+
+    themeRoots() {
+        const roots = [document];
+        if (this.channelDOMCache) {
+            for (const c of this.channelDOMCache.values()) {
+                if (c && c.fragment) roots.push(c.fragment);
+            }
+        }
+        return roots;
     },
 
     _hexToRgb(hex) {
@@ -1746,3 +2075,15 @@ Object.assign(NYM.prototype, {
     },
 
 });
+
+if (typeof window !== 'undefined') {
+    const SPAM_ACTIONS = (window.NYM_ACTIONS = window.NYM_ACTIONS || {});
+    SPAM_ACTIONS.onSpamFilterChange = function (_e, t) {
+        const n = window.nym;
+        if (n && typeof n.setSpamFilter === 'function') n.setSpamFilter({ enabled: !(t && t.value === 'off') });
+    };
+    SPAM_ACTIONS.onSpamFilterAggressiveChange = function (_e, t) {
+        const n = window.nym;
+        if (n && typeof n.setSpamFilter === 'function') n.setSpamFilter({ aggressive: !(t && t.value === 'off') });
+    };
+}

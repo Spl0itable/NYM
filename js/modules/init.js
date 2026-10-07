@@ -85,6 +85,10 @@ Object.assign(NYM.prototype, {
                     typeof this.refreshUnresolvedPlaces === 'function') {
                     this.refreshUnresolvedPlaces(true);
                 }
+                if (document.visibilityState === 'visible' &&
+                    typeof this._threadMarkOpenSeen === 'function') {
+                    this._threadMarkOpenSeen();
+                }
                 if (document.visibilityState === 'hidden' &&
                     typeof this.flushPendingGroupReactions === 'function') {
                     this.flushPendingGroupReactions();
@@ -116,6 +120,7 @@ Object.assign(NYM.prototype, {
             this.setupVisibilityMonitoring();
 
             this._sidebarSkelTimer = setTimeout(() => this._clearAllSidebarSkel(), 8000);
+            if (typeof this._leBindAll === 'function') this._leBindAll();
 
         } catch (error) {
             this.showNotification('Error', 'Failed to initialize: ' + error.message);

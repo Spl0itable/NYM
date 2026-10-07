@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
@@ -19,6 +20,8 @@ import 'media_note_host.dart';
 import 'media_note_stores.dart';
 import 'media_notes.dart';
 import 'once_crypto.dart';
+import 'voice_note_format.dart';
+import 'voice_note_player.dart';
 
 abstract class OnceReceiptSender {
   Future<void> opened({
@@ -202,7 +205,11 @@ class ViewOnceCard extends ConsumerWidget {
       opaque: false,
       barrierColor: Colors.black.withValues(alpha: 0.92),
       pageBuilder: (_, _, _) =>
-          ViewOnceViewer(bytes: bytes, kind: kind, mime: note.mime),
+          ViewOnceViewer(
+              bytes: bytes,
+              kind: kind,
+              mime: note.mime,
+              prepareSession: ref.read(voiceSessionPrepProvider)),
     ));
   }
 }
@@ -213,11 +220,13 @@ class ViewOnceViewer extends StatefulWidget {
     required this.bytes,
     required this.kind,
     required this.mime,
+    this.prepareSession,
   });
 
   final Uint8List bytes;
   final String kind;
   final String mime;
+  final VoiceSessionPrep? prepareSession;
 
   @override
   State<ViewOnceViewer> createState() => _ViewOnceViewerState();
@@ -227,6 +236,7 @@ class _ViewOnceViewerState extends State<ViewOnceViewer> {
   String? _temp;
   VideoPlayerController? _video;
   AudioPlayer? _audio;
+  bool _unplayable = false;
 
   @override
   void initState() {
@@ -237,7 +247,16 @@ class _ViewOnceViewerState extends State<ViewOnceViewer> {
   }
 
   Future<void> _prepare() async {
-    _temp = await MediaNoteFiles.writeTemp(widget.bytes, widget.mime);
+    final voice = widget.kind == 'video'
+        ? null
+        : voiceFileFor(widget.bytes, widget.mime, defaultTargetPlatform);
+    if (widget.kind != 'video' && voice == null) {
+      if (mounted) setState(() => _unplayable = true);
+      return;
+    }
+    _temp = voice == null
+        ? await MediaNoteFiles.writeTemp(widget.bytes, widget.mime)
+        : await MediaNoteFiles.writeTempExt(voice.bytes, voice.ext);
     if (!mounted) return;
     if (widget.kind == 'video') {
       final c = VideoPlayerController.file(File(_temp!));
@@ -254,7 +273,8 @@ class _ViewOnceViewerState extends State<ViewOnceViewer> {
       final p = AudioPlayer();
       _audio = p;
       try {
-        await p.play(DeviceFileSource(_temp!, mimeType: widget.mime));
+        await widget.prepareSession?.call();
+        await p.play(DeviceFileSource(_temp!, mimeType: voice!.mime));
       } catch (_) {}
       if (mounted) setState(() {});
     }
@@ -281,7 +301,12 @@ class _ViewOnceViewerState extends State<ViewOnceViewer> {
           ? AspectRatio(aspectRatio: v.value.aspectRatio, child: VideoPlayer(v))
           : const CircularProgressIndicator();
     } else {
-      media = const Icon(Icons.graphic_eq, color: Colors.white, size: 64);
+      media = _unplayable
+          ? Text(tr(kVoiceAppleUnplayable),
+              key: const ValueKey('onceUnplayable'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white))
+          : const Icon(Icons.graphic_eq, color: Colors.white, size: 64);
     }
     return Material(
       color: Colors.transparent,

@@ -133,7 +133,7 @@
             const ts = P().nextVoteTs(store[pollId], this.pubkey, nowSec());
             const rumor = this._dpControlRumor(msg, P().voteTags(pollId, idx), P().voteContent(poll.options[idx]), ts);
             if (!rumor) return;
-            window.nymHapticTap && window.nymHapticTap();
+            window.nymHaptic && window.nymHaptic('light');
             store[pollId] = P().applyVote(store[pollId], this.pubkey, idx, ts).entry;
             this._dpSave();
             this._dpRefresh(pollId);

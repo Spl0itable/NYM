@@ -12,6 +12,7 @@ import '../../features/messages/format/message_content.dart' show proxiedMedia;
 import '../../features/messages/inline_network_image.dart'
     show InlineNetworkImage;
 import '../nym_icons.dart' show NymSvgIcon;
+import '../common/nym_tooltip.dart';
 
 enum FormatToolKind { wrap, linePrefix, codeBlock, picker }
 
@@ -418,7 +419,7 @@ class _FormatToolbarIconButtonState extends State<FormatToolbarIconButton> {
     final lit = widget.enabled && (widget.active || _hover);
     final base = lit ? c.primary : c.textDim;
     final color = widget.enabled ? base : base.withValues(alpha: base.a * 0.4);
-    return Tooltip(
+    return NymTooltip(
       message: tr(widget.tooltip),
       child: Semantics(
         button: true,
@@ -583,7 +584,7 @@ class _FormatToolButtonState extends State<_FormatToolButton> {
       }
     }
 
-    return Tooltip(
+    return NymTooltip(
       message: tr(tool.label),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -873,7 +874,7 @@ class _MediaThumb extends StatelessWidget {
                     right: 2,
                     child: GestureDetector(
                       onTap: onRemove,
-                      child: Tooltip(
+                      child: NymTooltip(
                         message: tr('Remove attachment'),
                         child: Container(
                           width: 16,
@@ -896,7 +897,7 @@ class _MediaThumb extends StatelessWidget {
     );
 
     if (!_failed) return tile;
-    return Tooltip(
+    return NymTooltip(
       message: error.isEmpty
           ? tr('Tap to retry')
           : '$error — ${tr('Tap to retry')}',

@@ -35,28 +35,28 @@ Object.assign(NYM.prototype, {
             hash = pubkey.charCodeAt(i) + ((hash << 5) - hash);
         }
         const bucket = Math.abs(hash) % 1000;
-        const isLight = document.body.classList.contains('light-mode');
-        this._ensureBitchatColorSheet(isLight);
-        return `bitchat-user-${isLight ? 'l' : 'd'}${bucket}`;
+        this._ensureBitchatColorSheet();
+        return `bitchat-user-h${bucket}`;
     },
 
-    _ensureBitchatColorSheet(isLight) {
-        const id = isLight ? 'bitchat-colors-l' : 'bitchat-colors-d';
-        if (!this._bitchatColorSheets) this._bitchatColorSheets = {};
-        if (this._bitchatColorSheets[id]) return;
-        const parts = new Array(1000);
-        const tag = isLight ? 'l' : 'd';
-        for (let i = 0; i < 1000; i++) {
+    _ensureBitchatColorSheet() {
+        if (this._bitchatColorSheet) return;
+        const hsl = (i, isLight) => {
             const hue = (i * 360 / 1000) | 0;
             const sat = isLight ? 55 + (i % 35) : 65 + (i % 35);
             const light = isLight ? 25 + (i % 20) : 60 + (i % 25);
-            const cls = `bitchat-user-${tag}${i}`;
-            parts[i] = `.${cls},.${cls} .nym-suffix{color:hsl(${hue},${sat}%,${light}%)!important}`;
+            return `hsl(${hue},${sat}%,${light}%)`;
+        };
+        const parts = new Array(2000);
+        for (let i = 0; i < 1000; i++) {
+            const cls = `bitchat-user-h${i}`;
+            parts[i] = `.${cls},.${cls} .nym-suffix{color:${hsl(i, false)}!important}`;
+            parts[1000 + i] = `body.light-mode .${cls},body.light-mode .${cls} .nym-suffix{color:${hsl(i, true)}!important}`;
         }
         const sheet = new CSSStyleSheet();
         sheet.replaceSync(parts.join(''));
         document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-        this._bitchatColorSheets[id] = sheet;
+        this._bitchatColorSheet = sheet;
     },
 
     isVerifiedDeveloper(pubkey) {
@@ -331,8 +331,10 @@ Object.assign(NYM.prototype, {
     },
 
     togglePubkeyDisplayFormat() {
-        return this.setPubkeyDisplayFormat(
+        const next = this.setPubkeyDisplayFormat(
             this.getPubkeyDisplayFormat() === 'npub' ? 'hex' : 'npub');
+        if (typeof this.notePrefChanged === 'function') this.notePrefChanged('pubkeyFormat');
+        return next;
     },
 
     // Falls back to hex when nostr-tools hasn't loaded or the key isn't encodable.
@@ -583,7 +585,7 @@ Object.assign(NYM.prototype, {
     // Returns a proxied URL for media to hide the user's IP.
     getProxiedMediaUrl(originalUrl) {
         if (this.isOwnMediaUrl(originalUrl)) return originalUrl;
-        const base = this._getProxyBaseUrl();
+        const base = this._mediaProxyBase();
         if (!base) return originalUrl;
         return `${base}?url=${encodeURIComponent(originalUrl)}`;
     },
@@ -591,14 +593,14 @@ Object.assign(NYM.prototype, {
     // The emoji flag tells the proxy to apply a long edge-cache TTL.
     getProxiedEmojiUrl(originalUrl) {
         if (this.isOwnMediaUrl(originalUrl)) return originalUrl;
-        const base = this._getProxyBaseUrl();
+        const base = this._mediaProxyBase();
         if (!base) return originalUrl;
         return `${base}?emoji=1&url=${encodeURIComponent(originalUrl)}`;
     },
 
     _getBlossomUploadUrl(server) {
         const host = server || BLOSSOM_SERVERS[0];
-        const base = this._getProxyBaseUrl();
+        const base = this._mediaProxyBase();
         if (base) {
             return `${base}?action=upload&server=${encodeURIComponent(host)}`;
         }
@@ -606,11 +608,21 @@ Object.assign(NYM.prototype, {
     },
 
     _getBlossomMirrorUrl(server) {
-        const base = this._getProxyBaseUrl();
+        const base = this._mediaProxyBase();
         if (base) {
             return `${base}?action=mirror&server=${encodeURIComponent(server)}`;
         }
         return `${server.replace(/\/$/, '')}/mirror`;
+    },
+
+    _blossomFetch(url, opts) {
+        const base = this._mediaProxyBase();
+        if (base && url.startsWith(base)) return this._edgeFetch(url, opts);
+        return fetch(url, opts);
+    },
+
+    _blossomTypeAllowed(type) {
+        return type === 'application/octet-stream' || ['image/', 'video/', 'audio/'].some(p => type.startsWith(p));
     },
 
     async _signBlossomEvent(hashHex, tType = 'upload') {
@@ -635,12 +647,18 @@ Object.assign(NYM.prototype, {
     },
 
     async _putToBlossom(file, hashHex, server, signal) {
+        const type = this._blossomType(file);
+        if (!this._blossomTypeAllowed(type)) {
+            const err = new Error('Content type not allowed: ' + type);
+            err.status = 415;
+            throw err;
+        }
         const auth = await this._signBlossomEvent(hashHex, 'upload');
-        const resp = await this._edgeFetch(this._getBlossomUploadUrl(server), {
+        const resp = await this._blossomFetch(this._getBlossomUploadUrl(server), {
             method: 'PUT',
             headers: {
                 'Authorization': `Nostr ${auth}`,
-                'Content-Type': this._blossomType(file)
+                'Content-Type': type
             },
             body: file,
             signal
@@ -787,7 +805,7 @@ Object.assign(NYM.prototype, {
         const mirrors = [];
         await Promise.all(remaining.map(async (server) => {
             try {
-                const resp = await this._edgeFetch(this._getBlossomMirrorUrl(server), {
+                const resp = await this._blossomFetch(this._getBlossomMirrorUrl(server), {
                     method: 'PUT',
                     headers: {
                         'Authorization': `Nostr ${auth}`,
@@ -820,8 +838,15 @@ Object.assign(NYM.prototype, {
             for (const pk of missing) { try { this.queueProfileFetch(pk); } catch (_) { } }
             return;
         }
+        const look = (pk) => {
+            const u = this.users.get(pk);
+            return (u ? 'u' + (u.nym || '') : '-') + '|' + ((this.userAvatars && this.userAvatars.get(pk)) || '');
+        };
+        const before = new Map(missing.map(pk => [pk, look(pk)]));
         Promise.all(missing.map(pk => this.fetchProfileDirect(pk).catch(() => { }))).then(() => {
-            if (typeof onResolved === 'function') { try { onResolved(missing); } catch (_) { } return; }
+            const changed = missing.filter(pk => look(pk) !== before.get(pk));
+            if (!changed.length) return;
+            if (typeof onResolved === 'function') { try { onResolved(changed); } catch (_) { } return; }
             if (!rootEl || !rootEl.isConnected) return;
             const wantedLower = new Set(Array.from(wanted).map(pk => pk.toLowerCase()));
             rootEl.querySelectorAll('[data-pubkey]').forEach(row => {
@@ -1210,6 +1235,10 @@ Object.assign(NYM.prototype, {
     async _uploadOneAttachment(rec, signal) {
         if (!rec || !rec.file) return;
         this.updateComposerAttachment(rec.id, { status: 'uploading', error: '' });
+        const UA = window.NymUploadActivity;
+        this._endAttachmentActivity(rec);
+        rec.activity = UA && typeof this.beginChatActivity === 'function'
+            ? this.beginChatActivity(UA.kindForMime(rec.file.type)) : null;
         try {
             const upload = typeof this.prepareAttachmentUpload === 'function'
                 ? await this.prepareAttachmentUpload(rec) : rec.file;
@@ -1237,7 +1266,16 @@ Object.assign(NYM.prototype, {
                 status: 'failed',
                 error: (error && error.message) ? String(error.message).slice(0, 120) : 'Upload failed',
             });
+        } finally {
+            this._endAttachmentActivity(rec);
         }
+    },
+
+    _endAttachmentActivity(rec) {
+        if (!rec || rec.activity == null) return;
+        const token = rec.activity;
+        rec.activity = null;
+        if (typeof this.endChatActivity === 'function') this.endChatActivity(token);
     },
 
     async retryComposerAttachment(id) {
@@ -1319,6 +1357,7 @@ Object.assign(NYM.prototype, {
     getEffectiveUserStatus(pubkey) {
         if (!pubkey) return 'offline';
         // Reflect our own hidden broadcast back to us so disabling clearly works.
+        if (pubkey === this.pubkey && typeof this._awayEnsureRestored === 'function') this._awayEnsureRestored();
         if (pubkey === this.pubkey && this.settings && this.settings.showStatus === false) return 'hidden';
         // A friend sharing their real status privately ("Friends only") overrides the public 'hidden'.
         const sharesWithUs = this.friendsSharingStatus && this.friendsSharingStatus.has(pubkey);

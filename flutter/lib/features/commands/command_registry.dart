@@ -215,6 +215,13 @@ const List<CommandSpec> kCommandSpecs = [
     category: CommandCategory.misc,
   ),
   CommandSpec(
+    id: 'search',
+    name: '/search',
+    desc: 'Search this chat',
+    category: CommandCategory.misc,
+    takesArgs: true,
+  ),
+  CommandSpec(
     id: 'zap',
     name: '/zap',
     desc: 'Zap profile',

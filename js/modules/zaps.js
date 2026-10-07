@@ -1102,7 +1102,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        window.nymHapticTap && window.nymHapticTap();
+        window.nymHaptic && window.nymHaptic('medium');
 
         if (this.currentZapInvoice && this.currentZapInvoice.pr) {
             this._removePendingPurchase(this._pendingZapId(this.currentZapInvoice.pr));

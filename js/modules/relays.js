@@ -7,6 +7,13 @@ const EDGE_CHALLENGE_CONFIRM_MS = 1500;
 const EDGE_CHALLENGE_NOTE_MIN_MS = 30000;
 const HELD_EVENTS_MAX = 16;
 const HELD_EVENTS_MS = 20000;
+const HELD_SENDS_MAX = 200;
+const COMPOSER_CONN_TEXT = {
+    connecting: 'Connecting… messages will send when connected',
+    offline: 'Offline – messages will send when you reconnect',
+    mesh: 'Offline – sending over the Bluetooth mesh'
+};
+const COMPOSER_QUEUED_LABEL = 'Waiting to send';
 const POOL_QUIET_MS = 60000;
 const POOL_PROBE_TIMEOUT_MS = 10000;
 const POOL_RESUME_FRESH_MS = 5000;
@@ -1141,6 +1148,7 @@ Object.assign(NYM.prototype, {
                             console.warn('[NYM] Relay pool failed, falling back to direct connections');
                             this.useRelayProxy = false;
                             this._poolFallbackActive = true;
+                            this._noteAutoFallback();
                             this._schedulePoolReconnectInBackground();
                         }
                     }
@@ -1149,8 +1157,6 @@ Object.assign(NYM.prototype, {
                 if (this.useRelayProxy && poolConnected) {
                     this.connected = true;
                     this._startPoolShardHealthCheck();
-                    document.getElementById('messageInput').disabled = false;
-                    document.getElementById('sendBtn').disabled = false;
                     if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
                     this.updateConnectionStatus();
 
@@ -1165,10 +1171,9 @@ Object.assign(NYM.prototype, {
                     }
 
                     setTimeout(() => {
-                        if (this.settings.chatViewMode === 'columns' && typeof this.applyChatViewMode === 'function') {
-                            this.applyChatViewMode('columns');
-                        }
+                        this._ensureChatViewMode();
                         if (window.pendingChannel || window.urlChannelRouted) return;
+                        if (this._cvActive) return;
                         // Don't override if the user already navigated.
                         if (this.navigationHistory.length > 0) return;
                         if (this.settings.groupChatPMOnlyMode) {
@@ -1272,10 +1277,9 @@ Object.assign(NYM.prototype, {
                 throw new Error('Could not connect to any relay');
             }
 
-            document.getElementById('messageInput').disabled = false;
-            document.getElementById('sendBtn').disabled = false;
             this.connected = true;
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
+            if (typeof this._syncComposerConnHint === 'function') this._syncComposerConnHint();
 
             if (this.messageQueue.length > 0) {
                 const queuedMessages = [...this.messageQueue];
@@ -1300,8 +1304,10 @@ Object.assign(NYM.prototype, {
             try { if (typeof this.ensureAttestBadge === 'function') this.ensureAttestBadge(); } catch (_) { }
 
             setTimeout(() => {
+                this._ensureChatViewMode();
                 // Skip if a URL channel is pending or was already routed.
                 if (window.pendingChannel || window.urlChannelRouted) return;
+                if (this._cvActive) return;
                 // Don't override if the user already navigated.
                 if (this.navigationHistory.length > 0) return;
 
@@ -1375,11 +1381,10 @@ Object.assign(NYM.prototype, {
             this.updateConnectionStatus('Connection Failed');
             this.displaySystemMessage('Failed to connect to relays: ' + error.message);
 
-            document.getElementById('messageInput').disabled = false;
-            document.getElementById('sendBtn').disabled = false;
             if (typeof this._syncComposerVerifying === 'function') this._syncComposerVerifying();
         } finally {
             this.initialConnectionInProgress = false;
+            if (typeof this._syncComposerConnHint === 'function') this._syncComposerConnHint();
         }
     },
 
@@ -1512,6 +1517,29 @@ Object.assign(NYM.prototype, {
         };
         const entry = { timer: setTimeout(closeNow, timeoutMs), close: closeNow };
         this._backfillSubs.set(subId, entry);
+    },
+
+    _relayChannelBackfill(names) {
+        if (this.useRelayProxy || this.inPMMode) return;
+        const key = String(this.currentGeohash || this.currentChannel || '').toLowerCase();
+        if (!key || !Array.isArray(names) || !names.includes(key)) return;
+        if (!this._relayBackfilledChannels) this._relayBackfilledChannels = new Set();
+        if (this._relayBackfilledChannels.has(key)) return;
+        this._relayBackfilledChannels.add(key);
+        const since = Math.floor(Date.now() / 1000) - 86400;
+        const filters = [
+            { kinds: [20000], '#g': [key], since, limit: 200 },
+            { kinds: [23333], '#d': [key], since, limit: 200 }
+        ];
+        this._oneShotReqAcquire(() => {
+            const subId = Math.random().toString(36).substring(2);
+            this._registerBackfillSub(subId, { timeoutMs: 6000 });
+            this._sendChannelReq(subId, filters, key, 'geohash');
+            this._waitForEoseOrTimeout(subId, 6000).then(() => {
+                this._oneShotReqDone();
+                if (typeof this._refreshDirectHistoryNote === 'function') this._refreshDirectHistoryNote([key]);
+            });
+        });
     },
 
     _ensureChannelTypingSub(channelKey, channelType, force) {
@@ -1647,6 +1675,31 @@ Object.assign(NYM.prototype, {
     },
 
     // True on the app's own domain, where the browser can reach wss://relay.nymchat.app directly.
+    _d1Backed() {
+        return !!(this._getApiHost && this._getApiHost()) && !!this.useRelayProxy;
+    },
+
+    _ensureChatViewMode() {
+        if (this._cvActive || !this.settings || this.settings.chatViewMode !== 'columns') return;
+        if (typeof this.applyChatViewMode === 'function') this.applyChatViewMode('columns');
+    },
+
+    _afterTransportSwitch() {
+        this._ephSubscribedPks = new Set();
+        this._lastResubscribeAt = 0;
+        if (this.useRelayProxy && this._isAnyPoolOpen()) {
+            this._poolSubscribe();
+        } else {
+            this._refreshEphemeralSubscriptions();
+            this._resubscribeChannels();
+            this._catchUpLiveGap();
+        }
+        this.retryPendingDMsOnReconnect();
+        this._ensureChatViewMode();
+        if (this._cvActive && typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile(0);
+        this.updateConnectionStatus();
+    },
+
     _getApiHost() {
         try {
             const p = window.location.protocol;
@@ -1675,9 +1728,12 @@ Object.assign(NYM.prototype, {
 
         this.useRelayProxy = false;
         this._poolFallbackActive = true;
+        this._noteAutoFallback();
         console.warn('[NYM] Pool mode disabled, switching to direct relay connections');
 
-        this.reconnectToBroadcastRelays();
+        Promise.resolve(this.reconnectToBroadcastRelays()).catch(() => { }).then(() => {
+            if (!this.useRelayProxy) this._afterTransportSwitch();
+        });
         // Fallback sessions still need geo neighbourhoods for the geo-origin gate.
         this.ensureGeoRelayCoverage();
         if (this.currentGeohash) {
@@ -1729,14 +1785,13 @@ Object.assign(NYM.prototype, {
                     this._bgPoolReconnectAttempts = 0;
                     this._poolFallbackActive = false;
                     console.log('[NYM] Pool mode restored');
+                    this._fallbackNoticeEpisode = false;
                     this._startPoolShardHealthCheck();
-                    this._poolSubscribe();
                     this.relayPool.forEach((relay) => {
                         try { if (relay.ws) relay.ws.close(); } catch (_) { }
                     });
                     this.relayPool.clear();
-                    this.updateConnectionStatus();
-                    this.retryPendingDMsOnReconnect();
+                    this._afterTransportSwitch();
                 })
                 .catch(() => {
                     this._bgPoolReconnectInFlight = false;
@@ -1753,6 +1808,36 @@ Object.assign(NYM.prototype, {
 
         const initialDelay = immediate ? 0 : 15000;
         this._bgPoolReconnectTimer = setTimeout(tryRestore, initialDelay);
+    },
+
+    fallbackNoticeEnabled() {
+        try { return localStorage.getItem('nym_relay_fallback_notice_off') !== 'true'; } catch (_) { return true; }
+    },
+
+    setFallbackNoticeEnabled(on) {
+        try {
+            if (on) localStorage.removeItem('nym_relay_fallback_notice_off');
+            else localStorage.setItem('nym_relay_fallback_notice_off', 'true');
+        } catch (_) { }
+        this._syncFallbackNoticeSelect();
+    },
+
+    _syncFallbackNoticeSelect() {
+        if (typeof document === 'undefined') return;
+        const sel = document.getElementById('fallbackNoticeSelect');
+        if (sel) sel.value = this.fallbackNoticeEnabled() ? 'on' : 'off';
+    },
+
+    _noteAutoFallback() {
+        if (this._userDirectMode || this._fallbackNoticeEpisode) return;
+        this._fallbackNoticeEpisode = true;
+        if (!this.fallbackNoticeEnabled() || typeof this.showToast !== 'function') return;
+        const ui = (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s);
+        this.showToast(ui('Direct relay connections: the proxy was unreachable, so relays can see your IP address. The app will switch back when it recovers.'), {
+            kind: 'info',
+            action: ui("Don't show again"),
+            onAction: () => this.setFallbackNoticeEnabled(false)
+        });
     },
 
     _readUserDirectPref() {
@@ -1775,6 +1860,7 @@ Object.assign(NYM.prototype, {
     },
 
     _initRelayTransportMode() {
+        this._syncFallbackNoticeSelect();
         const host = !!this._getApiHost();
         this._userDirectMode = host && this._readUserDirectPref();
         this.useRelayProxy = host && !this._userDirectMode;
@@ -1810,6 +1896,7 @@ Object.assign(NYM.prototype, {
     async setUserDirectMode(direct) {
         if (!this.canSwitchRelayTransport()) return;
         this._writeUserDirectPref(!!direct);
+        this._fallbackNoticeEpisode = !direct;
         if (direct) {
             this._userDirectMode = true;
             this._poolFallbackActive = false;
@@ -1845,7 +1932,7 @@ Object.assign(NYM.prototype, {
         if (action !== 'direct' && action !== 'proxy') return false;
         if (action === 'direct' && !this._relayDirectAcknowledged()) {
             const ui = (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s);
-            const message = ui("Nymchat will disconnect from the relay pool proxy and connect to each relay directly. Relays will see your IP address, and the proxy's spam filtering won't apply. You can switch back anytime from Network Stats.");
+            const message = ui("Nymchat will disconnect from the relay pool proxy and connect to each relay directly. Images, videos, voice messages, avatars, custom emoji, GIFs and link previews will also load straight from the sites that host them, and uploads will go straight to them. Relays and those sites will see your IP address, and the proxy's spam filtering won't apply. You can switch back anytime from Network Stats.");
             let ok;
             if (typeof window.showAppConfirm === 'function') {
                 const res = await window.showAppConfirm(message, { title: ui('Use direct connections?'), okLabel: ui('Use direct') });
@@ -1891,6 +1978,7 @@ Object.assign(NYM.prototype, {
         for (const [url, entry] of [...this.relayPool]) {
             if (entry && oldWs.has(entry.ws)) this.relayPool.delete(url);
         }
+        if (!this.useRelayProxy) this._afterTransportSwitch();
     },
 
     _getProxiedRelayUrl(relayUrl) {
@@ -2855,7 +2943,7 @@ Object.assign(NYM.prototype, {
         const filters = [];
         const nowSec = Math.floor(Date.now() / 1000);
         const channelMode = !this.settings.groupChatPMOnlyMode;
-        const d1Available = !!(this._getApiHost && this._getApiHost());
+        const d1Available = this._d1Backed();
         const chSince = d1Available ? nowSec : ((typeof channelSince === 'number') ? channelSince : since24h);
         const lim = (n) => d1Available ? 1 : n;
 
@@ -3005,7 +3093,7 @@ Object.assign(NYM.prototype, {
         this._lastPoolSubId = subId;
         // With D1 backfill available, ask relays for a short real-time window only; else 24h.
         const since24h = nowSec - 86400;
-        const d1Available = !!(this._getApiHost && this._getApiHost());
+        const d1Available = this._d1Backed();
         const channelSince = d1Available ? nowSec - 300 : since24h;
         const filters = this._buildCriticalFilters(since24h, channelSince);
         if (isReconnect) this._applyReconnectSince(filters);
@@ -3323,7 +3411,7 @@ Object.assign(NYM.prototype, {
         const subId = Math.random().toString(36).substring(2);
         this._ephemeralSubIds.push(subId);
         const filter = { kinds: [1059], "#p": ephPks };
-        if (this._getApiHost && this._getApiHost()) {
+        if (this._d1Backed()) {
             filter.limit = 1;
         } else {
             filter.since = Math.floor(Date.now() / 1000) - 604800;
@@ -3338,7 +3426,7 @@ Object.assign(NYM.prototype, {
             // Sharded; `filter` stays unsharded because the pool path and shard recycles reuse it.
             this._sendShardedEphemeralReq(subId, ephPks, (keys) => {
                 const f = { kinds: [1059], '#p': keys };
-                if (this._getApiHost && this._getApiHost()) {
+                if (this._d1Backed()) {
                     f.limit = 1;
                 } else {
                     f.since = Math.floor(Date.now() / 1000) - 604800;
@@ -3803,6 +3891,11 @@ Object.assign(NYM.prototype, {
         return `https://${host}/api/proxy`;
     },
 
+    _mediaProxyBase() {
+        if (this._userDirectMode) return null;
+        return this._getProxyBaseUrl();
+    },
+
     // Fetch a JSON resource through the Cloudflare proxy when available.
     async proxiedJsonFetch(targetUrl, opts = {}) {
         const base = this._getProxyBaseUrl();
@@ -3840,7 +3933,7 @@ Object.assign(NYM.prototype, {
 
     // Edge-cached proxy, with a direct Giphy fallback if the worker is unreachable.
     async fetchGiphy({ trending = false, query = '', apiKey }) {
-        const base = this._getProxyBaseUrl();
+        const base = this._mediaProxyBase();
         const directUrl = trending
             ? `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(apiKey)}&limit=20&rating=g`
             : `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&limit=20&rating=g`;
@@ -3893,10 +3986,22 @@ Object.assign(NYM.prototype, {
         return false;
     },
 
+    _heldKept(h) {
+        if (!h || !Array.isArray(h.message) || !h.message[1]) return false;
+        const ev = h.message[1];
+        if (h.kind === 'event' && ev.kind === 0) return true;
+        return !!(this._queuedSends && this._queuedSends.has(ev.id));
+    },
+
     _holdEvent(kind, message) {
         if (!this._heldEvents) this._heldEvents = [];
-        if (this._heldEvents.length >= HELD_EVENTS_MAX) this._heldEvents.shift();
-        this._heldEvents.push({ kind, message, at: Date.now() });
+        const entry = { kind, message, at: Date.now() };
+        const kept = this._heldKept(entry);
+        const same = this._heldEvents.filter((h) => this._heldKept(h) === kept);
+        if (same.length >= (kept ? HELD_SENDS_MAX : HELD_EVENTS_MAX)) {
+            this._heldEvents.splice(this._heldEvents.indexOf(same[0]), 1);
+        }
+        this._heldEvents.push(entry);
     },
 
     _flushHeldEvents() {
@@ -3904,11 +4009,129 @@ Object.assign(NYM.prototype, {
         this._heldEvents = [];
         const now = Date.now();
         for (const h of list) {
-            if (now - h.at > HELD_EVENTS_MS) continue;
+            if (now - h.at > HELD_EVENTS_MS && !this._heldKept(h)) continue;
             if (h.kind === 'dm') this.sendDMToRelays(h.message);
             else this.broadcastEvent(h.message);
         }
         this._dmOutboxDrain();
+        this._syncComposerConnHint();
+    },
+
+    _noteQueuedSend(eventId, domId) {
+        if (!eventId) return;
+        if (!this._queuedSends) this._queuedSends = new Map();
+        const dom = domId || eventId;
+        this._queuedSends.set(eventId, dom);
+        this._paintQueued(dom, true);
+        this._syncComposerConnHint();
+    },
+
+    _settleQueuedSend(eventId) {
+        const q = this._queuedSends;
+        if (!q || !eventId || !q.has(eventId)) return;
+        const dom = q.get(eventId);
+        q.delete(eventId);
+        if (!this._isQueuedDomId(dom)) this._paintQueued(dom, false);
+        this._syncComposerConnHint();
+    },
+
+    _isQueuedDomId(domId) {
+        const q = this._queuedSends;
+        if (!q || !q.size || !domId) return false;
+        for (const v of q.values()) if (v === domId) return true;
+        return false;
+    },
+
+    _paintQueuedEl(el, on) {
+        if (!el) return;
+        el.classList.toggle('msg-queued', !!on);
+        let tag = el.querySelector(':scope > .msg-queued-tag');
+        if (on && !tag) {
+            tag = document.createElement('span');
+            tag.className = 'msg-queued-tag';
+            const label = this._composerQueuedLabel();
+            tag.textContent = typeof this.uiText === 'function' ? this.uiText(label) : label;
+            el.appendChild(tag);
+        } else if (!on && tag) {
+            tag.remove();
+        }
+    },
+
+    _paintQueued(domId, on) {
+        if (typeof document === 'undefined' || !domId) return;
+        const sel = `[data-message-id="${String(domId).replace(/["\\]/g, '\\$&')}"]`;
+        document.querySelectorAll(sel).forEach((el) => this._paintQueuedEl(el, on));
+    },
+
+    _composerConnText(state) {
+        return COMPOSER_CONN_TEXT[state] || '';
+    },
+
+    _composerQueuedLabel() {
+        return COMPOSER_QUEUED_LABEL;
+    },
+
+    _composerConnStateFor(o) {
+        if (o.relayOpen) return '';
+        if (o.meshCarries) return 'mesh';
+        if (o.deviceOffline || o.connectFailed) return 'offline';
+        return 'connecting';
+    },
+
+    _composerConnState() {
+        return this._composerConnStateFor({
+            relayOpen: this._anyRelayOpen(),
+            meshCarries: typeof this.meshShouldCarry === 'function' && !!this.meshShouldCarry(this.currentGeohash || this.currentChannel),
+            deviceOffline: typeof navigator !== 'undefined' && navigator.onLine === false,
+            connectFailed: !this.initialConnectionInProgress && /Failed|Disconnected/.test(this._connStatusText || '')
+        });
+    },
+
+    _syncComposerConnHint() {
+        if (typeof document === 'undefined') return;
+        const el = document.getElementById('composerConnHint');
+        if (!el) return;
+        if (!this._connHintWired && typeof window !== 'undefined') {
+            this._connHintWired = true;
+            const resync = () => this._syncComposerConnHint();
+            window.addEventListener('online', resync);
+            window.addEventListener('offline', resync);
+        }
+        const state = this.pubkey ? this._composerConnState() : '';
+        const raw = this._composerConnText(state);
+        const text = raw && typeof this.uiText === 'function' ? this.uiText(raw) : raw;
+        if (el.textContent !== text) el.textContent = text;
+        el.hidden = !state;
+        this._watchComposerConnHintPlace(el);
+        if (state) this._placeComposerConnHint(el);
+        if (typeof this._syncFloatOffsets === 'function') this._syncFloatOffsets();
+    },
+
+    _watchComposerConnHintPlace(el) {
+        if (this._connHintRO || typeof ResizeObserver === 'undefined') return;
+        const wrapper = el.parentElement;
+        const container = el.closest('.input-container');
+        if (!wrapper || !container) return;
+        this._connHintRO = new ResizeObserver(() => {
+            if (!el.hidden) this._placeComposerConnHint(el);
+        });
+        this._connHintRO.observe(wrapper);
+        this._connHintRO.observe(container);
+    },
+
+    _placeComposerConnHint(el) {
+        const wrapper = el.parentElement;
+        const container = el.closest('.input-container');
+        if (!wrapper || !container) return;
+        const w = wrapper.getBoundingClientRect();
+        const c = container.getBoundingClientRect();
+        const cs = getComputedStyle(container);
+        const innerL = c.left + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0);
+        const innerR = c.right - (parseFloat(cs.borderRightWidth) || 0) - (parseFloat(cs.paddingRight) || 0);
+        const l = (w.left - innerL).toFixed(2) + 'px';
+        const r = (innerR - w.right).toFixed(2) + 'px';
+        if (wrapper.style.getPropertyValue('--conn-hint-l') !== l) wrapper.style.setProperty('--conn-hint-l', l);
+        if (wrapper.style.getPropertyValue('--conn-hint-r') !== r) wrapper.style.setProperty('--conn-hint-r', r);
     },
 
     sendDMToRelays(message, opts) {
@@ -4028,6 +4251,7 @@ Object.assign(NYM.prototype, {
             this._holdEvent('dm', message);
             return 0;
         }
+        if (Array.isArray(message) && message[1]) this._settleQueuedSend(message[1].id);
         this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             const eventObj = Array.isArray(message) && message[0] === 'EVENT' ? message[1] : message;
@@ -4141,6 +4365,7 @@ Object.assign(NYM.prototype, {
             this._holdEvent('event', message);
             return;
         }
+        if (Array.isArray(message) && message[1]) this._settleQueuedSend(message[1].id);
         this._trackSentEventKind(message);
         if (this.useRelayProxy && this._isAnyPoolOpen()) {
             let evt = null;
@@ -4239,6 +4464,10 @@ Object.assign(NYM.prototype, {
         readableRelays.forEach(([url, relay]) => {
             this.subscribeToSingleRelay(url);
         });
+
+        this._refreshEphemeralSubscriptions();
+        this._resubscribeChannels();
+        this._catchUpLiveGap();
 
         this.discoverChannels();
 
@@ -4691,6 +4920,16 @@ Object.assign(NYM.prototype, {
     },
 
     updateConnectionStatus(status) {
+        try {
+            this._renderConnectionStatus(status);
+        } finally {
+            if (typeof this._syncComposerConnHint === 'function') this._syncComposerConnHint();
+        }
+    },
+
+    _renderConnectionStatus(status) {
+        if (status && typeof status === 'string') this._connStatusText = status;
+        else this._connStatusText = '';
         const statusEl = document.getElementById('connectionStatus');
         const dot = document.getElementById('statusDot');
 

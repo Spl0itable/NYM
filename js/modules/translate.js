@@ -161,15 +161,6 @@ Object.assign(NYM.prototype, {
         return sub ? `${this._languageNative(l.code)} — ${sub}` : l.name;
     },
 
-    _languageOptionButton(l, currentCode) {
-        const selected = currentCode === l.code ? ' selected' : '';
-        const sub = this._languageSubtitle(l.code);
-        return `<button class="translate-lang-option nm-tr-6${selected}" data-lang="${l.code}" ` +
-            `data-name="${this.escapeHtml(this._languageSearchKey(l.code, l.name))}">` +
-            `${this.escapeHtml(this._languageNative(l.code))}` +
-            `${sub ? `<span class="translate-lang-sub">${this.escapeHtml(sub)}</span>` : ''}</button>`;
-    },
-
     _getTranslateFavorites() {
         if (!this._translateFavorites) {
             let stored = [];
@@ -275,6 +266,10 @@ Object.assign(NYM.prototype, {
         const plainText = this._manualTrPlainText(content);
         if (!plainText) {
             this.displaySystemMessage('No text to translate.');
+            return;
+        }
+        if (typeof this.aiConsentEnsure === 'function' && !(await this.aiConsentEnsure('translate'))) {
+            this.aiConsentBlocked('translate');
             return;
         }
 
@@ -443,6 +438,10 @@ Object.assign(NYM.prototype, {
     async translatePoll(pollId) {
         const poll = this.polls && this.polls.get && this.polls.get(pollId);
         if (!poll) return;
+        if (typeof this.aiConsentEnsure === 'function' && !(await this.aiConsentEnsure('translate'))) {
+            this.aiConsentBlocked('translate');
+            return;
+        }
         const targetLang = this._effectiveTranslateLanguage();
 
         const msgEl = document.querySelector(`[data-message-id="${pollId}"]`);
@@ -510,6 +509,10 @@ Object.assign(NYM.prototype, {
         const input = document.getElementById('messageInput');
         const text = input.value.trim();
         if (!text) return;
+        if (typeof this.aiConsentEnsure === 'function' && !(await this.aiConsentEnsure('translate'))) {
+            this.aiConsentBlocked('translate');
+            return;
+        }
 
         const btn = document.getElementById('translateInputBtn');
         if (btn) btn.classList.add('translating');
