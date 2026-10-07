@@ -4,7 +4,7 @@ import { getEventHash, schnorr, ipv6Blocked, ipv6NetKey, cacheRateTake, sha256 }
 import { isNymchatClient, clientOriginAllowed } from './_client.js';
 import { closestRelayUrls, loadGeoDirectory } from './_georelays.js';
 import { filterSet, frameHit, eventHit, noteReport } from './_filters.js';
-import { spamEngine, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor } from './_spam.js';
+import { spamEngine, ioReserve, reviewSpamReport, hiddenEventIds, badgeGateRefuses, badgeTierFor } from './_spam.js';
 import { verifyBadge, authorityPubkey } from './_attest.js';
 
 function bytesHex(b) {
@@ -314,7 +314,8 @@ export async function onRequest(context) {
     try { return new URL(req.url).hostname.toLowerCase().slice(0, 120); } catch { return ''; }
   }
   const proxySecret = env && env.NYMCHAT_PROXY_SECRET ? env.NYMCHAT_PROXY_SECRET : null;
-  let gate = await filterSet(env);
+  const filterReserve = () => ioReserve(context);
+  let gate = await filterSet(env, filterReserve);
   const spam = spamEngine(env, context);
   let sockHeld = null;
   let sockHeldPubkey = '';
@@ -412,7 +413,7 @@ export async function onRequest(context) {
       if (serverOpen && server.readyState === 1) {
         server.send(JSON.stringify(['POOL:PING', Date.now()]));
         try { spam.tick(); } catch {}
-        filterSet(env).then((s) => { gate = s; }, () => { });
+        filterSet(env, filterReserve).then((s) => { gate = s; }, () => { });
         runArchive(flushArchive());
         runArchive(flushEmojiArchive());
       } else {

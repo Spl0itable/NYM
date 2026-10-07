@@ -195,7 +195,7 @@
                 const ev = this._etEvent(entry, backlog);
                 d = E().decide(ev, this._etView(), this.eventToastSettings());
                 if (d.toast === 'show') this._etApply(E().add(this._etState || E().emptyState(), ev, Date.now()));
-                else if (d.toast === 'hold') this._etHold(ev);
+                else if (d.toast === 'hold') this._etHold(ev, d.reason);
                 else this._etEntries.delete(ev.eventId);
             } catch (_) {
                 return null;
@@ -203,10 +203,11 @@
             return d;
         },
 
-        _etHold(ev) {
+        _etHold(ev, reason) {
             if (!this._etHeld) this._etHeld = [];
             this._etHeld.push(ev);
             ev.heldAt = Date.now();
+            ev.heldFor = reason || '';
             if (ev.backlog) {
                 if (!this._etBacklogFirst) this._etBacklogFirst = Date.now();
                 this._etBacklogAt = Date.now();
@@ -236,7 +237,7 @@
             const fresh = held.filter((e) => {
                 const n = this._etEntries && this._etEntries.get(e.eventId);
                 if (!n || n.viewed) return false;
-                if (!e.backlog && now - (e.heldAt || now) > E().CONFIG.durationMs) return false;
+                if (!e.backlog && e.heldFor !== 'sheet' && now - (e.heldAt || now) > E().CONFIG.durationMs) return false;
                 const d = E().decide(Object.assign({}, e, { backlog: false, seen: this._etSees(n) }), Object.assign({}, view, { call: false, sheet: false }), s);
                 return d.toast === 'show';
             });

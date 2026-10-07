@@ -32,10 +32,12 @@ let cache = emptySet();
 let previous = null;
 let loading = null;
 let loadingAt = 0;
+let reading = null;
 const forgotten = new Map();
 const FORGOTTEN_MS = REFRESH_MS * 2;
 const FORGOTTEN_MAX = 5000;
 const LOAD_TIMEOUT_MS = 4000;
+const READ_ABANDON_MS = 120000;
 
 function withTimeout(p, ms) {
   let timer = null;
@@ -43,7 +45,7 @@ function withTimeout(p, ms) {
   return Promise.race([Promise.resolve(p).finally(() => { if (timer) clearTimeout(timer); }), limit]);
 }
 
-export function _resetFilterCache() { cache = emptySet(); previous = null; loading = null; loadingAt = 0; forgotten.clear(); }
+export function _resetFilterCache() { cache = emptySet(); previous = null; loading = null; loadingAt = 0; reading = null; forgotten.clear(); }
 
 async function readRows(db) {
   const hit = await edgeCacheGet(NOPE_CACHE_KEY);
@@ -83,16 +85,23 @@ async function readSet(env) {
   return out;
 }
 
-export function filterSet(env) {
+export function filterSet(env, reserve) {
   const now = Date.now();
   if (now - cache.at < REFRESH_MS) return Promise.resolve(cache);
   if (loading && now - loadingAt > LOAD_TIMEOUT_MS + 1000) loading = null;
-  if (!loading) {
-    const p = withTimeout(readSet(env), LOAD_TIMEOUT_MS).then((s) => { if (loading === p) { previous = cache; cache = s; loading = null; } return cache; }, () => { if (loading === p) { loading = null; cache.at = now; } return cache; });
-    loading = p;
-    loadingAt = now;
+  if (!loading && (!reading || now - reading.at >= READ_ABANDON_MS)) {
+    const release = typeof reserve === "function" ? reserve() : () => { };
+    if (release) {
+      const run = { at: now };
+      reading = run;
+      const read = readSet(env);
+      read.then(() => { if (reading === run) reading = null; release(); }, () => { if (reading === run) reading = null; release(); });
+      const p = withTimeout(read, LOAD_TIMEOUT_MS).then((s) => { if (loading === p) { previous = cache; cache = s; loading = null; } return cache; }, () => { if (loading === p) { loading = null; cache.at = now; } return cache; });
+      loading = p;
+      loadingAt = now;
+    }
   }
-  return cache.at ? Promise.resolve(cache) : loading;
+  return cache.at || !loading ? Promise.resolve(cache) : loading;
 }
 
 export function filterSetSync() {

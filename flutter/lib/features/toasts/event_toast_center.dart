@@ -129,7 +129,7 @@ class EventToastCenter extends ChangeNotifier {
     if (d.toast == 'show') {
       _apply(EventToasts.add(_state, ev, _now()));
     } else if (d.toast == 'hold') {
-      _hold(ev);
+      _hold(ev, d.reason);
     } else {
       _targets.remove(ev.eventId);
     }
@@ -137,10 +137,12 @@ class EventToastCenter extends ChangeNotifier {
   }
 
   final Map<String, int> _heldAt = {};
+  final Set<String> _heldForSheet = {};
 
-  void _hold(EventToastEvent ev) {
+  void _hold(EventToastEvent ev, String reason) {
     _held = [..._held, ev];
     _heldAt[ev.eventId] = _now();
+    if (reason == 'sheet') _heldForSheet.add(ev.eventId);
     if (ev.backlog) {
       if (_backlogFirst == 0) _backlogFirst = _now();
       _backlogAt = _now();
@@ -222,6 +224,7 @@ class EventToastCenter extends ChangeNotifier {
       for (final e in held)
         if (_targets.containsKey(e.eventId) &&
             (e.backlog ||
+                _heldForSheet.contains(e.eventId) ||
                 now - (_heldAt[e.eventId] ?? now) <=
                     EventToastConfig.durationMs) &&
             (stillUnread?.call(e.eventId) ?? true) &&
@@ -233,6 +236,7 @@ class EventToastCenter extends ChangeNotifier {
     ];
     for (final e in held) {
       _heldAt.remove(e.eventId);
+      _heldForSheet.remove(e.eventId);
       if (!fresh.contains(e)) _targets.remove(e.eventId);
     }
     if (fresh.isNotEmpty) _apply(EventToasts.addMany(_state, fresh, _now()));
@@ -306,6 +310,7 @@ class EventToastCenter extends ChangeNotifier {
     _held = [];
     _backlogFirst = 0;
     _heldAt.clear();
+    _heldForSheet.clear();
     lastActAt = 0;
     _targets.clear();
     notifyListeners();

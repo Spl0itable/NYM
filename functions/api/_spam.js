@@ -1369,6 +1369,12 @@ function ioGive(ctx) {
   state.ioBusy.set(k, Math.max(0, (state.ioBusy.get(k) || 1) - 1));
 }
 
+export function ioReserve(ctx) {
+  if (!ioTake(ctx)) return null;
+  let given = false;
+  return () => { if (given) return; given = true; ioGive(ctx); };
+}
+
 async function cacheGet(ctx, key) {
   if (!ioTake(ctx)) return undefined;
   const p = Promise.resolve().then(() => edgeCacheGet(key));

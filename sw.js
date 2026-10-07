@@ -193,3 +193,23 @@ self.addEventListener('fetch', (e) => {
         })());
     }
 });
+
+function sameOrigin(c) {
+    try { return new URL(c.url).origin === self.location.origin; } catch (_) { return false; }
+}
+
+self.addEventListener('notificationclick', (e) => {
+    const n = e.notification;
+    const route = n && n.data && n.data.nymRoute ? n.data.nymRoute : null;
+    if (n) n.close();
+    e.waitUntil((async () => {
+        const all = (await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).filter(sameOrigin);
+        let client = all.find((c) => c.focused) || all.find((c) => c.visibilityState === 'visible') || all[0] || null;
+        if (client) {
+            try { client = (await client.focus()) || client; } catch (_) { }
+        } else if (self.clients.openWindow) {
+            try { client = await self.clients.openWindow('/'); } catch (_) { client = null; }
+        }
+        if (client && route) client.postMessage({ type: 'nym-notification-click', route });
+    })());
+});

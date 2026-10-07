@@ -10,6 +10,35 @@ function _clampNotifTs(timestamp, observedAt) {
     return ts > ceiling ? ceiling : ts;
 }
 
+const NYM_NOTIF_ROUTE_KEYS = ['type', 'pubkey', 'groupId', 'channel', 'geohash', 'sourceType', 'sourcePubkey', 'sourceGroupId', 'sourceChannel', 'sourceGeohash'];
+
+function _nymNotifRoute(info, nym) {
+    const r = {};
+    for (const k of NYM_NOTIF_ROUTE_KEYS) {
+        const v = info && info[k];
+        if (typeof v === 'string' && v) r[k] = v;
+    }
+    if (nym) r.nym = nym;
+    return r;
+}
+
+function _nymOpenRouteWhenReady(route, tries) {
+    const n = typeof window !== 'undefined' ? window.nym : null;
+    if (n && n.pubkey && typeof n._notifOpenRoute === 'function') {
+        n._notifOpenRoute(route);
+        return;
+    }
+    if (tries < 60) setTimeout(() => _nymOpenRouteWhenReady(route, tries + 1), 500);
+}
+
+if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof navigator.serviceWorker.addEventListener === 'function') {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+        const d = e && e.data;
+        if (!d || d.type !== 'nym-notification-click' || !d.route) return;
+        _nymOpenRouteWhenReady(d.route, 0);
+    });
+}
+
 Object.assign(NYM.prototype, {
 
     showNotification(title, body, channelInfo = null, timestamp = null) {
@@ -87,43 +116,65 @@ Object.assign(NYM.prototype, {
         }
 
         if ((!toastDecision || toastDecision.system) && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            try {
-                const notification = new Notification(titleToShow, {
-                    body: body,
-                    icon: NYM_NOTIFICATION_ICON,
-                    tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
-                    requireInteraction: false,
-                    data: { channelInfo: channelInfo }
-                });
+            const route = channelInfo ? _nymNotifRoute(channelInfo, lockedChat ? '' : (channelInfo.nym || baseTitle)) : null;
+            this._notifSystemShow(titleToShow, {
+                body: body,
+                icon: NYM_NOTIFICATION_ICON,
+                tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
+                renotify: true,
+                requireInteraction: false,
+                data: route ? { nymRoute: route } : {}
+            }, route);
+        }
 
-                if (channelInfo) {
+    },
+
+    _notifSystemShow(title, opts, route) {
+        const page = () => {
+            try {
+                const notification = new Notification(title, opts);
+                if (route) {
                     notification.onclick = (event) => {
                         event.preventDefault();
                         window.focus();
-
-                        if (channelInfo.type === 'pm') {
-                            this.openUserPM(channelInfo.nym || baseTitle, channelInfo.pubkey);
-                        } else if (channelInfo.type === 'group') {
-                            this.openGroup(channelInfo.groupId);
-                        } else if (channelInfo.type === 'geohash') {
-                            this.switchChannel(channelInfo.channel, channelInfo.geohash);
-                        } else if (channelInfo.type === 'reaction') {
-                            if (channelInfo.sourceType === 'pm' && channelInfo.sourcePubkey) {
-                                this.openUserPM(this.getNymFromPubkey(channelInfo.sourcePubkey), channelInfo.sourcePubkey);
-                            } else if (channelInfo.sourceType === 'group' && channelInfo.sourceGroupId) {
-                                this.openGroup(channelInfo.sourceGroupId);
-                            } else if (channelInfo.sourceType === 'geohash' && channelInfo.sourceGeohash) {
-                                this.switchChannel(channelInfo.sourceChannel, channelInfo.sourceGeohash);
-                            }
-                        }
-
+                        this._notifOpenRoute(route);
                         notification.close();
                     };
                 }
-            } catch (error) {
+            } catch (_) { }
+        };
+        const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+        if (!sw || typeof sw.getRegistration !== 'function') {
+            page();
+            return;
+        }
+        Promise.resolve()
+            .then(() => sw.getRegistration())
+            .then((reg) => {
+                if (!reg || typeof reg.showNotification !== 'function') throw new Error('no registration');
+                return reg.showNotification(title, opts);
+            })
+            .catch(page);
+    },
+
+    _notifOpenRoute(r) {
+        if (!r || typeof r !== 'object') return;
+        const nymOf = (pk) => (typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pk) : '');
+        if (r.type === 'pm') {
+            this.openUserPM(r.nym || nymOf(r.pubkey), r.pubkey);
+        } else if (r.type === 'group') {
+            this.openGroup(r.groupId);
+        } else if (r.type === 'geohash') {
+            this.switchChannel(r.channel, r.geohash);
+        } else if (r.type === 'reaction') {
+            if (r.sourceType === 'pm' && r.sourcePubkey) {
+                this.openUserPM(nymOf(r.sourcePubkey), r.sourcePubkey);
+            } else if (r.sourceType === 'group' && r.sourceGroupId) {
+                this.openGroup(r.sourceGroupId);
+            } else if (r.sourceType === 'geohash' && r.sourceGeohash) {
+                this.switchChannel(r.sourceChannel, r.sourceGeohash);
             }
         }
-
     },
 
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
@@ -1029,6 +1080,35 @@ Object.assign(NYM.prototype, {
         },
     },
 
+    _soundContext() {
+        const AC = typeof window !== 'undefined' ? (window.AudioContext || window.webkitAudioContext) : null;
+        if (!AC) return null;
+        let c = this._audioCtx;
+        if (!c || c.state === 'closed') {
+            try { c = new AC(); } catch (_) { return null; }
+            this._audioCtx = c;
+            this._soundArmResume();
+        }
+        this._soundResume();
+        return c;
+    },
+
+    _soundResume() {
+        const c = this._audioCtx;
+        if (!c || c.state !== 'suspended' || typeof c.resume !== 'function') return;
+        try {
+            const p = c.resume();
+            if (p && typeof p.catch === 'function') p.catch(() => { });
+        } catch (_) { }
+    },
+
+    _soundArmResume() {
+        if (this._soundResumeArmed || typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+        this._soundResumeArmed = true;
+        const wake = () => this._soundResume();
+        for (const t of ['pointerdown', 'keydown', 'touchend']) document.addEventListener(t, wake, { capture: true, passive: true });
+    },
+
     playSound(type) {
         const now = Date.now();
         if (this._lastSoundPlayedAt && now - this._lastSoundPlayedAt < 2000) return;
@@ -1039,7 +1119,8 @@ Object.assign(NYM.prototype, {
         const sound = this.NOTIFICATION_SOUNDS[legacy[type] || type];
         if (!sound) return;
 
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioContext = this._soundContext();
+        if (!audioContext) return;
         let t = audioContext.currentTime;
         for (const note of sound.notes) {
             const gainNode = audioContext.createGain();
