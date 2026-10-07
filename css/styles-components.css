@@ -3487,11 +3487,6 @@ body.is-scrolling ::-webkit-scrollbar-thumb,
         scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
     }
 
-    body.light-mode,
-    body.light-mode * {
-        scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
-    }
-
     body.light-mode.is-scrolling,
     body.light-mode.is-scrolling * {
         scrollbar-color: rgba(0, 0, 0, 0.2) transparent;

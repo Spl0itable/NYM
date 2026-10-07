@@ -486,6 +486,9 @@ class EventToasts {
     return out('show', system, 'show');
   }
 
+  static bool systemWhileOpen(EventToastSettings s, String category) =>
+      !(s.enabled && s.typeOn(category) && s.foreground == 'toast');
+
   static final RegExp _ws = RegExp(r'\s+');
   static final RegExp _trailingWs = RegExp(r'\s+$');
 

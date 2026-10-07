@@ -64,6 +64,7 @@ class NotifyContext {
     this.timestampMs,
     this.conversationKey,
     this.kind = NotificationKind.message,
+    this.presentWhileOpen = true,
   });
 
   final String? senderPubkey;
@@ -92,6 +93,8 @@ class NotifyContext {
 
   /// Which Android channel and alert weight to post under.
   final NotificationKind kind;
+
+  final bool presentWhileOpen;
 }
 
 /// Notification text with quoted lines dropped, so the reply is shown; a quote-only message keeps its content.
@@ -294,6 +297,7 @@ class NotificationsService {
       payload: context.payload,
       conversationKey: context.conversationKey,
       kind: context.kind,
+      presentWhileOpen: context.presentWhileOpen,
     );
     if (soundIsAudible(settings.sound)) {
       unawaited(playSound(settings.sound));

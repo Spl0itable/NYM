@@ -162,6 +162,7 @@ class NotificationService {
     String? payload,
     String? conversationKey,
     NotificationKind kind = NotificationKind.message,
+    bool presentWhileOpen = true,
   }) async {
     if (!isSupported) return;
     await initialize();
@@ -188,12 +189,9 @@ class NotificationService {
       // The lock screen hides decrypted content.
       visibility: NotificationVisibility.private,
     );
-    final iosDetails = DarwinNotificationDetails(
-      presentAlert: true,
-      presentBadge: true,
-      presentSound: true,
-      // iOS groups by thread, keeping a conversation in one stack.
-      threadIdentifier: conversationKey,
+    final iosDetails = darwinDetails(
+      conversationKey: conversationKey,
+      presentWhileOpen: presentWhileOpen,
     );
     final details =
         NotificationDetails(android: androidDetails, iOS: iosDetails);
@@ -205,6 +203,19 @@ class NotificationService {
         notificationDetails: details,
         payload: payload);
   }
+
+  static DarwinNotificationDetails darwinDetails({
+    String? conversationKey,
+    bool presentWhileOpen = true,
+  }) =>
+      DarwinNotificationDetails(
+        presentAlert: presentWhileOpen,
+        presentBanner: presentWhileOpen,
+        presentList: true,
+        presentBadge: true,
+        presentSound: presentWhileOpen,
+        threadIdentifier: conversationKey,
+      );
 
   static Future<void> cancelEverything() async {
     if (!isSupported) return;

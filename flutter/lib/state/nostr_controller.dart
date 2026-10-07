@@ -2187,7 +2187,7 @@ class NostrController {
           backlog: backlog,
         );
     if (!silent && !landsRead) {
-      final notifyContext = NotifyContext(
+      NotifyContext contextFor({bool presentWhileOpen = true}) => NotifyContext(
         senderPubkey: senderPubkey,
         isFriend: isFriend,
         isMention: isMention,
@@ -2200,7 +2200,9 @@ class NostrController {
         isBot: isVerifiedBot(senderPubkey),
         eventId: eventId,
         timestampMs: tsMs,
+        presentWhileOpen: presentWhileOpen,
       );
+      final notifyContext = contextFor();
       final svc = _ref.read(notificationsServiceProvider);
       EventToastDecision? toast;
       if (_ref.read(settingsProvider).notificationsEnabled &&
@@ -2219,7 +2221,10 @@ class NostrController {
           notifyFriendsOnly: _notifyFriendsOnly,
           groupNotifyMentionsOnly: _groupNotifyMentionsOnly,
           threadNotifyMentionsOnly: _threadNotifyMentionsOnly,
-          context: notifyContext,
+          context: contextFor(
+              presentWhileOpen: toast == null ||
+                  EventToasts.systemWhileOpen(
+                      EventToastCenter.instance.settings, toast.category)),
         ));
       }
     }

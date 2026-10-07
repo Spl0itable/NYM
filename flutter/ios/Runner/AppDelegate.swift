@@ -7,6 +7,7 @@ import Security
 import Speech
 import UIKit
 import UniformTypeIdentifiers
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -37,6 +38,7 @@ import UniformTypeIdentifiers
   private var callUUIDs: [String: UUID] = [:]
   private var answeredCalls: Set<UUID> = []
   private var callOnRingEngine: Set<UUID> = []
+  private lazy var shareLinks = ShareLinks { [weak self] in self?.drainShareInbox() }
   private lazy var callProvider: CXProvider = {
     let config = CXProviderConfiguration()
     config.supportsVideo = true
@@ -53,11 +55,36 @@ import UniformTypeIdentifiers
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    UNUserNotificationCenter.current().delegate = self
     excludeMessageStoreFromBackup()
     NotificationCenter.default.addObserver(
       self,
       selector: #selector(shareInboxMayHaveChanged),
       name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(privacyWillResignActive),
+      name: UIApplication.willResignActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(privacyDidBecomeActive),
+      name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(privacyCaptureChanged),
+      name: UIScreen.capturedDidChangeNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(uiSceneDidDisconnect),
+      name: UIScene.didDisconnectNotification,
       object: nil
     )
     drainShareInbox()
@@ -74,6 +101,8 @@ import UniformTypeIdentifiers
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     guard let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "NymchatChannels") else { return }
     channelMessenger = registrar.messenger()
+    shareListening = false
+    registrar.addSceneDelegate(shareLinks)
     registerBackgroundConnectivityChannel()
     registerBackgroundRefreshChannel()
     registerHeartbeatChannel()
@@ -86,6 +115,17 @@ import UniformTypeIdentifiers
     registerShareChannel()
     registerTranscribeChannel()
     registerCallChannel()
+  }
+
+  @objc private func uiSceneDidDisconnect(_ notification: Notification) {
+    channelMessenger = nil
+    backgroundRefreshChannel = nil
+    heartbeatChannel = nil
+    shareChannel = nil
+    shareListening = false
+    privacyChannel = nil
+    callChannel = nil
+    hidePrivacyCover()
   }
 
   private var sceneWindow: UIWindow? {
@@ -188,24 +228,6 @@ import UniformTypeIdentifiers
         result(FlutterMethodNotImplemented)
       }
     }
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(privacyWillResignActive),
-      name: UIApplication.willResignActiveNotification,
-      object: nil
-    )
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(privacyDidBecomeActive),
-      name: UIApplication.didBecomeActiveNotification,
-      object: nil
-    )
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(privacyCaptureChanged),
-      name: UIScreen.capturedDidChangeNotification,
-      object: nil
-    )
   }
 
   private func isScreenCaptured() -> Bool {
@@ -303,18 +325,6 @@ import UniformTypeIdentifiers
     } else {
       pendingShares.append(payload)
     }
-  }
-
-  override func application(
-    _ app: UIApplication,
-    open url: URL,
-    options: [UIApplication.OpenURLOptionsKey: Any] = [:]
-  ) -> Bool {
-    if url.scheme?.lowercased() == "nymchat", url.host?.lowercased() == "share" {
-      drainShareInbox()
-      return true
-    }
-    return super.application(app, open: url, options: options)
   }
 
   private func registerCloudKitBackupChannel() {
@@ -896,6 +906,37 @@ enum Transcriber {
 }
 
 class SceneDelegate: FlutterSceneDelegate {}
+
+final class ShareLinks: NSObject, FlutterSceneLifeCycleDelegate {
+  private let onShare: () -> Void
+
+  init(onShare: @escaping () -> Void) {
+    self.onShare = onShare
+  }
+
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions?
+  ) -> Bool {
+    guard let options = connectionOptions else { return false }
+    return take(options.urlContexts)
+  }
+
+  func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) -> Bool {
+    return take(URLContexts)
+  }
+
+  private func take(_ contexts: Set<UIOpenURLContext>) -> Bool {
+    guard contexts.contains(where: { Self.isShare($0.url) }) else { return false }
+    onShare()
+    return true
+  }
+
+  static func isShare(_ url: URL) -> Bool {
+    return url.scheme?.lowercased() == "nymchat" && url.host?.lowercased() == "share"
+  }
+}
 
 extension AppDelegate: CXProviderDelegate, PKPushRegistryDelegate {
   private static let ringWakeKey = "flutter.nym_ring_wake"

@@ -1194,8 +1194,13 @@ body.light-mode ::-webkit-scrollbar-track {
 }
 
 body.light-mode ::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.12);
+    background: transparent;
     border-radius: 10px;
+}
+
+body.light-mode.is-scrolling ::-webkit-scrollbar-thumb,
+body.light-mode *:hover>::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
 }
 
 body.light-mode ::-webkit-scrollbar-thumb:hover {
