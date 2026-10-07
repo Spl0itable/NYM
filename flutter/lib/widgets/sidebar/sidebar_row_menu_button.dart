@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/i18n/i18n.dart';
+import '../common/hit_slop.dart';
 import '../common/nym_focusable.dart';
 import '../nym_icons.dart';
 import 'sidebar_chrome.dart';
@@ -46,6 +47,7 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
       onPointerCancel: (_) => setState(() => _down = false),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
+        excludeFromSemantics: true,
         onTap: _show,
         child: SizedBox(
           key: const ValueKey('rowMenuHit'),
@@ -54,7 +56,8 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
             alignment: Alignment.centerRight,
             child: Padding(
               padding: const EdgeInsets.only(right: kSidebarMenuInset),
-              child: NymFocusable(
+              child: HitSlop(
+                child: NymFocusable(
                 onActivate: _show,
                 label: widget.semanticLabel,
                 tooltip: tr('More'),
@@ -82,6 +85,7 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
                       ),
                     ),
                   ),
+                ),
                 ),
               ),
             ),

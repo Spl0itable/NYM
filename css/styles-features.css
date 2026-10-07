@@ -6408,6 +6408,11 @@ body.light-mode .mesh-row.mesh-tappable:hover {
     max-width: 480px;
 }
 
+.user-sheet-modal.is-sheet > .sheet-panel > .sheet-grabber {
+    margin-left: 0;
+    margin-right: 0;
+}
+
 .user-sheet-modal .user-sheet-close,
 .user-sheet-modal .context-menu.in-sheet .context-menu-close {
     display: none;

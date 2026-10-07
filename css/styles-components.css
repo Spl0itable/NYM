@@ -2770,12 +2770,18 @@ body.chat-bubbles .crypto-lock-irc {
 
 .gx-controls {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    top: 8px;
+    right: 8px;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    padding: 4px;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 16px;
     z-index: 12;
+    max-height: calc(100% - 16px);
+    overflow-y: auto;
+    scrollbar-width: none;
 }
 
 .gx-ctl {
@@ -3170,6 +3176,10 @@ body.light-mode .gx-layers,
 body.light-mode .gx-lists,
 body.light-mode .geohash-info-panel {
     background: rgba(255, 255, 255, 0.96);
+}
+
+body.light-mode .gx-controls {
+    background: rgba(255, 255, 255, 0.6);
 }
 
 body.light-mode .gx-ctl:hover,
@@ -4594,4 +4604,72 @@ body.light-mode .settings-nav-item:hover {
     border-radius: 6px;
     color: var(--text);
     background: rgba(255, 255, 255, 0.04);
+}
+
+
+:where(.nym-toast-close, .btn-small, [data-action="resetColumnView"], .emoji-category-fav-btn) {
+    position: relative;
+}
+
+:where(.nym-toast-close, .btn-small, [data-action="resetColumnView"], .emoji-category-fav-btn)::after {
+    content: "";
+    position: absolute;
+    inset: min(0px, calc(50% - 12px));
+}
+
+.form-range {
+    height: 24px;
+    margin-block: -10px;
+    background: linear-gradient(var(--glass-border), var(--glass-border)) center / 100% 4px no-repeat;
+}
+
+@media (pointer: coarse) {
+    :where(.acct-switch-btn, .section-icon-btn, .sidebar-edit-btn, .nym-toast-close, .uh-phone-menu, .mobile-notif-toggle, .emoji-input-btn, .modal-close, .shop-close, .context-menu-close, .notif-prefs-btn, .msg-sheet-emoji, .msg-sheet-more, .color-mode-btn, .btn-small, .icon-btn, .send-btn, .shop-buy-btn, .pubkey-slideout-copy, .avatar-upload-btn, .acct-row-btn, .picker-tab, .emoji-category-fav-btn, .group-ctx-more, .status-indicator, .ch-tab, .nick-logout-btn, summary.nm-clickable, [data-action="resetColumnView"], [data-action="restorePurchasesFromInput"], header.chat-header .uh-actions > button) {
+        position: relative;
+    }
+
+    :where(.acct-switch-btn, .section-icon-btn, .sidebar-edit-btn, .nym-toast-close, .uh-phone-menu, .mobile-notif-toggle, .emoji-input-btn, .modal-close, .shop-close, .context-menu-close, .notif-prefs-btn, .msg-sheet-emoji, .msg-sheet-more, .color-mode-btn, .btn-small, .icon-btn, .send-btn, .shop-buy-btn, .pubkey-slideout-copy, .avatar-upload-btn, .acct-row-btn, .picker-tab, .emoji-category-fav-btn, .group-ctx-more, .status-indicator, .ch-tab, .nick-logout-btn, summary.nm-clickable, [data-action="resetColumnView"], [data-action="restorePurchasesFromInput"], header.chat-header .uh-actions > button)::after {
+        content: "";
+        position: absolute;
+        inset: min(0px, calc(50% - 22px));
+    }
+
+    .shop-tab::before {
+        content: "";
+        position: absolute;
+        inset: min(0px, calc(50% - 22px));
+    }
+
+    .nav-title .section-icon-btn + .section-icon-btn {
+        margin-left: 10px;
+    }
+
+    header.chat-header .uh-actions {
+        gap: 4px;
+    }
+
+    header.chat-header .mobile-header-actions {
+        margin-left: 2px;
+    }
+
+    .is-sheet :is(.modal-close, .shop-close, .notif-prefs-btn, .context-menu-close) {
+        z-index: 12;
+    }
+
+    #notificationsModal .modal-content > .notif-prefs-btn {
+        right: 56px;
+        z-index: 12;
+    }
+
+    .context-menu-item {
+        min-height: 44px;
+        padding-top: 13px;
+        padding-bottom: 13px;
+    }
+
+    .form-range {
+        height: 44px;
+        margin-block: -20px;
+        background: linear-gradient(var(--glass-border), var(--glass-border)) center / 100% 4px no-repeat;
+    }
 }

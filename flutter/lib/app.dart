@@ -37,6 +37,7 @@ import 'services/platform/deep_links.dart';
 import 'state/app_state.dart';
 import 'state/nostr_controller.dart';
 import 'state/settings_provider.dart';
+import 'widgets/common/hit_slop.dart';
 import 'widgets/common/nym_tooltip.dart';
 import 'widgets/common/toast_host.dart';
 
@@ -379,7 +380,8 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
           ),
           child: NymTooltipWarmth(
             child: PrivacyShield(
-                child: ToastHost(child: child ?? const SizedBox.shrink())),
+                child: HitSlopScope(
+                    child: ToastHost(child: child ?? const SizedBox.shrink()))),
           ),
         );
       },

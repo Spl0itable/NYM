@@ -32,7 +32,16 @@ class CryptoVerifiedBadge extends StatelessWidget {
       // Margin outside the box so the popup anchors on the lock itself.
       padding: const EdgeInsets.only(left: 4),
       child: Builder(
-        builder: (anchorContext) => GestureDetector(
+        builder: (anchorContext) => Semantics(
+          button: true,
+          label: switch (state) {
+            CryptoVerifyState.verified => tr('Cryptographically verified'),
+            CryptoVerifyState.unknown => tr('Verification unknown'),
+            CryptoVerifyState.unverified => tr('Unverified sender'),
+          },
+          onTap: () => showVerificationPopup(anchorContext, state),
+          excludeSemantics: true,
+          child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => showVerificationPopup(anchorContext, state),
           child: SizedBox(
@@ -40,6 +49,7 @@ class CryptoVerifiedBadge extends StatelessWidget {
             height: size,
             child: CustomPaint(painter: _LockPainter(state, _color(context))),
           ),
+        ),
         ),
       ),
     );

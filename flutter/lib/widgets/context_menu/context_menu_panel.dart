@@ -40,6 +40,7 @@ import 'interaction_hooks.dart';
 import 'menu_layer.dart';
 import 'profile_badges.dart';
 import 'report_modal.dart';
+import '../common/hit_slop.dart';
 
 CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
   final self = s.selfPubkey;
@@ -1032,7 +1033,7 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final color = _hover ? c.primary : c.textDim;
-    return MouseRegion(
+    return HitSlop(child: MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       cursor: SystemMouseCursors.click,
@@ -1056,7 +1057,7 @@ class _CopyPubkeyRowState extends State<_CopyPubkeyRow> {
           ),
         ),
       ),
-    );
+    ));
   }
 }
 
@@ -1113,6 +1114,9 @@ class _ActionItemState extends State<_ActionItem> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
+          constraints: touchPlatform()
+              ? const BoxConstraints(minHeight: kMinTouchTarget)
+              : null,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: _hover
@@ -1159,7 +1163,7 @@ class _CtxCloseButtonState extends State<CtxCloseButton> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return MouseRegion(
+    return HitSlop(child: Semantics(button: true, label: tr('Close'), onTap: widget.onTap, excludeSemantics: true, child: MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       cursor: SystemMouseCursors.click,
@@ -1190,7 +1194,7 @@ class _CtxCloseButtonState extends State<CtxCloseButton> {
                   : (c.isLight ? const Color(0x80000000) : c.textDim)),
         ),
       ),
-    );
+    )));
   }
 }
 
@@ -1207,7 +1211,7 @@ class _BackButtonState extends State<_BackButton> {
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
+    return HitSlop(child: Semantics(button: true, label: tr('Back'), onTap: widget.onTap, excludeSemantics: true, child: MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       cursor: SystemMouseCursors.click,
@@ -1228,7 +1232,7 @@ class _BackButtonState extends State<_BackButton> {
               size: 18, color: Colors.white),
         ),
       ),
-    );
+    )));
   }
 }
 

@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../i18n/i18n.dart';
@@ -113,7 +114,7 @@ class ModalChrome {
     return Positioned(
       top: 14,
       right: 14,
-      child: _CloseChip(c: c, onTap: onTap),
+      child: HitSlop(child: _CloseChip(c: c, onTap: onTap)),
     );
   }
 
@@ -127,13 +128,15 @@ class ModalChrome {
     bool large = false,
     Widget? child,
   }) {
-    final btn = _SendButton(
-      c: c,
-      label: label,
-      onTap: onTap,
-      danger: danger,
-      large: large,
-      child: child,
+    final btn = HitSlop(
+      child: _SendButton(
+        c: c,
+        label: label,
+        onTap: onTap,
+        danger: danger,
+        large: large,
+        child: child,
+      ),
     );
     return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
   }
@@ -141,7 +144,8 @@ class ModalChrome {
   /// Bordered translucent uppercase pill; [height] pins it to match the 42px send button beside it.
   static Widget iconButton(NymColors c, String label, VoidCallback? onTap,
       {double? height}) {
-    return _IconButton(c: c, label: label, onTap: onTap, height: height);
+    return HitSlop(
+        child: _IconButton(c: c, label: label, onTap: onTap, height: height));
   }
 
   static Widget formLabel(NymColors c, String text) {

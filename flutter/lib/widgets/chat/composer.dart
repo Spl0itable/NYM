@@ -3096,6 +3096,7 @@ class _ComposerState extends ConsumerState<Composer> {
         Positioned.fill(
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
+            excludeFromSemantics: true,
             onTap: onDismiss,
           ),
         ),

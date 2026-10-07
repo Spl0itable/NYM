@@ -548,24 +548,56 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     });
   }
 
+  String _clusterKey = '';
+  List<GeoWorldCluster> _clusterCache = const [];
+
+  List<GeoWorldCluster> _worldClusters(
+      Size size, List<GeohashChannelPoint> channels) {
+    final b = StringBuffer(
+        '${(_view.zoom * kGeoClusterZoomSteps).floor()}|${size.width}|${size.height}');
+    for (final c in channels) {
+      b.write('|${c.geohash}:${c.lat}:${c.lng}:${c.messages}');
+    }
+    final key = b.toString();
+    if (key != _clusterKey) {
+      _clusterKey = key;
+      _clusterCache = clusterGeoChannels([
+        for (final c in channels)
+          GeoClusterInput(
+              id: c.geohash, lat: c.lat, lng: c.lng, messages: c.messages),
+      ], _view.zoom, size);
+    }
+    return _clusterCache;
+  }
+
   List<GeoCluster> _clusters(Size size, List<GeohashChannelPoint> channels) {
     if (_heatmap || _view.zoom >= kGeoClusterMaxZoom) return const [];
-    return clusterGeoPoints([
-      for (final c in channels)
+    return [
+      for (final k in _worldClusters(size, channels))
         () {
-          final p = _view.project(c.lng, c.lat, size);
-          return GeoClusterPoint(
-              id: c.geohash, x: p.dx, y: p.dy, messages: c.messages);
+          final p = _view.project(k.lng, k.lat, size);
+          return GeoCluster(
+              ids: k.ids,
+              x: p.dx,
+              y: p.dy,
+              count: k.count,
+              messages: k.messages);
         }(),
-    ], kGeoClusterCellPx.toDouble());
+    ];
   }
 
   GeoCluster? _clusterAt(Offset local, Size size) {
+    GeoCluster? hit;
+    var best = double.infinity;
     for (final k in _clusters(size, _channels())) {
       if (k.count < 2) continue;
-      if ((Offset(k.x, k.y) - local).distance <= 22) return k;
+      final d = (Offset(k.x, k.y) - local).distance;
+      if (d <= k.r + 4 && d < best) {
+        best = d;
+        hit = k;
+      }
     }
-    return null;
+    return hit;
   }
 
   GeohashChannelPoint? _channelAt(Offset local, Size size) {
@@ -962,11 +994,21 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                 ),
               ),
               Positioned(
-                top: inset,
-                right: inset,
+                top: inset - 4,
+                right: inset - 4,
                 child: KeyedSubtree(
                   key: _controlsKey,
-                  child: _controlColumn(size, columnGap),
+                  child: Container(
+                    key: const ValueKey('geo-ctl-backdrop'),
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: context.nym.isLight
+                          ? const Color(0x99FFFFFF)
+                          : const Color(0x8C000000),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: _controlColumn(size, columnGap),
+                  ),
                 ),
               ),
               if (_layersOpen)
@@ -1225,6 +1267,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
         },
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
           onTapUp: (d) => _onTapUp(d, size),
           onScaleStart: (d) {
             if (_fly.isAnimating) _fly.stop();

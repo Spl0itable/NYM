@@ -9,6 +9,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../core/utils/secret_screen.dart';
 import '../../state/nostr_controller.dart';
+import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
@@ -110,35 +111,37 @@ class _AccountSwitchButtonState extends ConsumerState<AccountSwitchButton> {
         ),
       ),
     );
-    return Semantics(
-      container: true,
-      button: true,
-      label: label,
-      excludeSemantics: true,
-      onTap: () => showAccountSwitcher(context),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            NymTooltip(message: label, child: row),
-            if (_focus && FocusManager.instance.highlightMode ==
-                FocusHighlightMode.traditional)
-              Positioned(
-                left: -3,
-                top: -3,
-                right: -3,
-                bottom: -3,
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: c.secondary, width: 2),
-                      borderRadius: NymRadius.rsm,
+    return HitSlop(
+      child: Semantics(
+        container: true,
+        button: true,
+        label: label,
+        excludeSemantics: true,
+        onTap: () => showAccountSwitcher(context),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              NymTooltip(message: label, child: row),
+              if (_focus && FocusManager.instance.highlightMode ==
+                  FocusHighlightMode.traditional)
+                Positioned(
+                  left: -3,
+                  top: -3,
+                  right: -3,
+                  bottom: -3,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: c.secondary, width: 2),
+                        borderRadius: NymRadius.rsm,
+                      ),
                     ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

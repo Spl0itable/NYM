@@ -18,7 +18,9 @@ Object.assign(NYM.prototype, {
                     const swipeDistance = touch.clientX - this.swipeStartX;
 
                     if (swipeDistance > this.swipeThreshold) {
-                        if (!document.getElementById('sidebar').classList.contains('open')) this.toggleSidebar();
+                        const listOpen = document.getElementById('sidebar').classList.contains('open');
+                        if (!listOpen && this._meshPageOpen && typeof this.meshBackToList === 'function') this.meshBackToList();
+                        else if (!listOpen) this.toggleSidebar();
                         this.swipeStartX = null;
                     }
                 }

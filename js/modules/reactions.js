@@ -539,6 +539,14 @@ Object.assign(NYM.prototype, {
             badge.className = hasReacted ? 'reaction-badge user-reacted' : 'reaction-badge';
             badge.dataset.emoji = emoji;
             badge.dataset.messageId = messageId;
+            badge.setAttribute('role', 'button');
+            badge.setAttribute('aria-pressed', hasReacted ? 'true' : 'false');
+            badge.tabIndex = 0;
+            badge.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                badge.click();
+            });
 
             badge.innerHTML = `${this.renderReactionEmoji(emoji)} ${this.abbreviateNumber(reactors.size)}`;
 
@@ -601,10 +609,18 @@ Object.assign(NYM.prototype, {
 </svg>
 `;
         addBtn.title = 'Add reaction';
+        addBtn.setAttribute('role', 'button');
+        addBtn.setAttribute('aria-label', typeof this.uiText === 'function' ? this.uiText('Add reaction') : 'Add reaction');
+        addBtn.tabIndex = 0;
         addBtn.onclick = (e) => {
             e.stopPropagation();
             this.showEnhancedReactionPicker(messageId, addBtn);
         };
+        addBtn.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            addBtn.click();
+        });
         reactionsRow.appendChild(addBtn);
 
         if (wasAtBottom) {

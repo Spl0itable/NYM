@@ -943,10 +943,11 @@ Object.assign(NYM.prototype, {
     _cvBuildTabsView() {
         const overlay = document.createElement('div');
         overlay.className = 'cv-tabs-overlay';
+        overlay.setAttribute('data-sheet', '');
         overlay.innerHTML =
             '<div class="cv-tabs-sheet">' +
-            '<div class="cv-tabs-head"><span>Columns</span>' +
-            '<button class="cv-tabs-close" aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>' +
+            '<div class="cv-tabs-head" data-sheet-handle><span>Columns</span>' +
+            '<button class="cv-tabs-close" data-sheet-close aria-label="Close"><svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>' +
             '<div class="cv-tabs-list"></div>' +
             '<button class="cv-tabs-add">+ Add column</button>' +
             '</div>';

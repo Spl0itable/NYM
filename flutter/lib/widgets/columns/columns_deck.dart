@@ -49,6 +49,7 @@ import '../context_menu/profile_badges.dart';
 import '../nym_icons.dart';
 import '../../features/chat_lock/chat_lock_providers.dart';
 import '../common/nym_field.dart';
+import '../common/nym_sheet.dart';
 import '../common/nym_tooltip.dart';
 
 final ValueNotifier<double> cvColumnWidth =
@@ -982,16 +983,9 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
 
   /// Tabs sheet; reorders and removals commit immediately, so dismissing never discards anything.
   Future<void> _openTabsView() async {
-    // The PWA overlay has no transition, so this pops in and out instantly.
-    final result = await showGeneralDialog<_TabsResult>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: tr('Columns'),
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      transitionDuration: Duration.zero,
-      pageBuilder: (ctx, _, _) => Material(
-        type: MaterialType.transparency,
-        child: _TabsSheet(
+    final sheet = useNymSheet(context);
+    Widget tabs(BuildContext ctx) => _TabsSheet(
+          sheet: sheet,
           columns: List<_ColumnDesc>.from(_columns),
           activeDesc: (_focused >= 0 && _focused < _columns.length)
               ? _columns[_focused]
@@ -1011,9 +1005,26 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
             _removeColumn(d);
             return !_columns.contains(d);
           },
-        ),
-      ),
-    );
+        );
+    final barrier = Colors.black.withValues(alpha: 0.5);
+    final result = sheet
+        ? await showNymBottomSheet<_TabsResult>(
+            context,
+            tabs,
+            barrierColor: barrier,
+            dragAnywhere: false,
+          )
+        : await showGeneralDialog<_TabsResult>(
+            context: context,
+            barrierDismissible: true,
+            barrierLabel: tr('Columns'),
+            barrierColor: barrier,
+            transitionDuration: Duration.zero,
+            pageBuilder: (ctx, _, _) => Material(
+              type: MaterialType.transparency,
+              child: tabs(ctx),
+            ),
+          );
     if (result == null || !mounted) return;
     switch (result.action) {
       case _TabsAction.select:
@@ -2754,6 +2765,7 @@ class _TabsResult {
 
 class _TabsSheet extends StatefulWidget {
   const _TabsSheet({
+    this.sheet = false,
     required this.columns,
     required this.activeDesc,
     required this.titleOf,
@@ -2762,6 +2774,7 @@ class _TabsSheet extends StatefulWidget {
     required this.onRemove,
   });
 
+  final bool sheet;
   final List<_ColumnDesc> columns;
   final _ColumnDesc? activeDesc;
   final Widget Function(_ColumnDesc) titleOf;
@@ -2785,9 +2798,110 @@ class _TabsSheetState extends State<_TabsSheet> {
     _local = List<_ColumnDesc>.from(widget.columns);
   }
 
+  Widget _header(BuildContext context, NymColors c) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: c.glassBorder)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              tr('Columns'),
+              style: TextStyle(
+                color: c.primary,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          _HoverCloseButton(
+            tooltip: tr('Close'),
+            size: 18,
+            padding: const EdgeInsets.all(4),
+            hoverColor: c.textBright,
+            onTap: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _content(BuildContext context, NymColors c) => [
+        Flexible(
+          child: ReorderableListView.builder(
+            shrinkWrap: true,
+            buildDefaultDragHandles: false,
+            padding: const EdgeInsets.all(8),
+            itemCount: _local.length,
+            proxyDecorator: (child, index, animation) {
+              final d = _local[index];
+              return Material(
+                type: MaterialType.transparency,
+                child: _TabRow(
+                  index: index,
+                  active: widget.activeDesc == d,
+                  dragging: true,
+                  icon: widget.iconOf(d),
+                  title: widget.titleOf(d),
+                  onTap: () {},
+                  onClose: () {},
+                ),
+              );
+            },
+            onReorderItem: (oldIndex, newIndex) {
+              setState(() {
+                final moved = _local.removeAt(oldIndex);
+                _local.insert(newIndex, moved);
+              });
+              widget.onReorder(oldIndex, newIndex);
+            },
+            itemBuilder: (context, i) {
+              final desc = _local[i];
+              return _TabRow(
+                key: ValueKey('cvtab_${desc.key}'),
+                index: i,
+                active: widget.activeDesc == desc,
+                icon: widget.iconOf(desc),
+                title: widget.titleOf(desc),
+                onTap: () =>
+                    Navigator.of(context).pop(_TabsResult.select(desc)),
+                onClose: () async {
+                  final removed = await widget.onRemove(desc);
+                  if (removed && mounted) {
+                    setState(() => _local.remove(desc));
+                  }
+                },
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(8),
+          child: _AddColumnButton(
+            c: c,
+            width: double.infinity,
+            height: 44,
+            hoverFill: false,
+            onTap: () =>
+                Navigator.of(context).pop(const _TabsResult.add()),
+          ),
+        ),
+      ];
+
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    if (widget.sheet) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          NymSheetDragRegion(child: _header(context, c)),
+          ..._content(context, c),
+        ],
+      );
+    }
     final size = MediaQuery.of(context).size;
     // Desktop centers the sheet with a 70vh cap; below 769px it is a 75vh bottom sheet.
     final desktop = size.width >= 769;
@@ -2819,93 +2933,8 @@ class _TabsSheetState extends State<_TabsSheet> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  decoration: BoxDecoration(
-                    border: Border(bottom: BorderSide(color: c.glassBorder)),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          tr('Columns'),
-                          style: TextStyle(
-                            color: c.primary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                      _HoverCloseButton(
-                        tooltip: tr('Close'),
-                        size: 18,
-                        padding: const EdgeInsets.all(4),
-                        hoverColor: c.textBright,
-                        onTap: () => Navigator.of(context).pop(),
-                      ),
-                    ],
-                  ),
-                ),
-                Flexible(
-                  child: ReorderableListView.builder(
-                    shrinkWrap: true,
-                    buildDefaultDragHandles: false,
-                    padding: const EdgeInsets.all(8),
-                    itemCount: _local.length,
-                    proxyDecorator: (child, index, animation) {
-                      final d = _local[index];
-                      return Material(
-                        type: MaterialType.transparency,
-                        child: _TabRow(
-                          index: index,
-                          active: widget.activeDesc == d,
-                          dragging: true,
-                          icon: widget.iconOf(d),
-                          title: widget.titleOf(d),
-                          onTap: () {},
-                          onClose: () {},
-                        ),
-                      );
-                    },
-                    onReorderItem: (oldIndex, newIndex) {
-                      setState(() {
-                        final moved = _local.removeAt(oldIndex);
-                        _local.insert(newIndex, moved);
-                      });
-                      widget.onReorder(oldIndex, newIndex);
-                    },
-                    itemBuilder: (context, i) {
-                      final desc = _local[i];
-                      return _TabRow(
-                        key: ValueKey('cvtab_${desc.key}'),
-                        index: i,
-                        active: widget.activeDesc == desc,
-                        icon: widget.iconOf(desc),
-                        title: widget.titleOf(desc),
-                        onTap: () =>
-                            Navigator.of(context).pop(_TabsResult.select(desc)),
-                        onClose: () async {
-                          final removed = await widget.onRemove(desc);
-                          if (removed && mounted) {
-                            setState(() => _local.remove(desc));
-                          }
-                        },
-                      );
-                    },
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: _AddColumnButton(
-                    c: c,
-                    width: double.infinity,
-                    height: 44,
-                    hoverFill: false,
-                    onTap: () =>
-                        Navigator.of(context).pop(const _TabsResult.add()),
-                  ),
-                ),
+                _header(context, c),
+                ..._content(context, c),
               ],
             ),
           ),

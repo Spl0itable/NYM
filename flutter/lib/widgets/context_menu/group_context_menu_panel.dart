@@ -35,6 +35,7 @@ import '../common/nym_action_sheet.dart';
 import '../common/nym_sheet.dart';
 import '../common/nym_field.dart';
 import '../common/nym_tooltip.dart';
+import '../common/hit_slop.dart';
 
 /// Right-side group context-menu panel: header, role-gated owner/member controls, invite link, and member list.
 class GroupContextMenuPanel extends ConsumerStatefulWidget {
@@ -946,6 +947,9 @@ class _ActionRowState extends State<_ActionRow> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
+          constraints: touchPlatform()
+              ? const BoxConstraints(minHeight: kMinTouchTarget)
+              : null,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: _hover

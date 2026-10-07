@@ -7,6 +7,7 @@ import '../../core/theme/nym_metrics.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/hit_slop.dart';
 
 /// Shared form controls matching the PWA's settings styling, colored from `context.nym`.
 
@@ -390,7 +391,11 @@ class SegmentGroup<T> extends StatelessWidget {
         children: [
           for (final s in segments)
             Expanded(
-              child: GestureDetector(
+              child: HitSlop(child: Semantics(
+                button: true,
+                selected: s.value == value,
+                inMutuallyExclusiveGroup: true,
+                child: GestureDetector(
                 onTap: () => onChanged(s.value),
                 child: AnimatedContainer(
                   duration: NymMotion.transition,
@@ -419,8 +424,8 @@ class SegmentGroup<T> extends StatelessWidget {
                     ),
                   ),
                 ),
-              ),
-            ),
+              )),
+            )),
         ],
       ),
     );

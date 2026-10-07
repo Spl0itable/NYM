@@ -17,6 +17,7 @@ import 'emoji_data.dart';
 import 'modal_close_chip.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/hit_slop.dart';
 
 /// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
@@ -530,7 +531,7 @@ class _FavStar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return NymTooltip(
+    return HitSlop(child: NymTooltip(
       message: active ? tr('Unfavorite') : tr('Favorite'),
       child: InkWell(
         onTap: onTap,
@@ -544,7 +545,7 @@ class _FavStar extends StatelessWidget {
           ),
         ),
       ),
-    );
+    ));
   }
 }
 

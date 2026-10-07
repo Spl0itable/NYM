@@ -9,6 +9,7 @@ import '../i18n/i18n.dart';
 import 'composer_model.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/hit_slop.dart';
 
 class ComposerIcons {
   const ComposerIcons._();
@@ -384,7 +385,7 @@ class _EmojiInputButtonState extends State<EmojiInputButton> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final lit = widget.open || (_hover && widget.enabled);
-    return Opacity(
+    return HitSlop(child: Opacity(
       opacity: widget.enabled ? (lit ? 1.0 : 0.6) : 0.4,
       child: NymTooltip(
         message: tr('Emoji and GIFs'),
@@ -419,7 +420,7 @@ class _EmojiInputButtonState extends State<EmojiInputButton> {
           ),
         ),
       ),
-    );
+    ));
   }
 }
 
@@ -466,7 +467,7 @@ class PickerTabs extends StatelessWidget {
           children: [
             for (final (id, label) in tabs)
               Expanded(
-                child: Semantics(
+                child: HitSlop(child: Semantics(
                   selected: id == active,
                   button: true,
                   child: InkWell(
@@ -497,7 +498,7 @@ class PickerTabs extends StatelessWidget {
                       ),
                     ),
                   ),
-                ),
+                )),
               ),
           ],
         ),

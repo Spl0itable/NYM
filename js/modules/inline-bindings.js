@@ -256,6 +256,7 @@ window.nymHaptic = function (kind) {
         'stopPropagation':            function (e) { e.stopPropagation(); },
 
         'closeSidebar':               function () { nym().closeSidebar(); },
+        'closeChatList':              function () { if (typeof nym()._closeChatList === 'function') nym()._closeChatList(); },
         'openNotificationsModal':     function () { nym().openNotificationsModal(); },
         'openNotificationsAndCloseSidebar': function () { nym().openNotificationsModal(); nym().closeSidebar(); },
         'closeNotificationsModal':    function () { nym().closeNotificationsModal(); },

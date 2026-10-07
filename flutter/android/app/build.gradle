@@ -7,7 +7,7 @@ plugins {
 
 
 def keystoreProperties = new Properties()
-def keystorePropertiesFile = rootProject.file('key.properties')
+def keystorePropertiesFile = rootProject.file(System.getenv('NYM_KEY_PROPERTIES') ?: 'key.properties')
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
@@ -50,7 +50,7 @@ android {
         // unchanged.
         minSdk = 24
         targetSdk = 36
-        versionCode = 555
+        versionCode = 560
         versionName = flutter.versionName
         
         // Support all ABIs - AGP 8.9.1 automatically handles 16 KB alignment

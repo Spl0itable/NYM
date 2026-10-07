@@ -27,6 +27,7 @@ import '../features/onboarding/tutorial_overlay.dart';
 import '../features/search/unified_search_panel.dart';
 import '../features/settings/settings_screen.dart';
 import '../features/shortcuts/shortcuts.dart';
+import '../models/channel.dart' show kDefaultChannel;
 import '../services/location/geolocation.dart';
 import '../state/app_state.dart';
 import '../state/nostr_controller.dart';
@@ -34,8 +35,12 @@ import '../state/settings_provider.dart';
 import '../state/view_history.dart';
 import '../widgets/context_menu/interaction_hooks.dart';
 import '../widgets/chat/chat_pane.dart';
+import '../widgets/common/nym_sheet.dart' show kNymSheetCloseVelocity;
+import '../widgets/sidebar/list_swipe_back.dart';
 import '../widgets/sidebar/sidebar.dart';
 import '../widgets/wallpaper/wallpaper_layer.dart';
+
+final chatListLandingProvider = StateProvider<bool>((ref) => false);
 
 /// Responsive shell: two panes above 1024px, else a 300px off-canvas drawer; call UI mounts above everything.
 class HomeShell extends ConsumerStatefulWidget {
@@ -99,7 +104,39 @@ class HomeShellState extends ConsumerState<HomeShell>
   ValueNotifier<int>? _viewSwitches;
 
   void _onViewSwitch() {
+    _lastPageMesh = false;
     if (_phone && _drawerOpen && mounted) setState(() => _drawerOpen = false);
+  }
+
+  bool _lastPageMesh = false;
+
+  double? _listDrag;
+
+  bool _landingChecked = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_landingChecked) return;
+    _landingChecked = true;
+    if (!ref.read(chatListLandingProvider)) return;
+    if (MediaQuery.sizeOf(context).width <= kPhoneMax) _drawerOpen = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ref.read(chatListLandingProvider.notifier).state = false;
+    });
+  }
+
+  void _closeChatList() {
+    if (_lastPageMesh && MeshController.isSupportedPlatform) {
+      ref.read(meshScreenOpenProvider.notifier).state = true;
+      return;
+    }
+    final app = ref.read(appStateProvider.notifier);
+    if (app.viewSwitchCount == 0 &&
+        app.currentView != const ChatView.channel(kDefaultChannel)) {
+      app.switchChannel(kDefaultChannel);
+    }
+    if (_drawerOpen && mounted) setState(() => _drawerOpen = false);
   }
 
   void _recordCurrentView() {
@@ -275,6 +312,10 @@ class HomeShellState extends ConsumerState<HomeShell>
     }
     if (e.position.dx - _edgeSwipeStartX > _sidebarSwipeThreshold) {
       _edgeSwipePointer = null;
+      if (_phone && _meshShown) {
+        _meshBackToList();
+        return;
+      }
       // An open drawer closes first, then a thread backs out, and only then does the drawer open.
       if (_drawerOpen) {
         if (!_phone) setState(() => _drawerOpen = false);
@@ -321,6 +362,7 @@ class HomeShellState extends ConsumerState<HomeShell>
     ref.listen<bool>(meshScreenOpenProvider, (prev, next) {
       if (prev == next) return;
       if (next) {
+        _lastPageMesh = true;
         ref.read(viewHistoryProvider).record(const ViewHistoryEntry.mesh());
       } else {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -587,11 +629,14 @@ class HomeShellState extends ConsumerState<HomeShell>
 
         // 150ms linear slide, instant under reduce-motion.
         AnimatedSlide(
-          duration: MediaQuery.of(context).disableAnimations
+          duration: MediaQuery.of(context).disableAnimations ||
+                  _listDrag != null
               ? Duration.zero
               : NymMotion.slide,
           curve: Curves.linear,
-          offset: _drawerOpen ? Offset.zero : const Offset(-1, 0),
+          offset: _drawerOpen
+              ? Offset(phone ? (_listDrag ?? 0) / width : 0, 0)
+              : const Offset(-1, 0),
           child: SizedBox(
             width: phone ? width : NymDimens.sidebarDrawerWidth,
             height: double.infinity,
@@ -618,11 +663,22 @@ class HomeShellState extends ConsumerState<HomeShell>
                           left: BorderSide(color: context.nym.glassBorder),
                         ),
                 ),
-                child: Sidebar(
-                  compact: true,
-                  onItemSelected: phone
-                      ? null
-                      : () => setState(() => _drawerOpen = false),
+                child: ListSwipeBack(
+                  enabled: phone && _drawerOpen && !_meshShown,
+                  distance: _sidebarSwipeThreshold,
+                  velocity: kNymSheetCloseVelocity,
+                  onDrag: (v) {
+                    if (mounted) setState(() => _listDrag = v);
+                  },
+                  onBack: _closeChatList,
+                  child: Sidebar(
+                    compact: true,
+                    onItemSelected: phone
+                        ? null
+                        : () => setState(() => _drawerOpen = false),
+                    onClose: phone ? _closeChatList : null,
+                    closeShown: _drawerOpen,
+                  ),
                 ),
               ),
             ),

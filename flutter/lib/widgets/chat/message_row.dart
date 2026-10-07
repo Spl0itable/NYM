@@ -1830,6 +1830,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
             width: 32,
             child: widget.showAvatar
                 ? GestureDetector(
+                    excludeFromSemantics: true,
                     onTap: () => _openContextMenu(context),
                     child: NymAvatar(
                         seed: message.pubkey,
@@ -2747,7 +2748,12 @@ class _AddReactionButtonState extends State<_AddReactionButton> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return GestureDetector(
+    return Semantics(
+      button: true,
+      label: tr('Add reaction'),
+      onTap: widget.onTap,
+      excludeSemantics: true,
+      child: GestureDetector(
       onTap: widget.onTap,
       onTapDown: (_) => setState(() => _pressed = true),
       onTapUp: (_) => setState(() => _pressed = false),
@@ -2776,6 +2782,7 @@ class _AddReactionButtonState extends State<_AddReactionButton> {
             color: _pressed ? c.text : c.text.withValues(alpha: c.text.a * 0.6),
           ),
         ),
+      ),
       ),
     );
   }
@@ -4265,6 +4272,7 @@ class _StickyGroupAvatarState extends ConsumerState<_StickyGroupAvatar> {
   @override
   Widget build(BuildContext context) {
     final avatar = GestureDetector(
+      excludeFromSemantics: true,
       onTap: widget.onTap,
       child: NymAvatar(
         seed: widget.pubkey,

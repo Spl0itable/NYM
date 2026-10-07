@@ -510,6 +510,12 @@
     box-shadow: var(--shadow-md);
 }
 
+.reaction-badge:focus-visible,
+.add-reaction-btn:focus-visible {
+    outline: 2px solid var(--secondary);
+    outline-offset: 1px;
+}
+
 .add-reaction-btn {
     background: rgba(255, 255, 255, 0.04);
     border: 1px solid var(--glass-border);

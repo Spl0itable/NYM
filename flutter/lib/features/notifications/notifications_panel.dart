@@ -34,6 +34,7 @@ import '../settings/settings_widgets.dart' show FormSelect;
 import 'notifications_service.dart' show notificationsServiceProvider;
 import '../toasts/event_toast_prefs.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/hit_slop.dart';
 import '../identity/deleted_notice.dart' show dimNymSuffixes;
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
 
@@ -329,7 +330,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              NymTooltip(
+              HitSlop(child: NymTooltip(
                 message: tr('Notification settings'),
                 child: Semantics(
                   button: true,
@@ -355,7 +356,7 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                     ),
                   ),
                 ),
-              ),
+              )),
               const SizedBox(width: 6),
               _CloseChip(
                 onTap: () => Navigator.of(context).maybePop(),
@@ -907,7 +908,7 @@ class _CloseChipState extends State<_CloseChip> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return NymFocusable(
+    return HitSlop(child: NymFocusable(
       onActivate: widget.onTap,
       tooltip: tr('Close'),
       excludeChildSemantics: true,
@@ -939,7 +940,7 @@ class _CloseChipState extends State<_CloseChip> {
           ),
         ),
       ),
-    );
+    ));
   }
 }
 

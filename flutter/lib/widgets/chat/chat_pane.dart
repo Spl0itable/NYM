@@ -42,6 +42,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../state/view_history.dart';
+import '../common/hit_slop.dart';
 import '../common/nym_action_sheet.dart';
 import '../context_menu/group_context_menu_panel.dart' show showGroupMenuSheet;
 import '../common/nym_avatar.dart';
@@ -148,6 +149,7 @@ class ChatPane extends ConsumerWidget {
               target: eventToastRegion,
               child: ComposerOverhangInset(child: GestureDetector(
               behavior: HitTestBehavior.translucent,
+              excludeFromSemantics: true,
               onTap: () => FocusScope.of(context).unfocus(),
               child: KeyedSubtree(
                 key: TutorialTargets.keyFor(TutorialTarget.messagesContainer),
@@ -321,10 +323,9 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         bottom: false,
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: headerHeight - 1),
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: phone ? NymSpace.s2 : NymSpace.s3),
-            child: Row(
+          child: Row(
               children: [
+                SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
                 if (phone)
                   _HeaderPill(
                     svg: NymIcons.menu,
@@ -351,8 +352,14 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                 const SizedBox(width: NymSpace.s1),
                 Expanded(child: _headerMiddle(c, app, view, title, meta)),
                 const SizedBox(width: NymSpace.s1),
-                for (final a in shown) a.button,
-                if (phone) _notificationsPill(),
+                for (var i = 0; i < shown.length; i++) ...[
+                  if (i > 0) SizedBox(width: touchPlatform() ? 4 : 2),
+                  shown[i].button,
+                ],
+                if (phone) ...[
+                  if (shown.isNotEmpty) SizedBox(width: touchPlatform() ? 4 : 2),
+                  _notificationsPill(),
+                ],
                 if (!phone) ...[
                   Container(
                     width: 1,
@@ -373,9 +380,9 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                   const SizedBox(width: 2),
                   _moreMenu(view, overflow),
                 ],
+                SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
               ],
             ),
-          ),
         ),
       ),
     );
@@ -986,9 +993,6 @@ class _ActionBtnState extends State<_ActionBtn> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // 28px footprint at every width; only the nav buttons shrink on phones.
-    const pad = 5.0;
-
     final color = widget.disabled
         ? c.textDim.withValues(alpha: 0.3)
         : (widget.activeColor ?? (_hover ? c.primary : c.textDim));
@@ -1004,18 +1008,23 @@ class _ActionBtnState extends State<_ActionBtn> {
           // CSS default `ease`, not the global `--transition` token.
           duration: const Duration(milliseconds: 200),
           curve: Curves.ease,
-          child: Padding(
-            padding: EdgeInsets.all(pad),
-            child: NymSvgIcon(widget.svg, size: 18, color: color),
+          child: SizedBox(
+            width: 40,
+            height: 40,
+            child: Center(
+              child: NymSvgIcon(widget.svg, size: 18, color: color),
+            ),
           ),
         ),
       ),
     );
-    return NymFocusable(
-      onActivate: widget.disabled ? null : widget.onTap,
-      tooltip: widget.tooltip,
-      radius: const BorderRadius.all(Radius.circular(4)),
-      child: btn,
+    return HitSlop(
+      child: NymFocusable(
+        onActivate: widget.disabled ? null : widget.onTap,
+        tooltip: widget.tooltip,
+        radius: const BorderRadius.all(Radius.circular(4)),
+        child: btn,
+      ),
     );
   }
 }
@@ -1043,18 +1052,20 @@ class _HeaderPillState extends State<_HeaderPill> {
   @override
   Widget build(BuildContext context) {
     final box = _HeaderIconBox(svg: widget.svg);
-    return NymFocusable(
-      onActivate: widget.onTap,
-      tooltip: widget.label,
-      tooltipKeys: widget.keys,
-      excludeChildSemantics: true,
-      radius: NymRadius.rsm,
-      child: InkWell(
-        onTap: widget.onTap,
-        canRequestFocus: false,
-        excludeFromSemantics: true,
-        borderRadius: NymRadius.rsm,
-        child: widget.badge > 0 ? _withBadge(box, widget.badge) : box,
+    return HitSlop(
+      child: NymFocusable(
+        onActivate: widget.onTap,
+        tooltip: widget.label,
+        tooltipKeys: widget.keys,
+        excludeChildSemantics: true,
+        radius: NymRadius.rsm,
+        child: InkWell(
+          onTap: widget.onTap,
+          canRequestFocus: false,
+          excludeFromSemantics: true,
+          borderRadius: NymRadius.rsm,
+          child: widget.badge > 0 ? _withBadge(box, widget.badge) : box,
+        ),
       ),
     );
   }
@@ -1519,11 +1530,9 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
         bottom: false,
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: chatHeaderHeight(width) - 1),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-                horizontal: phone ? NymSpace.s2 : NymSpace.s3),
-            child: Row(
+          child: Row(
               children: [
+                SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
                 if (phone)
                   _HeaderPill(
                     key: const ValueKey('meshBack'),
@@ -1592,21 +1601,30 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
                   ),
                 ),
                 const SizedBox(width: NymSpace.s1),
-                for (final a in widget.actions)
-                  Semantics(
-                    button: true,
-                    toggled: a.active,
-                    enabled: !a.disabled,
-                    child: _ActionBtn(
-                      key: a.key,
-                      svg: a.svg,
-                      tooltip: a.tooltip,
-                      onTap: a.onTap,
-                      disabled: a.disabled,
-                      activeColor: a.active ? c.primary : null,
+                for (var i = 0; i < widget.actions.length; i++) ...[
+                  if (i > 0) SizedBox(width: touchPlatform() ? 4 : 2),
+                  HitSlop(
+                    child: Semantics(
+                      button: true,
+                      toggled: widget.actions[i].active,
+                      enabled: !widget.actions[i].disabled,
+                      child: _ActionBtn(
+                        key: widget.actions[i].key,
+                        svg: widget.actions[i].svg,
+                        tooltip: widget.actions[i].tooltip,
+                        onTap: widget.actions[i].onTap,
+                        disabled: widget.actions[i].disabled,
+                        activeColor:
+                            widget.actions[i].active ? c.primary : null,
+                      ),
                     ),
                   ),
-                if (phone) _notificationsPill(),
+                ],
+                if (phone) ...[
+                  if (widget.actions.isNotEmpty)
+                    SizedBox(width: touchPlatform() ? 4 : 2),
+                  _notificationsPill(),
+                ],
                 if (!phone) ...[
                   Container(
                     width: 1,
@@ -1629,9 +1647,9 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
                   const SizedBox(width: 2),
                   _moreButton(const [], ''),
                 ],
+                SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
               ],
             ),
-          ),
         ),
       ),
     );

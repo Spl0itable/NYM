@@ -11,7 +11,7 @@
         '#botRunsModal', '#botAnonModal', '#shopModal', '#giftShopModal', '#transferModal',
         '#geohashExplorerModal', '#clPromptModal', '.ct-modal', '[data-sheet]'
     ].join(',');
-    var PANELS = '.modal-content, .shop-content, .geohash-explorer-content';
+    var PANELS = '.modal-content, .shop-content, .geohash-explorer-content, .cv-tabs-sheet';
     var HANDLES = '.sheet-grabber, .modal-header, .geohash-explorer-header, .shop-header, [data-sheet-handle]';
     var CLOSERS = '.modal-close, .shop-close';
     var TEXT_TYPES = ['', 'text', 'password', 'number', 'email', 'url', 'tel'];
@@ -449,6 +449,7 @@
     }
 
     window.nymSheets = {
+        closeVelocity: CLOSE_VELOCITY,
         isSheet: function (modal) { return !!(modal && modal.classList && modal.classList.contains('is-sheet')); },
         isDirty: function (modal) { return dirty(modal); },
         close: function (modal) { requestClose(modal); },

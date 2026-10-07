@@ -44,6 +44,7 @@ import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../features/layout/layout_model.dart' show kPhoneMax;
 import '../../state/settings_provider.dart';
+import '../common/hit_slop.dart';
 import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
 import '../../features/chat_nav/chat_nav_providers.dart';
@@ -90,10 +91,19 @@ extension _SectionIdName on _SectionId {
 
 /// The left sidebar: identity header plus three collapsible sections, all in one scroll container.
 class Sidebar extends ConsumerStatefulWidget {
-  const Sidebar({super.key, this.onItemSelected, this.compact = false});
+  const Sidebar(
+      {super.key,
+      this.onItemSelected,
+      this.compact = false,
+      this.onClose,
+      this.closeShown = true});
 
   /// Called after a row is tapped, so the mobile drawer can close.
   final VoidCallback? onItemSelected;
+
+  final VoidCallback? onClose;
+
+  final bool closeShown;
 
   /// Compact (<=1024) layout shows the `.sidebar-actions` row; wide layouts put those actions in the header.
   final bool compact;
@@ -771,6 +781,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
             controller: _scroll,
             child: ListView(
               controller: _scroll,
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
               padding: EdgeInsets.zero,
               children: [
                 UnifiedSearchButton(onTap: () {
@@ -888,7 +899,9 @@ class _SidebarState extends ConsumerState<Sidebar> {
         ),
       ),
     );
-    return NymTooltip(message: label, excludeFromSemantics: true, child: button);
+    return HitSlop(
+        child: NymTooltip(
+            message: label, excludeFromSemantics: true, child: button));
   }
 
   Future<void> _openDiscover() async {
@@ -913,7 +926,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
     return Container(
       key: const ValueKey('sidebarHeader'),
       constraints: BoxConstraints(minHeight: extent),
-      padding: EdgeInsets.fromLTRB(NymSpace.s3, top, NymSpace.s3, 0),
+      padding: EdgeInsets.only(top: top),
       decoration: BoxDecoration(
         color: c.isLight
             ? Colors.white.withValues(alpha: 0.3)
@@ -927,6 +940,7 @@ class _SidebarState extends ConsumerState<Sidebar> {
           Row(
             key: const ValueKey('sidebarIdentityRow'),
             children: [
+              const SizedBox(width: NymSpace.s3),
               Expanded(
                 child: PanicHoldDetector(
                   onTap: () => NickEditModal.open(context),
@@ -984,7 +998,18 @@ class _SidebarState extends ConsumerState<Sidebar> {
                   MediaQuery.sizeOf(context).width <= kPhoneMax) ...[
                 const SizedBox(width: NymSpace.s2),
                 const _IdentityBell(),
+                if (widget.onClose != null) ...[
+                  const SizedBox(width: NymSpace.s2),
+                  ExcludeSemantics(
+                    excluding: !widget.closeShown,
+                    child: IgnorePointer(
+                      ignoring: !widget.closeShown,
+                      child: _IdentityClose(onTap: widget.onClose!),
+                    ),
+                  ),
+                ],
               ],
+              const SizedBox(width: NymSpace.s3),
             ],
           ),
         ],
@@ -1556,14 +1581,14 @@ class _NavSection extends StatelessWidget {
                   const SizedBox(width: 10),
                   if (leadingIcon != null) ...[
                     leadingIcon!,
-                    const SizedBox(width: 10),
+                    SizedBox(width: touchPlatform() ? 12 : 10),
                   ],
                   _MiniIcon(
                     svg: NymIcons.search,
                     tooltip: searchTooltip,
                     onTap: onToggleSearch,
                   ),
-                  const SizedBox(width: 10),
+                  SizedBox(width: touchPlatform() ? 12 : 10),
                   _MiniIcon(
                     svg: open ? NymIcons.chevronDown : NymIcons.chevronRight,
                     tooltip:
@@ -1791,11 +1816,13 @@ class _MiniIconState extends State<_MiniIcon> {
         ),
       ),
     );
-    return NymFocusable(
-      onActivate: widget.onTap,
-      tooltip: widget.tooltip,
-      radius: const BorderRadius.all(Radius.circular(4)),
-      child: btn,
+    return HitSlop(
+      child: NymFocusable(
+        onActivate: widget.onTap,
+        tooltip: widget.tooltip,
+        radius: const BorderRadius.all(Radius.circular(4)),
+        child: btn,
+      ),
     );
   }
 }
@@ -2374,16 +2401,74 @@ class _IdentityBellState extends ConsumerState<_IdentityBell> {
         ),
       ),
     );
-    return Semantics(
-      key: const ValueKey('identityNotifBtn'),
-      container: true,
-      button: true,
-      label: label,
-      excludeSemantics: true,
-      onTap: _open,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: NymTooltip(message: label, child: button),
+    return HitSlop(
+      child: Semantics(
+        key: const ValueKey('identityNotifBtn'),
+        container: true,
+        button: true,
+        label: label,
+        excludeSemantics: true,
+        onTap: _open,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: NymTooltip(message: label, child: button),
+        ),
+      ),
+    );
+  }
+}
+
+class _IdentityClose extends StatefulWidget {
+  const _IdentityClose({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  State<_IdentityClose> createState() => _IdentityCloseState();
+}
+
+class _IdentityCloseState extends State<_IdentityClose> {
+  bool _hover = false;
+  bool _focus = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final lit = _hover || _focus;
+    final label = tr('Close');
+    final button = InkWell(
+      borderRadius: NymRadius.rsm,
+      onTap: widget.onTap,
+      onHover: (v) => setState(() => _hover = v),
+      onFocusChange: (v) => setState(() => _focus = v),
+      child: Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: lit
+              ? (c.isLight
+                  ? Colors.black.withValues(alpha: 0.05)
+                  : c.primaryA(0.1))
+              : Colors.transparent,
+          borderRadius: NymRadius.rsm,
+        ),
+        child: NymSvgIcon(NymIcons.close,
+            size: 18, color: lit ? c.primary : c.textDim),
+      ),
+    );
+    return HitSlop(
+      child: Semantics(
+        key: const ValueKey('identityCloseBtn'),
+        container: true,
+        button: true,
+        label: label,
+        excludeSemantics: true,
+        onTap: widget.onTap,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: NymTooltip(message: label, child: button),
+        ),
       ),
     );
   }

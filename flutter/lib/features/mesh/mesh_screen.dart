@@ -13,7 +13,6 @@ import '../../widgets/chat/chat_pane.dart' show NymPageAction, NymPageHeader;
 import '../../widgets/common/list_empty_note.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/common/nym_field.dart';
-import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/nym_icons.dart';
@@ -446,10 +445,7 @@ class _MeshRow extends StatelessWidget {
     );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      child: NymFocusable(
-        onActivate: onTap,
-        radius: NymRadius.rxs,
-        child: SidebarRowGestures(
+      child: SidebarRowGestures(
           onTap: onTap,
           onShowMenu: (_) => false,
           builder: (context, hovered) => Container(
@@ -473,7 +469,6 @@ class _MeshRow extends StatelessWidget {
             ),
           ),
         ),
-      ),
     );
   }
 }

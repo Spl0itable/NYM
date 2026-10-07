@@ -68,7 +68,9 @@ class _UserListItemState extends ConsumerState<UserListItem> {
         child: MouseRegion(
           onEnter: (_) => setState(() => _hover = true),
           onExit: (_) => setState(() => _hover = false),
-          child: GestureDetector(
+          child: Semantics(
+            label: user.nym,
+            child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onLongPressStart: (d) =>
                 showUserContextMenu(context, ref, user, d.globalPosition),
@@ -145,7 +147,7 @@ class _UserListItemState extends ConsumerState<UserListItem> {
                 ),
               ),
             ),
-          ),
+          )),
         ),
       ),
     );

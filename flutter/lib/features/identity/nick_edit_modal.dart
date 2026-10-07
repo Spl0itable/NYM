@@ -31,6 +31,7 @@ import 'key_backup/key_backup_actions.dart';
 import 'modal_chrome.dart';
 import 'nym_identicon.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/hit_slop.dart';
 
 /// Profile and nickname editor, with a reveal slideout for the private key and recovery code.
 class NickEditModal extends ConsumerStatefulWidget {
@@ -1143,7 +1144,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
   Widget _smallButton(NymColors c, String label, VoidCallback onTap,
       {bool danger = false, String? icon}) {
     final fg = danger ? c.danger : c.text;
-    return GestureDetector(
+    return HitSlop(child: GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -1166,7 +1167,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   /// Uploads the picked image before saving so kind 0 carries a hosted URL; on failure the old image is kept.

@@ -821,3 +821,23 @@ body.solid-ui .cv-column-header {
 body.columns-mode.chat-bubbles .cv-list .message-content {
     max-width: min(calc(100% - 16px), calc(85 * 0.55em + 24px));
 }
+
+@media (max-width: 1024px) {
+    .cv-tabs-overlay.is-sheet {
+        align-items: flex-end;
+    }
+
+    .cv-tabs-overlay.is-sheet > .cv-tabs-sheet.sheet-panel {
+        padding: 0 0 env(safe-area-inset-bottom);
+        overflow: hidden;
+    }
+
+    .cv-tabs-overlay.is-sheet > .cv-tabs-sheet > .sheet-grabber {
+        margin: 0;
+        flex: 0 0 auto;
+    }
+
+    .cv-tabs-overlay.is-sheet > .cv-tabs-sheet > .cv-tabs-head {
+        touch-action: none;
+    }
+}

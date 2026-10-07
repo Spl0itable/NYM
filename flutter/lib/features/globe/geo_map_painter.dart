@@ -653,6 +653,8 @@ class GeoMapPainter extends CustomPainter {
 
     final blocked = [
       for (final r in occupied) GeoLabelBox(r.left, r.top, r.right, r.bottom),
+      for (final k in clusters)
+        if (k.count > 1) GeoLabelBox(k.x - k.r, k.y - k.r, k.x + k.r, k.y + k.r),
     ];
     for (final i in placeGeoLabels(boxes, blocked: blocked)) {
       out.add(cands[i]);
@@ -718,7 +720,7 @@ class GeoMapPainter extends CustomPainter {
 
   void _drawClusterMarker(Canvas canvas, GeoCluster k) {
     final p = Offset(k.x, k.y);
-    final r = 12.0 + math.min(6.0, math.log(k.count) / math.ln2 * 2);
+    final r = k.r;
     canvas.drawCircle(p, r + 2, Paint()..color = const Color(0x8C000000));
     canvas.drawCircle(p, r, Paint()..color = style.primary.withValues(alpha: 0.9));
     final tp = TextPainter(

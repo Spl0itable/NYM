@@ -131,8 +131,8 @@ body.light-mode .verified-badge::before {
     }
 
     .gx-controls {
-        top: 10px;
-        right: 10px;
+        top: 6px;
+        right: 6px;
     }
 
     .gx-layers {
@@ -198,6 +198,7 @@ body.light-mode .verified-badge::before {
     }
 
     #sidebar {
+        touch-action: pan-y;
         width: 100%;
         max-width: none;
         border-left: none;
@@ -223,7 +224,8 @@ body.light-mode .verified-badge::before {
         display: none;
     }
 
-    #identityNotifBtn {
+    #identityNotifBtn,
+    #identityCloseBtn {
         display: flex;
     }
 

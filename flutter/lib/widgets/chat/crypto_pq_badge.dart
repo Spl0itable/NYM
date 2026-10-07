@@ -68,7 +68,17 @@ class CryptoPqBadge extends StatelessWidget {
       // Margin outside the box so the popup anchors on the shield itself.
       padding: const EdgeInsets.only(left: 3),
       child: Builder(
-        builder: (anchorContext) => GestureDetector(
+        builder: (anchorContext) => Semantics(
+          button: true,
+          label: switch (state) {
+            PqBadgeState.full => tr(kPqFullTitle),
+            PqBadgeState.partial => tr(kPqPartialTitle),
+            PqBadgeState.legacy => tr(kPqLegacyTitle),
+            PqBadgeState.classical => tr(kPqClassicalTitle),
+          },
+          onTap: () => showPqPopup(anchorContext, state, coverage: coverage),
+          excludeSemantics: true,
+          child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => showPqPopup(anchorContext, state, coverage: coverage),
           child: SizedBox(
@@ -76,6 +86,7 @@ class CryptoPqBadge extends StatelessWidget {
             height: size,
             child: CustomPaint(painter: _ShieldPainter(state, _color)),
           ),
+        ),
         ),
       ),
     );

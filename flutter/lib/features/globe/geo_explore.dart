@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart' show Size;
 
 import 'topojson.dart';
 
@@ -8,6 +9,8 @@ const String kGeoBase32 = '0123456789bcdefghjkmnpqrstuvwxyz';
 const List<int> kGeoWindowOptions = [1, 24, 168];
 const int kGeoClusterCellPx = 48;
 const int kGeoClusterMaxZoom = 4;
+const int kGeoClusterGapPx = 2;
+const int kGeoClusterZoomSteps = 4;
 const int kGeoPulseWindowMs = 300000;
 const int kGeoOnlineWindowSec = 300;
 const int kGeoSearchMinChars = 2;
@@ -564,17 +567,35 @@ List<({T item, double distanceKm})> rankGeoNearby<T extends GeoActivity>(
 }
 
 @immutable
-class GeoClusterPoint {
-  const GeoClusterPoint({
+class GeoClusterInput {
+  const GeoClusterInput({
     required this.id,
-    required this.x,
-    required this.y,
+    required this.lat,
+    required this.lng,
     required this.messages,
   });
   final String id;
-  final double x;
-  final double y;
+  final double lat;
+  final double lng;
   final int messages;
+}
+
+@immutable
+class GeoWorldCluster {
+  const GeoWorldCluster({
+    required this.ids,
+    required this.lat,
+    required this.lng,
+    required this.count,
+    required this.messages,
+    required this.r,
+  });
+  final List<String> ids;
+  final double lat;
+  final double lng;
+  final int count;
+  final int messages;
+  final int r;
 }
 
 @immutable
@@ -591,41 +612,128 @@ class GeoCluster {
   final double y;
   final int count;
   final int messages;
+
+  double get r => geoClusterRadius(count).toDouble();
 }
 
-List<GeoCluster> clusterGeoPoints(List<GeoClusterPoint> points, double cellPx) {
-  final size = cellPx > 0 ? cellPx : kGeoClusterCellPx.toDouble();
-  final groups = <String, (int, int, List<GeoClusterPoint>)>{};
-  for (final p in points) {
-    final gx = (p.x / size).floor();
-    final gy = (p.y / size).floor();
-    groups.putIfAbsent('$gx,$gy', () => (gx, gy, <GeoClusterPoint>[])).$3.add(p);
+int geoClusterRadius(int count) {
+  if (count < 2) return 4;
+  var bits = 0;
+  for (var n = count; n > 1; n ~/= 2) {
+    bits++;
   }
-  final sorted = groups.values.toList()
-    ..sort((a, b) {
-      final c = a.$2 - b.$2;
-      return c != 0 ? c : a.$1 - b.$1;
-    });
-  return [
-    for (final g in sorted)
-      () {
-        final m = List<GeoClusterPoint>.of(g.$3)
-          ..sort((a, b) => _cmp(a.id, b.id));
-        var sx = 0.0, sy = 0.0;
-        var msgs = 0;
-        for (final p in m) {
-          sx += p.x;
-          sy += p.y;
-          msgs += p.messages;
+  return 12 + math.min(6, 2 * bits);
+}
+
+class _WorkCluster {
+  _WorkCluster(this.members, double s)
+      : key = members.first.id,
+        r = geoClusterRadius(members.length) {
+    var sLat = 0.0, sLng = 0.0;
+    var msgs = 0;
+    for (final p in members) {
+      sLat += p.lat;
+      sLng += p.lng;
+      msgs += p.messages;
+    }
+    lat = sLat / members.length;
+    lng = sLng / members.length;
+    wx = (lng + 180) * s;
+    wy = (90 - lat) * s;
+    messages = msgs;
+  }
+
+  final List<GeoClusterInput> members;
+  final String key;
+  final int r;
+  late final double lat;
+  late final double lng;
+  late final double wx;
+  late final double wy;
+  late final int messages;
+}
+
+List<GeoWorldCluster> clusterGeoChannels(
+    List<GeoClusterInput> points, double zoom, Size viewport) {
+  if (!(zoom < kGeoClusterMaxZoom)) return const [];
+  final w = viewport.width > 0 ? viewport.width : 1.0;
+  final h = viewport.height > 0 ? viewport.height : 1.0;
+  final zq = math.max(
+      1.0, (zoom * kGeoClusterZoomSteps).floor() / kGeoClusterZoomSteps);
+  final s = math.max(w / 360, h / 180) * zq;
+  final cell = kGeoClusterCellPx.toDouble();
+  _WorkCluster make(List<GeoClusterInput> members) =>
+      _WorkCluster(List.of(members)..sort((a, b) => _cmp(a.id, b.id)), s);
+  final groups = <String, List<GeoClusterInput>>{};
+  for (final p in points) {
+    if (!p.lat.isFinite || !p.lng.isFinite) continue;
+    final key =
+        '${((p.lng + 180) * s / cell).floor()},${((90 - p.lat) * s / cell).floor()}';
+    groups.putIfAbsent(key, () => []).add(p);
+  }
+  var list = [for (final g in groups.values) make(g)];
+  while (true) {
+    list.sort((a, b) => _cmp(a.key, b.key));
+    final buckets = <String, List<int>>{};
+    for (var i = 0; i < list.length; i++) {
+      final k = list[i];
+      buckets
+          .putIfAbsent('${(k.wx / cell).floor()},${(k.wy / cell).floor()}',
+              () => [])
+          .add(i);
+    }
+    final pairs = <(int, int, double)>[];
+    for (var i = 0; i < list.length; i++) {
+      final k = list[i];
+      final bx = (k.wx / cell).floor(), by = (k.wy / cell).floor();
+      for (var ox = -1; ox <= 1; ox++) {
+        for (var oy = -1; oy <= 1; oy++) {
+          final b = buckets['${bx + ox},${by + oy}'];
+          if (b == null) continue;
+          for (final j in b) {
+            if (j <= i) continue;
+            final o = list[j];
+            final dx = o.wx - k.wx, dy = o.wy - k.wy;
+            final lim = k.r + o.r + kGeoClusterGapPx;
+            final d = dx * dx + dy * dy;
+            if (d < lim * lim) pairs.add((i, j, d));
+          }
         }
-        return GeoCluster(
-          ids: [for (final p in m) p.id],
-          x: sx / m.length,
-          y: sy / m.length,
-          count: m.length,
-          messages: msgs,
-        );
-      }(),
+      }
+    }
+    if (pairs.isEmpty) break;
+    pairs.sort((a, b) {
+      final c = a.$3.compareTo(b.$3);
+      if (c != 0) return c;
+      final c2 = _cmp(list[a.$1].key, list[b.$1].key);
+      if (c2 != 0) return c2;
+      return _cmp(list[a.$2].key, list[b.$2].key);
+    });
+    final used = <int>{};
+    final merged = <_WorkCluster>[];
+    for (final p in pairs) {
+      if (used.contains(p.$1) || used.contains(p.$2)) continue;
+      used
+        ..add(p.$1)
+        ..add(p.$2);
+      merged.add(make([...list[p.$1].members, ...list[p.$2].members]));
+    }
+    list = [
+      for (var i = 0; i < list.length; i++)
+        if (!used.contains(i)) list[i],
+      ...merged,
+    ];
+  }
+  return [
+    for (final k in list)
+      GeoWorldCluster(
+        ids: [for (final p in k.members) p.id],
+        lat: k.lat,
+        lng: k.lng,
+        count: k.members.length,
+        messages: k.messages,
+        r: k.r,
+      ),
   ];
 }
 

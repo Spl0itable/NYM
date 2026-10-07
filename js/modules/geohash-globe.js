@@ -852,7 +852,8 @@ Object.assign(NYM.prototype, {
                     add(f.name, 'admin1', p, 9, 500, styles.adminLabel, 2.5, true);
                 }
             }
-            return GX.placeLabels(cands.map((c) => c.box), GX.LABEL_PAD, occupiedRects()).map((i) => cands[i]);
+            const bubbles = currentClusters().filter((k) => k.count > 1).map((k) => ({ x0: k.x - k.r, y0: k.y - k.r, x1: k.x + k.r, y1: k.y + k.r }));
+            return GX.placeLabels(cands.map((c) => c.box), GX.LABEL_PAD, occupiedRects().concat(bubbles)).map((i) => cands[i]);
         };
 
         const drawPlaceLabels = () => {
@@ -1011,13 +1012,21 @@ Object.assign(NYM.prototype, {
         let rafAnim = 0;
         let fly = null;
 
+        let clusterCache = { key: '', list: [] };
+        const worldClusters = () => {
+            const chans = this.geohashChannels || [];
+            const zq = Math.floor(view.zoom * GX.CLUSTER_ZOOM_STEPS);
+            let key = zq + '|' + cssWidth + '|' + cssHeight;
+            for (const c of chans) key += '|' + c.geohash + ':' + c.lat + ':' + c.lng + ':' + c.messages;
+            if (clusterCache.key !== key) {
+                const pts = chans.map((c) => ({ id: c.geohash, lat: c.lat, lng: c.lng, messages: c.messages }));
+                clusterCache = { key, list: GX.clusterChannels(pts, view.zoom, { width: cssWidth, height: cssHeight }) };
+            }
+            return clusterCache.list;
+        };
         const currentClusters = () => {
             if (heatmapMode || view.zoom >= GX.CLUSTER_MAX_ZOOM) return [];
-            const pts = (this.geohashChannels || []).map((c) => {
-                const p = project(c.lng, c.lat);
-                return { id: c.geohash, x: p.x, y: p.y, messages: c.messages };
-            });
-            return GX.clusterPoints(pts, GX.CLUSTER_CELL_PX);
+            return worldClusters().map((k) => Object.assign({}, k, project(k.lng, k.lat)));
         };
 
         const savedSet = () => {
@@ -1119,7 +1128,7 @@ Object.assign(NYM.prototype, {
         };
 
         const drawClusterMarker = (k) => {
-            const r = 12 + Math.min(6, Math.log2(k.count) * 2);
+            const r = k.r;
             ctx.beginPath();
             ctx.arc(k.x, k.y, r + 2, 0, Math.PI * 2);
             ctx.fillStyle = 'rgba(0,0,0,0.55)';
@@ -1304,6 +1313,17 @@ Object.assign(NYM.prototype, {
             return nearest;
         };
 
+        const clusterAt = (x, y) => {
+            let hit = null;
+            let best = Infinity;
+            for (const k of currentClusters()) {
+                if (k.count < 2) continue;
+                const d = Math.hypot(k.x - x, k.y - y);
+                if (d <= k.r + 4 && d < best) { best = d; hit = k; }
+            }
+            return hit;
+        };
+
         const onPointerDown = (e) => {
             if (e.pointerType === 'touch' && e.isPrimary === false) return;
             try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1354,7 +1374,7 @@ Object.assign(NYM.prototype, {
             const localX = e.clientX - rect.left;
             const localY = e.clientY - rect.top;
             if (this._gxLayersOpen) { this._gxToggleLayers(false); return; }
-            const cluster = currentClusters().find((k) => k.count > 1 && Math.hypot(k.x - localX, k.y - localY) <= 22);
+            const cluster = clusterAt(localX, localY);
             if (cluster) {
                 const bs = cluster.ids.map((id) => GX.cellBounds(id)).filter(Boolean);
                 const bounds = {

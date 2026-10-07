@@ -94,6 +94,7 @@ class _SidebarRowGesturesState extends State<SidebarRowGestures> {
         onPointerCancel: _cancelTimer,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
           onTap: _onTap,
           child: NymFocusable(
             onActivate: widget.onTap,

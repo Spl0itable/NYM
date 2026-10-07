@@ -5,6 +5,8 @@
     const WINDOW_OPTIONS = Object.freeze([1, 24, 168]);
     const CLUSTER_CELL_PX = 48;
     const CLUSTER_MAX_ZOOM = 4;
+    const CLUSTER_GAP_PX = 2;
+    const CLUSTER_ZOOM_STEPS = 4;
     const PULSE_WINDOW_MS = 300000;
     const ONLINE_WINDOW_SEC = 300;
     const SEARCH_MIN_CHARS = 2;
@@ -307,24 +309,75 @@
             .sort((a, b) => (a.distanceKm - b.distanceKm) || (b.messages - a.messages) || cmp(a.geohash, b.geohash));
     }
 
-    function clusterPoints(points, cellPx) {
-        const size = cellPx > 0 ? cellPx : CLUSTER_CELL_PX;
+    function clusterRadius(count) {
+        if (count < 2) return 4;
+        let bits = 0;
+        for (let n = count; n > 1; n = Math.floor(n / 2)) bits++;
+        return 12 + Math.min(6, 2 * bits);
+    }
+
+    function clusterChannels(points, zoom, viewport) {
+        if (!(zoom < CLUSTER_MAX_ZOOM)) return [];
+        const w = viewport && viewport.width > 0 ? viewport.width : 1;
+        const h = viewport && viewport.height > 0 ? viewport.height : 1;
+        const zq = Math.max(1, Math.floor(zoom * CLUSTER_ZOOM_STEPS) / CLUSTER_ZOOM_STEPS);
+        const s = Math.max(w / 360, h / 180) * zq;
+        const cell = CLUSTER_CELL_PX;
+        const make = (members) => {
+            const m = members.slice().sort((a, b) => cmp(a.id, b.id));
+            let sLat = 0, sLng = 0, msgs = 0;
+            for (const p of m) { sLat += p.lat; sLng += p.lng; msgs += p.messages || 0; }
+            const lat = sLat / m.length, lng = sLng / m.length;
+            return { members: m, key: m[0].id, lat, lng, wx: (lng + 180) * s, wy: (90 - lat) * s, r: clusterRadius(m.length), messages: msgs };
+        };
         const groups = new Map();
         for (const p of (Array.isArray(points) ? points : [])) {
-            const gx = Math.floor(p.x / size);
-            const gy = Math.floor(p.y / size);
-            const key = gx + ',' + gy;
+            if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lng) || typeof p.id !== 'string') continue;
+            const key = Math.floor((p.lng + 180) * s / cell) + ',' + Math.floor((90 - p.lat) * s / cell);
             let g = groups.get(key);
-            if (!g) { g = { gx, gy, members: [] }; groups.set(key, g); }
-            g.members.push(p);
+            if (!g) { g = []; groups.set(key, g); }
+            g.push(p);
         }
-        const out = [...groups.values()].sort((a, b) => (a.gy - b.gy) || (a.gx - b.gx)).map((g) => {
-            const m = g.members.slice().sort((a, b) => cmp(a.id, b.id));
-            let sx = 0, sy = 0, msgs = 0;
-            for (const p of m) { sx += p.x; sy += p.y; msgs += p.messages || 0; }
-            return { ids: m.map((p) => p.id), x: sx / m.length, y: sy / m.length, count: m.length, messages: msgs };
-        });
-        return out;
+        let list = [...groups.values()].map(make);
+        for (;;) {
+            list.sort((a, b) => cmp(a.key, b.key));
+            const buckets = new Map();
+            list.forEach((k, i) => {
+                const key = Math.floor(k.wx / cell) + ',' + Math.floor(k.wy / cell);
+                let b = buckets.get(key);
+                if (!b) { b = []; buckets.set(key, b); }
+                b.push(i);
+            });
+            const pairs = [];
+            list.forEach((k, i) => {
+                const bx = Math.floor(k.wx / cell), by = Math.floor(k.wy / cell);
+                for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+                    const b = buckets.get((bx + ox) + ',' + (by + oy));
+                    if (!b) continue;
+                    for (const j of b) {
+                        if (j <= i) continue;
+                        const o = list[j];
+                        const dx = o.wx - k.wx, dy = o.wy - k.wy;
+                        const lim = k.r + o.r + CLUSTER_GAP_PX;
+                        const d = dx * dx + dy * dy;
+                        if (d < lim * lim) pairs.push({ i, j, d });
+                    }
+                }
+            });
+            if (!pairs.length) break;
+            pairs.sort((a, b) => (a.d - b.d) || cmp(list[a.i].key, list[b.i].key) || cmp(list[a.j].key, list[b.j].key));
+            const used = new Set();
+            const merged = [];
+            for (const p of pairs) {
+                if (used.has(p.i) || used.has(p.j)) continue;
+                used.add(p.i); used.add(p.j);
+                merged.push(make(list[p.i].members.concat(list[p.j].members)));
+            }
+            list = list.filter((_, i) => !used.has(i)).concat(merged);
+        }
+        return list.map((k) => ({
+            ids: k.members.map((p) => p.id), lat: k.lat, lng: k.lng, count: k.members.length, messages: k.messages, r: k.r,
+        }));
     }
 
     function isRecent(lastMs, nowMs) {
@@ -475,11 +528,11 @@
     }
 
     G.NymGeoExplore = Object.freeze({
-        BASE32, WINDOW_OPTIONS, CLUSTER_CELL_PX, CLUSTER_MAX_ZOOM, PULSE_WINDOW_MS, ONLINE_WINDOW_SEC,
+        BASE32, WINDOW_OPTIONS, CLUSTER_CELL_PX, CLUSTER_MAX_ZOOM, CLUSTER_GAP_PX, CLUSTER_ZOOM_STEPS, PULSE_WINDOW_MS, ONLINE_WINDOW_SEC,
         SEARCH_MIN_CHARS, SEARCH_LIMIT, MIN_TOUCH_PX, PRECISION_LABELS, KIND_PRECISION,
         foldText, normalizeQuery, classifyQuery, isValidGeohash, encodeGeohash, cellBounds, placeGeohash,
         rankPlaces, buildPlaceIndex, buildSearchResults, roomPlaceLabel, formatLength, cellSizeMeters, precisionSteps, haversineKm, formatDistanceKm,
-        rankActive, rankNearby, clusterPoints, isRecent, normalizeWindowHours, summarizePeek, peekCapped, peekCountLabel, PEEK_FETCH_CAP,
+        rankActive, rankNearby, clusterChannels, clusterRadius, isRecent, normalizeWindowHours, summarizePeek, peekCapped, peekCountLabel, PEEK_FETCH_CAP,
         MAX_DPR, TIER_PX_PER_DEG, LABEL_PAD, capDpr, tierFor, cityRankCutoff, placeLabels, fitLabelBox,
     });
 })();
