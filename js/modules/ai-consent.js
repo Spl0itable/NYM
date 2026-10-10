@@ -27,10 +27,10 @@
 
     function render() {
         if (typeof document === 'undefined') return;
-        const sel = document.getElementById('aiConsentSelect');
-        if (sel) sel.value = read(KEY) === 'allowed' ? 'on' : 'off';
-        const tsel = document.getElementById('aiTranslateSelect');
-        if (tsel) tsel.value = read(TRANSLATE_KEY) === 'allowed' ? 'on' : 'off';
+        const sel = document.getElementById('aiConsentToggle');
+        if (sel) sel.checked = read(KEY) === 'allowed';
+        const tsel = document.getElementById('aiTranslateToggle');
+        if (tsel) tsel.checked = read(TRANSLATE_KEY) === 'allowed';
     }
 
     function write(allow, key) {
@@ -111,8 +111,8 @@
         window.NymAiConsentStrings = STRINGS;
         if (window.NYM_ACTIONS) {
             Object.assign(window.NYM_ACTIONS, {
-                onAiConsentChange: function (_e, t) { write(t && t.value === 'on', KEY); },
-                onAiTranslateChange: function (_e, t) { write(t && t.value === 'on', TRANSLATE_KEY); },
+                onAiConsentChange: function (_e, t) { write(!!(t && t.checked), KEY); },
+                onAiTranslateChange: function (_e, t) { write(!!(t && t.checked), TRANSLATE_KEY); },
             });
         }
         if (typeof document !== 'undefined') {

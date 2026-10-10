@@ -96,9 +96,14 @@ final groupToolsProvider = Provider<GroupToolsService>((ref) {
           ref.read(meshControllerProvider.notifier).bridge?.peerIdForPubkey(pk),
       sendMeshPm: (pk, content) => ctl().gtSendMeshPm(pk, content),
       notice: (text) => showToast(text),
-      notify: (title, body, route, type) =>
-          ctl().gtNotify(title: title, body: body, route: route, type: type),
+      notify: (title, body, route, type, [eventId]) => ctl().gtNotify(
+          title: title,
+          body: body,
+          route: route,
+          type: type,
+          eventId: eventId),
       nymOf: (pk) => ctl().gtNym(pk),
+      personHidden: (pk) => ref.read(appStateProvider).isPersonHidden(pk),
       sign: (template) => ctl().gtSign(template),
       verify: verifyGtEvent,
       sendCallSignal: (to, payload) async {

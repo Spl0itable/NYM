@@ -32,7 +32,8 @@
         },
 
         _acctLabel(a) {
-            const nym = a.nym || this._ac('Unnamed');
+            const nym = String(a.nym || '').replace(/#[0-9a-f]{4}$/i, '') || this._ac('Unnamed');
+            if (a.pubkey && window.NymSuffix) window.NymSuffix.remember(a.pubkey);
             return a.pubkey ? nym + '#' + a.pubkey.slice(-4) : nym;
         },
 
@@ -56,7 +57,7 @@
             const others = idx.accounts.filter((a) => a.pubkey && (!cur || a.id !== cur.id));
             if (!cur || cur.pubkey || !others.length) { row.classList.add('nm-hidden'); return; }
             const label = document.getElementById('setupAccountBackLabel');
-            if (label) label.textContent = from ? this._ac('Back to {nym}', { nym: this._acctLabel(from) }) : this._ac('Back to my identities');
+            if (label) this.renderNymText(label, from ? this._ac('Back to {nym}', { nym: this._acctLabel(from) }) : this._ac('Back to my identities'), from ? [from.pubkey] : []);
             row.classList.remove('nm-hidden');
         },
 
@@ -279,6 +280,7 @@
                 const leaving = A.pageId;
                 let carried = false;
                 try {
+                    if (typeof this._sendAsLeave === 'function') await this._sendAsLeave(r.index.active);
                     await this._acctPrepareLeave();
                     if (leaving && this.pubkey) {
                         const unsent = this._acctUnsent();
@@ -297,6 +299,7 @@
                     return false;
                 }
                 if (wipes.length) { try { await caches.delete(MEDIA_CACHE); } catch (_) { } }
+                if (typeof this._resetAppBadge === 'function') this._resetAppBadge();
                 try { history.replaceState(null, '', this._acctReturnUrl()); } catch (_) { }
                 location.reload();
                 return true;
@@ -332,13 +335,15 @@
                     ? `<img class="acct-avatar" src="${esc(avatarSrc)}" alt="" width="36" height="36">`
                     : `<span class="acct-avatar acct-avatar-blank">${esc((a.nym || '?').slice(0, 1).toUpperCase())}</span>`;
                 const nameHtml = a.pubkey
-                    ? `${esc(a.nym || this._ac('Unnamed'))}<span class="nym-suffix">#${esc(a.pubkey.slice(-4))}</span>`
+                    ? `<bdi class="acct-nym">${window.NymSuffix.pubkeyHtml(a.nym || this._ac('Unnamed'), a.pubkey)}</bdi>`
                     : esc(this._ac('New identity'));
                 const badge = BADGE[a.method] ? `<span class="acct-badge">${esc(this._ac(BADGE[a.method]))}</span>` : '';
                 const unread = !active && a.unread > 0 ? `<span class="acct-unread">${a.unread > 99 ? '99+' : a.unread}</span>` : '';
                 const check = active ? `<span class="acct-check" title="${esc(this._ac('Active identity'))}">${CHECK}</span>` : '';
                 const canNotify = a.pubkey && a.method !== 'anonymous';
-                const notify = canNotify ? `<label class="acct-notify"><input type="checkbox" data-on-change="acctNotify" data-acct-id="${esc(a.id)}"${a.notifyInactive ? ' checked' : ''}><span>${esc(this._ac("Notify me for this identity while it's not active"))}</span></label><div class="acct-notify-hint">${esc(this._ac('This can let the server see that these identities share a device.'))}</div>` : '';
+                const notify = canNotify ? `<div class="acct-notify"><label class="setting-toggle-row"><span class="form-label" id="acctNotifyLabel-${esc(a.id)}">${esc(this._ac("Notify me for this identity while it's not active"))}</span>`
+                    + `<span class="nym-switch"><input type="checkbox" role="switch" id="acctNotify-${esc(a.id)}" data-panel-toggle="notifyInactive" data-on-change="acctNotify" data-acct-id="${esc(a.id)}" aria-labelledby="acctNotifyLabel-${esc(a.id)}" aria-describedby="acctNotifyHint-${esc(a.id)}"${a.notifyInactive ? ' checked' : ''}><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span></label>`
+                    + `<div class="form-hint" id="acctNotifyHint-${esc(a.id)}">${esc(this._ac('This can let the server see that these identities share a device.'))}</div></div>` : '';
                 const copy = copyable.has(a.id) ? `<button type="button" class="acct-row-btn" data-action="acctCopyNsec" data-acct-id="${esc(a.id)}">${esc(this._ac('Copy nsec'))}</button>` : '';
                 return `<div class="acct-row${active ? ' is-active' : ''}" data-acct-row="${esc(a.id)}">`
                     + `<button type="button" class="acct-row-main" data-action="acctSwitch" data-acct-id="${esc(a.id)}"${active ? ' aria-current="true"' : ''}>${avatar}<span class="acct-name">${nameHtml}${badge}</span>${unread}${check}</button>`
@@ -404,20 +409,32 @@
             if (r.ok) await this._acctGo(r);
         },
 
-        _acctRemoveMessage(a) {
+        _acctName(a) {
+            return a.pubkey ? this._acctLabel(a) : this._ac('New identity');
+        },
+
+        _acctLanding(idx, id) {
+            const r = M().plan(idx, { type: 'remove', id });
+            const land = r.ok && r.index.active ? r.index.accounts.find((x) => x.id === r.index.active) : null;
+            if (id !== idx.active) return land ? this._ac('You will stay on {nym}.', { nym: this._acctName(land) }) : '';
+            return land ? this._ac('You will switch to {nym}.', { nym: this._acctName(land) }) : this._ac('You will return to the welcome screen.');
+        },
+
+        _acctRemoveMessage(a, landing) {
             const local = a.method === 'nsec' || a.method === 'ephemeral' || a.method === 'anonymous';
-            const head = this._ac('Remove {nym} from this device? Its messages, settings and caches on this device are deleted.', { nym: this._acctLabel(a) });
+            const head = this._ac('Remove {nym} from this device? Its messages, settings and caches on this device are deleted.', { nym: this._acctName(a) });
             const keys = local
                 ? this._ac('Its key is stored only on this device: back up the nsec first or you lose this identity.')
                 : this._ac('Its key stays in your signer; you can add it again later.');
-            return head + '\n\n' + keys;
+            return [head, keys, landing].filter(Boolean).join('\n\n');
         },
 
         async acctRemove(id) {
             const A = M();
-            const a = A.read().accounts.find((x) => x.id === id);
+            const idx = A.read();
+            const a = idx.accounts.find((x) => x.id === id);
             if (!a) return;
-            const ok = await window.showAppConfirm(this._acctRemoveMessage(a), { title: this._ac('Remove identity'), okLabel: this._ac('Remove'), danger: true });
+            const ok = await window.showAppConfirm(this._acctRemoveMessage(a, this._acctLanding(idx, id)), { title: this._ac('Remove identity'), okLabel: this._ac('Remove'), danger: true });
             if (!ok) return;
             const r = A.plan(A.read(), { type: 'remove', id });
             await this._acctGo(r);
@@ -428,9 +445,7 @@
             const idx = A.read();
             const cur = A.activeOf(idx);
             if (!cur || cur.id !== A.pageId) return false;
-            const planned = A.plan(idx, { type: 'logout' });
-            const next = planned.ok ? planned.index.accounts.find((a) => a.id === planned.index.active) : null;
-            const msg = this._acctRemoveMessage(cur) + (next ? '\n\n' + this._ac('You will switch to {nym}.', { nym: this._acctLabel(next) }) : '');
+            const msg = this._acctRemoveMessage(cur, this._acctLanding(idx, cur.id));
             const ok = await window.showAppConfirm(msg, { title: this._ac('Log out'), okLabel: this._ac('Log out'), danger: true });
             if (!ok) return true;
             await this._acctGo(A.plan(A.read(), { type: 'logout' }));
@@ -458,8 +473,13 @@
 
         async acctLogoutAll() {
             const A = M();
-            const n = A.read().accounts.length;
-            const ok = await window.showAppConfirm(this._ac('Log out of all {n} identities? Every identity and its data on this device is deleted. Back up any nsec you need first.', { n }), { title: this._ac('Log out of all identities'), okLabel: this._ac('Log out of all identities'), danger: true });
+            const idx = A.read();
+            const n = idx.accounts.length;
+            const welcome = this._ac('You will return to the welcome screen.');
+            const msg = n === 1
+                ? this._acctRemoveMessage(idx.accounts[0], welcome)
+                : [this._ac('Log out of all {n} identities? Every identity and its data on this device is deleted. Back up any nsec you need first.', { n }), idx.accounts.map((a) => this._acctName(a)).join('\n'), welcome].filter(Boolean).join('\n\n');
+            const ok = await window.showAppConfirm(msg, { title: this._ac('Log out of all identities'), okLabel: this._ac('Log out of all identities'), danger: true });
             if (!ok) return;
             await this._acctGo(A.plan(A.read(), { type: 'logoutAll' }));
         },
@@ -494,12 +514,29 @@
             }
         },
 
+        async _acctWatchRelay(a) {
+            const RB = window.NymRelayBlock;
+            if (!RB) return WATCH_RELAY;
+            let blocked = [];
+            try {
+                const A = M();
+                const vals = A && typeof A.stashKeys === 'function' ? await A.stashKeys(a.id, ['nym_blocked_relays']) : null;
+                const raw = vals && vals.nym_blocked_relays != null ? String(vals.nym_blocked_relays) : '';
+                if (raw) blocked = RB.list(RB.norm(JSON.parse(raw), Date.now()));
+            } catch (_) { blocked = []; }
+            const writeOnly = this.writeOnlyRelays instanceof Set ? this.writeOnlyRelays : new Set();
+            const others = (this.defaultRelays || []).filter((u) => u !== WATCH_RELAY && u !== this.appRelay && !writeOnly.has(u));
+            return RB.usable([WATCH_RELAY, ...others], blocked)[0] || WATCH_RELAY;
+        },
+
         _acctWatch(a) {
             const w = { pubkey: a.pubkey, ws: null, stopped: false, seen: new Set(), timer: null };
-            const open = () => {
+            const open = async () => {
                 if (w.stopped) return;
-                let url = WATCH_RELAY;
-                try { if (typeof this._getProxiedRelayUrl === 'function') url = this._getProxiedRelayUrl(WATCH_RELAY); } catch (_) { }
+                const relay = await this._acctWatchRelay(a);
+                if (w.stopped) return;
+                let url = relay;
+                try { if (typeof this._getProxiedRelayUrl === 'function') url = this._getProxiedRelayUrl(relay); } catch (_) { }
                 let ws;
                 try { ws = new WebSocket(url); } catch (_) { w.timer = setTimeout(open, this._acctWatchDelay(false)); return; }
                 w.ws = ws;
@@ -536,7 +573,7 @@
             return first ? 1000 + Math.floor(Math.random() * 11000) : 30000 + Math.floor(Math.random() * 30000);
         },
 
-        _acctBump(id) {
+        async _acctBump(id) {
             const A = M();
             const next = A.update((idx) => {
                 const a = idx.accounts.find((x) => x.id === id);
@@ -549,16 +586,25 @@
             this._acctRenderButton();
             if (document.getElementById('accountSwitcherModal')?.classList.contains('active')) this.openAccountSwitcher();
             try {
-                if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-                    const n = new Notification('Nymchat', { body: this._ac('New message for {nym}', { nym: this._acctLabel(a) }), tag: 'nym-acct-' + id });
-                    n.onclick = () => { try { window.focus(); } catch (_) { } this.acctSwitch(id); };
-                }
+                if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+                let active = null;
+                try { active = localStorage.getItem('nym_hide_previews'); } catch (_) { }
+                let target = null;
+                try {
+                    const vals = typeof A.stashKeys === 'function' ? await A.stashKeys(id, ['nym_hide_previews']) : null;
+                    target = vals && vals.nym_hide_previews != null ? String(vals.nym_hide_previews) : null;
+                } catch (_) { }
+                const notice = A.inactiveNotice(id, this._acctLabel(a), active, target);
+                const body = notice.nym == null ? this._ac(notice.text) : this._ac(notice.text, { nym: notice.nym });
+                const n = new Notification('Nymchat', { body, tag: 'nym-acct-' + notice.group });
+                n.onclick = () => { try { window.focus(); } catch (_) { } this.acctSwitch(id); };
             } catch (_) { }
         },
 
         async acctExtensionMismatch(expected) {
             const A = M();
             const others = A.read().accounts.filter((a) => a.id !== A.pageId && a.pubkey);
+            if (window.NymSuffix) window.NymSuffix.remember(String(expected || ''));
             const msg = this._ac('Your browser extension is signed in with a different key than {nym}. Switch the extension to that key and reload, or pick another identity. Nothing was sent.', { nym: (this.nym || 'nym') + '#' + String(expected || '').slice(-4) });
             const reload = await window.showAppConfirm(msg, { title: this._ac('Different key in extension'), okLabel: this._ac('Reload'), cancelLabel: others.length ? this._ac('Switch identity') : this._ac('Cancel') });
             if (reload) { location.reload(); return; }

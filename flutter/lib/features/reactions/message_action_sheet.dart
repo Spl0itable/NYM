@@ -3,16 +3,19 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/context_menu/context_menu_actions.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/nym_icons.dart';
 import '../dm_polls/dm_polls.dart';
 import '../group_tools/group_tools.dart';
 import '../i18n/i18n.dart';
+import '../layout/layout_model.dart' show mentionSuffixRanges;
 import '../media_notes/media_notes.dart' as notes;
 import '../messages/format/message_content.dart';
 import '../messages/inline_network_image.dart';
 import 'quick_react_popup.dart';
+import '../../core/theme/nym_a11y.dart';
 
 final RegExp _imageUrl = RegExp(
     r'(https?://[^\s#]+\.(?:png|jpe?g|gif|webp|avif)(?:\?[^\s#]*)?)(?:#\S*)?(?=\s|$)',
@@ -104,6 +107,9 @@ class MessageActionSheet extends StatelessWidget {
   final VoidCallback? onMore;
   final List<QuickContextItem> items;
 
+  Widget _slot(BuildContext context, Widget child) =>
+      context.largeTargets ? Expanded(child: child) : child;
+
   void _then(BuildContext context, VoidCallback run) {
     Navigator.of(context).pop();
     run();
@@ -129,7 +135,8 @@ class MessageActionSheet extends StatelessWidget {
             MediaQuery.withNoTextScaling(
               child: Container(
               key: const ValueKey('messageSheetReactRow'),
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: EdgeInsets.symmetric(
+                  horizontal: 4, vertical: context.largeTargets ? 0 : 4),
               decoration: BoxDecoration(
                 color: c.insetFill,
                 border: Border.all(color: c.insetBorder),
@@ -139,15 +146,17 @@ class MessageActionSheet extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   for (final e in emojis)
-                    Expanded(
-                      child: _SheetEmoji(
+                    _slot(
+                      context,
+                      _SheetEmoji(
                         emoji: e,
                         onTap: () => _then(context, () => onReact(e)),
                       ),
                     ),
                   if (more != null)
-                    Expanded(
-                      child: Semantics(
+                    _slot(
+                      context,
+                      Semantics(
                       button: true,
                       label: tr('More reactions'),
                       child: InkResponse(
@@ -155,7 +164,7 @@ class MessageActionSheet extends StatelessWidget {
                         onTap: () => _then(context, more),
                         radius: 22,
                         child: SizedBox(
-                          height: 44,
+                          height: context.largeTargets ? 44 : 36,
                           child: Center(
                             child: Container(
                               width: 36,
@@ -223,24 +232,13 @@ class _Preview extends StatelessWidget {
                 Row(
                   children: [
                     Flexible(
-                      child: Text.rich(
-                        TextSpan(children: [
-                          TextSpan(
-                            text: preview.nym,
-                            style: TextStyle(
-                                color: c.secondary,
-                                fontWeight: FontWeight.w600,
-                                fontSize: 13),
-                          ),
-                          if (preview.suffix.isNotEmpty)
-                            TextSpan(
-                              text: '#${preview.suffix}',
-                              style: TextStyle(
-                                  color: c.secondaryA(0.6), fontSize: 12),
-                            ),
-                        ]),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      child: NymLabel(
+                        preview.nym,
+                        suffix: preview.suffix,
+                        style: TextStyle(
+                            color: c.secondary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -249,12 +247,15 @@ class _Preview extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 3),
-                Text(
-                  text,
+                Text.rich(
+                  nymTextSpan(context, text,
+                      style: TextStyle(
+                          color: c.text, fontSize: 13, height: 1.35),
+                      extra: mentionSuffixRanges(text),
+                      bare: false),
                   key: const ValueKey('messageSheetPreviewText'),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: c.text, fontSize: 13, height: 1.35),
                 ),
               ],
             ),
@@ -292,8 +293,9 @@ class _SheetEmoji extends StatelessWidget {
       onTap: onTap,
       radius: 22,
       child: SizedBox(
-        height: 44,
+        height: context.largeTargets ? 44 : null,
         child: Center(
+          widthFactor: 1,
           child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
         child: InlineEmojiText(

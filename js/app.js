@@ -2291,6 +2291,136 @@ function onThreadsEnabledChange(value) {
 }
 window.onThreadsEnabledChange = onThreadsEnabledChange;
 
+const CACHE_PMS_OFF_CONFIRM = {
+    title: 'Stop caching PMs & group chats?',
+    body: 'This clears the PMs and group chats cached on this device. They load from the network again instead of appearing instantly at launch.',
+    ok: 'Turn off',
+};
+
+function resolvePillProximity(on, el) {
+    const ask = (nym._proximityAsk || 0) + 1;
+    nym._proximityAsk = ask;
+    const store = (v) => {
+        nym.settings.sortByProximity = v;
+        localStorage.setItem('nym_sort_proximity', String(v));
+    };
+    if (!on) {
+        store(false);
+        nym.userLocation = null;
+        nym.sortChannelsByActivity();
+        return true;
+    }
+    if (nym.userLocation) {
+        store(true);
+        nym.sortChannelsByActivity();
+        return true;
+    }
+    return new Promise((resolve) => {
+        const deny = () => {
+            if (nym._proximityAsk !== ask) { resolve(false); return; }
+            nym.displaySystemMessage('Location access denied. Proximity sorting disabled.');
+            store(false);
+            el.checked = false;
+            resolve(true);
+        };
+        const grant = (position) => {
+            if (nym._proximityAsk !== ask) { resolve(false); return; }
+            nym.userLocation = { lat: position.coords.latitude, lng: position.coords.longitude };
+            store(true);
+            nym.sortChannelsByActivity();
+            nym.displaySystemMessage('Location access granted. Geohash channels sorted by proximity.');
+            resolve(true);
+        };
+        if (!navigator.geolocation) { deny(); return; }
+        try { navigator.geolocation.getCurrentPosition(grant, deny); } catch (_) { deny(); }
+    });
+}
+
+async function resolvePillCachePMs(on, el) {
+    const wasOn = nym.settings.cachePMs !== false;
+    if (wasOn && !on) {
+        const ui = (s) => (typeof nym.uiText === 'function' ? nym.uiText(s) : s);
+        el.disabled = true;
+        let ok = false;
+        try {
+            ok = await window.showAppConfirm(ui(CACHE_PMS_OFF_CONFIRM.body), {
+                title: ui(CACHE_PMS_OFF_CONFIRM.title),
+                okLabel: ui(CACHE_PMS_OFF_CONFIRM.ok),
+                danger: true,
+            });
+        } catch (_) { ok = false; }
+        el.disabled = false;
+        if (!ok) {
+            el.checked = true;
+            return false;
+        }
+    }
+    nym.settings.cachePMs = on;
+    localStorage.setItem('nym_cache_pms', String(on));
+    if (wasOn && !on && typeof nym.clearPMCache === 'function') nym.clearPMCache().catch(() => { });
+    return true;
+}
+
+const SETTING_PILLS = {
+    showTimestamps(on) {
+        nym.settings.showTimestamps = on;
+        localStorage.setItem('nym_timestamps', String(on));
+        nym.refreshMessageTimestamps();
+    },
+    autoscroll(on) {
+        nym.settings.autoscroll = on;
+        localStorage.setItem('nym_autoscroll', String(on));
+    },
+    dmForwardSecrecyEnabled(on) {
+        nym.settings.dmForwardSecrecyEnabled = on;
+        localStorage.setItem('nym_dm_fwdsec_enabled', String(on));
+    },
+    appVerifiedFilter(on) {
+        const mode = normalizeAppVerifiedFilter(on ? 'on' : 'off');
+        nym.appVerifiedFilter = mode;
+        localStorage.setItem('nym_app_verified_filter', mode);
+    },
+    filterPacks() {
+        if (typeof nym.setFilterPacks !== 'function') return false;
+        nym.setFilterPacks(Array.from(document.querySelectorAll('[data-filter-pack]'))
+            .filter((b) => b.checked)
+            .map((b) => b.dataset.filterPack));
+    },
+    gesturesEnabled(on) {
+        nym.settings.gesturesEnabled = on;
+        localStorage.setItem('nym_gestures_enabled', String(on));
+    },
+    hideNonPinned(on) {
+        nym.hideNonPinned = on;
+        localStorage.setItem('nym_hide_non_pinned', String(on));
+        nym.applyHiddenChannels();
+    },
+    groupChatPMOnlyMode(on) {
+        const was = nym.settings.groupChatPMOnlyMode;
+        nym.settings.groupChatPMOnlyMode = on;
+        localStorage.setItem('nym_groupchat_pm_only_mode', String(on));
+        if (on !== was) nym.applyGroupChatPMOnlyMode(on);
+    },
+    lowDataMode(on) {
+        const was = nym.settings.lowDataMode;
+        nym.settings.lowDataMode = on;
+        localStorage.setItem('nym_low_data_mode', String(on));
+        if (on !== was) nym.applyLowDataMode(on);
+    },
+    sortByProximity: resolvePillProximity,
+    cachePMs: resolvePillCachePMs,
+};
+
+async function onSettingPillChange(el) {
+    if (!el || typeof nym === 'undefined' || !nym) return;
+    const apply = SETTING_PILLS[String(el.dataset.settingKey || '').split('.')[0]];
+    if (!apply) return;
+    if ((await apply(!!el.checked, el)) === false) return;
+    if (typeof nym._debouncedNostrSettingsSave === 'function') nym._debouncedNostrSettingsSave(1500);
+    else nostrSettingsSave();
+}
+window.onSettingPillChange = onSettingPillChange;
+
 function onTransparencyChange(value) {
     const enabled = value === 'true' || value === true;
     nym.settings.transparencyEnabled = enabled;
@@ -3474,9 +3604,9 @@ async function showSettings() {
         });
     }
 
-    const proximitySelect = document.getElementById('proximitySelect');
-    if (proximitySelect) {
-        proximitySelect.value = nym.settings.sortByProximity ? 'true' : 'false';
+    const proximityToggle = document.getElementById('proximityToggle');
+    if (proximityToggle) {
+        proximityToggle.checked = !!nym.settings.sortByProximity;
     }
 
     const blurSelect = document.getElementById('blurImagesSelect');
@@ -3535,7 +3665,7 @@ async function showSettings() {
         };
     }
 
-    const gesturesEnabledSelect = document.getElementById('gesturesEnabledSelect');
+    const gesturesEnabledToggle = document.getElementById('gesturesEnabledToggle');
     const swipeLeftSelect = document.getElementById('swipeLeftActionSelect');
     const swipeRightSelect = document.getElementById('swipeRightActionSelect');
     const swipeThresholdSelect = document.getElementById('swipeThresholdSelect');
@@ -3545,8 +3675,8 @@ async function showSettings() {
     const swipeReactEmojiGroup = document.getElementById('swipeReactEmojiGroup');
     const swipeReactEmojiBtn = document.getElementById('swipeReactEmojiBtn');
     const swipeReactEmojiPreview = document.getElementById('swipeReactEmojiPreview');
-    if (gesturesEnabledSelect) {
-        gesturesEnabledSelect.value = nym.settings.gesturesEnabled !== false ? 'true' : 'false';
+    if (gesturesEnabledToggle) {
+        gesturesEnabledToggle.checked = nym.settings.gesturesEnabled !== false;
     }
     if (swipeLeftSelect) swipeLeftSelect.value = nym.settings.swipeLeftAction || 'quote';
     if (swipeRightSelect) swipeRightSelect.value = nym.settings.swipeRightAction || 'translate';
@@ -3578,7 +3708,7 @@ async function showSettings() {
     if (swipeReactEmojiBtn) swipeReactEmojiBtn.onclick = openSwipeReactEmojiPicker;
 
     const updateSwipeSubsettings = () => {
-        const show = !gesturesEnabledSelect || gesturesEnabledSelect.value === 'true';
+        const show = !gesturesEnabledToggle || gesturesEnabledToggle.checked;
         if (swipeLeftGroup) swipeLeftGroup.style.display = show ? '' : 'none';
         if (swipeRightGroup) swipeRightGroup.style.display = show ? '' : 'none';
         if (swipeThresholdGroup) swipeThresholdGroup.style.display = show ? '' : 'none';
@@ -3586,7 +3716,7 @@ async function showSettings() {
         if (swipeReactEmojiGroup) swipeReactEmojiGroup.style.display = needsEmoji ? '' : 'none';
     };
     updateSwipeSubsettings();
-    if (gesturesEnabledSelect) gesturesEnabledSelect.onchange = updateSwipeSubsettings;
+    if (gesturesEnabledToggle) gesturesEnabledToggle.onchange = updateSwipeSubsettings;
 
     const handleSwipeActionChange = (selectEl) => {
         if (!selectEl) return;
@@ -3611,9 +3741,9 @@ async function showSettings() {
         nickStyleSelect.value = nym.settings.nickStyle || 'fancy';
     }
 
-    const hideNonPinnedSelect = document.getElementById('hideNonPinnedSelect');
-    if (hideNonPinnedSelect) {
-        hideNonPinnedSelect.value = nym.hideNonPinned ? 'true' : 'false';
+    const hideNonPinnedToggle = document.getElementById('hideNonPinnedToggle');
+    if (hideNonPinnedToggle) {
+        hideNonPinnedToggle.checked = !!nym.hideNonPinned;
     }
 
     nym.updateHiddenChannelsList();
@@ -3741,10 +3871,10 @@ async function showSettings() {
         nym._lastSoundPlayedAt = 0;
         nym.playSound(this.value);
     };
-    document.getElementById('autoscrollSelect').value = nym.settings.autoscroll;
-    const threadsSelectEl = document.getElementById('threadsSelect');
-    if (threadsSelectEl) threadsSelectEl.value = nym.settings.threadsEnabled !== false ? 'true' : 'false';
-    document.getElementById('timestampSelect').value = nym.settings.showTimestamps;
+    document.getElementById('autoscrollToggle').checked = String(nym.settings.autoscroll) === 'true';
+    const threadsToggleEl = document.getElementById('threadsToggle');
+    if (threadsToggleEl) threadsToggleEl.checked = nym.settings.threadsEnabled !== false;
+    document.getElementById('timestampToggle').checked = String(nym.settings.showTimestamps) === 'true';
     document.getElementById('timeFormatSelect').value = nym.settings.timeFormat;
     const dateFormatSelectEl = document.getElementById('dateFormatSelect');
     if (dateFormatSelectEl) dateFormatSelectEl.value = nym.settings.dateFormat || 'default';
@@ -3762,6 +3892,7 @@ async function showSettings() {
     nym.updateFriendsList();
     nym.updateKeywordList();
     nym.updateBlockedChannelsList();
+    nym.updateBlockedRelaysList();
 
     const acceptPMsSel = document.getElementById('acceptPMsSelect');
     if (acceptPMsSel) {
@@ -3815,18 +3946,18 @@ async function showSettings() {
         }
     }
 
-    const dmEnabledSel = document.getElementById('dmForwardSecrecySelect');
+    const dmEnabledSel = document.getElementById('dmForwardSecrecyToggle');
     const dmTtlSel = document.getElementById('dmTTLSelect');
     const dmTtlGroup = document.getElementById('dmTTLGroup');
 
     if (dmEnabledSel && dmTtlSel && dmTtlGroup) {
-        dmEnabledSel.value = nym.settings.dmForwardSecrecyEnabled ? 'true' : 'false';
+        dmEnabledSel.checked = !!nym.settings.dmForwardSecrecyEnabled;
         dmTtlSel.value = String(nym.settings.dmTTLSeconds || 86400);
         dmTtlGroup.style.display = '';
         dmTtlGroup.classList.toggle('nm-hidden', !nym.settings.dmForwardSecrecyEnabled);
 
         dmEnabledSel.onchange = () => {
-            dmTtlGroup.classList.toggle('nm-hidden', dmEnabledSel.value !== 'true');
+            dmTtlGroup.classList.toggle('nm-hidden', !dmEnabledSel.checked);
         };
     }
 
@@ -3849,9 +3980,9 @@ async function showSettings() {
             : (nym.settings.showStatus === 'friends' ? 'friends' : 'true');
     }
 
-    const cachePMsSel = document.getElementById('cachePMsSelect');
-    if (cachePMsSel) {
-        cachePMsSel.value = nym.settings.cachePMs !== false ? 'true' : 'false';
+    const cachePMsToggle = document.getElementById('cachePMsToggle');
+    if (cachePMsToggle) {
+        cachePMsToggle.checked = nym.settings.cachePMs !== false;
     }
 
     initWallpaperUI();
@@ -3871,9 +4002,9 @@ async function showSettings() {
         transparencySel.value = nym.settings.transparencyEnabled === true ? 'true' : 'false';
     }
 
-    const columnsWallpaperSel = document.getElementById('columnsWallpaperSelect');
-    if (columnsWallpaperSel) {
-        columnsWallpaperSel.value = nym.settings.columnsWallpaper === true ? 'true' : 'false';
+    const columnsWallpaperToggle = document.getElementById('columnsWallpaperToggle');
+    if (columnsWallpaperToggle) {
+        columnsWallpaperToggle.checked = nym.settings.columnsWallpaper === true;
     }
 
     const textSizeSlider = document.getElementById('textSizeSlider');
@@ -3884,24 +4015,24 @@ async function showSettings() {
         if (textSizeValue) textSizeValue.textContent = currentSize + 'px';
     }
 
-    const gcPmOnlySelect = document.getElementById('groupChatPMOnlySelect');
-    if (gcPmOnlySelect) {
-        gcPmOnlySelect.value = nym.settings.groupChatPMOnlyMode ? 'true' : 'false';
+    const gcPmOnlyToggle = document.getElementById('groupChatPMOnlyToggle');
+    if (gcPmOnlyToggle) {
+        gcPmOnlyToggle.checked = !!nym.settings.groupChatPMOnlyMode;
         const geohashSettings = document.querySelectorAll('[data-geohash-setting]');
         geohashSettings.forEach(el => {
             el.style.display = nym.settings.groupChatPMOnlyMode ? 'none' : '';
         });
-        gcPmOnlySelect.onchange = function () {
-            const enabled = this.value === 'true';
+        gcPmOnlyToggle.onchange = function () {
+            const enabled = this.checked;
             geohashSettings.forEach(el => {
                 el.style.display = enabled ? 'none' : '';
             });
         };
     }
 
-    const lowDataSelect = document.getElementById('lowDataModeSelect');
-    if (lowDataSelect) {
-        lowDataSelect.value = nym.settings.lowDataMode ? 'true' : 'false';
+    const lowDataToggle = document.getElementById('lowDataModeToggle');
+    if (lowDataToggle) {
+        lowDataToggle.checked = !!nym.settings.lowDataMode;
     }
 
     const powDifficultySelect = document.getElementById('powDifficultySelect');
@@ -3909,9 +4040,9 @@ async function showSettings() {
         powDifficultySelect.value = String(normalizePowDifficulty(localStorage.getItem('nym_pow_difficulty')));
     }
 
-    const appVerifiedSelect = document.getElementById('appVerifiedSelect');
-    if (appVerifiedSelect) {
-        appVerifiedSelect.value = normalizeAppVerifiedFilter(localStorage.getItem('nym_app_verified_filter'));
+    const appVerifiedToggle = document.getElementById('appVerifiedToggle');
+    if (appVerifiedToggle) {
+        appVerifiedToggle.checked = normalizeAppVerifiedFilter(localStorage.getItem('nym_app_verified_filter')) === 'on';
     }
 
     if (typeof nym._syncSpamFilterUi === 'function') nym._syncSpamFilterUi();
@@ -4018,12 +4149,9 @@ async function refreshAppCacheSize() {
 async function saveSettings() {
     const theme = document.getElementById('themeSelect').value;
     const sound = document.getElementById('soundSelect').value;
-    const autoscroll = document.getElementById('autoscrollSelect').value === 'true';
-    const showTimestamps = document.getElementById('timestampSelect').value === 'true';
     const timeFormat = document.getElementById('timeFormatSelect').value;
     const dateFormatEl = document.getElementById('dateFormatSelect');
     const dateFormat = dateFormatEl ? dateFormatEl.value : (nym.settings.dateFormat || 'default');
-    const sortByProximity = document.getElementById('proximitySelect').value === 'true';
     const blurImagesVal = document.getElementById('blurImagesSelect').value;
     const blurImages = blurImagesVal === 'friends' ? 'friends' : blurImagesVal === 'true';
     const nickStyle = document.getElementById('nickStyleSelect').value;
@@ -4039,8 +4167,6 @@ async function saveSettings() {
 
     nym.settings.theme = theme;
     nym.settings.sound = sound;
-    nym.settings.autoscroll = autoscroll;
-    nym.settings.showTimestamps = showTimestamps;
     nym.settings.timeFormat = timeFormat;
     nym.settings.dateFormat = dateFormat;
 
@@ -4059,13 +4185,8 @@ async function saveSettings() {
         localStorage.setItem('nym_accept_calls', acceptCallsEl.value);
     }
 
-    const dmEnabled = document.getElementById('dmForwardSecrecySelect').value === 'true';
     const dmTTL = parseInt(document.getElementById('dmTTLSelect').value || '86400', 10);
-
-    nym.settings.dmForwardSecrecyEnabled = dmEnabled;
     nym.settings.dmTTLSeconds = isFinite(dmTTL) && dmTTL > 0 ? dmTTL : 86400;
-
-    localStorage.setItem('nym_dm_fwdsec_enabled', String(nym.settings.dmForwardSecrecyEnabled));
     localStorage.setItem('nym_dm_ttl_seconds', String(nym.settings.dmTTLSeconds));
 
     const SAVE_INDICATOR_SCOPES = ['disabled', 'pms', 'groups', 'pms-groups', 'everywhere'];
@@ -4096,12 +4217,6 @@ async function saveSettings() {
     }
 
     const VALID_SWIPE_ACTIONS = ['quote', 'translate', 'copy', 'react', 'zap', 'slap', 'hug', 'none'];
-    const gesturesEnabledEl = document.getElementById('gesturesEnabledSelect');
-    if (gesturesEnabledEl) {
-        const on = gesturesEnabledEl.value === 'true';
-        nym.settings.gesturesEnabled = on;
-        localStorage.setItem('nym_gestures_enabled', String(on));
-    }
     const swipeLeftEl = document.getElementById('swipeLeftActionSelect');
     if (swipeLeftEl && VALID_SWIPE_ACTIONS.includes(swipeLeftEl.value)) {
         nym.settings.swipeLeftAction = swipeLeftEl.value;
@@ -4144,18 +4259,6 @@ async function saveSettings() {
         }
     }
 
-    // Turning the cache off wipes it so decrypted content isn't left at rest.
-    const cachePMsEl = document.getElementById('cachePMsSelect');
-    if (cachePMsEl) {
-        const wasOn = nym.settings.cachePMs !== false;
-        const nowOn = cachePMsEl.value === 'true';
-        nym.settings.cachePMs = nowOn;
-        localStorage.setItem('nym_cache_pms', String(nowOn));
-        if (wasOn && !nowOn && typeof nym.clearPMCache === 'function') {
-            nym.clearPMCache().catch(() => { });
-        }
-    }
-
     // Hidden, kept for compatibility.
     const autoEphemeral = document.getElementById('autoEphemeralSelect').value === 'true';
     if (autoEphemeral) {
@@ -4184,11 +4287,6 @@ async function saveSettings() {
         }
     }
 
-    const hideNonPinned = document.getElementById('hideNonPinnedSelect').value === 'true';
-    nym.hideNonPinned = hideNonPinned;
-    localStorage.setItem('nym_hide_non_pinned', String(hideNonPinned));
-    nym.applyHiddenChannels();
-
     const pinnedValueInput = document.getElementById('pinnedLandingChannelValue');
     if (pinnedValueInput && pinnedValueInput.value) {
         try {
@@ -4204,40 +4302,6 @@ async function saveSettings() {
         }
     }
 
-    if (sortByProximity) {
-        if (!nym.userLocation) {
-            navigator.geolocation.getCurrentPosition(
-                async (position) => {
-                    nym.userLocation = {
-                        lat: position.coords.latitude,
-                        lng: position.coords.longitude
-                    };
-                    nym.settings.sortByProximity = true;
-                    localStorage.setItem('nym_sort_proximity', 'true');
-
-                    nym.sortChannelsByActivity();
-
-                    nym.displaySystemMessage('Location access granted. Geohash channels sorted by proximity.');
-                },
-                (error) => {
-                    nym.displaySystemMessage('Location access denied. Proximity sorting disabled.');
-                    nym.settings.sortByProximity = false;
-                    localStorage.setItem('nym_sort_proximity', 'false');
-                    document.getElementById('proximitySelect').value = 'false';
-                }
-            );
-        } else {
-            nym.settings.sortByProximity = true;
-            localStorage.setItem('nym_sort_proximity', 'true');
-            nym.sortChannelsByActivity();
-        }
-    } else {
-        nym.settings.sortByProximity = false;
-        localStorage.setItem('nym_sort_proximity', 'false');
-        nym.userLocation = null;
-        nym.sortChannelsByActivity();
-    }
-
     nym.applyTheme(theme);
     nym.saveSettings();
     localStorage.setItem('nym_time_format', timeFormat);
@@ -4249,26 +4313,6 @@ async function saveSettings() {
     nym.settings.textSize = textSize;
     localStorage.setItem('nym_text_size', String(textSize));
     document.documentElement.style.setProperty('--user-text-size', textSize + 'px');
-
-    const gcPmOnlySelect = document.getElementById('groupChatPMOnlySelect');
-    if (gcPmOnlySelect) {
-        const gcPmOnlyMode = gcPmOnlySelect.value === 'true';
-        const wasGcPmOnly = nym.settings.groupChatPMOnlyMode;
-        nym.settings.groupChatPMOnlyMode = gcPmOnlyMode;
-        localStorage.setItem('nym_groupchat_pm_only_mode', String(gcPmOnlyMode));
-
-        if (gcPmOnlyMode !== wasGcPmOnly) {
-            nym.applyGroupChatPMOnlyMode(gcPmOnlyMode);
-        }
-    }
-
-    const lowDataMode = document.getElementById('lowDataModeSelect').value === 'true';
-    const wasLowData = nym.settings.lowDataMode;
-    nym.settings.lowDataMode = lowDataMode;
-    localStorage.setItem('nym_low_data_mode', String(lowDataMode));
-    if (lowDataMode !== wasLowData) {
-        nym.applyLowDataMode(lowDataMode);
-    }
 
     nym.displaySystemMessage('Settings saved');
 
@@ -4802,12 +4846,16 @@ async function checkSavedConnection() {
             nym.nostrLoginPubkey = pubkey;
             nym.nostrLoginSecretKey = secretKey;
             nym.nostrLoginMethod = method;
+            dropReplacedSessionNym();
 
             // Apply the cached profile before relays connect; fresh data overwrites later.
             nym.nym = 'nym'; // fallback until kind 0 profile is fetched
             try {
                 const cached = JSON.parse(localStorage.getItem('nym_nostr_login_profile') || '{}');
                 if (cached.name) nym.nym = cached.name;
+                if (cached.name && nym.nym && cached.name !== nym.nym) {
+                    localStorage.setItem('nym_nostr_login_profile', JSON.stringify(Object.assign({}, cached, { name: nym.nym })));
+                }
                 if (cached.avatar) {
                     nym.userAvatars.set(pubkey, cached.avatar);
                     nym.cacheAvatarImage(pubkey, cached.avatar);
@@ -4910,7 +4958,7 @@ async function checkSavedConnection() {
                         nymSecretSet('nym_session_nsec', nsec);
                     } catch (e) { }
                 }
-                if (!savedNick && nym.nym) {
+                if (nym.nym && savedNick !== nym.nym) {
                     try { localStorage.setItem('nym_auto_ephemeral_nick', nym.nym); } catch (e) { }
                 }
             } else {
@@ -5005,6 +5053,7 @@ async function checkSavedConnection() {
             return;
         }
     }
+    if (nym && typeof nym._resetAppBadge === 'function') nym._resetAppBadge();
     document.getElementById('setupModal').classList.add('active');
     updateSetupInviteBanner();
     updateSetupDeletedNotice();
@@ -5025,6 +5074,19 @@ async function initializeNym() {
         const nymInput = document.getElementById('nymInput').value.trim();
         let isDeveloperLogin = false;
 
+        const nostrLoginActive = isNostrLoggedIn();
+        let nostrPubkey = null, nostrSecretKey = null, nostrMethod = null;
+        if (nostrLoginActive) {
+            nostrMethod = localStorage.getItem('nym_nostr_login_method');
+            nostrPubkey = localStorage.getItem('nym_nostr_login_pubkey');
+            if (nostrMethod === 'nsec') {
+                try {
+                    const nsec = nymSecretGet('nym_nostr_login_nsec');
+                    if (nsec) nostrSecretKey = nym.decodeNsec(nsec);
+                } catch (_) { }
+            }
+        }
+
         if (nymInput && nym.isReservedNick(nymInput)) {
             const result = await showDevNsecModal('init');
             if (!result) {
@@ -5041,11 +5103,16 @@ async function initializeNym() {
         } else {
             // Reuse the keypair if one was already created from avatar upload.
             nym.connectionMode = 'ephemeral';
-            if (!setupKeypair) {
-                await nym.generateKeypair();
+            if (nostrPubkey) {
+                nym.pubkey = nostrPubkey;
+                nym.privkey = nostrSecretKey || null;
+            } else {
+                if (!setupKeypair) {
+                    await nym.generateKeypair();
+                }
+                if (typeof nym.pqRootPresetNew === 'function') nym.pqRootPresetNew();
             }
-            if (typeof nym.pqRootPresetNew === 'function') nym.pqRootPresetNew();
-            nym.nym = nymInput || nym.generateRandomNym();
+            nym.nym = (nostrPubkey ? nym.nym : nymInput) || nym.generateRandomNym();
             document.getElementById('currentNym').innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
             nym.updateSidebarAvatar();
             localStorage.removeItem('nym_connection_mode');
@@ -5053,9 +5120,10 @@ async function initializeNym() {
 
         localStorage.setItem('nym_auto_ephemeral', 'true');
         if (nymInput) {
-            localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
-            // Mark as user-chosen so it qualifies for D1 mirroring.
-            try { localStorage.setItem('nym_custom_nick', nym.parseNymFromDisplay(nymInput)); } catch (e) { }
+            if (!nostrPubkey) {
+                localStorage.setItem('nym_auto_ephemeral_nick', nymInput);
+                try { localStorage.setItem('nym_custom_nick', nym.parseNymFromDisplay(nymInput)); } catch (e) { }
+            }
             if (nym.isReservedNick(nymInput)) {
                 const nsecVal = document.getElementById('devNsecInput').value.trim();
                 if (nsecVal) {
@@ -5065,7 +5133,7 @@ async function initializeNym() {
             }
         }
 
-        if (!isDeveloperLogin && nym.privkey) {
+        if (!isDeveloperLogin && !nostrPubkey && nym.privkey) {
             try {
                 const nsec = window.NostrTools.nip19.nsecEncode(nym.privkey);
                 nymSecretSet('nym_session_nsec', nsec);
@@ -5078,17 +5146,7 @@ async function initializeNym() {
         }
 
         // Apply identity keys before connecting so relay subscriptions (especially DMs) use the right pubkey.
-        const nostrLoginActive = isNostrLoggedIn();
-        let nostrPubkey = null, nostrSecretKey = null, nostrMethod = null;
         if (nostrLoginActive) {
-            nostrMethod = localStorage.getItem('nym_nostr_login_method');
-            nostrPubkey = localStorage.getItem('nym_nostr_login_pubkey');
-            if (nostrMethod === 'nsec') {
-                try {
-                    const nsec = nymSecretGet('nym_nostr_login_nsec');
-                    if (nsec) nostrSecretKey = nym.decodeNsec(nsec);
-                } catch (_) { }
-            }
             if (nostrPubkey) {
                 nym.pubkey = nostrPubkey;
                 if (nostrSecretKey) {
@@ -5254,11 +5312,39 @@ function switchSetupTab(tab) {
     if (isLogin) prepareNostrLoginUI();
 }
 
+function uiVars(text, vars) {
+    let out = nym && typeof nym.uiText === 'function' ? nym.uiText(text) : text;
+    if (vars) for (const k of Object.keys(vars)) out = out.split('{' + k + '}').join(String(vars[k]));
+    return out;
+}
+
+function identityLabel(name, pubkey) {
+    if (nym && typeof nym._acctLabel === 'function') return nym._acctLabel({ nym: name, pubkey });
+    return (String(name || '').replace(/#[0-9a-f]{4}$/i, '') || uiVars('Unnamed')) + '#' + pubkey.slice(-4);
+}
+
+function savedLoginLabel(pubkey, npub) {
+    if (!/^[0-9a-f]{64}$/i.test(pubkey)) return npub || uiVars('this identity');
+    let name = '';
+    try {
+        const saved = window.NymAccounts && window.NymAccounts.read().accounts.find((a) => a.pubkey === pubkey);
+        if (saved) name = saved.nym;
+    } catch (_) { }
+    if (!name) {
+        try {
+            const p = JSON.parse(localStorage.getItem('nym_nostr_login_profile') || '{}');
+            if (p && typeof p.name === 'string') name = p.name;
+        } catch (_) { }
+    }
+    return identityLabel(name, pubkey);
+}
+
 async function openNostrLogin() {
     if (isNostrLoggedIn()) {
-        const method = localStorage.getItem('nym_nostr_login_method');
-        const npub = localStorage.getItem('nym_nostr_login_npub') || '';
-        if (await window.showAppConfirm(`Already logged in via ${method}${npub ? ' (' + npub + ')' : ''}.\n\nWould you like to log out of your Nostr identity?`, { okLabel: 'Log out', danger: true })) {
+        const method = localStorage.getItem('nym_nostr_login_method') || '';
+        const how = uiVars({ extension: 'Extension (NIP-07)', nip46: 'Bunker (NIP-46)' }[method] || method);
+        const who = savedLoginLabel(localStorage.getItem('nym_nostr_login_pubkey') || '', localStorage.getItem('nym_nostr_login_npub') || '');
+        if (await window.showAppConfirm(uiVars('Already logged in via {method} as {nym}. Log out of it? You will stay on the welcome screen.', { method: how, nym: who }), { okLabel: uiVars('Log out'), danger: true })) {
             nostrLogout();
         }
         return;
@@ -5919,6 +6005,18 @@ async function finishNostrLogin(message) {
     }
 }
 
+function dropReplacedSessionNym() {
+    let replaced = null;
+    try {
+        const nsec = nymSecretGet('nym_session_nsec');
+        if (nsec) replaced = window.NostrTools.getPublicKey(nym.decodeNsec(nsec));
+    } catch (_) { replaced = null; }
+    nymSecretRemove('nym_session_nsec');
+    localStorage.removeItem('nym_auto_ephemeral_nick');
+    localStorage.removeItem('nym_custom_nick');
+    if (replaced && typeof nym.pqRootForget === 'function') nym.pqRootForget(replaced);
+}
+
 function applyNostrLogin(pubkey, secretKey, method) {
     nym.nostrLoginPubkey = pubkey;
     nym.nostrLoginSecretKey = secretKey; // null for extension
@@ -5936,6 +6034,12 @@ function applyNostrLogin(pubkey, secretKey, method) {
     }
     nym.pubkey = pubkey;
     if (identitySwitched && typeof nym.pqResetIdentityState === 'function') nym.pqResetIdentityState();
+    if (identitySwitched) {
+        dropReplacedSessionNym();
+        nym.nym = nym.generateRandomNym();
+        const shown = document.getElementById('currentNym');
+        if (shown) shown.innerHTML = nym.formatNymWithPubkey(nym.nym, nym.pubkey);
+    }
 
     function updateSidebarFromProfile() {
         const user = nym.users.get(pubkey);
@@ -6109,12 +6213,16 @@ async function nostrSettingsSave() {
 
 // D1 settings read retry count and backoff (2s, 4s, 8s, 16s).
 const SETTINGS_LOAD_MAX_RETRIES = 4;
+const SETTINGS_LOAD_REUSE_MS = 10000;
 
 async function settingsLoad(attempt = 0) {
+    const recent = nym && nym._settingsBootLoaded;
+    if (attempt === 0 && recent && recent.pubkey === nym.pubkey && Date.now() - recent.at < SETTINGS_LOAD_REUSE_MS) return;
     let status = 'failed';
     if (nym && attempt === 0 && typeof nym._awaitReadState === 'function') nym._awaitReadState(12000);
     if (nym && typeof nym.settingsLoadFromD1 === 'function') {
         try { status = await nym.settingsLoadFromD1(); } catch (_) { status = 'failed'; }
+        if (status === 'loaded') nym._settingsBootLoaded = { pubkey: nym.pubkey, at: Date.now() };
     }
     if (nym && typeof nym._markReadStateKnown === 'function') nym._markReadStateKnown();
     if (status !== 'loaded') nostrSettingsLoad();
@@ -6314,6 +6422,9 @@ async function applyNostrSettingsAdditive(s) {
                     senderPubkey: pk,
                     eventId: n.eventId || n.channelInfo?.eventId || undefined
                 };
+                if (!entry.channelInfo) {
+                    for (const k of ['type', 'route', 'threadRoot']) if (typeof n[k] === 'string' && n[k]) entry[k] = n[k];
+                }
                 entry.viewed = !!n.viewed || viewedFromLastRead || nym._isNotificationSeen(entry);
                 if (entry.viewed) {
                     seenAdded = nym._rememberNotificationSeen(entry, false) || seenAdded;
@@ -6754,8 +6865,8 @@ async function applyNostrSettings(s) {
         const prevThreads = nym.settings.threadsEnabled !== false;
         nym.settings.threadsEnabled = s.threadsEnabled;
         localStorage.setItem('nym_threads_enabled', String(s.threadsEnabled));
-        const threadsSel = document.getElementById('threadsSelect');
-        if (threadsSel) threadsSel.value = s.threadsEnabled ? 'true' : 'false';
+        const threadsToggle = document.getElementById('threadsToggle');
+        if (threadsToggle) threadsToggle.checked = s.threadsEnabled;
         if (prevThreads !== s.threadsEnabled && typeof nym.applyThreadsEnabled === 'function') {
             nym.applyThreadsEnabled();
         }
@@ -6829,8 +6940,8 @@ async function applyNostrSettings(s) {
     if (typeof s.columnsWallpaper === 'boolean') {
         nym.settings.columnsWallpaper = s.columnsWallpaper;
         localStorage.setItem('nym_columns_wallpaper', String(s.columnsWallpaper));
-        const cwSel = document.getElementById('columnsWallpaperSelect');
-        if (cwSel) cwSel.value = s.columnsWallpaper ? 'true' : 'false';
+        const cwToggle = document.getElementById('columnsWallpaperToggle');
+        if (cwToggle) cwToggle.checked = s.columnsWallpaper;
         applyColumnsWallpaper(s.columnsWallpaper);
     }
 
@@ -6857,9 +6968,13 @@ async function applyNostrSettings(s) {
         }
     }
 
+    let filtersSynced = false;
     if (Array.isArray(s.blockedChannels)) {
+        const blockedBefore = new Set(nym.blockedChannels || []);
         nym.blockedChannels = new Set(s.blockedChannels);
         localStorage.setItem('nym_blocked_channels', JSON.stringify(s.blockedChannels));
+        if (typeof nym._applySyncedChannelBlocks === 'function') nym._applySyncedChannelBlocks(blockedBefore);
+        filtersSynced = true;
     }
 
     if (Array.isArray(s.userJoinedChannels)) {
@@ -6891,11 +7006,20 @@ async function applyNostrSettings(s) {
         if (typeof nym.applyHiddenChannels === 'function') {
             nym.applyHiddenChannels();
         }
+        filtersSynced = true;
     }
 
     if (Array.isArray(s.blockedUsers)) {
+        const usersBefore = new Set(nym.blockedUsers || []);
         nym.blockedUsers = new Set(s.blockedUsers);
         localStorage.setItem('nym_blocked', JSON.stringify(s.blockedUsers));
+        for (const pk of nym.blockedUsers) {
+            if (!usersBefore.has(pk) && typeof nym.hideMessagesFromBlockedUser === 'function') nym.hideMessagesFromBlockedUser(pk);
+        }
+        for (const pk of usersBefore) {
+            if (!nym.blockedUsers.has(pk) && typeof nym.showMessagesFromUnblockedUser === 'function') nym.showMessagesFromUnblockedUser(pk);
+        }
+        filtersSynced = true;
     }
 
     if (Array.isArray(s.friends)) {
@@ -6926,6 +7050,13 @@ async function applyNostrSettings(s) {
     if (Array.isArray(s.blockedKeywords)) {
         nym.blockedKeywords = new Set(s.blockedKeywords);
         localStorage.setItem('nym_blocked_keywords', JSON.stringify(s.blockedKeywords));
+        if (typeof nym._hideRenderedKeywordMatches === 'function') nym._hideRenderedKeywordMatches();
+        filtersSynced = true;
+    }
+    if ((filtersSynced || Array.isArray(s.friends)) && typeof nym._contentFiltersChanged === 'function') nym._contentFiltersChanged();
+
+    if (s.blockedRelays && typeof s.blockedRelays === 'object' && typeof nym.applySyncedBlockedRelays === 'function') {
+        nym.applySyncedBlockedRelays(s.blockedRelays);
     }
 
     if (typeof s.translateLanguage === 'string') {
@@ -7007,6 +7138,7 @@ async function applyNostrSettings(s) {
     if (typeof s.notificationsEnabled === 'boolean') {
         nym.notificationsEnabled = s.notificationsEnabled;
         localStorage.setItem('nym_notifications_enabled', String(s.notificationsEnabled));
+        if (typeof nym._updateNotificationBadge === 'function') nym._updateNotificationBadge();
     }
     if (typeof s.groupNotifyMentionsOnly === 'boolean') {
         nym.groupNotifyMentionsOnly = s.groupNotifyMentionsOnly;
@@ -7019,6 +7151,7 @@ async function applyNostrSettings(s) {
     if (typeof s.notifyFriendsOnly === 'boolean') {
         nym.notifyFriendsOnly = s.notifyFriendsOnly;
         localStorage.setItem('nym_notify_friends_only', String(s.notifyFriendsOnly));
+        if (typeof nym._contentFiltersChanged === 'function') nym._contentFiltersChanged();
     }
     if (s.eventToasts && typeof s.eventToasts === 'object' && typeof nym.applyEventToastSettings === 'function') {
         nym.applyEventToastSettings(s.eventToasts);
@@ -7267,7 +7400,9 @@ async function applyNostrSettings(s) {
 
 async function signOut() {
     if (nym && typeof nym.acctLogout === 'function' && await nym.acctLogout()) return;
-    if (!(await window.showAppConfirm('Sign out and disconnect from Nymchat?', { okLabel: 'Sign out', danger: true }))) return;
+    const who = nym && nym.pubkey ? identityLabel(nym.nym, nym.pubkey) : uiVars('this identity');
+    const ask = uiVars('Sign out of {nym} and disconnect from Nymchat?', { nym: who }) + '\n\n' + uiVars('You will return to the welcome screen.');
+    if (!(await window.showAppConfirm(ask, { okLabel: uiVars('Sign out'), danger: true }))) return;
     localStorage.removeItem('nym_auto_ephemeral');
     localStorage.removeItem('nym_auto_ephemeral_nick');
     localStorage.removeItem('nym_auto_ephemeral_channel');
@@ -7362,14 +7497,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('nymInput').focus();
 
-    document.getElementById('timestampSelect').addEventListener('change', (e) => {
+    document.getElementById('timestampToggle').addEventListener('change', (e) => {
         const timeFormatGroup = document.getElementById('timeFormatGroup');
         if (timeFormatGroup) {
-            timeFormatGroup.style.display = e.target.value === 'true' ? 'block' : 'none';
+            timeFormatGroup.style.display = e.target.checked ? 'block' : 'none';
         }
         const dateFormatGroup = document.getElementById('dateFormatGroup');
         if (dateFormatGroup) {
-            dateFormatGroup.style.display = e.target.value === 'true' ? 'block' : 'none';
+            dateFormatGroup.style.display = e.target.checked ? 'block' : 'none';
         }
     });
 
@@ -7781,6 +7916,10 @@ async function routeToUrlChannel() {
 function openRelayStats() {
     const modal = document.getElementById('relayStatsModal');
     if (!modal) return;
+    const search = rsEnsureRelaySearch();
+    nym._relaySearchQuery = '';
+    if (search) search.value = '';
+    _rsExpandedRelay = null;
     syncLowDataToggleFromState();
     modal.classList.add('active');
     startRelayStatsLoop();
@@ -7790,19 +7929,22 @@ function syncLowDataToggleFromState() {
     const toggle = document.getElementById('rsLowDataToggle');
     if (!toggle || typeof nym === 'undefined') return;
     toggle.checked = !!(nym.settings && nym.settings.lowDataMode);
+    const state = toggle.checked ? 'true' : 'false';
+    if (toggle.getAttribute('aria-checked') !== state) toggle.setAttribute('aria-checked', state);
 }
 
 function toggleLowDataModeFromStats(e) {
     if (typeof nym === 'undefined') return;
     const enabled = !!(e && e.target && e.target.checked);
+    if (e && e.target && e.target.setAttribute) e.target.setAttribute('aria-checked', enabled ? 'true' : 'false');
     const wasEnabled = !!(nym.settings && nym.settings.lowDataMode);
     if (enabled === wasEnabled) return;
 
     nym.settings.lowDataMode = enabled;
     localStorage.setItem('nym_low_data_mode', String(enabled));
 
-    const settingsSelect = document.getElementById('lowDataModeSelect');
-    if (settingsSelect) settingsSelect.value = enabled ? 'true' : 'false';
+    const settingsToggle = document.getElementById('lowDataModeToggle');
+    if (settingsToggle) settingsToggle.checked = enabled;
 
     nym.applyLowDataMode(enabled);
     nym.displaySystemMessage(enabled ? 'Low Data Mode enabled' : 'Low Data Mode disabled');
@@ -8000,7 +8142,9 @@ function renderRelayStats() {
             shardLine = document.createElement('div');
             shardLine.id = 'rsShardLine';
             shardLine.className = 'rs-shard-line';
-            listEl.parentNode.insertBefore(shardLine, listEl);
+            const searchWrap = document.getElementById('rsRelaySearchWrap');
+            const anchor = searchWrap && searchWrap.parentNode === listEl.parentNode ? searchWrap : listEl;
+            listEl.parentNode.insertBefore(shardLine, anchor);
         }
         const si = Array.isArray(s.shardInfo) ? s.shardInfo : [];
         if (si.length) {
@@ -8112,15 +8256,17 @@ function rsRenderRelayDetail(row, url, stats) {
         const labels = {
             'channel-get': 'Channel history', 'channel-activity': 'Channel activity',
             'channel-active': 'Active channels', 'channel-delete': 'Channel cleanup',
-            'pm-get': 'Private messages', 'pm-put': 'Message backup',
+            'pm-get': 'Private messages', 'pm-get:inbox': 'Group messages', 'pm-put': 'Message backup',
             'pm-deposit': 'Message delivery', 'pm-delete': 'Message cleanup',
             'profile-get': 'Profiles', 'profile-set': 'Profile updates',
             'emoji-get': 'Emoji', 'settings-get': 'Settings', 'settings-set': 'Settings sync',
             'settings-delete': 'Settings cleanup',
+            'shop-status': 'Shop status', 'filter-get': 'Filters',
             'auth': 'Sign-in', 'other': 'Other'
         };
+        const uiLabel = (s) => (typeof nym.uiText === 'function' ? nym.uiText(s) : s);
         // Fall back to a title-cased name so no raw hyphenated action ever shows.
-        const labelFor = (a) => labels[a] || String(a).replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const labelFor = (a) => uiLabel(labels[a] || String(a).replace(/[-_:]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()));
         const rows = [...perAction.entries()]
             .map(([action, s]) => ({ label: labelFor(action), count: s.count, bytes: (s.bytesSent || 0) + (s.bytesReceived || 0) }))
             .sort((a, b) => b.bytes - a.bytes);
@@ -8129,17 +8275,205 @@ function rsRenderRelayDetail(row, url, stats) {
         ).join('');
         return;
     }
+    let kindsEl = detail.querySelector('.rs-kind-rows');
+    if (!kindsEl) {
+        detail.textContent = '';
+        kindsEl = document.createElement('div');
+        kindsEl.className = 'rs-kind-rows';
+        detail.appendChild(kindsEl);
+    }
     const perKind = stats.kindStatsPerRelay && stats.kindStatsPerRelay.get(url);
     if (!perKind || perKind.size === 0) {
-        detail.innerHTML = '<div class="rs-kind-row nm-app-5">No events recorded from this relay yet.</div>';
+        kindsEl.innerHTML = '<div class="rs-kind-row nm-app-5">No events recorded from this relay yet.</div>';
+    } else {
+        const rows = [...perKind.entries()]
+            .map(([kind, s]) => ({ kind, count: s.count, bytes: s.bytes }))
+            .sort((a, b) => b.bytes - a.bytes);
+        kindsEl.innerHTML = rows.map(r =>
+            `<div class="rs-kind-row"><span>kind ${r.kind}</span><span>${r.count} evt</span><span>${formatBytes(r.bytes)}</span></div>`
+        ).join('');
+    }
+    rsRenderRelayActions(detail, url);
+}
+
+function rsText(s) {
+    return (typeof nym !== 'undefined' && typeof nym.uiText === 'function') ? nym.uiText(s) : s;
+}
+
+function rsRenderRelayActions(detail, url) {
+    if (typeof nym === 'undefined' || typeof nym.relayBlockGuard !== 'function') return;
+    const why = nym.relayBlockGuard(url);
+    const sig = why;
+    let el = detail.querySelector('.rs-relay-actions');
+    if (el && el.dataset.sig === sig) return;
+    if (!el) {
+        el = document.createElement('div');
+        el.className = 'rs-relay-actions';
+        el.addEventListener('click', (e) => e.stopPropagation());
+        detail.appendChild(el);
+    }
+    el.dataset.sig = sig;
+    el.textContent = '';
+    if (why === 'required') {
+        const tag = document.createElement('span');
+        tag.className = 'rs-relay-required';
+        tag.textContent = rsText('Required');
+        const note = document.createElement('span');
+        note.className = 'rs-relay-note';
+        note.textContent = rsText("The app relay carries Nymchat's own channels and can't be blocked.");
+        el.append(tag, note);
         return;
     }
-    const rows = [...perKind.entries()]
-        .map(([kind, s]) => ({ kind, count: s.count, bytes: s.bytes }))
-        .sort((a, b) => b.bytes - a.bytes);
-    detail.innerHTML = rows.map(r =>
-        `<div class="rs-kind-row"><span>kind ${r.kind}</span><span>${r.count} evt</span><span>${formatBytes(r.bytes)}</span></div>`
-    ).join('');
+    if (why === 'invalid' || why === 'already') return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'rs-relay-block-btn';
+    btn.textContent = rsText('Block');
+    if (why === 'last-default') {
+        btn.disabled = true;
+        const note = document.createElement('span');
+        note.className = 'rs-relay-note';
+        note.textContent = rsText('Keep at least one default relay unblocked: direct connections read from these.');
+        el.append(btn, note);
+        return;
+    }
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        rsConfirmBlockRelay(url);
+    });
+    el.appendChild(btn);
+}
+
+async function rsConfirmBlockRelay(url) {
+    if (typeof nym === 'undefined' || typeof nym.blockRelay !== 'function') return;
+    const why = nym.relayBlockGuard(url);
+    if (why !== 'ok' && why !== 'signer') return;
+    const shown = NymRelayBlock.shown(url);
+    const parts = [];
+    if (why === 'signer') {
+        parts.push(rsText('{relay} is the relay your remote signer uses. Your signer keeps its own connection, so signing still works.').replace('{relay}', shown));
+    }
+    parts.push(rsText('Block {relay}? The app stops connecting to it for this account, here and on your other devices.').replace('{relay}', shown));
+    const bare = typeof nym.relayBlockLeavesGeoBare === 'function' ? nym.relayBlockLeavesGeoBare(url) : '';
+    if (bare) {
+        parts.push(rsText('Live messages in #{geohash} need one of its nearest relays, and this is the last one you have not blocked.').replace('{geohash}', bare));
+    }
+    parts.push(rsText("History the app backend already stored can't be filtered by relay, and blocking doesn't reduce app backend traffic."));
+    const ok = await window.showAppConfirm(parts.join('\n\n'), { title: rsText('Block relay?'), okLabel: rsText('Block'), danger: true });
+    if (!ok) return;
+    const res = nym.blockRelay(url, { confirmed: why === 'signer' });
+    if (res === 'blocked' && _rsExpandedRelay === url) _rsExpandedRelay = null;
+    renderRelayStats();
+}
+
+function rsUnblockRelay(url) {
+    if (typeof nym === 'undefined' || typeof nym.unblockRelay !== 'function') return;
+    nym.unblockRelay(url);
+    renderRelayStats();
+}
+
+function rsEnsureRelaySearch() {
+    const input = document.getElementById('rsRelaySearch');
+    if (!input || typeof nym === 'undefined') return null;
+    if (!input.dataset.bound) {
+        input.dataset.bound = '1';
+        input.addEventListener('input', () => {
+            nym._relaySearchQuery = input.value;
+            renderRelayList(nym.relayPool, nym.relayStats);
+        });
+        const modal = document.getElementById('relayStatsModal');
+        const clearOnEscape = (e) => {
+            if (!(nym._relaySearchQuery || '').trim() && !input.value) return false;
+            e.preventDefault();
+            rsClearRelaySearch(true);
+            return true;
+        };
+        if (modal) {
+            modal.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape' || e.defaultPrevented) return;
+                clearOnEscape(e);
+            });
+            modal.addEventListener('nym-sheet-escape', (e) => { clearOnEscape(e); });
+        }
+    }
+    const label = rsText('Search relays');
+    if (input.placeholder !== label) input.placeholder = label;
+    if (input.getAttribute('aria-label') !== label) input.setAttribute('aria-label', label);
+    return input;
+}
+
+function rsClearRelaySearch(focus) {
+    const input = document.getElementById('rsRelaySearch');
+    nym._relaySearchQuery = '';
+    if (input) {
+        input.value = '';
+        if (focus) { try { input.focus(); } catch (_) { } }
+    }
+    renderRelayList(nym.relayPool, nym.relayStats);
+}
+
+function rsRenderBlockedRelays(query) {
+    const box = document.getElementById('rsBlockedRelays');
+    if (!box || typeof nym === 'undefined' || typeof nym.blockedRelayList !== 'function') return;
+    const all = nym.blockedRelayList();
+    const list = query ? all.filter(u => NymRelayBlock.searchMatch(u, query)) : all;
+    const notes = list.map(u => (typeof nym.relayBlockGeoNote === 'function' ? nym.relayBlockGeoNote(u) : ''));
+    const sig = JSON.stringify([all.length, list, notes, rsText('Blocked ({n})')]);
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    box.textContent = '';
+    const title = document.createElement('div');
+    title.className = 'relay-stats-section-title relay-stats-blocked-title';
+    title.textContent = rsText('Blocked ({n})').replace('{n}', String(all.length));
+    box.appendChild(title);
+    const rows = document.createElement('div');
+    rows.className = 'relay-stats-blocked-list';
+    if (!all.length) {
+        const empty = document.createElement('div');
+        empty.className = 'relay-stats-blocked-empty';
+        empty.textContent = rsText('No blocked relays. Open a relay above to block it.');
+        rows.appendChild(empty);
+    } else if (!list.length) {
+        const empty = document.createElement('div');
+        empty.className = 'relay-stats-blocked-empty';
+        empty.textContent = rsText("No blocked relays match '{query}'").replace('{query}', query);
+        rows.appendChild(empty);
+    }
+    list.forEach((url, i) => {
+        const row = document.createElement('div');
+        row.className = 'relay-stats-blocked-row';
+        row.dataset.rsUrl = url;
+        const name = document.createElement('span');
+        name.className = 'relay-stats-url';
+        name.title = url;
+        name.textContent = NymRelayBlock.shown(url);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rs-relay-unblock-btn';
+        btn.textContent = rsText('Unblock');
+        btn.setAttribute('aria-label', rsText('Unblock {relay}').replace('{relay}', NymRelayBlock.shown(url)));
+        btn.addEventListener('click', (e) => { e.stopPropagation(); rsUnblockRelay(url); });
+        row.append(name, btn);
+        if (notes[i]) {
+            const note = document.createElement('div');
+            note.className = 'rs-relay-note relay-stats-blocked-note';
+            note.textContent = rsText('Live messages in #{geohash} need one of its nearest relays. Unblock one of them to receive them.').replace('{geohash}', notes[i]);
+            row.appendChild(note);
+        }
+        rows.appendChild(row);
+    });
+    box.appendChild(rows);
+    const hint = document.createElement('div');
+    hint.className = 'relay-stats-blocked-hint';
+    hint.textContent = rsText("Blocking stops live traffic with a relay for this account on every device. History the app backend already stored can't be filtered by relay, because the backend doesn't record which relay a message came from, and blocking doesn't reduce app backend traffic.");
+    box.appendChild(hint);
+    const publishOnly = [...(nym.writeOnlyRelays || [])].map(u => NymRelayBlock.shown(u));
+    if (publishOnly.length) {
+        const pub = document.createElement('div');
+        pub.className = 'relay-stats-blocked-hint relay-stats-blocked-publish';
+        pub.textContent = rsText("Messages you send are also published to {relay}, a publish-only relay. It isn't listed here and can't be blocked.").replace('{relay}', publishOnly.join(', '));
+        box.appendChild(pub);
+    }
 }
 
 function renderRelayList(pool, stats) {
@@ -8159,6 +8493,7 @@ function renderRelayList(pool, stats) {
         known.forEach(url => {
             if (url === 'relay-pool') return;
             if (writeOnly.has(url)) return;
+            if (nym.isRelayBlocked(url)) return;
             entries.push({
                 url,
                 open: connectedSet.has(url),
@@ -8169,6 +8504,7 @@ function renderRelayList(pool, stats) {
     } else {
         pool.forEach((relay, url) => {
             if (writeOnly.has(url)) return;
+            if (nym.isRelayBlocked(url)) return;
             const isOpen = relay.ws && relay.ws.readyState === WebSocket.OPEN;
             entries.push({
                 url,
@@ -8184,16 +8520,28 @@ function renderRelayList(pool, stats) {
         return b.events - a.events;
     });
 
-    const apiHasData = typeof nym !== 'undefined' && nym.relayStats &&
+    const query = String((typeof nym !== 'undefined' && nym._relaySearchQuery) || '').trim();
+    const searching = query.length > 0;
+    rsEnsureRelaySearch();
+    rsRenderBlockedRelays(query);
+    const countEl = document.getElementById('rsRelaySearchCount');
+    const total = entries.length;
+    const shown = searching ? entries.filter(e => NymRelayBlock.searchMatch(e.url, query)) : entries;
+    const countText = searching ? rsText('{n} of {m}').replace('{n}', String(shown.length)).replace('{m}', String(total)) : '';
+    if (countEl && countEl.textContent !== countText) countEl.textContent = countText;
+
+    const apiHasData = !searching && typeof nym !== 'undefined' && nym.relayStats &&
         ((nym.relayStats.apiBytesReceived || 0) + (nym.relayStats.apiBytesSent || 0)) > 0;
 
-    if (entries.length === 0 && !apiHasData) {
+    if (!searching && entries.length === 0 && !apiHasData) {
         listEl.innerHTML = '<div class="nm-app-5">No relays connected</div>';
         return;
     }
 
-    // Two sections: App data (the /api backend) and Relay data.
     const ordered = [];
+    if (searching && shown.length === 0) {
+        ordered.push({ url: '__empty__', isEmpty: true });
+    }
     if (apiHasData) {
         const apiOpen = !!(nym._apiSock && nym._apiSock.ws && nym._apiSock.ws.readyState === WebSocket.OPEN);
         ordered.push({ url: '__apihdr__', isHeader: true, label: 'App data' });
@@ -8203,13 +8551,14 @@ function renderRelayList(pool, stats) {
             bytesReceived: nym.relayStats.apiBytesReceived || 0
         });
     }
-    if (entries.length) {
+    if (shown.length) {
         ordered.push({ url: '__relayhdr__', isHeader: true, label: 'Relay data' });
-        for (const e of entries) ordered.push(e);
+        for (const e of shown) ordered.push(e);
     }
 
+    listEl.querySelectorAll(':scope > .nm-app-5').forEach(n => n.remove());
     const existing = new Map();
-    listEl.querySelectorAll('.relay-stats-row, .relay-stats-section-title').forEach(row => {
+    listEl.querySelectorAll('.relay-stats-row, .relay-stats-section-title, .relay-stats-empty').forEach(row => {
         const url = row.dataset.rsUrl;
         if (url) existing.set(url, row);
     });
@@ -8228,6 +8577,25 @@ function renderRelayList(pool, stats) {
     ordered.forEach(e => {
         seen.add(e.url);
         let row = existing.get(e.url);
+        if (e.isEmpty) {
+            if (!row) {
+                row = document.createElement('div');
+                row.className = 'relay-stats-empty';
+                row.dataset.rsUrl = e.url;
+                const msg = document.createElement('span');
+                const clear = document.createElement('button');
+                clear.type = 'button';
+                clear.className = 'rs-relay-clear-btn';
+                clear.addEventListener('click', (ev) => { ev.stopPropagation(); rsClearRelaySearch(true); });
+                row.append(msg, clear);
+            }
+            const msgText = rsText("No relays match '{query}'").replace('{query}', query);
+            if (row.firstChild.textContent !== msgText) row.firstChild.textContent = msgText;
+            const clearText = rsText('Clear');
+            if (row.lastChild.textContent !== clearText) row.lastChild.textContent = clearText;
+            place(row);
+            return;
+        }
         if (e.isHeader) {
             if (!row) {
                 row = document.createElement('div');

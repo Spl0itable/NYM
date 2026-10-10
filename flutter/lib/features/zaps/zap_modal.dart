@@ -20,6 +20,8 @@ import 'lnurl.dart';
 import 'zap_logic.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_label.dart' show NymText;
+import '../../widgets/common/dialog_button.dart';
 
 /// Zap modal: amount and comment, LNURL-pay invoice with QR, then LUD-21 payment polling.
 class ZapModal extends ConsumerStatefulWidget {
@@ -333,7 +335,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
               children: [
                 _header(c),
                 const SizedBox(height: 24),
-                Text(
+                NymText(
                   widget.messageId != null
                       ? tr('Zapping @{nym}', {'nym': widget.recipientNym})
                       : tr("Zapping @{nym}'s profile",
@@ -664,22 +666,19 @@ class _ZapModalState extends ConsumerState<ZapModal> {
   }
 
   Widget _actions(NymColors c) {
+    final cancel = DialogButton.secondary(
+        label: tr('Cancel'), onTap: () => Navigator.of(context).pop());
     if (_phase == _Phase.invoice) {
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      return DialogActions(
         children: [
-          _iconBtn(c, tr('Cancel'), () => Navigator.of(context).pop()),
-          const SizedBox(width: 10),
-          _sendBtn(c, tr("I've paid"), _checkingManual ? null : _manualCheck),
+          cancel,
+          DialogButton(
+              label: tr("I've paid"),
+              onTap: _checkingManual ? null : _manualCheck),
         ],
       );
     }
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _iconBtn(c, tr('Cancel'), () => Navigator.of(context).pop()),
-      ],
-    );
+    return DialogActions(children: [cancel]);
   }
 
   Widget _iconBtn(NymColors c, String label, VoidCallback? onTap) {
@@ -706,34 +705,7 @@ class _ZapModalState extends ConsumerState<ZapModal> {
     );
   }
 
-  Widget _sendBtn(NymColors c, String label, VoidCallback? onTap) {
-    return Opacity(
-      opacity: onTap == null ? 0.35 : 1,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: NymRadius.rsm,
-        child: Container(
-          height: 42,
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-          decoration: BoxDecoration(
-            color: c.primaryA(0.1),
-            border: Border.all(color: c.primaryA(0.3)),
-            borderRadius: NymRadius.rsm,
-          ),
-          child: Text(
-            label.toUpperCase(),
-            style: TextStyle(
-              color: c.primary,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 1.5,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+
 
   Widget _input(
     NymColors c,

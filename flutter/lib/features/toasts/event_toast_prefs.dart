@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../state/settings_provider.dart';
 import '../i18n/i18n.dart';
+import '../settings/settings_widgets.dart' show SettingsToggleRow;
 import 'event_toast_settings_store.dart';
 import 'event_toasts.dart';
 
@@ -40,16 +41,22 @@ class _EventToastPrefsSectionState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _Check(
-              key: const ValueKey('eventToastsMaster'),
+            SettingsToggleRow(
+              key: const ValueKey('panel-eventToasts'),
               label: tr(EventToasts.strings['master']!),
               value: _s.enabled,
+              spacing: 0,
               onChanged: (v) => _save(_s.copyWith(enabled: v)),
             ),
             Padding(
-              padding: const EdgeInsets.only(top: 10, bottom: 4),
-              child: Text(tr(EventToasts.strings['whileOpen']!),
-                  style: TextStyle(color: c.textDim, fontSize: 12)),
+              padding: const EdgeInsets.only(top: 10, bottom: 6),
+              child: Text(tr(EventToasts.strings['whileOpen']!).toUpperCase(),
+                  style: TextStyle(
+                    color: c.textDim,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1.2,
+                  )),
             ),
             Wrap(
               spacing: 6,
@@ -65,87 +72,41 @@ class _EventToastPrefsSectionState
               ],
             ),
             Padding(
-              padding: const EdgeInsets.only(top: 10, bottom: 2),
-              child: Text(tr(EventToasts.strings['typesHeading']!),
-                  style: TextStyle(color: c.textDim, fontSize: 12)),
+              padding: const EdgeInsets.only(top: 10, bottom: 4),
+              child: Text(tr(EventToasts.strings['typesHeading']!).toUpperCase(),
+                  style: TextStyle(
+                    color: c.textDim,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1.2,
+                  )),
             ),
-            Opacity(
-              opacity: typesOn ? 1 : 0.5,
-              child: Padding(
-                padding: const EdgeInsets.only(left: 20),
-                child: LayoutBuilder(builder: (context, box) {
-                  const gap = 12.0;
-                  final cols =
-                      ((box.maxWidth + gap) / (190 + gap)).floor().clamp(1, 8);
-                  final w = (box.maxWidth - gap * (cols - 1)) / cols;
-                  return Wrap(
-                    spacing: gap,
-                    children: [
-                      for (final k in EventToasts.types)
-                        SizedBox(
-                          width: w,
-                          child: _Check(
-                            key: ValueKey('eventToastType-$k'),
-                            label: tr(EventToasts.settingLabels[k]!),
-                            value: _s.typeOn(k),
-                            indent: true,
-                            onChanged: typesOn
-                                ? (v) => _save(_s.copyWith(types: {k: v}))
-                                : null,
-                          ),
+            Padding(
+              padding: const EdgeInsets.only(left: 20),
+              child: LayoutBuilder(builder: (context, box) {
+                const gap = 12.0;
+                final cols =
+                    ((box.maxWidth + gap) / (190 + gap)).floor().clamp(1, 8);
+                final w = (box.maxWidth - gap * (cols - 1)) / cols;
+                return Wrap(
+                  spacing: gap,
+                  children: [
+                    for (final k in EventToasts.types)
+                      SizedBox(
+                        width: w,
+                        child: SettingsToggleRow(
+                          key: ValueKey('panel-eventToastType.$k'),
+                          label: tr(EventToasts.settingLabels[k]!),
+                          value: _s.typeOn(k),
+                          spacing: 0,
+                          onChanged: typesOn
+                              ? (v) => _save(_s.copyWith(types: {k: v}))
+                              : null,
                         ),
-                    ],
-                  );
-                }),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Check extends StatelessWidget {
-  const _Check({
-    super.key,
-    required this.label,
-    required this.value,
-    required this.onChanged,
-    this.indent = false,
-  });
-
-  final String label;
-  final bool value;
-  final ValueChanged<bool>? onChanged;
-  final bool indent;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    final cb = onChanged;
-    return Padding(
-      padding: EdgeInsets.only(top: indent ? 6 : 0),
-      child: InkWell(
-        onTap: cb == null ? null : () => cb(!value),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 22,
-              height: 22,
-              child: Checkbox(
-                value: value,
-                onChanged: cb == null ? null : (v) => cb(v ?? false),
-                activeColor: c.primary,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child:
-                  Text(label, style: TextStyle(color: c.textDim, fontSize: 13)),
+                      ),
+                  ],
+                );
+              }),
             ),
           ],
         ),

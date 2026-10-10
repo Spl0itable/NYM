@@ -94,7 +94,8 @@ class ChannelListItem extends ConsumerWidget {
       children: [
         nameText,
         if (preview.text.isNotEmpty)
-          rowPreviewLine(context, preview.text, 'channel')
+          rowPreviewLine(context, preview.text, 'channel', preview.dim,
+              preview.sender, preview.bodyAt)
         else
           _ChannelLocationLine(
             geohash: entry.geohashKey,

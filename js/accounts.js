@@ -61,6 +61,12 @@
         return get('nym_auto_ephemeral_nick') || '';
     }
 
+    function ownNym(nym, pubkey) {
+        const n = typeof nym === 'string' ? nym : '';
+        if (!/^[0-9a-f]{64}$/i.test(pubkey || '')) return n;
+        return n.replace(/#[0-9a-f]{4}$/i, '#' + pubkey.slice(-4).toLowerCase());
+    }
+
     function newAccount(o) {
         return Object.assign({ id: '', ns: '', pubkey: '', method: '', nym: '', avatar: '', addedAt: 0, notifyInactive: false, unread: 0, returnTo: null }, o);
     }
@@ -75,7 +81,7 @@
         const accounts = j.accounts.filter((a) => a && typeof a.id === 'string' && /^[0-9a-z]{1,32}$/.test(a.id)).map((a) => newAccount({
             id: a.id, ns: typeof a.ns === 'string' ? a.ns : a.id,
             pubkey: typeof a.pubkey === 'string' ? a.pubkey : '', method: typeof a.method === 'string' ? a.method : '',
-            nym: typeof a.nym === 'string' ? a.nym : '', avatar: typeof a.avatar === 'string' && a.avatar.length <= AVATAR_MAX ? a.avatar : '',
+            nym: ownNym(a.nym, a.pubkey), avatar: typeof a.avatar === 'string' && a.avatar.length <= AVATAR_MAX ? a.avatar : '',
             addedAt: Number(a.addedAt) || 0, notifyInactive: a.notifyInactive === true, unread: Math.max(0, Number(a.unread) || 0),
             returnTo: typeof a.returnTo === 'string' ? a.returnTo : null
         }));
@@ -91,7 +97,7 @@
         const method = methodFromStorage(get);
         if (!method) return emptyIndex();
         const pubkey = (method === 'nsec' || method === 'extension' || method === 'nip46') ? (get('nym_nostr_login_pubkey') || '') : '';
-        const acct = newAccount({ id, ns: '', pubkey, method, nym: nymFromStorage(get, method), addedAt: now });
+        const acct = newAccount({ id, ns: '', pubkey, method, nym: ownNym(nymFromStorage(get, method), pubkey), addedAt: now });
         return { v: 1, active: id, accounts: [acct], journal: null };
     }
 
@@ -443,12 +449,23 @@
         return gone;
     }
 
+    function staleNyms(raw, index) {
+        let j;
+        try { j = JSON.parse(raw); } catch (_) { return false; }
+        const list = j && Array.isArray(j.accounts) ? j.accounts : [];
+        return index.accounts.some((a) => {
+            const was = list.find((x) => x && x.id === a.id);
+            return !!was && typeof was.nym === 'string' && was.nym !== a.nym;
+        });
+    }
+
     function boot(store, opts) {
         const o = opts || {};
         const get = (k) => { try { return store.getItem(k); } catch (_) { return null; } };
         const index = loadOrMigrate(get, o.id ? o.id() : 'x', o.now ? o.now() : 0);
         const recovering = !!index.journal;
-        if (!recovering && index.accounts.length && get(INDEX_KEY) === null) {
+        const stored = get(INDEX_KEY);
+        if (!recovering && index.accounts.length && (stored === null || staleNyms(stored, index))) {
             try { store.setItem(INDEX_KEY, JSON.stringify(index)); } catch (_) { }
         }
         let dropDbs = [];
@@ -465,6 +482,8 @@
             async merge(id, data) { s.set(id, Object.assign({}, data, s.get(id) || {})); },
             async get(id) { return s.has(id) ? Object.assign({}, s.get(id)) : null; },
             async key(id, k) { const d = s.get(id); return d && Object.prototype.hasOwnProperty.call(d, k) ? d[k] : null; },
+            async keys(id, names) { const d = s.get(id) || {}; const out = {}; for (const k of names || []) out[k] = Object.prototype.hasOwnProperty.call(d, k) ? d[k] : null; return out; },
+            async setKey(id, k, v) { if (!s.has(id)) return false; s.get(id)[k] = String(v); return true; },
             async drop(id) { s.delete(id); },
             async del(id) { s.delete(id); c.delete(id); },
             async ids() { return [...s.keys()]; },
@@ -541,6 +560,26 @@
                 const q = t.objectStore('stash').get([id, k]);
                 q.onsuccess = () => { box.v = q.result === undefined ? null : q.result; };
             }),
+            keys: (id, names) => run(['stash'], 'readonly', (t, box) => {
+                const st = t.objectStore('stash');
+                const out = {};
+                box.v = out;
+                for (const k of names || []) {
+                    out[k] = null;
+                    const q = st.get([id, k]);
+                    q.onsuccess = () => { out[k] = q.result === undefined ? null : q.result; };
+                }
+            }),
+            setKey: (id, k, v) => run(['stash'], 'readwrite', (t, box) => {
+                const st = t.objectStore('stash');
+                const q = st.getAllKeys(range(id), 1);
+                box.v = false;
+                q.onsuccess = () => {
+                    if (!q.result || !q.result.length) return;
+                    st.put(String(v), [id, k]);
+                    box.v = true;
+                };
+            }),
             drop: (id) => run(['stash'], 'readwrite', (t) => { t.objectStore('stash').delete(range(id)); }),
             del: (id) => run(['stash', 'carry'], 'readwrite', (t) => {
                 t.objectStore('stash').delete(range(id));
@@ -570,6 +609,17 @@
         };
     }
 
+    function hidesPreviews(raw) {
+        return raw === '1' || raw === 'true';
+    }
+
+    function inactiveNotice(id, label, activeHides, targetHides) {
+        if (hidesPreviews(activeHides) || hidesPreviews(targetHides)) {
+            return { text: 'New message on another identity', nym: null, group: 'other' };
+        }
+        return { text: 'New message for {nym}', nym: String(label || ''), group: String(id || '') };
+    }
+
     function randomId() {
         const b = new Uint8Array(6);
         try { self.crypto.getRandomValues(b); } catch (_) { for (let i = 0; i < 6; i++) b[i] = Math.floor(Math.random() * 256); }
@@ -578,9 +628,9 @@
 
     const api = {
         MAX_ACCOUNTS, INDEX_KEY, NS_PREFIX, METHODS, CACHE_DB, STASH_DB, DROP_KEY, AVATAR_MAX, SETTINGS_SCOPE,
-        nsKey, dbName, classify, methodFromStorage, nymFromStorage, parseIndex, loadOrMigrate,
+        nsKey, dbName, classify, methodFromStorage, nymFromStorage, ownNym, parseIndex, loadOrMigrate,
         emptyIndex, plan, runEffects, commit, recover, sweep, boot, randomId, activeOf, isQuota,
-        snapshot, legacyStashes, migrateLegacy, memStash, idbStash
+        snapshot, legacyStashes, migrateLegacy, memStash, idbStash, hidesPreviews, inactiveNotice
     };
     self.NymAccounts = api;
 
@@ -653,6 +703,20 @@
     api.stashKey = async function (id, k) {
         if (!stash) return null;
         try { return await stash.key(id, k); } catch (_) { return null; }
+    };
+    api.stashKeys = async function (id, names) {
+        if (!stash || !id) return null;
+        try { return await stash.keys(id, names); } catch (_) { return null; }
+    };
+    api.stashSet = function (id, k, v) {
+        if (!stash || !id || !k) return Promise.resolve(false);
+        return Promise.resolve(locked(async () => {
+            if (api.frozen) return false;
+            const idx = api.read();
+            if (idx.journal || idx.active !== api.pageId || id === api.pageId) return false;
+            if (!idx.accounts.some((a) => a.id === id)) return false;
+            return !!(await stash.setKey(id, k, v));
+        })).catch(() => false);
     };
     api.carryPut = async function (id, v) {
         if (!stash || !id) return false;

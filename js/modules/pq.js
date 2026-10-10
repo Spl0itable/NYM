@@ -314,6 +314,15 @@
             try { localStorage.removeItem(PQ_ROOT_LS_KEY); } catch (_) { }
         },
 
+        pqRootForget(pubkey) {
+            if (!pubkey || pubkey === this.pubkey) return false;
+            const map = this._pqRootStoredMap();
+            if (map.unreadable || !map.byPubkey[pubkey]) return false;
+            delete map.byPubkey[pubkey];
+            this._pqRootWriteMap(map);
+            return true;
+        },
+
         // A record exists that this device cannot open; it must not generate or announce (spec §7).
         pqRootLocked() { return !!this._pqRootLocked; },
 
@@ -482,7 +491,7 @@
                 this._pqRootRetryTimer = null;
                 if (this.pqRootSettled()) return;
                 if (typeof this.settingsLoadFromD1 !== 'function') return;
-                try { await this.settingsLoadFromD1(); } catch (_) { }
+                try { await this.settingsLoadFromD1({ root: true }); } catch (_) { }
             }, PQ_ROOT_RETRY_MS[n]);
         },
 
@@ -722,7 +731,7 @@
             const now = Date.now();
             if (this._pqRootRetryAt && now - this._pqRootRetryAt < 60000) return false;
             this._pqRootRetryAt = now;
-            try { await this.settingsLoadFromD1(); } catch (_) { }
+            try { await this.settingsLoadFromD1({ root: true }); } catch (_) { }
             return this.pqRootSettled();
         },
 

@@ -28,6 +28,8 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
   final _box = GlobalKey();
   bool _hover = false;
   bool _down = false;
+  Widget? _face;
+  Object? _faceKey;
 
   void _show() {
     final box = _box.currentContext?.findRenderObject() as RenderBox?;
@@ -41,7 +43,13 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
   Widget build(BuildContext context) {
     final c = context.nym;
     final lit = _hover || _down;
-    return Listener(
+    final tip = tr('More');
+    final hit = sidebarRowMenuHit();
+    final key = (c, lit, widget.semanticLabel, tip, hit);
+    final face = _face;
+    if (face != null && _faceKey == key) return face;
+    _faceKey = key;
+    return _face = Listener(
       onPointerDown: (_) => setState(() => _down = true),
       onPointerUp: (_) => setState(() => _down = false),
       onPointerCancel: (_) => setState(() => _down = false),
@@ -51,7 +59,7 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
         onTap: _show,
         child: SizedBox(
           key: const ValueKey('rowMenuHit'),
-          width: sidebarRowMenuHit() + kSidebarMenuInset,
+          width: hit + kSidebarMenuInset,
           child: Align(
             alignment: Alignment.centerRight,
             child: Padding(
@@ -60,7 +68,7 @@ class _SidebarRowMenuButtonState extends State<SidebarRowMenuButton> {
                 child: NymFocusable(
                 onActivate: _show,
                 label: widget.semanticLabel,
-                tooltip: tr('More'),
+                tooltip: tip,
                 radius: NymRadius.rxs,
                 excludeChildSemantics: true,
                 child: MouseRegion(

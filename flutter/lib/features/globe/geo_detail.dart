@@ -251,12 +251,14 @@ GeoLabelFeature _labelFeature(
   }
   var cx = 0.0, cy = 0.0;
   if (largest != null && largest.isNotEmpty) {
+    final wrap = geoRingWrapsAntimeridian(largest);
     for (final p in largest) {
-      cx += p[0];
+      cx += wrap && p[0] < 0 ? p[0] + 360 : p[0];
       cy += p[1];
     }
     cx /= largest.length;
     cy /= largest.length;
+    if (cx > 180) cx -= 360;
   }
   return GeoLabelFeature(
     name: name,

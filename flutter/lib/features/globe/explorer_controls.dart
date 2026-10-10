@@ -311,7 +311,7 @@ class GeoLayersMenu extends StatelessWidget {
                     nym,
                     const GeoClusterSwatch(
                         key: ValueKey('geo-legend-cluster-swatch')),
-                    tr('Number = rooms grouped together'),
+                    tr('Number = channels grouped together'),
                   ),
                 if (showPulseLegend)
                   _swatchRow(

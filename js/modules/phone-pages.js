@@ -525,10 +525,10 @@
         var icon = avatar ? '<img src="' + esc(avatar) + '" class="group-ctx-custom-avatar" alt="" decoding="async">' : GROUP_SVG;
         return '<div class="context-menu-avatar-header group-sheet-head" data-sheet-handle>'
             + '<div class="group-ctx-icon' + (avatar ? ' has-image' : '') + '">' + icon + '</div>'
-            + '<div class="context-menu-avatar-nym">' + esc(g.name || ui('Group')) + '</div>'
+            + '<div class="context-menu-avatar-nym">' + esc((typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || 'Group'))) + '</div>'
             + '<div class="ctx-status-row">' + esc(countText) + '</div>'
             + '</div>'
-            + (g.description ? '<div class="context-menu-bio">' + esc(g.description) + '</div>' : '');
+            + ((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || '')) ? '<div class="context-menu-bio">' + esc((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || ''))) + '</div>' : '');
     }
 
     function showActionSheet(entries, label, opts) {

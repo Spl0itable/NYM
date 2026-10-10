@@ -15,7 +15,7 @@ import '../accounts/account_logic.dart';
 import '../accounts/account_switcher.dart' show accountDisplayName;
 import '../i18n/i18n.dart';
 import 'biometric_secret_store.dart';
-import 'identity_vault.dart' show SecureStoreLike;
+import 'identity_vault.dart' show IdentityVault, SecureStoreLike;
 import 'modal_chrome.dart';
 import 'panic_overlay.dart';
 import 'vault_settings_modal.dart' show identityVaultProvider;
@@ -70,17 +70,39 @@ class VaultLockedApp extends StatelessWidget {
       );
 }
 
-class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
+class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock>
+    with WidgetsBindingObserver {
   final _pw = TextEditingController();
 
   String? _error;
   bool _busy = false;
+  bool _invalidated = false;
+  BiometricKind? _kind;
 
   bool get _isBiometric =>
       ref.read(identityVaultProvider).method == 'biometric';
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _readKind();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _readKind();
+  }
+
+  Future<void> _readKind() async {
+    if (!_isBiometric) return;
+    final kind = await ref.read(identityVaultProvider).biometricKind();
+    if (mounted && kind != _kind) setState(() => _kind = kind);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pw.dispose();
     super.dispose();
   }
@@ -105,13 +127,21 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
       }
       if (mounted) widget.onUnlocked(secrets);
     } catch (e) {
-      if (mounted) {
-        _pw.clear();
-        setState(() {
-          _busy = false;
-          _error = _messageOf(e);
-        });
-      }
+      if (!mounted) return;
+      final invalidated = e is BiometricVaultException &&
+          e.failure == BiometricVaultFailure.invalidated;
+      _pw.clear();
+      setState(() {
+        _busy = false;
+        if (invalidated) _invalidated = true;
+        _error = invalidated
+            ? tr('The fingerprints or face data on this device changed, so '
+                "its biometric key no longer opens Nymchat. Use Can't unlock? "
+                'to start over, then sign back in with your saved nsec and '
+                'recovery code.')
+            : _messageOf(e);
+      });
+      if (invalidated) await _forget();
     }
   }
 
@@ -126,8 +156,8 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
                     ? e.message?.toString()
                     : null;
     if (m == null || m.isEmpty) return tr('Unlock failed.');
-    if (m == 'Wrong password/PIN or unrecognized passkey.') {
-      return tr('Wrong password/PIN or unrecognized passkey.');
+    if (m == IdentityVault.wrongPasswordOrPin) {
+      return tr('Wrong password or PIN. Try again.');
     }
     return m;
   }
@@ -168,16 +198,28 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
   Future<bool> _confirmForget() {
     final next = _nextAccountName();
     final current = ref.read(accountsProvider)?.changes.value.activeAccount;
+    final switching = next != null && current != null;
+    final name =
+        current == null ? tr('this identity') : accountDisplayName(current);
     return showAppConfirm(
       context,
-      next != null && current != null
+      switching
           ? tr('This permanently deletes {nym} and its data on this device, '
               'and you will switch to {next}. Continue?',
-              {'nym': accountDisplayName(current), 'next': next})
-          : tr('This permanently deletes the encrypted identity on this device and '
-              'starts a fresh one. Continue?'),
-      title: tr('Forget identity'),
-      okLabel: tr('Forget'),
+              {'nym': name, 'next': next})
+          : _isBiometric
+              ? tr('Without your biometrics, {nym} cannot be recovered. '
+                  'Starting over permanently deletes it and its data on this '
+                  'device, and you will return to the welcome screen. If you '
+                  'saved your nsec somewhere else, you can sign back in with '
+                  'it there.', {'nym': name})
+              : tr('Without the password or PIN, {nym} cannot be recovered. '
+                  'Starting over permanently deletes it and its data on this '
+                  'device, and you will return to the welcome screen. If you '
+                  'saved your nsec somewhere else, you can sign back in with '
+                  'it there.', {'nym': name}),
+      title: tr('Forget this identity?'),
+      okLabel: switching ? tr('Forget') : tr('Delete and start over'),
       danger: true,
     );
   }
@@ -204,7 +246,7 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 500),
+              constraints: const BoxConstraints(maxWidth: 520),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -354,16 +396,75 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
     );
   }
 
+  static String _bioLede(BiometricKind kind) => switch (kind) {
+        BiometricKind.faceId => tr('Your Nymchat identity is encrypted on this '
+            'device. Use Face ID to unlock it.'),
+        BiometricKind.touchId => tr('Your Nymchat identity is encrypted on '
+            'this device. Use Touch ID to unlock it.'),
+        BiometricKind.opticId => tr('Your Nymchat identity is encrypted on '
+            'this device. Use Optic ID to unlock it.'),
+        BiometricKind.face => tr('Your Nymchat identity is encrypted on this '
+            'device. Use your face to unlock it.'),
+        BiometricKind.fingerprint => tr('Your Nymchat identity is encrypted '
+            'on this device. Use your fingerprint to unlock it.'),
+        BiometricKind.iris => tr('Your Nymchat identity is encrypted on this '
+            'device. Use your iris to unlock it.'),
+        BiometricKind.generic => tr('Your Nymchat identity is encrypted on '
+            'this device. Use your biometrics to unlock it.'),
+      };
+
+  static String _bioButton(BiometricKind kind) => switch (kind) {
+        BiometricKind.faceId => tr('Unlock with Face ID'),
+        BiometricKind.touchId => tr('Unlock with Touch ID'),
+        BiometricKind.opticId => tr('Unlock with Optic ID'),
+        BiometricKind.face => tr('Unlock with face'),
+        BiometricKind.fingerprint => tr('Unlock with fingerprint'),
+        BiometricKind.iris => tr('Unlock with iris'),
+        BiometricKind.generic => tr('Unlock with biometrics'),
+      };
+
+  static IconData _bioIcon(BiometricKind kind) => switch (kind) {
+        BiometricKind.faceId || BiometricKind.face => Icons.face,
+        BiometricKind.opticId || BiometricKind.iris => Icons.remove_red_eye,
+        _ => Icons.fingerprint,
+      };
+
+  Widget _primaryLabel(NymColors c, bool isBio) {
+    final style = TextStyle(
+      color: c.primary,
+      fontSize: NymType.lg,
+      fontWeight: FontWeight.w500,
+    );
+    if (_invalidated) return Text(tr("Can't unlock?"), style: style);
+    if (!isBio) return Text(tr('Unlock'), style: style);
+    final kind = _kind ?? BiometricKind.generic;
+    return Opacity(
+      opacity: _kind == null ? 0 : 1,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(_bioIcon(kind), size: 18, color: c.primary),
+          const SizedBox(width: 8),
+          Flexible(child: Text(_bioButton(kind), style: style)),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _promptChildren(NymColors c, bool isBio) {
     return [
       _wordmark(c),
       _title(c, tr('Unlock your identity')),
-      _lede(
-          c,
-          isBio
-              ? tr('Your Nymchat identity key is encrypted on this device. '
-                  'Use your biometric to unlock.')
-              : tr('Your Nymchat identity key is encrypted on this device.')),
+      if (isBio)
+        Opacity(
+          opacity: _kind == null ? 0 : 1,
+          child: _lede(c, _bioLede(_kind ?? BiometricKind.generic)),
+        )
+      else
+        _lede(
+            c,
+            tr('Your Nymchat identity is encrypted on this device. '
+                'Enter your password or PIN to unlock it.')),
       const SizedBox(height: 16),
       if (!isBio)
         ModalChrome.focusRing(
@@ -387,11 +488,15 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
             style: TextStyle(color: c.danger, fontSize: NymType.md, height: 1.4),
           ),
         ),
-      SizedBox(height: isBio ? 4 : 16),
+      const SizedBox(height: 16),
       _primary(
         c,
         tr('Unlock'),
-        _busy ? null : _unlock,
+        _busy
+            ? null
+            : _invalidated
+                ? _forget
+                : _unlock,
         child: _busy
             ? SizedBox(
                 width: 18,
@@ -399,10 +504,15 @@ class _VaultBootUnlockState extends ConsumerState<VaultBootUnlock> {
                 child: CircularProgressIndicator(
                     strokeWidth: 2, color: c.primary),
               )
-            : null,
+            : _primaryLabel(c, isBio),
       ),
-      const SizedBox(height: 8),
-      _ghost(c, tr('Forget identity'), _busy ? null : _forget),
+      if (!_invalidated) ...[
+        const SizedBox(height: 8),
+        _ghost(
+            c,
+            isBio ? tr("Can't unlock?") : tr('Forgot your password or PIN?'),
+            _busy ? null : _forget),
+      ],
       if (_busy)
         Padding(
           padding: const EdgeInsets.only(top: 12),

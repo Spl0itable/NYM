@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../models/user.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/context_menu/profile_badges.dart';
 import '../emoji/custom_emoji.dart';
 import '../i18n/i18n.dart';
@@ -304,22 +305,11 @@ class _AutocompleteDropdownState extends State<AutocompleteDropdown> {
           _mentionAvatar(c, m),
           const SizedBox(width: 4),
           Flexible(
-            child: RichText(
-              overflow: TextOverflow.ellipsis,
-              text: TextSpan(
-                style: TextStyle(color: c.primary, fontWeight: FontWeight.bold),
-                children: [
-                  TextSpan(text: '@${m.baseNym}'),
-                  TextSpan(
-                    text: '#${m.suffix}',
-                    style: TextStyle(
-                      color: c.primary.withValues(alpha: 0.7),
-                      fontWeight: FontWeight.w100,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
+            child: NymLabel(
+              '@${m.baseNym}',
+              suffix: m.suffix,
+              style: TextStyle(
+                  color: c.primary, fontSize: 14, fontWeight: FontWeight.bold),
             ),
           ),
           if (hasFlair) ...[

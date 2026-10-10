@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/semantics.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/identity/deleted_notice.dart';
@@ -295,8 +296,9 @@ class _ToastCardState extends State<_ToastCard> {
                       ? Text.rich(
                           dimNymSuffixes(
                             t.text,
-                            nymSuffixStyle(TextStyle(
-                                color: fg, fontSize: 13, height: 1.4)),
+                            nymSuffixStyle(
+                                TextStyle(color: fg, fontSize: 13, height: 1.4),
+                                contrast: context.highContrast),
                           ),
                           style:
                               TextStyle(color: fg, fontSize: 13, height: 1.4),

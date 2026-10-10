@@ -290,6 +290,7 @@ class GeoMapPainter extends CustomPainter {
     required this.heatmap,
     required this.daynight,
     required this.grid,
+    this.gridCorner = false,
     this.admin1Features = const [],
     this.cities = const [],
     this.hoveredGeohash,
@@ -310,6 +311,23 @@ class GeoMapPainter extends CustomPainter {
   }) : super(repaint: repaint);
 
   final List<Rect> occupied;
+
+  List<GeoMapLabel>? _placed;
+
+  List<GeoLabelBox> _gridLabelBlocked(Size size, List<GeoMapLabel> placed) {
+    final out = <GeoLabelBox>[
+      for (final r in occupied) GeoLabelBox(r.left, r.top, r.right, r.bottom),
+      for (final l in placed) l.box,
+    ];
+    if (heatmap) return out;
+    for (final k in clusters) {
+      final r = (k.count > 1 ? k.r : 4.0) + 2;
+      if (_inView(Offset(k.x, k.y), r, size)) {
+        out.add(GeoLabelBox(k.x - r, k.y - r, k.x + r, k.y + r));
+      }
+    }
+    return out;
+  }
 
   final double dpr;
 
@@ -344,6 +362,7 @@ class GeoMapPainter extends CustomPainter {
   final bool heatmap;
   final bool daynight;
   final bool grid;
+  final bool gridCorner;
   final String? hoveredGeohash;
   final ({double lat, double lng})? userLocation;
 
@@ -367,17 +386,17 @@ class GeoMapPainter extends CustomPainter {
     _drawGraticule(canvas, size);
     _drawWorld(canvas, size);
     _drawAdmin1(canvas, size);
+    _drawPlaceLabels(canvas, size);
+    if (grid && gridCorner) _drawGrid(canvas, size);
     if (heatmap) {
-      _drawPlaceLabels(canvas, size);
       _drawHeatmap(canvas, size);
     } else {
-      _drawPlaceLabels(canvas, size);
       _drawSaved(canvas, size);
       _drawRecent(canvas, size);
       _drawChannels(canvas, size);
     }
     if (daynight) _drawDaynight(canvas, size);
-    if (grid) _drawGrid(canvas, size);
+    if (grid && !gridCorner) _drawGrid(canvas, size);
     _drawSelected(canvas, size);
     _drawUserLocation(canvas, size);
   }
@@ -700,7 +719,9 @@ class GeoMapPainter extends CustomPainter {
       }
     }
     final dot = Paint()..color = style.cityDot;
-    for (final l in layoutLabels(size)) {
+    final placed = layoutLabels(size);
+    _placed = placed;
+    for (final l in placed) {
       final cy = (l.box.y0 + l.box.y1) / 2;
       if (l.center) {
         final o = Offset((l.box.x0 + l.box.x1) / 2 - l.fill.width / 2,
@@ -727,6 +748,7 @@ class GeoMapPainter extends CustomPainter {
       text: TextSpan(
         text: '${k.count}',
         style: const TextStyle(
+          fontFamily: kSansFont,
           fontSize: 11,
           fontWeight: FontWeight.w700,
           color: Color(0xFF000000),
@@ -840,7 +862,20 @@ class GeoMapPainter extends CustomPainter {
     );
   }
 
-  void _drawGrid(Canvas canvas, Size size) {
+  ({
+    int precision,
+    double lngStep,
+    double latStep,
+    double s,
+    double lngMin,
+    double lngMax,
+    double latMin,
+    double latMax,
+    int startGi,
+    int endGi,
+    int startLi,
+    int endLi,
+  }) _gridRange(Size size) {
     final precision = computeGridPrecision(view, size);
     final cell = geohashCellSize(precision);
     final lngStep = cell.lngStep, latStep = cell.latStep;
@@ -851,51 +886,110 @@ class GeoMapPainter extends CustomPainter {
     final lngMax = math.min(180.0, view.cx + halfLng);
     final latMin = math.max(-90.0, view.cy - halfLat);
     final latMax = math.min(90.0, view.cy + halfLat);
+    return (
+      precision: precision,
+      lngStep: lngStep,
+      latStep: latStep,
+      s: s,
+      lngMin: lngMin,
+      lngMax: lngMax,
+      latMin: latMin,
+      latMax: latMax,
+      startGi: ((lngMin + 180) / lngStep).floor(),
+      endGi: ((lngMax + 180) / lngStep).ceil(),
+      startLi: ((latMin + 90) / latStep).floor(),
+      endLi: ((latMax + 90) / latStep).ceil(),
+    );
+  }
 
-    final startGi = ((lngMin + 180) / lngStep).floor();
-    final endGi = ((lngMax + 180) / lngStep).ceil();
-    final startLi = ((latMin + 90) / latStep).floor();
-    final endLi = ((latMax + 90) / latStep).ceil();
+  double? _gridFontSize(double cellPxW, double cellPxH) {
+    if (cellPxW < 38 || cellPxH < 22) return null;
+    return (math.min(cellPxW, cellPxH) / 5).floor().clamp(9, 14).toDouble();
+  }
 
+  List<({String text, GeoLabelBox box, TextPainter stroke, TextPainter fill})>
+      gridCornerLabels(Size size, {List<GeoMapLabel>? placed}) {
+    final g = _gridRange(size);
+    final fontSize = _gridFontSize(g.lngStep * g.s, g.latStep * g.s);
+    if (fontSize == null) return const [];
+    final lineH = fontSize * 1.4;
+    final blocked = _gridLabelBlocked(size, placed ?? layoutLabels(size));
+    final out =
+        <({String text, GeoLabelBox box, TextPainter stroke, TextPainter fill})>[];
+    for (var li = g.startLi; li < g.endLi; li++) {
+      final cellLat = -90 + li * g.latStep + g.latStep / 2;
+      if (cellLat < -90 || cellLat > 90) continue;
+      for (var gi = g.startGi; gi < g.endGi; gi++) {
+        final cellLng = -180 + gi * g.lngStep + g.lngStep / 2;
+        if (cellLng < -180 || cellLng > 180) continue;
+        final gh = encodeGeohash(cellLat, cellLng, precision: g.precision);
+        final c = view.project(
+            cellLng - g.lngStep / 2, cellLat + g.latStep / 2, size);
+        final end = view.project(
+            cellLng + g.lngStep / 2, cellLat - g.latStep / 2, size);
+        final tp = _labelPainters(gh, fontSize, FontWeight.w600,
+            style.gridLabel, 3, style.gridLabelStroke);
+        final textW = tp.$2.width;
+        final at = geoGridCornerLabel(
+            GeoLabelBox(c.dx, c.dy, end.dx, end.dy), textW, lineH,
+            width: size.width, height: size.height, blocked: blocked);
+        if (at == null) continue;
+        out.add((
+          text: gh,
+          box: GeoLabelBox(at.x, at.y, at.x + textW, at.y + lineH),
+          stroke: tp.$1,
+          fill: tp.$2,
+        ));
+      }
+    }
+    return out;
+  }
+
+  void _drawGrid(Canvas canvas, Size size) {
+    final g = _gridRange(size);
     final linePaint = Paint()
       ..color = style.gridLine
       ..strokeWidth = 1
       ..style = PaintingStyle.stroke;
     final path = Path();
-    for (var gi = startGi; gi < endGi; gi++) {
-      final lng0 = -180 + gi * lngStep;
-      final a = view.project(lng0, latMax, size);
-      final b = view.project(lng0, latMin, size);
+    for (var gi = g.startGi; gi < g.endGi; gi++) {
+      final lng0 = -180 + gi * g.lngStep;
+      final a = view.project(lng0, g.latMax, size);
+      final b = view.project(lng0, g.latMin, size);
       path.moveTo(a.dx, a.dy);
       path.lineTo(b.dx, b.dy);
     }
-    for (var li = startLi; li < endLi; li++) {
-      final lat0 = -90 + li * latStep;
-      final a = view.project(lngMin, lat0, size);
-      final b = view.project(lngMax, lat0, size);
+    for (var li = g.startLi; li < g.endLi; li++) {
+      final lat0 = -90 + li * g.latStep;
+      final a = view.project(g.lngMin, lat0, size);
+      final b = view.project(g.lngMax, lat0, size);
       path.moveTo(a.dx, a.dy);
       path.lineTo(b.dx, b.dy);
     }
     canvas.drawPath(path, linePaint);
 
-    final cellPxW = lngStep * s;
-    final cellPxH = latStep * s;
-    if (cellPxW >= 38 && cellPxH >= 22) {
-      final fontSize =
-          (math.min(cellPxW, cellPxH) / 5).floor().clamp(9, 14).toDouble();
-      for (var li = startLi; li < endLi; li++) {
-        final cellLat = -90 + li * latStep + latStep / 2;
-        if (cellLat < -90 || cellLat > 90) continue;
-        for (var gi = startGi; gi < endGi; gi++) {
-          final cellLng = -180 + gi * lngStep + lngStep / 2;
-          if (cellLng < -180 || cellLng > 180) continue;
-          final gh = encodeGeohash(cellLat, cellLng, precision: precision);
-          final p = view.project(cellLng, cellLat, size);
-          if (!_inView(p, 0, size)) continue;
-          _strokedText(canvas, gh, p, fontSize, style.gridLabel,
-              style.gridLabelStroke, 3,
-              weight: FontWeight.w600);
-        }
+    if (gridCorner) {
+      for (final l in gridCornerLabels(size, placed: _placed)) {
+        final at = Offset(l.box.x0, l.box.y0);
+        l.stroke.paint(canvas, at);
+        l.fill.paint(canvas, at);
+      }
+      return;
+    }
+    final fontSize = _gridFontSize(g.lngStep * g.s, g.latStep * g.s);
+    if (fontSize == null) return;
+    for (var li = g.startLi; li < g.endLi; li++) {
+      final cellLat = -90 + li * g.latStep + g.latStep / 2;
+      if (cellLat < -90 || cellLat > 90) continue;
+      for (var gi = g.startGi; gi < g.endGi; gi++) {
+        final cellLng = -180 + gi * g.lngStep + g.lngStep / 2;
+        if (cellLng < -180 || cellLng > 180) continue;
+        final gh = encodeGeohash(cellLat, cellLng, precision: g.precision);
+        final p = view.project(cellLng, cellLat, size);
+        if (!_inView(p, 0, size)) continue;
+        _strokedText(canvas, gh, p, fontSize, style.gridLabel,
+            style.gridLabelStroke, 3,
+            weight: FontWeight.w600);
       }
     }
   }
@@ -930,6 +1024,7 @@ class GeoMapPainter extends CustomPainter {
           text: TextSpan(
             text: text,
             style: TextStyle(
+              fontFamily: kSansFont,
               fontSize: fontSize,
               fontWeight: weight,
               foreground: fg,
@@ -963,6 +1058,7 @@ class GeoMapPainter extends CustomPainter {
       old.heatmap != heatmap ||
       old.daynight != daynight ||
       old.grid != grid ||
+      old.gridCorner != gridCorner ||
       old.hoveredGeohash != hoveredGeohash ||
       old.userLocation != userLocation ||
       old.heatmapImage != heatmapImage ||

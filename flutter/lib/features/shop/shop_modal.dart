@@ -31,7 +31,10 @@ import 'shop_controller.dart';
 import 'shop_models.dart';
 import 'shop_widgets.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/dialog_button.dart';
+import '../../core/theme/nym_a11y.dart';
 
 /// Live shop identity: pubkey, active signer (local or NIP-46) and privkey fallback; null when logged out.
 ShopIdentity? _shopIdentity(WidgetRef ref) {
@@ -254,6 +257,7 @@ class _ShopModalState extends ConsumerState<ShopModal> {
             style: TextStyle(color: c.inputText, fontSize: 13),
             decoration: NymField.decoration(c,
               hint: tr('Recovery code'),
+          minHeight: largeFieldMin(context),
               fontSize: 13,
               radius: NymRadius.rxs,
               contentPadding:
@@ -1204,21 +1208,14 @@ class _ActiveItemsPreview extends ConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Flexible(
-          child: Text.rich(
-            TextSpan(children: [
-              TextSpan(
-                text: '${bubble ? '' : '<'}$nym',
-                style: TextStyle(
-                  color: authorColor,
-                  fontWeight: isGenesis ? FontWeight.w700 : FontWeight.w600,
-                ),
-              ),
-              TextSpan(
-                text: '#$suffix',
-                style:
-                    TextStyle(color: authorColor, fontWeight: FontWeight.w400),
-              ),
-            ]),
+          child: NymLabel(
+            '${bubble ? '' : '<'}$nym',
+            suffix: suffix,
+            genesis: isGenesis,
+            style: TextStyle(
+              color: authorColor,
+              fontWeight: isGenesis ? FontWeight.w700 : FontWeight.w600,
+            ),
           ),
         ),
         if (flairId != null)
@@ -1538,39 +1535,11 @@ class _RecipientPubkeyDialogState extends State<_RecipientPubkeyDialog> {
           ),
         ],
         const SizedBox(height: 16),
-        Row(
+        DialogActions(
           children: [
-            Expanded(
-              child: GestureDetector(
-                onTap: _submit,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: c.secondaryA(0.18),
-                    border: Border.all(color: c.secondaryA(0.4)),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(widget.ctaLabel,
-                      style: TextStyle(color: c.secondary)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            GestureDetector(
-              onTap: () => Navigator.of(context).pop(),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 10),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  border: Border.all(color: c.glassBorder),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(tr('Cancel'),
-                    style: TextStyle(color: c.textDim)),
-              ),
-            ),
+            DialogButton.secondary(
+                label: tr('Cancel'), onTap: () => Navigator.of(context).pop()),
+            DialogButton(label: widget.ctaLabel, onTap: _submit),
           ],
         ),
       ],
@@ -2012,14 +1981,11 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
               ],
             ),
           const SizedBox(height: 16),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: c.primary),
-              onPressed: () => Navigator.of(context).pop(true),
-              child: Text(tr('Close')),
-            ),
-          ),
+          DialogActions(children: [
+            DialogButton(
+                label: tr('Close'),
+                onTap: () => Navigator.of(context).pop(true)),
+          ]),
         ];
       case _BuyPhase.error:
         return [
@@ -2028,23 +1994,13 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
               textAlign: TextAlign.center,
               style: TextStyle(color: c.text, fontSize: 13)),
           const SizedBox(height: 16),
-          Row(
+          DialogActions(
             children: [
-              Expanded(
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: Text(tr('Close'), style: TextStyle(color: c.textDim)),
-                ),
-              ),
-              // Only offered when an invoice exists; re-verifies server-side.
+              DialogButton.secondary(
+                  label: tr('Close'),
+                  onTap: () => Navigator.of(context).pop(false)),
               if (_invoice != null && _invoice!.invoiceId.isNotEmpty)
-                Expanded(
-                  child: FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: c.primary),
-                    onPressed: _manualCheck,
-                    child: Text(tr("I've paid")),
-                  ),
-                ),
+                DialogButton(label: tr("I've paid"), onTap: _manualCheck),
             ],
           ),
         ];
@@ -2081,26 +2037,19 @@ class _InvoiceDialogState extends ConsumerState<_InvoiceDialog> {
             ],
           ),
           const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          DialogActions(
             children: [
               _cancelButton(c),
               if (_invoice!.invoiceId.isNotEmpty)
-                TextButton(
-                  onPressed: _manualCheck,
-                  child:
-                      Text(tr("I've paid"), style: TextStyle(color: c.primary)),
-                ),
+                DialogButton(label: tr("I've paid"), onTap: _manualCheck),
             ],
           ),
         ];
     }
   }
 
-  Widget _cancelButton(NymColors c) => TextButton(
-        onPressed: () => Navigator.of(context).pop(false),
-        child: Text(tr('Cancel'), style: TextStyle(color: c.textDim)),
-      );
+  Widget _cancelButton(NymColors c) => DialogButton.secondary(
+      label: tr('Cancel'), onTap: () => Navigator.of(context).pop(false));
 
   /// Prominent "save your recovery code" warning panel.
   Widget _recoveryWarningBlock(

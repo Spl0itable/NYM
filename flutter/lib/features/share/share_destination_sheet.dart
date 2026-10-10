@@ -8,6 +8,7 @@ import '../../widgets/context_menu/interaction_hooks.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_field.dart';
 
 class SharedPayload {
@@ -69,6 +70,7 @@ class _ShareDestinationSheetState
     final channels = ref.watch(channelsProvider);
     final pms = ref.watch(pmListProvider);
     final groups = ref.watch(groupsProvider);
+    final app = ref.watch(appStateProvider);
 
     final rows = <Widget>[];
     void section(String title) {
@@ -85,7 +87,9 @@ class _ShareDestinationSheetState
 
     final chanMatches = [
       for (final ch in channels)
-        if (_matches(ch.isGeohash ? ch.geohashKey : ch.channel)) ch
+        if (!app.isChannelHidden(ch.key) &&
+            _matches(ch.isGeohash ? ch.geohashKey : ch.channel))
+          ch
     ];
     if (chanMatches.isNotEmpty) {
       section(tr('Channels'));
@@ -102,7 +106,9 @@ class _ShareDestinationSheetState
 
     final pmMatches = [
       for (final pm in pms)
-        if (_matches(getNymFromPubkey(pm.nym, pm.pubkey))) pm
+        if (!app.isPersonHidden(pm.pubkey, pm.nym) &&
+            _matches(getNymFromPubkey(pm.nym, pm.pubkey)))
+          pm
     ];
     if (pmMatches.isNotEmpty) {
       section(tr('Private messages'));
@@ -190,10 +196,10 @@ class _ShareDestinationSheetState
     return ListTile(
       dense: true,
       leading: SizedBox(width: 24, child: Center(child: leading)),
-      title: Text(label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: c.text)),
+      title: Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: NymLabel(label, style: TextStyle(color: c.text)),
+      ),
       onTap: onTap,
     );
   }

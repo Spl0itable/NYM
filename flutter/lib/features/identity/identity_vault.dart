@@ -44,6 +44,7 @@ class IdentityVault {
   final BiometricSecretStore _biometric;
 
   static const String bioSecretName = 'nym_vault_bio_secret';
+  static const String wrongPasswordOrPin = 'Wrong password or PIN. Try again.';
 
   static const int _iterations = 310000;
   static const String _checkPlaintext = 'nymchat-vault-ok';
@@ -221,7 +222,7 @@ class IdentityVault {
           throw StateError('Vault verification failed.');
         }
       } catch (_) {
-        throw StateError('Wrong password/PIN or unrecognized passkey.');
+        throw StateError(wrongPasswordOrPin);
       }
     }
     // Retain the key for the session so post-boot secret writes stay encrypted.
@@ -326,6 +327,14 @@ class IdentityVault {
     }
   }
 
+  Future<BiometricKind> biometricKind() async {
+    try {
+      return await _biometric.kind();
+    } catch (_) {
+      return BiometricKind.generic;
+    }
+  }
+
   Future<void> enableBiometric() async {
     if (isEnabled) throw StateError('Encryption is already enabled.');
     if (!await biometricAvailable()) {
@@ -363,7 +372,7 @@ class IdentityVault {
     if (!isEnabled) return {};
     final plain = biometricProtected ? null : await _secure.get(bioSecretName);
     if (plain == null || plain.isEmpty) {
-      final out = await unlock(await _readProtectedSecret());
+      final out = await _unlockWithBiometricSecret(await _readProtectedSecret());
       if (!biometricProtected) {
         await _kv.setBool(StorageKeys.vaultBioProtected, true);
       }
@@ -401,7 +410,7 @@ class IdentityVault {
         back = null;
       }
       if (back == plain) {
-        final out = await unlock(plain);
+        final out = await _unlockWithBiometricSecret(plain);
         await _kv.setBool(StorageKeys.vaultBioProtected, true);
         await _dropPlainSecret();
         return out;
@@ -410,7 +419,16 @@ class IdentityVault {
     if (!await _biometric.confirmPresence()) {
       throw const BiometricVaultException(BiometricVaultFailure.canceled);
     }
-    return unlock(plain);
+    return _unlockWithBiometricSecret(plain);
+  }
+
+  Future<Map<String, String>> _unlockWithBiometricSecret(String secret) async {
+    try {
+      return await unlock(secret);
+    } on StateError catch (e) {
+      if (e.message != wrongPasswordOrPin) rethrow;
+      throw const BiometricVaultException(BiometricVaultFailure.failed);
+    }
   }
 
   Future<String> _readProtectedSecret() async {

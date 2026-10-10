@@ -8,9 +8,14 @@ import 'topojson.dart';
 const String kGeoBase32 = '0123456789bcdefghjkmnpqrstuvwxyz';
 const List<int> kGeoWindowOptions = [1, 24, 168];
 const int kGeoClusterCellPx = 48;
-const int kGeoClusterMaxZoom = 4;
+const int kGeoClusterGridZoom = 4;
+const int kGeoClusterSeedPx = 6;
 const int kGeoClusterGapPx = 2;
 const int kGeoClusterZoomSteps = 4;
+const double kGeoMaxZoom = 32768;
+const double kGeoGridAutoPxPerDeg = 400;
+const double kGeoGridLabelDx = 6;
+const double kGeoGridLabelDy = 5;
 const int kGeoPulseWindowMs = 300000;
 const int kGeoOnlineWindowSec = 300;
 const int kGeoSearchMinChars = 2;
@@ -606,12 +611,16 @@ class GeoCluster {
     required this.y,
     required this.count,
     required this.messages,
+    this.lat = 0,
+    this.lng = 0,
   });
   final List<String> ids;
   final double x;
   final double y;
   final int count;
   final int messages;
+  final double lat;
+  final double lng;
 
   double get r => geoClusterRadius(count).toDouble();
 }
@@ -653,77 +662,176 @@ class _WorkCluster {
   late final int messages;
 }
 
+double geoClusterZoomStep(double zoom) {
+  final z = zoom > 0 ? math.min(zoom, kGeoMaxZoom) : 1.0;
+  if (z < kGeoClusterGridZoom) {
+    return math.max(
+        1.0, (z * kGeoClusterZoomSteps).floor() / kGeoClusterZoomSteps);
+  }
+  var base = kGeoClusterGridZoom.toDouble();
+  while (base * 2 <= z) {
+    base *= 2;
+  }
+  final q = base / kGeoClusterZoomSteps;
+  return base + ((z - base) / q).floor() * q;
+}
+
+double _geoStepAt(int i) {
+  const below = (kGeoClusterGridZoom - 1) * kGeoClusterZoomSteps;
+  if (i < below) return 1 + i / kGeoClusterZoomSteps;
+  final j = i - below;
+  return kGeoClusterGridZoom *
+      math.pow(2, j ~/ kGeoClusterZoomSteps).toDouble() *
+      (1 + (j % kGeoClusterZoomSteps) / kGeoClusterZoomSteps);
+}
+
+int _geoStepIndex(double zq) {
+  var i = 0;
+  while (_geoStepAt(i) < zq) {
+    i++;
+  }
+  return i;
+}
+
+double? geoClusterSplitZoom(
+    List<GeoClusterInput> points, double zoom, Size viewport) {
+  bool splits(double z) => clusterGeoChannels(points, z, viewport).length > 1;
+  if (!splits(kGeoMaxZoom)) return null;
+  var lo = _geoStepIndex(geoClusterZoomStep(zoom));
+  if (splits(_geoStepAt(lo))) return _geoStepAt(lo);
+  var hi = _geoStepIndex(kGeoMaxZoom);
+  while (hi - lo > 1) {
+    final mid = (lo + hi) ~/ 2;
+    if (splits(_geoStepAt(mid))) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return _geoStepAt(hi);
+}
+
+bool geoDeepGrid(double pxPerDeg) => pxPerDeg >= kGeoGridAutoPxPerDeg;
+
+({double x, double y})? geoGridCornerLabel(
+    GeoLabelBox cell, double textW, double lineH,
+    {required double width,
+    required double height,
+    List<GeoLabelBox> blocked = const []}) {
+  final x = math.max(cell.x0, 0.0) + kGeoGridLabelDx;
+  final y = math.max(cell.y0, 0.0) + kGeoGridLabelDy;
+  if (x + textW > width || y + lineH > height) return null;
+  if (x + textW > cell.x1 || y + lineH > cell.y1) return null;
+  if (cell.y0 < 0 && cell.y1 + kGeoGridLabelDy - y < 2 * lineH) return null;
+  if (cell.x0 < 0 && cell.x1 + kGeoGridLabelDx - (x + textW) < lineH) {
+    return null;
+  }
+  final x1 = x + textW, y1 = y + lineH;
+  for (final b in blocked) {
+    if (x < b.x1 && x1 > b.x0 && y < b.y1 && y1 > b.y0) return null;
+  }
+  return (x: x, y: y);
+}
+
+class _GeoPair {
+  _GeoPair(this.a, this.b, this.d);
+  final _WorkCluster a;
+  final _WorkCluster b;
+  final double d;
+}
+
 List<GeoWorldCluster> clusterGeoChannels(
     List<GeoClusterInput> points, double zoom, Size viewport) {
-  if (!(zoom < kGeoClusterMaxZoom)) return const [];
   final w = viewport.width > 0 ? viewport.width : 1.0;
   final h = viewport.height > 0 ? viewport.height : 1.0;
-  final zq = math.max(
-      1.0, (zoom * kGeoClusterZoomSteps).floor() / kGeoClusterZoomSteps);
+  final zq = geoClusterZoomStep(zoom);
   final s = math.max(w / 360, h / 180) * zq;
   final cell = kGeoClusterCellPx.toDouble();
+  final seed =
+      (zq < kGeoClusterGridZoom ? kGeoClusterCellPx : kGeoClusterSeedPx)
+          .toDouble();
   _WorkCluster make(List<GeoClusterInput> members) =>
       _WorkCluster(List.of(members)..sort((a, b) => _cmp(a.id, b.id)), s);
   final groups = <String, List<GeoClusterInput>>{};
   for (final p in points) {
     if (!p.lat.isFinite || !p.lng.isFinite) continue;
     final key =
-        '${((p.lng + 180) * s / cell).floor()},${((90 - p.lat) * s / cell).floor()}';
+        '${((p.lng + 180) * s / seed).floor()},${((90 - p.lat) * s / seed).floor()}';
     groups.putIfAbsent(key, () => []).add(p);
   }
   var list = [for (final g in groups.values) make(g)];
-  while (true) {
-    list.sort((a, b) => _cmp(a.key, b.key));
-    final buckets = <String, List<int>>{};
-    for (var i = 0; i < list.length; i++) {
-      final k = list[i];
-      buckets
-          .putIfAbsent('${(k.wx / cell).floor()},${(k.wy / cell).floor()}',
-              () => [])
-          .add(i);
-    }
-    final pairs = <(int, int, double)>[];
-    for (var i = 0; i < list.length; i++) {
-      final k = list[i];
-      final bx = (k.wx / cell).floor(), by = (k.wy / cell).floor();
-      for (var ox = -1; ox <= 1; ox++) {
-        for (var oy = -1; oy <= 1; oy++) {
-          final b = buckets['${bx + ox},${by + oy}'];
-          if (b == null) continue;
-          for (final j in b) {
-            if (j <= i) continue;
-            final o = list[j];
-            final dx = o.wx - k.wx, dy = o.wy - k.wy;
-            final lim = k.r + o.r + kGeoClusterGapPx;
-            final d = dx * dx + dy * dy;
-            if (d < lim * lim) pairs.add((i, j, d));
-          }
+  String bucketOf(_WorkCluster k) =>
+      '${(k.wx / cell).floor()},${(k.wy / cell).floor()}';
+  final buckets = <String, Set<_WorkCluster>>{};
+  void put(_WorkCluster k) =>
+      buckets.putIfAbsent(bucketOf(k), () => <_WorkCluster>{}).add(k);
+  List<_GeoPair> near(_WorkCluster k) {
+    final out = <_GeoPair>[];
+    final bx = (k.wx / cell).floor(), by = (k.wy / cell).floor();
+    for (var ox = -1; ox <= 1; ox++) {
+      for (var oy = -1; oy <= 1; oy++) {
+        final b = buckets['${bx + ox},${by + oy}'];
+        if (b == null) continue;
+        for (final o in b) {
+          if (identical(o, k)) continue;
+          final lo = _cmp(k.key, o.key) < 0 ? k : o;
+          final hi = identical(lo, k) ? o : k;
+          final dx = hi.wx - lo.wx, dy = hi.wy - lo.wy;
+          final lim = lo.r + hi.r + kGeoClusterGapPx;
+          final d = dx * dx + dy * dy;
+          if (d < lim * lim) out.add(_GeoPair(lo, hi, d));
         }
       }
     }
-    if (pairs.isEmpty) break;
-    pairs.sort((a, b) {
-      final c = a.$3.compareTo(b.$3);
+    return out;
+  }
+
+  list.forEach(put);
+  var pairs = <_GeoPair>[
+    for (final k in list)
+      for (final p in near(k))
+        if (identical(p.a, k)) p,
+  ];
+  while (pairs.isNotEmpty) {
+    pairs.sort((x, y) {
+      final c = x.d.compareTo(y.d);
       if (c != 0) return c;
-      final c2 = _cmp(list[a.$1].key, list[b.$1].key);
+      final c2 = _cmp(x.a.key, y.a.key);
       if (c2 != 0) return c2;
-      return _cmp(list[a.$2].key, list[b.$2].key);
+      return _cmp(x.b.key, y.b.key);
     });
-    final used = <int>{};
+    final used = <_WorkCluster>{};
     final merged = <_WorkCluster>[];
     for (final p in pairs) {
-      if (used.contains(p.$1) || used.contains(p.$2)) continue;
+      if (used.contains(p.a) || used.contains(p.b)) continue;
       used
-        ..add(p.$1)
-        ..add(p.$2);
-      merged.add(make([...list[p.$1].members, ...list[p.$2].members]));
+        ..add(p.a)
+        ..add(p.b);
+      merged.add(make([...p.a.members, ...p.b.members]));
+    }
+    for (final k in used) {
+      buckets[bucketOf(k)]!.remove(k);
+    }
+    pairs = [
+      for (final p in pairs)
+        if (!used.contains(p.a) && !used.contains(p.b)) p,
+    ];
+    merged.forEach(put);
+    final fresh = merged.toSet();
+    for (final m in merged) {
+      for (final p in near(m)) {
+        final o = identical(p.a, m) ? p.b : p.a;
+        if (fresh.contains(o) && !identical(p.a, m)) continue;
+        pairs.add(p);
+      }
     }
     list = [
-      for (var i = 0; i < list.length; i++)
-        if (!used.contains(i)) list[i],
+      for (final k in list)
+        if (!used.contains(k)) k,
       ...merged,
     ];
   }
+  list.sort((a, b) => _cmp(a.key, b.key));
   return [
     for (final k in list)
       GeoWorldCluster(

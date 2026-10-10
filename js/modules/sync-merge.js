@@ -10,6 +10,8 @@
         pubkeyFormat: Object.freeze(['pubkeyFormat']),
         voiceSpeed: Object.freeze(['voiceSpeed']),
         keepCallHistory: Object.freeze(['keepCallHistory']),
+        largeTargets: Object.freeze(['largeTargets']),
+        highContrast: Object.freeze(['highContrast']),
     });
 
     const RX_EVENT = /^[0-9a-f]{16}$/;

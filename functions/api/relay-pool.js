@@ -70,7 +70,7 @@ class TokenBucket {
     const units = typeof n === 'number' ? n : 1;
     this.tokens = Math.min(this.capacity, this.tokens + Math.max(0, t - this.at) * this.rate);
     this.at = t;
-    if (this.tokens < units) return false;
+    if (this.tokens < units - 1e-9) return false;
     this.tokens -= units;
     return true;
   }
@@ -181,6 +181,7 @@ const ARCHIVE_RATE_WINDOW_MS = 60000;
 const ARCHIVE_RATE_MAX_KEYS = 5000;
 const ARCHIVE_RATE_LIMITS = { channel: 30, reaction: 60, record: 20, emoji: 6 };
 const archiveRates = new Map();
+let archiveRateEntries = 0;
 
 function archiveRateClass(kind) {
   if (kind === 20000 || kind === 23333) return 'channel';
@@ -189,28 +190,47 @@ function archiveRateClass(kind) {
   return 'record';
 }
 
-function archiveRateOk(pubkey, kind, eventId, now) {
-  if (typeof pubkey !== 'string' || !pubkey || typeof eventId !== 'string' || eventId.length < 8) return false;
-  const cls = archiveRateClass(kind);
-  const t = typeof now === 'number' ? now : Date.now();
-  const window = Math.floor(t / ARCHIVE_RATE_WINDOW_MS);
-  const key = cls + ':' + pubkey;
-  let entry = archiveRates.get(key);
-  if (!entry || entry.window !== window) {
-    if (entry) archiveRates.delete(key);
-    entry = { window, ids: new Set() };
-    archiveRates.set(key, entry);
-    if (archiveRates.size > ARCHIVE_RATE_MAX_KEYS) archiveRates.delete(archiveRates.keys().next().value);
-  }
+function archiveRateTag(eventId) {
   let tag = 0x811c9dc5;
   for (let i = 0; i < eventId.length; i++) {
     tag ^= eventId.charCodeAt(i);
     tag = Math.imul(tag, 0x01000193);
   }
-  if (entry.ids.has(tag)) return true;
-  if (entry.ids.size >= ARCHIVE_RATE_LIMITS[cls]) return false;
-  entry.ids.add(tag);
+  return tag;
+}
+
+function archiveRateSweep(t) {
+  for (const [key, log] of archiveRates) {
+    if (archiveRates.size <= ARCHIVE_RATE_MAX_KEYS && log.length && log[log.length - 1][0] > t - ARCHIVE_RATE_WINDOW_MS) break;
+    archiveRateEntries -= log.length;
+    archiveRates.delete(key);
+  }
+}
+
+function archiveRateOk(pubkey, kind, eventId, now) {
+  if (typeof pubkey !== 'string' || !pubkey || typeof eventId !== 'string' || eventId.length < 8) return false;
+  const cls = archiveRateClass(kind);
+  const t = typeof now === 'number' ? now : Date.now();
+  const key = cls + ':' + pubkey;
+  const tag = archiveRateTag(eventId);
+  const had = archiveRates.get(key);
+  const log = had ? had.filter((e) => e[0] > t - ARCHIVE_RATE_WINDOW_MS) : [];
+  if (had) {
+    archiveRateEntries += log.length - had.length;
+    archiveRates.set(key, log);
+  }
+  if (log.some((e) => e[1] === tag)) return true;
+  if (log.length >= ARCHIVE_RATE_LIMITS[cls]) return false;
+  log.push([t, tag]);
+  archiveRateEntries++;
+  archiveRates.delete(key);
+  archiveRates.set(key, log);
+  archiveRateSweep(t);
   return true;
+}
+
+function archiveRateStats() {
+  return { keys: archiveRates.size, entries: archiveRateEntries, maxKeys: ARCHIVE_RATE_MAX_KEYS };
 }
 
 const ARCHIVE_JSON_MAX = { 20000: 32768, 23333: 32768, 7: 4096, 30078: 32768, 30030: 65536, 10030: 65536 };
@@ -291,7 +311,7 @@ const POOL_IP_CHARGE_BATCH = 20;
 export {
   isPrivateRelayHost, POOL_MAX_UPSTREAMS, canonicalRelayUrl, TokenBucket, eventFrameCanonical,
   canonicalEventFrame, reframeRelayMessage, verifySignedEvent, verifiedEventJson, validatedPowBits,
-  archiveRateOk, clientIpKey, channelKeyFor, evTagReader, spamEngineJob
+  archiveRateOk, archiveRateStats, clientIpKey, channelKeyFor, evTagReader, spamEngineJob
 };
 
 export async function onRequest(context) {

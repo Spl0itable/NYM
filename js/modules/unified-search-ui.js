@@ -25,8 +25,10 @@
             if (!this._usItems) this._usItems = new WeakMap();
             let it = this._usItems.get(m);
             const at = (m.created_at || 0) * 1000;
-            if (it && it.text === m.content && it.key === key && it.at === at) return it;
-            it = { id: m.id, key, at, text: m.content || '', msg: m, folded: null };
+            const F = window.NymContentFilter;
+            const text = F && typeof this._cfCtx === 'function' ? F.stripBlockedQuotes(this._cfCtx(), m.content || '') : (m.content || '');
+            if (it && it.text === text && it.key === key && it.at === at) return it;
+            it = { id: m.id, key, at, text, msg: m, folded: null };
             this._usItems.set(m, it);
             return it;
         },
@@ -36,7 +38,7 @@
             const packs = typeof this.activeFilterPacks === 'function' ? this.activeFilterPacks().join(',') : '';
             const gates = typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0;
             const minute = Math.floor(Date.now() / 60000);
-            return [size(this.deletedEventIds), size(this.blockedUsers), size(this.blockedKeywords), [...(this.blockedKeywords || [])].join('\u0001'), size(this._quiet), packs, gates, minute].join('|');
+            return [size(this.deletedEventIds), size(this.blockedUsers), size(this.blockedKeywords), [...(this.blockedKeywords || [])].join('\u0001'), size(this._quiet), size(this.friends), packs, gates, minute].join('|');
         },
 
         _usVisible(it) {
@@ -44,11 +46,11 @@
             if (!m) return true;
             if (this.deletedEventIds && (this.deletedEventIds.has(m.id) || (m.nymMessageId && this.deletedEventIds.has(m.nymMessageId)))) return false;
             if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(m)) return false;
-            if (!m.isOwn && ((this.blockedUsers && this.blockedUsers.has(m.pubkey)) || m.blocked)) return false;
-            if (typeof this._quietMessage === 'function' && this._quietMessage(m)) return false;
-            if (!m.isOwn && typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(m.content, m.author, m.pubkey)) return false;
-            const gates = typeof this._clientGatesActive === 'function' && this._clientGatesActive();
-            if (gates && !m.isOwn && typeof this.isSpamMessage === 'function' && this.isSpamMessage(m.content)) return false;
+            if (typeof this.isContentHidden === 'function') {
+                if (this.isContentHidden(m)) return false;
+            } else if (!m.isOwn && this.blockedUsers && this.blockedUsers.has(m.pubkey)) {
+                return false;
+            }
             if (typeof this._ctHidden === 'function' && this._ctHidden(m)) return false;
             return true;
         },
@@ -56,8 +58,9 @@
         _usCorpus() {
             const channels = [];
             const seen = new Set();
-            const blocked = this.blockedChannels || new Set();
+            const blocked = new Set([...(this.blockedChannels || [])].concat([...(this.hiddenChannels || [])]).map((k) => String(k || '').toLowerCase()));
             const activity = this.channelLastActivity || new Map();
+            const nymHidden = (pk, nym) => typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword('', nym || '', pk);
             for (const [key, ch] of (this.channels || new Map())) {
                 const k = String(key || '').toLowerCase();
                 if (!k || blocked.has(k) || seen.has(k)) continue;
@@ -77,7 +80,7 @@
             }
             for (const [gid, g] of (this.groupConversations || new Map())) {
                 if (!gid || this._usLocked(this.getGroupConversationKey(gid))) continue;
-                channels.push({ key: gid, name: (g && g.name) || this._ct('Group'), kind: 'group', joined: true, at: (g && g.lastMessageTime) || 0 });
+                channels.push({ key: gid, name: g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || this._ct('Group'))) : this._ct('Group'), kind: 'group', joined: true, at: (g && g.lastMessageTime) || 0 });
             }
             const nyms = [];
             const people = new Set();
@@ -91,11 +94,13 @@
             const friends = this.friends || new Set();
             for (const [pk, u] of (this.users || new Map())) {
                 if (!pk || blockedUsers.has(pk) || people.has(pk)) continue;
+                if (pk !== this.pubkey && nymHidden(pk, (u && u.nym) || '')) continue;
                 people.add(pk);
                 nyms.push({ pubkey: pk, nym: this.stripPubkeySuffix((u && u.nym) || ''), npub: npub(pk), friend: friends.has(pk), at: (u && u.lastSeen) || 0 });
             }
             for (const [pk, p] of (this.pmConversations || new Map())) {
                 if (!pk || blockedUsers.has(pk) || people.has(pk)) continue;
+                if (nymHidden(pk, (p && p.nym) || '')) continue;
                 if (this._usLocked(this.getPMConversationKey(pk))) continue;
                 people.add(pk);
                 nyms.push({ pubkey: pk, nym: this.stripPubkeySuffix((p && p.nym) || ''), npub: npub(pk), friend: friends.has(pk), at: 0 });
@@ -137,16 +142,26 @@
             return S().search(st.query, this._usCorpus(), { limits: st.limits, scope, lower, visible });
         },
 
-        _usHighlight(text, ranges) {
+        _usHighlight(text, ranges, dims) {
             const esc = (s) => this.escapeHtml(s);
+            const hits = ranges || [];
+            const dim = dims || [];
+            const clamp = (v) => Math.max(0, Math.min(text.length, v));
+            const cuts = new Set([0, text.length]);
+            for (const r of hits.concat(dim)) { cuts.add(clamp(r[0])); cuts.add(clamp(r[1])); }
+            const at = [...cuts].sort((a, b) => a - b);
+            const inside = (list, a, b) => list.some((r) => r[0] <= a && b <= r[1]);
             let out = '';
-            let at = 0;
-            for (const r of ranges || []) {
-                if (r[0] > at) out += esc(text.slice(at, r[0]));
-                out += '<mark class="us-hit">' + esc(text.slice(r[0], r[1])) + '</mark>';
-                at = r[1];
+            for (let i = 0; i + 1 < at.length; i++) {
+                const a = at[i];
+                const b = at[i + 1];
+                if (b <= a) continue;
+                let piece = esc(text.slice(a, b));
+                if (inside(dim, a, b)) piece = '<span class="nym-suffix">' + piece + '</span>';
+                if (inside(hits, a, b)) piece = '<mark class="us-hit">' + piece + '</mark>';
+                out += piece;
             }
-            return out + esc(text.slice(at));
+            return out;
         },
 
         _usAvatarImg(pubkey, cls) {
@@ -404,7 +419,7 @@
                     const when = this._formatFullTimestamp(it.at);
                     const snip = S().snippet(it.text, q.tokens);
                     body += row('message', { item: it, rid: 'message-' + it.key + '-' + it.id }, `${sender}, ${chat}, ${when}: ${snip.text}`,
-                        `${this._usGlyphHtml(it.key)}<div class="us-body"><div class="us-meta"><span class="us-sender">${m.pubkey ? this._usNymHtml(senderBase, m.pubkey, []) : esc(sender)}</span><span class="us-dot">·</span><span class="us-chat">${esc(chat)}</span><span class="us-when">${esc(when)}</span></div><div class="us-snippet">${this._usHighlight(snip.text, snip.ranges)}</div></div>`);
+                        `${this._usGlyphHtml(it.key)}<div class="us-body"><div class="us-meta"><span class="us-sender">${m.pubkey ? this._usNymHtml(senderBase, m.pubkey, []) : esc(sender)}</span><span class="us-dot">·</span><span class="us-chat">${info.t === 'dm' ? this.nymTextHtml(chat, [info.n]) : esc(chat)}</span><span class="us-when">${esc(when)}</span></div><div class="us-snippet">${this._usHighlight(snip.text, snip.ranges, window.NymLayoutModel ? window.NymLayoutModel.mentionSuffixRanges(snip.text) : [])}</div></div>`);
                 }
                 if (r.messages.total > r.messages.items.length) body += more('messages', r.messages.items.length, r.messages.total);
                 html += groupHtml('m', this._us('messages'), r.messages.total, body);

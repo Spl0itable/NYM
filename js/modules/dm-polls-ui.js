@@ -85,7 +85,9 @@
 
         _dpTally(msg, poll) {
             const entry = this._dpStore()[msg.nymMessageId];
-            return P().tally(entry, { options: poll.options.length, author: msg.pubkey, allowed: this._dpAllowed(msg) });
+            const allowed = this._dpAllowed(msg).filter((pk) => pk === this.pubkey ||
+                typeof this.isPersonHidden !== 'function' || !this.isPersonHidden(pk));
+            return P().tally(entry, { options: poll.options.length, author: msg.pubkey, allowed });
         },
 
         _dpControlRumor(msg, extraTags, content, ts) {

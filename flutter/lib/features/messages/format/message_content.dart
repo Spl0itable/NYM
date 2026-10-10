@@ -48,6 +48,8 @@ import 'video_message.dart';
 import '../../../core/utils/safe_url.dart';
 import '../../../widgets/common/hollow_bullet.dart';
 import '../../../widgets/common/nym_tooltip.dart';
+import '../../../core/theme/nym_a11y.dart';
+import '../../../widgets/common/nym_label.dart';
 
 /// Shared stateless [ApiClient] for proxy URL construction; its builders do no network.
 final _proxyApi = ApiClient();
@@ -125,13 +127,15 @@ class MessageContent extends ConsumerWidget {
       commonMark: commonMark,
     );
 
-    final blocks = NymFormat.format(content, ctx);
+    final shown = ref.watch(
+        appStateProvider.select((s) => s.stripBlockedQuotes(content)));
+    final blocks = NymFormat.format(shown, ctx);
     final size = fontSize ?? settings.textSize.toDouble();
     final color = baseColor ?? c.text;
 
     // 1–6 emoji and nothing else render enlarged, unicode or custom.
     final emojiOnly =
-        isEmojiOnly(content) || isCustomEmojiOnly(content, ctx.customEmojis);
+        isEmojiOnly(shown) || isCustomEmojiOnly(shown, ctx.customEmojis);
 
     // Bare links to unfurl below the body, skipping inline media.
     final previewUrls = _collectPreviewUrls(blocks);
@@ -168,7 +172,7 @@ class MessageContent extends ConsumerWidget {
     }
 
     // Read-more: the char threshold only flags long bodies (quote lines excluded); the collapse is height-based.
-    final replyText = content
+    final replyText = shown
         .split('\n')
         .where((line) => !line.startsWith('>'))
         .join('\n')
@@ -765,7 +769,15 @@ class _RichInlineState extends State<_RichInline> {
   ) {
     switch (node) {
       case TextSpanNode(:final text):
-        return TextSpan(text: text, style: base);
+        final bare =
+            NymBareSuffixScope.of(context) ? nymSuffixRanges(text) : null;
+        if (bare == null || bare.isEmpty) {
+          return TextSpan(text: text, style: base);
+        }
+        return TextSpan(
+            style: base,
+            children: nymRangeSpans(text, bare,
+                nymSuffixStyle(base, contrast: context.highContrast)));
       case BoldNode(:final children):
         return TextSpan(children: [
           for (final ch in children)
@@ -856,7 +868,9 @@ class _RichInlineState extends State<_RichInline> {
         return TextSpan(
           text: url,
           style: base.merge(TextStyle(
-            color: c.secondary,
+            color: context.highContrast
+                ? legibleOnAll(c.secondary, [bubbleBgFor(c), c.bg])
+                : c.secondary,
             decoration: TextDecoration.underline,
           )),
           recognizer: _LinkTap(url),
@@ -1182,11 +1196,9 @@ class _MentionChip extends ConsumerWidget {
           if (node.suffix != null)
             TextSpan(
               text: '#${node.suffix}',
-              style: TextStyle(
-                color: c.secondaryA(0.7),
-                fontSize: size * 0.9,
-                fontWeight: FontWeight.w100,
-              ),
+              style: nymSuffixStyle(
+                  TextStyle(color: c.secondary, fontSize: size),
+                  contrast: context.highContrast),
             ),
         ],
       ),
@@ -2870,7 +2882,8 @@ class _QuoteBox extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (block.author != null) _quoteAuthor(c, ref, block.author!),
+        if (block.author != null)
+          _quoteAuthor(c, ref, block.author!, context.highContrast),
         for (final child in block.children) _quoteChild(context, c, child),
       ],
     );
@@ -3002,7 +3015,8 @@ class _QuoteBox extends ConsumerWidget {
 
 
   /// Quote author header with a dim `#suffix`.
-  Widget _quoteAuthor(NymColors c, WidgetRef ref, String author) {
+  Widget _quoteAuthor(
+      NymColors c, WidgetRef ref, String author, bool contrast) {
     final split = splitNymSuffix(author);
     final base = split.base;
     final suffix = split.suffix.isEmpty ? null : split.suffix;
@@ -3036,11 +3050,13 @@ class _QuoteBox extends ConsumerWidget {
           if (suffix != null)
             TextSpan(
               text: suffix,
-              style: TextStyle(
-                color: c.secondaryA(0.7),
-                fontSize: authorSize * 0.9,
-                fontWeight: FontWeight.w100,
-              ),
+              style: nymSuffixStyle(
+                  TextStyle(
+                    color: c.secondary,
+                    fontSize: authorSize,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  contrast: contrast),
             ),
           // Flair goes after the suffix and before ':'.
           if (t != null)
@@ -3873,10 +3889,14 @@ class InlineEmojiText extends ConsumerWidget {
     this.maxLines,
     this.overflow,
     this.textAlign,
+    this.dim = const [],
+    this.dimStyle,
   });
 
   final String text;
   final TextStyle style;
+  final List<List<int>> dim;
+  final TextStyle? dimStyle;
 
   /// Custom emoji side length; defaults to 1.75x the font size.
   final double? emojiSize;
@@ -3954,10 +3974,26 @@ class InlineEmojiText extends ConsumerWidget {
       );
     }
 
+    final dimmed = dimStyle != null && dim.isNotEmpty;
     // No token: a single plain Text.
-    if (!_rxToken.hasMatch(text)) return plainText();
+    if (!_rxToken.hasMatch(text) && !dimmed) return plainText();
 
     final spans = <InlineSpan>[];
+    void addText(int from, int to) {
+      var at = from;
+      if (dimmed) {
+        for (final r in dim) {
+          if (r[1] <= at || r[0] >= to) continue;
+          final a = r[0] < at ? at : r[0];
+          final b = r[1] > to ? to : r[1];
+          if (a > at) spans.add(TextSpan(text: text.substring(at, a), style: style));
+          spans.add(TextSpan(text: text.substring(a, b), style: dimStyle));
+          at = b;
+        }
+      }
+      if (at < to) spans.add(TextSpan(text: text.substring(at, to), style: style));
+    }
+
     var last = 0;
     for (final m in _rxToken.allMatches(text)) {
       final code = m.group(1)!;
@@ -3966,15 +4002,11 @@ class InlineEmojiText extends ConsumerWidget {
       if (url == null) {
         continue; // unknown code → leave the literal `:code:` in trailing text
       }
-      if (m.start > last) {
-        spans.add(TextSpan(text: text.substring(last, m.start), style: style));
-      }
+      if (m.start > last) addText(last, m.start);
       spans.add(emojiSpan(code, url));
       last = m.end;
     }
-    if (last < text.length) {
-      spans.add(TextSpan(text: text.substring(last), style: style));
-    }
+    if (last < text.length) addText(last, text.length);
     return Text.rich(
       TextSpan(children: spans),
       maxLines: maxLines,

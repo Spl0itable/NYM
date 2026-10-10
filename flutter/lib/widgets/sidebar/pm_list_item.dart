@@ -10,6 +10,7 @@ import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/nym_avatar.dart';
+import '../common/nym_label.dart';
 import '../context_menu/profile_badges.dart';
 import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
@@ -60,7 +61,7 @@ class PMListItem extends ConsumerWidget {
         ref.read(chatNavProvider).pinIndexOfChat('pm-${pubkey.toLowerCase()}') >= 0;
 
     final preview = pubkey.isEmpty
-        ? (text: '', time: '', ts: 0)
+        ? kNoRowPreview
         : sidebarRowPreview(ref, 'pm-${pubkey.toLowerCase()}', 'pm');
     final Widget row = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
@@ -117,77 +118,54 @@ class PMListItem extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(text: base),
-                          TextSpan(
-                            text: '#$suffix',
-                            style: TextStyle(
-                              color: c.textDim.withValues(alpha: 0.7),
-                              fontSize: textSize * 0.9,
-                              fontWeight: FontWeight.w100,
-                            ),
-                          ),
-                          WidgetSpan(
-                            alignment: PlaceholderAlignment.middle,
-                            child: Consumer(
-                              builder: (context, ref, _) => CosmeticNymBadges(
-                                cosmetics:
-                                    ref.watch(userCosmeticsProvider(pubkey)),
-                                flairSize: 14,
-                                supporterHeight: 14,
-                              ),
-                            ),
-                          ),
-                          if (isDev || isBot)
-                            const WidgetSpan(
-                              alignment: PlaceholderAlignment.middle,
-                              child: Padding(
-                                padding: EdgeInsets.only(left: 4),
-                                child: VerifiedBadge(size: 14),
-                              ),
-                            ),
-                          if (isFriend)
-                            const WidgetSpan(
-                              alignment: PlaceholderAlignment.middle,
-                              child: Padding(
-                                padding: EdgeInsets.only(left: 2),
-                                child: FriendBadge(size: 14),
-                              ),
-                            ),
-                          if (isSupport)
-                            const WidgetSpan(
-                              alignment: PlaceholderAlignment.middle,
-                              child: Padding(
-                                padding: EdgeInsets.only(left: 4),
-                                child: _SupportLabel(),
-                              ),
-                            ),
-                          if (mesh)
-                            WidgetSpan(
-                              alignment: PlaceholderAlignment.middle,
-                              child: Padding(
-                                padding: const EdgeInsets.only(left: 4),
-                                child: NymSvgIcon(NymIcons.bluetooth,
-                                    size: 12, color: c.primary),
-                              ),
-                            ),
-                        ],
-                      ),
+                    Row(
                       key: const ValueKey('sidebarName'),
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: c.textDim,
-                        fontSize: textSize,
-                        fontWeight: FontWeight.w400,
-                        height: 1.3,
-                      ),
+                      children: [
+                        Flexible(
+                          child: NymLabel(
+                            base,
+                            suffix: suffix,
+                            style: TextStyle(
+                              color: c.textDim,
+                              fontSize: textSize,
+                              fontWeight: FontWeight.w400,
+                              height: 1.3,
+                            ),
+                          ),
+                        ),
+                        Consumer(
+                          builder: (context, ref, _) => CosmeticNymBadges(
+                            cosmetics: ref.watch(userCosmeticsProvider(pubkey)),
+                            flairSize: 14,
+                            supporterHeight: 14,
+                          ),
+                        ),
+                        if (isDev || isBot)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 4),
+                            child: VerifiedBadge(size: 14),
+                          ),
+                        if (isFriend)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 2),
+                            child: FriendBadge(size: 14),
+                          ),
+                        if (isSupport)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 4),
+                            child: _SupportLabel(),
+                          ),
+                        if (mesh)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: NymSvgIcon(NymIcons.bluetooth,
+                                size: 12, color: c.primary),
+                          ),
+                      ],
                     ),
                     if (preview.text.isNotEmpty)
-                      rowPreviewLine(context, preview.text, 'pm'),
+                      rowPreviewLine(context, preview.text, 'pm',
+                          preview.dim, preview.sender, preview.bodyAt),
                     ],
                     ),
                   ),

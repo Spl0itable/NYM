@@ -66,10 +66,12 @@
             const showSend = action === 'send';
             const active = document.activeElement;
             const lostFocus = !!active && ((!showSend && (active === send || active === more)) || (showSend && active === mic));
+            const appearing = showSend && send.hidden;
             if (send.hidden === showSend) send.hidden = !showSend;
             if (more && more.hidden === showSend) more.hidden = !showSend;
             if (mic.hidden !== showSend) mic.hidden = showSend;
             if (!showSend && this._composerMenuOpen === 'send') this.closeComposerMenu();
+            if (appearing && typeof this._sendAsProbe === 'function') Promise.resolve(this._sendAsProbe()).catch(() => { });
             if (lostFocus) {
                 const input = document.getElementById('messageInput');
                 if (input) input.focus();
@@ -150,8 +152,51 @@
             if (!menu) return;
             const model = this._composerSendModel();
             menu.querySelectorAll('[data-send-item]').forEach((el) => {
+                if (el.dataset.sendItem === 'as') return;
                 el.hidden = !model.some((m) => m.id === el.dataset.sendItem);
             });
+            this._composerRenderSendAs();
+        },
+
+        _composerRenderSendAs() {
+            const sep = document.getElementById('sendAsSep');
+            const head = document.getElementById('sendAsHeading');
+            const group = document.getElementById('sendAsGroup');
+            if (!sep || !head || !group) return;
+            const sec = typeof this.sendAsSection === 'function' ? this.sendAsSection() : { show: false, rows: [] };
+            const active = document.activeElement;
+            const focused = active && group.contains(active) && active.dataset ? active.dataset.acctId : null;
+            sep.hidden = !sec.show;
+            head.hidden = !sec.show;
+            group.hidden = !sec.show;
+            group.innerHTML = sec.show ? sec.rows.map((r) => this._composerSendAsRow(r)).join('') : '';
+            if (focused) {
+                const again = [...group.querySelectorAll('[data-acct-id]')].find((el) => el.dataset.acctId === focused);
+                if (again) again.focus();
+                else {
+                    const menu = document.getElementById('sendMenu');
+                    const items = menu ? this._composerMenuItems(menu) : [];
+                    const first = items.find((el) => el.getAttribute('aria-disabled') !== 'true') || items[0];
+                    if (first) first.focus();
+                }
+            }
+        },
+
+        _composerSendAsRow(r) {
+            const S = window.NymSendAs;
+            const e = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+            const name = r.nym + '#' + r.suffix;
+            const label = S ? S.text(this._cx(S.STRINGS.rowLabel), name) : name;
+            const reason = r.reason ? this._cx(r.reason) : '';
+            const rid = 'sendAsReason-' + r.account;
+            const avatar = typeof this._sendAsAvatar === 'function' ? this._sendAsAvatar(r.account) : '';
+            const img = avatar
+                ? `<img class="send-as-avatar" src="${e(avatar)}" alt="" width="24" height="24" decoding="async">`
+                : `<span class="send-as-avatar send-as-avatar-blank" aria-hidden="true">${e(r.nym.slice(0, 1).toUpperCase())}</span>`;
+            return `<button type="button" class="composer-menu-item send-as-item${r.enabled ? '' : ' is-disabled'}" role="menuitem" data-send-item="as" data-acct-id="${e(r.account)}" data-state="${e(r.state)}" aria-label="${e(label)}" aria-disabled="${r.enabled ? 'false' : 'true'}"${reason ? ` aria-describedby="${e(rid)}" data-detail="${e(reason)}"` : ''}>`
+                + img
+                + `<span class="composer-menu-text"><span class="composer-menu-label"><bdi class="send-as-name"><span class="send-as-nym">${e(r.nym)}</span><span class="nym-suffix">#${e(r.suffix)}</span></bdi></span>`
+                + `<span class="composer-menu-reason" id="${e(rid)}">${e(reason)}</span></span></button>`;
         },
 
         _composerMenuItems(menu) {
@@ -195,7 +240,17 @@
             if (!menu) return;
             if (this._composerMenuOpen && this._composerMenuOpen !== kind) this.closeComposerMenu();
             if (kind === 'attach') this._composerRenderAttach();
-            else this._composerRenderSend();
+            else {
+                this._composerRenderSend();
+                if (typeof this._sendAsProbe === 'function') {
+                    Promise.resolve(this._sendAsProbe()).then(() => {
+                        if (this._composerMenuOpen === 'send') {
+                            this._composerRenderSendAs();
+                            this._composerPlaceMenu('send', menu);
+                        }
+                    }).catch(() => { });
+                }
+            }
             if (typeof this.closeEnhancedEmojiModal === 'function' && this.enhancedEmojiModal && this._activePickerMode === 'input') this.closeEnhancedEmojiModal({ keepFocus: true });
             const gif = document.getElementById('gifPicker');
             if (gif && gif.classList.contains('active') && typeof this.closeGifPicker === 'function') this.closeGifPicker({ keepFocus: true });
@@ -219,7 +274,12 @@
             this._composerMenuOpen = null;
             const ids = MENUS[kind];
             const menu = document.getElementById(ids.menu);
-            if (menu) menu.hidden = true;
+            this._composerGrab = null;
+            if (menu) {
+                menu.hidden = true;
+                menu.classList.remove('sheet-dragging');
+                if (menu.style.transform) menu.style.transform = '';
+            }
             const backdrop = document.getElementById('composerMenuBackdrop');
             if (backdrop) backdrop.hidden = true;
             let trigger = document.getElementById(ids.trigger);
@@ -249,6 +309,7 @@
             if (!menu || menu._nymBound) return;
             menu._nymBound = true;
             if (menu.parentNode !== document.body) document.body.appendChild(menu);
+            this._composerGrabber(menu);
             menu.addEventListener('keydown', (e) => this._composerMenuKeydown(e, menu));
             menu.addEventListener('click', (e) => {
                 const item = e.target.closest('[role="menuitem"]');
@@ -262,13 +323,88 @@
                     return;
                 }
                 this.closeComposerMenu({ restoreFocus: true });
-                if (kind === 'send') this._composerRunSend(item.dataset.sendItem);
+                if (kind === 'send') this._composerRunSend(item.dataset.sendItem, item.dataset.acctId);
             }, true);
         },
 
-        _composerRunSend(id) {
+        _composerGrabber(menu) {
+            if (menu.querySelector(':scope > .sheet-grabber')) return;
+            const g = document.createElement('div');
+            g.className = 'sheet-grabber';
+            g.setAttribute('role', 'button');
+            g.setAttribute('aria-label', this._cx('Close sheet'));
+            g.tabIndex = -1;
+            g.innerHTML = '<span class="sheet-grabber-bar"></span>';
+            menu.insertBefore(g, menu.firstChild);
+            g.addEventListener('pointerdown', (e) => this._composerGrabDown(e, menu, g));
+            g.addEventListener('pointermove', (e) => this._composerGrabMove(e));
+            g.addEventListener('pointerup', (e) => this._composerGrabUp(e));
+            g.addEventListener('pointercancel', (e) => this._composerGrabUp(e));
+            g.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (Date.now() < (this._composerGrabQuiet || 0) || !menu.classList.contains('is-sheet')) return;
+                this.closeComposerMenu({ restoreFocus: true });
+            });
+        },
+
+        _composerGrabDown(e, menu, g) {
+            if ((e.button !== undefined && e.button !== 0) || !menu.classList.contains('is-sheet') || menu.hidden) return;
+            e.preventDefault();
+            const now = performance.now();
+            this._composerGrab = { id: e.pointerId, menu, y0: e.clientY, y: e.clientY, t: now, v: 0, moved: false, h: menu.getBoundingClientRect().height || 1 };
+            try { g.setPointerCapture(e.pointerId); } catch (_) { }
+        },
+
+        _composerGrabMove(e) {
+            const d = this._composerGrab;
+            if (!d || e.pointerId !== d.id) return;
+            const now = performance.now();
+            d.v = (e.clientY - d.y) / Math.max(1, now - d.t);
+            d.y = e.clientY;
+            d.t = now;
+            const dy = Math.max(0, e.clientY - d.y0);
+            if (!d.moved && dy < 4) return;
+            d.moved = true;
+            d.menu.classList.add('sheet-dragging');
+            d.menu.style.transform = 'translateY(' + dy + 'px)';
+            if (e.cancelable) e.preventDefault();
+        },
+
+        _composerGrabUp(e) {
+            const d = this._composerGrab;
+            if (!d || e.pointerId !== d.id) return;
+            this._composerGrab = null;
+            if (!d.moved) return;
+            this._composerGrabQuiet = Date.now() + 350;
+            const S = window.nymSheets || {};
+            const dy = Math.max(0, e.clientY - d.y0);
+            const close = e.type !== 'pointercancel' && (dy > d.h * (S.closeFraction || 0.3) || d.v > (S.closeVelocity || 0.7));
+            d.menu.classList.remove('sheet-dragging');
+            if (close) this._composerSheetOut(d.menu);
+            else d.menu.style.transform = '';
+        },
+
+        _composerSheetOut(menu) {
+            const kind = this._composerMenuOpen;
+            const reduce = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+            if (reduce) { this.closeComposerMenu({ restoreFocus: true }); return; }
+            const out = 'translateY(100%)';
+            menu.style.transform = out;
+            let done = false;
+            const end = () => {
+                if (done) return;
+                done = true;
+                if (this._composerMenuOpen === kind && menu.style.transform === out) this.closeComposerMenu({ restoreFocus: true });
+            };
+            menu.addEventListener('transitionend', end, { once: true });
+            setTimeout(end, 320);
+        },
+
+        _composerRunSend(id, acctId) {
             if (id === 'later' && typeof this.openSendLater === 'function') this.openSendLater();
             else if (id === 'anon' && typeof this.sendMessagePseudonymous === 'function') this.sendMessagePseudonymous();
+            else if (id === 'as' && acctId && typeof this.sendAs === 'function') this.sendAs(acctId);
         },
 
         _composerPickerTabs(container, active) {

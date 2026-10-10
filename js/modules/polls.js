@@ -87,6 +87,38 @@ Object.assign(NYM.prototype, {
         this.updatePollDisplay(pollId);
     },
 
+    _pollHidden(poll) {
+        if (!poll) return true;
+        const F = window.NymContentFilter;
+        if (!F || typeof this._cfCtx !== 'function') {
+            return !!(poll.pubkey && poll.pubkey !== this.pubkey && this.blockedUsers && this.blockedUsers.has(poll.pubkey));
+        }
+        const text = [poll.question || ''].concat((poll.options || []).map((o) => (o && o.text) || '')).join('\n');
+        return F.hidden(this._cfCtx(), { pubkey: poll.pubkey || '', content: text, nym: this._cfNym(poll.nym || '') });
+    },
+
+    _pollVotes(poll) {
+        const out = new Map();
+        if (!poll || !poll.votes) return out;
+        poll.votes.forEach((idx, pk) => {
+            if (typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk)) return;
+            out.set(pk, idx);
+        });
+        return out;
+    },
+
+    _refreshChannelPollsForFilters() {
+        if (typeof document === 'undefined' || !this.polls) return;
+        document.querySelectorAll('.poll-container[data-poll-id]').forEach((el) => {
+            const poll = this.polls.get(el.dataset.pollId);
+            if (!poll || this._pollHidden(poll)) {
+                const row = el.closest('.message') || el;
+                row.remove();
+            }
+        });
+        this.renderChannelPolls();
+    },
+
     handlePollEvent(event) {
         const expirationTag = event.tags.find(t => t[0] === 'expiration');
         if (expirationTag) {
@@ -129,8 +161,8 @@ Object.assign(NYM.prototype, {
                 this.pendingPollVotes.delete(event.id);
             }
 
-            if (geohash === this.currentGeohash) {
-                this.displayPollMessage(event.id, nym, event.pubkey, question, options, poll.votes, event.created_at, event.pubkey === this.pubkey);
+            if (geohash === this.currentGeohash && !this._pollHidden(poll)) {
+                this.displayPollMessage(event.id, nym, event.pubkey, question, options, this._pollVotes(poll), event.created_at, event.pubkey === this.pubkey);
             }
         }
     },
@@ -358,15 +390,16 @@ Object.assign(NYM.prototype, {
         const container = document.querySelector(`.poll-container[data-poll-id="${pollId}"]`);
         if (!container) return;
 
-        const totalVotes = poll.votes.size;
-        const hasVoted = poll.votes.has(this.pubkey);
+        const votes = this._pollVotes(poll);
+        const totalVotes = votes.size;
+        const hasVoted = votes.has(this.pubkey);
 
         // Update options in place so existing voter <img> nodes aren't rebuilt (avoids avatar flicker).
         for (const opt of poll.options) {
             const optionEl = container.querySelector(`.poll-option[data-option-index="${opt.index}"]`);
             if (!optionEl) continue;
 
-            const optVotes = Array.from(poll.votes.entries()).filter(([, idx]) => idx === opt.index);
+            const optVotes = Array.from(votes.entries()).filter(([, idx]) => idx === opt.index);
             const count = optVotes.length;
             const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
 
@@ -378,7 +411,7 @@ Object.assign(NYM.prototype, {
             const pctEl = optionEl.querySelector('.poll-option-pct');
             if (pctEl) pctEl.textContent = totalVotes > 0 ? pct + '%' : '';
 
-            optionEl.classList.toggle('poll-option-selected', hasVoted && poll.votes.get(this.pubkey) === opt.index);
+            optionEl.classList.toggle('poll-option-selected', hasVoted && votes.get(this.pubkey) === opt.index);
 
             const votersEl = optionEl.querySelector('.poll-voters');
             if (votersEl) {
@@ -429,20 +462,21 @@ Object.assign(NYM.prototype, {
         if (pollFooter) pollFooter.textContent = `${totalVotes} vote${totalVotes !== 1 ? 's' : ''}`;
 
         if (typeof this.ensureListProfiles === 'function') {
-            this.ensureListProfiles(container, [...poll.votes.keys()]);
+            this.ensureListProfiles(container, [...votes.keys()]);
         }
     },
 
     showPollVotersModal(pollId, anchorEl, ev, override) {
         if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
         const poll = override || this.polls.get(pollId);
-        if (!poll || poll.votes.size === 0) return;
+        const votes = this._pollVotes(poll);
+        if (!poll || votes.size === 0) return;
 
         this.closePollVotersModal();
 
         const optionLabel = new Map(poll.options.map(o => [o.index, o.text]));
         const MAX_ROWS = 100;
-        const entries = Array.from(poll.votes.entries());
+        const entries = Array.from(votes.entries());
         const shown = entries.slice(0, MAX_ROWS);
         const rows = shown.map(([pubkey, optIdx]) => {
             const isYou = pubkey === this.pubkey;
@@ -465,7 +499,7 @@ Object.assign(NYM.prototype, {
         const modal = document.createElement('div');
         modal.className = 'reactors-modal poll-voters-modal';
         modal.innerHTML = `
-            <div class="reactors-modal-header"><span>📊 Voters</span> <span class="reactors-modal-count">${poll.votes.size}</span></div>
+            <div class="reactors-modal-header"><span>📊 Voters</span> <span class="reactors-modal-count">${votes.size}</span></div>
             <div class="reactors-modal-list">${rows}${overflowItem}</div>
         `;
         document.body.appendChild(modal);
@@ -533,6 +567,7 @@ Object.assign(NYM.prototype, {
         const channelPolls = [];
         for (const [pollId, poll] of this.polls) {
             if (poll.geohash !== geohash) continue;
+            if (this._pollHidden(poll)) continue;
             if (container.querySelector(`[data-poll-id="${pollId}"]`)) {
                 this.updatePollDisplay(pollId);
             } else {
@@ -550,7 +585,7 @@ Object.assign(NYM.prototype, {
             for (const [pollId, poll] of channelPolls) {
                 const nym = this.resolveDisplayNym(poll.pubkey, poll.nym);
                 const isOwn = poll.pubkey === this.pubkey;
-                this.displayPollMessage(pollId, nym, poll.pubkey, poll.question, poll.options, poll.votes, poll.created_at, isOwn);
+                this.displayPollMessage(pollId, nym, poll.pubkey, poll.question, poll.options, this._pollVotes(poll), poll.created_at, isOwn);
             }
         } finally {
             this._suppressBubbleRewrap = prevSuppress;

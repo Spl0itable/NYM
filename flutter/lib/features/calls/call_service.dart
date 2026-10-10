@@ -173,6 +173,7 @@ class CallService {
             .onToken(platform: platform, token: token, env: env);
       };
     } catch (_) {}
+    _ref.listen(appStateProvider, (_, _) => _dropGoneGroup());
     // Hydrate seen calls so a call already handled or relay-replayed isn't re-rung.
     unawaited(_hydrateSeenCalls());
   }
@@ -503,6 +504,7 @@ class CallService {
             route: isGroup ? (groupId ?? '') : callerPubkey,
             ts: whenMs,
             eventId: callId.isNotEmpty ? 'missed-call-$callId' : null,
+            senderPubkey: callerPubkey,
           );
     } catch (_) {
       // The history store may be gone during teardown; best-effort.
@@ -716,6 +718,33 @@ class CallService {
   }
 
   _LeftCall? _left;
+  Timer? _leftExpiry;
+
+  bool get busy => _active != null || _incoming != null || _starting;
+
+  Future<void> callBack(CallRecord r) async {
+    if (busy) return;
+    if (r.group.isNotEmpty) {
+      if (canRejoinGroupCall(r.group)) return rejoinGroupCall(r.group);
+      return startGroupCall(r.group, video: r.isVideo);
+    }
+    if (r.peer.isEmpty) return;
+    return startCall(r.peer, video: r.isVideo);
+  }
+
+  void _setLeft(_LeftCall? l) {
+    _leftExpiry?.cancel();
+    _leftExpiry = null;
+    _left = l;
+    if (l == null) return;
+    final wait = l.at + rejoinWindow.inMilliseconds + 1000 - clock();
+    _leftExpiry = Timer(Duration(milliseconds: wait < 0 ? 0 : wait), () {
+      _leftExpiry = null;
+      if (_left != l || clock() - l.at <= rejoinWindow.inMilliseconds) return;
+      _left = null;
+      if (_active == null && _incoming == null) _publishIdle();
+    });
+  }
 
   static const Duration rejoinWindow = Duration(hours: 3);
 
@@ -723,8 +752,16 @@ class CallService {
     final l = _left;
     if (l == null || l.groupId != groupId) return false;
     if (_active != null || _incoming != null) return false;
+    if (_groupById(groupId) == null) return false;
     if (l.remaining.isEmpty) return false;
     return clock() - l.at <= rejoinWindow.inMilliseconds;
+  }
+
+  void _dropGoneGroup() {
+    final l = _left;
+    if (l == null || _groupById(l.groupId) != null) return;
+    _setLeft(null);
+    if (_active == null && _incoming == null) _publishIdle();
   }
 
   void _onLeftCallHangup(String sender, Map<String, dynamic> data) {
@@ -732,7 +769,7 @@ class CallService {
     if (l == null || l.callId != data['callId']) return;
     l.remaining.remove(sender);
     if (l.remaining.isEmpty) {
-      _left = null;
+      _setLeft(null);
       if (_active == null && _incoming == null) _publishIdle();
     }
   }
@@ -752,7 +789,7 @@ class CallService {
       _releaseStream(stream);
       return;
     }
-    _left = null;
+    _setLeft(null);
     final active = _ActiveCall(
       callId: l.callId,
       kind: l.kind,
@@ -764,6 +801,12 @@ class CallService {
     );
     _active = active;
     _startOngoing(active);
+    active.lostTimer = Timer(callLostAfter, () {
+      active.lostTimer = null;
+      if (_active != active || active.status == 'active') return;
+      _system(tr('Call ended'));
+      end();
+    });
     await _attachLocalPreview(stream);
     for (final pk in active.members.where((pk) => pk != _self)) {
       _send(pk, CallSignal.accept(active.callId));
@@ -778,18 +821,26 @@ class CallService {
   /// Ends the active call.
   void end() {
     final ac = _active;
+    final live = ac == null
+        ? <String>{}
+        : ac.peers.entries
+            .where((e) =>
+                e.value.pc.connectionState ==
+                RTCPeerConnectionState.RTCPeerConnectionStateConnected)
+            .map((e) => e.key)
+            .toSet();
     if (ac != null &&
         ac.isGroup &&
         ac.groupId != null &&
         ac.status != 'outgoing' &&
-        ac.peers.isNotEmpty) {
-      _left = _LeftCall(
+        live.isNotEmpty) {
+      _setLeft(_LeftCall(
         callId: ac.callId,
         groupId: ac.groupId!,
         kind: ac.kind,
         members: List.of(ac.members),
-        remaining: ac.peers.keys.toSet(),
-      );
+        remaining: live,
+      ));
     }
     if (ac != null) {
       for (final pk in ac.members.where((pk) => pk != _self)) {
@@ -1229,6 +1280,8 @@ class CallService {
   }
 
   void dispose() {
+    _leftExpiry?.cancel();
+    _leftExpiry = null;
     // The container may be tearing down; best-effort.
     try {
       _ref.read(nostrControllerProvider).setCallSignalHandler(null);
@@ -1821,9 +1874,12 @@ class CallService {
     if (ac == null || ac.callId != data['callId']) return;
     if (!ac.members.contains(sender)) return;
     _removePeer(sender);
-    if (!ac.isGroup || ac.peers.isEmpty) {
+    if (!ac.isGroup) {
       _system(tr('Call ended'));
       _endCall();
+    } else if (ac.peers.isEmpty) {
+      _system(tr('Call ended'));
+      end();
     } else {
       _publish();
     }
@@ -1960,8 +2016,14 @@ class CallService {
       isSelf: false,
       mid: (data['mid'] as String?) ?? genCallId(),
     ));
-    ac.chatUnread += 1;
+    if (!_chatHidden(sender, text)) ac.chatUnread += 1;
     _publish();
+  }
+
+  bool _chatHidden(String pubkey, String text) {
+    final app = _ref.read(appStateProvider);
+    return app.isRefHidden(
+        pubkey: pubkey, author: app.users[pubkey]?.nym ?? '', body: text);
   }
 
   Future<void> _connectToPeer(String peerPubkey) {
@@ -2607,7 +2669,7 @@ class CallService {
     _syncIncomingUi();
     final l = _left;
     state.value = l != null && canRejoinGroupCall(l.groupId)
-        ? CallState(rejoinGroupId: l.groupId)
+        ? CallState(rejoinGroupId: l.groupId, rejoinCallId: l.callId)
         : CallState.idle;
   }
 
@@ -2661,7 +2723,9 @@ class CallService {
 
     // Merge per-message reactions into chat entries; hide blocked senders' rows.
     final chatLog =
-        ac.chatLog.where((m) => m.isSelf || !_isBlocked(m.pubkey)).map((m) {
+        ac.chatLog
+            .where((m) => m.isSelf || !_chatHidden(m.pubkey, m.text))
+            .map((m) {
       final r = ac.chatReactions[m.mid];
       if (r == null || r.isEmpty) return m;
       return m.copyWith(

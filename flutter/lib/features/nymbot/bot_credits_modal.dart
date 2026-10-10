@@ -14,6 +14,7 @@ import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
 import 'nymbot_models.dart';
 import 'nymbot_providers.dart';
+import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/nym_field.dart';
 
 /// Shown instead of the purchase UI where credits can't be sold; named so a test can hold the i18n catalog to it.
@@ -721,11 +722,9 @@ class _InvoiceViewState extends ConsumerState<_InvoiceView> {
             ],
           ),
         ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        DialogActions(
           children: [
             ModalChrome.iconButton(c, tr('Change amount'), widget.onBack),
-            const SizedBox(width: 10),
             ModalChrome.sendButton(
               c,
               tr("I've paid"),

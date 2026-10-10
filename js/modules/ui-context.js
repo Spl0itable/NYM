@@ -174,7 +174,7 @@ Object.assign(NYM.prototype, {
                 const baseNym = this.contextMenuData.nym;
                 const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
                 const fullNym = `${baseNym}#${suffix}`;
-                this.setQuoteReply(fullNym, this.contextMenuData.content);
+                this.setQuoteReply(fullNym, this.contextMenuData.content, this.contextMenuData.messageId);
             }
             this.closeContextMenu();
         });
@@ -268,11 +268,7 @@ Object.assign(NYM.prototype, {
         const targetNym = document.getElementById('reportTargetNym');
         const reportMessageCheckbox = document.getElementById('reportMessage');
 
-        const baseNym = this.contextMenuData.nym;
-        const suffix = this.getPubkeySuffix(this.contextMenuData.pubkey);
-        const fullNym = `${baseNym}#${suffix}`;
-
-        targetNym.textContent = fullNym;
+        targetNym.innerHTML = this.formatNymWithPubkey(this.contextMenuData.nym, this.contextMenuData.pubkey);
 
         if (this.contextMenuData.messageId) {
             reportMessageCheckbox.disabled = false;

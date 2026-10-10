@@ -116,20 +116,126 @@ Object.assign(NYM.prototype, {
     },
 
     hasBlockedKeyword(text, nickname, pubkey) {
-        const lowerText = typeof text === 'string' ? text.toLowerCase() : '';
-        const lowerNick = nickname ? this.parseNymFromDisplay(nickname).toLowerCase() : '';
-        const ownKeyword = Array.from(this.blockedKeywords).some(keyword =>
-            lowerText.includes(keyword) || (lowerNick && lowerNick.includes(keyword))
-        );
-        if (ownKeyword) return true;
-        // Filter packs join the user's keywords here so every filter call site picks them up.
-        if (typeof this.hasFilterPackMatch !== 'function') return false;
-        if (pubkey) {
-            if (pubkey === this.pubkey) return false;
-            if (typeof this.isFriend === 'function' && this.isFriend(pubkey)) return false;
-            if (typeof this.isVerifiedBot === 'function' && this.isVerifiedBot(pubkey)) return false;
-        }
-        return this.hasFilterPackMatch(text, nickname);
+        const F = window.NymContentFilter;
+        return !!F && F.textBlocked(this._cfCtx(), text, this._cfNym(nickname), pubkey);
+    },
+
+    _cfNym(nickname) {
+        if (!nickname) return '';
+        const s = String(nickname);
+        return s.indexOf('<') === -1 && s.indexOf('&') === -1 ? s : this.parseNymFromDisplay(s);
+    },
+
+    _cfCtx() {
+        if (this._cfCtxObj) return this._cfCtxObj;
+        const n = this;
+        const gates = () => typeof n._clientGatesActive === 'function' && n._clientGatesActive();
+        this._cfCtxObj = {
+            get self() { return n.pubkey || ''; },
+            get blockedUsers() { return n.blockedUsers; },
+            get keywords() { return n.blockedKeywords; },
+            get blockedChannels() { return n.blockedChannels; },
+            get hiddenChannels() { return n.hiddenChannels; },
+            get friendsOnly() { return !!n.notifyFriendsOnly; },
+            get packs() { return typeof n.activeFilterPacks === 'function' && n.activeFilterPacks().length > 0; },
+            friend: (pk) => typeof n.isFriend === 'function' && n.isFriend(pk),
+            bot: (pk) => typeof n.isVerifiedBot === 'function' && n.isVerifiedBot(pk),
+            pack: (text, nym) => typeof n.hasFilterPackMatch === 'function' && n.hasFilterPackMatch(text, nym),
+            muted: (pk) => gates() && typeof n.isAutoMuted === 'function' && n.isAutoMuted(pk),
+            deleted: (m) => n._cfDeleted(m),
+            quiet: (m) => typeof n._quietMessage === 'function' && n._quietMessage(m),
+            spam: (m) => (m.isPM || gates()) && typeof n.isSpamMessage === 'function' && n.isSpamMessage(m.content),
+            gated: (m) => m._spamGated === true
+        };
+        return this._cfCtxObj;
+    },
+
+    _cfDeleted(m) {
+        if (!m) return true;
+        if (m.deleted || m.isDeleted || m._hidden) return true;
+        const del = this.deletedEventIds;
+        if (del && (del.has(m.id) || (m.nymMessageId && del.has(m.nymMessageId)))) return true;
+        return typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(m);
+    },
+
+    _cfView(m) {
+        return {
+            pubkey: m.pubkey || '',
+            content: typeof m.content === 'string' ? m.content : null,
+            nym: this._cfNym(m.author),
+            own: !!m.isOwn || (!!this.pubkey && m.pubkey === this.pubkey),
+            system: false,
+            mesh: !!m.isMesh
+        };
+    },
+
+    isContentHidden(m) {
+        if (!m) return true;
+        const F = window.NymContentFilter;
+        if (!F) return !m.isOwn && !!(this.blockedUsers && this.blockedUsers.has(m.pubkey));
+        return F.hidden(this._cfCtx(), this._cfView(m), m);
+    },
+
+    isPersonHidden(pubkey, nym) {
+        const F = window.NymContentFilter;
+        const pk = pubkey || '';
+        if (!F) return !!(pk && pk !== this.pubkey && this.blockedUsers && this.blockedUsers.has(pk));
+        const name = nym !== undefined && nym !== null ? nym
+            : (pk && typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pk) : '');
+        return F.personHidden(this._cfCtx(), pk, this._cfNym(name));
+    },
+
+    _pruneBlockedQuotes() {
+        if (this.channelDOMCache && typeof this.channelDOMCache.clear === 'function') this.channelDOMCache.clear();
+        const F = window.NymContentFilter;
+        if (!F || typeof document === 'undefined') return;
+        const ctx = this._cfCtx();
+        document.querySelectorAll('.message blockquote > .quote-author').forEach((a) => {
+            const sfx = a.querySelector('.nym-suffix');
+            if (sfx && F.quoteBlocked(ctx, 'q' + String(sfx.textContent || '').trim()) && a.parentElement) a.parentElement.remove();
+        });
+    },
+
+    _contentFiltersActive() {
+        const F = window.NymContentFilter;
+        return !!F && F.activeFilters(this._cfCtx());
+    },
+
+    _previewMessage(list) {
+        const F = window.NymContentFilter;
+        if (!Array.isArray(list) || !F) return null;
+        const last = list[list.length - 1];
+        const size = (v) => (v && typeof v.size === 'number' ? v.size : 0);
+        const sig = [list.length, last ? (last.id || '') + ':' + (typeof last.content === 'string' ? last.content.length : 0) : '',
+            this._cfVersion || 0, this._cfEditEpoch || 0, size(this.deletedEventIds), size(this.blockedUsers), size(this.blockedKeywords),
+            size(this.friends), size(this.autoMutedPubkeys), Math.floor(Date.now() / 60000),
+            typeof this._clientGatesActive === 'function' && this._clientGatesActive() ? 1 : 0].join('|');
+        if (!this._previewMemo) this._previewMemo = new WeakMap();
+        const hit = this._previewMemo.get(list);
+        if (hit && hit.sig === sig) return hit.m;
+        const i = F.lastVisible(this._cfCtx(), list, (m) => this._cfView(m));
+        const m = i >= 0 ? list[i] : null;
+        this._previewMemo.set(list, { sig, m });
+        return m;
+    },
+
+    _previewBody(text) {
+        const F = window.NymContentFilter;
+        const s = typeof text === 'string' ? text : '';
+        const clean = F && s ? F.stripBlockedQuotes(this._cfCtx(), s) : s;
+        return typeof this._notifPreviewText === 'function' ? this._notifPreviewText(clean) : clean;
+    },
+
+    _keepsBlockedGroupControl(type) {
+        const F = window.NymContentFilter;
+        return !!F && F.keepsBlockedGroupControl(type || '');
+    },
+
+    _keepsBlockedGroupRumor(rumor) {
+        const tags = (rumor && Array.isArray(rumor.tags)) ? rumor.tags : [];
+        if (!tags.some((t) => Array.isArray(t) && t[0] === 'g' && t[1])) return false;
+        const type = tags.find((t) => Array.isArray(t) && t[0] === 'type' && t[1]);
+        return this._keepsBlockedGroupControl(type ? type[1] : '');
     },
 
     _extractQuoteChain(quoteContext) {
@@ -162,9 +268,7 @@ Object.assign(NYM.prototype, {
         // Text below the quote is the replier's, not Nymbot's, or the worker echoes it back as an assistant turn.
         const nonQuotedText = lines.filter(l => !l.startsWith('>')).join('\n').trim();
         if (nonQuotedText && (conversation.length === 0 || conversation[conversation.length - 1].text !== nonQuotedText)) {
-            const senderNym = (this.nym && this.pubkey && typeof this.getPubkeySuffix === 'function')
-                ? `${this.nym}#${this.getPubkeySuffix(this.pubkey)}`
-                : (this.nym || 'nym');
+            const senderNym = (this.nym && this.pubkey) ? String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey) : (this.nym || 'nym');
             conversation.push({ author: senderNym, text: nonQuotedText });
         }
         // Strip the wire envelope from Nymbot's own turns, or the model imitates it.
@@ -494,6 +598,7 @@ Object.assign(NYM.prototype, {
         this.autoMutedPubkeys.set(pubkey, Date.now() + this.AUTO_MUTE_MS);
         if (!fresh) return false;
         if (typeof this.hideMessagesFromBlockedUser === 'function') this.hideMessagesFromBlockedUser(pubkey);
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
         if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
         return true;
     },
@@ -540,6 +645,11 @@ Object.assign(NYM.prototype, {
             if (typeof this._persistDedupSets === 'function') this._persistDedupSets();
             if (!silent) this._revealGatedPubkey(pubkey);
         }
+    },
+
+    _wotGated(pubkey) {
+        return WOT_SPAM_GATE && !!pubkey && pubkey !== this.pubkey && this._clientGatesActive() &&
+            !this.isFriend(pubkey) && !this.nymchatPubkeys.has(pubkey) && this._isPubkeyGated(pubkey);
     },
 
     _isPubkeyGated(pubkey) {
@@ -626,6 +736,7 @@ Object.assign(NYM.prototype, {
 
     _countArrivedUnread(storageKey, message, exists) {
         if (!message || message.isOwn || exists) return;
+        if (this.isContentHidden(message)) return;
         const lastRead = (this.channelLastRead && this.channelLastRead.get(storageKey)) || 0;
         if ((message.created_at || 0) <= lastRead) return;
         if (message.isHistorical) {
@@ -713,7 +824,7 @@ Object.assign(NYM.prototype, {
             if (!exists) {
                 const msgTime = (message.created_at || 0) * 1000;
                 const prevActivity = this.channelLastActivity.get(storageKey) || 0;
-                if (!isGated && msgTime > prevActivity) {
+                if (!isGated && msgTime > prevActivity && !this.isContentHidden(message)) {
                     this.channelLastActivity.set(storageKey, msgTime);
                     if (typeof this._persistUnreadCounts === 'function') {
                         this._persistUnreadCounts();
@@ -795,6 +906,8 @@ Object.assign(NYM.prototype, {
             }
         }
 
+        if (this.isContentHidden(message)) return;
+
         // Thread replies update the root's reply row instead; replies with no local root render normally (threads.js).
         if (!_threadRender && message.threadRoot &&
             typeof this.threadsEnabled === 'function' && this.threadsEnabled() &&
@@ -846,7 +959,7 @@ Object.assign(NYM.prototype, {
         let deferFormat = false;
 
         // Own filtered messages get a system notice, since they were still sent to relays.
-        const keywordHit = this.hasBlockedKeyword(message.content, message.author, message.pubkey);
+        const keywordHit = this.hasBlockedKeyword(message.content, message.isOwn ? '' : message.author, message.pubkey);
         const clientGates = this._clientGatesActive();
         const spamHit = clientGates && this.isSpamMessage(message.content);
         if (message.isOwn) {
@@ -1005,7 +1118,7 @@ Object.assign(NYM.prototype, {
             }
             if (_botAuthored) {
                 // Show Nymbot's canonical command names in this client's localized vocabulary.
-                formattedContent = this.localizeCommandTokensIn(formattedContent);
+                formattedContent = window.NymSuffix.dimHtml(this.localizeCommandTokensIn(formattedContent), '*');
                 if (message.thinking) {
                     formattedContent = this._renderBotThinkingHtml(message.thinking) + formattedContent;
                 }
@@ -1365,7 +1478,8 @@ Object.assign(NYM.prototype, {
 
 
         // Silent for historical, own, bot, bulk and thread re-renders; live thread replies sound via _onThreadReplyArrived.
-        if (!_threadRender && !this._suppressSound && !message.isHistorical && !message.isOwn && !message.isBot && this.settings.sound) {
+        if (!_threadRender && !this._suppressSound && !message.isHistorical && !message.isOwn && !message.isBot && this.settings.sound
+            && !(this._sendAsQuiet instanceof Set && this._sendAsQuiet.has(message.id))) {
             if (isMentioned || message.isPM) {
                 this.playSound(this.settings.sound);
             }
@@ -1607,16 +1721,24 @@ Object.assign(NYM.prototype, {
     },
 
     formatMessageWithQuotes(content, depth = 0, commonMark = false) {
+        const F = window.NymContentFilter;
+        if (F && !depth && typeof content === 'string' && content.indexOf('>') !== -1) {
+            content = F.stripBlockedQuotes(this._cfCtx(), content);
+        }
         return window.NymFormat.formatWithQuotes(content, Object.assign(this._mainFormatCtx(content), { commonMark }), depth);
     },
 
     _pubkeyForSuffix(sfx) {
         if (!sfx) return null;
         if (!this._suffixIndex) this._suffixIndex = new Map();
+        const key = sfx.toLowerCase();
         // Rebuild when the index size disagrees materially with the live users map.
         const usersSize = this.users ? this.users.size : 0;
-        if (this._suffixIndex.size === 0 || Math.abs(this._suffixIndex.size - usersSize) > 8) {
+        const stale = this._suffixIndex.size === 0 || Math.abs(this._suffixIndex.size - usersSize) > 8
+            || (!this._suffixIndex.has(key) && this._suffixIndexUsers !== usersSize);
+        if (stale) {
             this._suffixIndex.clear();
+            this._suffixIndexUsers = usersSize;
             this.users.forEach((_, pubkey) => {
                 if (typeof pubkey === 'string' && pubkey.length >= 4) {
                     const s = pubkey.slice(-4).toLowerCase();
@@ -1624,7 +1746,7 @@ Object.assign(NYM.prototype, {
                 }
             });
         }
-        return this._suffixIndex.get(sfx.toLowerCase()) || null;
+        return this._suffixIndex.get(key) || null;
     },
 
     // Main-thread only (needs this.users); keyed by suffix -> { avatar, flair } in ctx.mentionInfo.
@@ -1843,7 +1965,7 @@ Object.assign(NYM.prototype, {
         if (html) {
             messageEl.innerHTML = shown;
         } else {
-            messageEl.textContent = shown;
+            this.renderNymText(messageEl, shown);
         }
         container.appendChild(messageEl);
 
@@ -2266,7 +2388,7 @@ Object.assign(NYM.prototype, {
         return this._groupResizeObserver;
     },
 
-    setQuoteReply(author, text) {
+    setQuoteReply(author, text, sourceId) {
         // Strip all nested quotes; keep only the last message being quoted.
         const MAX_NESTED = 1;
         const strippedLines = [];
@@ -2286,7 +2408,7 @@ Object.assign(NYM.prototype, {
             strippedText = window.NymMediaNotes.previewText(strippedText);
             text = window.NymMediaNotes.previewText(text);
         }
-        this.pendingQuote = { author, text: strippedText, fullText: text };
+        this.pendingQuote = { author, text: strippedText, fullText: text, sourceId: typeof sourceId === 'string' ? sourceId : '' };
         const preview = document.getElementById('quotePreview');
         const authorEl = document.getElementById('quotePreviewAuthor');
         const textEl = document.getElementById('quotePreviewText');
@@ -2499,7 +2621,7 @@ Object.assign(NYM.prototype, {
                     const suffix = this.getPubkeySuffix(msgEl.dataset.pubkey);
                     const authorText = `${baseNym}#${suffix}`;
                     const cleanContent = msgEl.dataset.rawContent || msgEl.querySelector('.message-content')?.textContent.replace(/\d{1,2}:\d{2}\s*(AM|PM)?\s*$/i, '').trim();
-                    if (cleanContent) this.setQuoteReply(authorText, cleanContent);
+                    if (cleanContent) this.setQuoteReply(authorText, cleanContent, msgEl.dataset.messageId);
                 }
             },
             translate: {
@@ -2773,7 +2895,7 @@ Object.assign(NYM.prototype, {
 
             if (cleanContent) {
                 window.getSelection()?.removeAllRanges();
-                this.setQuoteReply(authorText, cleanContent);
+                this.setQuoteReply(authorText, cleanContent, msgEl.dataset.messageId);
             }
         });
     },
@@ -3084,22 +3206,6 @@ Object.assign(NYM.prototype, {
                 msg.style.display = 'none';
                 msg.classList.add('blocked');
             }
-        });
-
-        this.messages.forEach((channelMessages, channel) => {
-            channelMessages.forEach(msg => {
-                if (this.hasBlockedKeyword(msg.content, msg.author)) {
-                    msg.blocked = true;
-                }
-            });
-        });
-
-        this.pmMessages.forEach((conversationMessages, conversationKey) => {
-            conversationMessages.forEach(msg => {
-                if (this.hasBlockedKeyword(msg.content, msg.author)) {
-                    msg.blocked = true;
-                }
-            });
         });
     },
 
@@ -3553,18 +3659,13 @@ Object.assign(NYM.prototype, {
 
         const clientGates = this._clientGatesActive();
         return (Array.isArray(subset) ? subset : messages).filter(msg => {
-            if (this.deletedEventIds.has(msg.id)) return false;
-            if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
             if (WOT_SPAM_GATE && clientGates && !msg.isOwn && !this.isFriend(msg.pubkey) &&
                 !this.nymchatPubkeys.has(msg.pubkey) && this._isPubkeyGated(msg.pubkey)) {
                 return false;
             }
-            if (!msg.isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
-            if (typeof this._quietMessage === 'function' && this._quietMessage(msg)) return false;
-            if (!msg.isOwn && this.hasBlockedKeyword(msg.content, msg.author, msg.pubkey)) return false;
-            if (clientGates && !msg.isOwn && this.isSpamMessage(msg.content)) return false;
+            if (this.isContentHidden(msg)) return false;
             if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
             return true;
         }).sort((a, b) => this._compareMessages(a, b));

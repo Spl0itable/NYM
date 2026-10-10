@@ -8,6 +8,8 @@ import '../../widgets/nym_icons.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/hit_slop.dart';
+import '../../widgets/common/nym_switch.dart';
+import '../../core/theme/nym_a11y.dart';
 
 /// Shared form controls matching the PWA's settings styling, colored from `context.nym`.
 
@@ -171,6 +173,166 @@ class FormGroup extends StatelessWidget {
   }
 }
 
+class SettingsToggleRow extends StatefulWidget {
+  const SettingsToggleRow({
+    super.key,
+    required this.label,
+    required this.value,
+    required this.onChanged,
+    this.hint,
+    this.semanticHint,
+    this.sub = false,
+    this.switchKey,
+    this.tooltip,
+    this.amberHint,
+    this.footer,
+    this.padding,
+    this.spacing = 20,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+  final String? hint;
+  final String? semanticHint;
+  final bool sub;
+  final Key? switchKey;
+  final String? tooltip;
+  final String? amberHint;
+  final Widget? footer;
+  final EdgeInsetsGeometry? padding;
+  final double spacing;
+
+  @override
+  State<SettingsToggleRow> createState() => _SettingsToggleRowState();
+}
+
+class _SettingsToggleRowState extends State<SettingsToggleRow> {
+  bool _focused = false;
+
+  void _toggle() {
+    final change = widget.onChanged;
+    if (change != null) change(!widget.value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final enabled = widget.onChanged != null;
+    final hint = widget.hint;
+    final Widget text = widget.sub
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.label,
+                  style: TextStyle(color: c.text, fontSize: 14)),
+              if (hint != null) ...[
+                const SizedBox(height: 2),
+                Text(hint,
+                    style: TextStyle(
+                        color: c.textDim, fontSize: 11, height: 1.4)),
+              ],
+            ],
+          )
+        : Text(
+            widget.label.toUpperCase(),
+            style: TextStyle(
+              color: c.textDim,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.2,
+            ),
+          );
+    Widget row = ConstrainedBox(
+      constraints: BoxConstraints(minHeight: nymTouchPlatform() ? 44 : 32),
+      child: Padding(
+        padding: widget.padding ??
+            (widget.sub
+                ? const EdgeInsets.symmetric(vertical: 6)
+                : EdgeInsets.zero),
+        child: Row(
+          children: [
+            Expanded(child: text),
+            const SizedBox(width: 16),
+            NymSwitch(
+              key: widget.switchKey,
+              value: widget.value,
+              onChanged: widget.onChanged,
+              focused: _focused && enabled,
+            ),
+          ],
+        ),
+      ),
+    );
+    row = MergeSemantics(
+      child: Semantics(
+        toggled: widget.value,
+        enabled: enabled,
+        label: widget.label,
+        hint: widget.semanticHint ?? hint,
+        onTap: enabled ? _toggle : null,
+        child: FocusableActionDetector(
+          enabled: enabled,
+          mouseCursor:
+              enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
+          onShowFocusHighlight: (v) {
+            if (v != _focused) setState(() => _focused = v);
+          },
+          actions: <Type, Action<Intent>>{
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) {
+                _toggle();
+                return null;
+              },
+            ),
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: enabled ? _toggle : null,
+            child: ExcludeSemantics(child: row),
+          ),
+        ),
+      ),
+    );
+    if (!enabled) {
+      row = Opacity(opacity: 0.5, child: row);
+      final tip = widget.tooltip;
+      if (tip != null) row = NymTooltip(message: tip, child: row);
+    }
+    if (widget.sub) return row;
+    return Padding(
+      padding: EdgeInsets.only(bottom: widget.spacing),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          row,
+          if (hint != null) ...[
+            const SizedBox(height: 5),
+            ExcludeSemantics(
+              child: Text(
+                hint,
+                style: TextStyle(color: c.textDim, fontSize: 11, height: 1.4),
+              ),
+            ),
+          ],
+          if (widget.amberHint != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              widget.amberHint!,
+              style: const TextStyle(
+                  color: Color(0xFFF0A030), fontSize: 11, height: 1.4),
+            ),
+          ],
+          if (widget.footer != null) ...[
+            const SizedBox(height: 12),
+            widget.footer!,
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 /// Styled dropdown; [disabled] dims it and makes it inert, with an optional [tooltip].
 class FormSelect<T> extends StatelessWidget {
   const FormSelect({
@@ -267,7 +429,10 @@ class FormInput extends StatefulWidget {
     this.prefix,
     this.maxLines = 1,
     this.maxLength,
+    this.largeTarget = false,
   });
+
+  final bool largeTarget;
 
   final TextEditingController? controller;
   final String? hint;
@@ -358,7 +523,8 @@ class _FormInputState extends State<FormInput> {
                   child: widget.prefix,
                 ),
           prefixIconConstraints:
-              const BoxConstraints(minWidth: 36, minHeight: 16)),
+              const BoxConstraints(minWidth: 36, minHeight: 16),
+          minHeight: widget.largeTarget ? largeFieldMin(context) : null),
       ),
     );
   }

@@ -17,6 +17,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/chat/message_row.dart' show formatRelativeTime;
 import 'format/message_content.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_label.dart';
 import '../i18n/i18n.dart';
 
 class NostrRefCardData {
@@ -308,19 +309,34 @@ class _NostrRefCardState extends ConsumerState<NostrRefCard> {
   Widget build(BuildContext context) {
     final data = _data;
     if (!_resolved || data == null) return const SizedBox.shrink();
+    final hidden = ref.watch(appStateProvider.select((s) => s.isRefHidden(
+          pubkey: data.pubkey,
+          author: data.author,
+          body: data.body,
+          channel: data.channel,
+          profile: data.kind == NostrRefKind.profile,
+        )));
+    if (hidden) return const SizedBox.shrink();
     final c = context.nym;
 
     final users = ref.watch(usersProvider);
     // Prefer the store's current nym; strip any `#xxxx` before re-adding so the suffix isn't doubled.
     final baseNym = pickDisplayNym(users[data.pubkey]?.nym, data.author);
     final openProfileCb = widget.onOpenProfile;
-    final nymText = Text(
-      data.pubkey.isEmpty ? baseNym : '$baseNym#${getPubkeySuffix(data.pubkey)}',
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style:
-          TextStyle(color: c.text, fontSize: 12, fontWeight: FontWeight.w600),
-    );
+    final nymText = data.pubkey.isEmpty
+        ? Text(
+            baseNym,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                color: c.text, fontSize: 12, fontWeight: FontWeight.w600),
+          )
+        : NymLabel(
+            baseNym,
+            pubkey: data.pubkey,
+            style: TextStyle(
+                color: c.text, fontSize: 12, fontWeight: FontWeight.w600),
+          );
 
     final headRow = Row(
       children: [

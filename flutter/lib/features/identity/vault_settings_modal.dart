@@ -13,6 +13,7 @@ import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import 'biometric_secret_store.dart';
 import 'identity_vault.dart';
+import '../../widgets/common/dialog_button.dart';
 import 'modal_chrome.dart';
 
 final identityVaultProvider = Provider<IdentityVault>((ref) {
@@ -50,6 +51,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   String? _error;
   bool _busy = false;
   bool _bioAvailable = false;
+  BiometricKind? _kind;
 
   @override
   void initState() {
@@ -58,11 +60,21 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
   }
 
   Future<void> _checkBiometric() async {
-    final supported =
-        await ref.read(identityVaultProvider).biometricAvailable();
+    final vault = ref.read(identityVaultProvider);
+    final supported = await vault.biometricAvailable();
     final taken = ref.read(accountsProvider)?.biometricHeldByOther() ?? false;
-    if (mounted) setState(() => _bioAvailable = supported && !taken);
+    final kind = supported || vault.method == 'biometric'
+        ? await vault.biometricKind()
+        : null;
+    if (mounted) {
+      setState(() {
+        _bioAvailable = supported && !taken;
+        _kind = kind;
+      });
+    }
   }
+
+  String get _bioName => biometricKindName(_kind ?? BiometricKind.generic);
 
   @override
   void dispose() {
@@ -112,9 +124,8 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
     );
   }
 
-  String _methodName(IdentityVault vault) => vault.method == 'biometric'
-      ? tr('Biometric (Face/Touch ID)')
-      : tr('Password or PIN');
+  String _methodName(IdentityVault vault) =>
+      vault.method == 'biometric' ? _bioName : tr('Password or PIN');
 
   Widget _status(NymColors c) => _error == null
       ? const SizedBox.shrink()
@@ -183,18 +194,13 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
         ],
         _status(c),
         const SizedBox(height: 24),
-        Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 10,
-          runSpacing: 10,
+        DialogActions(
           children: [
-            ModalChrome.iconButton(
-                c, tr('Close'), () => Navigator.of(context).pop(),
-                height: 42),
             if (!isBio)
               ModalChrome.iconButton(c, tr('Change password or PIN'),
-                  _busy ? null : () => _go('change'),
-                  height: 42),
+                  _busy ? null : () => _go('change')),
+            ModalChrome.iconButton(
+                c, tr('Close'), () => Navigator.of(context).pop()),
             ModalChrome.sendButton(
                 c, tr('Turn off'), _busy ? null : () => _go('off'),
                 danger: true),
@@ -221,12 +227,10 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
             last: true, onDone: () => _change(vault)),
         _status(c),
         const SizedBox(height: 24),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        DialogActions(
           children: [
             ModalChrome.iconButton(
                 c, tr('Cancel'), () => Navigator.of(context).pop()),
-            const SizedBox(width: 10),
             ModalChrome.sendButton(
               c,
               tr('Change'),
@@ -260,12 +264,10 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
         ],
         _status(c),
         const SizedBox(height: 24),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        DialogActions(
           children: [
             ModalChrome.iconButton(
                 c, tr('Cancel'), () => Navigator.of(context).pop()),
-            const SizedBox(width: 10),
             ModalChrome.sendButton(
               c,
               tr('Turn off'),
@@ -324,9 +326,7 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
               DropdownMenuItem(value: 'password', child: Text(tr('Password'))),
               DropdownMenuItem(value: 'pin', child: Text(tr('PIN'))),
               if (_bioAvailable)
-                DropdownMenuItem(
-                    value: 'biometric',
-                    child: Text(tr('Biometric (Face/Touch ID)'))),
+                DropdownMenuItem(value: 'biometric', child: Text(_bioName)),
             ],
             onChanged: (v) => setState(() => _method = v ?? 'password'),
           ),
@@ -386,12 +386,10 @@ class _VaultSettingsModalState extends ConsumerState<VaultSettingsModal> {
           Text(_error!, style: TextStyle(color: c.danger, fontSize: 12)),
         ],
         const SizedBox(height: 24),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        DialogActions(
           children: [
             ModalChrome.iconButton(
                 c, tr('Cancel'), () => Navigator.of(context).pop()),
-            const SizedBox(width: 10),
             ModalChrome.sendButton(
               c,
               tr('Enable'),

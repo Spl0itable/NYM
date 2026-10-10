@@ -272,6 +272,7 @@
         // inbound 
         _onMeshPublicMessage(m) {
             const channel = this.sanitizeChannelName(m.channel || '') || MESH_CHANNEL;
+            if (typeof this.isChannelBlocked === 'function' && this.isChannelBlocked(channel, channel)) return;
             const seconds = Math.floor((m.timestampMs || Date.now()) / 1000);
             const pubkey = m.senderNostrPubkey || ('mesh:' + m.senderPeerID);
             // The sender's outbox later republishes with a `['nymmesh', id]` tag; remembering the id drops that copy.
@@ -315,6 +316,13 @@
                 return;
             }
 
+            if (this.blockedUsers && this.blockedUsers.has(pubkey)) return;
+            const accept = this.settings && this.settings.acceptPMs;
+            if (accept && accept !== 'enabled') {
+                if (accept === 'disabled') return;
+                if (accept === 'friends' && !(typeof this.isFriend === 'function' && this.isFriend(pubkey))) return;
+            }
+
             const conversationKey = this.getPMConversationKey(pubkey);
             const msg = {
                 id: 'mesh-pm-' + m.messageId,
@@ -343,6 +351,7 @@
             if (list.length > this.pmStorageLimit) list = list.slice(-this.pmStorageLimit);
             this.pmMessages.set(conversationKey, list);
             if (typeof this.persistPMMessages === 'function') this.persistPMMessages(conversationKey);
+            if (typeof this.isContentHidden === 'function' && this.isContentHidden(msg)) return;
 
             this.addPMConversation(this.getNymFromPubkey(pubkey), pubkey, ms);
             this.movePMToTop(pubkey, ms);
@@ -543,6 +552,10 @@
             return this.uiText(peer.isVerified ? 'Verified' : 'Not verified yet');
         },
 
+        _meshRefreshForFilters() {
+            if (this._meshPageOpen) this._renderMeshPanel();
+        },
+
         _renderMeshPanel() {
             this._renderMeshHeader();
             const body = document.getElementById('meshPanelBody');
@@ -550,7 +563,8 @@
             const mesh = this._mesh;
             const running = !!(mesh && mesh.running);
             const links = running ? (mesh.linkList || []) : [];
-            const peers = running ? (mesh.peerList || []) : [];
+            const peers = (running ? (mesh.peerList || []) : []).filter((p) =>
+                !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(this._meshLinkedKey(p) || '', p.nickname || '')));
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const u = (s) => esc(this.uiText(s));
             const icon = (inner) => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;

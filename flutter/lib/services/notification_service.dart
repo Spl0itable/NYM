@@ -172,22 +172,11 @@ class NotificationService {
         ? _generateUniqueId()
         : conversationKey.hashCode & 0x7fffffff;
 
-    final channel = _channelFor(kind);
-    final androidDetails = AndroidNotificationDetails(
-      channel.id,
-      channel.name,
-      channelDescription: channel.description,
-      importance: channel.importance,
-      priority: kind == NotificationKind.activity
-          ? Priority.defaultPriority
-          : Priority.high,
-      enableVibration: kind != NotificationKind.activity,
-      playSound: true,
-      styleInformation: BigTextStyleInformation(body, contentTitle: title),
-      autoCancel: true,
-      groupKey: conversationKey,
-      // The lock screen hides decrypted content.
-      visibility: NotificationVisibility.private,
+    final androidDetails = NotificationService.androidDetails(
+      title: title,
+      body: body,
+      conversationKey: conversationKey,
+      kind: kind,
     );
     final iosDetails = darwinDetails(
       conversationKey: conversationKey,
@@ -202,6 +191,30 @@ class NotificationService {
         body: body,
         notificationDetails: details,
         payload: payload);
+  }
+
+  static AndroidNotificationDetails androidDetails({
+    required String title,
+    required String body,
+    String? conversationKey,
+    NotificationKind kind = NotificationKind.message,
+  }) {
+    final channel = _channelFor(kind);
+    return AndroidNotificationDetails(
+      channel.id,
+      channel.name,
+      channelDescription: channel.description,
+      importance: channel.importance,
+      priority: kind == NotificationKind.activity
+          ? Priority.defaultPriority
+          : Priority.high,
+      enableVibration: kind != NotificationKind.activity,
+      playSound: true,
+      styleInformation: BigTextStyleInformation(body, contentTitle: title),
+      autoCancel: true,
+      groupKey: conversationKey,
+      visibility: NotificationVisibility.private,
+    );
   }
 
   static DarwinNotificationDetails darwinDetails({
@@ -233,8 +246,41 @@ class NotificationService {
     }
   }
 
+  static const Set<String> _badgeChannels = {
+    'nym_messages',
+    'nym_mentions',
+    'nym_activity',
+  };
+
+  static List<int> staleNotificationIds(
+      List<ActiveNotification> active, Set<String> unreadKeys) {
+    final out = <int>[];
+    for (final n in active) {
+      final id = n.id;
+      if (id == null || !_badgeChannels.contains(n.channelId)) continue;
+      final key = n.groupKey ?? '';
+      if (key.startsWith('account-')) continue;
+      final keep = key.isEmpty ? unreadKeys.isNotEmpty : unreadKeys.contains(key);
+      if (!keep) out.add(id);
+    }
+    return out;
+  }
+
+  Future<void> cancelReadConversations(Set<String> unreadKeys) async {
+    if (!isSupported || !Platform.isAndroid) return;
+    try {
+      final android = _notifications.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return;
+      final active = await android.getActiveNotifications();
+      for (final id in staleNotificationIds(active, unreadKeys)) {
+        await _notifications.cancel(id: id);
+      }
+    } catch (_) {}
+  }
+
   /// One Android channel per kind, since a channel's importance is fixed at creation.
-  _Channel _channelFor(NotificationKind kind) {
+  static _Channel _channelFor(NotificationKind kind) {
     switch (kind) {
       case NotificationKind.message:
         return const _Channel(

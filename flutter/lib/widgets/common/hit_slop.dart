@@ -21,25 +21,65 @@ class HitSlop extends SingleChildRenderObjectWidget {
   final double minSize;
   final bool mergeSemantics;
 
+  static ({double left, double right}) _limits(BuildContext context) {
+    final limit = HitSlopLimit.maybeOf(context);
+    final rtl = Directionality.maybeOf(context) == TextDirection.rtl;
+    final start = limit?.start ?? double.infinity;
+    final end = limit?.end ?? double.infinity;
+    return rtl ? (left: end, right: start) : (left: start, right: end);
+  }
+
   @override
-  RenderHitSlop createRenderObject(BuildContext context) => RenderHitSlop(
-        minSize: touchPlatform() ? minSize : 0,
-        mergeSemantics: mergeSemantics,
-      );
+  RenderHitSlop createRenderObject(BuildContext context) {
+    final l = _limits(context);
+    return RenderHitSlop(
+      minSize: touchPlatform() ? minSize : 0,
+      mergeSemantics: mergeSemantics,
+      maxLeft: l.left,
+      maxRight: l.right,
+    );
+  }
 
   @override
   void updateRenderObject(BuildContext context, RenderHitSlop renderObject) {
+    final l = _limits(context);
     renderObject
       ..minSize = touchPlatform() ? minSize : 0
-      ..mergeSemantics = mergeSemantics;
+      ..mergeSemantics = mergeSemantics
+      ..maxLeft = l.left
+      ..maxRight = l.right;
   }
 }
 
+class HitSlopLimit extends InheritedWidget {
+  const HitSlopLimit({super.key, this.start, this.end, required super.child});
+
+  final double? start;
+  final double? end;
+
+  static HitSlopLimit? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<HitSlopLimit>();
+
+  @override
+  bool updateShouldNotify(HitSlopLimit oldWidget) =>
+      oldWidget.start != start || oldWidget.end != end;
+}
+
 class RenderHitSlop extends RenderProxyBox {
-  RenderHitSlop({required double minSize, required bool mergeSemantics}) {
+  RenderHitSlop({
+    required double minSize,
+    required bool mergeSemantics,
+    this.maxLeft = double.infinity,
+    this.maxRight = double.infinity,
+  }) {
     _minSize = minSize;
     _mergeSemantics = mergeSemantics;
   }
+
+  double maxLeft;
+  double maxRight;
+
+  static int _plain = 0;
 
   late double _minSize;
   double get minSize => _minSize;
@@ -77,13 +117,19 @@ class RenderHitSlop extends RenderProxyBox {
     return Rect.fromLTRB(-dx, -dy, size.width + dx, size.height + dy);
   }
 
+  Rect get tapRect {
+    final r = slopRect;
+    return Rect.fromLTRB(math.max(r.left, -maxLeft), r.top,
+        math.min(r.right, size.width + maxRight), r.bottom);
+  }
+
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
     if (size.contains(position)) {
       return super.hitTest(result, position: position);
     }
     final c = child;
-    if (c == null || !slopRect.contains(position)) return false;
+    if (_plain > 0 || c == null || !tapRect.contains(position)) return false;
     final inside = Offset(
       position.dx.clamp(0.0, math.max(0.0, size.width - 0.01)),
       position.dy.clamp(0.0, math.max(0.0, size.height - 0.01)),
@@ -126,27 +172,37 @@ class RenderHitSlopScope extends RenderProxyBox {
     return false;
   }
 
+  bool _plainHit(BoxHitTestResult result, Offset position) {
+    RenderHitSlop._plain++;
+    try {
+      return super.hitTest(result, position: position);
+    } finally {
+      RenderHitSlop._plain--;
+    }
+  }
+
+  bool _reaches(RenderHitSlop target, Offset position) {
+    final probe = BoxHitTestResult();
+    _plainHit(probe, position);
+    return probe.path.any((e) => identical(e.target, target));
+  }
+
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
     if (!size.contains(position)) return false;
-    final near = <({RenderHitSlop slop, Matrix4 toLocal, Offset local, double d})>[];
+    final near = <({RenderHitSlop slop, Offset local, double d})>[];
     for (final s in RenderHitSlop.live) {
       if (s.minSize <= 0 || !s.attached || !s.hasSize || !_inside(s)) continue;
       final toLocal = Matrix4.tryInvert(s.getTransformTo(this));
       if (toLocal == null) continue;
       final local = MatrixUtils.transformPoint(toLocal, position);
       if ((Offset.zero & s.size).contains(local)) {
-        final probe = BoxHitTestResult();
-        super.hitTest(probe, position: position);
-        if (probe.path.any((e) => identical(e.target, s))) {
-          return super.hitTest(result, position: position);
-        }
-      } else if (!s.slopRect.contains(local)) {
+        if (_reaches(s, position)) return _plainHit(result, position);
+      } else if (!s.tapRect.contains(local)) {
         continue;
       }
       near.add((
         slop: s,
-        toLocal: toLocal,
         local: local,
         d: (local - s.size.center(Offset.zero)).distance,
       ));
@@ -159,20 +215,11 @@ class RenderHitSlopScope extends RenderProxyBox {
         n.local.dy.clamp(0.0, math.max(0.0, target.size.height - 0.01)),
       );
       for (final inside in [edge, target.size.center(Offset.zero)]) {
-        final probe = BoxHitTestResult();
-        super.hitTest(probe,
-            position: MatrixUtils.transformPoint(
-                target.getTransformTo(this), inside));
-        if (!probe.path.any((e) => identical(e.target, target))) continue;
-        result.addWithRawTransform(
-          transform: n.toLocal,
-          position: position,
-          hitTest: (r, _) => target.hitTest(r, position: inside),
-        );
-        super.hitTest(result, position: position);
-        return true;
+        final at =
+            MatrixUtils.transformPoint(target.getTransformTo(this), inside);
+        if (_reaches(target, at)) return _plainHit(result, at);
       }
     }
-    return super.hitTest(result, position: position);
+    return _plainHit(result, position);
   }
 }

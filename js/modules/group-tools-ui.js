@@ -267,7 +267,7 @@
             const group = this.groupConversations.get(groupId);
             if (!group) return;
             if (!this.users.has(joinerPubkey) && typeof this.fetchProfileDirect === 'function') await this.fetchProfileDirect(joinerPubkey);
-            const title = this._gx('Join request in {group}', { group: group.name || 'Group' });
+            const title = this._gx('Join request in {group}', { group: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) });
             const body = this._gx('{nym} wants to join. Open the group menu to approve or decline.', { nym: this.getNymFromPubkey(joinerPubkey) });
             this.showNotification(title, body, { type: 'group', groupId, id: this.getGroupConversationKey(groupId), pubkey: joinerPubkey, eventId: 'join-req-' + groupId + '-' + joinerPubkey }, Date.now());
         },
@@ -284,7 +284,7 @@
             const banned = Array.isArray(group.banned) && group.banned.includes(joinerPubkey);
             if (approve && !banned && !group.members.includes(joinerPubkey)) {
                 if (group.members.length >= (this.MAX_GROUP_MEMBERS || 100)) {
-                    this._gtNotice(this._gx('{group} is full. Remove someone to approve {nym}.', { group: group.name || 'Group', nym: this.getNymFromPubkey(joinerPubkey) }));
+                    this._gtNotice(this._gx('{group} is full. Remove someone to approve {nym}.', { group: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')), nym: this.getNymFromPubkey(joinerPubkey) }));
                     refreshList();
                     return;
                 }
@@ -476,7 +476,8 @@
                 const capMax = this.MAX_GROUP_MEMBERS || 100;
                 const full = p.memberCount != null && p.memberCount >= capMax;
                 const members = p.memberCount == null ? '' : `<div class="gt-inv-members">${esc(this._gx('{n}/{max} members', { n: p.memberCount, max: capMax }) + (full ? ' · ' + this._gx('Full') : ''))}</div>`;
-                const admins = p.admins.length ? `<div class="gt-inv-admins">${esc(this._gx('Admins: {list}', { list: p.admins.join(', ') }))}</div>` : '';
+                const adminsLine = this._gx('Admins: {list}', { list: '\u0000' }).split('\u0000');
+                const admins = p.admins.length ? `<div class="gt-inv-admins">${esc(adminsLine[0])}${window.NymSuffix.listHtml(p.admins)}${esc(adminsLine.slice(1).join(''))}</div>` : '';
                 const desc = p.description ? `<div class="gt-inv-desc" role="button" tabindex="0" data-action="gtToggleInviteDesc" title="${esc(p.description)}">${esc(p.description)}</div>` : '';
                 const note = !p.verified ? `<div class="gt-inv-note">${esc(this._gx('This link has no group details. Ask the sender for a fresh link to see them.'))}</div>`
                     : (p.approval ? `<div class="gt-inv-note">${esc(this._gx('An admin approves join requests for this group.'))}</div>` : '');
@@ -607,12 +608,27 @@
         },
 
         _gtFindEvent(groupId, eventId) {
+            const m = this._gtEventMessage(groupId, eventId);
+            return m ? T().parseEvent(m.content) : null;
+        },
+
+        _gtEventMessage(groupId, eventId) {
             const list = this.pmMessages.get(this.getGroupConversationKey(groupId)) || [];
             for (const m of list) {
                 const ev = T().parseEvent(m && m.content);
-                if (ev && ev.id === eventId) return ev;
+                if (ev && ev.id === eventId) return m;
             }
             return null;
+        },
+
+        _gtVisibleRsvps(entries, members) {
+            const tally = T().rsvpTally(entries || {}, members || null);
+            if (typeof this.isPersonHidden !== 'function') return tally;
+            const out = {};
+            for (const s of Object.keys(tally)) {
+                out[s] = Array.isArray(tally[s]) ? tally[s].filter((pk) => pk === this.pubkey || !this.isPersonHidden(pk)) : tally[s];
+            }
+            return out;
         },
 
         _gtRefreshEventCards(eventId) {
@@ -681,10 +697,12 @@
         },
 
         _gtFireReminder(eventId, r) {
+            const source = this._gtEventMessage(r.groupId, eventId);
+            if (source && typeof this.isContentHidden === 'function' && this.isContentHidden(source)) return;
             const group = this.groupConversations.get(r.groupId);
             const title = this._gx('Reminder: {title}', { title: r.title });
             const body = this._gx('Starts {when}', { when: window.NymMessageFormat && window.NymMessageFormat.formatTimestamp ? window.NymMessageFormat.formatTimestamp(String(r.start), 'R') : new Date(r.start * 1000).toLocaleString() });
-            this.showNotification(title, body + (group ? ' · ' + group.name : ''), { type: 'group', groupId: r.groupId, id: this.getGroupConversationKey(r.groupId), eventId: 'event-reminder-' + eventId }, Date.now());
+            this.showNotification(title, body + (group ? ' · ' + (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) : ''), { type: 'group', groupId: r.groupId, id: this.getGroupConversationKey(r.groupId), eventId: 'event-reminder-' + eventId, subject: String(r.title || '') }, Date.now());
         },
 
         _gtCardHtml(message) {
@@ -709,9 +727,9 @@
             const esc = (s) => this.escapeHtml(String(s));
             const group = this.groupConversations.get(groupId);
             const entries = this._gtRsvpStore()[ev.id] || {};
-            const tally = T().rsvpTally(entries, group ? group.members : null);
+            const tally = this._gtVisibleRsvps(entries, group ? group.members : null);
             const mine = entries[this.pubkey] ? entries[this.pubkey].s : null;
-            const names = (list) => list.map((pk) => esc(this.getNymFromPubkey(pk))).join(', ');
+            const names = (list) => window.NymSuffix.listHtml(list.map((pk) => this.getNymFromPubkey(pk)));
             const labels = { going: this._gx('Going'), maybe: this._gx('Maybe'), no: this._gx("Can't") };
             const btn = (s) => `<button class="gt-rsvp-btn${mine === s ? ' active' : ''}" data-action="gtRsvp" data-status="${s}" data-event-id="${ev.id}" data-group-id="${esc(groupId)}" aria-pressed="${mine === s}">${esc(labels[s])} <span class="gt-rsvp-count">${tally[s].length}</span></button>`;
             const who = ['going', 'maybe', 'no'].filter((s) => tally[s].length).map((s) => `<div class="gt-rsvp-who-row"><span class="gt-rsvp-who-label">${esc(labels[s])}:</span> ${names(tally[s])}</div>`).join('');
@@ -1173,7 +1191,7 @@
                 const st = T().callLinkState(l, now);
                 const stLabel = st === 'active' ? (l.exp ? this._gx('Active until {time}', { time: new Date(l.exp * 1000).toLocaleString() }) : this._gx('Active, never expires'))
                     : (st === 'revoked' ? this._gx('Revoked') : this._gx('Expired'));
-                return `<div class="gt-link-row gt-link-${st}"><div class="gt-link-info"><div class="gt-link-name">${esc(l.name)} · ${esc(l.kind === 'video' ? this._gx('Video') : this._gx('Voice'))}</div>
+                return `<div class="gt-link-row gt-link-${st}"><div class="gt-link-info"><div class="gt-link-name">${this.nymTextHtml(l.name)} · ${esc(l.kind === 'video' ? this._gx('Video') : this._gx('Voice'))}</div>
                     <div class="gt-link-state">${esc(stLabel)}</div></div>
                     ${st === 'active' ? `<button class="icon-btn" data-action="gtCopyCallLink" data-link-id="${l.id}">${esc(this._gx('Copy'))}</button>
                     <button class="icon-btn danger" data-action="gtRevokeCallLink" data-link-id="${l.id}">${esc(this._gx('Revoke'))}</button>` : ''}</div>`;
@@ -1316,8 +1334,9 @@
 
         gtShowDescription(groupId) {
             const group = this.groupConversations.get(groupId || this.currentGroup);
-            if (!group || !group.description) return;
-            window.showAppAlert(group.description, { title: group.name || this._gx('Group') });
+            const description = group ? (typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || '')) : '';
+            if (!description) return;
+            window.showAppAlert(description, { title: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) });
         },
 
         _gtGroupMenuHtml(groupId) {

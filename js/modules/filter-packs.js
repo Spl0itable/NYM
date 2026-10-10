@@ -257,7 +257,9 @@
             const next = (Array.isArray(ids) ? ids : []).filter((id) => PACK_IDS.includes(id));
             this.filterPacks = next;
             try { localStorage.setItem('nym_filter_packs', JSON.stringify(next)); } catch (_) { }
-            this.ensureFilterPacksLoaded();
+            const changed = () => { if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged(); };
+            changed();
+            Promise.resolve(this.ensureFilterPacksLoaded()).then(changed, changed);
         }
     });
 })();

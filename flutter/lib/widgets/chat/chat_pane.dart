@@ -2,6 +2,7 @@ import 'dart:async' show Timer, unawaited;
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/shortcuts/shortcuts.dart';
@@ -34,6 +35,8 @@ import '../../features/settings/settings_screen.dart';
 import '../../features/group_tools/group_tools.dart' show GroupTools;
 import '../../features/layout/layout_model.dart';
 import '../../features/shop/cosmetics.dart';
+import '../../features/shop/shop_catalog.dart';
+import '../../features/shop/shop_widgets.dart' show FlairBadge, SupporterMark;
 import '../../features/shop/shop_modal.dart';
 import '../../models/channel.dart';
 import '../../models/group.dart';
@@ -46,6 +49,7 @@ import '../common/hit_slop.dart';
 import '../common/nym_action_sheet.dart';
 import '../context_menu/group_context_menu_panel.dart' show showGroupMenuSheet;
 import '../common/nym_avatar.dart';
+import '../common/nym_label.dart';
 import '../nym_icons.dart';
 import '../context_menu/profile_badges.dart' show VerifiedBadge;
 import '../../features/threads/thread_view.dart' show ThreadView;
@@ -57,6 +61,7 @@ import '../../features/composer/composer_model.dart';
 import 'messages_list.dart';
 import '../common/nym_focusable.dart';
 import '../common/nym_tooltip.dart';
+import '../../core/theme/nym_a11y.dart';
 
 /// Call-start hook; [peer] is the PM peer pubkey, or '' for a channel/group.
 typedef OnStartCall = void Function(String peer, {required bool video});
@@ -216,6 +221,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
   /// Retry timers per geohash, so switching channels doesn't cancel another header's retry.
   final Map<String, Timer> _placeRetries = {};
 
+  final _TitleRoom _room = _TitleRoom('chat');
+
   bool get _canBack => ref.read(viewHistoryProvider).canBack;
   bool get _canForward => ref.read(viewHistoryProvider).canForward;
 
@@ -310,8 +317,42 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       rejoin: view.kind == ViewKind.group && rejoinId == view.id,
     );
     final maxShown = phone ? actions.length : 3;
-    final shown = actions.take(maxShown).toList();
-    final overflow = actions.skip(maxShown).toList();
+    final capped = {for (final a in actions.skip(maxShown)) a.id};
+    final metrics =
+        headerActionMetrics(phone: phone, targets: context.largeTouchTargets);
+    final loc = isChannel
+        ? _locationFor(app, view)
+        : (text: '', dist: '', geohash: null);
+    final badges = _titleBadges(app, view);
+    final info = !isChannel || loc.geohash != null;
+    final insets = MediaQuery.paddingOf(context);
+    final side = phone ? 2.0 : NymSpace.s1;
+    final plan = _room.plan(
+      layout: '$phone:$drawer:${metrics.box}:${metrics.gap}',
+      width: width - insets.left - insets.right,
+      extra: badges.length * (_kBadgeGap + _kBadge) +
+          (info ? _kInfoGap + _kInfo : 0),
+      kind: switch (view.kind) {
+        ViewKind.channel => 'channel',
+        ViewKind.pm => 'pm',
+        ViewKind.group => 'group',
+      },
+      actions: [
+        for (final a in actions)
+          if (!capped.contains(a.id)) a.id,
+        'bell',
+      ],
+      step: metrics.pitch,
+      phone: phone,
+    );
+    final shown = [
+      for (final a in actions)
+        if (!capped.contains(a.id) && !plan.moved.contains(a.id)) a,
+    ];
+    final overflow = [
+      for (final a in actions)
+        if (capped.contains(a.id) || plan.moved.contains(a.id)) a,
+    ];
 
     return Container(
       key: const ValueKey('chatHeader'),
@@ -327,10 +368,13 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
               children: [
                 SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
                 if (phone)
-                  _HeaderPill(
-                    svg: NymIcons.menu,
-                    label: tr('Menu'),
-                    onTap: widget.onOpenSidebar ?? () {},
+                  HitSlopLimit(
+                    end: side,
+                    child: _HeaderPill(
+                      svg: NymIcons.menu,
+                      label: tr('Menu'),
+                      onTap: widget.onOpenSidebar ?? () {},
+                    ),
                   )
                 else ...[
                   _NavBtn(
@@ -341,44 +385,44 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                     disabled: !_canBack,
                   ),
                   const SizedBox(width: 2),
-                  _NavBtn(
-                    key: const ValueKey('navForward'),
-                    svg: NymIcons.chevronRight,
-                    tooltip: tr('Go forward'),
-                    onTap: _canForward ? () => _step(1) : null,
-                    disabled: !_canForward,
-                  ),
-                ],
-                const SizedBox(width: NymSpace.s1),
-                Expanded(child: _headerMiddle(c, app, view, title, meta)),
-                const SizedBox(width: NymSpace.s1),
-                for (var i = 0; i < shown.length; i++) ...[
-                  if (i > 0) SizedBox(width: touchPlatform() ? 4 : 2),
-                  shown[i].button,
-                ],
-                if (phone) ...[
-                  if (shown.isNotEmpty) SizedBox(width: touchPlatform() ? 4 : 2),
-                  _notificationsPill(),
-                ],
-                if (!phone) ...[
-                  Container(
-                    width: 1,
-                    height: 24,
-                    margin: const EdgeInsets.symmetric(horizontal: NymSpace.s2),
-                    color: c.glassBorder,
-                  ),
-                  if (drawer) ...[
-                    _notificationsPill(),
-                    const SizedBox(width: 2),
-                    _HeaderPill(
-                      svg: NymIcons.menu,
-                      label: tr('Menu'),
-                      onTap: widget.onOpenSidebar ?? () {},
+                  HitSlopLimit(
+                    end: side,
+                    child: _NavBtn(
+                      key: const ValueKey('navForward'),
+                      svg: NymIcons.chevronRight,
+                      tooltip: tr('Go forward'),
+                      onTap: _canForward ? () => _step(1) : null,
+                      disabled: !_canForward,
                     ),
-                  ] else
-                    _appIcons(),
-                  const SizedBox(width: 2),
-                  _moreMenu(view, overflow),
+                  ),
+                ],
+                SizedBox(width: side),
+                Expanded(
+                    child: _headerMiddle(
+                        c, app, view, title, meta, loc, badges, info)),
+                SizedBox(width: side),
+                if (phone)
+                  _HeaderActionRow(lead: side, children: [
+                    for (final a in shown) a.button,
+                    _notificationsPill(),
+                    if (plan.more) _moreMenu(view, overflow),
+                  ])
+                else ...[
+                  _HeaderActionRow(
+                      lead: side, children: [for (final a in shown) a.button]),
+                  const _HeaderDivider(),
+                  _HeaderActionRow(children: [
+                    if (drawer) ...[
+                      _notificationsPill(),
+                      _HeaderPill(
+                        svg: NymIcons.menu,
+                        label: tr('Menu'),
+                        onTap: widget.onOpenSidebar ?? () {},
+                      ),
+                    ] else
+                      _appIcons(),
+                    _moreMenu(view, overflow),
+                  ]),
                 ],
                 SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
               ],
@@ -512,7 +556,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     return tr('Last seen unknown');
   }
 
-  List<({Widget button, String label, String svg, VoidCallback? onTap})>
+  List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
       _chatActions({
     required ChatView view,
     required bool isChannel,
@@ -522,10 +566,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     bool rejoin = false,
   }) {
     final controller = ref.read(nostrControllerProvider);
-    final out = <({Widget button, String label, String svg, VoidCallback? onTap})>[];
-    void add(String svg, String label, VoidCallback? onTap,
+    final out = <({String id, Widget button, String label, String svg, VoidCallback? onTap})>[];
+    void add(String id, String svg, String label, VoidCallback? onTap,
         {Key? key, Color? active, bool disabled = false}) {
       out.add((
+        id: id,
         button: _ActionBtn(
           key: key,
           svg: svg,
@@ -541,10 +586,11 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     }
 
     if (isChannel) {
-      add(NymIcons.shareNodes, tr('Share channel URL'),
+      add('share', NymIcons.shareNodes, tr('Share channel URL'),
           () => ShareChannelModal.open(context, channelKey),
           key: TutorialTargets.keyFor(TutorialTarget.shareButton));
       add(
+        'favorite',
         isPinned ? NymIcons.starFilled : NymIcons.starOutline,
         isDefault
             ? tr('#nymchat is always at the top')
@@ -555,26 +601,51 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
       );
     } else {
       if (rejoin) {
-        add(NymIcons.phone, tr('Rejoin the call'),
+        add('rejoin', NymIcons.phoneRejoin, tr('Rejoin the call'),
             () => ref.read(callServiceProvider).rejoinGroupCall(view.id),
             key: const ValueKey('rejoinCallBtn'),
             active: context.nym.primary);
       }
-      add(NymIcons.phone, tr('Start audio call'),
+      add('audio', NymIcons.phone, tr('Start audio call'),
           () => _startCall(view, video: false));
-      add(NymIcons.video, tr('Start video call'),
+      add('video', NymIcons.video, tr('Start video call'),
           () => _startCall(view, video: true));
     }
     return out;
   }
 
-  Widget _headerMiddle(NymColors c, AppState app, ChatView view, String title,
-      ({String? svg, String text}) meta) {
+  List<Widget> _titleBadges(AppState app, ChatView view) {
+    if (view.kind != ViewKind.pm) return const [];
+    final controller = ref.read(nostrControllerProvider);
+    final cosmetics = ref.watch(userCosmeticsProvider(view.id));
+    return [
+      for (final id in cosmetics.flairIds)
+        if (id.isNotEmpty && ShopCatalog.byId(id) != null)
+          FlairBadge(
+            flairId: id,
+            edition: id == 'flair-genesis' ? cosmetics.genesisEdition : null,
+            size: _kBadge,
+            gap: 0,
+          ),
+      if (controller.isVerifiedDeveloper(view.id) ||
+          controller.isVerifiedBot(view.id))
+        const VerifiedBadge(size: _kBadge),
+      if (cosmetics.supporter) const SupporterMark(size: _kBadge),
+      if (app.friends.contains(view.id)) const _FriendBadge(size: _kBadge),
+    ];
+  }
+
+  Widget _headerMiddle(
+      NymColors c,
+      AppState app,
+      ChatView view,
+      String title,
+      ({String? svg, String text}) meta,
+      ({String text, String dist, String? geohash}) loc,
+      List<Widget> badges,
+      bool info) {
     final controller = ref.read(nostrControllerProvider);
     final isBot = view.kind == ViewKind.pm && controller.isVerifiedBot(view.id);
-    final loc = view.kind == ViewKind.channel
-        ? _locationFor(app, view)
-        : (text: '', dist: '', geohash: null);
     final geohash = loc.geohash;
     final titleStyle = TextStyle(
       color: c.primary,
@@ -587,7 +658,6 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     Widget titleText;
     String sub;
     var dot = false;
-    var badges = <Widget>[];
     switch (view.kind) {
       case ViewKind.channel:
         avatar = _AvatarTile(
@@ -611,35 +681,8 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         );
         final base = stripPubkeySuffix(title);
         final suffix = getPubkeySuffix(view.id);
-        titleText = Text.rich(
-          TextSpan(style: titleStyle, children: [
-            TextSpan(text: base),
-            if (suffix.isNotEmpty)
-              TextSpan(
-                  text: '#$suffix',
-                  style: titleStyle.copyWith(
-                      color: c.textDim, fontWeight: FontWeight.w500)),
-          ]),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        );
+        titleText = NymLabel(base, suffix: suffix, style: titleStyle);
         dot = status == UserStatus.online && !isBot;
-        final isDev = controller.isVerifiedDeveloper(view.id);
-        badges = [
-          CosmeticNymBadges(
-            cosmetics: ref.watch(userCosmeticsProvider(view.id)),
-            flairSize: 18,
-            supporterHeight: 18,
-          ),
-          if (isDev || isBot) ...[
-            const SizedBox(width: 4),
-            const VerifiedBadge(size: 18),
-          ],
-          if (app.friends.contains(view.id)) ...[
-            const SizedBox(width: 4),
-            const _FriendBadge(size: 18),
-          ],
-        ];
         sub = isBot
             ? meta.text
             : [
@@ -697,15 +740,22 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
               Row(
                 children: [
                   Flexible(
-                    child: KeyedSubtree(
-                        key: const ValueKey('chatHeaderTitle'),
-                        child: titleText),
+                    child: _RoomReport(
+                      room: _room,
+                      onRoom: _onTitleRoom,
+                      child: KeyedSubtree(
+                          key: const ValueKey('chatHeaderTitle'),
+                          child: titleText),
+                    ),
                   ),
-                  ...badges,
-                  if (onTap != null) ...[
-                    const SizedBox(width: 6),
+                  for (final b in badges) ...[
+                    const SizedBox(width: _kBadgeGap),
+                    SizedBox(width: _kBadge, height: _kBadge, child: b),
+                  ],
+                  if (info) ...[
+                    const SizedBox(width: _kInfoGap),
                     NymSvgIcon(NymIcons.info,
-                        size: 16, color: open ? c.primary : c.textDim),
+                        size: _kInfo, color: open ? c.primary : c.textDim),
                   ],
                 ],
               ),
@@ -731,7 +781,9 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
                         overflow: TextOverflow.ellipsis,
                         softWrap: false,
                         style: TextStyle(
-                            color: c.textDim,
+                            color: context.highContrast
+                                ? legibleOn(c.textDim, flattenOver(c.glassBg, c.bg))
+                                : c.textDim,
                             fontSize: NymType.sm,
                             height: 16 / NymType.sm),
                       ),
@@ -768,12 +820,16 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
     );
   }
 
+  void _onTitleRoom(double room) {
+    if (mounted && _room.report(room)) setState(() {});
+  }
+
   Widget _moreMenu(ChatView view,
-      List<({Widget button, String label, String svg, VoidCallback? onTap})>
+      List<({String id, Widget button, String label, String svg, VoidCallback? onTap})>
           overflow) {
     final chatItems = <({String id, String label, String svg, VoidCallback? onTap})>[
-      for (var i = 0; i < overflow.length; i++)
-        (id: 'chat-$i', label: overflow[i].label, svg: overflow[i].svg, onTap: overflow[i].onTap),
+      for (final a in overflow)
+        (id: 'chat-${a.id}', label: a.label, svg: a.svg, onTap: a.onTap),
     ];
     if (view.kind == ViewKind.channel) {
       final gh = _locationFor(ref.read(appStateProvider), view).geohash;
@@ -834,6 +890,7 @@ class _ChatHeaderState extends ConsumerState<_ChatHeader>
         final count = app.users.values.where((u) {
           if (u.pubkey == app.selfPubkey) return false;
           if (!u.channels.contains(key)) return false;
+          if (app.isPersonHidden(u.pubkey, u.nym)) return false;
           // Unlike `activeCount`, this has no bot always-online bypass, so the recency check applies to bots too.
           if (u.effectiveStatus(
                   isVerifiedBot: kVerifiedBotPubkeys.contains(u.pubkey)) ==
@@ -927,11 +984,6 @@ class _NavBtnState extends State<_NavBtn> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    // Only the 768px phone breakpoint shrinks it to 24x24.
-    final phone =
-        MediaQuery.of(context).size.width <= NymDimens.mobileBreakpoint;
-    final size = phone ? 24.0 : 28.0;
-
     final color = widget.disabled
         ? c.textDim.withValues(alpha: 0.3)
         : (_hover ? c.primary : c.textDim);
@@ -943,32 +995,33 @@ class _NavBtnState extends State<_NavBtn> {
         onTap: widget.disabled ? null : (widget.onTap ?? () {}),
         canRequestFocus: false,
         excludeFromSemantics: true,
-        borderRadius: const BorderRadius.all(Radius.circular(4)),
+        borderRadius: NymRadius.rsm,
         child: Container(
-          width: size,
-          height: size,
+          width: _kNavBox,
+          height: _kNavBox,
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: (_hover && !widget.disabled)
                 ? c.hoverOverlay
                 : Colors.transparent,
-            borderRadius: const BorderRadius.all(Radius.circular(4)),
+            borderRadius: NymRadius.rsm,
           ),
           child: NymSvgIcon(widget.svg, size: 18, color: color),
         ),
       ),
     );
-    return NymFocusable(
-      onActivate: widget.disabled ? null : (widget.onTap ?? () {}),
-      tooltip: widget.tooltip,
-      radius: const BorderRadius.all(Radius.circular(4)),
-      child: btn,
+    return HitSlop(
+      child: NymFocusable(
+        onActivate: widget.disabled ? null : (widget.onTap ?? () {}),
+        tooltip: widget.tooltip,
+        radius: NymRadius.rsm,
+        child: btn,
+      ),
     );
   }
 }
 
-/// Boxless header action button; disabled rests dim and ignores taps (the always-favorited `#nymchat`).
-class _ActionBtn extends StatefulWidget {
+class _ActionBtn extends StatelessWidget {
   const _ActionBtn({
     super.key,
     required this.svg,
@@ -984,47 +1037,185 @@ class _ActionBtn extends StatefulWidget {
   final bool disabled;
 
   @override
-  State<_ActionBtn> createState() => _ActionBtnState();
-}
-
-class _ActionBtnState extends State<_ActionBtn> {
-  bool _hover = false;
-
-  @override
   Widget build(BuildContext context) {
-    final c = context.nym;
-    final color = widget.disabled
-        ? c.textDim.withValues(alpha: 0.3)
-        : (widget.activeColor ?? (_hover ? c.primary : c.textDim));
-
-    final btn = MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.disabled ? null : widget.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedScale(
-          scale: (_hover && !widget.disabled) ? 1.1 : 1.0,
-          // CSS default `ease`, not the global `--transition` token.
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.ease,
-          child: SizedBox(
-            width: 40,
-            height: 40,
-            child: Center(
-              child: NymSvgIcon(widget.svg, size: 18, color: color),
-            ),
+    final tap = disabled ? null : onTap;
+    return HitSlop(
+      child: NymFocusable(
+        onActivate: tap,
+        tooltip: tooltip,
+        radius: NymRadius.rsm,
+        child: GestureDetector(
+          onTap: tap,
+          behavior: HitTestBehavior.opaque,
+          child: _HeaderIconBox(
+            key: ValueKey('headerAction:$tooltip'),
+            svg: svg,
+            color: activeColor,
+            disabled: disabled,
           ),
         ),
       ),
     );
-    return HitSlop(
-      child: NymFocusable(
-        onActivate: widget.disabled ? null : widget.onTap,
-        tooltip: widget.tooltip,
-        radius: const BorderRadius.all(Radius.circular(4)),
-        child: btn,
-      ),
+  }
+}
+
+const double _kHeaderActionGlyph = 18;
+const double _kNavBox = 32;
+const double _kBadge = 18;
+const double _kBadgeGap = 4;
+const double _kInfo = 16;
+const double _kInfoGap = 6;
+
+({double box, double gap, double pitch}) _headerMetrics(BuildContext context) =>
+    headerActionMetrics(
+        phone: MediaQuery.sizeOf(context).width <= NymDimens.mobileBreakpoint,
+        targets: context.largeTouchTargets);
+
+double _headerActionGap(BuildContext context) => _headerMetrics(context).gap;
+
+class _TitleRoom {
+  _TitleRoom(this.scope);
+
+  final String scope;
+  static final Map<String, double> _fixed = {};
+  String _laidSig = '';
+  String _laidKey = '';
+  double _laidWidth = 0;
+  double _laidExtra = 0;
+  String _laidKind = '';
+  List<String> _laidActions = const [];
+  List<String> _laidMoved = const [];
+  bool _laidMore = false;
+  double _laidStep = 0;
+  bool _laidPhone = false;
+
+  ({List<String> moved, double room, bool more}) plan({
+    required String layout,
+    required double width,
+    required double extra,
+    required String kind,
+    required List<String> actions,
+    required double step,
+    required bool phone,
+  }) {
+    final key = '$scope:$layout';
+    final fixed = _fixed[key];
+    final out = fixed == null
+        ? (moved: const <String>[], room: 0.0, more: false)
+        : headerOverflow(
+            kind: kind,
+            actions: actions,
+            base: (width + fixed - extra - actions.length * step)
+                .roundToDouble(),
+            step: step,
+            more: !phone);
+    _laidKey = key;
+    _laidWidth = width;
+    _laidExtra = extra;
+    _laidKind = kind;
+    _laidActions = actions;
+    _laidMoved = out.moved;
+    _laidMore = phone && out.more;
+    _laidStep = step;
+    _laidPhone = phone;
+    _laidSig =
+        '$key:$width:$extra:$kind:${actions.join(',')}:${out.moved.join(',')}';
+    return (moved: out.moved, room: out.room, more: _laidMore);
+  }
+
+  bool report(double room) {
+    final base =
+        room - _laidMoved.length * _laidStep + (_laidMore ? _laidStep : 0);
+    final fixed =
+        base + _laidExtra + _laidActions.length * _laidStep - _laidWidth;
+    final known = _fixed[_laidKey];
+    if (known != null && (fixed - known).abs() < 0.5) return false;
+    _fixed[_laidKey] = fixed;
+    final again = headerOverflow(
+        kind: _laidKind,
+        actions: _laidActions,
+        base: base,
+        step: _laidStep,
+        more: !_laidPhone);
+    return again.moved.join(',') != _laidMoved.join(',') ||
+        (_laidPhone && again.more) != _laidMore;
+  }
+}
+
+class _RoomReport extends SingleChildRenderObjectWidget {
+  const _RoomReport({required this.room, required this.onRoom, super.child});
+
+  final _TitleRoom room;
+  final ValueChanged<double> onRoom;
+
+  @override
+  _RenderRoomReport createRenderObject(BuildContext context) =>
+      _RenderRoomReport(onRoom, room._laidSig);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderRoomReport renderObject) {
+    renderObject
+      ..onRoom = onRoom
+      ..sig = room._laidSig;
+  }
+}
+
+class _RenderRoomReport extends RenderProxyBox {
+  _RenderRoomReport(this.onRoom, this._sig);
+
+  ValueChanged<double> onRoom;
+  String _sig;
+  set sig(String v) {
+    if (v == _sig) return;
+    _sig = v;
+    markNeedsLayout();
+  }
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final w = constraints.maxWidth.roundToDouble();
+    if (!w.isFinite) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (attached) onRoom(w);
+    });
+  }
+}
+
+class _HeaderActionRow extends StatelessWidget {
+  const _HeaderActionRow({super.key, required this.children, this.lead});
+  final List<Widget> children;
+  final double? lead;
+
+  @override
+  Widget build(BuildContext context) {
+    final gap = _headerActionGap(context);
+    final lead = this.lead;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < children.length; i++) ...[
+          if (i > 0) SizedBox(width: gap),
+          if (i == 0 && lead != null)
+            HitSlopLimit(start: lead, child: children[i])
+          else
+            children[i],
+        ],
+      ],
+    );
+  }
+}
+
+class _HeaderDivider extends StatelessWidget {
+  const _HeaderDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      height: 24,
+      margin: const EdgeInsets.symmetric(horizontal: NymSpace.s2),
+      color: context.nym.glassBorder,
     );
   }
 }
@@ -1072,8 +1263,15 @@ class _HeaderPillState extends State<_HeaderPill> {
 }
 
 class _HeaderIconBox extends StatefulWidget {
-  const _HeaderIconBox({required this.svg});
+  const _HeaderIconBox({
+    super.key,
+    required this.svg,
+    this.color,
+    this.disabled = false,
+  });
   final String svg;
+  final Color? color;
+  final bool disabled;
 
   @override
   State<_HeaderIconBox> createState() => _HeaderIconBoxState();
@@ -1085,25 +1283,28 @@ class _HeaderIconBoxState extends State<_HeaderIconBox> {
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
+    final hover = _hover && !widget.disabled;
+    final color = widget.disabled
+        ? c.textDim.withValues(alpha: 0.3)
+        : (widget.color ?? (hover ? c.primary : c.textDim));
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: AnimatedContainer(
         duration: NymMotion.transition,
         curve: NymMotion.curve,
-        width: 40,
-        height: 40,
+        width: _headerMetrics(context).box,
+        height: _headerMetrics(context).box,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: _hover
+          color: hover
               ? (c.isLight
                   ? Colors.black.withValues(alpha: 0.05)
                   : c.primaryA(0.1))
               : Colors.transparent,
           borderRadius: NymRadius.rsm,
         ),
-        child: NymSvgIcon(widget.svg,
-            size: 18, color: _hover ? c.primary : c.textDim),
+        child: NymSvgIcon(widget.svg, size: _kHeaderActionGlyph, color: color),
       ),
     );
   }
@@ -1136,7 +1337,7 @@ class _CountBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 4),
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: c.danger,
+        color: badgeFill(context, c.danger),
         borderRadius: const BorderRadius.all(Radius.circular(8)),
       ),
       child: Text(
@@ -1269,15 +1470,9 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     final group = Semantics(
         label: tr('Main menu'),
         container: true,
-        child: Row(
+        child: _HeaderActionRow(
           key: const ValueKey('menu-row-0'),
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final id in menu.grid.first) ...[
-              if (id != menu.grid.first.first) const SizedBox(width: 2),
-              pill(id),
-            ],
-          ],
+          children: [for (final id in menu.grid.first) pill(id)],
         ),
       );
     if (!tutorial) return group;
@@ -1349,22 +1544,25 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     }
 
     if (useNymActionSheet(context)) {
-      return NymFocusable(
-        key: const ValueKey('menu-more'),
-        onActivate: () => _openMoreSheet(chatItems, head, menu.overflow, pick, groupId),
-        tooltip: tr('More'),
-        excludeChildSemantics: true,
-        radius: NymRadius.rsm,
-        child: InkWell(
-          onTap: () => _openMoreSheet(chatItems, head, menu.overflow, pick, groupId),
-          canRequestFocus: false,
-          excludeFromSemantics: true,
-          borderRadius: NymRadius.rsm,
-          child: _HeaderIconBox(svg: NymIcons.rowMenuOutline),
+      return HitSlop(
+        child: NymFocusable(
+          key: const ValueKey('menu-more'),
+          onActivate: () => _openMoreSheet(chatItems, head, menu.overflow, pick, groupId),
+          tooltip: tr('More'),
+          excludeChildSemantics: true,
+          radius: NymRadius.rsm,
+          child: InkWell(
+            onTap: () => _openMoreSheet(chatItems, head, menu.overflow, pick, groupId),
+            canRequestFocus: false,
+            excludeFromSemantics: true,
+            borderRadius: NymRadius.rsm,
+            child: _HeaderIconBox(svg: NymIcons.rowMenuOutline),
+          ),
         ),
       );
     }
-    return NymTooltip(
+    return HitSlop(
+      child: NymTooltip(
       message: tr('More'),
       child: PopupMenuButton<String>(
       key: const ValueKey('menu-more'),
@@ -1403,6 +1601,7 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
           ),
       ],
       child: _HeaderIconBox(svg: NymIcons.rowMenuOutline),
+      ),
       ),
     );
   }
@@ -1459,6 +1658,7 @@ mixin _HeaderAppGroup<T extends ConsumerStatefulWidget> on ConsumerState<T> {
 
 class NymPageAction {
   const NymPageAction({
+    this.id = '',
     required this.key,
     required this.svg,
     required this.tooltip,
@@ -1466,6 +1666,7 @@ class NymPageAction {
     this.active = false,
     this.disabled = false,
   });
+  final String id;
   final Key key;
   final String svg;
   final String tooltip;
@@ -1484,8 +1685,10 @@ class NymPageHeader extends ConsumerStatefulWidget {
     this.onBackToList,
     this.onOpenSidebar,
     this.actions = const [],
+    this.kind = '',
   });
 
+  final String kind;
   final Widget tile;
   final String title;
   final String subtitle;
@@ -1500,6 +1703,12 @@ class NymPageHeader extends ConsumerStatefulWidget {
 
 class _NymPageHeaderState extends ConsumerState<NymPageHeader>
     with _HeaderAppGroup<NymPageHeader> {
+  final _TitleRoom _room = _TitleRoom('page');
+
+  void _onTitleRoom(double room) {
+    if (mounted && _room.report(room)) setState(() {});
+  }
+
   void _step(int delta) {
     if (stepViewHistory(ProviderScope.containerOf(context, listen: false), delta) &&
         mounted) {
@@ -1514,6 +1723,48 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
     final width = MediaQuery.of(context).size.width;
     final phone = width <= NymDimens.mobileBreakpoint;
     final drawer = !phone && widget.onOpenSidebar != null;
+    final metrics =
+        headerActionMetrics(phone: phone, targets: context.largeTouchTargets);
+    final insets = MediaQuery.paddingOf(context);
+    final side = phone ? 2.0 : NymSpace.s1;
+    final plan = _room.plan(
+      layout: '$phone:$drawer:${metrics.box}:${metrics.gap}',
+      width: width - insets.left - insets.right,
+      extra: 0,
+      kind: widget.kind,
+      actions: [for (final a in widget.actions) a.id, 'bell'],
+      step: metrics.pitch,
+      phone: phone,
+    );
+    final moved = [
+      for (final a in widget.actions)
+        if (plan.moved.contains(a.id))
+          (
+            id: 'chat-${a.id}',
+            label: a.tooltip,
+            svg: a.svg,
+            onTap: a.disabled ? null : a.onTap,
+          ),
+    ];
+    final actions = [
+      for (final a in widget.actions)
+        if (!plan.moved.contains(a.id))
+        HitSlop(
+          child: Semantics(
+            button: true,
+            toggled: a.active,
+            enabled: !a.disabled,
+            child: _ActionBtn(
+              key: a.key,
+              svg: a.svg,
+              tooltip: a.tooltip,
+              onTap: a.onTap,
+              disabled: a.disabled,
+              activeColor: a.active ? c.primary : null,
+            ),
+          ),
+        ),
+    ];
     final titleStyle = TextStyle(
       color: c.primary,
       fontSize: NymType.lg,
@@ -1534,11 +1785,14 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
               children: [
                 SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
                 if (phone)
-                  _HeaderPill(
-                    key: const ValueKey('meshBack'),
-                    svg: NymIcons.chevronLeft,
-                    label: tr('Back to chats'),
-                    onTap: widget.onBackToList ?? widget.onBack,
+                  HitSlopLimit(
+                    end: side,
+                    child: _HeaderPill(
+                      key: const ValueKey('meshBack'),
+                      svg: NymIcons.chevronLeft,
+                      label: tr('Back to chats'),
+                      onTap: widget.onBackToList ?? widget.onBack,
+                    ),
                   )
                 else ...[
                   _NavBtn(
@@ -1549,15 +1803,18 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
                     disabled: !history.canBack,
                   ),
                   const SizedBox(width: 2),
-                  _NavBtn(
-                    key: const ValueKey('meshNavForward'),
-                    svg: NymIcons.chevronRight,
-                    tooltip: tr('Go forward'),
-                    onTap: history.canForward ? () => _step(1) : null,
-                    disabled: !history.canForward,
+                  HitSlopLimit(
+                    end: side,
+                    child: _NavBtn(
+                      key: const ValueKey('meshNavForward'),
+                      svg: NymIcons.chevronRight,
+                      tooltip: tr('Go forward'),
+                      onTap: history.canForward ? () => _step(1) : null,
+                      disabled: !history.canForward,
+                    ),
                   ),
                 ],
-                const SizedBox(width: NymSpace.s1),
+                SizedBox(width: side),
                 Expanded(
                   child: Padding(
                     padding:
@@ -1573,11 +1830,15 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(widget.title,
-                                  key: const ValueKey('meshHeaderTitle'),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: titleStyle),
+                              _RoomReport(
+                                room: _room,
+                                onRoom: _onTitleRoom,
+                                child: Text(widget.title,
+                                    key: const ValueKey('meshHeaderTitle'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: titleStyle),
+                              ),
                               const SizedBox(height: 2),
                               SizedBox(
                                 key: const ValueKey('meshHeaderSub'),
@@ -1600,52 +1861,29 @@ class _NymPageHeaderState extends ConsumerState<NymPageHeader>
                     ),
                   ),
                 ),
-                const SizedBox(width: NymSpace.s1),
-                for (var i = 0; i < widget.actions.length; i++) ...[
-                  if (i > 0) SizedBox(width: touchPlatform() ? 4 : 2),
-                  HitSlop(
-                    child: Semantics(
-                      button: true,
-                      toggled: widget.actions[i].active,
-                      enabled: !widget.actions[i].disabled,
-                      child: _ActionBtn(
-                        key: widget.actions[i].key,
-                        svg: widget.actions[i].svg,
-                        tooltip: widget.actions[i].tooltip,
-                        onTap: widget.actions[i].onTap,
-                        disabled: widget.actions[i].disabled,
-                        activeColor:
-                            widget.actions[i].active ? c.primary : null,
-                      ),
-                    ),
-                  ),
-                ],
-                if (phone) ...[
-                  if (widget.actions.isNotEmpty)
-                    SizedBox(width: touchPlatform() ? 4 : 2),
-                  _notificationsPill(),
-                ],
-                if (!phone) ...[
-                  Container(
-                    width: 1,
-                    height: 24,
-                    margin:
-                        const EdgeInsets.symmetric(horizontal: NymSpace.s2),
-                    color: c.glassBorder,
-                  ),
-                  if (drawer) ...[
+                SizedBox(width: side),
+                if (phone)
+                  _HeaderActionRow(lead: side, children: [
+                    ...actions,
                     _notificationsPill(),
-                    const SizedBox(width: 2),
-                    _HeaderPill(
-                      key: const ValueKey('meshMenu'),
-                      svg: NymIcons.menu,
-                      label: tr('Menu'),
-                      onTap: widget.onOpenSidebar!,
-                    ),
-                  ] else
-                    _appIcons(tutorial: false),
-                  const SizedBox(width: 2),
-                  _moreButton(const [], ''),
+                    if (plan.more) _moreButton(moved, tr('Bluetooth mesh')),
+                  ])
+                else ...[
+                  _HeaderActionRow(lead: side, children: actions),
+                  const _HeaderDivider(),
+                  _HeaderActionRow(children: [
+                    if (drawer) ...[
+                      _notificationsPill(),
+                      _HeaderPill(
+                        key: const ValueKey('meshMenu'),
+                        svg: NymIcons.menu,
+                        label: tr('Menu'),
+                        onTap: widget.onOpenSidebar!,
+                      ),
+                    ] else
+                      _appIcons(tutorial: false),
+                    _moreButton(moved, tr('Bluetooth mesh')),
+                  ]),
                 ],
                 SizedBox(width: phone ? NymSpace.s2 : NymSpace.s3),
               ],

@@ -588,90 +588,22 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _firstRunLanguageDefault() {
-        const known = new Map(NYM_TRANSLATE_LANGUAGES.map(l => [l.code.toLowerCase(), l.code]));
-        const tags = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || 'en'];
-        for (const tag of tags) {
-            const full = String(tag || '').toLowerCase();
-            if (!full) continue;
-            const base = full.split('-')[0];
-            if (base === 'en') return '';
-            if (known.has(full)) return known.get(full);
-            if (known.has(base)) return known.get(base);
-        }
-        return '';
-    },
-
     _maybeFirstRunLanguagePicker() {
-        const root = document.documentElement;
-        if (!root.classList.contains('nym-first-lang')) return;
-        const screen = document.getElementById('firstLangScreen');
-        const list = document.getElementById('firstLangList');
-        const search = document.getElementById('firstLangSearch');
-        const empty = document.getElementById('firstLangEmpty');
-        if (this._uiLanguageChosen() || this.getUiLanguage() || !screen || !list || !search) {
-            root.classList.remove('nym-first-lang');
-            return;
-        }
-        const preset = this._firstRunLanguageDefault();
-        const options = [{ code: '', name: 'English' }].concat(NYM_TRANSLATE_LANGUAGES
-            .filter(l => l.code !== 'en')
-            .sort((a, b) => a.name.localeCompare(b.name)));
-        list.innerHTML = options.map(l => {
-            const name = l.code ? this._languageNative(l.code) : l.name;
-            const sub = l.code ? this._languageSubtitle(l.code) : '';
-            const key = (l.code ? this._languageSearchKey(l.code, l.name) : 'english') + ' ' + (l.code || 'en').toLowerCase();
-            return `<button type="button" class="first-lang-row${l.code === preset ? ' is-active' : ''}" ` +
-                `data-lang="${this.escapeHtml(l.code)}" data-name="${this.escapeHtml(key)}">` +
-                `<span class="first-lang-name">${this.escapeHtml(name)}</span>` +
-                `${sub ? `<span class="first-lang-sub">${this.escapeHtml(sub)}</span>` : ''}</button>`;
-        }).join('');
-
-        let done = false;
-        const finish = (code) => {
-            if (done) return;
-            done = true;
-            const current = this.getUiLanguage();
-            this._markUiLanguageChosen();
-            root.classList.remove('nym-first-lang');
-            this._syncTranslateLanguageToUi(code);
-            if (code !== current) {
-                this.applyUiLanguage(code).catch(() => { });
-                const select = document.getElementById('uiLanguageSelect');
-                if (select) select.value = code;
-            }
-            if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
-        };
-
-        search.addEventListener('input', () => {
-            const q = search.value.trim().toLowerCase();
-            let any = false;
-            list.querySelectorAll('.first-lang-row').forEach(row => {
-                const hit = !q || row.dataset.name.includes(q);
-                row.classList.toggle('nm-hidden', !hit);
-                if (hit) any = true;
-            });
-            if (empty) empty.classList.toggle('nm-hidden', any);
-        });
-        list.addEventListener('click', (e) => {
-            const row = e.target.closest('.first-lang-row');
-            if (row) finish(row.dataset.lang || '');
-        });
-        const close = document.getElementById('firstLangClose');
-        if (close) close.addEventListener('click', () => finish(preset));
-        screen.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') finish(preset);
-        });
-
-        const active = list.querySelector('.first-lang-row.is-active');
-        if (active) list.scrollTop = Math.max(0, active.offsetTop - (list.clientHeight - active.offsetHeight) / 2);
-        try {
-            if (active) active.focus({ preventScroll: true });
-        } catch (_) { }
+        const picker = window.NymFirstLang;
+        if (picker) picker.onChoose((code) => this._applyFirstRunLanguage(code));
+        else document.documentElement.classList.remove('nym-first-lang');
     },
 
-    _uiLanguageChosen() {
-        try { return localStorage.getItem('nym_ui_language_chosen') === 'true'; } catch (_) { return false; }
+    _applyFirstRunLanguage(code) {
+        const current = this.getUiLanguage();
+        this._syncTranslateLanguageToUi(code);
+        if (code !== current) {
+            this.applyUiLanguage(code).catch(() => { });
+            const select = document.getElementById('uiLanguageSelect');
+            if (select) select.value = code;
+        }
+        this._markUiLanguageChosen();
+        if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
     },
 
     _markUiLanguageChosen() {

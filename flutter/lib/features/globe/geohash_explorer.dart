@@ -227,6 +227,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
 
   final GlobalKey _searchBoxKey = GlobalKey();
   final GlobalKey _controlsKey = GlobalKey();
+  final GlobalKey _stackBoxKey = GlobalKey();
   final GlobalKey _mapBoxKey = GlobalKey();
   List<Rect> _occupied = const [];
 
@@ -236,6 +237,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   int _activeWindowHours = 24;
 
   String? _hoveredGeohash;
+  bool _hoverGroup = false;
   bool _dragging = false;
 
   /// Selected channel or cell, driving the info panel and Join.
@@ -275,6 +277,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
 
   bool _listsOpen = false;
   bool _layersOpen = false;
+  List<GeohashChannelPoint>? _stackRooms;
+  GeoCluster? _stackAt;
   final FocusNode _layersButtonFocus = FocusNode(debugLabel: 'geo-layers');
   GeoListTab _listTab = GeoListTab.active;
   List<GeoPlace> _places = const [];
@@ -350,7 +354,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     final map = _mapBoxKey.currentContext?.findRenderObject();
     if (map is! RenderBox || !map.hasSize) return;
     final out = <Rect>[];
-    for (final k in [_searchBoxKey, _controlsKey]) {
+    for (final k in [_searchBoxKey, _controlsKey, _stackBoxKey]) {
       final b = k.currentContext?.findRenderObject();
       if (b is! RenderBox || !b.hasSize || !b.attached) continue;
       out.add(map.globalToLocal(b.localToGlobal(Offset.zero)) & b.size);
@@ -471,18 +475,23 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
 
   void _setView(GeoView v, Size size) {
     if (_fly.isAnimating) _fly.stop();
-    setState(() => _view = v.clamped(size));
+    setState(() {
+      _view = v.clamped(size);
+      _stackRooms = null;
+    });
     // Trigger the lazy detail load on any zoom change.
     _ensureSubregions();
   }
 
   void _onFlyTick() {
     final t = Curves.easeInOutCubic.transform(_fly.value);
-    setState(() => _view = GeoView.lerp(_flyFrom, _flyTo, t).clamped(_lastSize));
+    setState(() => _view = (_fly.isCompleted ? _flyTo : GeoView.lerp(_flyFrom, _flyTo, t))
+        .clamped(_lastSize));
     if (_fly.isCompleted) _ensureSubregions();
   }
 
   void _flyToView(GeoView target, Size size) {
+    if (_stackRooms != null) setState(() => _stackRooms = null);
     final to = target.clamped(size);
     if (_reduceMotion) {
       if (_fly.isAnimating) _fly.stop();
@@ -554,7 +563,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   List<GeoWorldCluster> _worldClusters(
       Size size, List<GeohashChannelPoint> channels) {
     final b = StringBuffer(
-        '${(_view.zoom * kGeoClusterZoomSteps).floor()}|${size.width}|${size.height}');
+        '${geoClusterZoomStep(_view.zoom)}|${size.width}|${size.height}');
     for (final c in channels) {
       b.write('|${c.geohash}:${c.lat}:${c.lng}:${c.messages}');
     }
@@ -571,7 +580,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
   }
 
   List<GeoCluster> _clusters(Size size, List<GeohashChannelPoint> channels) {
-    if (_heatmap || _view.zoom >= kGeoClusterMaxZoom) return const [];
+    if (_heatmap) return const [];
     return [
       for (final k in _worldClusters(size, channels))
         () {
@@ -581,7 +590,9 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
               x: p.dx,
               y: p.dy,
               count: k.count,
-              messages: k.messages);
+              messages: k.messages,
+              lat: k.lat,
+              lng: k.lng);
         }(),
     ];
   }
@@ -604,7 +615,13 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     const hitR = 10.0;
     GeohashChannelPoint? nearest;
     var best = double.infinity;
-    for (final ch in _channels()) {
+    final channels = _channels();
+    final hidden = <String>{
+      for (final k in _clusters(size, channels))
+        if (k.count > 1) ...k.ids,
+    };
+    for (final ch in channels) {
+      if (hidden.contains(ch.geohash)) continue;
       final p = _view.project(ch.lng, ch.lat, size);
       final d = (p - local).distance;
       if (d < hitR && d < best) {
@@ -623,7 +640,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     final local = d.localPosition;
     final cluster = _clusterAt(local, size);
     if (cluster != null) {
-      _flyToCluster(cluster, size);
+      _tapCluster(cluster, size);
       return;
     }
     final ch = _channelAt(local, size);
@@ -641,7 +658,27 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     }
   }
 
-  void _flyToCluster(GeoCluster k, Size size) {
+  void _tapCluster(GeoCluster k, Size size) {
+    final ids = k.ids.toSet();
+    final members = [
+      for (final c in _channels())
+        if (ids.contains(c.geohash)) c,
+    ];
+    final split = geoClusterSplitZoom([
+      for (final c in members)
+        GeoClusterInput(
+            id: c.geohash, lat: c.lat, lng: c.lng, messages: c.messages),
+    ], _view.zoom, size);
+    if (split == null) {
+      if (members.isEmpty) return;
+      setState(() {
+        _stackRooms = rankGeoActive(members);
+        _stackAt = k;
+        _layersOpen = false;
+      });
+      _loadPlaces();
+      return;
+    }
     var latLo = 90.0, latHi = -90.0, lngLo = 180.0, lngHi = -180.0;
     for (final id in k.ids) {
       final b = geohashBounds(id);
@@ -652,19 +689,72 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
       lngHi = math.max(lngHi, b.lngHi);
     }
     if (latLo > latHi) return;
-    final fit = _view.fitBounds(
+    var target = _view.fitBounds(
         (latLo: latLo, latHi: latHi, lngLo: lngLo, lngHi: lngHi), size,
         padding: 0.5);
-    final target = fit.zoom <= _view.zoom
-        ? fit.copyWith(zoom: math.min(GeoView.maxZoom, kGeoClusterMaxZoom + 0.5))
-        : fit;
+    if (target.zoom < split) {
+      target =
+          GeoView(cx: k.lng, cy: k.lat, zoom: math.min(GeoView.maxZoom, split));
+    }
+    if (target.zoom <= _view.zoom) {
+      target =
+          target.copyWith(zoom: math.min(GeoView.maxZoom, _view.zoom * 2));
+    }
     _flyToView(target, size);
+  }
+
+  void _closeStack() {
+    if (_stackRooms == null) return;
+    setState(() => _stackRooms = null);
+  }
+
+  void _pickStack(String geohash) {
+    final rooms = _stackRooms ?? const <GeohashChannelPoint>[];
+    final hit = rooms.where((c) => c.geohash == geohash);
+    setState(() => _stackRooms = null);
+    if (hit.isNotEmpty) _selectChannel(hit.first);
+  }
+
+  Widget _stackPanel(Size size, bool narrow) {
+    final k = _stackAt!;
+    final inset = narrow ? 10.0 : 16.0;
+    final maxX = size.width - inset - kGeoTouch - 8;
+    final w = math.max(0.0, math.min(300.0, maxX - inset));
+    final left = math.max(inset, math.min(maxX - w, k.x - w / 2));
+    final below = size.height - inset - (k.y + k.r + 8);
+    final above = k.y - k.r - 8 - (inset + kGeoTouch + 8);
+    final list = KeyedSubtree(
+      key: _stackBoxKey,
+      child: KeyedSubtree(
+        key: const ValueKey('geo-stack-list'),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+              maxHeight: math.max(0.0, below >= above ? below : above)),
+          child: GeoStackList(
+            rooms: _stackRooms!,
+            placeLabel: _placeLabel,
+            location: _userLocation(),
+            onPick: _pickStack,
+            onClose: _closeStack,
+          ),
+        ),
+      ),
+    );
+    if (below >= above) {
+      return Positioned(left: left, width: w, top: k.y + k.r + 8, child: list);
+    }
+    return Positioned(
+        left: left,
+        width: w,
+        bottom: size.height - (k.y - k.r - 8),
+        child: list);
   }
 
   /// Selects for the info panel and starts a reverse geocode for its Location row.
   void _selectChannel(GeohashChannelPoint point) {
     final token = ++_geocodeToken;
     setState(() {
+      _stackRooms = null;
       _selected = point;
       _hoveredGeohash = point.geohash;
       _locationInfo = tr('Loading location...');
@@ -732,6 +822,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     if (_fly.isAnimating) _fly.stop();
     setState(() {
       _view = const GeoView().clamped(size);
+      _stackRooms = null;
       _heatmap = false;
       _daynight = false;
       _grid = false;
@@ -921,7 +1012,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
           _lastSize = size;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            setState(() => _view = _view.clamped(size));
+            setState(() {
+              _view = _view.clamped(size);
+              _stackRooms = null;
+            });
             // Frame the focus cell once, on the first real layout.
             final focus = widget.focusGeohash;
             if (!_focusApplied && focus != null && focus.isNotEmpty) {
@@ -967,6 +1061,14 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
             fit: StackFit.expand,
             children: [
               _mapGestureLayer(size, style, channels, recent, saved),
+              if (_stackRooms != null)
+                Positioned.fill(
+                  child: Listener(
+                    key: const ValueKey('geo-stack-barrier'),
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: (_) => _closeStack(),
+                  ),
+                ),
               if (_layersOpen)
                 Positioned.fill(
                   child: GestureDetector(
@@ -979,6 +1081,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
               if (_selected != null)
                 _infoPanel(_selected!, narrow, inset, size, columnBottom,
                     bottomPad, saved),
+              if (_stackRooms != null && _stackAt != null)
+                _stackPanel(size, narrow),
               Positioned(
                 top: inset,
                 left: inset,
@@ -1023,8 +1127,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                     grid: _grid,
                     windowHours: _activeWindowHours,
                     showLocationLegend: _userLocation() != null,
-                    showClusterLegend:
-                        !_heatmap && _view.zoom < kGeoClusterMaxZoom,
+                    showClusterLegend: !_heatmap,
                     showPulseLegend: !_heatmap && !_reduceMotion,
                     reduceMotion: _reduceMotion,
                     onHeat: () {
@@ -1058,7 +1161,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
 
   void _openLayersFromKey() {
     if (_layersOpen) return;
-    setState(() => _layersOpen = true);
+    setState(() {
+      _layersOpen = true;
+      _stackRooms = null;
+    });
   }
 
   int get _layerCount => [_heatmap, _daynight, _grid].where((on) => on).length;
@@ -1125,7 +1231,10 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
             if (_layersOpen) {
               _closeLayers();
             } else {
-              setState(() => _layersOpen = true);
+              setState(() {
+                _layersOpen = true;
+                _stackRooms = null;
+              });
             }
           },
         ),
@@ -1139,11 +1248,12 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
       GeoControlButton(
         key: const ValueKey('geo-ctl-lists'),
         icon: Icons.list,
-        tooltip: tr('Rooms list'),
+        tooltip: tr('Channels list'),
         active: _listsOpen,
         onTap: () => setState(() {
           _listsOpen = !_listsOpen;
           _layersOpen = false;
+          _stackRooms = null;
           if (_listsOpen) {
             _loadPlaces();
             if (size.width < kGlobeNarrowBreakpoint) _selected = null;
@@ -1232,7 +1342,7 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
     // `grabbing` while dragging, `click` over a dot, else `grab`.
     final cursor = _dragging
         ? SystemMouseCursors.grabbing
-        : (_hoveredGeohash != null
+        : (_hoveredGeohash != null || _hoverGroup
             ? SystemMouseCursors.click
             : SystemMouseCursors.grab);
     final clusters = _clusters(size, channels);
@@ -1244,15 +1354,24 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
         if (_dragging) return;
         final ch = _channelAt(event.localPosition, size);
         final gh = ch?.geohash;
-        if (gh != _hoveredGeohash) {
-          setState(() => _hoveredGeohash = gh);
+        final group =
+            ch == null && _clusterAt(event.localPosition, size) != null;
+        if (gh != _hoveredGeohash || group != _hoverGroup) {
+          setState(() {
+            _hoveredGeohash = gh;
+            _hoverGroup = group;
+          });
         }
       },
       onExit: (_) {
         // Clear hover unless a dot is selected.
         final keep = _selected?.geohash;
-        if (_hoveredGeohash != null && _hoveredGeohash != keep) {
-          setState(() => _hoveredGeohash = keep);
+        if ((_hoveredGeohash != null && _hoveredGeohash != keep) ||
+            _hoverGroup) {
+          setState(() {
+            _hoveredGeohash = keep;
+            _hoverGroup = false;
+          });
         }
       },
       child: Listener(
@@ -1311,7 +1430,8 @@ class _GeohashExplorerState extends ConsumerState<GeohashExplorer>
                     channels: channels,
                     heatmap: _heatmap,
                     daynight: _daynight,
-                    grid: _grid,
+                    grid: _grid || geoDeepGrid(_view.scale(size)),
+                    gridCorner: !_grid,
                     hoveredGeohash: _hoveredGeohash,
                     userLocation: _userLocation(),
                     heatmapImage: _heatImage,

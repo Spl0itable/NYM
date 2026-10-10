@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/constants/storage_keys.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../services/nostr/nostr_service.dart';
 import '../../services/notification_service.dart';
@@ -36,6 +37,7 @@ abstract class AccountsController {
   });
   bool biometricHeldByOther();
   Future<String?> storedNsec(String id);
+  Future<String?> storedSecret(String id, String key);
   Future<void> runInactiveProbes();
   void forgetAll();
   String? savedElsewhere(String pubkey);
@@ -51,19 +53,28 @@ class AccountAlreadySaved implements Exception {
 
 const String kAccountPayloadPrefix = 'nymchat-account:';
 
+typedef InactiveNotifier = Future<void> Function({
+  required String title,
+  required String body,
+  String? payload,
+  String? conversationKey,
+});
+
 class AccountSession extends ChangeNotifier implements AccountsController {
   AccountSession({
     required this.runtime,
     this.overrides,
     this.probe,
     this._detach,
-  }) {
+    InactiveNotifier? notify,
+  }) : _notify = notify ?? NotificationService().showNotification {
     _container = _build();
   }
 
   final AccountRuntime runtime;
   final List<Override> Function()? overrides;
   final InactiveProbe? probe;
+  final InactiveNotifier _notify;
   Future<void> Function()? _detach;
   ProviderContainer? _container;
   int _generation = 0;
@@ -132,7 +143,8 @@ class AccountSession extends ChangeNotifier implements AccountsController {
           try {
             await old
                 .read(nostrControllerProvider)
-                .suspendForAccountSwitch(persist: keep)
+                .suspendForAccountSwitch(
+                    persist: keep, targetId: plan.index.active)
                 .timeout(const Duration(seconds: 15));
           } catch (_) {}
         }
@@ -269,6 +281,10 @@ class AccountSession extends ChangeNotifier implements AccountsController {
   }
 
   @override
+  Future<String?> storedSecret(String id, String key) =>
+      runtime.storedSecret(id, key);
+
+  @override
   void forgetAll() => runtime.forget();
 
   @override
@@ -293,13 +309,21 @@ class AccountSession extends ChangeNotifier implements AccountsController {
         if (a.id == runtime.index.active || !a.notifyInactive) continue;
         final fresh = await p.probe(a);
         if (fresh <= 0) continue;
-        final label = getNymFromPubkey(a.nym.isEmpty ? 'nym' : a.nym, a.pubkey);
+        final notice = AccountLogic.inactiveNotice(
+          a.id,
+          getNymFromPubkey(a.nym.isEmpty ? 'nym' : a.nym, a.pubkey),
+          runtime.storedPref(runtime.index.active, StorageKeys.hidePreviews),
+          runtime.storedPref(a.id, StorageKeys.hidePreviews),
+        );
+        final nym = notice.nym;
         try {
-          await NotificationService().showNotification(
+          await _notify(
             title: 'Nymchat',
-            body: tr('New message for {nym}', {'nym': label}),
+            body: nym == null
+                ? tr('New message on another identity')
+                : tr('New message for {nym}', {'nym': nym}),
             payload: '$kAccountPayloadPrefix${a.id}',
-            conversationKey: 'account-${a.id}',
+            conversationKey: 'account-${notice.group}',
           );
         } catch (_) {}
       }

@@ -24,6 +24,7 @@ import '../../models/group.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/app_dialog.dart';
+import '../common/nym_label.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
 import 'context_menu_actions.dart';
@@ -36,6 +37,8 @@ import '../common/nym_sheet.dart';
 import '../common/nym_field.dart';
 import '../common/nym_tooltip.dart';
 import '../common/hit_slop.dart';
+import '../common/dialog_button.dart';
+import '../../core/theme/nym_a11y.dart';
 
 /// Right-side group context-menu panel: header, role-gated owner/member controls, invite link, and member list.
 class GroupContextMenuPanel extends ConsumerStatefulWidget {
@@ -947,7 +950,7 @@ class _ActionRowState extends State<_ActionRow> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
-          constraints: touchPlatform()
+          constraints: context.largeTouchTargets
               ? const BoxConstraints(minHeight: kMinTouchTarget)
               : null,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1116,30 +1119,25 @@ class _MemberTileState extends State<_MemberTile> {
               widget.avatar,
               const SizedBox(width: 10),
               Expanded(
-                child: RichText(
-                  overflow: TextOverflow.ellipsis,
-                  text: TextSpan(
-                    style: TextStyle(
-                        color: widget.dimmed ? c.textDim : c.text, fontSize: 14),
-                    children: [
-                      TextSpan(text: widget.base),
-                      TextSpan(
-                        text: widget.suffix,
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: NymLabel(
+                        widget.base,
+                        suffix: widget.suffix,
                         style: TextStyle(
-                          color: c.text.withValues(alpha: 0.7),
-                          fontSize: 14 * 0.9,
-                          fontWeight: FontWeight.w100,
-                        ),
+                            color: widget.dimmed ? c.textDim : c.text,
+                            fontSize: 14),
                       ),
-                      if (widget.isSelf) ...[
-                        const WidgetSpan(child: SizedBox(width: 6)),
-                        TextSpan(
-                          text: tr('you'),
-                          style: TextStyle(color: c.textDim, fontSize: 11),
-                        ),
-                      ],
+                    ),
+                    if (widget.isSelf) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        tr('you'),
+                        style: TextStyle(color: c.textDim, fontSize: 11),
+                      ),
                     ],
-                  ),
+                  ],
                 ),
               ),
               if (widget.roleBadge != null) ...[
@@ -1326,25 +1324,19 @@ class _AddMembersDialogState extends ConsumerState<_AddMembersDialog> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 8, 16, 16),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          child: DialogActions(
+            alignment: WrapAlignment.end,
             children: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: Text(tr('Cancel'),
-                    style: TextStyle(color: c.textDim)),
+              DialogButton.secondary(
+                label: tr('Cancel'),
+                onTap: () => Navigator.of(context).pop(),
               ),
-              const SizedBox(width: 8),
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: c.primary,
-                  foregroundColor: c.bg,
-                ),
-                onPressed: _picked.isEmpty
+              DialogButton(
+                label: tr('Add'),
+                onTap: _picked.isEmpty
                     ? null
                     : () => Navigator.of(context)
                         .pop(_picked.map((r) => r.pubkey).toList()),
-                child: Text(tr('Add')),
               ),
             ],
           ),

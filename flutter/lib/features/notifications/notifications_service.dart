@@ -14,6 +14,7 @@ import '../dm_polls/dm_polls.dart' show DmPolls, dmPollPreview;
 import '../group_tools/group_tools.dart' show GroupTools;
 import '../i18n/i18n.dart';
 import '../messages/format/nym_format.dart' show NymFormat;
+import '../toasts/event_toasts.dart';
 import 'notification_sounds.dart';
 import 'notify_view.dart';
 
@@ -65,6 +66,7 @@ class NotifyContext {
     this.conversationKey,
     this.kind = NotificationKind.message,
     this.presentWhileOpen = true,
+    this.preview,
   });
 
   final String? senderPubkey;
@@ -95,7 +97,42 @@ class NotifyContext {
   final NotificationKind kind;
 
   final bool presentWhileOpen;
+
+  final EventToastEvent? preview;
 }
+
+String systemNotificationBody({
+  required String body,
+  required bool locked,
+  required bool hidePreviews,
+  NotifyContext context = const NotifyContext(),
+}) {
+  final base = context.preview ??
+      EventToastEvent(
+        kind: context.isGroup ? 'group' : 'pm',
+        mention: context.isMention,
+        thread: context.isThreadReply,
+      );
+  return EventToasts.systemBody(
+    base.copyWith(body: locked ? '' : body, locked: locked || base.locked),
+    EventToastPrefs(hidePreviews: hidePreviews),
+    (s, [p]) => EventToasts.fill(tr(s), p),
+  );
+}
+
+String systemNotificationTitle({
+  required String title,
+  required bool locked,
+  required bool hidePreviews,
+  NotifyContext context = const NotifyContext(),
+}) =>
+    EventToasts.systemTitle(
+      title,
+      EventToastPrefs(hidePreviews: hidePreviews),
+      topic: EventToasts.topicOf(context.eventId),
+      locked: locked,
+      tr: (s, [p]) => EventToasts.fill(tr(s), p),
+    );
 
 /// Notification text with quoted lines dropped, so the reply is shown; a quote-only message keeps its content.
 String notificationBodyFor(String content) {
@@ -292,8 +329,18 @@ class NotificationsService {
 
     // Post the OS notification first and don't await the tone, which may never start in the background.
     await _local.showNotification(
-      title: shownTitle,
-      body: NymFormat.stripForPreview(shownBody),
+      title: systemNotificationTitle(
+        title: shownTitle,
+        locked: redacted,
+        hidePreviews: settings.hidePreviews,
+        context: context,
+      ),
+      body: systemNotificationBody(
+        body: NymFormat.stripForPreview(shownBody),
+        locked: redacted,
+        hidePreviews: settings.hidePreviews,
+        context: context,
+      ),
       payload: context.payload,
       conversationKey: context.conversationKey,
       kind: context.kind,

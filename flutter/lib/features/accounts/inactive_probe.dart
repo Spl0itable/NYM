@@ -6,12 +6,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/event_kinds.dart';
 import '../../core/constants/relays.dart';
+import '../../core/constants/storage_keys.dart';
 import '../../services/relay/relay_message.dart';
 import '../../services/relay/relay_pool.dart';
 import '../../services/relay/relay_pool_proxy.dart';
+import '../relays/relay_block.dart';
 import 'account_logic.dart';
 
-typedef ProbeTransportFactory = PoolTransport Function(bool direct);
+typedef ProbeTransportFactory = PoolTransport Function(
+    bool direct, List<String> relays);
 
 class InactiveProbe {
   InactiveProbe({
@@ -42,15 +45,30 @@ class InactiveProbe {
 
   static int _wallSec() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
-  static PoolTransport _defaultTransport(bool direct) => direct
-      ? RelayPool(
-          relays: RelayConfig.defaultRelays,
-          writeOnlyRelays: RelayConfig.writeOnlyRelays,
-        )
-      : RelayPoolProxy(
-          relays: RelayConfig.defaultRelays,
-          dmRelays: RelayConfig.defaultRelays,
-        );
+  static PoolTransport _defaultTransport(bool direct, List<String> relays) =>
+      direct
+          ? RelayPool(
+              relays: relays,
+              writeOnlyRelays: RelayConfig.writeOnlyRelays,
+            )
+          : RelayPoolProxy(
+              relays: relays,
+              dmRelays: relays,
+            );
+
+  List<String> relaysFor(String id) {
+    Object? raw;
+    try {
+      final s =
+          prefs.getString(AccountLogic.nsKey(id, StorageKeys.blockedRelays));
+      if (s != null && s.isNotEmpty) raw = jsonDecode(s);
+    } catch (_) {
+      raw = null;
+    }
+    final blocked = RelayBlock.list(
+        RelayBlock.norm(raw, DateTime.now().millisecondsSinceEpoch));
+    return RelayBlock.usable(RelayConfig.defaultRelays, blocked);
+  }
 
   Future<void> baseline(String id, List<String> seen) async {
     final kept =
@@ -75,7 +93,7 @@ class InactiveProbe {
     await Future<void>.delayed(_stagger());
     final now = _nowSec();
     final direct = prefs.getString('nym_relay_direct_mode') == 'true';
-    final pool = _transport(direct);
+    final pool = _transport(direct, relaysFor(a.id));
     final found = <String>[];
     try {
       pool.connectAll();

@@ -112,10 +112,6 @@ body.nymchat-app .logo-ascii {
     min-width: 0;
 }
 
-.nym-value .nym-suffix {
-    color: var(--text-dim);
-}
-
 .status-indicator {
     width: 100%;
     display: flex;
@@ -144,7 +140,7 @@ body.nymchat-app .logo-ascii {
     height: 8px;
     margin: 0 2px;
     border-radius: 50%;
-    background: #22c55e;
+    background: var(--warning);
 }
 
 .nav-section {
@@ -693,13 +689,6 @@ body.sidebar-reorder-mode .nav-title {
     gap: var(--sb-gap);
     min-height: var(--sb-row-h);
     cursor: pointer;
-}
-
-.user-item .nym-suffix,
-.pm-name .nym-suffix {
-    opacity: 0.7;
-    font-size: 0.9em;
-    font-weight: 100;
 }
 
 .user-item > span:last-child,
@@ -1380,10 +1369,6 @@ body.light-mode .icon-btn.danger:hover {
     overflow-wrap: anywhere;
 }
 
-.acct-name .nym-suffix {
-    color: var(--text-dim);
-}
-
 .acct-badge {
     font-size: 10px;
     font-weight: 500;
@@ -1415,20 +1400,6 @@ body.light-mode .icon-btn.danger:hover {
     display: flex;
     flex-direction: column;
     gap: 6px;
-}
-
-.acct-notify {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: var(--text);
-    cursor: pointer;
-}
-
-.acct-notify-hint {
-    font-size: 11px;
-    color: var(--text-dim);
 }
 
 .acct-row-btns {
@@ -1532,7 +1503,34 @@ html.nym-acct-frozen .acct-switch-overlay {
 }
 
 .has-preview .row-preview {
-    display: block;
+    display: flex;
+    align-items: baseline;
+}
+
+.row-preview .nym-suffix {
+    line-height: 1;
+}
+
+.row-preview-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.row-preview-tag {
+    flex: none;
+    white-space: pre;
+}
+
+.row-preview-body {
+    flex: 1 1 0;
+    min-width: 2em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
 }
 
 .channel-item.has-preview .channel-sub {
@@ -1812,6 +1810,9 @@ body.sidebar-reorder-mode .section-reorder-btn svg {
 }
 
 header.chat-header {
+    --uh-gap: 2px;
+    --uh-box: 40px;
+    --uh-side: var(--space-1);
     box-sizing: border-box;
     height: var(--chat-header-h);
     min-height: var(--chat-header-h);
@@ -1821,7 +1822,7 @@ header.chat-header {
     display: flex;
     align-items: center;
     justify-content: flex-start;
-    gap: var(--space-1);
+    gap: var(--uh-side);
     overflow: hidden;
 }
 
@@ -1919,8 +1920,53 @@ header.chat-header .uh-mid {
 .uh-title-row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     min-width: 0;
+}
+
+.uh-badges {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.uh-badges:empty {
+    display: none;
+}
+
+.uh-badges .verified-badge {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+}
+
+.uh-badges .flair-badge {
+    margin: 0;
+    font-size: 18px;
+}
+
+.uh-badges .friend-badge svg {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    opacity: 1;
+}
+
+.uh-badges .supporter-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    color: #ffd700;
+}
+
+.uh-badges .supporter-mark svg {
+    width: 18px;
+    height: 18px;
+    filter: drop-shadow(0 0 4px rgba(255, 215, 0, 0.6));
 }
 
 .uh-title {
@@ -1939,13 +1985,9 @@ header.chat-header .uh-mid {
     display: inline;
 }
 
-.uh-title .nym-suffix {
-    color: var(--text-dim);
-    font-weight: 500;
-}
-
 .uh-info {
     flex: 0 0 auto;
+    margin-left: 2px;
     color: var(--text-dim);
     display: none;
 }
@@ -1983,7 +2025,7 @@ header.chat-header .uh-mid {
 .uh-actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--uh-gap, 2px);
     flex: 0 0 auto;
 }
 
@@ -1992,8 +2034,8 @@ header.chat-header .header-icon-btn,
 header.chat-header .mobile-header-actions > button,
 .uh-phone-menu {
     position: relative;
-    width: 40px;
-    height: 40px;
+    width: var(--uh-box, 40px);
+    height: var(--uh-box, 40px);
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -2038,6 +2080,10 @@ header.chat-header .favorite-channel-btn.active {
     color: #f5c518;
 }
 
+header.chat-header .uh-actions > .call-rejoin-btn {
+    color: var(--primary);
+}
+
 header.chat-header .uh-actions .share-channel-btn svg,
 header.chat-header .uh-actions .share-channel-btn:hover svg {
     fill: none;
@@ -2051,6 +2097,7 @@ header.chat-header .uh-actions > .uh-over {
 
 header.chat-header .header-more {
     flex: 0 0 auto;
+    margin-left: calc(var(--uh-gap) - var(--space-1));
 }
 
 header.chat-header .header-actions {
@@ -2061,9 +2108,13 @@ header.chat-header .header-actions {
     border-left: 1px solid var(--glass-border);
 }
 
+header.chat-header .header-actions-row {
+    gap: var(--uh-gap);
+}
+
 header.chat-header .mobile-header-actions {
     margin-left: 0;
-    gap: 2px;
+    gap: var(--uh-gap);
 }
 
 .header-more-head {
@@ -2090,8 +2141,9 @@ header.chat-header .mobile-header-actions {
 
 @media (max-width: 768px) {
     header.chat-header {
+        --uh-box: 34px;
+        --uh-side: 2px;
         padding: 0 var(--space-2);
-        gap: 2px;
     }
 
     header.chat-header .uh-phone-menu {
@@ -2106,10 +2158,24 @@ header.chat-header .mobile-header-actions {
         display: none;
     }
 
+    header.chat-header.uh-more-on .header-more {
+        display: block;
+        order: 5;
+        margin-left: calc(var(--uh-gap) - 2px);
+    }
+
+    header.chat-header .uh-actions.uh-empty {
+        display: none;
+    }
+
+    header.chat-header.uh-acts-empty .mobile-header-actions {
+        margin-left: 0;
+    }
+
     header.chat-header .mobile-header-actions {
         order: 4;
         padding-left: 0;
-        margin-left: 0;
+        margin-left: calc(var(--uh-gap) - 2px);
         border-left: none;
     }
 

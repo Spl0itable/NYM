@@ -13,6 +13,7 @@ import '../../core/constants/relays.dart';
 import '../../core/crypto/bech32_codec.dart' show encodeNevent;
 import '../../features/layout/layout_model.dart';
 import '../../features/toasts/toast_center.dart';
+import '../../features/toasts/toast_model.dart' show ToastKind;
 import 'event_details_sheet.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
@@ -23,6 +24,7 @@ import '../../features/chat_tools/chat_tools_service.dart'
 import '../../features/chat_tools/chat_tools_ui.dart';
 import '../../features/autocomplete/pending_edit.dart';
 import '../../features/commands/command_i18n.dart';
+import '../../features/composer/send_as_model.dart';
 import '../../features/composer/composer_conn.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/messages/flood_tracker.dart';
@@ -56,6 +58,7 @@ import '../../services/relay/queued_sends.dart';
 import '../../services/storage/mesh_file_store.dart';
 import '../../state/settings_provider.dart';
 import '../common/nym_avatar.dart';
+import '../../features/accounts/account_host.dart' show accountsProvider;
 import '../nym_icons.dart';
 import 'hover_bar_controller.dart';
 import 'bitchat_user_color.dart';
@@ -75,8 +78,10 @@ import '../../features/media_notes/media_note_sender.dart';
 import '../common/nym_focusable.dart';
 import '../../features/chat_nav/chat_nav.dart';
 import '../../features/chat_nav/chat_nav_providers.dart';
-import 'composer.dart' show composerOverhangProvider;
+import 'composer.dart' show ComposerDrafts, composerOverhangProvider;
 import '../common/nym_tooltip.dart';
+import '../common/nym_label.dart';
+import '../../core/theme/nym_a11y.dart';
 
 String formatTime(DateTime t, String timeFormat) {
   final h24 = t.hour;
@@ -465,8 +470,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   List<MessageReaction> get reactions => widget.reactions;
 
   /// Null gives the identicon fallback.
-  String? get _authorPicture =>
-      ref.watch(usersProvider
+  String? get _authorPicture => message.localOnlyRow
+      ? localAccountAvatar(ref, message)
+      : ref.watch(usersProvider
           .select((u) => u[message.pubkey]?.profile?.picture));
 
   bool get _isVerified {
@@ -620,8 +626,9 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   }
 
   /// Resolved from the shop controller (self) or presence.
-  UserCosmetics get _cosmetics =>
-      ref.watch(userCosmeticsProvider(message.pubkey));
+  UserCosmetics get _cosmetics => message.localOnlyRow
+      ? const UserCosmetics()
+      : ref.watch(userCosmeticsProvider(message.pubkey));
 
   /// The supporter gold treatment composes over an active style, as the PWA applies both classes.
   MessageStyleDecoration? _styleDecoration(BuildContext context) {
@@ -668,12 +675,14 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     required double flairSize,
     bool brackets = false,
   }) {
-    final style = _authorStyle(c, self: self, size: size);
+    final base = _authorStyle(c, self: self, size: size);
+    final style = context.highContrast && base.color != null
+        ? base.copyWith(
+            color: legibleOnAll(base.color!, [bubbleBgFor(c), c.bg]))
+        : base;
     final bracketColor = style.color;
     final suffix = getPubkeySuffix(message.pubkey);
-    // Genesis holders' suffix is raised to weight 400.
-    final suffixWeight =
-        hasGenesisFlair(_cosmetics) ? FontWeight.w400 : FontWeight.w100;
+    final genesisSuffix = hasGenesisFlair(_cosmetics);
     // Prefer the live profile nym over the one frozen at ingest; watched so rows repaint when it lands.
     final liveNym = ref.watch(
         usersProvider.select((u) => u[message.pubkey]?.nym));
@@ -685,21 +694,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         if (brackets)
           Text('<', style: TextStyle(color: bracketColor, fontSize: size)),
         Flexible(
-          child: Text.rich(
-            TextSpan(children: [
-              TextSpan(text: baseNym, style: style),
-              if (suffix.isNotEmpty)
-                TextSpan(
-                  text: '#$suffix',
-                  style: style.copyWith(
-                    color: style.color?.withValues(alpha: 0.7),
-                    fontSize: size * 0.9,
-                    fontWeight: suffixWeight,
-                  ),
-                ),
-            ]),
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: NymLabel(baseNym,
+              suffix: suffix, style: style, genesis: genesisSuffix),
         ),
         _nymBadges(context, flairSize: flairSize),
         if (_isVerified) ...[
@@ -937,7 +933,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     final isAction = message.kind == MessageKind.action;
     final size = settings.textSize.toDouble() - 3;
     // Action messages replace the `.system-message` class, so no pill or centering.
-    final text = Text(
+    final text = NymText(
       message.content,
       textAlign: isAction ? TextAlign.start : TextAlign.center,
       style: TextStyle(
@@ -1040,22 +1036,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         ),
         const SizedBox(width: 6),
         Flexible(
-          child: Text.rich(
-            TextSpan(children: [
-              TextSpan(text: baseNym, style: nymStyle),
-              if (suffix.isNotEmpty)
-                TextSpan(
-                  text: '#$suffix',
-                  style: nymStyle.copyWith(
-                    color: c.textDim.withValues(alpha: 0.7),
-                    fontSize: size * 0.9,
-                    fontWeight: FontWeight.w100,
-                  ),
-                ),
-            ]),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: NymLabel(baseNym, suffix: suffix, style: nymStyle),
         ),
         CosmeticNymBadges(
           cosmetics: ref.watch(userCosmeticsProvider(pk)),
@@ -1141,29 +1122,20 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                         NymAvatar(
                             seed: message.pubkey,
                             size: fontSize + 2,
-                            imageUrl: _authorPicture),
+                            imageUrl: _authorPicture,
+                            localOnly: message.localOnlyRow),
                         const SizedBox(width: 4),
                         Flexible(
-                          child: Text.rich(
-                            TextSpan(children: [
-                              TextSpan(
-                                text: pickDisplayNym(
-                                    ref.watch(usersProvider.select(
-                                        (u) => u[message.pubkey]?.nym)),
-                                    message.author),
-                                style: TextStyle(
-                                  color: c.secondary,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              if (suffix.isNotEmpty)
-                                TextSpan(
-                                  text: '#$suffix',
-                                  style: TextStyle(color: c.secondaryA(0.6)),
-                                ),
-                            ]),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          child: NymLabel(
+                            pickDisplayNym(
+                                ref.watch(usersProvider.select(
+                                    (u) => u[message.pubkey]?.nym)),
+                                message.author),
+                            suffix: suffix,
+                            style: TextStyle(
+                              color: c.secondary,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ),
                         _nymBadges(context, flairSize: 20),
@@ -1294,7 +1266,11 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            NymAvatar(seed: message.pubkey, size: 18, imageUrl: _authorPicture),
+            NymAvatar(
+                seed: message.pubkey,
+                size: 18,
+                imageUrl: _authorPicture,
+                localOnly: message.localOnlyRow),
             const SizedBox(width: 4),
             Flexible(
               child: _authorLine(
@@ -1476,6 +1452,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
           ),
         if (_showReaderAvatars) _readerAvatars(context),
         if (self) _deliveryFooter(context),
+        if (!self && message.optimistic) _sendAsFooter(context),
       ],
     );
 
@@ -1752,6 +1729,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         ),
         // Delivery ticks sit on their own right-aligned line below the bubble, as in IRC.
         if (self) _deliveryFooter(context),
+        if (!self && message.optimistic) _sendAsFooter(context),
         if (_showTranslation)
           MessageTranslation(
             content: message.content,
@@ -1835,7 +1813,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
                     child: NymAvatar(
                         seed: message.pubkey,
                         size: 32,
-                        imageUrl: _authorPicture),
+                        imageUrl: _authorPicture,
+                        localOnly: message.localOnlyRow),
                   )
                 : const SizedBox.shrink(),
           ),
@@ -1942,7 +1921,16 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       message.isOwn &&
       !message.isPM &&
       (message.isGroup || _isChannelMessage) &&
-      message.readers.isNotEmpty;
+      _visibleReaders.isNotEmpty;
+
+  Map<String, String> get _visibleReaders {
+    if (message.readers.isEmpty) return message.readers;
+    final app = ref.read(appStateProvider);
+    return {
+      for (final e in message.readers.entries)
+        if (!app.isPersonHidden(e.key, e.value)) e.key: e.value
+    };
+  }
 
   /// Named channels also carry read receipts natively, so they qualify alongside geohash channels.
   bool get _isChannelMessage {
@@ -1956,7 +1944,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   /// Up to 3 overlapping reader avatars plus `+N`; long-press opens a "seen by" modal.
   Widget _readerAvatars(BuildContext context) {
     const maxVisible = 3;
-    final entries = message.readers.entries.toList();
+    final entries = _visibleReaders.entries.toList();
     final visible = entries.take(maxVisible).toList();
     final overflow = entries.length - visible.length;
     final c = context.nym;
@@ -2016,7 +2004,7 @@ class _MessageRowState extends ConsumerState<MessageRow> {
   void _showSeenBy(BuildContext context) {
     final users = ref.read(usersProvider);
     final reactors = <ReactorEntry>[
-      for (final e in message.readers.entries)
+      for (final e in _visibleReaders.entries)
         ReactorEntry(
           pubkey: e.key,
           nym: pickDisplayNym(users[e.key]?.nym, e.value),
@@ -2242,7 +2230,10 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         if (message.content.isEmpty) return;
         ref
             .read(pendingComposerActionProvider.notifier)
-            .requestQuote(fullNym: fullNym, content: message.content);
+            .requestQuote(
+                fullNym: fullNym,
+                content: message.content,
+                messageId: message.id);
         return;
       case 'translate':
         if (message.content.isEmpty) return;
@@ -2317,9 +2308,8 @@ class _MessageRowState extends ConsumerState<MessageRow> {
     if (message.content.isEmpty) return;
     final baseNym = _baseNym(_displayNym());
     final fullNym = '$baseNym#${getPubkeySuffix(message.pubkey)}';
-    ref
-        .read(pendingComposerActionProvider.notifier)
-        .requestQuote(fullNym: fullNym, content: message.content);
+    ref.read(pendingComposerActionProvider.notifier).requestQuote(
+        fullNym: fullNym, content: message.content, messageId: message.id);
   }
 
   void _openContextMenu(BuildContext context) {
@@ -2397,8 +2387,12 @@ class _MessageRowState extends ConsumerState<MessageRow> {
       ConstrainedBox(
         key: const ValueKey('messageReadCap'),
         constraints: BoxConstraints(maxWidth: readWidthPx(fontSize)),
-        child: _contentBody(context, color, fontSize,
-            deco: deco, bubble: bubble),
+        child: NymBareSuffixScope(
+          enabled: message.isBot ||
+              ref.read(nostrControllerProvider).isVerifiedBot(message.pubkey),
+          child: _contentBody(context, color, fontSize,
+              deco: deco, bubble: bubble),
+        ),
       );
 
   Widget _contentBody(
@@ -2486,6 +2480,74 @@ class _MessageRowState extends ConsumerState<MessageRow> {
         if (message.isPM && !message.isGroup) return _deliveryTicks(context);
         return const SizedBox.shrink();
       },
+    );
+  }
+
+  Widget _sendAsFooter(BuildContext context) {
+    final c = context.nym;
+    final failed = message.deliveryStatus == DeliveryStatus.failed;
+    if (!failed && message.deliveryStatus != DeliveryStatus.sending) {
+      return const SizedBox.shrink();
+    }
+    final nym = getNymFromPubkey(message.author, message.pubkey);
+    final note = NymText(
+      failed
+          ? tr(SendAsStrings.failedShort, {'nym': nym})
+          : tr(SendAsStrings.sending, {'nym': nym}),
+      style: TextStyle(
+        color: failed ? c.danger : c.textDim,
+        fontSize: 11,
+      ),
+    );
+    if (!failed) {
+      return Padding(
+        key: const ValueKey('msgSendAsTag'),
+        padding: const EdgeInsets.only(top: 2),
+        child: note,
+      );
+    }
+    final hooks = ref.read(pendingComposerActionProvider.notifier);
+    final id = message.id;
+    Widget act(String key, String label, VoidCallback onTap) => Semantics(
+          button: true,
+          child: InkWell(
+            key: ValueKey('sendAsAct-$key'),
+            onTap: onTap,
+            borderRadius: NymRadius.rsm,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: c.danger,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  decoration: TextDecoration.underline,
+                  decorationColor: c.danger,
+                ),
+              ),
+            ),
+          ),
+        );
+    return Padding(
+      key: const ValueKey('msgSendAsTag'),
+      padding: const EdgeInsets.only(top: 2),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        children: [
+          note,
+          act('retry', tr('Retry'), () => hooks.requestSendAsRetry(id)),
+          act('copy', tr('Copy'), () {
+            final text =
+                ComposerDrafts.failedSendAs[id]?.composed ?? message.content;
+            unawaited(Clipboard.setData(ClipboardData(text: text)));
+            showToast(tr('Copied!'), kind: ToastKind.success);
+          }),
+          act('putBack', tr(SendAsStrings.putBack),
+              () => hooks.requestSendAsPutBack(id)),
+        ],
+      ),
     );
   }
 
@@ -2681,8 +2743,13 @@ class _ReactionBadgeState extends State<_ReactionBadge> {
             duration: const Duration(milliseconds: 200),
             curve: Curves.ease,
             child: AnimatedContainer(
+              key: const ValueKey('reactionChip'),
               duration: const Duration(milliseconds: 200),
               curve: Curves.ease,
+              constraints: context.largeTouchTargets
+                  ? const BoxConstraints(minHeight: 32)
+                  : null,
+              alignment: context.largeTouchTargets ? Alignment.center : null,
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
                 // `.user-reacted` follows `:hover` at equal specificity, so its fill wins while hovered.
@@ -2763,6 +2830,10 @@ class _AddReactionButtonState extends State<_AddReactionButton> {
         duration: const Duration(milliseconds: 120),
         // The 0.6 rest opacity is folded into each color's alpha, avoiding a per-frame saveLayer on every row.
         child: Container(
+          constraints: context.largeTouchTargets
+              ? const BoxConstraints(minHeight: 32)
+              : null,
+          alignment: context.largeTouchTargets ? Alignment.center : null,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
             color: _pressed
@@ -3964,6 +4035,16 @@ class _StopBtn extends StatelessWidget {
   }
 }
 
+String? localAccountAvatar(WidgetRef ref, Message m) {
+  if (m.isOwn) return null;
+  final index = ref.read(accountsProvider)?.changes.value;
+  if (index == null) return null;
+  for (final a in index.accounts) {
+    if (a.pubkey == m.pubkey) return a.avatar.isEmpty ? null : a.avatar;
+  }
+  return null;
+}
+
 /// Folds oldest-first messages into same-author bubble runs; shared by the single-chat and columns views.
 List<List<MessageGroupEntry>> buildMessageGroups(
   List<Message> messages, {
@@ -3974,6 +4055,8 @@ List<List<MessageGroupEntry>> buildMessageGroups(
 }) {
   // Same predicate as messages_list `_groupsWith`.
   bool groupsWith(Message prev, Message cur) =>
+      !prev.localOnlyRow &&
+      !cur.localOnlyRow &&
       !prev.isSystemRow &&
       !cur.isSystemRow &&
       !prev.isMeAction &&
@@ -4121,8 +4204,10 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
 
     // The avatar is a Positioned overlay in the left gutter so it can glide without affecting the bubble column.
     final last = entries.last.message;
-    final picture = ref
-        .watch(usersProvider.select((m) => m[first.pubkey]?.profile?.picture));
+    final picture = first.localOnlyRow
+        ? localAccountAvatar(ref, first)
+        : ref.watch(
+            usersProvider.select((m) => m[first.pubkey]?.profile?.picture));
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 0, 14, 0),
       child: Stack(
@@ -4147,6 +4232,7 @@ class _MessageGroupState extends ConsumerState<MessageGroup> {
               child: _StickyGroupAvatar(
                 pubkey: first.pubkey,
                 imageUrl: picture,
+                localOnly: first.localOnlyRow,
                 bubbleKey: _bubbleKey,
                 onTap: () => _openAvatarMenu(context, ref, last),
               ),
@@ -4177,10 +4263,12 @@ class _StickyGroupAvatar extends ConsumerStatefulWidget {
     required this.imageUrl,
     required this.onTap,
     this.bubbleKey,
+    this.localOnly = false,
   });
 
   final String pubkey;
   final String? imageUrl;
+  final bool localOnly;
   final VoidCallback onTap;
 
   /// Aligns the resting avatar to the last bubble rather than the reactions/translation rows; null uses the foot.
@@ -4278,6 +4366,7 @@ class _StickyGroupAvatarState extends ConsumerState<_StickyGroupAvatar> {
         seed: widget.pubkey,
         size: _avatar,
         imageUrl: widget.imageUrl,
+        localOnly: widget.localOnly,
       ),
     );
     final hintTop = ref.watch(composerHintTopProvider);

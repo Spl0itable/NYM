@@ -18,6 +18,7 @@ import 'modal_close_chip.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/hit_slop.dart';
+import '../../core/theme/nym_a11y.dart';
 
 /// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
@@ -357,6 +358,7 @@ class _EmojiPickerState extends ConsumerState<EmojiPicker>
         cursorColor: c.isLight ? c.text : c.textBright,
         decoration: NymField.decoration(c,
             hint: tr('Search emoji...'),
+          minHeight: largeFieldMin(context),
             fontSize: 12,
             radius: NymRadius.rxs,
             contentPadding:

@@ -1,12 +1,18 @@
 final RegExp _suffixRe = RegExp(r'#[0-9a-f]{4}$', caseSensitive: false);
 final RegExp _hex4Re = RegExp(r'^[0-9a-f]{4}$', caseSensitive: false);
 
+final Set<String> _seenSuffixes = <String>{};
+
 /// Last 4 hex chars of the pubkey, or '????' if not hex.
 String getPubkeySuffix(String pubkey) {
   if (pubkey.length < 4) return '????';
   final last4 = pubkey.substring(pubkey.length - 4);
-  return _hex4Re.hasMatch(last4) ? last4 : '????';
+  if (!_hex4Re.hasMatch(last4)) return '????';
+  if (pubkey.length == 64) _seenSuffixes.add(last4.toLowerCase());
+  return last4;
 }
+
+bool isSeenNymSuffix(String hex) => _seenSuffixes.contains(hex.toLowerCase());
 
 String stripPubkeySuffix(String nym) => nym.replaceAll(_suffixRe, '');
 

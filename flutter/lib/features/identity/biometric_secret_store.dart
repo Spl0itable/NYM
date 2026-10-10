@@ -3,8 +3,31 @@ import 'package:local_auth/local_auth.dart';
 
 import '../i18n/i18n.dart';
 
+enum BiometricKind { faceId, touchId, opticId, face, fingerprint, iris, generic }
+
+BiometricKind biometricKindReported(Object? reported) => switch (reported) {
+      'touchID' => BiometricKind.touchId,
+      'faceID' => BiometricKind.faceId,
+      'opticID' => BiometricKind.opticId,
+      'fingerprint' => BiometricKind.fingerprint,
+      'face' => BiometricKind.face,
+      'iris' => BiometricKind.iris,
+      _ => BiometricKind.generic,
+    };
+
+String biometricKindName(BiometricKind kind) => switch (kind) {
+      BiometricKind.faceId => tr('Face ID'),
+      BiometricKind.touchId => tr('Touch ID'),
+      BiometricKind.opticId => tr('Optic ID'),
+      BiometricKind.face => tr('Face unlock'),
+      BiometricKind.fingerprint => tr('Fingerprint'),
+      BiometricKind.iris => tr('Iris'),
+      BiometricKind.generic => tr('Biometrics'),
+    };
+
 abstract class BiometricSecretStore {
   Future<bool> isAvailable();
+  Future<BiometricKind> kind();
   Future<String?> read();
   Future<void> write(String secret);
   Future<void> delete();
@@ -75,6 +98,16 @@ class PlatformBiometricSecretStore implements BiometricSecretStore {
       return types.any((type) => type != BiometricType.weak);
     } catch (_) {
       return false;
+    }
+  }
+
+  @override
+  Future<BiometricKind> kind() async {
+    try {
+      return biometricKindReported(
+          await channel.invokeMethod<String>('biometryType'));
+    } catch (_) {
+      return BiometricKind.generic;
     }
   }
 

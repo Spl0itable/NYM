@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import '../../core/utils/nym_utils.dart';
 import '../../models/group.dart';
 import '../../models/message.dart';
 import '../chat_tools/chat_tools_service.dart' show ChatToolsPrefs;
@@ -201,6 +202,7 @@ class GroupToolsHooks {
     this.onSyncChanged,
     this.now,
     this.translate,
+    this.personHidden,
   });
 
   final String Function() selfPubkey;
@@ -229,9 +231,16 @@ class GroupToolsHooks {
   final String? Function(String pubkey)? meshPeerFor;
   final Future<bool> Function(String pubkey, String content)? sendMeshPm;
   final void Function(String text)? notice;
-  final void Function(String title, String body, String route, String type)?
+  final void Function(
+    String title,
+    String body,
+    String route,
+    String type, [
+    String? eventId,
+  ])?
   notify;
   final String Function(String pubkey)? nymOf;
+  final bool Function(String pubkey)? personHidden;
   final Future<Map<String, dynamic>?> Function(Map<String, dynamic> template)?
   sign;
   final bool Function(Map<String, dynamic> event)? verify;
@@ -276,6 +285,8 @@ class GroupToolsService {
   void _notice(String text, [Map<String, String>? vars]) =>
       hooks.notice?.call(_t(text, vars));
   String _nym(String pk) => hooks.nymOf?.call(pk) ?? pk.substring(0, 8);
+
+  String _tag(String pk) => '${_nym(pk)}#${getPubkeySuffix(pk)}';
 
   String randomHex(int bytes) {
     final sb = StringBuffer();
@@ -544,13 +555,15 @@ class GroupToolsService {
         ['x', randomHex(32)],
       ], '');
     }
-    if (grew && GroupTools.mayApproveJoins(role(groupId, _self))) {
+    if (grew &&
+        GroupTools.mayApproveJoins(role(groupId, _self)) &&
+        hooks.personHidden?.call(joiner) != true) {
       hooks.notify?.call(
         _t('Join request in {group}', {
           'group': g.name.isEmpty ? 'Group' : g.name,
         }),
         _t('{nym} wants to join. Open the group menu to approve or decline.', {
-          'nym': _nym(joiner),
+          'nym': _tag(joiner),
         }),
         groupId,
         'group',
@@ -600,7 +613,7 @@ class GroupToolsService {
       if (isFullFor(g, joiner)) {
         _notice('{group} is full. Remove someone to approve {nym}.', {
           'group': g.name.isEmpty ? 'Group' : g.name,
-          'nym': _nym(joiner),
+          'nym': _tag(joiner),
         });
         _changed();
         return;
@@ -622,7 +635,7 @@ class GroupToolsService {
     }
     if (approve) {
       if (banned) return;
-      _notice('Approved. {nym} was added to the group.', {'nym': _nym(joiner)});
+      _notice('Approved. {nym} was added to the group.', {'nym': _tag(joiner)});
     } else {
       await hooks.sendDirect?.call(joiner, [
         ['g', groupId],
@@ -630,7 +643,7 @@ class GroupToolsService {
         ['type', GroupToolsTypes.joinDeclined],
         ['x', randomHex(32)],
       ], '');
-      _notice('Declined the join request from {nym}.', {'nym': _nym(joiner)});
+      _notice('Declined the join request from {nym}.', {'nym': _tag(joiner)});
     }
     _changed();
   }
@@ -1107,6 +1120,7 @@ class GroupToolsService {
             (g != null ? ' · ${g.name}' : ''),
         r.groupId,
         'group',
+        'event-reminder-$id',
       );
     }
     var next = 0;
@@ -1246,6 +1260,7 @@ class GroupToolsService {
       _t('{nym} wants to join', {'nym': who}),
       sender,
       'call',
+      'call-link-${link.id}-$sender-$_nowSec',
     );
     final admit =
         await (hooks.confirm?.call(

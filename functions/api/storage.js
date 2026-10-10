@@ -36,6 +36,7 @@ import {
   verifyClientAuth,
   enforceAuthReplay,
   cacheRateTake,
+  cacheRateTakeAll,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -551,6 +552,85 @@ var SETTINGS_MAX_BYTES = 256 * 1024 * 1024;
 var SETTINGS_MAX_BLOB = 512 * 1024;
 function isValidSettingsCategory(cat) { return SETTINGS_CATEGORY_RE.test(cat); }
 
+var SETTINGS_HAVE_MAX = 5000;
+var SETTINGS_CATEGORIES_MAX = 64;
+var SETTINGS_BLOB_CHUNK = 99;
+
+function settingsDeltaOpts(body) {
+  var o = { since: null, have: null, categories: null, app: null };
+  var any = false;
+  var since = body.since;
+  if (typeof since === "number" && Number.isFinite(since) && since >= 0) { o.since = Math.floor(since); any = true; }
+  if (body.have && typeof body.have === "object" && !Array.isArray(body.have)) {
+    o.have = {};
+    var hk = Object.keys(body.have);
+    for (var i = 0; i < hk.length && i < SETTINGS_HAVE_MAX; i++) {
+      var hv = Number(body.have[hk[i]]);
+      if (Number.isFinite(hv)) o.have[hk[i]] = hv;
+    }
+    any = true;
+  }
+  if (Array.isArray(body.categories)) {
+    o.categories = [];
+    var seen = {};
+    for (var j = 0; j < body.categories.length && j < SETTINGS_CATEGORIES_MAX; j++) {
+      var c = body.categories[j];
+      if (typeof c === "string" && isValidSettingsCategory(c) && !seen[c]) { seen[c] = 1; o.categories.push(c); }
+    }
+    any = true;
+  }
+  if (body.app === "nymchat" || body.app === "nymbot") { o.app = body.app + "-"; any = true; }
+  return any ? o : null;
+}
+
+async function settingsDeltaRead(db, userPubkey, o) {
+  var out = { categories: {}, cursor: 0 };
+  if (o.categories && !o.categories.length) return out;
+  try {
+    var headSql = "SELECT MAX(updated_at) AS m FROM settings WHERE pubkey = ?";
+    var headBinds = [userPubkey];
+    if (o.categories) {
+      headSql += " AND category IN (" + o.categories.map(function () { return "?"; }).join(",") + ")";
+      headBinds = headBinds.concat(o.categories);
+    }
+    var head = await db.prepare(headSql).bind(...headBinds).first();
+    out.cursor = (head && Number(head.m)) || 0;
+  } catch (e) { }
+  var metaSql = "SELECT category, updated_at FROM settings WHERE pubkey = ?";
+  var metaBinds = [userPubkey];
+  if (o.categories) {
+    metaSql += " AND category IN (" + o.categories.map(function () { return "?"; }).join(",") + ")";
+    metaBinds = metaBinds.concat(o.categories);
+  }
+  if (o.since !== null) { metaSql += " AND updated_at > ?"; metaBinds.push(o.since); }
+  var meta = [];
+  try { meta = (await db.prepare(metaSql).bind(...metaBinds).all()).results || []; } catch (e) { meta = []; }
+  var need = [];
+  for (var i = 0; i < meta.length; i++) {
+    var cat = meta[i].category;
+    if (!isValidSettingsCategory(cat)) continue;
+    if (o.app && cat.toLowerCase().indexOf(o.app) !== 0) continue;
+    var at = meta[i].updated_at || 0;
+    if (o.have && Object.prototype.hasOwnProperty.call(o.have, cat) && o.have[cat] === at) {
+      out.categories[cat] = { updatedAt: at, same: 1 };
+    } else {
+      need.push(cat);
+    }
+  }
+  for (var k = 0; k < need.length; k += SETTINGS_BLOB_CHUNK) {
+    var chunk = need.slice(k, k + SETTINGS_BLOB_CHUNK);
+    var rs = [];
+    try {
+      rs = (await db.prepare("SELECT category, blob, updated_at FROM settings WHERE pubkey = ? AND category IN (" +
+        chunk.map(function () { return "?"; }).join(",") + ")").bind(userPubkey, ...chunk).all()).results || [];
+    } catch (e) { rs = []; }
+    rs.forEach(function (r) {
+      if (typeof r.blob === "string") out.categories[r.category] = { blob: r.blob, updatedAt: r.updated_at || 0 };
+    });
+  }
+  return out;
+}
+
 async function handleSettingsAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -567,6 +647,8 @@ async function handleSettingsAction(context, body) {
   if (!clientAuthOk(context, body, userPubkey)) return json({ error: "Authentication failed" }, 401);
 
   if (body.action === "settings-get") {
+    var delta = settingsDeltaOpts(body);
+    if (delta) return json(await settingsDeltaRead(env.DB_SETTINGS, userPubkey, delta));
     var categories = {};
     try {
       var rs = await env.DB_SETTINGS.prepare("SELECT category, blob, updated_at FROM settings WHERE pubkey = ?").bind(userPubkey).all();
@@ -1109,6 +1191,90 @@ function pmWrapRecipient(ev) {
   return p ? p[1].toLowerCase() : null;
 }
 
+var PM_CURSOR_RE = /^\d{1,16}(:[0-9a-f]{64})?$/;
+var PM_CURSOR_EXPOSE = "X-Has-More, X-Cursor, X-Cursor-Head";
+
+function pmCursorParse(after) {
+  if (typeof after !== "string" || !PM_CURSOR_RE.test(after)) return null;
+  var at = after.indexOf(":");
+  var s = Number(at < 0 ? after : after.slice(0, at));
+  if (!Number.isSafeInteger(s)) return null;
+  return { s: s, id: at < 0 ? "" : after.slice(at + 1), raw: after };
+}
+
+function pmNdjson(rows, headers) {
+  var enc = new TextEncoder();
+  var stream = new ReadableStream({
+    start(controller) {
+      for (var j = 0; j < rows.length; j++) controller.enqueue(enc.encode(rows[j].event + "\n"));
+      try { controller.close(); } catch (_) { }
+    }
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: Object.assign({ "Content-Type": "application/x-ndjson" }, headers, { "Access-Control-Expose-Headers": PM_CURSOR_EXPOSE }, CLIENT_CORS_HEADERS)
+  });
+}
+
+var PM_IN_MAX = 95;
+
+function pmKeyGroups(pks) {
+  var out = [];
+  for (var i = 0; i < pks.length; i += PM_IN_MAX) out.push(pks.slice(i, i + PM_IN_MAX));
+  return out;
+}
+
+async function pmCursorHead(db, pks) {
+  if (!pks.length) return "0";
+  var best = 0;
+  try {
+    var groups = pmKeyGroups(pks);
+    for (var g = 0; g < groups.length; g++) {
+      var ph = groups[g].map(function () { return "?"; }).join(",");
+      var row = await db.prepare("SELECT MAX(stored_at) AS m FROM pm WHERE pubkey IN (" + ph + ")").bind(...groups[g]).first();
+      var m = row && Number(row.m);
+      if (Number.isFinite(m) && m > best) best = m;
+    }
+  } catch (e) { return "0"; }
+  return best > 0 ? String(best) : "0";
+}
+
+async function pmCursorResponse(db, pks, cursor, rawLimit) {
+  var limit = Number(rawLimit);
+  if (!Number.isFinite(limit) || limit <= 0) limit = 200;
+  if (limit > 1000) limit = 1000;
+  limit = Math.floor(limit);
+  var rows = [];
+  if (pks.length) {
+    var groups = pmKeyGroups(pks);
+    try {
+      for (var g = 0; g < groups.length; g++) {
+        var part;
+        if (groups[g].length === 1) {
+          part = (await replica(db).prepare(
+            "SELECT id, event, stored_at FROM pm WHERE pubkey = ? AND stored_at = ? AND id > ? UNION ALL SELECT id, event, stored_at FROM pm WHERE pubkey = ? AND stored_at > ? ORDER BY stored_at ASC, id ASC LIMIT ?"
+          ).bind(groups[g][0], cursor.s, cursor.id, groups[g][0], cursor.s, limit).all()).results || [];
+        } else {
+          var ph = groups[g].map(function () { return "?"; }).join(",");
+          part = (await replica(db).prepare(
+            "SELECT id, event, stored_at FROM pm WHERE pubkey IN (" + ph + ") AND stored_at >= ? AND (stored_at > ? OR (stored_at = ? AND id > ?)) ORDER BY stored_at ASC, id ASC LIMIT ?"
+          ).bind(...groups[g], cursor.s, cursor.s, cursor.s, cursor.id, limit).all()).results || [];
+        }
+        rows = rows.concat(part);
+      }
+      if (groups.length > 1) {
+        rows.sort(function (a, b) { return (a.stored_at - b.stored_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0); });
+        rows = rows.slice(0, limit);
+      }
+    } catch (e) { rows = []; }
+  }
+  var last = rows.length ? rows[rows.length - 1] : null;
+  return pmNdjson(rows, {
+    "X-Cursor": last ? String(last.stored_at) + ":" + last.id : cursor.raw,
+    "X-Has-More": rows.length >= limit ? "1" : "0"
+  });
+}
+
 async function handlePmAction(context, body) {
   var env = context.env;
   var json = function (obj, status) {
@@ -1130,31 +1296,36 @@ async function handlePmAction(context, body) {
         if (!seenInbox[lipk]) { seenInbox[lipk] = 1; inboxPks.push(lipk); }
       }
     }
+    var inboxCursor = pmCursorParse(body.after);
+    if (inboxCursor) return pmCursorResponse(env.DB_PM, inboxPks, inboxCursor, body.limit);
     var inboxSince = Number(body.since) || 0;
     var inboxLimit = Number(body.limit);
     if (!Number.isFinite(inboxLimit) || inboxLimit <= 0) inboxLimit = 1000;
     if (inboxLimit > 1000) inboxLimit = 1000;
     var inboxRows = [];
+    var inboxHead = "0";
     if (inboxPks.length) {
+      var inboxDb = replica(env.DB_PM);
+      var inboxAsc = body.asc === true;
+      var inboxGroups = pmKeyGroups(inboxPks);
+      inboxHead = await pmCursorHead(inboxDb, inboxPks);
       try {
-        var inboxPh = inboxPks.map(function () { return "?"; }).join(",");
-        inboxRows = (await replica(env.DB_PM).prepare(
-          "SELECT event FROM pm WHERE pubkey IN (" + inboxPh + ") AND created_at >= ? ORDER BY created_at " + (body.asc === true ? "ASC" : "DESC") + " LIMIT ?"
-        ).bind(...inboxPks, inboxSince, inboxLimit).all()).results || [];
+        for (var ig = 0; ig < inboxGroups.length; ig++) {
+          var inboxPh = inboxGroups[ig].map(function () { return "?"; }).join(",");
+          var inboxPart = (await inboxDb.prepare(
+            "SELECT event" + (inboxGroups.length > 1 ? ", created_at" : "") + " FROM pm WHERE pubkey IN (" + inboxPh + ") AND created_at >= ? ORDER BY created_at " + (inboxAsc ? "ASC" : "DESC") + " LIMIT ?"
+          ).bind(...inboxGroups[ig], inboxSince, inboxLimit).all()).results || [];
+          inboxRows = inboxRows.concat(inboxPart);
+        }
+        if (inboxGroups.length > 1) {
+          inboxRows.sort(function (a, b) { return inboxAsc ? (a.created_at - b.created_at) : (b.created_at - a.created_at); });
+          inboxRows = inboxRows.slice(0, inboxLimit);
+        }
       } catch (e) { inboxRows = []; }
     }
-    var inboxEnc = new TextEncoder();
-    var inboxStream = new ReadableStream({
-      start(controller) {
-        for (var ij = 0; ij < inboxRows.length; ij++) {
-          controller.enqueue(inboxEnc.encode(inboxRows[ij].event + "\n"));
-        }
-        try { controller.close(); } catch (_) { }
-      }
-    });
-    return new Response(inboxStream, {
-      status: 200,
-      headers: { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS }
+    return pmNdjson(inboxRows, {
+      "X-Has-More": inboxRows.length >= inboxLimit ? "1" : "0",
+      "X-Cursor-Head": inboxHead
     });
   }
 
@@ -1190,9 +1361,12 @@ async function handlePmAction(context, body) {
       : (body.event ? [body.event] : []);
     if (pubkeyHit(await filterSet(env), userPubkey)) return json({ ok: true, added: depEvents.length });
     var depUnits = Math.max(1, depEvents.length);
-    if (!(await cacheRateTake("pm-deposit", userPubkey, depUnits, PM_DEPOSIT_RATE, STORAGE_RATE_WINDOW_MS)) ||
-      !(await cacheRateTake("pm-deposit-ip", requestIp(context), depUnits, PM_DEPOSIT_IP_RATE, STORAGE_RATE_WINDOW_MS))) {
-      var depRetry = Math.max(1, Math.ceil((STORAGE_RATE_WINDOW_MS - (Date.now() % STORAGE_RATE_WINDOW_MS)) / 1000));
+    var depGate = await cacheRateTakeAll([
+      { bucket: "pm-deposit", who: userPubkey, units: depUnits, limit: PM_DEPOSIT_RATE, windowMs: STORAGE_RATE_WINDOW_MS },
+      { bucket: "pm-deposit-ip", who: requestIp(context), units: depUnits, limit: PM_DEPOSIT_IP_RATE, windowMs: STORAGE_RATE_WINDOW_MS }
+    ]);
+    if (!depGate.ok) {
+      var depRetry = Math.max(1, Math.ceil(depGate.retryAfterMs / 1000));
       return new Response(JSON.stringify({ error: "Too many messages deposited. Try again in a minute.", retryAfter: depRetry }), {
         status: 429,
         headers: { "Content-Type": "application/json", "Retry-After": String(depRetry), ...CLIENT_CORS_HEADERS }
@@ -1219,6 +1393,8 @@ async function handlePmAction(context, body) {
   }
 
   if (body.action === "pm-get") {
+    var ownCursor = pmCursorParse(body.after);
+    if (ownCursor) return pmCursorResponse(env.DB_PM, [userPubkey], ownCursor, body.limit);
     var since = Number(body.since) || 0;
     var before = Number(body.before) || 0;
     var limit = Number(body.limit);
@@ -1229,27 +1405,13 @@ async function handlePmAction(context, body) {
     if (before) { sql += " AND created_at < ?"; binds.push(before); }
     sql += " ORDER BY created_at " + (body.asc === true ? "ASC" : "DESC") + " LIMIT ?";
     binds.push(limit);
+    var ownDb = replica(env.DB_PM);
+    var ownHead = before ? null : await pmCursorHead(ownDb, [userPubkey]);
     var rows = [];
-    try { rows = (await replica(env.DB_PM).prepare(sql).bind(...binds).all()).results || []; } catch (e) { rows = []; }
-    var hasMore = rows.length >= limit;
-    var pmEncoder = new TextEncoder();
-    var pmStream = new ReadableStream({
-      start(controller) {
-        for (var j = 0; j < rows.length; j++) {
-          controller.enqueue(pmEncoder.encode(rows[j].event + "\n"));
-        }
-        try { controller.close(); } catch (_) { }
-      }
-    });
-    return new Response(pmStream, {
-      status: 200,
-      headers: {
-        "Content-Type": "application/x-ndjson",
-        "X-Has-More": hasMore ? "1" : "0",
-        "Access-Control-Expose-Headers": "X-Has-More",
-        ...CLIENT_CORS_HEADERS
-      }
-    });
+    try { rows = (await ownDb.prepare(sql).bind(...binds).all()).results || []; } catch (e) { rows = []; }
+    var ownHeaders = { "X-Has-More": rows.length >= limit ? "1" : "0" };
+    if (ownHead !== null) ownHeaders["X-Cursor-Head"] = ownHead;
+    return pmNdjson(rows, ownHeaders);
   }
 
   // Rows live under the authenticated user's pubkey, so ownership is implicit.
@@ -1578,6 +1740,31 @@ async function handleChannelAction(context, body) {
 
 var EMOJI_READ_TTL = 300;
 
+function emojiEtag(text) {
+  return bytesToHex(sha256(utf8ToBytes(text || ""))).slice(0, 32);
+}
+
+async function emojiPacksCacheGet() {
+  try {
+    var hit = await caches.default.match(readCacheRequest("/emoji-packs"));
+    if (!hit) return null;
+    var text = await hit.text();
+    var tag = hit.headers.get("X-Etag");
+    return { body: text, etag: tag && /^[0-9a-f]{32}$/.test(tag) ? tag : emojiEtag(text) };
+  } catch (e) { return null; }
+}
+
+function emojiPacksCachePut(context, packs) {
+  try {
+    var headers = new Headers();
+    headers.set("Content-Type", "application/x-ndjson");
+    headers.set("Cache-Control", "public, max-age=" + EMOJI_READ_TTL);
+    headers.set("X-Etag", packs.etag);
+    var op = caches.default.put(readCacheRequest("/emoji-packs"), new Response(packs.body, { headers: headers }));
+    if (context && context.waitUntil) context.waitUntil(op);
+  } catch (e) { }
+}
+
 // Serves the deduped NIP-30 emoji set (kind 30030 packs).
 async function handleEmojiAction(context, body) {
   var env = context.env;
@@ -1590,20 +1777,20 @@ async function handleEmojiAction(context, body) {
   if (!hasD1(env.DB_CHANNELS)) return json({ error: "Emoji storage is not configured (missing DB_CHANNELS binding)." }, 503);
 
   if (body.action === "emoji-get") {
-    var ndjsonHeaders = { "Content-Type": "application/x-ndjson", ...CLIENT_CORS_HEADERS };
     var userPk = (typeof body.pubkey === "string" && /^[0-9a-f]{64}$/i.test(body.pubkey)) ? body.pubkey.toLowerCase() : null;
 
-    var packsBody = await readCacheGetRaw("/emoji-packs");
-    if (packsBody === null) {
+    var packs = await emojiPacksCacheGet();
+    if (packs === null) {
       var packRows = [];
       try {
         packRows = (await replica(env.DB_CHANNELS).prepare(
           "SELECT json FROM emoji_packs WHERE kind = 30030 ORDER BY created_at DESC LIMIT 500"
         ).all()).results || [];
       } catch (e) { packRows = []; }
-      packsBody = packRows.map(function (r) { return r.json; }).join("\n");
-      if (packsBody) packsBody += "\n";
-      readCachePutRaw(context, "/emoji-packs", packsBody, "application/x-ndjson", EMOJI_READ_TTL);
+      var packsText = packRows.map(function (r) { return r.json; }).join("\n");
+      if (packsText) packsText += "\n";
+      packs = { body: packsText, etag: emojiEtag(packsText) };
+      emojiPacksCachePut(context, packs);
     }
 
     var userLine = "";
@@ -1616,7 +1803,10 @@ async function handleEmojiAction(context, body) {
       } catch (e) { userLine = ""; }
     }
 
-    return new Response((packsBody || "") + userLine, { status: 200, headers: ndjsonHeaders });
+    var ndjsonHeaders = { "Content-Type": "application/x-ndjson", "X-Etag": packs.etag, "Access-Control-Expose-Headers": "X-Etag, X-Same", ...CLIENT_CORS_HEADERS };
+    var same = typeof body.etag === "string" && body.etag.length <= 64 && body.etag === packs.etag;
+    if (same) ndjsonHeaders["X-Same"] = "1";
+    return new Response((same ? "" : (packs.body || "")) + userLine, { status: 200, headers: ndjsonHeaders });
   }
 
   return json({ error: "Unknown action" }, 400);

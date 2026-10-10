@@ -136,6 +136,7 @@ class EventToastEvent {
     this.identity = '',
     this.eventId = '',
     this.seen = false,
+    this.system = false,
   });
 
   final String kind;
@@ -152,6 +153,7 @@ class EventToastEvent {
   final String identity;
   final String eventId;
   final bool seen;
+  final bool system;
 
   static String _s(Object? v) => v is String ? v : '';
 
@@ -170,6 +172,7 @@ class EventToastEvent {
         identity: _s(j['identity']),
         eventId: _s(j['eventId']),
         seen: j['seen'] == true,
+        system: j['system'] == true,
       );
 
   EventToastEvent slim() => EventToastEvent(
@@ -199,6 +202,31 @@ class EventToastEvent {
         viewOnce: viewOnce,
         identity: identity,
         eventId: eventId,
+        seen: seen ?? this.seen,
+      );
+
+  EventToastEvent copyWith({
+    String? body,
+    bool? locked,
+    bool? backlog,
+    String? identity,
+    String? eventId,
+    bool? seen,
+  }) =>
+      EventToastEvent(
+        kind: kind,
+        key: key,
+        sender: sender,
+        chat: chat,
+        body: body ?? this.body,
+        mention: mention,
+        everyone: everyone,
+        thread: thread,
+        locked: locked ?? this.locked,
+        viewOnce: viewOnce,
+        backlog: backlog ?? this.backlog,
+        identity: identity ?? this.identity,
+        eventId: eventId ?? this.eventId,
         seen: seen ?? this.seen,
       );
 
@@ -435,6 +463,35 @@ class EventToasts {
     'typesHeading': 'Show banners for',
   };
 
+  static const Map<String, Map<String, String>> topics = {
+    'reminder': {
+      'prefix': 'event-reminder-',
+      'title': 'Event reminder',
+      'template': 'Reminder: {title}',
+    },
+    'callLink': {
+      'prefix': 'call-link-',
+      'title': 'Call link',
+      'template': 'Call link: {name}',
+    },
+  };
+
+  static const String legacyIdPrefix = 'gt-';
+
+  static const Map<String, String> callStrings = {
+    'call': 'Call',
+    'missed': 'Missed {kind} call',
+    'inGroup': ' in {group}',
+    'audio': 'audio',
+    'video': 'video',
+  };
+
+  static const List<String> onceLabels = [
+    'View-once photo',
+    'View-once video',
+    'View-once voice message',
+  ];
+
   static Map<String, Object?> configJson() => {
         'maxVisible': EventToastConfig.maxVisible,
         'durationMs': EventToastConfig.durationMs,
@@ -498,11 +555,122 @@ class EventToasts {
     return '${s.substring(0, EventToastConfig.bodyChars).replaceAll(_trailingWs, '')}…';
   }
 
-  static String _bodyOf(EventToastEvent e, EventToastPrefs p) {
+  static String preview(EventToastEvent e, EventToastPrefs p) {
     if (e.locked) return '';
     if (e.viewOnce) return strings['viewOnce']!;
     if (p.hidePreviews) return '';
-    return clip(e.body);
+    return e.body;
+  }
+
+  static String _bodyOf(EventToastEvent e, EventToastPrefs p) =>
+      clip(preview(e, p));
+
+  static String _metaLine(EventToastEvent e, EventToastTr tr) {
+    final label = tr(labels[category(e)]!);
+    return e.chat.isNotEmpty ? '$label · ${e.chat}' : label;
+  }
+
+  static String systemBody(EventToastEvent e, EventToastPrefs p,
+      [EventToastTr tr = plainTr]) {
+    if (e.locked) return tr(strings['newMessage']!);
+    final shown = preview(e, p);
+    if (shown == strings['viewOnce']) return tr(shown);
+    if (shown.isNotEmpty || !p.hidePreviews) return shown;
+    return _metaLine(e, tr);
+  }
+
+  static String topicOf(String? eventId) {
+    final id = eventId ?? '';
+    for (final t in topics.entries) {
+      if (id.startsWith(t.value['prefix']!)) return t.key;
+    }
+    return '';
+  }
+
+  static String systemTitle(String title, EventToastPrefs p,
+      {String topic = '', bool locked = false, EventToastTr tr = plainTr}) {
+    final t = topics[topic];
+    if (t == null || locked || !p.hidePreviews) return title;
+    return tr(t['title']!);
+  }
+
+  static final RegExp _wordChar = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+  static String _onceLabelOf(String body, EventToastTr tr) {
+    final s = body.trim();
+    var best = '';
+    for (final l in onceLabels) {
+      for (final f in [l, tr(l)]) {
+        if (f.isEmpty || f.length <= best.length || !s.startsWith(f)) continue;
+        if (s.length > f.length && _wordChar.hasMatch(s[f.length])) continue;
+        best = f;
+      }
+    }
+    return best;
+  }
+
+  static bool isViewOnce(String body, [EventToastTr tr = plainTr]) =>
+      _onceLabelOf(body, tr).isNotEmpty;
+
+  static String listBody(EventToastEvent e, EventToastPrefs p,
+      [EventToastTr tr = plainTr]) {
+    if (e.locked) return '';
+    if (!p.hidePreviews || e.system) return e.body;
+    if (e.viewOnce) {
+      final label = _onceLabelOf(e.body, tr);
+      return label.isNotEmpty ? label : tr(strings['viewOnce']!);
+    }
+    return '';
+  }
+
+  static bool _fitsTemplate(String text, String template) {
+    final m = RegExp(r'\{[A-Za-z]+\}').firstMatch(template);
+    if (m == null) return false;
+    final pre = template.substring(0, m.start);
+    final post = template.substring(m.end);
+    if (pre.trim().isEmpty && post.trim().isEmpty) return false;
+    return text.length >= pre.length + post.length &&
+        text.startsWith(pre) &&
+        text.endsWith(post);
+  }
+
+  static String entryTopic(String? eventId, String title,
+      [EventToastTr tr = plainTr]) {
+    final byId = topicOf(eventId);
+    if (byId.isNotEmpty) return byId;
+    if (!(eventId ?? '').startsWith(legacyIdPrefix)) return '';
+    for (final t in topics.entries) {
+      final tpl = t.value['template']!;
+      if (_fitsTemplate(title, tpl) || _fitsTemplate(title, tr(tpl))) {
+        return t.key;
+      }
+    }
+    return '';
+  }
+
+  static String callLabel(
+      {String topic = '',
+      bool missed = false,
+      bool video = false,
+      String chat = '',
+      EventToastTr tr = plainTr}) {
+    if (topic == 'callLink') return tr(topics['callLink']!['title']!);
+    if (!missed) return tr(callStrings['call']!);
+    final base = tr(callStrings['missed']!,
+        {'kind': tr(callStrings[video ? 'video' : 'audio']!)});
+    return chat.isNotEmpty
+        ? base + tr(callStrings['inGroup']!, {'group': chat})
+        : base;
+  }
+
+  static bool callIsVideo(String body, [EventToastTr tr = plainTr]) {
+    final s = body.trim();
+    if (s.isEmpty) return false;
+    final forms = [
+      fill(callStrings['missed']!, {'kind': callStrings['video']}),
+      tr(callStrings['missed']!, {'kind': tr(callStrings['video']!)}),
+    ];
+    return forms.any((f) => f.isNotEmpty && s.startsWith(f));
   }
 
   static EventToastText present(EventToast t, EventToastPrefs prefs,
@@ -520,7 +688,7 @@ class EventToasts {
       final label = tr(labels[category(e)]!);
       final chat = e.chat;
       final title = e.sender.isNotEmpty ? e.sender : (chat.isNotEmpty ? chat : label);
-      final meta = chat.isNotEmpty && chat != title ? '$label · $chat' : label;
+      final meta = chat.isNotEmpty && chat != title ? _metaLine(e, tr) : label;
       final body = _bodyOf(e, prefs);
       return EventToastText(
           title, meta, body == viewOnce ? tr(body) : body, 'conversation');

@@ -30,13 +30,17 @@ import '../../widgets/nym_icons.dart';
 import '../chat_lock/chat_lock_providers.dart';
 import '../layout/layout_model.dart';
 import '../settings/settings_screen.dart' show notificationSoundOptions;
-import '../settings/settings_widgets.dart' show FormSelect;
+import '../settings/settings_widgets.dart' show FormSelect, SettingsToggleRow;
 import 'notifications_service.dart' show notificationsServiceProvider;
 import '../toasts/event_toast_prefs.dart';
+import '../toasts/event_toasts.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../identity/deleted_notice.dart' show dimNymSuffixes;
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
+import '../../widgets/common/nym_label.dart'
+    show knownNymSuffix, mergeNymRanges, nymSuffixRanges;
+import '../../core/theme/nym_a11y.dart';
 
 /// Opening doesn't clear the badge; rows are marked viewed once ≥60% visible, with unread state snapshotted before opening.
 Future<void> showNotificationsPanel(BuildContext context) {
@@ -47,7 +51,10 @@ Future<void> showNotificationsPanel(BuildContext context) {
   final cutoff24h = DateTime.now().millisecondsSinceEpoch - 24 * 60 * 60 * 1000;
   final entries = [
     for (final e in all)
-      if (e.ts > cutoff24h && !blocked.contains(e.senderPubkey ?? '')) e,
+      if (e.ts > cutoff24h &&
+          !blocked.contains(e.senderPubkey ?? '') &&
+          NotificationHistoryNotifier.hiddenEntry?.call(e) != true)
+        e,
   ]..sort((a, b) => b.ts.compareTo(a.ts));
   // Frozen unread state per entry, as a public type.
   final viewedAtOpen = [for (final e in entries) e.viewed];
@@ -224,7 +231,8 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                 g.key.startsWith('pm:')
                     ? dimNymSuffixes(
                         _groupTitle(g.key, _rows[g.items.first].entry),
-                        nymSuffixStyle(_groupTitleStyle(c)))
+                        nymSuffixStyle(_groupTitleStyle(c),
+                            contrast: context.highContrast))
                     : TextSpan(
                         text: _groupTitle(g.key, _rows[g.items.first].entry)),
                 maxLines: 1,
@@ -357,8 +365,9 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
                   ),
                 ),
               )),
-              const SizedBox(width: 6),
+              SizedBox(width: context.largeTouchTargets ? 10 : 6),
               _CloseChip(
+                key: const ValueKey('notifCloseChip'),
                 onTap: () => Navigator.of(context).maybePop(),
               ),
             ],
@@ -409,7 +418,6 @@ class _NotificationsPanelState extends ConsumerState<NotificationsPanel> {
   }
 }
 
-/// Notification preference checkboxes; Enable is a reactive Settings field, the others KV-only flags read by the gates.
 class _NotifToggles extends ConsumerStatefulWidget {
   const _NotifToggles();
 
@@ -466,9 +474,11 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _ToggleRow(
+          SettingsToggleRow(
+            key: const ValueKey('panel-notificationsEnabled'),
             label: tr('Enable notifications'),
             value: enabled,
+            spacing: 0,
             onChanged: (v) {
               // Plain `update` so the bell and gate react live; doesn't fire cross-device sync.
               ref
@@ -478,20 +488,22 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
               if (v) unawaited(_requestOsPermission());
             },
           ),
-          _ToggleRow(
+          SettingsToggleRow(
+            key: const ValueKey('panel-groupNotifyMentionsOnly'),
             label: tr('Only notify for mentions in group chats'),
             value: _mentionsOnly,
-            indent: true,
+            spacing: 0,
             onChanged: (v) {
               setState(() => _mentionsOnly = v);
               kv.setString(StorageKeys.groupNotifyMentionsOnly, '$v');
             },
           ),
           // Thread-scoped twin of the group setting; off, replies in threads the user started also notify.
-          _ToggleRow(
+          SettingsToggleRow(
+            key: const ValueKey('panel-threadNotifyMentionsOnly'),
             label: tr('Only notify for mentions in threads'),
             value: _threadMentionsOnly,
-            indent: true,
+            spacing: 0,
             onChanged: (v) {
               setState(() => _threadMentionsOnly = v);
               kv.setString(StorageKeys.threadNotifyMentionsOnly, '$v');
@@ -518,10 +530,11 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
                   'Turn on "Stay Connected in Background" in Settings → Data '
                   '& Backup to get them when it is closed.'),
             ),
-          _ToggleRow(
+          SettingsToggleRow(
+            key: const ValueKey('panel-notifyFriendsOnly'),
             label: tr('Only notify for messages from friends'),
             value: _friendsOnly,
-            indent: true,
+            spacing: 0,
             onChanged: (v) {
               setState(() => _friendsOnly = v);
               kv.setString(StorageKeys.notifyFriendsOnly, '$v');
@@ -531,8 +544,13 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
             padding: const EdgeInsets.only(top: 12),
             child: Row(
               children: [
-                Text(tr('Notification Sound'),
-                    style: TextStyle(color: c.textDim, fontSize: 13)),
+                Text(tr('Notification Sound').toUpperCase(),
+                    style: TextStyle(
+                      color: c.textDim,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.2,
+                    )),
                 const SizedBox(width: 12),
                 Flexible(
                   child: ConstrainedBox(
@@ -555,52 +573,6 @@ class _NotifTogglesState extends ConsumerState<_NotifToggles> {
           ),
           const EventToastPrefsSection(),
         ],
-      ),
-    );
-  }
-}
-
-/// Checkbox row, whole row tappable; [indent] for sub-options.
-class _ToggleRow extends StatelessWidget {
-  const _ToggleRow({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-    this.indent = false,
-  });
-  final String label;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-  final bool indent;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    return Padding(
-      padding: EdgeInsets.only(top: indent ? 6 : 0, left: indent ? 20 : 0),
-      child: InkWell(
-        onTap: () => onChanged(!value),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 22,
-              height: 22,
-              child: Checkbox(
-                value: value,
-                onChanged: (v) => onChanged(v ?? false),
-                activeColor: c.primary,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child:
-                  Text(label, style: TextStyle(color: c.textDim, fontSize: 13)),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -688,23 +660,40 @@ class _NotificationRow extends ConsumerStatefulWidget {
     return '${months[d.month - 1]} ${d.day}, ${formatTime(d, timeFormat)}';
   }
 
-  /// Prefer the entry's carried context label, else derive one from its type; call bodies need none.
-  String? _contextLabel() {
+  String? _contextLabel({
+    required String topic,
+    required bool textHidden,
+    required String Function(String id) groupName,
+    required EventToastTr etr,
+  }) {
     final carried = entry.contextLabel;
     if (carried == 'PM thread') return tr('Private message thread');
     if (carried != null && carried.isNotEmpty) return carried;
+    final route = entry.route ?? '';
+    final inThread = (entry.threadRoot ?? '').isNotEmpty;
+    String where(String name) => inThread
+        ? tr('in a thread in {name}', {'name': name})
+        : tr('in {name}', {'name': name});
     switch (entry.type) {
       case 'call':
-        return entry.body.startsWith('Missed') ? null : tr('Call');
+        final groupCall = route.isNotEmpty && !_isPubkey(route);
+        return EventToasts.callLabel(
+          topic: topic,
+          missed: (entry.eventId ?? '').startsWith('missed-call-'),
+          video: EventToasts.callIsVideo(entry.body, etr),
+          chat: textHidden && groupCall ? groupName(route) : '',
+          tr: etr,
+        );
       case 'pm':
-        return tr('Private message');
+        return tr(inThread ? 'Private message thread' : 'Private message');
       case 'reaction':
-        return tr('Reaction');
+        return tr(entry.body.trim().startsWith('⚡') ? 'Zap' : 'Reaction');
       case 'mention':
-        return tr('Mention');
+        return route.isNotEmpty && !_isPubkey(route)
+            ? where('#$route')
+            : tr('Mention');
       case 'group':
-        // Fallback when no group name was carried.
-        return tr('Group');
+        return where(groupName(route));
       default:
         return null;
     }
@@ -739,11 +728,43 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
         ? ''
         : (_isPubkey(sender) ? sender : (_isPubkey(route) ? route : ''));
     final hasPubkey = pubkey.isNotEmpty;
-    final label =
-        locked ? tr(ChatLockStrings.lockedChats) : widget._contextLabel();
     final picture =
         hasPubkey ? ref.watch(usersProvider)[pubkey]?.profile?.picture : null;
-    final body = locked ? tr(ChatLockStrings.notifBody) : widget._displayBody();
+    final hide = ref.watch(settingsProvider.select((s) => s.hidePreviews));
+    final prefs = EventToastPrefs(hidePreviews: hide);
+    String etr(String s, [Map<String, Object?>? p]) =>
+        EventToasts.fill(tr(s), p);
+    final topic = EventToasts.entryTopic(entry.eventId, entry.title, etr);
+    final system =
+        route.isEmpty && sender.isEmpty && (entry.eventId ?? '').isEmpty;
+    final groups = ref.watch(appStateProvider.select((a) => a.groups));
+    String groupName(String id) {
+      for (final g in groups) {
+        if (g.id == id && g.name.isNotEmpty) return g.name;
+      }
+      return tr('Group');
+    }
+
+    final label = locked
+        ? tr(ChatLockStrings.lockedChats)
+        : widget._contextLabel(
+            topic: topic,
+            textHidden: hide && !system,
+            groupName: groupName,
+            etr: etr,
+          );
+    final shownTitle =
+        EventToasts.systemTitle(entry.title, prefs, topic: topic, tr: etr);
+    final text = widget._displayBody();
+    final body = locked
+        ? tr(ChatLockStrings.notifBody)
+        : EventToasts.listBody(
+            EventToastEvent(
+                body: text,
+                viewOnce: EventToasts.isViewOnce(text, etr),
+                system: system),
+            prefs,
+            etr);
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -793,10 +814,12 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
                     children: [
                       // Brackets show in IRC mode only.
                       _Author(
-                        entry: locked
+                        entry: locked || shownTitle != entry.title
                             ? NotificationEntry(
                                 type: entry.type,
-                                title: tr(ChatLockStrings.notifTitle),
+                                title: locked
+                                    ? tr(ChatLockStrings.notifTitle)
+                                    : shownTitle,
                                 body: body,
                                 ts: entry.ts,
                               )
@@ -805,15 +828,31 @@ class _NotificationRowState extends ConsumerState<_NotificationRow> {
                         brackets: !ref.watch(
                             settingsProvider.select((s) => s.useBubbles)),
                       ),
-                      const SizedBox(height: 2),
+                      if (body.isNotEmpty || !hide) const SizedBox(height: 2),
                       // Custom `:shortcode:` emoji render as images; 2-line clamp.
-                      InlineEmojiText(
-                        text: body,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style:
-                            TextStyle(color: c.text, fontSize: 13, height: 1.4),
-                      ),
+                      if (body.isNotEmpty || !hide)
+                        InlineEmojiText(
+                          text: body,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: c.text, fontSize: 13, height: 1.4),
+                          dim: locked
+                              ? const []
+                              : mergeNymRanges(
+                                  mentionSuffixRanges(body),
+                                  nymSuffixRanges(body,
+                                      known: hasPubkey &&
+                                              ref
+                                                  .read(nostrControllerProvider)
+                                                  .isVerifiedBot(pubkey)
+                                          ? null
+                                          : knownNymSuffix(sender: pubkey))),
+                          dimStyle: nymSuffixStyle(
+                              TextStyle(
+                                  color: c.text, fontSize: 13, height: 1.4),
+                              contrast: context.highContrast),
+                        ),
                       const SizedBox(height: 2),
                       Row(
                         children: [
@@ -895,7 +934,7 @@ class _Author extends ConsumerWidget {
 }
 
 class _CloseChip extends StatefulWidget {
-  const _CloseChip({required this.onTap});
+  const _CloseChip({super.key, required this.onTap});
   final VoidCallback onTap;
 
   @override

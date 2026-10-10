@@ -88,7 +88,10 @@ List<QuickContextItem> buildQuickContextItems(
       case MsgAction.reply:
         return () => ref
             .read(pendingComposerActionProvider.notifier)
-            .requestQuote(fullNym: fullNym, content: message.content);
+            .requestQuote(
+                fullNym: fullNym,
+                content: message.content,
+                messageId: message.id);
       case MsgAction.replyPrivately:
         return () => ChatToolsActions.replyPrivately(read, stored);
       case MsgAction.thread:

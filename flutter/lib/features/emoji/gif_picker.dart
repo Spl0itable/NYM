@@ -22,6 +22,7 @@ import '../messages/format/message_content.dart' show proxiedMedia;
 import '../messages/inline_network_image.dart' show InlineNetworkImage;
 import 'modal_close_chip.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../core/theme/nym_a11y.dart';
 
 /// Requests go through the backend proxy, which attaches the key, so the user's IP never reaches Giphy.
 const String kGiphyApiKey = kApiGiphyApiKey;
@@ -357,6 +358,7 @@ class _GifPickerState extends ConsumerState<GifPicker>
         cursorColor: c.isLight ? Colors.black : Colors.white,
         decoration: NymField.decoration(c,
           hint: tr('Search GIFs...'),
+          minHeight: largeFieldMin(context),
           fontSize: 12,
           radius: NymRadius.rxs,
           contentPadding:

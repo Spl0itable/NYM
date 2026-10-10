@@ -67,22 +67,14 @@ class _RingWhenClosedSettingState extends ConsumerState<RingWhenClosedSetting> {
     final reg = ref.read(ringRegistrationProvider);
     final self = _self;
     final other = reg.ownedByOther(self);
-    return FormGroup(
-      key: const ValueKey('ringWhenClosed'),
+    final on = reg.enabledFor(self);
+    return SettingsToggleRow(
+      key: const ValueKey('setting-ringWhenClosed'),
       label: tr('Ring When Nymchat Is Closed'),
       hint: tr(kRingWhenClosedHint),
       amberHint: other ? tr(kRingOtherIdentityHint) : null,
-      child: FormSelect<bool>(
-        value: reg.enabledFor(self),
-        items: [
-          (value: false, label: tr('Disabled')),
-          (value: true, label: tr('Enabled')),
-        ],
-        onChanged: (v) {
-          if (other && v) return;
-          unawaited(_set(v));
-        },
-      ),
+      value: on,
+      onChanged: _busy || (other && !on) ? null : (v) => unawaited(_set(v)),
     );
   }
 }

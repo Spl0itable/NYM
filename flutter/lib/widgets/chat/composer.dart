@@ -21,6 +21,7 @@ import '../../features/toasts/toast_model.dart';
 import '../common/css_focus_ring.dart';
 import '../common/nym_focusable.dart';
 import '../common/nym_avatar.dart';
+import '../common/nym_label.dart';
 import '../nym_icons.dart';
 import '../../features/ai_consent/ai_consent.dart';
 import '../../features/autocomplete/autocomplete_dropdown.dart';
@@ -38,6 +39,10 @@ import '../../features/commands/command_registry.dart';
 import '../../features/composer/composer_conn.dart';
 import '../../features/composer/composer_menus.dart';
 import '../../features/composer/composer_model.dart';
+import '../../features/composer/send_as_model.dart';
+import '../../features/send_as/send_as_service.dart' show SendAsResult;
+import '../../features/accounts/account_host.dart' show accountsProvider;
+import '../../services/relay/queued_sends.dart';
 import '../../features/dm_polls/dm_polls_providers.dart';
 import '../../features/dm_polls/dm_polls_service.dart' show DmPollsService;
 import '../../features/emoji/custom_emoji.dart';
@@ -82,36 +87,9 @@ import '../common/hollow_bullet.dart';
 import '../common/nym_field.dart';
 import '../sidebar/sidebar_chrome.dart';
 import '../common/nym_tooltip.dart';
+import '../../features/composer/composer_drafts.dart';
 
-/// Session-wide per-conversation drafts, kept outside the widget because the bot chat swaps [Composer] out.
-class ComposerDrafts {
-  ComposerDrafts._();
-
-  static final Map<String, String> _drafts = {};
-
-  /// `'g:'`/`'p:'`/`'c:'` prefixed keys like the PWA's `_getInputContextKey`.
-  static String keyFor(ChatView view) {
-    switch (view.kind) {
-      case ViewKind.group:
-        return 'g:${view.id}';
-      case ViewKind.pm:
-        return 'p:${view.id}';
-      case ViewKind.channel:
-        return 'c:${view.id}';
-    }
-  }
-
-  /// A blank draft deletes the stored entry.
-  static void save(String key, String value) {
-    if (value.trim().isNotEmpty) {
-      _drafts[key] = value;
-    } else {
-      _drafts.remove(key);
-    }
-  }
-
-  static String restore(String key) => _drafts[key] ?? '';
-}
+export '../../features/composer/composer_drafts.dart' show ComposerDrafts;
 
 final composerOverhangProvider = StateProvider<double>((ref) => 0);
 
@@ -141,6 +119,7 @@ class Composer extends ConsumerStatefulWidget {
 class _ComposerState extends ConsumerState<Composer> {
   final _controller = EmojiSentinelController();
   final _focus = FocusNode();
+  final _sendMenuFocus = FocusNode(debugLabel: 'sendMenuBtn');
 
   // Only one picker popover is open at a time.
   final _emojiPortal = OverlayPortalController();
@@ -157,10 +136,14 @@ class _ComposerState extends ConsumerState<Composer> {
 
   // Quote/edit are deferred to send: a chip sits above the input while the typed text stays clean.
   ({String author, String text, String fullText})? _pendingQuote;
+  String _pendingQuoteId = '';
   PendingEdit? _pendingEdit;
 
   // Each conversation switch stashes the outgoing draft, clears quote/edit, and restores the incoming draft.
   String? _activeDraftKey;
+
+  late final String _draftOwner =
+      ref.read(accountsProvider)?.changes.value.active ?? '';
 
   /// Stored expanded (`:code:` text) so drafts never carry sentinel chars whose allocations can be dropped.
   void _saveCurrentDraft() {
@@ -171,7 +154,7 @@ class _ComposerState extends ConsumerState<Composer> {
 
   /// No-ops when the input already holds that exact text.
   void _restoreDraftForContext(ChatView view) {
-    final key = ComposerDrafts.keyFor(view);
+    final key = ComposerDrafts.keyFor(view, owner: _draftOwner);
     _activeDraftKey = key;
     final draft = ComposerDrafts.restore(key);
     if (_controller.text == draft) return;
@@ -526,6 +509,7 @@ class _ComposerState extends ConsumerState<Composer> {
     }
     _controller.dispose();
     _focus.dispose();
+    _sendMenuFocus.dispose();
     _fieldScroll.dispose();
     _translateSearchController.dispose();
     super.dispose();
@@ -548,7 +532,8 @@ class _ComposerState extends ConsumerState<Composer> {
         _controller.text = existing + insert;
         _controller.selection =
             TextSelection.collapsed(offset: _controller.text.length);
-      case QuoteAction(:final fullNym, :final content):
+      case QuoteAction(:final fullNym, :final content, :final messageId):
+        _pendingQuoteId = messageId;
         _pendingQuote = (
           author: fullNym,
           text: _strippedQuoteText(content),
@@ -568,6 +553,11 @@ class _ComposerState extends ConsumerState<Composer> {
           // Fire-and-forget; the upload path manages its own progress state.
           unawaited(_pickAndUploadImage(preselected: files));
         }
+      case SendAsRetryAction(:final placeholder):
+        unawaited(_retrySendAs(placeholder));
+        return;
+      case SendAsPutBackAction(:final placeholder):
+        _putBackSendAs(placeholder);
     }
     _focus.requestFocus();
     setState(() {});
@@ -627,7 +617,8 @@ class _ComposerState extends ConsumerState<Composer> {
   void initState() {
     super.initState();
     // Seed the draft key so the first switch away saves the unsent input.
-    _activeDraftKey = ComposerDrafts.keyFor(ref.read(currentViewProvider));
+    _activeDraftKey = ComposerDrafts.keyFor(ref.read(currentViewProvider),
+        owner: _draftOwner);
     // Rebuild on focus change for the focus fill and ring.
     _focus.addListener(_onFocusChanged);
     ComposerShortcutHooks.focus = _focus;
@@ -1057,9 +1048,15 @@ class _ComposerState extends ConsumerState<Composer> {
           }
         }
         final results = queryMentions(
-          users: state.users,
+          users: {
+            for (final e in state.users.entries)
+              if (e.key == state.selfPubkey ||
+                  !state.isPersonHidden(e.key, e.value.nym))
+                e.key: e.value
+          },
           search: trigger.query,
           currentChannelKey: currentKey,
+          blocked: state.blockedUsers,
           priority: priority,
         );
         final broadcast = [
@@ -1079,11 +1076,16 @@ class _ComposerState extends ConsumerState<Composer> {
       case TriggerKind.channel:
         final counts = <String, int>{};
         state.messages.forEach((key, msgs) {
-          if (key.startsWith('#')) counts[key.substring(1)] = msgs.length;
+          if (key.startsWith('#') && !state.isChannelBlockedKey(key)) {
+            counts[key.substring(1)] = msgs.length;
+          }
         });
         final results = queryChannels(
           search: trigger.query,
-          channels: state.channels,
+          channels: [
+            for (final ch in state.channels)
+              if (!state.isChannelBlockedKey(ch.key)) ch
+          ],
           messageChannelCounts: counts,
           currentKey: currentKey,
         );
@@ -2988,6 +2990,9 @@ class _ComposerState extends ConsumerState<Composer> {
   }
 
   Future<void> _openSendMenu() async {
+    final asRows = await _sendAsRows();
+    if (!mounted) return;
+    final index = ref.read(accountsProvider)?.changes.value;
     final id = await showComposerMenu(
       context,
       kind: 'send',
@@ -2995,12 +3000,232 @@ class _ComposerState extends ConsumerState<Composer> {
       entries: [
         for (final it in sendMenuItems(canAnon: _anonEligible))
           ComposerMenuEntry.send(it),
+        if (asRows.isNotEmpty) ComposerMenuEntry.sendAsHeader(),
+        for (final r in asRows)
+          ComposerMenuEntry.sendAs(
+            r,
+            pubkey: index?.byId(r.account)?.pubkey ?? '',
+            avatar: index?.byId(r.account)?.avatar ?? '',
+          ),
       ],
       anchor: globalRectOf(_sendSplitKey),
     );
-    if (id == null || !mounted) return;
+    if (!mounted) return;
+    if (id == null) {
+      if (_sendMenuFocus.context != null) {
+        _sendMenuFocus.requestFocus();
+      } else {
+        _focus.requestFocus();
+      }
+      return;
+    }
     if (id == 'later') _openSendLater();
     if (id == 'anon' && _anonEligible) _sendAnon();
+    if (id.startsWith('as:')) await _sendAs(id.substring(3));
+  }
+
+  bool get _sendAsAllowed {
+    final view = _chatView();
+    final controller = ref.read(nostrControllerProvider);
+    final mesh = ref
+            .read(meshControllerProvider.notifier)
+            .bridge
+            ?.shouldSendOverMesh(view) ??
+        false;
+    return canSendAs(
+      loggedIn: controller.identity != null,
+      anonymousActive: controller.sendAsAnonymousActive,
+      surface: mediaSurface(view),
+      editing: _pendingEdit != null,
+      mesh: view.kind == ViewKind.channel && mesh,
+      command: isCommandLine(_draftText().trim()),
+    );
+  }
+
+  bool get _quotePending {
+    if (_pendingQuote == null) return false;
+    final id = _pendingQuoteId;
+    if (id.isEmpty) return false;
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(id)) return true;
+    return QueuedSends.instance.isQueued(id);
+  }
+
+  String _sendAsPreview() {
+    var content = _draftText();
+    final urls = attachmentUrls;
+    if (urls.isNotEmpty) {
+      final needsSpace = content.isNotEmpty && !content.endsWith(' ');
+      content = '$content${needsSpace ? ' ' : ''}${urls.join(' ')}';
+    }
+    final quote = _pendingQuote;
+    if (quote != null) {
+      final first = quote.text.split('\n').first;
+      content = '> @${quote.author}: $first\n\n$content';
+    }
+    return content;
+  }
+
+  Future<List<SendAsRow>> _sendAsRows() async {
+    if (!_sendAsAllowed) return const [];
+    try {
+      return await ref
+          .read(nostrControllerProvider)
+          .sendAsMenuRows(_sendAsPreview(), quotePending: _quotePending);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _sendAs(String accountId) async {
+    final rows = await _sendAsRows();
+    if (!mounted) return;
+    final row = rows.where((r) => r.account == accountId).firstOrNull;
+    if (row == null) {
+      _onSystemMessage(tr(SendAsStrings.removed));
+      return;
+    }
+    if (!row.enabled) {
+      if (row.reason.isNotEmpty) _onSystemMessage(tr(row.reason));
+      return;
+    }
+    if (hasPendingUploads) {
+      _onSystemMessage(
+          tr('Still uploading — send again once the attachments finish.'));
+      return;
+    }
+    final typed = _draftText();
+    final urls = attachmentUrls;
+    if (typed.trim().isEmpty && urls.isEmpty && _pendingQuote == null) return;
+    var composed = typed;
+    if (urls.isNotEmpty) {
+      final needsSpace = composed.isNotEmpty && !composed.endsWith(' ');
+      composed = '$composed${needsSpace ? ' ' : ''}${urls.join(' ')}';
+    }
+    final quote = _pendingQuote;
+    final quoteId = _pendingQuoteId;
+    final content = _composeOutgoing(composed);
+    final controller = ref.read(nostrControllerProvider);
+    _pushSentHistory(content);
+    _controller.clear();
+    _endAllUploadActivities();
+    _attachments.clear();
+    _popout = false;
+    _syncPopoutPortal();
+    _hideOverlay();
+    setState(() {});
+    _focus.requestFocus();
+    final result =
+        await controller.sendChannelAs(accountId, content, draft: composed);
+    if (!mounted) return;
+    _onSendAsResult(result, composed, quote, quoteId);
+  }
+
+  bool _restoreSendAsDraft(String composed,
+      ({String author, String text, String fullText})? quote, String quoteId) {
+    if (_controller.text.isNotEmpty || _pendingQuote != null) return false;
+    _controller.value = TextEditingValue(
+      text: composed,
+      selection: TextSelection.collapsed(offset: composed.length),
+    );
+    _pendingQuote = quote;
+    _pendingQuoteId = quoteId;
+    _onInputChanged();
+    setState(() {});
+    return true;
+  }
+
+  void _onSendAsResult(
+      SendAsResult result,
+      String composed,
+      ({String author, String text, String fullText})? quote,
+      String quoteId) {
+    if (result.ok) {
+      Haptics.light();
+      showToast(tr(SendAsStrings.sentAs, {'nym': result.label}),
+          kind: ToastKind.success);
+      return;
+    }
+    final back = _restoreSendAsDraft(composed, quote, quoteId);
+    if (result.status == 'failed') {
+      final placeholder = result.placeholder;
+      if (placeholder.isNotEmpty) {
+        ComposerDrafts.failedSendAs[placeholder] =
+            (composed: composed, quote: quote, quoteId: quoteId);
+      }
+      _sendAsFailedToast(result.label, placeholder, back);
+      return;
+    }
+    if (result.reason.isNotEmpty) _onSystemMessage(tr(result.reason));
+  }
+
+  void _sendAsFailedToast(String label, String placeholder, bool back) {
+    ToastCenter.instance.show(
+      tr(back ? SendAsStrings.failed : SendAsStrings.failedShort,
+          {'nym': label}),
+      kind: ToastKind.error,
+      action: placeholder.isEmpty ? null : tr('Retry'),
+      onAction: placeholder.isEmpty
+          ? null
+          : () => unawaited(_retrySendAs(placeholder)),
+    );
+  }
+
+  Future<void> _retrySendAs(String placeholder) async {
+    final draft = ComposerDrafts.failedSendAs[placeholder];
+    final result =
+        await ref.read(nostrControllerProvider).retrySendAs(placeholder);
+    if (result.ok) {
+      ComposerDrafts.failedSendAs.remove(placeholder);
+      if (mounted && draft != null && _controller.text == draft.composed) {
+        _controller.clear();
+        _pendingQuote = null;
+        setState(() {});
+      }
+      Haptics.light();
+      showToast(tr(SendAsStrings.sentAs, {'nym': result.label}),
+          kind: ToastKind.success);
+      return;
+    }
+    if (result.status == 'failed') {
+      final back = mounted &&
+          draft != null &&
+          (_controller.text == draft.composed ||
+              _restoreSendAsDraft(draft.composed, draft.quote, draft.quoteId));
+      _sendAsFailedToast(result.label, placeholder, back);
+      return;
+    }
+    ComposerDrafts.failedSendAs.remove(placeholder);
+    if (mounted && result.reason.isNotEmpty) {
+      _onSystemMessage(tr(result.reason));
+    }
+  }
+
+  void _putBackSendAs(String placeholder) {
+    final draft = ComposerDrafts.failedSendAs.remove(placeholder);
+    final controller = ref.read(nostrControllerProvider);
+    String? text = draft?.composed;
+    if (text == null) {
+      for (final m in ref.read(appStateProvider).messages.values.expand((l) => l)) {
+        if (m.id == placeholder) {
+          text = m.content;
+          break;
+        }
+      }
+    }
+    controller.dropSendAsRetry(placeholder);
+    ref.read(appStateProvider.notifier).dropSendAsPlaceholder(placeholder);
+    if (text == null || text.isEmpty) return;
+    if (_controller.text.trim().isEmpty && _pendingQuote == null) {
+      _restoreSendAsDraft(text, draft?.quote, draft?.quoteId ?? '');
+      return;
+    }
+    if (_controller.text.contains(text)) return;
+    final next = '${_controller.text}\n$text';
+    _controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+    _onInputChanged();
   }
 
   Widget _primaryButton(bool sendEnabled, bool phone,
@@ -3018,6 +3243,7 @@ class _ComposerState extends ConsumerState<Composer> {
       enabled: sendEnabled,
       onTap: _send,
       onMenu: () => unawaited(_openSendMenu()),
+      menuFocus: _sendMenuFocus,
       phone: phone,
       inset: inset,
     );
@@ -3252,12 +3478,14 @@ class _SendButton extends StatefulWidget {
     required this.enabled,
     required this.onTap,
     required this.onMenu,
+    this.menuFocus,
     this.phone = false,
     this.inset = 0,
   });
   final bool enabled;
   final VoidCallback onTap;
   final VoidCallback onMenu;
+  final FocusNode? menuFocus;
 
   final bool phone;
   final double inset;
@@ -3436,6 +3664,7 @@ class _SendButtonState extends State<_SendButton> {
             borderRadius: right,
             child: InkWell(
               key: const ValueKey('sendMenuBtn'),
+              focusNode: widget.menuFocus,
               onTap: widget.enabled ? widget.onMenu : null,
               borderRadius: right,
               child: SizedBox(
@@ -3610,46 +3839,35 @@ class _QuotePreviewChip extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          RichText(
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            text: TextSpan(
-              style: TextStyle(
-                  color: c.primary, fontSize: 12, fontWeight: FontWeight.w600),
-              children: [
-                if (t != null)
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.middle,
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 3),
-                      child: NymAvatar(
-                        seed: t.pubkey,
-                        size: 12,
-                        imageUrl: users[t.pubkey]?.profile?.picture,
-                      ),
-                    ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (t != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 3),
+                  child: NymAvatar(
+                    seed: t.pubkey,
+                    size: 12,
+                    imageUrl: users[t.pubkey]?.profile?.picture,
                   ),
-                TextSpan(text: base),
-                if (suffix.isNotEmpty)
-                  TextSpan(
-                    text: suffix,
-                    style: TextStyle(
-                      color: c.primary.withValues(alpha: 0.7),
-                      fontWeight: FontWeight.w100,
-                      fontSize: 12 * 0.9,
-                    ),
-                  ),
-                if (t != null)
-                  WidgetSpan(
-                    alignment: PlaceholderAlignment.middle,
-                    child: CosmeticNymBadges(
-                      cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
-                      flairSize: 12,
-                      supporterHeight: 12,
-                    ),
-                  ),
-              ],
-            ),
+                ),
+              Flexible(
+                child: NymLabel(
+                  base,
+                  suffix: suffix,
+                  style: TextStyle(
+                      color: c.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (t != null)
+                CosmeticNymBadges(
+                  cosmetics: ref.watch(userCosmeticsProvider(t.pubkey)),
+                  flairSize: 12,
+                  supporterHeight: 12,
+                ),
+            ],
           ),
           const SizedBox(height: 2),
           // Renders custom emoji as images, like the PWA quote preview.
@@ -4327,11 +4545,8 @@ class _InputMentionChip extends ConsumerWidget {
               if (suffix.isNotEmpty)
                 TextSpan(
                   text: suffix,
-                  style: baseStyle.copyWith(
-                    color: (baseStyle.color ?? c.text).withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w100,
-                    fontSize: size * 0.9,
-                  ),
+                  style: nymSuffixStyleOf(context,
+                      baseStyle.copyWith(color: baseStyle.color ?? c.text)),
                 ),
             ],
           ),

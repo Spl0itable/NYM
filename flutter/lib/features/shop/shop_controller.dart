@@ -901,11 +901,10 @@ class OtherUsersShopController
   /// 24h persisted-cache TTL.
   static const int _cacheMaxAgeMs = 24 * 60 * 60 * 1000;
 
-  /// Pubkeys fetched within 10 minutes aren't re-queued.
-  static const int _freshMs = 600000;
+  static const int _freshMs = 30 * 60 * 1000;
 
   /// Debounce before a queued batch flushes.
-  static const Duration _debounce = Duration(milliseconds: 600);
+  static const Duration _debounce = Duration(seconds: 2);
 
   /// Never fetch our own status; the owner reads its record via [ShopController.loadFromServer].
   String? selfPubkey;
@@ -996,6 +995,9 @@ class OtherUsersShopController
           changed = true;
         });
         if (changed) state = next;
+        for (final pk in pubkeys.take(100)) {
+          _fetchedAt.putIfAbsent(pk, () => now);
+        }
       }
     } catch (_) {
       // Best-effort; keep cached items.

@@ -3,16 +3,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../state/app_state.dart';
+import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/sidebar/pm_context_menu.dart';
 import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
 import '../identity/deleted_notice.dart' show dimNymSuffixes;
+import '../settings/settings_widgets.dart' show SettingsToggleRow;
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import 'chat_lock.dart';
 import 'chat_lock_providers.dart';
@@ -141,23 +144,23 @@ class _ChatLockPromptState extends State<_ChatLockPrompt> {
                       style: TextStyle(color: c.danger, fontSize: 12)),
                 ],
                 const SizedBox(height: 22),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 10,
-                  runSpacing: 10,
+                DialogActions(
                   children: [
                     ModalChrome.iconButton(c, tr('Cancel'),
-                        () => Navigator.of(context).pop(), height: 42),
-                    if (widget.alt != null)
-                      ModalChrome.iconButton(
-                          c,
-                          widget.alt!,
-                          () => Navigator.of(context)
-                              .pop(const ChatLockPromptResult(alt: true)),
-                          height: 42),
+                        () => Navigator.of(context).pop()),
                     ModalChrome.sendButton(c, widget.ok, _submit),
                   ],
                 ),
+                if (widget.alt != null) ...[
+                  const SizedBox(height: DialogButtonMetrics.gap),
+                  DialogButton.secondary(
+                    key: const ValueKey('chat-lock-alt'),
+                    label: widget.alt!,
+                    fullWidth: true,
+                    onTap: () => Navigator.of(context)
+                        .pop(const ChatLockPromptResult(alt: true)),
+                  ),
+                ],
               ],
             ),
           ),
@@ -398,7 +401,8 @@ class _LockedRow extends ConsumerWidget {
                             ? dimNymSuffixes(
                                 chatLockLabel(ref, lockKey),
                                 nymSuffixStyle(
-                                    TextStyle(color: c.text, fontSize: 14)))
+                                    TextStyle(color: c.text, fontSize: 14),
+                                    contrast: context.highContrast))
                             : TextSpan(text: chatLockLabel(ref, lockKey)),
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: c.text, fontSize: 14),
@@ -516,6 +520,17 @@ class _ChatLockSettingsModalState extends ConsumerState<ChatLockSettingsModal> {
     });
   }
 
+  void _flipHide(ChatLockService service, bool on) {
+    final error = service.setHide(on, _code.text);
+    setState(() {
+      _error = error;
+      if (error.isEmpty) {
+        _hide = on;
+        _savedCode = _code.text;
+      }
+    });
+  }
+
   @override
   void dispose() {
     _code.dispose();
@@ -571,19 +586,13 @@ class _ChatLockSettingsModalState extends ConsumerState<ChatLockSettingsModal> {
                   },
                 ),
                 const SizedBox(height: 16),
-                Material(
-                  type: MaterialType.transparency,
-                  child: CheckboxListTile(
-                    key: const ValueKey('chat-lock-hide'),
-                    contentPadding: EdgeInsets.zero,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    value: _hide,
-                    onChanged: (v) => setState(() => _hide = v == true),
-                    title: Text(tr(ChatLockStrings.hideEntry),
-                        style: TextStyle(color: c.text, fontSize: 14)),
-                    subtitle: Text(tr(ChatLockStrings.hideEntryHint),
-                        style: TextStyle(color: c.textDim, fontSize: 11)),
-                  ),
+                SettingsToggleRow(
+                  key: const ValueKey('panel-chatLockHideEntry'),
+                  label: tr(ChatLockStrings.hideEntry),
+                  hint: tr(ChatLockStrings.hideEntryHint),
+                  value: _hide,
+                  spacing: 8,
+                  onChanged: (v) => _flipHide(service, v),
                 ),
                 ModalChrome.focusRing(
                   c,

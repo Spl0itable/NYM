@@ -209,26 +209,49 @@ Object.assign(NYM.prototype, {
         const list = this._threadListForMessage(msg);
         if (!list || !list.length) return 0;
         const c = this._threadCountCache;
-        if (!c || c.list !== list || c.len !== list.length) {
+        const ver = this._cfVersion || 0;
+        if (!c || c.list !== list || c.len !== list.length || c.ver !== ver) {
             const map = new Map();
             for (const m of list) {
-                if (m && m.threadRoot) map.set(m.threadRoot, (map.get(m.threadRoot) || 0) + 1);
+                if (!m || !m.threadRoot || this._threadReplyFiltered(m)) continue;
+                map.set(m.threadRoot, (map.get(m.threadRoot) || 0) + 1);
             }
-            this._threadCountCache = { list, len: list.length, map };
+            this._threadCountCache = { list, len: list.length, ver, map };
         }
         const key = this.threadKeyForMessage(msg);
         return key ? (this._threadCountCache.map.get(key) || 0) : 0;
+    },
+
+    _threadReplyFiltered(m) {
+        if (!m) return true;
+        if (typeof this.isContentHidden === 'function') return this.isContentHidden(m);
+        return this.deletedEventIds.has(m.id) ||
+            !!(m.nymMessageId && this.deletedEventIds.has(m.nymMessageId)) ||
+            (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(m)) ||
+            (m.pubkey !== this.pubkey && (this.blockedUsers.has(m.pubkey) || !!m.blocked));
     },
 
     _threadRepliesFor(rootMsg) {
         const list = this._threadListForMessage(rootMsg) || [];
         const rootId = this.threadKeyForMessage(rootMsg);
         return list
-            .filter(m => m && m.threadRoot === rootId && !this.deletedEventIds.has(m.id) &&
-                !(m.nymMessageId && this.deletedEventIds.has(m.nymMessageId)) &&
-                !(typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(m)) &&
-                !(m.pubkey !== this.pubkey && (this.blockedUsers.has(m.pubkey) || m.blocked)))
+            .filter(m => m && m.threadRoot === rootId && !this._threadReplyFiltered(m))
             .sort((a, b) => this._compareMessages(a, b));
+    },
+
+    _refreshAllThreadIndicators() {
+        this._threadCountCache = null;
+        if (typeof document === 'undefined' || typeof this._refreshThreadIndicators !== 'function') return;
+        const roots = new Set();
+        document.querySelectorAll('.message[data-message-id] > .thread-indicator-row').forEach((row) => {
+            const id = row.parentElement.dataset.messageId;
+            if (id) roots.add(id);
+        });
+        for (const id of roots) {
+            const sample = typeof this._findStoredMessage === 'function' ? this._findStoredMessage(id) : null;
+            if (!sample) continue;
+            try { this._refreshThreadIndicators(id, sample); } catch (_) { }
+        }
     },
 
     // `nym#abcd`, the quote-reply shape, so /api/bot can tell the bot's turns from humans'.
@@ -244,7 +267,8 @@ Object.assign(NYM.prototype, {
         const list = this.messages.get(storageKey) || [];
         const root = list.find(m => m && m.id === rootId);
         if (!root) return [];
-        return [root, ...this._threadRepliesFor(root)];
+        const head = this._threadReplyFiltered(root) ? [] : [root];
+        return [...head, ...this._threadRepliesFor(root)];
     },
 
     // Null unless Nymbot is the root or last speaker; call before publishing the outgoing message.
@@ -285,8 +309,9 @@ Object.assign(NYM.prototype, {
     _threadBotConversation(rootId, storageKey, opts = {}) {
         const limit = opts.limit || 20;
         const exclude = opts.exclude ? this._threadEntryText({ content: opts.exclude }) : '';
+        const skip = typeof opts.skip === 'function' ? opts.skip : null;
         const entries = this._threadChannelChain(rootId, storageKey)
-            .filter(m => !m._spamGated)
+            .filter(m => !m._spamGated && !(skip && skip(m)))
             .map(m => ({ author: this._threadMessageAuthor(m), text: this._threadEntryText(m).slice(0, 1000) }))
             .filter(e => e.text);
         if (exclude && entries.length && entries[entries.length - 1].text === exclude) {
@@ -330,7 +355,7 @@ Object.assign(NYM.prototype, {
         if (ctx.type === 'channel') return `#${ctx.geohash || ctx.channel || ''}`;
         if (ctx.type === 'group') {
             const g = this.groupConversations && this.groupConversations.get(ctx.groupId);
-            return g && g.name ? g.name : 'Group chat';
+            return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group chat';
         }
         if (ctx.type === 'pm') {
             return `@${this.resolveDisplayNym(ctx.pubkey, ctx.nym || '')}`;
@@ -600,6 +625,7 @@ Object.assign(NYM.prototype, {
         // Only a live reply in the open thread sounds here; collapsed-thread replies go through showNotification.
         if (!this._threadReplyHidden(message) &&
             !message.isHistorical && !message.isOwn && !message.isBot &&
+            !(this._sendAsQuiet instanceof Set && this._sendAsQuiet.has(message.id)) &&
             this.settings && this.settings.sound &&
             (message.isPM || (typeof this.isMentioned === 'function' && this.isMentioned(message.content)))) {
             this.playSound(this.settings.sound);

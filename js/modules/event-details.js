@@ -191,7 +191,7 @@
                     const nevent = this.neventForMessage(eventId, msg.pubkey, hints);
                     if (nevent) frag.appendChild(this._edRow('nevent', nevent, { mono: true }));
                 }
-                if (msg.author) frag.appendChild(this._edRow('Nym', msg.author));
+                if (msg.author) frag.appendChild(this._edRow('Nym', msg.author, { nym: true }));
                 const ch = msg.geohash || msg.channel;
                 if (ch) frag.appendChild(this._edRow('Channel', ch));
                 const created = Number(msg.created_at) || 0;
@@ -233,7 +233,8 @@
             l.textContent = label;
             const v = document.createElement('span');
             v.className = 'event-detail-value' + ((opts && opts.mono) ? ' mono' : '');
-            v.textContent = value;
+            if (opts && opts.nym && window.NymSuffix) v.innerHTML = window.NymSuffix.labelHtml(value);
+            else v.textContent = value;
             row.appendChild(l);
             row.appendChild(v);
             return row;

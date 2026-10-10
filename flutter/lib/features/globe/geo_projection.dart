@@ -3,7 +3,8 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 
-/// Equirectangular camera centered on (cx, cy) in degrees at a zoom of 1–16.
+import 'geo_explore.dart' show kGeoMaxZoom;
+
 @immutable
 class GeoView {
   const GeoView({this.cx = 0, this.cy = 0, this.zoom = 1});
@@ -15,7 +16,7 @@ class GeoView {
   final double zoom;
 
   static const double minZoom = 1;
-  static const double maxZoom = 16;
+  static const double maxZoom = kGeoMaxZoom;
 
   static GeoView lerp(GeoView a, GeoView b, double t) {
     final za = math.log(a.zoom), zb = math.log(b.zoom);

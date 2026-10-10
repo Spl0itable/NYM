@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../i18n/i18n.dart';
@@ -208,7 +209,7 @@ class GeoRoomLists extends StatelessWidget {
             ),
             Expanded(
               child: rows.isEmpty
-                  ? _empty(tr('No active rooms'),
+                  ? _empty(tr('No active channels'),
                       tr('Nothing was posted in this window.'), nym)
                   : _list([for (final r in rows) (r, null)], nym),
             ),
@@ -218,14 +219,14 @@ class GeoRoomLists extends StatelessWidget {
         if (location == null) {
           return _empty(
             tr('Location is off'),
-            tr('Turn on "Sort by proximity" in Settings to list rooms near you. Distances are worked out on this device and your location is never sent.'),
+            tr('Turn on "Sort by proximity" in Settings to list channels near you. Distances are worked out on this device and your location is never sent.'),
             nym,
           );
         }
         final rows = rankGeoNearby([...active, ...saved.where((s) => !active.any((a) => a.geohash == s.geohash))], location);
         if (rows.isEmpty) {
-          return _empty(tr('No rooms yet'),
-              tr('No active or saved rooms to measure.'), nym);
+          return _empty(tr('No channels yet'),
+              tr('No active or saved channels to measure.'), nym);
         }
         return _list([for (final r in rows) (r.item, r.distanceKm)], nym);
       case GeoListTab.saved:
@@ -252,14 +253,39 @@ class GeoRoomLists extends StatelessWidget {
     );
   }
 
-  Widget _row(GeoActivity c, double? km, NymColors nym) {
+  Widget _row(GeoActivity c, double? km, NymColors nym) =>
+      GeoRoomRow(room: c, km: km, placeLabel: placeLabel, onOpen: onOpen);
+}
+
+class GeoRoomRow extends StatelessWidget {
+  const GeoRoomRow({
+    super.key,
+    required this.room,
+    required this.placeLabel,
+    required this.onOpen,
+    this.km,
+    this.hint,
+    this.autofocus = false,
+  });
+
+  final GeoActivity room;
+  final double? km;
+  final String Function(String geohash) placeLabel;
+  final void Function(String geohash) onOpen;
+  final String? hint;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) {
+    final nym = context.nym;
+    final c = room;
     final place = placeLabel(c.geohash);
     final activity = c.messages == 1
         ? tr('1 message')
         : tr('{n} messages', {'n': c.messages});
     final dist = km == null
         ? null
-        : tr('{d} away', {'d': formatGeoDistanceKm(km)});
+        : tr('{d} away', {'d': formatGeoDistanceKm(km!)});
     final parts = [
       '#${c.geohash}',
       if (place.isNotEmpty) place,
@@ -269,10 +295,11 @@ class GeoRoomLists extends StatelessWidget {
     return Semantics(
       button: true,
       label: parts.join(', '),
-      hint: tr('Shows this room on the map'),
+      hint: hint ?? tr('Shows this channel on the map'),
       excludeSemantics: true,
       child: InkWell(
         key: ValueKey('geo-row-${c.geohash}'),
+        autofocus: autofocus,
         onTap: () => onOpen(c.geohash),
         child: Container(
           constraints: const BoxConstraints(minHeight: 52),
@@ -318,6 +345,127 @@ class GeoRoomLists extends StatelessWidget {
                 ],
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class GeoStackList extends StatelessWidget {
+  const GeoStackList({
+    super.key,
+    required this.rooms,
+    required this.placeLabel,
+    required this.onPick,
+    required this.onClose,
+    this.location,
+  });
+
+  final List<GeoActivity> rooms;
+  final String Function(String geohash) placeLabel;
+  final void Function(String geohash) onPick;
+  final VoidCallback onClose;
+  final ({double lat, double lng})? location;
+
+  @override
+  Widget build(BuildContext context) {
+    final nym = context.nym;
+    final title = tr('{n} channels here', {'n': rooms.length});
+    return FocusScope(
+      child: Builder(
+        builder: (inner) => CallbackShortcuts(
+          bindings: {
+            const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+                FocusScope.of(inner).nextFocus(),
+            const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+                FocusScope.of(inner).previousFocus(),
+            const SingleActivator(LogicalKeyboardKey.escape): onClose,
+          },
+          child: Semantics(
+            scopesRoute: true,
+            namesRoute: true,
+            explicitChildNodes: true,
+            label: title,
+            child: Container(
+              decoration: BoxDecoration(
+                color: nym.isLight
+                    ? const Color(0xF5FFFFFF)
+                    : const Color(0xF0000000),
+                border: Border.all(color: nym.glassBorder),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Material(
+                type: MaterialType.transparency,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.only(left: 12, right: 2),
+                      decoration: BoxDecoration(
+                        border: Border(
+                            bottom: BorderSide(color: nym.glassBorder)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Semantics(
+                              header: true,
+                              child: Text(
+                                title,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: nym.text,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Semantics(
+                            button: true,
+                            label: tr('Close'),
+                            excludeSemantics: true,
+                            child: InkWell(
+                              key: const ValueKey('geo-stack-close'),
+                              borderRadius: BorderRadius.circular(10),
+                              onTap: onClose,
+                              child: SizedBox(
+                                width: 44,
+                                height: 44,
+                                child: Icon(Icons.close,
+                                    size: 20, color: nym.textDim),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Flexible(
+                      child: ListView(
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        children: [
+                          for (var i = 0; i < rooms.length; i++)
+                            GeoRoomRow(
+                              room: rooms[i],
+                              km: location == null
+                                  ? null
+                                  : haversineKm(location!.lat, location!.lng,
+                                      rooms[i].lat, rooms[i].lng),
+                              placeLabel: placeLabel,
+                              onOpen: onPick,
+                              hint: tr('Opens this channel'),
+                              autofocus: i == 0,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ),

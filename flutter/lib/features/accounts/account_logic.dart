@@ -358,6 +358,20 @@ class AccountLogic {
     return 'device';
   }
 
+  static bool hidesPreviews(String? raw) => raw == '1' || raw == 'true';
+
+  static ({String text, String? nym, String group}) inactiveNotice(
+      String id, String label, String? activeHides, String? targetHides) {
+    if (hidesPreviews(activeHides) || hidesPreviews(targetHides)) {
+      return (
+        text: 'New message on another identity',
+        nym: null,
+        group: 'other',
+      );
+    }
+    return (text: 'New message for {nym}', nym: label, group: id);
+  }
+
   static String classifyNative(String key) {
     if (nativeDeviceKeys.contains(key) ||
         nativeDevicePrefixes.any(key.startsWith)) {

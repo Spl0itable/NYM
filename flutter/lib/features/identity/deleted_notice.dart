@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 
 import '../../core/utils/nym_utils.dart';
 import '../i18n/i18n.dart';
+import '../../widgets/common/nym_label.dart' show nymRangeSpans, nymSuffixRanges;
 
 class DeletedNotice {
   DeletedNotice({required String nym, required String pubkey})
@@ -21,20 +22,24 @@ class DeletedNotice {
       : tr('{nym} was deleted from another device.', {'nym': label});
 }
 
-final RegExp _nymSuffixRe =
-    RegExp(r'(?<=[^\s#])#[0-9a-f]{4}(?![0-9A-Za-z])', caseSensitive: false);
+bool hasNymSuffix(String text) => nymSuffixRanges(text).isNotEmpty;
 
-bool hasNymSuffix(String text) => _nymSuffixRe.hasMatch(text);
-
-TextSpan dimNymSuffixes(String text, TextStyle dim) {
+List<InlineSpan> dimRangeSpans(
+    String text, List<List<int>> ranges, TextStyle dim) {
   final parts = <InlineSpan>[];
   var at = 0;
-  for (final m in _nymSuffixRe.allMatches(text)) {
-    if (m.start > at) parts.add(TextSpan(text: text.substring(at, m.start)));
-    parts.add(TextSpan(text: m.group(0), style: dim));
-    at = m.end;
+  for (final r in ranges) {
+    if (r[0] < at || r[1] > text.length) continue;
+    if (r[0] > at) parts.add(TextSpan(text: text.substring(at, r[0])));
+    parts.add(TextSpan(text: text.substring(r[0], r[1]), style: dim));
+    at = r[1];
   }
-  if (parts.isEmpty) return TextSpan(text: text);
   if (at < text.length) parts.add(TextSpan(text: text.substring(at)));
-  return TextSpan(children: parts);
+  return parts;
+}
+
+TextSpan dimNymSuffixes(String text, TextStyle dim) {
+  final ranges = nymSuffixRanges(text);
+  if (ranges.isEmpty) return TextSpan(text: text);
+  return TextSpan(children: nymRangeSpans(text, ranges, dim));
 }

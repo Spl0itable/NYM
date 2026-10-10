@@ -66,11 +66,13 @@ class FlairBadge extends StatelessWidget {
     required this.flairId,
     this.edition,
     this.size = 20,
+    this.gap = 5,
   });
 
   final String flairId;
   final int? edition;
   final double size;
+  final double gap;
 
   /// Exact CSS flair colors.
   static const Map<String, Color> colors = {
@@ -202,7 +204,7 @@ class FlairBadge extends StatelessWidget {
     final shadows = _glows[flairId]?.shadowsFor(isLight: isLight) ?? const [];
     final icon = ShopSvgIcon(svg: svg, size: size, color: color);
     return Padding(
-      padding: const EdgeInsets.only(left: 5),
+      padding: EdgeInsets.only(left: gap),
       child: (shadows.isEmpty && !showGenesisNumber)
           ? icon
           : Stack(
@@ -282,28 +284,7 @@ class SupporterBadge extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           // Gold glow behind the trophy, kept in light mode.
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: ImageFiltered(
-                    imageFilter: ui.ImageFilter.blur(
-                      sigmaX: Shadow.convertRadiusToSigma(4),
-                      sigmaY: Shadow.convertRadiusToSigma(4),
-                    ),
-                    child: const ShopSvgIcon(
-                      svg: ShopCatalog.trophyIcon,
-                      size: 14,
-                      color: Color(0x99FFD700),
-                    ),
-                  ),
-                ),
-              ),
-              ShopSvgIcon(
-                  svg: ShopCatalog.trophyIcon, size: 14, color: iconColor),
-            ],
-          ),
+          _TrophyGlow(size: 14, color: iconColor),
           const SizedBox(width: 5),
           Text(
             tr('SUPPORTER'),
@@ -316,6 +297,68 @@ class SupporterBadge extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TrophyGlow extends StatelessWidget {
+  const _TrophyGlow({required this.size, required this.color});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Positioned.fill(
+          child: IgnorePointer(
+            child: ImageFiltered(
+              imageFilter: ui.ImageFilter.blur(
+                sigmaX: Shadow.convertRadiusToSigma(4),
+                sigmaY: Shadow.convertRadiusToSigma(4),
+              ),
+              child: ShopSvgIcon(
+                svg: ShopCatalog.trophyIcon,
+                size: size,
+                color: const Color(0x99FFD700),
+              ),
+            ),
+          ),
+        ),
+        ShopSvgIcon(svg: ShopCatalog.trophyIcon, size: size, color: color),
+      ],
+    );
+  }
+}
+
+class SupporterMark extends StatelessWidget {
+  const SupporterMark({super.key, this.size = 18});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = tr('Supporter');
+    return NymTooltip(
+      message: label,
+      excludeFromSemantics: true,
+      child: Semantics(
+        label: label,
+        image: true,
+        child: ExcludeSemantics(
+          child: SizedBox.square(
+            dimension: size,
+            child: _TrophyGlow(
+              size: size,
+              color: context.nym.isLight
+                  ? const Color(0xFF9A7800)
+                  : SupporterBadge._gold,
+            ),
+          ),
+        ),
       ),
     );
   }

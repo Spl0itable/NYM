@@ -253,12 +253,14 @@ GeoFeature _annotate(String name, List<List<List<List<double>>>> polys) {
 
   var cx = 0.0, cy = 0.0;
   if (largestRing != null && largestRing.isNotEmpty) {
+    final wrap = geoRingWrapsAntimeridian(largestRing);
     for (final pt in largestRing) {
-      cx += pt[0];
+      cx += wrap && pt[0] < 0 ? pt[0] + 360 : pt[0];
       cy += pt[1];
     }
     cx /= largestRing.length;
     cy /= largestRing.length;
+    if (cx > 180) cx -= 360;
   }
 
   return GeoFeature(
@@ -268,6 +270,20 @@ GeoFeature _annotate(String name, List<List<List<List<double>>>> polys) {
     centroid: [cx, cy],
     area: largestArea.isFinite ? largestArea : 0,
   );
+}
+
+bool geoRingWrapsAntimeridian(List<List<double>> ring) {
+  var lo = double.infinity, hi = double.negativeInfinity;
+  var slo = double.infinity, shi = double.negativeInfinity;
+  for (final p in ring) {
+    final lng = p[0];
+    final s = lng < 0 ? lng + 360 : lng;
+    if (lng < lo) lo = lng;
+    if (lng > hi) hi = lng;
+    if (s < slo) slo = s;
+    if (s > shi) shi = s;
+  }
+  return hi - lo > 180 && shi - slo < 180;
 }
 
 /// Ray-casting point-in-polygon over one ring.

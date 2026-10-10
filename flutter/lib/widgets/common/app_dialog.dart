@@ -9,8 +9,10 @@ import '../../core/utils/secret_screen.dart';
 import '../../features/i18n/i18n.dart';
 import '../../features/toasts/toast_center.dart';
 import '../../state/settings_provider.dart';
+import 'dialog_button.dart';
 import 'keyboard_inset_dialog.dart';
 import 'nym_field.dart';
+import 'nym_label.dart';
 
 /// Shared confirm, alert and prompt dialogs, the native port of the PWA's `dialog.js`.
 
@@ -308,7 +310,7 @@ class _AppDialogState extends State<_AppDialog> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
+                              NymText(
                                 widget.message,
                                 style: TextStyle(
                                   color: c.text,
@@ -325,14 +327,9 @@ class _AppDialogState extends State<_AppDialog> {
                       ),
                       Padding(
                         padding: const EdgeInsets.fromLTRB(32, 8, 32, 32),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
+                        child: DialogActions(
                           children: [
-                            if (!widget.alertOnly) ...[
-                              _cancelButton(c),
-                              const SizedBox(width: 10),
-                            ],
+                            if (!widget.alertOnly) _cancelButton(c),
                             _okButton(c),
                           ],
                         ),
@@ -515,65 +512,15 @@ class _AppDialogState extends State<_AppDialog> {
     );
   }
 
-  /// Cancel `.icon-btn`; flex's default stretch sizes it to the 42px OK button beside it.
   Widget _cancelButton(NymColors c) {
-    return InkWell(
-      onTap: _cancel,
-      borderRadius: NymRadius.rxs,
-      child: Container(
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: c.subtleFill,
-          border: Border.all(
-            color: c.isLight
-                ? const Color(0x1A000000)
-                : c.glassBorder,
-          ),
-          borderRadius: NymRadius.rxs,
-        ),
-        child: Center(
-          widthFactor: 1,
-          child: Text(
-            widget.cancelLabel.toUpperCase(),
-            style: TextStyle(
-              color: c.isLight ? c.primary : c.text,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.8,
-            ),
-          ),
-        ),
-      ),
-    );
+    return DialogButton.secondary(label: widget.cancelLabel, onTap: _cancel);
   }
 
   Widget _okButton(NymColors c) {
-    final accent = widget.danger ? c.danger : c.primary;
-    return InkWell(
+    return DialogButton(
+      label: widget.okLabel,
       onTap: _ok,
-      borderRadius: NymRadius.rsm,
-      child: Container(
-        height: 42,
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-        decoration: BoxDecoration(
-          color: accent.withValues(alpha: 0.1),
-          border: Border.all(
-            color: accent.withValues(alpha: widget.danger ? 0.35 : 0.3),
-          ),
-          borderRadius: NymRadius.rsm,
-        ),
-        child: Text(
-          widget.okLabel.toUpperCase(),
-          style: TextStyle(
-            color: accent,
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 1.5,
-          ),
-        ),
-      ),
+      role: widget.danger ? DialogButtonRole.danger : DialogButtonRole.primary,
     );
   }
 }

@@ -5,7 +5,9 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../features/i18n/i18n.dart';
 import '../common/nym_sheet.dart';
+import '../common/nym_label.dart';
 import '../common/nym_field.dart';
+import '../common/dialog_button.dart';
 
 /// Report modal; [onSubmit] is wired to the NIP-56 kind-1984 report publish.
 class ReportModal extends StatefulWidget {
@@ -95,8 +97,7 @@ class _ReportModalState extends State<ReportModal> {
                   TextSpan(
                       text: tr('Reporting: '),
                       style: TextStyle(color: c.textDim, fontSize: 15)),
-                  TextSpan(
-                      text: widget.targetNym,
+                  nymTextSpan(context, widget.targetNym,
                       style: TextStyle(color: c.primary, fontSize: 15)),
                 ])),
                 const SizedBox(height: 15),
@@ -182,11 +183,9 @@ class _ReportModalState extends State<ReportModal> {
                   ),
                 ),
                 const SizedBox(height: 15),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                DialogActions(
                   children: [
                     _cancelBtn(c),
-                    const SizedBox(width: 10),
                     _submitBtn(c),
                   ],
                 ),
@@ -270,52 +269,11 @@ class _ReportModalState extends State<ReportModal> {
   }
 
   Widget _cancelBtn(NymColors c) {
-    return InkWell(
-      onTap: () => Navigator.of(context).pop(),
-      borderRadius: NymRadius.rxs,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: c.subtleFill,
-          border: Border.all(color: c.glassBorder),
-          borderRadius: NymRadius.rxs,
-        ),
-        child: Text(
-          tr('CANCEL'),
-          style: TextStyle(
-            color: c.isLight ? c.primary : c.text,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.8,
-          ),
-        ),
-      ),
-    );
+    return DialogButton.secondary(
+        label: tr('CANCEL'), onTap: () => Navigator.of(context).pop());
   }
 
   Widget _submitBtn(NymColors c) {
-    return InkWell(
-      onTap: _submit,
-      borderRadius: NymRadius.rsm,
-      child: Container(
-        height: 42,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: c.primaryA(0.1),
-          border: Border.all(color: c.primaryA(0.3)),
-          borderRadius: NymRadius.rsm,
-        ),
-        child: Text(
-          tr('SUBMIT REPORT'),
-          style: TextStyle(
-            color: c.primary,
-            fontSize: 12,
-            letterSpacing: 1.5,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
+    return DialogButton(label: tr('SUBMIT REPORT'), onTap: _submit);
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/dialog_button.dart';
 import '../identity/modal_chrome.dart';
 
 Future<T?> showMeshSheet<T>(BuildContext context, WidgetBuilder builder) {
@@ -44,15 +45,7 @@ class MeshSheetFrame extends StatelessWidget {
         const SizedBox(height: 16),
         ...children,
         const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            for (var i = 0; i < actions.length; i++) ...[
-              if (i > 0) const SizedBox(width: 10),
-              actions[i],
-            ],
-          ],
-        ),
+        DialogActions(alignment: WrapAlignment.end, children: actions),
       ],
     );
     return nymSheetOr(

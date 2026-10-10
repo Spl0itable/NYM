@@ -55,6 +55,8 @@ class Settings {
     this.hideNonPinned = false,
     this.hidePreviews = false,
     this.colorfulMessages = false,
+    this.largeTargets = false,
+    this.highContrast = false,
     this.infoPanelOpen = false,
     this.columnsResetTick = 0,
   });
@@ -112,6 +114,8 @@ class Settings {
   final bool hidePreviews;
 
   final bool colorfulMessages;
+  final bool largeTargets;
+  final bool highContrast;
 
   final bool infoPanelOpen;
 
@@ -177,6 +181,8 @@ class Settings {
     bool? hideNonPinned,
     bool? hidePreviews,
     bool? colorfulMessages,
+    bool? largeTargets,
+    bool? highContrast,
     bool? infoPanelOpen,
     int? columnsResetTick,
   }) {
@@ -224,6 +230,8 @@ class Settings {
       hideNonPinned: hideNonPinned ?? this.hideNonPinned,
       hidePreviews: hidePreviews ?? this.hidePreviews,
       colorfulMessages: colorfulMessages ?? this.colorfulMessages,
+      largeTargets: largeTargets ?? this.largeTargets,
+      highContrast: highContrast ?? this.highContrast,
       infoPanelOpen: infoPanelOpen ?? this.infoPanelOpen,
       columnsResetTick: columnsResetTick ?? this.columnsResetTick,
     );
@@ -327,6 +335,8 @@ class Settings {
       hideNonPinned: kv.getBool(StorageKeys.hideNonPinned, defaultValue: false),
       hidePreviews: kv.getBool(StorageKeys.hidePreviews, defaultValue: false),
       colorfulMessages: kv.getBool(StorageKeys.colorfulMessages, defaultValue: false),
+      largeTargets: kv.getBool(StorageKeys.largeTargets, defaultValue: false),
+      highContrast: kv.getBool(StorageKeys.highContrast, defaultValue: false),
       infoPanelOpen: kv.getBool(StorageKeys.infoPanelOpen, defaultValue: false),
     );
   }

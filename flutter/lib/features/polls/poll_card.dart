@@ -27,6 +27,7 @@ import '../translate/translate_languages.dart';
 import '../translate/translate_service.dart';
 import '../../widgets/anchored_popup.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/nym_label.dart';
 
 /// Inline poll rendered as a full message row; tapping an option votes, the footer opens the voters list.
 class PollCard extends ConsumerStatefulWidget {
@@ -143,21 +144,10 @@ class _PollCardState extends ConsumerState<PollCard> {
           if (brackets)
             Text('<', style: TextStyle(color: authorColor, fontSize: fontSize)),
           Flexible(
-            child: Text.rich(
-              TextSpan(children: [
-                TextSpan(text: baseNym, style: authorStyle),
-                if (suffix.isNotEmpty)
-                  TextSpan(
-                    text: '#$suffix',
-                    style: authorStyle.copyWith(
-                      color: authorColor.withValues(alpha: 0.7),
-                      fontSize: fontSize * 0.9,
-                      fontWeight: FontWeight.w100,
-                    ),
-                  ),
-              ]),
-              overflow: TextOverflow.ellipsis,
-            ),
+            child: NymLabel(baseNym,
+                suffix: suffix,
+                style: authorStyle,
+                genesis: hasGenesisFlair(cosmetics)),
           ),
           if (cosmetics.flairId != null && cosmetics.flairId!.isNotEmpty)
             FlairBadge(
@@ -1109,22 +1099,12 @@ class _PollVotersModal extends ConsumerWidget {
                 seed: pk, size: 18, imageUrl: users[pk]?.profile?.picture),
             const SizedBox(width: 6),
             Expanded(
-              child: RichText(
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                text: TextSpan(
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: NymLabel(
+                  nym,
+                  suffix: suffix,
                   style: TextStyle(fontSize: 13, color: c.text),
-                  children: [
-                    TextSpan(text: nym),
-                    if (suffix.isNotEmpty)
-                      TextSpan(
-                        text: '#$suffix',
-                        style: TextStyle(
-                          color: c.text.withValues(alpha: 0.5),
-                          fontSize: 13 * 0.9,
-                        ),
-                      ),
-                  ],
                 ),
               ),
             ),

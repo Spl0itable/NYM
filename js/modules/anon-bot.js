@@ -303,6 +303,29 @@
             }
         },
 
+        _botAnonIdentities() {
+            const st = this._botAnon;
+            if (!st) return [];
+            return [st.current, ...(st.prev || [])].filter((i) => i && i.sk && typeof i.pk === 'string');
+        },
+
+        async _botAnonStream(identity, extra) {
+            const host = this._getApiHost();
+            if (!host || !identity) throw new Error('anonymous key unavailable');
+            const body = Object.assign({ action: 'pm-get', pubkey: identity.pk }, extra || {});
+            body.auth = this._botAnonSignAuth('pm-get', 'storage', identity, await this._authPayloadHash(body));
+            const resp = await this._edgeFetch(`https://${host}/api/storage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const ct = resp.headers.get('Content-Type') || '';
+            if (!resp.ok || ct.indexOf('application/x-ndjson') < 0) throw new Error(`Request failed (${resp.status})`);
+            const events = [];
+            await this._readNdjsonStream(resp, (ev) => { if (ev) events.push(ev); });
+            return { events, headers: resp.headers };
+        },
+
         botAnonRequest(action, extra, opts) {
             return this._botAnonPost('bot', action, extra, opts);
         },

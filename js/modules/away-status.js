@@ -170,6 +170,15 @@
             await this._awayAnnounce(merged);
         },
 
+        _awayReplyAllowed(o) {
+            const x = o || {};
+            const F = window.NymContentFilter;
+            if (x.geohash && F && typeof this._cfCtx === 'function' && F.channelHidden(this._cfCtx(), x.geohash)) return false;
+            if (typeof this.isContentHidden === 'function' &&
+                this.isContentHidden({ id: x.id || '', pubkey: x.pubkey || '', author: x.nym || '', content: typeof x.content === 'string' ? x.content : '' })) return false;
+            return !(typeof this._wotGated === 'function' && this._wotGated(x.pubkey || ''));
+        },
+
         _awayMaybeAutoReply(o) {
             this._awayEnsureRestored();
             const self = this.pubkey;

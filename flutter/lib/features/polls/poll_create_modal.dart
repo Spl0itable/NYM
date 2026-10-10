@@ -9,6 +9,7 @@ import '../dm_polls/dm_polls_providers.dart';
 import '../i18n/i18n.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/dialog_button.dart';
 
 /// Poll form is valid with a non-empty question and at least 2 non-empty options.
 bool pollFormValid(String question, List<String> options) {
@@ -170,11 +171,9 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              child: DialogActions(
                 children: [
                   _cancelBtn(c),
-                  const SizedBox(width: 10),
                   _createBtn(c),
                 ],
               ),
@@ -297,56 +296,14 @@ class _PollCreateModalState extends ConsumerState<PollCreateModal> {
   }
 
   Widget _cancelBtn(NymColors c) {
-    return InkWell(
-      onTap: () => Navigator.of(context).pop(),
-      borderRadius: NymRadius.rxs,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: c.subtleFill,
-          border: Border.all(color: c.glassBorder),
-          borderRadius: NymRadius.rxs,
-        ),
-        child: Text(
-          tr('CANCEL'),
-          style: TextStyle(
-            color: c.isLight ? c.primary : c.text,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.8,
-          ),
-        ),
-      ),
-    );
+    return DialogButton.secondary(
+        label: tr('CANCEL'), onTap: () => Navigator.of(context).pop());
   }
 
   Widget _createBtn(NymColors c) {
-    final enabled = _valid && !_submitting;
-    return Opacity(
-      opacity: enabled ? 1 : 0.35,
-      child: InkWell(
-        onTap: enabled ? _submit : null,
-        borderRadius: NymRadius.rsm,
-        child: Container(
-          height: 42,
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: c.primaryA(0.1),
-            border: Border.all(color: c.primaryA(0.3)),
-            borderRadius: NymRadius.rsm,
-          ),
-          child: Text(
-            tr('CREATE POLL'),
-            style: TextStyle(
-              color: c.primary,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 1.5,
-            ),
-          ),
-        ),
-      ),
+    return DialogButton(
+      label: tr('CREATE POLL'),
+      onTap: _valid && !_submitting ? _submit : null,
     );
   }
 }

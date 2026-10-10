@@ -11,6 +11,7 @@ import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/nym_avatar.dart';
+import '../common/nym_label.dart';
 import '../context_menu/profile_badges.dart';
 
 /// Typing-indicator row for a conversation; reads `AppState.typing` against a live clock so it self-expires.
@@ -39,7 +40,8 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
     final out = <String>[];
     app.typing.forEach((k, expiry) {
       if (k.startsWith(prefix) && expiry > now) {
-        out.add(k.substring(prefix.length));
+        final pk = k.substring(prefix.length);
+        if (!app.isPersonHidden(pk)) out.add(pk);
       }
     });
     return out;
@@ -74,16 +76,8 @@ class _TypingIndicatorRowState extends ConsumerState<TypingIndicatorRow> {
       final isVerified =
           controller.isVerifiedDeveloper(pk) || controller.isVerifiedBot(pk);
       return [
-        TextSpan(text: split.base),
-        if (split.suffix.isNotEmpty)
-          TextSpan(
-            text: split.suffix,
-            style: TextStyle(
-              color: c.textDim.withValues(alpha: 0.7),
-              fontSize: 12 * 0.9,
-              fontWeight: FontWeight.w100,
-            ),
-          ),
+        ...nymLabelSpans(context, split.base, split.suffix,
+            TextStyle(color: c.textDim, fontSize: 12, height: 1)),
         WidgetSpan(
           alignment: PlaceholderAlignment.middle,
           child: CosmeticNymBadges(

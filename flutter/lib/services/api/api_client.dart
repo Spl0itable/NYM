@@ -228,11 +228,13 @@ class ApiSocketResult {
     required this.data,
     required this.items,
     required this.hasMore,
+    this.headers = const {},
   });
   final int status;
   final Map<String, dynamic> data;
   final List<dynamic> items;
   final bool hasMore;
+  final Map<String, String> headers;
 }
 
 /// Persistent multiplexed `/api` socket for D1 storage ops; failures trip a cooldown and fall back to HTTP.
@@ -362,7 +364,7 @@ class ApiSocket {
     final id = msg[1];
     final p = _pending[id];
     // Tally received bytes before dispatch removes the pending entry.
-    onTraffic?.call(p?.action ?? 'other', recv: recvLen);
+    onTraffic?.call(p?.stats ?? 'other', recv: recvLen);
     if (p == null) return;
     if (t == 'RES') {
       _pending.remove(id);
@@ -388,10 +390,17 @@ class ApiSocket {
     } else if (t == 'END') {
       _pending.remove(id);
       final hdrs = (msg.length > 3 && msg[3] is Map) ? msg[3] as Map : const {};
-      final hasMore =
-          '${hdrs['x-has-more'] ?? hdrs['X-Has-More'] ?? ''}' == '1';
+      final headers = <String, String>{
+        for (final e in hdrs.entries)
+          if (e.value != null) '${e.key}'.toLowerCase(): '${e.value}',
+      };
+      final hasMore = (headers['x-has-more'] ?? '') == '1';
       p.complete(ApiSocketResult(
-          status: 200, data: const {}, items: p.items, hasMore: hasMore));
+          status: 200,
+          data: const {},
+          items: p.items,
+          hasMore: hasMore,
+          headers: headers));
     }
   }
 
@@ -401,12 +410,14 @@ class ApiSocket {
     Map<String, dynamic> extra, {
     bool stream = false,
     Duration? timeout,
+    String? statsAction,
   }) {
     if (!_open || _channel == null) {
       return Future.error(StateError('api socket not ready'));
     }
     final id = _nextId++;
-    final p = _Pending(stream: stream, action: action);
+    final stats = statsAction ?? action;
+    final p = _Pending(stream: stream, action: action, stats: stats);
     _pending[id] = p;
     p.timer = Timer(timeout ?? _requestTimeout, () {
       if (_pending.remove(id) != null) {
@@ -415,7 +426,7 @@ class ApiSocket {
     });
     try {
       final sent = _send(['REQ', id, action, extra]);
-      onTraffic?.call(action, sent: sent);
+      onTraffic?.call(stats, sent: sent);
     } catch (e) {
       _pending.remove(id);
       p.completeError(e);
@@ -469,11 +480,13 @@ class ApiSocket {
 }
 
 class _Pending {
-  _Pending({required this.stream, required this.action});
+  _Pending({required this.stream, required this.action, String? stats})
+      : stats = stats ?? action;
   final bool stream;
 
   /// The request action, for tallying frame bytes.
   final String action;
+  final String stats;
   final List<dynamic> items = [];
   final Completer<ApiSocketResult> _completer = Completer<ApiSocketResult>();
   Timer? timer;
@@ -573,6 +586,7 @@ class ApiClient {
     String action,
     Map<String, dynamic> body, {
     required bool stream,
+    String? statsAction,
   }) async {
     if (!_socketEnabled) return null;
     final authed = body.containsKey('auth');
@@ -599,7 +613,8 @@ class ApiClient {
           if (e.key != 'action' && e.key != 'auth' && e.key != 'pubkey')
             e.key: e.value,
       };
-      final result = await socket.request(action, extra, stream: stream);
+      final result = await socket.request(action, extra,
+          stream: stream, statsAction: statsAction);
       if (!stream && result.status == 429) {
         throw ApiException(
           action,
@@ -1162,12 +1177,20 @@ class ApiClient {
   }
 
   /// `POST /api/storage` for NDJSON-streamed reads (`profile-get`, `pm-get`); throws [ApiException] on non-2xx.
-  Future<StorageStream> storageStream(Map<String, dynamic> body) async {
+  Future<StorageStream> storageStream(
+    Map<String, dynamic> body, {
+    String? statsAction,
+    bool socket = true,
+  }) async {
     final action = (body['action'] ?? 'other').toString();
+    final stats = statsAction ?? action;
     // WS-first: streaming actions collect ITEM frames before the HTTP fallback.
-    final ws = await _trySocket(action, body, stream: true);
+    final ws = socket
+        ? await _trySocket(action, body, stream: true, statsAction: stats)
+        : null;
     if (ws != null) {
-      return StorageStream(items: ws.items, hasMore: ws.hasMore);
+      return StorageStream(
+          items: ws.items, hasMore: ws.hasMore, headers: ws.headers);
     }
     final payload = jsonEncode(body);
     final res = await _client.post(
@@ -1175,7 +1198,7 @@ class ApiClient {
       headers: _headers({'Content-Type': 'application/json'}),
       body: payload,
     );
-    _trackApiData(action,
+    _trackApiData(stats,
         sent: _bodyLen(payload), recv: _bodyLen(res.bodyBytes));
     // Reject even a 2xx that isn't NDJSON, or a JSON error body would be split into bogus items.
     final contentType = _header(res, 'content-type') ?? '';
@@ -1202,7 +1225,13 @@ class ApiClient {
       }
     }
     final hasMore = (_header(res, 'x-has-more') ?? '') == '1';
-    return StorageStream(items: items, hasMore: hasMore);
+    return StorageStream(
+      items: items,
+      hasMore: hasMore,
+      headers: {
+        for (final e in res.headers.entries) e.key.toLowerCase(): e.value,
+      },
+    );
   }
 
   /// `POST /api/bot` for Nymbot credit actions; same auth contract as [storageAction], bound to [botUrl].
@@ -1244,9 +1273,14 @@ class ApiClient {
 
 /// Streamed `/api/storage` read: per-line [items] and the `X-Has-More` flag.
 class StorageStream {
-  const StorageStream({required this.items, required this.hasMore});
+  const StorageStream({
+    required this.items,
+    required this.hasMore,
+    this.headers = const {},
+  });
   final List<dynamic> items;
   final bool hasMore;
+  final Map<String, String> headers;
 }
 
 /// Thrown on a non-success backend response.

@@ -582,6 +582,29 @@
             }
         },
 
+        _cnPruneHiddenMentions() {
+            if (typeof this.isContentHidden !== 'function') return;
+            let state = this._cnMentions();
+            const changed = [];
+            for (const key of Object.keys((state && state.chats) || {})) {
+                const ids = ((state.chats[key] || {}).ids || []).map((e) => e.id);
+                if (!ids.length) continue;
+                const store = this._cnIsConv(key) ? this.pmMessages : this.messages;
+                const list = (store && store.get(key)) || [];
+                const byId = new Map();
+                for (const m of list) {
+                    if (!m) continue;
+                    if (m.id) byId.set(m.id, m);
+                    if (m.nymMessageId) byId.set(m.nymMessageId, m);
+                }
+                const gone = ids.filter((id) => byId.has(id) && this.isContentHidden(byId.get(id)));
+                if (!gone.length) continue;
+                state = N().mentionDrop(state, key, gone);
+                changed.push(key);
+            }
+            if (changed.length) this._cnSetMentions(state, changed);
+        },
+
         unreadMentionCount(key) {
             return N().mentionCount(this._cnMentions(), key);
         },
@@ -798,7 +821,7 @@
                 return typeof this.getNymHtmlFromPubkey === 'function' ? this.getNymHtmlFromPubkey(p.id) : esc(p.id.slice(0, 8));
             }
             const g = this.groupConversations && this.groupConversations.get(p.id);
-            return esc(g && g.name ? g.name : p.id.slice(0, 8));
+            return esc(g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || p.id.slice(0, 8))) : p.id.slice(0, 8));
         },
 
         _pinKeyForItem(itemEl) {

@@ -51,9 +51,24 @@ String stripMarkdown(String input) {
   return s;
 }
 
+final RegExp _senderTail = RegExp(r'^[0-9a-f]{4}$', caseSensitive: false);
+
+String senderSuffix(String pubkey) {
+  final tail = pubkey.length >= 4 ? pubkey.substring(pubkey.length - 4) : '';
+  return _senderTail.hasMatch(tail) ? '#$tail' : '';
+}
+
+({String name, String sfx})? _previewSender(
+    String kind, String author, String pubkey, bool self, LayoutTr t) {
+  if (self) return (name: _fill(t, 'You'), sfx: '');
+  if (kind == 'pm') return null;
+  return author.isEmpty ? null : (name: author, sfx: senderSuffix(pubkey));
+}
+
 String rowPreview({
   required String kind,
   String author = '',
+  String pubkey = '',
   bool self = false,
   String text = '',
   bool hide = false,
@@ -65,9 +80,61 @@ String rowPreview({
   if (locked) return redacted;
   final body = stripMarkdown(text);
   if (body.isEmpty) return '';
-  final who = self ? _fill(t, 'You') : author;
-  if (kind == 'pm' && !self) return body;
-  return who.isNotEmpty ? '$who: $body' : body;
+  final who = _previewSender(kind, author, pubkey, self, t);
+  return who != null && who.name.isNotEmpty
+      ? '${who.name}${who.sfx}: $body'
+      : body;
+}
+
+final RegExp _mentionSuffix =
+    RegExp(r'@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b', caseSensitive: false);
+
+List<List<int>> mentionSuffixRanges(String text, [int from = 0]) => [
+      for (final m in _mentionSuffix.allMatches(text))
+        [from + m.end - 5, from + m.end],
+    ];
+
+({String text, List<List<int>> dim, List<int>? sender, int bodyAt})
+    rowPreviewParts({
+  required String kind,
+  String author = '',
+  String pubkey = '',
+  bool self = false,
+  String text = '',
+  bool hide = false,
+  bool locked = false,
+  String redacted = '',
+  LayoutTr t = _same,
+}) {
+  final out = rowPreview(
+    kind: kind,
+    author: author,
+    pubkey: pubkey,
+    self: self,
+    text: text,
+    hide: hide,
+    locked: locked,
+    redacted: redacted,
+    t: t,
+  );
+  if (out.isEmpty || hide || locked) {
+    return (text: out, dim: const <List<int>>[], sender: null, bodyAt: 0);
+  }
+  final body = stripMarkdown(text);
+  final from = out.length - body.length;
+  final who = _previewSender(kind, author, pubkey, self, t);
+  final sender = who != null && who.name.isNotEmpty && who.sfx.isNotEmpty
+      ? [who.name.length, who.name.length + who.sfx.length]
+      : null;
+  final whole = from >= 0 && out.substring(from) == body;
+  final mentions =
+      whole ? mentionSuffixRanges(body, from) : const <List<int>>[];
+  return (
+    text: out,
+    dim: sender == null ? mentions : [[sender[0], sender[1]], ...mentions],
+    sender: sender,
+    bodyAt: whole ? from : 0,
+  );
 }
 
 String relativeTime(int nowMs, int tsMs, [LayoutTr t = _same]) {
@@ -107,6 +174,7 @@ String settingsMode(num width) {
 }
 
 const double kChEm = 0.55;
+const double kPreviewBodyMinEm = 2;
 
 double readWidthPx(num fontSize) => (kReadCh * kChEm * fontSize).roundToDouble();
 
@@ -196,4 +264,60 @@ int clampColumnWidth(Object? w) {
   }
   if (n == null || n.isNaN || n.isInfinite) return kColumnDefault;
   return n.clamp(kColumnMin.toDouble(), kColumnMax.toDouble()).round();
+}
+
+const double kHeaderMinTitle = 96;
+
+const List<String> kHeaderEssential = ['bell', 'more', 'rejoin'];
+
+const Map<String, List<String>> kHeaderPriority = {
+  'channel': ['share', 'favorite'],
+  'pm': ['video', 'audio'],
+  'group': ['video', 'audio'],
+  'mesh': ['addDevice', 'ghost'],
+};
+
+const Map<String, String> kHeaderKinds = {
+  'channel': 'channel',
+  'geohash': 'channel',
+  'thread': 'channel',
+  'pm': 'pm',
+  'bot': 'pm',
+  'group': 'group',
+  'groupcall': 'group',
+  'mesh': 'mesh',
+};
+
+({double box, double gap, double pitch}) headerActionMetrics(
+    {required bool phone, required bool targets}) {
+  final double box = phone && !targets ? 34 : 40;
+  final double gap = targets ? 4 : 2;
+  return (box: box, gap: gap, pitch: box + gap);
+}
+
+({List<String> moved, double room, bool more}) headerOverflow({
+  required String kind,
+  required List<String> actions,
+  required double base,
+  required double step,
+  required bool more,
+  double min = kHeaderMinTitle,
+}) {
+  var room = base;
+  var shown = more;
+  final moved = <String>[];
+  if (room < min) {
+    for (final id in kHeaderPriority[kind] ?? const <String>[]) {
+      if (!actions.contains(id) || kHeaderEssential.contains(id)) continue;
+      moved.add(id);
+      if (shown) {
+        room += step;
+      } else {
+        shown = true;
+      }
+      if (room >= min) break;
+    }
+  }
+  if (room <= base) return (moved: const <String>[], room: base, more: more);
+  return (moved: moved, room: room, more: shown);
 }

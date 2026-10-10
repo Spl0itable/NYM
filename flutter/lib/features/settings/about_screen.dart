@@ -22,6 +22,7 @@ import '../identity/modal_chrome.dart';
 import 'build_integrity.dart';
 import 'settings_widgets.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/dialog_button.dart';
 
 /// Bundled fallback version, shown until the live version resolves; keep in sync with `NYMCHAT_VERSION` at release.
 const String kAboutVersion = 'v3.75.545';
@@ -931,39 +932,15 @@ class _AboutScreenState extends ConsumerState<AboutScreen> {
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: c.glassBorder)),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: DialogActions(
         children: [
-          NymOutlineButton(
+          DialogButton.secondary(
             label: tr('Close'),
-            onPressed: () => Navigator.of(context).pop(),
+            onTap: () => Navigator.of(context).pop(),
           ),
-          const SizedBox(width: 10),
-          Opacity(
-            opacity: _sending ? 0.35 : 1.0,
-            child: InkWell(
-              onTap: _sending ? null : _sendContact,
-              borderRadius: NymRadius.rsm,
-              child: Container(
-                height: 42,
-                alignment: Alignment.center,
-                padding: const EdgeInsets.symmetric(horizontal: 22),
-                decoration: BoxDecoration(
-                  color: c.primaryA(0.10),
-                  borderRadius: NymRadius.rsm,
-                  border: Border.all(color: c.primaryA(0.30)),
-                ),
-                child: Text(
-                  _sending ? tr('SENDING...') : tr('SEND MESSAGE'),
-                  style: TextStyle(
-                    color: c.primary,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 1.5,
-                  ),
-                ),
-              ),
-            ),
+          DialogButton(
+            label: _sending ? tr('SENDING...') : tr('SEND MESSAGE'),
+            onTap: _sending ? null : _sendContact,
           ),
         ],
       ),

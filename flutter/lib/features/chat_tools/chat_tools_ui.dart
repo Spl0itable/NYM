@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -31,9 +32,9 @@ import 'chat_tools.dart';
 import 'chat_tools_providers.dart';
 import 'chat_tools_service.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../identity/deleted_notice.dart' show dimNymSuffixes;
-import '../search/unified_search_panel.dart' show nymSuffixStyle;
 
 class ChatToolIcons {
   const ChatToolIcons._();
@@ -480,6 +481,23 @@ class _ToolButton extends StatelessWidget {
   }
 }
 
+bool _savedHidden(AppState app, Map<String, dynamic> e) {
+  final chat = e['chat'] is Map ? e['chat'] as Map : const {};
+  final a = e['a'] is Map ? e['a'] as Map : const {};
+  final pk = '${a['pk'] ?? ''}';
+  final key = '${chat['k'] ?? ''}';
+  if (chat['t'] == 'channel' && key.isNotEmpty && app.isChannelBlockedKey(key)) {
+    return true;
+  }
+  if (chat['t'] == 'dm' &&
+      key.isNotEmpty &&
+      app.blockedUsers.contains(key.startsWith('pm-') ? key.substring(3) : key)) {
+    return true;
+  }
+  return app.isRefHidden(
+      pubkey: pk, author: '${a['n'] ?? ''}', body: '${e['text'] ?? ''}');
+}
+
 class SavedMessagesPanel extends ConsumerWidget {
   const SavedMessagesPanel({super.key});
 
@@ -495,7 +513,11 @@ class SavedMessagesPanel extends ConsumerWidget {
     final c = context.nym;
     final tools = ref.read(chatToolsProvider);
     final settings = ref.watch(settingsProvider);
-    final items = tools.savedItems;
+    final app = ref.watch(appStateProvider);
+    final items = [
+      for (final e in tools.savedItems)
+        if (!_savedHidden(app, e)) e
+    ];
     final status = tools.savedStatus;
     final statusText = status == SavedStatus.local
         ? tr('Saved on this device only')
@@ -566,15 +588,17 @@ class SavedMessagesPanel extends ConsumerWidget {
                           Text.rich(
                               dimNymSuffixes(
                                   '${a['n']}',
-                                  nymSuffixStyle(TextStyle(
-                                      color: c.primary,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600))),
+                                  nymSuffixStyle(
+                                      TextStyle(
+                                          color: c.primary,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600),
+                                      contrast: context.highContrast)),
                               style: TextStyle(
                                   color: c.primary,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600)),
-                          Text(chatLabel,
+                          NymText(chatLabel,
                               style: TextStyle(color: c.textDim, fontSize: 12)),
                           Text(when,
                               style: TextStyle(color: c.textDim, fontSize: 12)),
@@ -948,7 +972,8 @@ class _ChatMediaPanelState extends ConsumerState<ChatMediaPanel> {
                         dimNymSuffixes(
                             it.author,
                             nymSuffixStyle(
-                                TextStyle(color: c.textDim, fontSize: 11))),
+                                TextStyle(color: c.textDim, fontSize: 11),
+                                contrast: context.highContrast)),
                         TextSpan(text: ' · ${when(it.at)}'),
                       ]),
                       style: TextStyle(color: c.textDim, fontSize: 11)),

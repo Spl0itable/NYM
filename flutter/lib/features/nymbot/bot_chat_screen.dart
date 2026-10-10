@@ -17,6 +17,7 @@ import '../../models/message.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../accounts/account_host.dart' show accountsProvider;
 import '../../widgets/chat/composer.dart'
     show ComposerDrafts, EmojiSentinelController;
 import '../../widgets/chat/message_row.dart'
@@ -43,6 +44,7 @@ import '../emoji/gif_picker.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/nym_format.dart' show NymFormat;
 import '../reactions/reaction_picker.dart';
+import '../settings/settings_widgets.dart' show SettingsToggleRow;
 import '../threads/thread_view.dart' show ThreadView;
 import '../toasts/toast_center.dart';
 import '../translate/translate_languages.dart';
@@ -57,6 +59,7 @@ import '../../services/storage/revocable_prefs.dart';
 import '../chat_lock/chat_lock_providers.dart';
 import '../../widgets/chat/list_anchor.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_tooltip.dart';
 
 /// Private Nymbot chat over the canonical bot PM thread, with tier/model switching and credit buying.
@@ -986,9 +989,9 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
   /// Order snapshotted at open so toggling a star doesn't reshuffle.
   List<MapEntry<String, String>> _translateLangOrder = const [];
 
-  /// Bot draft key in the shared draft store.
-  static final String _draftKey =
-      ComposerDrafts.keyFor(const ChatView.pm(kNymbotPubkey));
+  late final String _draftKey = ComposerDrafts.keyFor(
+      const ChatView.pm(kNymbotPubkey),
+      owner: ref.read(accountsProvider)?.changes.value.active ?? '');
 
   @override
   void initState() {
@@ -1153,7 +1156,10 @@ class _BotComposerState extends ConsumerState<_BotComposer> {
           text: _strippedQuoteText(content),
           fullText: content,
         );
-      case InsertTextAction() || ShareFilesAction():
+      case InsertTextAction() ||
+            ShareFilesAction() ||
+            SendAsRetryAction() ||
+            SendAsPutBackAction():
         // Share-sheet actions target real conversations, never the bot chat.
         return;
     }
@@ -2144,27 +2150,13 @@ class _QuotePreviewChip extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                RichText(
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  text: TextSpan(
-                    style: TextStyle(
-                        color: c.primary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600),
-                    children: [
-                      TextSpan(text: base),
-                      if (suffix.isNotEmpty)
-                        TextSpan(
-                          text: suffix,
-                          style: TextStyle(
-                            color: c.primary.withValues(alpha: 0.7),
-                            fontWeight: FontWeight.w100,
-                            fontSize: 12 * 0.9,
-                          ),
-                        ),
-                    ],
-                  ),
+                NymLabel(
+                  base,
+                  suffix: suffix,
+                  style: TextStyle(
+                      color: c.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -3050,17 +3042,12 @@ class _AnonModalState extends ConsumerState<_AnonModal> {
               style: TextStyle(color: c.textDim, fontSize: 12, height: 1.4),
             ),
             const SizedBox(height: 12),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
+            SettingsToggleRow(
+              key: const ValueKey('botAnonToggle'),
+              sub: true,
+              label: tr('Anonymous mode'),
+              hint: tr('Send this chat from a throwaway key'),
               value: state.anonEnabled,
-              thumbColor: WidgetStateProperty.resolveWith((states) {
-                if (states.contains(WidgetState.selected)) return c.primary;
-                return null;
-              }),
-              title: Text(tr('Anonymous mode'),
-                  style: TextStyle(color: c.text, fontSize: 14)),
-              subtitle: Text(tr('Send this chat from a throwaway key'),
-                  style: TextStyle(color: c.textDim, fontSize: 11)),
               onChanged: _busy ? null : (v) => _toggle(v),
             ),
             if (state.anonEnabled) ...[

@@ -47,9 +47,11 @@ class MentionAction extends ComposerAction {
 }
 
 class QuoteAction extends ComposerAction {
-  const QuoteAction({required this.fullNym, required this.content});
+  const QuoteAction(
+      {required this.fullNym, required this.content, this.messageId = ''});
   final String fullNym;
   final String content;
+  final String messageId;
 }
 
 /// Appends shared text so the user can review it before sending.
@@ -64,17 +66,37 @@ class ShareFilesAction extends ComposerAction {
   final List<String> paths;
 }
 
+class SendAsRetryAction extends ComposerAction {
+  const SendAsRetryAction(this.placeholder);
+  final String placeholder;
+}
+
+class SendAsPutBackAction extends ComposerAction {
+  const SendAsPutBackAction(this.placeholder);
+  final String placeholder;
+}
+
 class InteractionHooks extends StateNotifier<ComposerAction?> {
   InteractionHooks() : super(null);
 
   void requestMention(String fullNym) => state = MentionAction(fullNym);
 
-  void requestQuote({required String fullNym, required String content}) =>
-      state = QuoteAction(fullNym: fullNym, content: content);
+  void requestQuote(
+          {required String fullNym,
+          required String content,
+          String messageId = ''}) =>
+      state = QuoteAction(
+          fullNym: fullNym, content: content, messageId: messageId);
 
   void requestInsertText(String text) => state = InsertTextAction(text);
 
   void requestShareFiles(List<String> paths) => state = ShareFilesAction(paths);
+
+  void requestSendAsRetry(String placeholder) =>
+      state = SendAsRetryAction(placeholder);
+
+  void requestSendAsPutBack(String placeholder) =>
+      state = SendAsPutBackAction(placeholder);
 
   void consume() => state = null;
 }

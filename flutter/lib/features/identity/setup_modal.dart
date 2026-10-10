@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/constants/site_links.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../services/platform/deep_links.dart';
@@ -19,6 +20,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/brand_buttons.dart';
+import '../../widgets/common/nym_label.dart' show NymText;
 import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
@@ -670,7 +672,7 @@ class _SetupModalState extends ConsumerState<SetupModal> {
       ),
       if (_loginError != null) ...[
         const SizedBox(height: 5),
-        Text(_loginError!, style: TextStyle(color: c.danger, fontSize: 12)),
+        NymText(_loginError!, style: TextStyle(color: c.danger, fontSize: 12)),
       ],
       const SizedBox(height: 5),
       Text(
@@ -1095,7 +1097,8 @@ class _DeletedNoticeBanner extends StatelessWidget {
           border: Border.all(color: c.secondary),
         ),
         child: Text.rich(
-          dimNymSuffixes(notice.text, nymSuffixStyle(style)),
+          dimNymSuffixes(notice.text,
+              nymSuffixStyle(style, contrast: context.highContrast)),
           style: style,
           textAlign: TextAlign.center,
         ),

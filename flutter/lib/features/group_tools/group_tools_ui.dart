@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../core/utils/nym_utils.dart';
 import '../../models/group.dart';
 import '../../models/message.dart';
 import '../../state/app_state.dart';
@@ -24,13 +25,14 @@ import '../groups/group_logic.dart' show kMaxGroupMembers;
 import '../i18n/i18n.dart';
 import '../messages/format/discord_timestamp.dart';
 import '../messages/format/message_content.dart';
-import '../search/unified_search_panel.dart' show nymSuffixStyle;
+import '../../widgets/common/nym_label.dart';
 import '../toasts/toast_center.dart';
 import 'group_tools.dart';
 import 'group_tools_providers.dart';
 import 'group_tools_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/dialog_button.dart';
 
 class GroupToolIcons {
   const GroupToolIcons._();
@@ -391,8 +393,8 @@ class GtEventCard extends ConsumerWidget {
             if (lists[s]!.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  '${labels[s]}: ${lists[s]!.map(nym.gtNym).join(', ')}',
+                child: NymText(
+                  '${labels[s]}: ${lists[s]!.map((pk) => '${nym.gtNym(pk)}#${getPubkeySuffix(pk)}').join(', ')}',
                   key: ValueKey('gtWho-$s'),
                   style: TextStyle(color: c.textDim, fontSize: 12),
                 ),
@@ -943,8 +945,8 @@ class GtPanelShell extends StatelessWidget {
   }
 }
 
-Text _hint(BuildContext context, String text) =>
-    Text(text, style: TextStyle(color: context.nym.textDim, fontSize: 12));
+Widget _hint(BuildContext context, String text) =>
+    NymText(text, style: TextStyle(color: context.nym.textDim, fontSize: 12));
 
 GroupToolsService _svc(BuildContext context) =>
     ProviderScope.containerOf(context, listen: false).read(groupToolsProvider);
@@ -1090,20 +1092,18 @@ class _InvitePreviewBodyState extends State<_InvitePreviewBody> {
             ),
           ),
         const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
+        DialogActions(
+          alignment: WrapAlignment.end,
           children: [
-            GtButton(
+            DialogButton.secondary(
               label: tr('Cancel'),
               onTap: () => Navigator.of(context).pop(false),
             ),
-            const SizedBox(width: 8),
-            GtButton(
+            DialogButton(
               key: const ValueKey('gtInviteJoin'),
               label: full
                   ? tr('Group is full')
                   : (widget.waiting ? tr('Waiting for approval') : tr('Join')),
-              primary: true,
               onTap: widget.waiting || full
                   ? null
                   : () => Navigator.of(context).pop(true),
@@ -1169,14 +1169,9 @@ class _JoinRequestsBody extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text.rich(
-                        TextSpan(children: [
-                          TextSpan(text: nym.gtNym(r.pubkey)),
-                          TextSpan(
-                            text: '#${r.pubkey.substring(r.pubkey.length - 4)}',
-                            style: nymSuffixStyle(TextStyle(color: c.text)),
-                          ),
-                        ]),
+                      NymLabel(
+                        nym.gtNym(r.pubkey),
+                        pubkey: r.pubkey,
                         style: TextStyle(color: c.text),
                       ),
                       Text(
@@ -1518,18 +1513,16 @@ class _CreateEventBodyState extends ConsumerState<_CreateEventBody> {
             decoration: deco(tr('Note (optional)')),
           ),
           const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          DialogActions(
+            alignment: WrapAlignment.end,
             children: [
-              GtButton(
+              DialogButton.secondary(
                 label: tr('Cancel'),
                 onTap: () => Navigator.of(context).pop(),
               ),
-              const SizedBox(width: 8),
-              GtButton(
+              DialogButton(
                 key: const ValueKey('gtEventCreate'),
                 label: tr('Create event'),
-                primary: true,
                 onTap: _submit,
               ),
             ],
@@ -1965,18 +1958,16 @@ class _CreateCallLinkBodyState extends ConsumerState<_CreateCallLinkBody> {
             ),
           ),
           const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          DialogActions(
+            alignment: WrapAlignment.end,
             children: [
-              GtButton(
+              DialogButton.secondary(
                 label: tr('Cancel'),
                 onTap: () => Navigator.of(context).pop(),
               ),
-              const SizedBox(width: 8),
-              GtButton(
+              DialogButton(
                 key: const ValueKey('gtCreateCallLink'),
                 label: tr('Create link'),
-                primary: true,
                 onTap: () {
                   final link = ref
                       .read(groupToolsProvider)
@@ -2062,7 +2053,7 @@ class CallLinksBody extends ConsumerWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
+                          NymText(
                             '${l.name} · ${l.kind == 'video' ? tr('Video') : tr('Voice')}',
                             style: TextStyle(
                               color: st == 'active' ? c.text : c.textDim,

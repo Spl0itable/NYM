@@ -348,7 +348,8 @@ window.nymHaptic = function (kind) {
 
         'openMessageThread':          function (_e, t) { nym().openMessageThread(t); },
         'closeThreadView':            function () { nym().closeThreadView(); },
-        'onThreadsEnabledChange':     function (_e, t) { window.onThreadsEnabledChange(t.value); },
+        'onThreadsEnabledChange':     function (_e, t) { window.onThreadsEnabledChange(!!t.checked); },
+        'onSettingPillChange':        function (_e, t) { window.onSettingPillChange(t); },
 
         'navigateBack':               function () { nym().navigateBack(); },
         'navigateForward':            function () { nym().navigateForward(); },
@@ -463,7 +464,7 @@ window.nymHaptic = function (kind) {
         'toggleLowDataModeFromStats': function (e) { window.toggleLowDataModeFromStats(e); },
         'toggleRelayTransportFromStats': function () { window.toggleRelayTransportFromStats(); },
         'onTransparencyChange':       function (_e, t) { window.onTransparencyChange(t.value); },
-        'onColumnsWallpaperChange':   function (_e, t) { window.onColumnsWallpaperChange(t.value); },
+        'onColumnsWallpaperChange':   function (_e, t) { window.onColumnsWallpaperChange(!!t.checked); },
         'addBlockedKeyword':          function () { nym().addBlockedKeyword(); },
         'executeSettingsTransfer':    function () { nym().executeSettingsTransfer(); },
         'clearLocalStorageCache':     function () { window.clearLocalStorageCache(); },

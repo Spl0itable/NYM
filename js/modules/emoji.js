@@ -4,6 +4,8 @@ const _RX_REACTION_SHORTCODE = /^:[a-zA-Z0-9_]{1,64}:$/;
 const _RX_REACTION_EMOJI = new RegExp('^(?:(?:[\\u{1F1E0}-\\u{1F1FF}]{2})|(?:[#*0-9]\\u{FE0F}?\\u{20E3})|(?:(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?(?:\\u{200D}(?:\\p{Emoji_Presentation}|\\p{Extended_Pictographic})(?:\\u{FE0F}|\\u{FE0E})?(?:[\\u{1F3FB}-\\u{1F3FF}])?)*)(?:[\\u{E0020}-\\u{E007E}]+\\u{E007F})?)$', 'u');
 const _REACTION_MAX_LENGTH = 64;
 const _REACTION_EXTRA_SYMBOLS = new Set(['\u20BF', '+', '-']);
+const EMOJI_D1_REFRESH_MS = 6 * 60 * 60 * 1000;
+const EMOJI_PACK_CACHE_MAX = 200;
 
 Object.assign(NYM.prototype, {
 
@@ -39,7 +41,7 @@ Object.assign(NYM.prototype, {
                 try {
                     const packs = Array.from(this.customEmojiPacks.values())
                         .sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-                        .slice(0, 200);
+                        .slice(0, EMOJI_PACK_CACHE_MAX);
                     localStorage.setItem('nym_custom_emoji_packs', JSON.stringify(packs));
                 } catch (err) {
                     if (err && err.name === 'QuotaExceededError') {
@@ -200,20 +202,38 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _emojiD1Meta() {
+        try {
+            const m = JSON.parse(localStorage.getItem('nym_custom_emoji_d1') || 'null');
+            return m && typeof m === 'object' ? m : null;
+        } catch (_) { return null; }
+    },
+
     async _emojiRestoreFromD1() {
         if (!this._getApiHost || !this._getApiHost()) return;
         if (typeof this._storageApiStream !== 'function') return;
         const now = Date.now();
         if (this._emojiD1FetchedAt && now - this._emojiD1FetchedAt < 600000) return;
+        const held = this.customEmojiPacks && this.customEmojiPacks.size > 0;
+        const meta = held ? this._emojiD1Meta() : null;
+        if (meta && Number.isFinite(meta.at) && now >= meta.at && now - meta.at < EMOJI_D1_REFRESH_MS) return;
         this._emojiD1FetchedAt = now;
+        const etag = meta && typeof meta.etag === 'string' && /^[0-9a-f]{32}$/.test(meta.etag) ? meta.etag : null;
         const events = [];
+        let tag = null;
+        let same = false;
         try {
-            const resp = await this._storageApiStream('emoji-get', {}, false);
+            const resp = await this._storageApiStream('emoji-get', etag ? { etag } : {}, false);
+            tag = resp.headers.get('X-Etag');
+            same = !!etag && resp.headers.get('X-Same') === '1';
             await this._readNdjsonStream(resp, (ev) => events.push(ev));
         } catch (_) {
             this._emojiD1FetchedAt = 0;
             return;
         }
+        const packs = events.filter((ev) => ev && ev.kind === 30030).length;
+        const keep = typeof tag === 'string' && /^[0-9a-f]{32}$/.test(tag) && (same || packs <= EMOJI_PACK_CACHE_MAX) ? tag : null;
+        try { localStorage.setItem('nym_custom_emoji_d1', JSON.stringify({ at: now, etag: keep })); } catch (_) { }
         let sliceStart = Date.now();
         for (let i = 0; i < events.length; i++) {
             if (await this._verifyRelayEventAsync(events[i])) {
@@ -309,22 +329,51 @@ Object.assign(NYM.prototype, {
         return `<img class="${cls}" src="${safeUrl}" alt=":${safeCode}:" title=":${safeCode}:" data-emoji-code="${safeCode}" width="30" height="30" decoding="async" loading="lazy" draggable="false">`;
     },
 
-    customEmojiTagsForContent(content) {
+    customEmojiTagsForContent(content, map) {
         const tags = [];
-        if (!content || !this.customEmojis || this.customEmojis.size === 0) return tags;
+        const emojis = map || this.customEmojis;
+        if (!content || !emojis || emojis.size === 0) return tags;
         const seen = new Set();
         const re = /:([a-zA-Z0-9_]+):/g;
         let m;
         while ((m = re.exec(content)) !== null) {
             const code = m[1];
             if (seen.has(code)) continue;
-            const url = this.customEmojis.get(code);
+            const url = emojis.get(code);
             if (url) {
                 seen.add(code);
                 tags.push(['emoji', code, url]);
             }
         }
         return tags;
+    },
+
+    customEmojiMapFrom(get) {
+        const map = new Map();
+        const add = (code, url) => {
+            if (!code || !url || typeof code !== 'string' || typeof url !== 'string') return;
+            if (!_RX_EMOJI_SHORTCODE.test(code) || !_RX_EMOJI_URL.test(url)) return;
+            if (this.emojiMap && this.emojiMap[code.toLowerCase()]) return;
+            map.set(code, url);
+        };
+        try {
+            const list = JSON.parse(get('nym_custom_emojis') || '[]');
+            if (Array.isArray(list)) for (const e of list) if (Array.isArray(e)) add(e[0], e[1]);
+        } catch (_) { }
+        try {
+            const packs = JSON.parse(get('nym_custom_emoji_packs') || '[]');
+            const seen = new Map();
+            if (Array.isArray(packs)) {
+                for (const p of packs) {
+                    if (!p || !p.pubkey || !Array.isArray(p.emojis) || p.emojis.length === 0) continue;
+                    const key = `${p.pubkey}:${p.identifier || ''}`;
+                    if (seen.has(key) && seen.get(key) >= (p.created_at || 0)) continue;
+                    seen.set(key, p.created_at || 0);
+                    for (const e of p.emojis) if (e) add(e.shortcode, e.url);
+                }
+            }
+        } catch (_) { }
+        return map;
     },
 
     isCustomEmojiOnly(content) {

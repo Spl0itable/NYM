@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'nym_a11y.dart';
 import 'nym_colors.dart';
 import '../../widgets/common/nym_tooltip.dart';
 
@@ -172,7 +173,7 @@ const List<String> kEmojiFontFallback = [
 ];
 
 /// Material [ThemeData] carrying the [NymColors] extension.
-ThemeData buildNymThemeData(NymColors c) {
+ThemeData buildNymThemeData(NymColors c, {NymA11y a11y = const NymA11y()}) {
   final base = c.isLight
       ? ThemeData.light(useMaterial3: true)
       : ThemeData.dark(useMaterial3: true);
@@ -209,6 +210,6 @@ ThemeData buildNymThemeData(NymColors c) {
       selectionHandleColor: c.primary,
     ),
     tooltipTheme: const TooltipThemeData(waitDuration: NymTooltipTiming.wait),
-    extensions: [c],
+    extensions: [c, a11y],
   );
 }

@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../../core/constants/relays.dart';
+import '../../features/relays/relay_block.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import 'held_publishes.dart';
@@ -248,6 +249,7 @@ class RelayPool implements PoolTransport {
     required List<String> relays,
     EventVerifier? verify,
     Set<String>? writeOnlyRelays,
+    Iterable<String>? blockedRelays,
     RelayConnection Function(String url)? connectionFactory,
     Random? random,
     this.eoseQuorum = 0.6,
@@ -256,11 +258,41 @@ class RelayPool implements PoolTransport {
   })  : _verify = verify ?? _acceptAll,
         _held = HeldPublishes(max: heldMax, wait: heldWait),
         _writeOnly = writeOnlyRelays ?? RelayConfig.writeOnlyRelays,
+        _blocked = RelayBlock.toSet(blockedRelays),
         _connectionFactory =
             connectionFactory ?? ((url) => RelayConnection(url)),
         _rng = random ?? Random() {
     for (final url in relays) {
+      if (url == RelayConfig.appRelay) continue;
+      _wanted.add(url);
       _addRelayInternal(url);
+    }
+  }
+
+  Set<String> _blocked;
+
+  final Set<String> _wanted = {};
+
+  bool _started = false;
+
+  Set<String> get blockedRelays => Set.unmodifiable(_blocked);
+
+  bool isRelayBlocked(String url) => RelayBlock.isBlocked(_blocked, url);
+
+  void setBlockedRelays(Iterable<String> urls) {
+    final next = RelayBlock.toSet(urls);
+    if (next.length == _blocked.length && next.containsAll(_blocked)) return;
+    _blocked = next;
+    for (final url in _connections.keys.toList()) {
+      if (isRelayBlocked(url)) unawaited(removeRelay(url));
+    }
+    for (final url in _wanted) {
+      if (isRelayBlocked(url) || _connections.containsKey(url)) continue;
+      if (_started) {
+        addRelay(url);
+      } else {
+        _addRelayInternal(url);
+      }
     }
   }
 
@@ -358,6 +390,7 @@ class RelayPool implements PoolTransport {
 
   void _addRelayInternal(String url) {
     if (_connections.containsKey(url)) return;
+    if (isRelayBlocked(url)) return;
     final conn = _connectionFactory(url);
     _connections[url] = conn;
     _msgSubs[url] = conn.messages.listen((msg) => _onRelayMessage(url, msg));
@@ -372,7 +405,10 @@ class RelayPool implements PoolTransport {
 
   /// Adds a relay; when already connected it connects and back-fills active subscriptions.
   void addRelay(String url) {
+    if (url == RelayConfig.appRelay) return;
+    _wanted.add(url);
     if (_bannedRelays.contains(url)) return;
+    if (isRelayBlocked(url)) return;
     if (_connections.containsKey(url)) return;
     _addRelayInternal(url);
     final conn = _connections[url]!;
@@ -394,6 +430,7 @@ class RelayPool implements PoolTransport {
   @override
   void connectAll() {
     _disposed = false;
+    _started = true;
     _startSampler();
     for (final conn in _connections.values) {
       conn.connect();
@@ -414,6 +451,7 @@ class RelayPool implements PoolTransport {
   @override
   Future<void> disconnectAll() async {
     _disposed = true;
+    _started = false;
     _held.dropAll();
     _stopSampler();
     final subs = _subscriptions.values.toList();

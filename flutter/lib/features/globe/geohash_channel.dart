@@ -79,6 +79,7 @@ List<GeohashChannelPoint> buildGeohashChannels(
     candidates.add(name);
   });
 
+  candidates.removeWhere(state.isChannelHidden);
   if (candidates.isEmpty) return const [];
 
   final n = math.max(1, math.min(24, windowHours));

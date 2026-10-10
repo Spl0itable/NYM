@@ -59,6 +59,7 @@ import {
   ipv6Blocked,
   ipv6NetKey,
   cacheRateTake,
+  cacheRateTakeAll,
   parseNwcUri,
   invoicePaymentConfirmed,
   sanitizeInput,
@@ -261,28 +262,9 @@ var BOT_PUBLIC_RATE_LIMIT = 20;
 var BOT_PUBLIC_RATE_WINDOW_MS = 60000;
 
 async function publicCommandRateOk(request) {
-  try {
-    if (typeof caches === "undefined" || !caches.default) return true;
-    var ip = request.headers.get("CF-Connecting-IP") || "";
-    if (!ip) return true;
-    var windowId = Math.floor(Date.now() / BOT_PUBLIC_RATE_WINDOW_MS);
-    var key = new Request("https://nymbot-ratelimit.invalid/public?ip=" +
-      encodeURIComponent(ip) + "&w=" + windowId);
-    var count = 0;
-    var hit = await caches.default.match(key);
-    if (hit) {
-      var n = parseInt(await hit.text(), 10);
-      if (Number.isFinite(n)) count = n;
-    }
-    if (count >= BOT_PUBLIC_RATE_LIMIT) return false;
-    var ttlSec = Math.ceil(BOT_PUBLIC_RATE_WINDOW_MS / 1000);
-    await caches.default.put(key, new Response(String(count + 1), {
-      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + ttlSec }
-    }));
-    return true;
-  } catch (_) {
-    return true;
-  }
+  var ip = request.headers.get("CF-Connecting-IP") || "";
+  if (!ip) return true;
+  return await cacheRateTake("bot-public", ip, 1, BOT_PUBLIC_RATE_LIMIT, BOT_PUBLIC_RATE_WINDOW_MS);
 }
 
 function aiSafeValue(value) {
@@ -3936,8 +3918,11 @@ async function handleBotPMActionPriced(context, body, botPrivkey, botPubkey) {
   if (body.action === "transcribe") {
     if (!env.AI) return json({ error: "Transcription is not configured on this server." }, 503);
     var transcribeIp = (context.request && context.request.headers && context.request.headers.get("CF-Connecting-IP")) || "";
-    if (!(await cacheRateTake("transcribe", userPubkey, 1, BOT_TRANSCRIBE_RATE, BOT_PM_RATE_WINDOW_MS)) ||
-      !(await cacheRateTake("transcribe-ip", transcribeIp, 1, BOT_TRANSCRIBE_IP_RATE, BOT_PM_RATE_WINDOW_MS))) {
+    var transcribeGate = await cacheRateTakeAll([
+      { bucket: "transcribe", who: userPubkey, units: 1, limit: BOT_TRANSCRIBE_RATE, windowMs: BOT_PM_RATE_WINDOW_MS },
+      { bucket: "transcribe-ip", who: transcribeIp, units: 1, limit: BOT_TRANSCRIBE_IP_RATE, windowMs: BOT_PM_RATE_WINDOW_MS }
+    ]);
+    if (!transcribeGate.ok) {
       return json({ error: "Slow down \u2014 too many recordings. Try again in a minute." }, 429);
     }
     var audioRaw = typeof body.audio === "string" ? body.audio : "";

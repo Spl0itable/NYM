@@ -5,6 +5,7 @@ import 'package:flutter/material.dart' show Brightness;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/constants/storage_keys.dart';
+import '../core/theme/nym_a11y.dart';
 import '../core/theme/nym_colors.dart';
 import '../core/theme/nym_theme.dart';
 import '../models/settings.dart';
@@ -373,6 +374,18 @@ class SettingsController extends StateNotifier<Settings> {
     _stampPref('colorfulMessages', syncedTs);
   }
 
+  void setLargeTargets(bool v, {int? syncedTs}) {
+    _kv.setBool(StorageKeys.largeTargets, v);
+    state = state.copyWith(largeTargets: v);
+    _stampPref('largeTargets', syncedTs);
+  }
+
+  void setHighContrast(bool v, {int? syncedTs}) {
+    _kv.setBool(StorageKeys.highContrast, v);
+    state = state.copyWith(highContrast: v);
+    _stampPref('highContrast', syncedTs);
+  }
+
   void setHidePreviews(bool v, {int? syncedTs}) {
     _kv.setBool(StorageKeys.hidePreviews, v);
     state = state.copyWith(hidePreviews: v);
@@ -484,4 +497,10 @@ final nymColorsProvider = Provider<NymColors>((ref) {
     brightness: brightness,
     solidUi: settings.solidUi,
   );
+});
+
+final nymA11yProvider = Provider<NymA11y>((ref) {
+  final s = ref.watch(settingsProvider
+      .select((x) => (t: x.largeTargets, c: x.highContrast)));
+  return NymA11y(largeTargets: s.t, highContrast: s.c);
 });

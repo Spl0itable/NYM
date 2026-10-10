@@ -47,11 +47,11 @@
             else if (el.getAttribute('role') === 'menuitem' && !el.classList.contains('nm-hidden')) {
                 var icon = el.querySelector('svg');
                 var text = el.querySelector('span');
-                entries.push({ label: text ? text.textContent : el.textContent, svg: icon ? icon.outerHTML : '', disabled: el.disabled, run: function () { el.click(); } });
+                entries.push({ label: text ? text.textContent : el.textContent, svg: icon ? icon.outerHTML : '', disabled: el.disabled, cls: el.dataset.uhId ? 'uh-chat-item uh-act-' + el.dataset.uhId : (el.classList.contains('uh-chat-item') ? 'uh-chat-item' : ''), run: function () { el.click(); } });
             }
         });
         var n = window.nym;
-        var group = n && n.inPMMode && n.currentGroup ? n.currentGroup : null;
+        var group = n && !meshMode() && n.inPMMode && n.currentGroup ? n.currentGroup : null;
         return sheet.show(entries, 'More', { group: group });
     }
 
@@ -137,15 +137,8 @@
     }
 
     function lastShown(n, list) {
-        if (!Array.isArray(list)) return null;
-        for (var i = list.length - 1; i >= 0; i--) {
-            var m = list[i];
-            if (!m || m.deleted || m.isDeleted || m._hidden) continue;
-            if (m.pubkey && n.blockedUsers && n.blockedUsers.has(m.pubkey)) continue;
-            if (typeof m.content !== 'string') continue;
-            return m;
-        }
-        return null;
+        if (!Array.isArray(list) || typeof n._previewMessage !== 'function') return null;
+        return n._previewMessage(list);
     }
 
     function rowLocked(n, item) {
@@ -186,6 +179,52 @@
         return { pv: pv, tm: tm };
     }
 
+    function fillDimmed(el, text, dim, from, to) {
+        var at = from;
+        for (var i = 0; i < dim.length; i++) {
+            var a = Math.max(dim[i][0], from);
+            var b = Math.min(dim[i][1], to);
+            if (b <= a) continue;
+            if (a > at) el.appendChild(document.createTextNode(text.slice(at, a)));
+            var sfx = document.createElement('span');
+            sfx.className = 'nym-suffix';
+            sfx.textContent = text.slice(a, b);
+            el.appendChild(sfx);
+            at = b;
+        }
+        if (at < to) el.appendChild(document.createTextNode(text.slice(at, to)));
+        return el;
+    }
+
+    function previewPart(tag, cls) {
+        var el = document.createElement(tag);
+        el.className = cls;
+        return el;
+    }
+
+    function paintPreview(pv, text, dim, sender, bodyAt) {
+        var at = bodyAt > 1 && bodyAt <= text.length ? bodyAt : 0;
+        var sig = text + '\u0000' + JSON.stringify(dim) + '\u0000' + (sender ? sender.join(',') : '') + '\u0000' + at;
+        if (pv._lySig === sig) return;
+        pv._lySig = sig;
+        pv.classList.toggle('has-sender', at > 0);
+        var frag = document.createDocumentFragment();
+        if (at > 0) {
+            var nameEnd = sender ? sender[0] : at - 2;
+            var name = previewPart('bdi', 'row-preview-name');
+            name.textContent = text.slice(0, nameEnd);
+            frag.appendChild(name);
+            frag.appendChild(fillDimmed(previewPart('span', 'row-preview-tag'), text, dim, nameEnd, at));
+        }
+        if (text) {
+            var body = fillDimmed(previewPart('span', 'row-preview-body'), text, dim, at, text.length);
+            body.setAttribute('dir', 'auto');
+            frag.appendChild(body);
+        }
+        pv.textContent = '';
+        pv.appendChild(frag);
+    }
+
     function paintRow(n, item, now, hide, ui) {
         var conv = rowConversation(n, item);
         if (!conv) return;
@@ -194,16 +233,26 @@
         if (!els) return;
         var locked = rowLocked(n, item);
         var text = '';
+        var dim = [];
+        var sender = null;
+        var bodyAt = 0;
         if (m) {
             var body = m.content;
-            try { if (typeof n._notifPreviewText === 'function') body = n._notifPreviewText(body); } catch (_) { }
+            try { body = typeof n._previewBody === 'function' ? n._previewBody(body) : n._notifPreviewText(body); } catch (_) { }
             var author = m.author || '';
-            try { if (typeof n.parseNymFromDisplay === 'function') author = n.parseNymFromDisplay(author); } catch (_) { }
+            try {
+                if (typeof n.resolveDisplayNym === 'function') author = n.resolveDisplayNym(m.pubkey, m.author);
+                else if (typeof n.parseNymFromDisplay === 'function') author = n.parseNymFromDisplay(author);
+            } catch (_) { }
             var redacted = '';
             if (locked) { try { redacted = n._clRedactText().body; } catch (_) { redacted = ui('New message'); } }
-            text = LM().rowPreview({ kind: conv.kind, author: author, self: !!m.isOwn, text: body, hide: hide, locked: locked, redacted: redacted }, ui);
+            var parts = LM().rowPreviewParts({ kind: conv.kind, author: author, pubkey: m.pubkey, self: !!m.isOwn, text: body, hide: hide, locked: locked, redacted: redacted }, ui);
+            text = parts.text;
+            dim = parts.dim;
+            sender = parts.sender || null;
+            bodyAt = parts.bodyAt || 0;
         }
-        if (els.pv.textContent !== text) els.pv.textContent = text;
+        paintPreview(els.pv, text, dim, sender, bodyAt);
         item.classList.toggle('has-preview', !!text);
         var ts = m ? (m._ms || (m.created_at ? m.created_at * 1000 : (m.timestamp instanceof Date ? m.timestamp.getTime() : 0))) : 0;
         var when = ts ? LM().relativeTime(now, ts, ui) : '';
@@ -482,6 +531,7 @@
         var el = null;
         if (!sec) {
             el = document.getElementById(target);
+            if (!el && /Select$/.test(target)) el = document.getElementById(target.replace(/Select$/, 'Toggle'));
             sec = el && m.contains(el) ? el.closest('.settings-section[data-section-key]') : null;
         }
         if (!sec) return;
@@ -638,7 +688,7 @@
         if (kind === 'channel') return '#' + id;
         if (kind === 'group') {
             var g = n.groupConversations && n.groupConversations.get(id);
-            return g && g.name ? g.name : ui('Group');
+            return g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || 'Group')) : ui('Group');
         }
         if (kind === 'pm') {
             var nymName = typeof n.getNymFromPubkey === 'function' ? n.getNymFromPubkey(id) : '';
@@ -670,7 +720,7 @@
             title.className = 'notif-group-title';
             var first = items[g.items[0]];
             var label = notifGroupTitle(n, g.key, first && first._notif, ui);
-            if (g.key.indexOf('pm:') === 0 && typeof n.nymLabelHtml === 'function') title.innerHTML = n.nymLabelHtml(label);
+            if (g.key.indexOf('pm:') === 0 && typeof n.nymLabelHtml === 'function') title.innerHTML = '<bdi>' + n.nymLabelHtml(label) + '</bdi>';
             else title.textContent = label;
             var unread = g.items.filter(function (i) { return !items[i]._notif || !items[i]._notif.viewed; }).length;
             if (unread) {
@@ -1055,9 +1105,11 @@
 
     function setHidePreviews(on) {
         lsSet(HIDE_KEY, on ? '1' : null);
-        var sel = document.getElementById('hidePreviewsSelect');
-        if (sel) sel.value = on ? 'on' : 'off';
+        var sel = document.getElementById('hidePreviewsToggle');
+        if (sel) sel.checked = !!on;
         sweepPreviews();
+        var n = window.nym;
+        if (n && typeof n._refreshNotificationsModalIfOpen === 'function') n._refreshNotificationsModalIfOpen();
     }
 
     function notePref(name) {
@@ -1065,7 +1117,7 @@
         if (n && typeof n.notePrefChanged === 'function') n.notePrefChanged(name);
     }
 
-    ACTIONS.onHidePreviewsChange = function (_e, t) { setHidePreviews(t && t.value === 'on'); notePref('hidePreviews'); };
+    ACTIONS.onHidePreviewsChange = function (_e, t) { setHidePreviews(!!(t && t.checked)); notePref('hidePreviews'); };
 
     var COLORFUL_KEY = 'nym_colorful_messages';
 
@@ -1073,8 +1125,8 @@
 
     function applyColorful() {
         if (document.body) document.body.classList.toggle('colorful-messages', colorful());
-        var sel = document.getElementById('colorfulMessagesSelect');
-        if (sel) sel.value = colorful() ? 'on' : 'off';
+        var sel = document.getElementById('colorfulMessagesToggle');
+        if (sel) sel.checked = colorful();
     }
 
     function setColorful(on) {
@@ -1083,14 +1135,51 @@
     }
 
     ACTIONS.onColorfulMessagesChange = function (_e, t) {
-        setColorful(!!(t && t.value === 'on'));
+        setColorful(!!(t && t.checked));
         notePref('colorfulMessages');
     };
 
+    var TARGETS_KEY = 'nym_large_targets';
+    var CONTRAST_KEY = 'nym_high_contrast';
+
+    function applyA11y() {
+        var t = lsGet(TARGETS_KEY) === '1';
+        var c = lsGet(CONTRAST_KEY) === '1';
+        if (document.body) {
+            document.body.classList.toggle('a11y-targets', t);
+            document.body.classList.toggle('a11y-contrast', c);
+        }
+        var tb = document.getElementById('a11yTargetsToggle');
+        if (tb) tb.checked = t;
+        var cb = document.getElementById('a11yContrastToggle');
+        if (cb) cb.checked = c;
+    }
+
+    function setLargeTargets(on) {
+        lsSet(TARGETS_KEY, on ? '1' : null);
+        applyA11y();
+    }
+
+    function setHighContrast(on) {
+        lsSet(CONTRAST_KEY, on ? '1' : null);
+        applyA11y();
+    }
+
+    ACTIONS.onLargeTargetsChange = function (_e, t) {
+        setLargeTargets(!!(t && t.checked));
+        notePref('largeTargets');
+    };
+
+    ACTIONS.onHighContrastChange = function (_e, t) {
+        setHighContrast(!!(t && t.checked));
+        notePref('highContrast');
+    };
+
     function syncSettings() {
-        var sel = document.getElementById('hidePreviewsSelect');
-        if (sel) sel.value = previewsHidden() ? 'on' : 'off';
+        var sel = document.getElementById('hidePreviewsToggle');
+        if (sel) sel.checked = previewsHidden();
         applyColorful();
+        applyA11y();
     }
 
 
@@ -1122,6 +1211,7 @@
         var meta = document.getElementById('channelMeta');
         var av = document.getElementById('chatHeaderAvatar');
         var title = document.getElementById('chatHeaderTitle');
+        var badges = document.getElementById('chatHeaderBadges');
         var sub = document.getElementById('chatHeaderSub');
         var mid = document.getElementById('chatTitleBtn');
         if (!n || !src || !av || !title || !sub || !mid) return;
@@ -1132,6 +1222,7 @@
         av.className = 'uh-avatar';
         av.replaceChildren();
         title.replaceChildren();
+        if (badges) badges.replaceChildren();
         if (kind === 'pm' || kind === 'bot') {
             var row = src.querySelector('.pm-header-row');
             var img = row && row.querySelector('.pm-header-avatar img');
@@ -1139,7 +1230,8 @@
             if (row) {
                 Array.prototype.forEach.call(row.childNodes, function (c) {
                     if (c.nodeType === 1 && c.classList.contains('pm-header-avatar')) return;
-                    title.appendChild(c.cloneNode(true));
+                    var named = c.nodeType !== 1 || c.classList.contains('pm-name-text') || c.classList.contains('nym-suffix');
+                    (named || !badges ? title : badges).appendChild(c.cloneNode(true));
                 });
             }
             var seen = textOf(src.querySelector('.pm-last-seen'));
@@ -1151,9 +1243,9 @@
             var gimg = src.querySelector('.group-header-custom-avatar');
             if (gimg) av.appendChild(gimg.cloneNode(true));
             else av.innerHTML = PEOPLE_SVG;
-            title.textContent = g ? g.name : textOf(src.querySelector('.group-name-text'));
+            title.textContent = g ? (typeof n._groupLabel === 'function' ? n._groupLabel(g) : (g.name || 'Group')) : textOf(src.querySelector('.group-name-text'));
             var count = g ? (typeof n.abbreviateNumber === 'function' ? n.abbreviateNumber(g.members.length) : g.members.length) : '';
-            var desc = g && window.NymGroupTools ? window.NymGroupTools.descriptionLine(g.description) : '';
+            var desc = g && window.NymGroupTools ? window.NymGroupTools.descriptionLine((typeof n._groupDescription === 'function' ? n._groupDescription(g) : (g.description || ''))) : '';
             subText = joinSub([count !== '' ? uiT(n, count + ' members') : '', desc || enc]);
         } else if (kind === 'geohash') {
             av.innerHTML = n._channelGlyphSvg(true, 18);
@@ -1189,36 +1281,139 @@
         applyActionOverflow();
     }
 
-    function chatActions() {
-        var box = document.querySelector('header.chat-header .uh-actions');
+    var HEADER_IDS = { shareChannelBtn: 'share', favoriteChannelBtn: 'favorite', rejoinCallBtn: 'rejoin', audioCallBtn: 'audio', videoCallBtn: 'video', meshGhostBtn: 'ghost', meshAddBtn: 'addDevice' };
+
+    function actionsIn(sel) {
+        var box = document.querySelector('header.chat-header ' + sel);
         if (!box) return [];
         return Array.prototype.filter.call(box.children, function (b) {
             return b.tagName === 'BUTTON' && b.id !== 'infoPanelBtn';
         });
     }
 
+    function chatActions() { return actionsIn('.channel-action-buttons'); }
+
+    function meshActions() { return actionsIn('.mesh-hdr-actions'); }
+
+    function meshMode() {
+        var main = document.querySelector('.main-content');
+        return !!(main && main.classList.contains('mesh-mode'));
+    }
+
+    function liveAction(b) {
+        return b.style.display !== 'none' && !b.hidden && !b.classList.contains('nm-call-hidden') && !b.classList.contains('nm-hidden');
+    }
+
+    function shownEl(el) {
+        if (!el || !el.getClientRects().length) return false;
+        var cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden';
+    }
+
+    function titleRoom(mid) {
+        var row = mid && mid.querySelector('.uh-title-row');
+        var title = row && row.querySelector('.uh-title');
+        if (!row || !title || !shownEl(row)) return null;
+        var used = 0;
+        var count = 0;
+        Array.prototype.forEach.call(row.children, function (c) {
+            if (c === title || !shownEl(c)) return;
+            var cs = getComputedStyle(c);
+            used += c.getBoundingClientRect().width + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0);
+            count++;
+        });
+        return Math.round(row.getBoundingClientRect().width - used - count * (parseFloat(getComputedStyle(row).columnGap) || 0));
+    }
+
+    function markHeaderEnds(head, gap, mid) {
+        var t = mid && shownEl(mid) ? mid.getBoundingClientRect() : null;
+        var list = Array.prototype.filter.call(head.querySelectorAll('.uh-phone-menu, .uh-left .channel-nav-btn, .uh-actions > button, .header-icon-btn, .mobile-header-actions > button'), shownEl)
+            .map(function (b) { return { b: b, r: b.getBoundingClientRect() }; })
+            .filter(function (x) { return x.r.width > 0; })
+            .sort(function (a, b) { return a.r.left - b.r.left; });
+        list.forEach(function (x, i) {
+            var prev = list[i - 1];
+            var next = list[i + 1];
+            var start = !prev || x.r.left - prev.r.right > gap + 0.5;
+            var end = !next || next.r.left - x.r.right > gap + 0.5;
+            var titleL = start && !!t && t.right <= x.r.left + 0.5 && (!prev || prev.r.right <= t.left + 0.5);
+            var titleR = end && !!t && t.left >= x.r.right - 0.5 && (!next || next.r.left >= t.right - 0.5);
+            if (x.b.classList.contains('uh-end-l') !== start) x.b.classList.toggle('uh-end-l', start);
+            if (x.b.classList.contains('uh-end-r') !== end) x.b.classList.toggle('uh-end-r', end);
+            if (x.b.classList.contains('uh-title-l') !== titleL) x.b.classList.toggle('uh-title-l', titleL);
+            if (x.b.classList.contains('uh-title-r') !== titleR) x.b.classList.toggle('uh-title-r', titleR);
+        });
+    }
+
     function applyActionOverflow() {
+        var head = document.querySelector('header.chat-header');
+        var n = window.nym;
+        var M = LM();
+        if (!head || !n || !M || typeof M.headerOverflow !== 'function') return;
         var phone = window.innerWidth <= 768;
-        var shown = 0;
-        chatActions().forEach(function (b) {
-            var vis = b.style.display !== 'none' && !b.hidden && !b.classList.contains('nm-call-hidden') && !b.classList.contains('nm-hidden');
-            if (vis) shown++;
-            var want = vis && !phone && shown > 3;
+        var mesh = meshMode();
+        var cs = getComputedStyle(head);
+        var gap = parseFloat(cs.getPropertyValue('--uh-gap')) || 2;
+        var step = (parseFloat(cs.getPropertyValue('--uh-box')) || 40) + gap;
+        (mesh ? chatActions() : meshActions()).forEach(function (b) { if (b.classList.contains('uh-over')) b.classList.remove('uh-over'); });
+        var live = [];
+        var capped = [];
+        (mesh ? meshActions() : chatActions()).forEach(function (b) {
+            if (!liveAction(b)) {
+                if (b.classList.contains('uh-over')) b.classList.remove('uh-over');
+                return;
+            }
+            if (!phone && live.length >= 3) capped.push(b);
+            else live.push(b);
+        });
+        var mid = head.querySelector(mesh ? '#meshHeaderMid' : '#chatTitleBtn');
+        var room = head.getBoundingClientRect().width > 0 ? titleRoom(mid) : null;
+        var moved = [];
+        var more = false;
+        if (room !== null) {
+            var was = live.filter(function (b) { return b.classList.contains('uh-over'); }).length;
+            var base = room - was * step + (phone && head.classList.contains('uh-more-on') ? step : 0);
+            var kind = mesh ? 'mesh' : (M.HEADER_KINDS[headerKind(n)] || 'channel');
+            var plan = M.headerOverflow({ kind: kind, actions: live.map(function (b) { return HEADER_IDS[b.id] || b.id; }).concat('bell'), base: base, step: step, more: !phone });
+            moved = plan.moved;
+            more = phone && plan.more;
+        } else {
+            moved = live.filter(function (b) { return b.classList.contains('uh-over'); }).map(function (b) { return HEADER_IDS[b.id] || b.id; });
+            more = phone && head.classList.contains('uh-more-on');
+        }
+        live.forEach(function (b) {
+            var want = moved.indexOf(HEADER_IDS[b.id] || b.id) >= 0;
             if (b.classList.contains('uh-over') !== want) b.classList.toggle('uh-over', want);
         });
+        capped.forEach(function (b) { if (!b.classList.contains('uh-over')) b.classList.add('uh-over'); });
+        var empty = live.length === moved.length;
+        var box = head.querySelector(mesh ? '.mesh-hdr-actions' : '.channel-action-buttons');
+        if (box && box.classList.contains('uh-empty') !== empty) box.classList.toggle('uh-empty', empty);
+        var other = head.querySelector(mesh ? '.channel-action-buttons' : '.mesh-hdr-actions');
+        if (other && other.classList.contains('uh-empty')) other.classList.remove('uh-empty');
+        if (head.classList.contains('uh-acts-empty') !== empty) head.classList.toggle('uh-acts-empty', empty);
+        if (head.classList.contains('uh-more-on') !== more) head.classList.toggle('uh-more-on', more);
+        if (room !== null) markHeaderEnds(head, gap, mid);
+    }
+
+    var overflowTimer = 0;
+    function scheduleOverflow() {
+        if (overflowTimer) return;
+        overflowTimer = setTimeout(function () { overflowTimer = 0; try { applyActionOverflow(); } catch (_) { } }, 0);
     }
 
     function buildChatMenu(menu) {
         var n = window.nym;
         Array.prototype.slice.call(menu.querySelectorAll('.uh-chat-item, .header-more-head, .header-more-sep')).forEach(function (x) { x.remove(); });
-        if (!n || n._meshPageOpen) return;
+        if (!n) return;
         applyActionOverflow();
+        var mesh = meshMode();
         var items = [];
-        chatActions().forEach(function (b) {
+        (mesh ? meshActions() : chatActions()).forEach(function (b) {
             if (!b.classList.contains('uh-over')) return;
-            items.push({ label: b.getAttribute('aria-label') || '', svg: b.querySelector('svg'), run: function () { b.click(); }, disabled: b.disabled });
+            items.push({ id: HEADER_IDS[b.id] || '', label: b.getAttribute('aria-label') || '', svg: b.querySelector('svg'), run: function () { b.click(); }, disabled: b.disabled, filled: b.id === 'favoriteChannelBtn' && b.classList.contains('active') });
         });
-        var kind = headerKind(n);
+        var kind = mesh ? 'mesh' : headerKind(n);
         if (kind === 'geohash') {
             var gh = geoKey(n);
             items.push({ label: uiT(n, 'Open in explorer'), html: EXPLORE_SVG, run: function () { if (typeof n.showGeohashExplorer === 'function') n.showGeohashExplorer(gh); } });
@@ -1227,18 +1422,20 @@
         if (items.length) {
             var head = document.createElement('div');
             head.className = 'header-more-head';
-            head.textContent = kind === 'group' ? uiT(n, 'Group') : (kind === 'pm' || kind === 'bot' ? uiT(n, 'Private message') : uiT(n, 'Channel'));
+            head.textContent = kind === 'mesh' ? uiT(n, 'Bluetooth mesh') : kind === 'group' ? uiT(n, 'Group') : (kind === 'pm' || kind === 'bot' ? uiT(n, 'Private message') : uiT(n, 'Channel'));
             menu.insertBefore(head, first);
             items.forEach(function (it) {
                 var btn = document.createElement('button');
                 btn.type = 'button';
                 btn.className = 'header-more-item uh-chat-item';
                 btn.setAttribute('role', 'menuitem');
+                if (it.id) btn.dataset.uhId = it.id;
                 if (it.disabled) btn.disabled = true;
                 if (it.svg) {
                     var c = it.svg.cloneNode(true);
                     c.setAttribute('width', '16');
                     c.setAttribute('height', '16');
+                    if (it.filled) c.setAttribute('fill', 'currentColor');
                     btn.appendChild(c);
                 } else if (it.html) {
                     btn.insertAdjacentHTML('beforeend', it.html);
@@ -1296,7 +1493,20 @@
             var mo = new MutationObserver(scheduleHeader);
             mo.observe(src, { childList: true, subtree: true, characterData: true, attributes: true });
             if (meta) mo.observe(meta, { childList: true, subtree: true, characterData: true });
-            chatActions().forEach(function (b) { mo.observe(b, { attributes: true, attributeFilter: ['class', 'style', 'disabled', 'aria-label'] }); });
+            chatActions().concat(meshActions()).forEach(function (b) { mo.observe(b, { attributes: true, attributeFilter: ['class', 'style', 'disabled', 'aria-label', 'hidden'] }); });
+            var main = document.querySelector('.main-content');
+            if (main) mo.observe(main, { attributes: true, attributeFilter: ['class'] });
+            var bodyMo = new MutationObserver(scheduleOverflow);
+            bodyMo.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        }
+        if (typeof ResizeObserver !== 'undefined') {
+            var ro = new ResizeObserver(scheduleOverflow);
+            var head = document.querySelector('header.chat-header');
+            if (head) ro.observe(head);
+            ['chatTitleBtn', 'meshHeaderMid', 'chatHeaderBadges'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) ro.observe(el);
+            });
         }
         window.addEventListener('resize', scheduleHeader);
         scheduleHeader();
@@ -1327,6 +1537,9 @@
         refreshPreviews: sweepPreviews,
         setHidePreviews: setHidePreviews,
         setColorful: setColorful,
+        setLargeTargets: setLargeTargets,
+        setHighContrast: setHighContrast,
+        applyA11y: applyA11y,
         previewsHidden: previewsHidden,
         applyDock: applyDock,
         applySettingsMode: applySettingsMode,

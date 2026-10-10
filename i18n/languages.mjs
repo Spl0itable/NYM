@@ -2,13 +2,13 @@
 
 import { readFile } from 'node:fs/promises';
 
-const SOURCE = new URL('../js/modules/translate.js', import.meta.url);
+const SOURCE = new URL('../js/languages.js', import.meta.url);
 
 // English is excluded: it is the source, so its pack would map every string to itself.
 export async function loadLanguages() {
   const src = await readFile(SOURCE, 'utf8');
   const start = src.indexOf('const NYM_TRANSLATE_LANGUAGES = [');
-  if (start < 0) throw new Error('NYM_TRANSLATE_LANGUAGES not found in js/modules/translate.js');
+  if (start < 0) throw new Error('NYM_TRANSLATE_LANGUAGES not found in js/languages.js');
   const end = src.indexOf('\n];', start);
   if (end < 0) throw new Error('NYM_TRANSLATE_LANGUAGES is not terminated');
   const block = src.slice(start, end);
@@ -23,6 +23,6 @@ export async function loadLanguages() {
     seen.add(code);
     out.push({ code, name });
   }
-  if (out.length === 0) throw new Error('parsed no languages from js/modules/translate.js');
+  if (out.length === 0) throw new Error('parsed no languages from js/languages.js');
   return out;
 }

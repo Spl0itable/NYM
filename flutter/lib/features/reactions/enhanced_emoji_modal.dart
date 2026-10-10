@@ -16,6 +16,7 @@ import '../messages/inline_network_image.dart';
 import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../core/theme/nym_a11y.dart';
 
 /// Below this width the grid drops to 5 columns.
 const double _kFiveColMaxWidth = 480;
@@ -287,6 +288,7 @@ class _EnhancedEmojiModalState extends ConsumerState<EnhancedEmojiModal> {
       cursorColor: c.isLight ? Colors.black : Colors.white,
       decoration: NymField.decoration(c,
           hint: tr('Search emoji...'),
+          minHeight: largeFieldMin(context),
           fontSize: 12,
           radius: NymRadius.rxs,
           contentPadding:

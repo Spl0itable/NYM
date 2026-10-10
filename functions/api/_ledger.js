@@ -352,6 +352,7 @@ export class NymLedger {
       case "gift-list": return this._giftList(a);
       case "gift-peek": return this._giftPeek(a);
       case "key-reserve": return this._keyReserve(a);
+      case "key-rate": return this._keyRate(a);
       case "key-settle": return this._keySettle(a);
       case "key-usage": return this._keyUsage(a);
       case "key-reset": return this._keyReset(a);
@@ -1450,6 +1451,39 @@ export class NymLedger {
     if (rateLimit > 0) row.rl.push(now);
     this._keyPut(row);
     return { ok: true, used: row.used / 1000, reserved: (pending + (id ? msat : 0)) / 1000, periodStart: row.start, resetAt };
+  }
+
+  _keyRate(a) {
+    const keys = Array.isArray(a.keys) ? a.keys : [];
+    const peek = Array.isArray(a.peek) ? a.peek : [];
+    if (!keys.length || keys.length + peek.length > 8) return { error: "Invalid keys." };
+    const now = this._keyNow(a.now);
+    this._keyPrune(now);
+    const all = keys.concat(peek);
+    const rows = [];
+    let wait = 0;
+    let index = -1;
+    for (let i = 0; i < all.length; i++) {
+      const k = all[i] || {};
+      const keyId = this._keyId(k.keyId);
+      if (!keyId || rows.some((r) => r.row.id === keyId)) return { error: "Invalid key." };
+      const limit = Math.floor(Number(k.rateLimit) || 0);
+      const windowMs = Math.max(1000, Math.floor(Number(k.rateWindowMs) || 60000));
+      const row = this._keyRow(keyId, undefined, now);
+      row.rl = row.rl.filter((t) => t > now - windowMs);
+      if (limit > 0 && row.rl.length >= limit) {
+        const w = Math.max(1, row.rl[row.rl.length - limit] + windowMs - now);
+        if (w > wait) { wait = w; index = i; }
+      }
+      rows.push({ row, limit, take: i < keys.length });
+    }
+    if (wait > 0) return { ok: false, rateLimited: true, retryAfterMs: wait, index };
+    for (const r of rows) {
+      if (r.limit <= 0 || !r.take) continue;
+      r.row.rl.push(now);
+      this._keyPut(r.row);
+    }
+    return { ok: true };
   }
 
   _keySettle(a) {

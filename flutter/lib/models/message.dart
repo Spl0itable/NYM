@@ -204,6 +204,10 @@ class Message {
 
   bool heldShown = false;
 
+  bool foreignKey = false;
+
+  bool get localOnlyRow => optimistic && foreignKey;
+
   /// Read-receipt readers of own channel/group messages: pubkey to nym.
   final Map<String, String> readers;
 

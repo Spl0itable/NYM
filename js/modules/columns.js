@@ -216,10 +216,33 @@ Object.assign(NYM.prototype, {
         this._cvSaveLayout();
     },
 
+    _cvDescHidden(desc, includeHidden) {
+        if (!desc) return false;
+        const F = window.NymContentFilter;
+        if (desc.type === 'pm') {
+            if (!desc.pubkey) return false;
+            if (!includeHidden) return !!(this.blockedUsers && this.blockedUsers.has(desc.pubkey));
+            return typeof this.isPersonHidden === 'function' && this.isPersonHidden(desc.pubkey, desc.nym);
+        }
+        if (desc.type === 'channel' && F && typeof this._cfCtx === 'function') {
+            const key = desc.geohash || desc.channel || '';
+            return includeHidden ? F.channelHidden(this._cfCtx(), key) : F.channelBlocked(this._cfCtx(), key);
+        }
+        return false;
+    },
+
+    _cvRefreshForFilters() {
+        if (!Array.isArray(this._cvColumns) || !this._cvColumns.length || typeof this.cvRemoveColumn !== 'function') return;
+        for (const col of this._cvColumns.slice()) {
+            if (this._cvDescHidden(col, false)) this.cvRemoveColumn(col.id);
+        }
+    },
+
     _cvMostRecent(map) {
         if (!map || !map.size) return null;
         let best = null, max = -1;
         for (const [key, val] of map) {
+            if (map === this.pmConversations && this._cvDescHidden({ type: 'pm', pubkey: key, nym: val && val.nym }, false)) continue;
             const t = (val && val.lastMessageTime) || 0;
             if (t > max) { max = t; best = { key, val }; }
         }
@@ -230,6 +253,7 @@ Object.assign(NYM.prototype, {
         const { render = true, save = true, focus = true } = opts;
         if (this.settings && this.settings.groupChatPMOnlyMode && desc && desc.type === 'channel') return;
         desc = this._cvNormaliseDesc(desc);
+        if (this._cvDescHidden(desc, false)) return;
         const key = this._cvColKey(desc);
         if (!key) return;
         const existing = this._cvColumns.find(c => c.key === key);
@@ -301,6 +325,7 @@ Object.assign(NYM.prototype, {
     // Mirrors single-view nav history so back/forward drive column navigation too.
     _cvOpenConversation(desc, opts = {}) {
         desc = this._cvNormaliseDesc(desc);
+        if (this._cvDescHidden(desc, false)) return;
         const key = this._cvColKey(desc);
         if (!key) return;
         if (window.innerWidth <= 1024 && typeof this.closeSidebar === 'function') this.closeSidebar();
@@ -514,7 +539,7 @@ Object.assign(NYM.prototype, {
         }
         if (col.type === 'group') {
             const g = this.groupConversations && this.groupConversations.get(col.groupId);
-            return (g && g.name) || 'Group chat';
+            return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group chat';
         }
         return 'Column';
     },
@@ -882,14 +907,14 @@ Object.assign(NYM.prototype, {
         if (this.channels && !(this.settings && this.settings.groupChatPMOnlyMode)) {
             for (const [, ch] of this.channels) {
                 const desc = { type: 'channel', channel: ch.channel, geohash: ch.geohash || '' };
-                if (open.has(this._cvColKey(desc))) continue;
+                if (open.has(this._cvColKey(desc)) || this._cvDescHidden(desc, true)) continue;
                 out.push({ label: `#${ch.geohash || ch.channel}`, icon: this._channelGlyphSvg(!!this.channelGeohashKey(ch.channel, ch.geohash), 16), desc });
             }
         }
         if (this.pmConversations) {
             for (const [pubkey, conv] of this.pmConversations) {
                 const desc = { type: 'pm', pubkey, nym: conv.nym };
-                if (open.has(this._cvColKey(desc))) continue;
+                if (open.has(this._cvColKey(desc)) || this._cvDescHidden(desc, false)) continue;
                 const src = this.getAvatarUrl(pubkey);
                 out.push({ label: conv.nym || 'Private message', icon: `<img class="avatar-pm" src="${this.escapeHtml(src)}" data-avatar-pubkey="${this._safePubkey(pubkey)}" alt="" width="20" height="20">`, desc });
             }
@@ -901,7 +926,7 @@ Object.assign(NYM.prototype, {
                 const gicon = g.avatar
                     ? `<img class="avatar-pm" src="${this.escapeHtml(this._profileMediaUrl(g.avatar))}" alt="" width="20" height="20">`
                     : '◧';
-                out.push({ label: g.name || 'Group chat', icon: gicon, desc });
+                out.push({ label: (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')), icon: gicon, desc });
             }
         }
         return out;

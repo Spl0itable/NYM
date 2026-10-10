@@ -6,7 +6,12 @@ import '../../core/theme/nym_metrics.dart';
 import '../../widgets/anchored_popup.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
+import '../../core/theme/nym_a11y.dart';
 import 'composer_model.dart';
+import 'send_as_model.dart';
+import '../messages/inline_network_image.dart';
+import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/common/hit_slop.dart';
@@ -93,6 +98,11 @@ class ComposerMenuEntry {
     this.enabled = true,
     this.note = '',
     this.warn = false,
+    this.kind = 'item',
+    this.pubkey = '',
+    this.avatar = '',
+    this.suffix = '',
+    this.semantics = '',
   });
 
   final String id;
@@ -101,6 +111,36 @@ class ComposerMenuEntry {
   final bool enabled;
   final String note;
   final bool warn;
+  final String kind;
+  final String pubkey;
+  final String avatar;
+  final String suffix;
+  final String semantics;
+
+  bool get isHeader => kind == 'header';
+
+  factory ComposerMenuEntry.sendAsHeader() => ComposerMenuEntry(
+        id: 'as-header',
+        label: tr(SendAsStrings.header),
+        svg: '',
+        enabled: false,
+        kind: 'header',
+      );
+
+  factory ComposerMenuEntry.sendAs(SendAsRow row,
+          {String pubkey = '', String avatar = ''}) =>
+      ComposerMenuEntry(
+        id: row.id,
+        label: row.nym,
+        svg: '',
+        enabled: row.enabled,
+        note: row.reason.isEmpty ? '' : tr(row.reason),
+        kind: 'identity',
+        pubkey: pubkey,
+        avatar: avatar,
+        suffix: '#${row.suffix}',
+        semantics: tr(SendAsStrings.rowLabel, {'nym': row.label}),
+      );
 
   factory ComposerMenuEntry.attach(AttachItem it) => ComposerMenuEntry(
         id: it.id,
@@ -229,8 +269,13 @@ class ComposerMenuList extends StatefulWidget {
 }
 
 class _ComposerMenuListState extends State<ComposerMenuList> {
+  late final List<FocusNode?> _byEntry = [
+    for (final e in widget.entries)
+      e.isHeader ? null : FocusNode(debugLabel: e.id),
+  ];
+
   late final List<FocusNode> _nodes = [
-    for (final e in widget.entries) FocusNode(debugLabel: e.id),
+    for (final n in _byEntry) ?n,
   ];
 
   @override
@@ -242,8 +287,11 @@ class _ComposerMenuListState extends State<ComposerMenuList> {
   }
 
   int get _firstEnabled {
-    final i = widget.entries.indexWhere((e) => e.enabled);
-    return i < 0 ? 0 : i;
+    final i =
+        widget.entries.indexWhere((e) => e.enabled && !e.isHeader);
+    if (i >= 0) return i;
+    final j = widget.entries.indexWhere((e) => !e.isHeader);
+    return j < 0 ? 0 : j;
   }
 
   KeyEventResult _onKey(FocusNode _, KeyEvent e) {
@@ -276,21 +324,96 @@ class _ComposerMenuListState extends State<ComposerMenuList> {
       child: Focus(
         onKeyEvent: _onKey,
         skipTraversal: true,
-        child: Column(
-          key: ValueKey('${widget.kind}Menu'),
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = 0; i < widget.entries.length; i++)
-              _ComposerMenuRow(
-                key: ValueKey('${widget.kind}-item-${widget.entries[i].id}'),
-                entry: widget.entries[i],
-                focusNode: _nodes[i],
-                autofocus: i == first,
-              ),
-          ],
+        child: SingleChildScrollView(
+          child: Column(
+            key: ValueKey('${widget.kind}Menu'),
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < widget.entries.length; i++)
+                if (widget.entries[i].isHeader)
+                  _ComposerMenuHeader(
+                    key: ValueKey('${widget.kind}-header-${widget.entries[i].id}'),
+                    label: widget.entries[i].label,
+                  )
+                else
+                  _ComposerMenuRow(
+                    key: ValueKey(
+                        '${widget.kind}-item-${widget.entries[i].id}'),
+                    entry: widget.entries[i],
+                    focusNode: _byEntry[i]!,
+                    autofocus: i == first,
+                  ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+class _ComposerMenuHeader extends StatelessWidget {
+  const _ComposerMenuHeader({super.key, required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+          child: Divider(height: 1, thickness: 1, color: c.glassBorder),
+        ),
+        Semantics(
+          header: true,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+            child: Text(
+              label,
+              style: TextStyle(
+                color: c.textDim,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SendAsAvatar extends StatelessWidget {
+  const _SendAsAvatar({required this.pubkey, required this.avatar});
+
+  final String pubkey;
+  final String avatar;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = NymAvatar(seed: pubkey, size: 24);
+    final url = proxiedAvatarUrl(avatar.isEmpty ? null : avatar);
+    if (url == null) return fallback;
+    return FutureBuilder<Uint8List?>(
+      future: InlineNetworkImage.resolveBytes(url, fetchIfMissing: false),
+      builder: (context, snap) {
+        final bytes = snap.data;
+        if (bytes == null) return fallback;
+        return ClipOval(
+          child: Image.memory(
+            bytes,
+            width: 24,
+            height: 24,
+            fit: BoxFit.cover,
+            gaplessPlayback: true,
+            errorBuilder: (_, _, _) => fallback,
+          ),
+        );
+      },
     );
   }
 }
@@ -311,19 +434,36 @@ class _ComposerMenuRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = context.nym;
     final e = entry;
+    final identity = e.kind == 'identity';
+    final dim = e.enabled || context.highContrast ? 1.0 : 0.45;
+    final nameStyle = TextStyle(color: c.text, fontSize: 14);
     final row = Container(
       constraints: const BoxConstraints(minHeight: 44),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
-          NymSvgIcon(e.svg, size: 20, color: c.text),
+          Opacity(
+            opacity: dim,
+            child: identity
+                ? SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: _SendAsAvatar(pubkey: e.pubkey, avatar: e.avatar),
+                  )
+                : NymSvgIcon(e.svg, size: 20, color: c.text),
+          ),
           const SizedBox(width: 12),
           Flexible(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(e.label, style: TextStyle(color: c.text, fontSize: 14)),
+                Opacity(
+                  opacity: dim,
+                  child: identity
+                      ? NymLabel(e.label, suffix: e.suffix, style: nameStyle)
+                      : Text(e.label, style: nameStyle),
+                ),
                 if (e.note.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(
@@ -343,19 +483,31 @@ class _ComposerMenuRow extends StatelessWidget {
     return Semantics(
       button: true,
       enabled: e.enabled,
-      child: Opacity(
-        opacity: e.enabled ? 1 : 0.45,
-        child: InkWell(
-          focusNode: focusNode,
-          autofocus: autofocus,
-          borderRadius: NymRadius.rsm,
-          hoverColor: e.enabled ? c.primaryA(0.12) : Colors.transparent,
-          focusColor: c.primaryA(0.12),
-          mouseCursor: e.enabled
-              ? SystemMouseCursors.click
-              : SystemMouseCursors.forbidden,
-          onTap: () => Navigator.of(context).pop(e.id),
-          child: row,
+      label: e.semantics.isEmpty ? null : e.semantics,
+      hint: identity && e.note.isNotEmpty ? e.note : null,
+      child: InkWell(
+        focusNode: focusNode,
+        autofocus: autofocus,
+        borderRadius: NymRadius.rsm,
+        hoverColor: e.enabled ? c.primaryA(0.12) : Colors.transparent,
+        focusColor: c.primaryA(0.12),
+        mouseCursor:
+            e.enabled ? SystemMouseCursors.click : SystemMouseCursors.forbidden,
+        onTap: () => Navigator.of(context).pop(e.id),
+        child: ListenableBuilder(
+          listenable: focusNode,
+          builder: (context, child) => Container(
+            foregroundDecoration: focusNode.hasFocus &&
+                    FocusManager.instance.highlightMode ==
+                        FocusHighlightMode.traditional
+                ? BoxDecoration(
+                    border: Border.all(color: c.primary, width: 2),
+                    borderRadius: NymRadius.rsm,
+                  )
+                : null,
+            child: child,
+          ),
+          child: identity ? ExcludeSemantics(child: row) : row,
         ),
       ),
     );

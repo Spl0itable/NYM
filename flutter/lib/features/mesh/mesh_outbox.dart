@@ -16,6 +16,7 @@ class MeshOutboxEntry {
     this.meshMessageId,
     this.nymMessageId,
     this.signedEvent,
+    this.owner,
     this.attempts = 0,
   });
 
@@ -45,8 +46,30 @@ class MeshOutboxEntry {
   /// Event signed at send time; republishing the same bytes keeps one event id and the original content.
   final Map<String, dynamic>? signedEvent;
 
+  final String? owner;
+
   /// Publish attempts spent, bounded so a dead relay set can't retry forever.
   int attempts;
+
+  bool belongsTo(String pubkey) {
+    final signed = signedEvent?['pubkey'];
+    final who = owner ?? (signed is String ? signed : null);
+    return who == null || who.isEmpty || who == pubkey;
+  }
+
+  MeshOutboxEntry ownedBy(String pubkey) => MeshOutboxEntry(
+        kind: kind,
+        target: target,
+        content: content,
+        createdAtSec: createdAtSec,
+        localId: localId,
+        threadRoot: threadRoot,
+        meshMessageId: meshMessageId,
+        nymMessageId: nymMessageId,
+        signedEvent: signedEvent,
+        owner: pubkey,
+        attempts: attempts,
+      );
 
   Map<String, dynamic> toJson() => {
         'kind': kind.name,
@@ -58,6 +81,7 @@ class MeshOutboxEntry {
         if (meshMessageId != null) 'meshMessageId': meshMessageId,
         if (nymMessageId != null) 'nymMessageId': nymMessageId,
         if (signedEvent != null) 'signedEvent': signedEvent,
+        if (owner != null) 'owner': owner,
         if (attempts > 0) 'attempts': attempts,
       };
 
@@ -95,6 +119,7 @@ class MeshOutboxEntry {
       signedEvent: raw['signedEvent'] is Map
           ? Map<String, dynamic>.from(raw['signedEvent'] as Map)
           : null,
+      owner: str('owner'),
       attempts: raw['attempts'] is num ? (raw['attempts'] as num).toInt() : 0,
     );
   }
@@ -169,6 +194,7 @@ class MeshOutbox {
         meshMessageId: e.meshMessageId,
         nymMessageId: e.nymMessageId,
         signedEvent: event,
+        owner: e.owner,
         attempts: e.attempts,
       );
       return true;

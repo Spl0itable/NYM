@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import '../../features/messages/inline_network_image.dart';
@@ -37,6 +39,7 @@ class NymAvatar extends StatefulWidget {
     this.size = 20,
     this.label,
     this.imageUrl,
+    this.localOnly = false,
   });
 
   final String seed;
@@ -45,6 +48,8 @@ class NymAvatar extends StatefulWidget {
   final String? label;
 
   final String? imageUrl;
+
+  final bool localOnly;
 
   @override
   State<NymAvatar> createState() => _NymAvatarState();
@@ -96,6 +101,25 @@ class _NymAvatarState extends State<NymAvatar> {
     final proxied = proxiedAvatarUrl(widget.imageUrl);
     final fallback = _identicon(context);
     if (proxied == null) return fallback;
+    if (widget.localOnly) {
+      return FutureBuilder<Uint8List?>(
+        future: InlineNetworkImage.resolveBytes(proxied, fetchIfMissing: false),
+        builder: (context, snap) {
+          final bytes = snap.data;
+          if (bytes == null) return fallback;
+          return ClipOval(
+            child: Image.memory(
+              bytes,
+              width: widget.size,
+              height: widget.size,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, _, _) => fallback,
+            ),
+          );
+        },
+      );
+    }
     return ClipOval(
       child: SizedBox(
         width: widget.size,

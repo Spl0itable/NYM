@@ -11,6 +11,7 @@ import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../chat/bitchat_user_color.dart';
 import '../common/nym_avatar.dart';
+import '../common/nym_label.dart';
 import '../context_menu/context_menu_actions.dart';
 import '../context_menu/context_menu_panel.dart';
 import '../context_menu/profile_badges.dart';
@@ -107,23 +108,10 @@ class _UserListItemState extends ConsumerState<UserListItem> {
                     ),
                     const SizedBox(width: kSidebarGap),
                     Flexible(
-                      child: Text.rich(
+                      child: NymLabel(
+                        displayNym,
                         key: const ValueKey('sidebarName'),
-                        TextSpan(
-                          children: [
-                            TextSpan(text: displayNym),
-                            TextSpan(
-                              text: '#$suffix',
-                              style: TextStyle(
-                                color: nymColor.withValues(alpha: 0.7),
-                                fontSize: (textSize - 3) * 0.9,
-                                fontWeight: FontWeight.w100,
-                              ),
-                            ),
-                          ],
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        suffix: suffix,
                         style: TextStyle(
                           color: nymColor,
                           fontSize: textSize - 3,

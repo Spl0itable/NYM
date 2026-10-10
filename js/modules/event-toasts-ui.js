@@ -66,7 +66,7 @@
             const i = info || {};
             const groupName = (id) => {
                 const g = id && this.groupConversations && this.groupConversations.get(id);
-                return g && g.name ? g.name : this._etTr('Group');
+                return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : this._etTr('Group');
             };
             if (i.type === 'geohash' || i.type === 'channel') return '#' + (i.geohash || i.channel || '');
             if (i.type === 'group') return groupName(i.groupId || String(i.id || '').replace(/^group-/, ''));
@@ -80,7 +80,10 @@
 
         _etSender(entry) {
             const pk = entry.senderPubkey || '';
-            if (!pk) return String(entry.title || '');
+            if (!pk) {
+                const info = entry.channelInfo || {};
+                return E().systemTitle({ title: entry.title, topic: E().topicOf(info.eventId || entry.eventId) }, this._etPrefs(), (s, p) => this._etTr(s, p));
+            }
             const info = entry.channelInfo || {};
             const known = typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(pk) : '';
             const hint = info.type === 'pm' && info.nym ? info.nym : (known || 'nym');
@@ -95,16 +98,12 @@
             return ONCE_LABELS.some((l) => s.startsWith(l) || s.startsWith(this._etTr(l)));
         },
 
-        _etEvent(entry, backlog) {
+        _etContent(entry) {
             const info = entry.channelInfo || {};
             const kind = this._etKind(entry);
             const body = String(entry.body || '');
             const locked = !!entry.locked;
             const mentioned = !locked && typeof this.isMentioned === 'function' && this.isMentioned(body);
-            if (!this._etEntries) this._etEntries = new Map();
-            this._etSeq = (this._etSeq || 0) + 1;
-            const token = 'et' + this._etSeq;
-            this._etEntries.set(token, entry);
             return {
                 kind,
                 key: this._etKey(info, entry),
@@ -114,13 +113,34 @@
                 mention: kind === 'channel' ? !info.inThread || mentioned : mentioned,
                 everyone: !locked && kind === 'group' && EVERYONE_RE.test(body),
                 thread: !!info.inThread,
-                seen: this._etSees(entry),
                 locked,
                 viewOnce: !locked && this._etViewOnce(body),
+            };
+        },
+
+        _etEvent(entry, backlog) {
+            const ev = this._etContent(entry);
+            if (!this._etEntries) this._etEntries = new Map();
+            this._etSeq = (this._etSeq || 0) + 1;
+            const token = 'et' + this._etSeq;
+            this._etEntries.set(token, entry);
+            return Object.assign(ev, {
+                seen: this._etSees(entry),
                 backlog: !!backlog,
                 identity: this.pubkey || '',
                 eventId: token,
-            };
+            });
+        },
+
+        _etPrefs() {
+            return { hidePreviews: lsGet('nym_hide_previews') === '1' };
+        },
+
+        _etSystemBody(entry) {
+            if (!entry) return null;
+            if (!entry.channelInfo) return String(entry.body || '');
+            if (!E()) return null;
+            return E().systemBody(this._etContent(entry), this._etPrefs(), (s, p) => this._etTr(s, p));
         },
 
         _etSees(entry) {
@@ -355,7 +375,7 @@
             host.querySelectorAll('.nym-toast-event').forEach((el) => {
                 if (!live.has(el.dataset.eventToastId) && !el.classList.contains('leaving')) this._etRemoveEl(el);
             });
-            const prefs = { hidePreviews: lsGet('nym_hide_previews') === '1' };
+            const prefs = this._etPrefs();
             const tr = (s, p) => this._etTr(s, p);
             state.toasts.forEach((t, i) => {
                 const p = E().present(t, prefs, tr);
@@ -373,9 +393,10 @@
                     if (n.textContent !== text) n.textContent = text;
                     n.classList.toggle('nm-hidden', !text);
                 };
-                this._etTitle(el.querySelector('.nym-toast-title'), p.title, t.locked || !t.last ? '' : String(t.last.sender || ''));
+                const sender = t.locked || !t.last ? '' : String(t.last.sender || '');
+                this._etTitle(el.querySelector('.nym-toast-title'), p.title, sender);
                 set('.nym-toast-meta', p.meta);
-                set('.nym-toast-body', p.body);
+                this._etBody(el.querySelector('.nym-toast-body'), p.body, sender);
                 if (fresh) {
                     const firstEvent = host.querySelector('.nym-toast-event:not(.leaving)');
                     if (i === 0 && firstEvent) host.insertBefore(el, firstEvent);
@@ -402,6 +423,15 @@
             dim.textContent = m[2];
             node.appendChild(dim);
             if (cut + m[2].length < title.length) node.appendChild(document.createTextNode(title.slice(cut + m[2].length)));
+        },
+
+        _etBody(node, body, sender) {
+            const text = String(body || '');
+            const key = text + '\u0000' + sender;
+            node.classList.toggle('nm-hidden', !text);
+            if (node.dataset.shown === key) return;
+            node.dataset.shown = key;
+            node.innerHTML = this.nymTextHtml(text, sender ? [sender] : []);
         },
 
         _etBuild(id) {
@@ -580,12 +610,15 @@
             const tr = (s) => this._etTr(s);
             const S = E().STRINGS;
             const modes = E().FOREGROUND_MODES.map((m) => '<option value="' + m + '">' + this.escapeHtml(tr(E().FOREGROUND_LABELS[m])) + '</option>').join('');
-            const types = E().TYPES.map((k) => '<label class="et-type"><input type="checkbox" class="nm-h-79" id="eventToastType-' + k + '" data-et-type="' + k + '"> ' + this.escapeHtml(tr(E().SETTING_LABELS[k])) + '</label>').join('');
+            const pill = '<span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>';
+            const types = E().TYPES.map((k) => '<label class="setting-toggle-row et-type"><span class="form-label" id="eventToastTypeLabel-' + k + '">' + this.escapeHtml(tr(E().SETTING_LABELS[k])) + '</span>' +
+                '<span class="nym-switch"><input type="checkbox" role="switch" id="eventToastType-' + k + '" data-et-type="' + k + '" data-panel-toggle="eventToastType.' + k + '" aria-labelledby="eventToastTypeLabel-' + k + '">' + pill + '</label>').join('');
             wrap.innerHTML =
-                '<label class="et-row et-master"><input type="checkbox" class="nm-h-79" id="eventToastsCheckbox"> ' + this.escapeHtml(tr(S.master)) + '</label>' +
-                '<label class="et-row et-mode" for="eventToastsForeground"><span>' + this.escapeHtml(tr(S.whileOpen)) + '</span>' +
+                '<label class="setting-toggle-row et-master"><span class="form-label" id="eventToastsLabel">' + this.escapeHtml(tr(S.master)) + '</span>' +
+                '<span class="nym-switch"><input type="checkbox" role="switch" id="eventToastsCheckbox" data-panel-toggle="eventToasts" aria-labelledby="eventToastsLabel">' + pill + '</label>' +
+                '<label class="et-row et-mode" for="eventToastsForeground"><span class="form-label">' + this.escapeHtml(tr(S.whileOpen)) + '</span>' +
                 '<select id="eventToastsForeground" class="form-select">' + modes + '</select></label>' +
-                '<fieldset class="et-types" id="eventToastTypes"><legend>' + this.escapeHtml(tr(S.typesHeading)) + '</legend>' + types + '</fieldset>';
+                '<fieldset class="et-types" id="eventToastTypes"><legend class="form-label">' + this.escapeHtml(tr(S.typesHeading)) + '</legend>' + types + '</fieldset>';
             prefs.appendChild(wrap);
             wrap.addEventListener('change', (e) => {
                 const t = e.target;

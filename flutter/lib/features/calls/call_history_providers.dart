@@ -161,7 +161,12 @@ final callHistoryHiddenProvider =
     Provider<bool Function(CallRecord r)>((ref) {
   ref.watch(chatLockRevisionProvider);
   final lock = ref.watch(chatLockProvider);
+  ref.watch(contentFilterRevisionProvider);
+  final app = ref.read(appStateProvider);
   return (r) {
+    if (r.group.isEmpty && r.peer.isNotEmpty && app.isPersonHidden(r.peer)) {
+      return true;
+    }
     try {
       return lock.notificationIsLocked(
           'call', r.group.isNotEmpty ? r.group : r.peer, r.peer);

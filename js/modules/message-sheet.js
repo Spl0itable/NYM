@@ -92,7 +92,7 @@
         _msgActionRun(id, x) {
             switch (id) {
                 case 'reply':
-                    return () => this.setQuoteReply(x.fullNym, x.content);
+                    return () => this.setQuoteReply(x.fullNym, x.content, x.messageId);
                 case 'replyPrivately':
                     return () => this.replyPrivately(x.toolId);
                 case 'thread':
@@ -225,8 +225,8 @@
                 '<div class="msg-sheet-preview" data-sheet-handle>' +
                 `<img class="msg-sheet-avatar" alt="" src="${esc(avatar)}">` +
                 '<div class="msg-sheet-meta">' +
-                `<div class="msg-sheet-head"><span class="msg-sheet-author" data-no-i18n><span class="msg-sheet-nym">${esc(ctx.baseNym)}</span>${suffix ? `<span class="msg-sheet-suffix">#${esc(suffix)}</span>` : ''}</span><span class="msg-sheet-time">${esc(this._msgSheetTime(msgEl))}</span></div>` +
-                `<div class="msg-sheet-text" data-no-i18n>${esc(preview.text)}</div>` +
+                `<div class="msg-sheet-head"><span class="msg-sheet-author" data-no-i18n><span class="msg-sheet-nym">${window.NymSuffix.html(ctx.baseNym, suffix)}</span></span><span class="msg-sheet-time">${esc(this._msgSheetTime(msgEl))}</span></div>` +
+                `<div class="msg-sheet-text" data-no-i18n>${this.mentionSuffixHtml(preview.text)}</div>` +
                 '</div>' +
                 (preview.thumb ? `<img class="msg-sheet-thumb" alt="" src="${esc(typeof this.getProxiedMediaUrl === 'function' ? this.getProxiedMediaUrl(preview.thumb) : preview.thumb)}">` : '') +
                 '</div>' +

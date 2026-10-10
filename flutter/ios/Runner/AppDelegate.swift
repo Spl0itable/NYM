@@ -128,6 +128,7 @@ import flutter_webrtc
     registerPasskeyBackupChannel()
     registerCloudKitBackupChannel()
     registerSecureChannel()
+    registerBadgeChannel()
     registerPrivacyChannel()
     registerShareChannel()
     registerTranscribeChannel()
@@ -239,6 +240,28 @@ import flutter_webrtc
           .expirationDate: Date().addingTimeInterval(60),
         ]
       )
+      result(true)
+    }
+  }
+
+  private func registerBadgeChannel() {
+    guard let messenger = channelMessenger else { return }
+    let channel = FlutterMethodChannel(
+      name: "app.nymchat/badge",
+      binaryMessenger: messenger
+    )
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "set" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let args = call.arguments as? [String: Any]
+      let count = max(0, (args?["count"] as? Int) ?? 0)
+      if #available(iOS 16.0, *) {
+        UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
+      } else {
+        UIApplication.shared.applicationIconBadgeNumber = count
+      }
       result(true)
     }
   }
@@ -803,9 +826,25 @@ enum VaultKey {
         SecItemDelete(base as CFDictionary)
         reply(nil)
       }
+    case "biometryType":
+      result(biometryType())
     default:
       result(FlutterMethodNotImplemented)
     }
+  }
+
+  private static func biometryType() -> String {
+    let context = LAContext()
+    var error: NSError?
+    if !context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error),
+      error?.code == LAError.biometryNotEnrolled.rawValue
+    {
+      return "none"
+    }
+    if context.biometryType == .faceID { return "faceID" }
+    if context.biometryType == .touchID { return "touchID" }
+    if #available(iOS 17.0, *), context.biometryType == .opticID { return "opticID" }
+    return "none"
   }
 
   private static func store(_ data: Data) -> Any? {

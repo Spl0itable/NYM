@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../core/constants/event_kinds.dart';
 import '../../models/nostr_event.dart';
 
@@ -76,6 +78,21 @@ class ZapLogic {
           ? 'b:${bolt11.toLowerCase()}'
           : eventId;
 
+  static final RegExp _hex64 = RegExp(r'^[0-9a-f]{64}$');
+
+  static String zapperOf(NostrEvent e) {
+    final desc = e.tagValue('description');
+    if (desc == null || desc.isEmpty) return e.pubkey;
+    try {
+      final req = jsonDecode(desc);
+      if (req is Map && req['pubkey'] is String) {
+        final pk = (req['pubkey'] as String).toLowerCase();
+        if (_hex64.hasMatch(pk)) return pk;
+      }
+    } catch (_) {}
+    return e.pubkey;
+  }
+
   /// Parses a kind-9735 receipt, or null without an `e` target (profile zaps don't accrue to a message).
   static ZapReceiptInfo? parseReceipt(NostrEvent e) {
     if (e.kind != EventKind.zapReceipt) return null;
@@ -87,7 +104,7 @@ class ZapLogic {
     return ZapReceiptInfo(
       messageId: messageId,
       recipientPubkey: e.tagValue('p'),
-      zapperPubkey: e.pubkey,
+      zapperPubkey: zapperOf(e),
       amountSats: amount,
       bolt11: bolt11,
       eventId: e.id,

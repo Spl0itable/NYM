@@ -7,6 +7,8 @@
         document.body.classList.add('solid-ui');
     }
     if (/NymchatApp\//i.test(navigator.userAgent)) document.body.classList.add('nymchat-app');
+    if (localStorage.getItem('nym_large_targets') === '1') document.body.classList.add('a11y-targets');
+    if (localStorage.getItem('nym_high_contrast') === '1') document.body.classList.add('a11y-contrast');
     // Apply the columns layout up front so column-view users don't see the single view flash first.
     if (localStorage.getItem('nym_chat_view_mode') === 'columns') {
         document.body.classList.add('columns-mode');

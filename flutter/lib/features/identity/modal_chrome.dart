@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
+import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/keyboard_inset_dialog.dart';
 import '../../widgets/common/nym_sheet.dart';
@@ -128,6 +129,15 @@ class ModalChrome {
     bool large = false,
     Widget? child,
   }) {
+    if (!large) {
+      return DialogButton(
+        label: label,
+        onTap: onTap,
+        role: danger ? DialogButtonRole.danger : DialogButtonRole.primary,
+        fullWidth: fullWidth,
+        child: child,
+      );
+    }
     final btn = HitSlop(
       child: _SendButton(
         c: c,
@@ -141,11 +151,8 @@ class ModalChrome {
     return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
   }
 
-  /// Bordered translucent uppercase pill; [height] pins it to match the 42px send button beside it.
-  static Widget iconButton(NymColors c, String label, VoidCallback? onTap,
-      {double? height}) {
-    return HitSlop(
-        child: _IconButton(c: c, label: label, onTap: onTap, height: height));
+  static Widget iconButton(NymColors c, String label, VoidCallback? onTap) {
+    return DialogButton.secondary(label: label, onTap: onTap);
   }
 
   static Widget formLabel(NymColors c, String text) {
@@ -306,78 +313,6 @@ class _SendButtonState extends State<_SendButton> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _IconButton extends StatefulWidget {
-  const _IconButton(
-      {required this.c, required this.label, required this.onTap, this.height});
-
-  final NymColors c;
-  final String label;
-  final VoidCallback? onTap;
-  final double? height;
-
-  @override
-  State<_IconButton> createState() => _IconButtonState();
-}
-
-class _IconButtonState extends State<_IconButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = widget.c;
-    final Color fill;
-    final Color border;
-    final Color fg;
-    if (_hover) {
-      fill = c.isLight ? const Color(0x0F000000) : c.primaryA(0.12);
-      border = c.isLight ? c.primary : c.primaryA(0.3);
-      fg = c.primary;
-    } else {
-      fill = c.subtleFill;
-      border = c.isLight ? const Color(0x1A000000) : c.glassBorder;
-      fg = c.isLight ? c.primary : c.text;
-    }
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: NymMotion.transition,
-          curve: NymMotion.curve,
-          height: widget.height,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: fill,
-            borderRadius: NymRadius.rxs,
-            border: Border.all(color: border),
-            boxShadow: _hover
-                ? [BoxShadow(color: c.primaryA(0.1), blurRadius: 15)]
-                : null,
-          ),
-          // Center with widthFactor centers the label vertically while staying shrink-wrapped.
-          child: widget.height == null
-              ? _label(fg)
-              : Center(widthFactor: 1, child: _label(fg)),
-        ),
-      ),
-    );
-  }
-
-  Text _label(Color fg) {
-    return Text(
-      widget.label.toUpperCase(),
-      style: TextStyle(
-        color: fg,
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
-        letterSpacing: 0.8,
       ),
     );
   }

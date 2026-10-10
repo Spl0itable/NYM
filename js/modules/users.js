@@ -47,11 +47,33 @@ Object.assign(NYM.prototype, {
             const light = isLight ? 25 + (i % 20) : 60 + (i % 25);
             return `hsl(${hue},${sat}%,${light}%)`;
         };
-        const parts = new Array(2000);
+        const lin = (v) => (v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+        const lum = (rgb) => 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+        const rgbOf = (h, sat, light) => {
+            const S = sat / 100, L = light / 100;
+            const k = (n) => (n + h / 30) % 12;
+            const a = S * Math.min(L, 1 - L);
+            const f = (n) => L - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+            return [f(0), f(8), f(4)];
+        };
+        const ratio = (x, y) => (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+        const LIGHT_BG = lum([230 / 255, 230 / 255, 224 / 255]);
+        const DARK_BG = lum([42 / 255, 42 / 255, 58 / 255]);
+        const legible = (i, isLight) => {
+            const hue = (i * 360 / 1000) | 0;
+            const sat = isLight ? 55 + (i % 35) : 65 + (i % 35);
+            let light = isLight ? 25 + (i % 20) : 60 + (i % 25);
+            const bg = isLight ? LIGHT_BG : DARK_BG;
+            while (light > 0 && light < 100 && ratio(lum(rgbOf(hue, sat, light)), bg) < 4.6) light += isLight ? -1 : 1;
+            return `hsl(${hue},${sat}%,${light}%)`;
+        };
+        const parts = new Array(4000);
         for (let i = 0; i < 1000; i++) {
             const cls = `bitchat-user-h${i}`;
-            parts[i] = `.${cls},.${cls} .nym-suffix{color:${hsl(i, false)}!important}`;
-            parts[1000 + i] = `body.light-mode .${cls},body.light-mode .${cls} .nym-suffix{color:${hsl(i, true)}!important}`;
+            parts[i] = `.${cls}{color:${hsl(i, false)}!important}`;
+            parts[1000 + i] = `body.light-mode .${cls}{color:${hsl(i, true)}!important}`;
+            parts[2000 + i] = `body.a11y-contrast .${cls}{color:${legible(i, false)}!important}`;
+            parts[3000 + i] = `body.light-mode.a11y-contrast .${cls}{color:${legible(i, true)}!important}`;
         }
         const sheet = new CSSStyleSheet();
         sheet.replaceSync(parts.join(''));
@@ -111,6 +133,7 @@ Object.assign(NYM.prototype, {
 
     saveBlockedKeywords() {
         localStorage.setItem('nym_blocked_keywords', JSON.stringify(Array.from(this.blockedKeywords)));
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
     addBlockedKeyword() {
@@ -123,15 +146,7 @@ Object.assign(NYM.prototype, {
             this.updateKeywordList();
             input.value = '';
 
-            document.querySelectorAll('.message').forEach(msg => {
-                const content = msg.querySelector('.message-content');
-                const author = msg.dataset.author || '';
-                const contentMatch = content && content.textContent.toLowerCase().includes(keyword);
-                const nickMatch = this.parseNymFromDisplay(author).toLowerCase().includes(keyword);
-                if (contentMatch || nickMatch) {
-                    msg.classList.add('blocked');
-                }
-            });
+            this._hideRenderedKeywordMatches();
 
             this._userListSig = '';
             this.updateUserList();
@@ -139,6 +154,17 @@ Object.assign(NYM.prototype, {
             this.displaySystemMessage(`Blocked keyword: "${keyword}"`);
             if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
         }
+    },
+
+    _hideRenderedKeywordMatches() {
+        if (typeof document === 'undefined') return;
+        document.querySelectorAll('.message').forEach(msg => {
+            const own = !!this.pubkey && msg.dataset.pubkey === this.pubkey;
+            const content = msg.querySelector('.message-content');
+            if (this.hasBlockedKeyword(content ? content.textContent : '', own ? '' : (msg.dataset.author || ''), msg.dataset.pubkey || '')) {
+                msg.classList.add('blocked');
+            }
+        });
     },
 
     removeBlockedKeyword(keyword) {
@@ -252,26 +278,32 @@ Object.assign(NYM.prototype, {
     },
 
     formatNymWithPubkey(nym, pubkey) {
-        if (pubkey && /^[0-9a-f]{64}$/i.test(pubkey)) {
-            const baseName = nym.replace(/#[0-9a-f]{4}$/i, '');
-            return `${this.escapeHtml(baseName)}<span class="nym-suffix">#${this.getPubkeySuffix(pubkey)}</span>`;
-        }
-
-        const suffixMatch = nym.match(/#([0-9a-f]{4})$/i);
-        if (suffixMatch) {
-            const baseName = nym.substring(0, nym.length - 5);
-            return `${this.escapeHtml(baseName)}<span class="nym-suffix">#${suffixMatch[1]}</span>`;
-        }
-
+        const S = window.NymSuffix;
+        if (pubkey && /^[0-9a-f]{64}$/i.test(pubkey)) return S.pubkeyHtml(nym, pubkey);
+        const suffixMatch = String(nym).match(/#([0-9a-f]{4})$/i);
+        if (suffixMatch) return S.html(String(nym).slice(0, -5), suffixMatch[1]);
         const suffix = pubkey ? pubkey.slice(-4) : '????';
-        return `${this.escapeHtml(nym)}<span class="nym-suffix">#${suffix}</span>`;
+        return `${this.escapeHtml(nym)}<span class="${S.CLASS}">#${this.escapeHtml(suffix)}</span>`;
     },
 
     nymLabelHtml(label) {
-        const s = String(label == null ? '' : label);
-        const m = /^([\s\S]*[^\s#])(#[0-9a-f]{4})$/i.exec(s);
-        if (!m) return this.escapeHtml(s);
-        return `${this.escapeHtml(m[1])}<span class="nym-suffix">${this.escapeHtml(m[2])}</span>`;
+        return window.NymSuffix.labelHtml(label);
+    },
+
+    nymTextHtml(text, known) {
+        return window.NymSuffix.textHtml(text, known === undefined ? this._nymKnown() : known);
+    },
+
+    renderNymText(el, text, known) {
+        return window.NymSuffix.render(el, text, known === undefined ? this._nymKnown() : known);
+    },
+
+    _nymKnown() {
+        const S = window.NymSuffix;
+        if (this.pubkey) S.remember(this.pubkey);
+        const g = this.inPMMode && this.currentGroup && this.groupConversations ? this.groupConversations.get(this.currentGroup) : null;
+        if (g && Array.isArray(g.members)) g.members.forEach((pk) => S.remember(pk));
+        return true;
     },
 
     updateSidebarAvatar() {
@@ -290,7 +322,9 @@ Object.assign(NYM.prototype, {
     getPubkeySuffix(pubkey) {
         if (typeof pubkey !== 'string' || pubkey.length < 4) return '????';
         const tail = pubkey.slice(-4);
-        return /^[0-9a-f]{4}$/i.test(tail) ? tail : '????';
+        if (!/^[0-9a-f]{4}$/i.test(tail)) return '????';
+        if (typeof window !== 'undefined' && window.NymSuffix && /^[0-9a-f]{64}$/i.test(pubkey)) window.NymSuffix.remember(pubkey);
+        return tail;
     },
 
     // 64-char hex pubkey or npub/nprofile, normalized to lowercase hex; null otherwise.
@@ -1346,7 +1380,7 @@ Object.assign(NYM.prototype, {
             return `${cleanNym}#${this.getPubkeySuffix(pubkey)}`;
         }
 
-        return `nym#${pubkey.slice(-4)}`;
+        return `nym#${this.getPubkeySuffix(pubkey)}`;
     },
 
     getNymHtmlFromPubkey(pubkey) {
@@ -1356,8 +1390,7 @@ Object.assign(NYM.prototype, {
     dimNymSuffix(text) {
         const s = String(text == null ? '' : text);
         const m = s.match(/^([\s\S]*?)#([0-9a-f]{4})$/i);
-        if (!m) return this.escapeHtml(s);
-        return `${this.escapeHtml(m[1])}<span class="nym-suffix">#${m[2]}</span>`;
+        return m ? window.NymSuffix.html(m[1], m[2]) : this.escapeHtml(s);
     },
 
     // Returns 'hidden' when the user opted out of broadcasting status; callers suppress the indicator.
@@ -2003,6 +2036,7 @@ Object.assign(NYM.prototype, {
 
     saveBlockedUsers() {
         localStorage.setItem('nym_blocked', JSON.stringify(Array.from(this.blockedUsers)));
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
     updateBlockedList() {
@@ -2146,6 +2180,7 @@ Object.assign(NYM.prototype, {
 
     saveFriends() {
         localStorage.setItem('nym_friends', JSON.stringify(Array.from(this.friends)));
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
     isFriend(pubkey) {
@@ -2292,6 +2327,10 @@ Object.assign(NYM.prototype, {
         return String(text).replace(/[&<>"']/g, m => map[m]);
     },
 
+    mentionSuffixHtml(text) {
+        return window.NymSuffix.textHtml(text);
+    },
+
     // Scheme guard for anything that becomes an href or an external open.
     safeUrl(url) {
         const F = window.NymFormat;
@@ -2413,10 +2452,15 @@ function nymUsableNick(value) {
     return base !== '' && base.toLowerCase() !== NYM_PLACEHOLDER_NICK;
 }
 
+function nymOwnSuffix(value, pubkey) {
+    if (typeof pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(pubkey)) return value;
+    return value.replace(/#[0-9a-f]{4}$/i, '#' + pubkey.slice(-4).toLowerCase());
+}
+
 Object.defineProperty(NYM.prototype, 'nym', {
     configurable: true,
     get() {
-        return nymUsableNick(this._nymValue) ? this._nymValue : null;
+        return nymUsableNick(this._nymValue) ? nymOwnSuffix(this._nymValue, this.pubkey) : null;
     },
     set(value) {
         if (value === null || value === undefined) {

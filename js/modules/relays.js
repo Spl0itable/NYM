@@ -14,6 +14,8 @@ const COMPOSER_CONN_TEXT = {
     mesh: 'Offline – sending over the Bluetooth mesh'
 };
 const COMPOSER_QUEUED_LABEL = 'Waiting to send';
+const CONN_NOTICE_GRACE_MS = 2000;
+const CONN_STATUS_OFFLINE = /Failed|Disconnected/;
 const POOL_QUIET_MS = 60000;
 const POOL_PROBE_TIMEOUT_MS = 10000;
 const POOL_RESUME_FRESH_MS = 5000;
@@ -243,7 +245,7 @@ Object.assign(NYM.prototype, {
             if (closest.length === 0) return;
 
             if (this.useRelayProxy) {
-                const expected = new Set(closest.map(r => r.url));
+                const expected = new Set(closest.map(r => r.url).filter(u => !this.isRelayBlocked(u)));
                 const present = new Set(this.poolConnectedRelays || []);
                 let missing = 0;
                 expected.forEach(u => { if (!present.has(u)) missing++; });
@@ -252,11 +254,12 @@ Object.assign(NYM.prototype, {
             }
 
             let alive = 0;
-            for (const r of closest) {
+            const wanted = closest.filter(r => !this.isRelayBlocked(r.url));
+            for (const r of wanted) {
                 const relay = this.relayPool.get(r.url);
                 if (relay && relay.ws && relay.ws.readyState === WebSocket.OPEN) alive++;
             }
-            if (alive < closest.length) {
+            if (alive < wanted.length) {
                 this.connectToGeoRelays(this._geoRelayKeepAliveGeohash);
             }
         }, 30000);
@@ -296,7 +299,7 @@ Object.assign(NYM.prototype, {
             for (const url of geoRelayUrls) this.currentGeoRelays.add(url);
 
             const present = new Set(this.poolConnectedRelays || []);
-            const anyMissing = [...geoRelayUrls].some(u => !present.has(u));
+            const anyMissing = [...geoRelayUrls].some(u => !present.has(u) && !this.isRelayBlocked(u));
 
             if (changed || anyMissing) {
                 this._poolSendRelayConfig();
@@ -1602,6 +1605,7 @@ Object.assign(NYM.prototype, {
 
     shouldRetryRelay(relayUrl) {
         if (relayUrl === this.appRelay) return true;
+        if (this.isRelayBlocked(relayUrl)) return false;
 
         if (this.relayPool.size > 0) {
             const s = this._getRelayStats().get(relayUrl);
@@ -1819,13 +1823,13 @@ Object.assign(NYM.prototype, {
             if (on) localStorage.removeItem('nym_relay_fallback_notice_off');
             else localStorage.setItem('nym_relay_fallback_notice_off', 'true');
         } catch (_) { }
-        this._syncFallbackNoticeSelect();
+        this._syncFallbackNoticeToggle();
     },
 
-    _syncFallbackNoticeSelect() {
+    _syncFallbackNoticeToggle() {
         if (typeof document === 'undefined') return;
-        const sel = document.getElementById('fallbackNoticeSelect');
-        if (sel) sel.value = this.fallbackNoticeEnabled() ? 'on' : 'off';
+        const sel = document.getElementById('fallbackNoticeToggle');
+        if (sel) sel.checked = this.fallbackNoticeEnabled();
     },
 
     _noteAutoFallback() {
@@ -1860,7 +1864,7 @@ Object.assign(NYM.prototype, {
     },
 
     _initRelayTransportMode() {
-        this._syncFallbackNoticeSelect();
+        this._syncFallbackNoticeToggle();
         const host = !!this._getApiHost();
         this._userDirectMode = host && this._readUserDirectPref();
         this.useRelayProxy = host && !this._userDirectMode;
@@ -2062,8 +2066,9 @@ Object.assign(NYM.prototype, {
             shards.push({ id: `discovered-${i}`, role: 'discovered', relays: chunk, dmRelays: [] });
         });
 
-        if (shards.length === 0) shards.push({ id: 'critical-0', role: 'critical', relays: [], dmRelays: [] });
-        return shards;
+        const kept = NymRelayBlock.filterShards(shards, this._blockedRelaySet());
+        if (kept.length === 0) kept.push({ id: 'critical-0', role: 'critical', relays: [], dmRelays: [] });
+        return kept;
     },
     _poolAddMessageListener(handler) {
         for (const p of this.poolSockets) {
@@ -3193,9 +3198,14 @@ Object.assign(NYM.prototype, {
     _giftWrapCatchUpWindowMs: 10000,
     _giftWrapCatchUpMaxKeys: 1000,
 
+    _botAnonKeySet() {
+        return new Set(typeof this.botAnonPubkeys === 'function' ? (this.botAnonPubkeys() || []) : []);
+    },
+
     _giftWrapCatchUpFilter(floorSec) {
-        const eph = typeof this._getAllSelfEphemeralPubkeys === 'function'
-            ? (this._getAllSelfEphemeralPubkeys() || []) : [];
+        const anon = this._botAnonKeySet();
+        const eph = (typeof this._getAllSelfEphemeralPubkeys === 'function'
+            ? (this._getAllSelfEphemeralPubkeys() || []) : []).filter((pk) => !anon.has(pk));
         const pks = [...new Set([this.pubkey, ...eph].filter(pk => typeof pk === 'string' && pk))]
             .slice(0, this._giftWrapCatchUpMaxKeys);
         if (!pks.length) return null;
@@ -3316,6 +3326,236 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    _pmInboxRestore(keys) {
+        if (!this._pmInboxQ) this._pmInboxQ = new Set();
+        for (const k of Array.isArray(keys) ? keys : []) if (typeof k === 'string' && k) this._pmInboxQ.add(k);
+        if (this._pmInboxRunning) return this._pmInboxRunning;
+        const run = (async () => {
+            const D = window.NymD1Cursor;
+            if (!this._pmInboxDoneAt) this._pmInboxDoneAt = new Map();
+            while (this._pmInboxQ.size) {
+                const batch = [...this._pmInboxQ];
+                this._pmInboxQ.clear();
+                const now = Date.now();
+                const due = D ? batch.filter((k) => !D.coalesce(this._pmInboxDoneAt.get(k), now)) : batch;
+                if (due.length) await this._pmInboxPass(due);
+            }
+        })().finally(() => { if (this._pmInboxRunning === run) this._pmInboxRunning = null; });
+        this._pmInboxRunning = run;
+        return run;
+    },
+
+    async _pmInboxState(pk) {
+        let st = this._pmInboxCur;
+        if (!st || st.pk !== pk) {
+            st = { pk, map: {}, loaded: false, holds: [], heldSince: 0 };
+            this._pmInboxCur = st;
+        }
+        if (st.loaded) return st;
+        if (typeof this.hydrateGate === 'function') {
+            await Promise.race([this.hydrateGate(), new Promise((r) => setTimeout(r, 20000))]);
+        }
+        if (st.loaded || this.pubkey !== pk) return st;
+        st.loaded = true;
+        const rec = typeof this._pmCursorMetaFor === 'function' ? this._pmCursorMetaFor('pmInboxCursors', pk) : null;
+        if (rec && rec.map && typeof rec.map === 'object') {
+            st.map = window.NymD1Cursor.inboxStore(rec.map, [], null, null);
+            if (Number.isFinite(rec.heldSince) && rec.heldSince > 0) st.heldSince = rec.heldSince;
+        }
+        return st;
+    },
+
+    async _pmInboxRead(chunk, extra) {
+        const events = [];
+        const resp = await this._storageApiStream('pm-get', Object.assign({ pubkeys: chunk }, extra || {}), false, { statsAction: 'pm-get:inbox' });
+        await this._readNdjsonStream(resp, (ev) => { if (ev) events.push(ev); });
+        return { events, headers: resp.headers };
+    },
+
+    async _pmInboxReplay(events, hold) {
+        events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+        this._restoreFromD1Depth = (this._restoreFromD1Depth || 0) + 1;
+        try {
+            for (let k = 0; k < events.length; k++) {
+                const ev = events[k];
+                if (!ev || typeof ev.id !== 'string') continue;
+                try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
+                const kind = hold && typeof this._pmWrapRetryable === 'function' ? this._pmWrapRetryable(ev) : false;
+                if (kind) hold(ev, kind);
+                if (k + 1 < events.length && typeof this._yieldIfDue === 'function') await this._yieldIfDue();
+            }
+        } finally {
+            this._restoreFromD1Depth = Math.max(0, (this._restoreFromD1Depth || 1) - 1);
+        }
+    },
+
+    async _pmInboxPass(keys) {
+        const D = window.NymD1Cursor;
+        const pk = this.pubkey;
+        if (!D) {
+            for (let i = 0; i < keys.length; i += 200) {
+                const r = await this._pmInboxRead(keys.slice(i, i + 200));
+                await this._pmInboxReplay(r.events, null);
+            }
+            return;
+        }
+        const st = await this._pmInboxState(pk);
+        if (this.pubkey !== pk) return;
+        const holdFor = (chunk, after) => (ev, kind) => {
+            if (st.holds.some((h) => h.id === ev.id)) return;
+            const now = Date.now();
+            const persist = kind === 'hold';
+            const since = persist && st.heldSince && now - st.heldSince < D.HOLD_MS ? st.heldSince : now;
+            if (persist && !st.heldSince) st.heldSince = since;
+            st.holds.push({ id: ev.id, ev, since, persist, keys: chunk.slice(), after: D.valid(after) ? after : null });
+            while (st.holds.length > 500) st.holds.shift();
+        };
+        const done = (chunk) => { const t = Date.now(); for (const k of chunk) this._pmInboxDoneAt.set(k, t); };
+        const legacyRead = async (chunk) => {
+            const r = await this._pmInboxRead(chunk);
+            if (this.pubkey !== pk) return;
+            await this._pmInboxReplay(r.events, holdFor(chunk, null));
+            const head = D.fromHead(r.headers.get('X-Cursor-Head'));
+            if (head) st.map = D.inboxStore(st.map, chunk, head, null);
+            done(chunk);
+        };
+        const plan = D.inboxPlan(keys, st.map);
+        for (const chunk of plan.legacy) {
+            try { await legacyRead(chunk); } catch (_) { }
+            if (this.pubkey !== pk) return;
+        }
+        for (const group of plan.cursor) {
+            let after = group.after;
+            let best = null;
+            let legacy = false;
+            try {
+                for (let page = 0; page < D.MAX_PAGES; page++) {
+                    const r = await this._pmInboxRead(group.keys, { after, limit: D.PAGE_LIMIT });
+                    if (this.pubkey !== pk) return;
+                    const step = D.step(page, after, r.headers.get('X-Cursor'), r.headers.get('X-Has-More'));
+                    if (!step.serverOk) {
+                        legacy = true;
+                        await this._pmInboxReplay(r.events, null);
+                        break;
+                    }
+                    await this._pmInboxReplay(r.events, holdFor(group.keys, after));
+                    best = D.newer(best, step.cursor);
+                    if (!step.next) break;
+                    after = step.next;
+                }
+            } catch (_) { }
+            if (this.pubkey !== pk) return;
+            if (legacy) {
+                const next = {};
+                for (const [k, v] of Object.entries(st.map)) if (!group.keys.includes(k)) next[k] = v;
+                st.map = next;
+                st.legacyServer = true;
+                try { await this._pmInboxRead(group.keys).then((r) => this._pmInboxReplay(r.events, null)); } catch (_) { }
+                done(group.keys);
+                continue;
+            }
+            if (best) st.map = D.inboxStore(st.map, group.keys, best, null);
+            done(group.keys);
+        }
+        if (st.legacyServer) st.map = {};
+        await this._pmInboxRetryHeld();
+        this._pmInboxCommit();
+    },
+
+    async _botAnonInboxRestore(keys) {
+        const D = window.NymD1Cursor;
+        const pk = this.pubkey;
+        if (!D || typeof this._botAnonStream !== 'function' || typeof this._botAnonIdentities !== 'function') return;
+        const st = await this._pmInboxState(pk);
+        if (this.pubkey !== pk) return;
+        if (!this._pmInboxDoneAt) this._pmInboxDoneAt = new Map();
+        const ids = this._botAnonIdentities();
+        for (const key of keys) {
+            const id = ids.find((i) => i.pk === key);
+            if (!id || D.coalesce(this._pmInboxDoneAt.get(key), Date.now())) continue;
+            try {
+                if (!D.valid(st.map[key])) {
+                    const r = await this._botAnonStream(id, { since: 0, before: 0, limit: 1000 });
+                    if (this.pubkey !== pk) return;
+                    await this._pmInboxReplay(r.events, null);
+                    const head = D.fromHead(r.headers.get('X-Cursor-Head'));
+                    if (head) st.map = D.inboxStore(st.map, [key], head, null);
+                } else {
+                    let after = D.startAfter(st.map[key]);
+                    let best = null;
+                    let legacy = false;
+                    for (let page = 0; page < D.MAX_PAGES; page++) {
+                        const r = await this._botAnonStream(id, { after, limit: D.PAGE_LIMIT });
+                        if (this.pubkey !== pk) return;
+                        const step = D.step(page, after, r.headers.get('X-Cursor'), r.headers.get('X-Has-More'));
+                        await this._pmInboxReplay(r.events, null);
+                        if (!step.serverOk) { legacy = true; break; }
+                        best = D.newer(best, step.cursor);
+                        if (!step.next) break;
+                        after = step.next;
+                    }
+                    if (legacy) {
+                        const next = Object.assign({}, st.map);
+                        delete next[key];
+                        st.map = next;
+                        const r = await this._botAnonStream(id, { since: 0, before: 0, limit: 1000 });
+                        await this._pmInboxReplay(r.events, null);
+                    } else if (best) {
+                        st.map = D.inboxStore(st.map, [key], best, null);
+                    }
+                }
+                this._pmInboxDoneAt.set(key, Date.now());
+            } catch (_) { }
+        }
+        this._pmInboxCommit();
+    },
+
+    async _pmInboxRetryHeld() {
+        const st = this._pmInboxCur;
+        if (!st || st.pk !== this.pubkey || !st.holds.length || this._pmInboxRetrying) return false;
+        this._pmInboxRetrying = true;
+        let changed = false;
+        try {
+            const D = window.NymD1Cursor;
+            const now = Date.now();
+            const keep = [];
+            for (const h of st.holds.slice()) {
+                if (this._decryptedWrapIds && this._decryptedWrapIds.has(h.id)) { changed = true; continue; }
+                if (now - h.since >= D.HOLD_MS) { changed = true; continue; }
+                try { await this.handleGiftWrapDM(h.ev, { fromD1: true }); } catch (_) { }
+                if (this._decryptedWrapIds && this._decryptedWrapIds.has(h.id)) { changed = true; continue; }
+                keep.push(h);
+            }
+            if (this._pmInboxCur === st) {
+                st.holds = keep;
+                if (!keep.length) st.heldSince = 0;
+            }
+        } finally {
+            this._pmInboxRetrying = false;
+        }
+        if (changed) this._pmInboxCommit();
+        return changed;
+    },
+
+    _pmInboxCommit() {
+        const st = this._pmInboxCur;
+        const D = window.NymD1Cursor;
+        if (!D || !st || st.pk !== this.pubkey || typeof this._pmMetaCommit !== 'function') return;
+        const live = typeof this._getAllSelfEphemeralPubkeys === 'function' ? this._getAllSelfEphemeralPubkeys() : null;
+        st.map = D.inboxStore(st.map, [], null, live);
+        const now = Date.now();
+        const out = Object.assign({}, st.map);
+        const active = st.holds.filter((h) => h.persist && now - h.since < D.HOLD_MS);
+        for (const h of active) {
+            for (const k of h.keys) {
+                if (!(k in out)) continue;
+                if (!D.valid(h.after)) delete out[k];
+                else out[k] = D.older(out[k], h.after);
+            }
+        }
+        this._pmMetaCommit({ key: 'pmInboxCursors', pk: st.pk, map: out, heldSince: active.length ? st.heldSince || now : 0 });
+    },
+
     async _recoverEphemeralHistory(ephPks) {
         if (!Array.isArray(ephPks) || ephPks.length === 0) return;
         const since = this._isFreshDevice
@@ -3323,20 +3563,15 @@ Object.assign(NYM.prototype, {
             : (this.lastPMSyncTime > 0 ? Math.max(0, this.lastPMSyncTime - 300) : 0);
 
         if (this._getApiHost && this._getApiHost() && typeof this._storageApiStream === 'function') {
-            try {
-                // No `since` gate (NIP-59 backdates created_at) and chunk to the server's 200-pubkey cap.
-                const evs = [];
-                for (let i = 0; i < ephPks.length; i += 200) {
-                    const chunk = ephPks.slice(i, i + 200);
-                    const resp = await this._storageApiStream('pm-get', { pubkeys: chunk }, false);
-                    await this._readNdjsonStream(resp, (ev) => { if (ev) evs.push(ev); });
-                }
-                // Replay oldest-first as D1 history (fromD1) so it folds into the chat instead of raising notifications.
-                evs.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
-                for (const ev of evs) {
-                    try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
-                }
-            } catch (_) { }
+            const anon = this._botAnonKeySet();
+            const groupKeys = ephPks.filter((k) => !anon.has(k));
+            const anonKeys = ephPks.filter((k) => anon.has(k));
+            if (groupKeys.length) {
+                try { await this._pmInboxRestore(groupKeys); } catch (_) { }
+            }
+            if (anonKeys.length) {
+                try { await this._botAnonInboxRestore(anonKeys); } catch (_) { }
+            }
             return;
         }
 
@@ -3640,6 +3875,8 @@ Object.assign(NYM.prototype, {
 
         if (this._isUnsafeRelayUrl(relayUrl)) return;
 
+        if (this.isRelayBlocked(relayUrl)) return;
+
         // Block known-bad relays entirely.
         if (relayUrl === 'wss://relay.nosflare.com' || relayUrl === 'wss://relay.nostraddress.com' || relayUrl === 'wss://nostr-server-production.up.railway.app') {
             return;
@@ -3687,6 +3924,12 @@ Object.assign(NYM.prototype, {
                 ws.onopen = () => {
                     clearTimeout(connectionTimeout);
 
+                    if (this.isRelayBlocked(relayUrl)) {
+                        try { ws.close(1000); } catch (_) { }
+                        resolve();
+                        return;
+                    }
+
                     this.relayStats.latencyPerRelay.set(relayUrl, Date.now() - wsCreatedAt);
 
                     this.relayPool.set(relayUrl, {
@@ -3729,6 +3972,12 @@ Object.assign(NYM.prototype, {
 
                     const wasConnected = this.relayPool.has(relayUrl) &&
                         this.relayPool.get(relayUrl).ws === ws;
+
+                    if (this.isRelayBlocked(relayUrl)) {
+                        if (wasConnected) this.relayPool.delete(relayUrl);
+                        this.updateConnectionStatus();
+                        return;
+                    }
 
                     // Only blacklist on actual connection failures, not normal closes.
                     const isConnectionFailure = !wasConnected && event.code !== 1000 && event.code !== 1001;
@@ -3777,7 +4026,7 @@ Object.assign(NYM.prototype, {
                                     return;
                                 }
 
-                                if (!this.connected) {
+                                if (!this.connected || this.isRelayBlocked(relayUrl)) {
                                     this.reconnectingRelays.delete(relayUrl);
                                     this.updateConnectionStatus();
                                     return;
@@ -3850,19 +4099,221 @@ Object.assign(NYM.prototype, {
     },
 
     _canonicalRelayUrl(url) {
-        if (typeof url !== 'string') return url;
+        return NymRelayBlock.canon(url);
+    },
+
+    _blockedRelayState() {
+        if (!this._blockedRelays) {
+            let raw = null;
+            try { raw = JSON.parse(localStorage.getItem('nym_blocked_relays') || 'null'); } catch (_) { }
+            this._blockedRelays = NymRelayBlock.norm(raw, Date.now());
+            this._blockedRelaySetCache = null;
+        }
+        return this._blockedRelays;
+    },
+
+    _blockedRelaySet() {
+        if (!this._blockedRelaySetCache) this._blockedRelaySetCache = new Set(NymRelayBlock.list(this._blockedRelayState()));
+        return this._blockedRelaySetCache;
+    },
+
+    isRelayBlocked(url) {
+        return NymRelayBlock.isBlocked(this._blockedRelaySet(), url);
+    },
+
+    blockedRelayList() {
+        return NymRelayBlock.list(this._blockedRelayState());
+    },
+
+    _blockedRelaysForSync() {
+        return NymRelayBlock.norm(this._blockedRelayState(), Date.now());
+    },
+
+    _nip46SignerRelay() {
         try {
-            const u = new URL(url.trim());
-            const defaultPort = (u.protocol === 'wss:' && u.port === '443') ||
-                (u.protocol === 'ws:' && u.port === '80');
-            const port = (u.port && !defaultPort) ? ':' + u.port : '';
-            const path = u.pathname.replace(/\/+$/, '');
-            return `${u.protocol}//${u.hostname.toLowerCase()}${port}${path}`;
-        } catch (_) {
-            return url;
+            if (localStorage.getItem('nym_nostr_login_method') !== 'nip46') return '';
+            return localStorage.getItem('nym_nip46_relay') || '';
+        } catch (_) { return ''; }
+    },
+
+    relayBlockGuard(url) {
+        return NymRelayBlock.guard(url, {
+            blocked: this._blockedRelaySet(),
+            defaults: this.defaultRelays,
+            writeOnly: [...(this.writeOnlyRelays || [])],
+            signer: this._nip46SignerRelay()
+        });
+    },
+
+    _relayReaderContext() {
+        return { defaults: this.defaultRelays, writeOnly: [...(this.writeOnlyRelays || [])] };
+    },
+
+    blockRelay(url, opts) {
+        const why = this.relayBlockGuard(url);
+        if (why !== 'ok' && !(why === 'signer' && opts && opts.confirmed)) return why;
+        this._setBlockedRelayState(NymRelayBlock.block(this._blockedRelayState(), url, Date.now()));
+        return 'blocked';
+    },
+
+    unblockRelay(url) {
+        if (!this.isRelayBlocked(url)) return false;
+        this._setBlockedRelayState(NymRelayBlock.unblock(this._blockedRelayState(), url, Date.now()));
+        return true;
+    },
+
+    applySyncedBlockedRelays(remote) {
+        const now = Date.now();
+        const merged = NymRelayBlock.keepReader(NymRelayBlock.merge(this._blockedRelayState(), remote, now), this._relayReaderContext(), now);
+        const behind = JSON.stringify(merged) !== JSON.stringify(NymRelayBlock.norm(remote, now));
+        this._setBlockedRelayState(merged, { quiet: true });
+        if (behind && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(3000);
+    },
+
+    _setBlockedRelayState(next, opts) {
+        const before = this._blockedRelaySet();
+        this._blockedRelays = next;
+        this._blockedRelaySetCache = null;
+        try { localStorage.setItem('nym_blocked_relays', JSON.stringify(next)); } catch (_) { }
+        const after = this._blockedRelaySet();
+        const changes = [];
+        for (const u of after) if (!before.has(u)) changes.push([u, true]);
+        for (const u of before) if (!after.has(u)) changes.push([u, false]);
+        if (changes.length) this._applyRelayBlockChanges(changes);
+        if (!(opts && opts.quiet) && typeof this._debouncedNostrSettingsSave === 'function') this._debouncedNostrSettingsSave(1500);
+        return changes.length > 0;
+    },
+
+    _applyRelayBlockChanges(changes) {
+        for (const [url, blocked] of changes) {
+            if (blocked) this._dropBlockedRelay(url);
+            else this._restoreUnblockedRelay(url);
+        }
+        if (this.useRelayProxy && typeof this._poolSendRelayConfig === 'function') this._poolSendRelayConfig();
+        if (typeof this.updateBlockedRelaysList === 'function') this.updateBlockedRelaysList();
+        if (typeof this.updateConnectionStatus === 'function') this.updateConnectionStatus();
+    },
+
+    _isPoolSocket(ws) {
+        if (!ws) return false;
+        if (ws === this.poolSocket) return true;
+        return (this.poolSockets || []).some(p => p.ws === ws);
+    },
+
+    _dropBlockedRelay(url) {
+        const C = NymRelayBlock.canon;
+        for (const [u, relay] of [...this.relayPool]) {
+            if (C(u) !== url) continue;
+            if (relay && relay.ws && !this._isPoolSocket(relay.ws)) {
+                try { relay.ws.close(); } catch (_) { }
+            }
+            this.relayPool.delete(u);
+            if (this._poolRelayLastSeen) this._poolRelayLastSeen.delete(u);
+        }
+        if (this.useRelayProxy) return;
+        if (this.currentGeoRelays) {
+            for (const u of [...this.currentGeoRelays]) if (C(u) === url) this.currentGeoRelays.delete(u);
+        }
+        if (this.geoRelayConnections) {
+            for (const set of this.geoRelayConnections.values()) {
+                for (const u of [...set]) if (C(u) === url) set.delete(u);
+            }
         }
     },
 
+    _wantedRelaySpelling(url) {
+        const C = NymRelayBlock.canon;
+        const geohash = this.currentGeohash && this.isValidGeohash && this.isValidGeohash(this.currentGeohash) ? this.currentGeohash : '';
+        const nearest = geohash && !(this.settings && this.settings.groupChatPMOnlyMode)
+            ? this.getClosestRelaysForGeohash(geohash).map(r => r.url) : [];
+        const geoHit = nearest.find(u => C(u) === url);
+        if (geoHit) return { url: geoHit, geo: true };
+        const def = (this.defaultRelays || []).find(u => C(u) === url);
+        if (def) return { url: def, geo: false };
+        if (this.settings && (this.settings.lowDataMode || this.settings.groupChatPMOnlyMode)) return null;
+        const geo = (this.geoRelays || []).map(r => r.url || r).find(u => typeof u === 'string' && C(u) === url);
+        if (geo) return { url: geo, geo: false };
+        const found = [...(this.allRelayUrls || [])].find(u => C(u) === url);
+        return found ? { url: found, geo: false } : null;
+    },
+
+    _restoreUnblockedRelay(url) {
+        if (this.useRelayProxy) return;
+        const want = this._wantedRelaySpelling(url);
+        if (!want) return;
+        for (const u of new Set([want.url, url])) {
+            if (this.failedRelays) this.failedRelays.delete(u);
+            this.blacklistedRelays.delete(u);
+            this.blacklistTimestamps.delete(u);
+        }
+        this.connectToRelay(want.url, 'relay').then(() => {
+            const r = this.relayPool.get(want.url);
+            if (!r || !r.ws || r.ws.readyState !== WebSocket.OPEN) return;
+            this.subscribeToSingleRelay(want.url);
+            if (want.geo) {
+                this.currentGeoRelays.add(want.url);
+                this._ensureGeoRelayLiveSub(r, want.url);
+            }
+            this.updateConnectionStatus();
+        }).catch(() => { });
+    },
+
+    relayBlockLeavesGeoBare(url) {
+        const geohash = this.currentGeohash;
+        if (!geohash || !this.isValidGeohash || !this.isValidGeohash(geohash)) return '';
+        if (this.settings && this.settings.groupChatPMOnlyMode) return '';
+        const nearest = this.getClosestRelaysForGeohash(geohash).map(r => r.url);
+        const C = NymRelayBlock.canon;
+        const target = C(url);
+        if (!nearest.some(u => C(u) === target)) return '';
+        const next = new Set(this._blockedRelaySet());
+        next.add(target);
+        return NymRelayBlock.geoAllBlocked(nearest, next) ? geohash : '';
+    },
+
+    updateBlockedRelaysList() {
+        const list = document.getElementById('blockedRelaysList');
+        if (!list) return;
+        const urls = this.blockedRelayList();
+        list.textContent = '';
+        const t = (s) => (typeof this.uiText === 'function' ? this.uiText(s) : s);
+        if (!urls.length) {
+            const empty = document.createElement('div');
+            empty.className = 'list-empty-msg';
+            empty.textContent = t('No blocked relays');
+            list.appendChild(empty);
+            return;
+        }
+        const frag = document.createDocumentFragment();
+        for (const url of urls) {
+            const row = document.createElement('div');
+            row.className = 'blocked-item';
+            row.dataset.relayUrl = url;
+            const span = document.createElement('span');
+            span.className = 'blocked-relay-url';
+            span.title = url;
+            span.textContent = NymRelayBlock.shown(url);
+            const btn = document.createElement('button');
+            btn.className = 'unblock-btn';
+            btn.type = 'button';
+            btn.textContent = t('Unblock');
+            btn.addEventListener('click', () => this.unblockRelay(url));
+            row.appendChild(span);
+            row.appendChild(btn);
+            frag.appendChild(row);
+        }
+        list.appendChild(frag);
+    },
+
+    relayBlockGeoNote(url) {
+        const geohash = this.currentGeohash;
+        if (!geohash || !this.isValidGeohash || !this.isValidGeohash(geohash)) return '';
+        const nearest = this.getClosestRelaysForGeohash(geohash).map(r => r.url);
+        const C = NymRelayBlock.canon;
+        if (!nearest.some(u => C(u) === C(url))) return '';
+        if (!NymRelayBlock.geoAllBlocked(nearest, this._blockedRelaySet())) return '';
+        return geohash;
+    },
 
     _throttledProxyFetch(url, opts) {
         return new Promise((resolve, reject) => {
@@ -4087,20 +4538,68 @@ Object.assign(NYM.prototype, {
         });
     },
 
+    _connNoticeGraceMs() {
+        return CONN_NOTICE_GRACE_MS;
+    },
+
+    _connNoticeStep(memo, t, state, restart) {
+        if (!state) return { since: null, armed: false, shown: '' };
+        const m = memo && !restart ? memo : { since: null, armed: false };
+        const since = m.since == null ? t : m.since;
+        const armed = !!m.armed || t - since >= CONN_NOTICE_GRACE_MS;
+        return { since, armed, shown: armed ? state : '' };
+    },
+
+    _connNoticeNow() {
+        return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+    },
+
+    _connNoticeArmed() {
+        return !!(this._connNotice && this._connNotice.armed);
+    },
+
+    _armConnNoticeTimer(g) {
+        const due = g.since != null && !g.armed ? g.since + CONN_NOTICE_GRACE_MS : null;
+        if (this._connNoticeDue === due) return;
+        if (this._connNoticeTimer) clearTimeout(this._connNoticeTimer);
+        this._connNoticeTimer = null;
+        this._connNoticeDue = due;
+        if (due == null) return;
+        this._connNoticeTimer = setTimeout(() => {
+            this._connNoticeTimer = null;
+            this._connNoticeDue = null;
+            if (this._connNotice && this._connNotice.since != null) this._connNotice.armed = true;
+            this._syncComposerConnHint();
+        }, Math.max(0, due - this._connNoticeNow()));
+    },
+
+    _restartConnNotice() {
+        this._connNotice = null;
+        this._syncComposerConnHint();
+    },
+
     _syncComposerConnHint() {
         if (typeof document === 'undefined') return;
-        const el = document.getElementById('composerConnHint');
-        if (!el) return;
         if (!this._connHintWired && typeof window !== 'undefined') {
             this._connHintWired = true;
             const resync = () => this._syncComposerConnHint();
             window.addEventListener('online', resync);
             window.addEventListener('offline', resync);
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') this._restartConnNotice();
+            });
         }
-        const state = this.pubkey ? this._composerConnState() : '';
-        const raw = this._composerConnText(state);
-        const text = raw && typeof this.uiText === 'function' ? this.uiText(raw) : raw;
-        if (el.textContent !== text) el.textContent = text;
+        const raw = this.pubkey ? this._composerConnState() : '';
+        const g = this._connNoticeStep(this._connNotice, this._connNoticeNow(), raw, false);
+        this._connNotice = g;
+        this._armConnNoticeTimer(g);
+        this._paintConnStatus();
+        const el = document.getElementById('composerConnHint');
+        if (!el) return;
+        const state = g.shown;
+        const text = this._composerConnText(state);
+        const shown = text && typeof this.uiText === 'function' ? this.uiText(text) : text;
+        if (el.textContent !== shown) el.textContent = shown;
         el.hidden = !state;
         this._watchComposerConnHintPlace(el);
         if (state) this._placeComposerConnHint(el);
@@ -4930,30 +5429,26 @@ Object.assign(NYM.prototype, {
     _renderConnectionStatus(status) {
         if (status && typeof status === 'string') this._connStatusText = status;
         else this._connStatusText = '';
-        const statusEl = document.getElementById('connectionStatus');
-        const dot = document.getElementById('statusDot');
 
         if (status && typeof status === 'string') {
-            statusEl.textContent = status;
-
+            let color = '';
             if (status.includes('Connected') || status.includes('relays')) {
-                dot.style.background = 'var(--primary)';
+                color = 'var(--primary)';
             } else if (status.includes('Connecting') || status.includes('Discovering')) {
-                dot.style.background = 'var(--warning)';
+                color = 'var(--warning)';
             } else if (status.includes('Failed') || status.includes('Disconnected')) {
-                dot.style.background = 'var(--danger)';
+                color = 'var(--danger)';
             }
+            this._setConnStatus(status, color);
         } else {
             // Pool mode: relayPool entries hold a stale poolSocket ref during single-worker reconnects.
             if (this.useRelayProxy) {
                 const count = this.poolConnectedRelays.length;
                 if (this._isAnyPoolOpen() && count > 0) {
-                    statusEl.textContent = `Proxy Connected (${count} relays)`;
-                    dot.style.background = 'var(--primary)';
+                    this._setConnStatus(`Proxy Connected (${count} relays)`, 'var(--primary)');
                     this.connected = true;
                 } else {
-                    statusEl.textContent = 'Connecting...';
-                    dot.style.background = 'var(--warning)';
+                    this._setConnStatus('Connecting...', 'var(--warning)');
                 }
                 return;
             }
@@ -4969,16 +5464,32 @@ Object.assign(NYM.prototype, {
             });
 
             if (actuallyConnected > 0) {
-                statusEl.textContent = `Direct Connected (${actuallyConnected} relays)`;
-                dot.style.background = 'var(--primary)';
+                this._setConnStatus(`Direct Connected (${actuallyConnected} relays)`, 'var(--primary)');
                 this.connected = true;
             } else {
-                statusEl.textContent = 'Disconnected';
-                dot.style.background = 'var(--danger)';
+                this._setConnStatus('Disconnected', 'var(--danger)');
                 this.connected = false;
             }
 
         }
+    },
+
+    _setConnStatus(text, color) {
+        const prev = this._connStatusShown;
+        this._connStatusShown = { text, color: color || (prev && prev.color) || '' };
+        this._paintConnStatus();
+    },
+
+    _paintConnStatus() {
+        const cur = this._connStatusShown;
+        if (!cur || typeof document === 'undefined') return;
+        const statusEl = document.getElementById('connectionStatus');
+        const dot = document.getElementById('statusDot');
+        const held = !this._connNoticeArmed();
+        const text = held && CONN_STATUS_OFFLINE.test(cur.text) ? 'Connecting...' : cur.text;
+        const color = held && cur.color === 'var(--danger)' ? 'var(--warning)' : cur.color;
+        if (statusEl && statusEl.textContent !== text) statusEl.textContent = text;
+        if (dot && color && dot.style.background !== color) dot.style.background = color;
     },
 
     _jitter(baseMs, spread = 0.25) {

@@ -10,6 +10,8 @@ import '../../../core/constants/relays.dart';
 import '../../../core/crypto/bech32_codec.dart' as bech32;
 import '../../../core/crypto/keys.dart';
 import '../../../models/nostr_event.dart';
+import '../../relays/blocked_relays.dart';
+import '../../relays/relay_block.dart';
 import 'key_backup_config.dart';
 import 'key_backup_crypto.dart' show BackupSecret;
 import 'key_backup_service.dart' show shortNpub;
@@ -416,6 +418,7 @@ class PasskeyBackupService {
     PasskeyRelayClient? relays,
     List<String>? publishRelays,
     List<String>? queryRelays,
+    this._blocked,
     int Function()? now,
     this._nonce,
   })  : _platform = platform ?? const MethodChannelPasskeyPlatform(),
@@ -430,8 +433,19 @@ class PasskeyBackupService {
   final PasskeyRelayClient _relays;
   final List<String> _publishRelays;
   final List<String> _queryRelays;
+  final Iterable<String> Function()? _blocked;
   final int Function() _now;
   final Uint8List? Function()? _nonce;
+
+  List<String> _live(List<String> relays) {
+    final blocked = _blocked;
+    if (blocked == null) return relays;
+    try {
+      return RelayBlock.usable(relays, blocked());
+    } catch (_) {
+      return relays;
+    }
+  }
 
   Future<bool> isAvailable() => _platform.isAvailable();
 
@@ -466,7 +480,7 @@ class PasskeyBackupService {
       try {
         final event = keys.buildEvent(secretHex,
             createdAt: _now(), pqCode: pqCode, nonce: _nonce?.call());
-        final ok = await _relays.publish(event, _publishRelays);
+        final ok = await _relays.publish(event, _live(_publishRelays));
         if (ok < 1) {
           throw const PasskeyBackupException(PasskeyBackupError.publishFailed);
         }
@@ -507,7 +521,7 @@ class PasskeyBackupService {
       final keys = PasskeyBackupKeys.fromPrf(prf);
       prf.fillRange(0, prf.length, 0);
       try {
-        final events = await _relays.query(keys.filter, _queryRelays);
+        final events = await _relays.query(keys.filter, _live(_queryRelays));
         final secret = keys.secretFromEvents(events);
         if (secret != null) return secret;
       } finally {
@@ -525,14 +539,16 @@ class PasskeyBackupService {
 PasskeyBackupService? defaultPasskeyBackupService({
   KeyBackupConfig config = KeyBackupConfig.environment,
   TargetPlatform? platform,
+  Iterable<String> Function()? blocked,
 }) {
   final p = platform ?? defaultTargetPlatform;
   if (!config.passkeyEnabledOn(p)) return null;
-  return PasskeyBackupService(rpId: config.passkeyRpId);
+  return PasskeyBackupService(rpId: config.passkeyRpId, blocked: blocked);
 }
 
-final passkeyBackupServiceProvider =
-    Provider<PasskeyBackupService?>((ref) => defaultPasskeyBackupService());
+final passkeyBackupServiceProvider = Provider<PasskeyBackupService?>((ref) =>
+    defaultPasskeyBackupService(
+        blocked: () => ref.read(blockedRelaysProvider)));
 
 final passkeyBackupAvailableProvider = FutureProvider<bool>((ref) async {
   final service = ref.watch(passkeyBackupServiceProvider);

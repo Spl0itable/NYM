@@ -1,6 +1,6 @@
 // HTTP proxy for media, translation, unfurl, Blossom, geo-relays, JSON and zap-verify so user IPs stay hidden.
 
-import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked, ipv6NetKey, cacheRateTake } from './_shared.js';
+import { validateZapReceipt, nwcInvoicePaid, ipv6Blocked, ipv6NetKey, cacheRateTakeAll } from './_shared.js';
 import { clientOriginAllowed } from './_client.js';
 import { translateText, MAX_CHARS } from './_translate.js';
 
@@ -532,20 +532,21 @@ function translateBuildTokenOk(request, env) {
   return diff === 0;
 }
 
-async function translateRateOk(request, context, units) {
-  if (units <= 0) return true;
-  if (translateBuildTokenOk(request, context && context.env)) return true;
-  return await cacheRateTake('translate-ip', translateIpKey(request), units,
-    TRANSLATE_IP_RATE, TRANSLATE_RATE_WINDOW_MS);
+async function translateRateWaitMs(request, context, units) {
+  if (units <= 0) return 0;
+  if (translateBuildTokenOk(request, context && context.env)) return 0;
+  const gate = await cacheRateTakeAll([{ bucket: 'translate-ip', who: translateIpKey(request), units,
+    limit: TRANSLATE_IP_RATE, windowMs: TRANSLATE_RATE_WINDOW_MS }]);
+  return gate.ok ? 0 : Math.max(1, gate.retryAfterMs || TRANSLATE_RATE_WINDOW_MS);
 }
 
-function translateRateLimited() {
+function translateRateLimited(waitMs) {
   return new Response(JSON.stringify({ error: 'Too many translation requests. Try again in a minute.' }), {
     status: 429,
     headers: {
       ...CORS_HEADERS,
       'Content-Type': 'application/json',
-      'Retry-After': String(Math.ceil(TRANSLATE_RATE_WINDOW_MS / 1000)),
+      'Retry-After': String(Math.max(1, Math.ceil(waitMs / 1000))),
     },
   });
 }
@@ -581,7 +582,8 @@ async function handleTranslate(request, context) {
   const cachePath = `/translate?k=${await sha256Hex(`${sl}\u0000${target}\u0000${q}`)}`;
   const cached = await readEdgeCache(cachePath);
   if (cached) return cached;
-  if (!(await translateRateOk(request, context, 1))) return translateRateLimited();
+  const translateWait = await translateRateWaitMs(request, context, 1);
+  if (translateWait) return translateRateLimited(translateWait);
 
   let result;
   try {
@@ -623,7 +625,8 @@ async function handleTranslateBatch(texts, source, target, context, request) {
     return jsonResponse({ error: `Batch too large (max ${TRANSLATE_BATCH_BYTES} chars)` }, 400);
   }
   const units = items.reduce((n, t) => n + (t.trim() ? 1 : 0), 0);
-  if (!(await translateRateOk(request, context, units))) return translateRateLimited();
+  const translateWait = await translateRateWaitMs(request, context, units);
+  if (translateWait) return translateRateLimited(translateWait);
 
   const ai = context.env && context.env.AI;
   const out = new Array(items.length).fill(null);

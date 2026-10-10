@@ -138,6 +138,7 @@ class CallState {
     this.canRouteAudio = false,
     this.hasCamera = false,
     this.rejoinGroupId,
+    this.rejoinCallId,
   });
 
   final CallPhase phase;
@@ -197,6 +198,8 @@ class CallState {
 
   final String? rejoinGroupId;
 
+  final String? rejoinCallId;
+
   bool get isActiveCall =>
       phase == CallPhase.ringing ||
       phase == CallPhase.connecting ||
@@ -238,6 +241,7 @@ class CallState {
     bool? canRouteAudio,
     bool? hasCamera,
     String? rejoinGroupId,
+    String? rejoinCallId,
   }) =>
       CallState(
         phase: phase ?? this.phase,
@@ -271,5 +275,6 @@ class CallState {
         canRouteAudio: canRouteAudio ?? this.canRouteAudio,
         hasCamera: hasCamera ?? this.hasCamera,
         rejoinGroupId: rejoinGroupId ?? this.rejoinGroupId,
+        rejoinCallId: rejoinCallId ?? this.rejoinCallId,
       );
 }

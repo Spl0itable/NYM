@@ -10,8 +10,12 @@ import '../../core/crypto/keys.dart';
 import '../../core/crypto/nip44.dart' as nip44;
 import '../../core/crypto/schnorr.dart' as schnorr;
 import '../../models/nostr_event.dart';
+import '../../services/api/api_config.dart';
+import '../../services/relay/relay_connection.dart'
+    show WebSocketChannelFactory, defaultRelayChannelFactory;
 import '../../services/relay/relay_message.dart';
 import '../../services/relay/relay_pool.dart';
+import '../../services/relay/relay_pool_proxy.dart';
 
 /// NIP-46 remote signer transport: NIP-44 `{id, method, params}` RPC over kind 24133, with the session persisted for restore.
 
@@ -44,21 +48,90 @@ abstract class Nip46Socket {
 
 typedef Nip46SocketFactory = Nip46Socket Function(String relayUrl);
 
-class _WebSocketNip46Socket implements Nip46Socket {
-  _WebSocketNip46Socket(String relayUrl)
-      : _channel = WebSocketChannel.connect(Uri.parse(relayUrl));
+class _ChannelNip46Socket implements Nip46Socket {
+  _ChannelNip46Socket(this._relayUrl, this._channelFactory,
+      {required bool proxied}) {
+    _connect(proxied: proxied);
+  }
 
-  final WebSocketChannel _channel;
+  final String _relayUrl;
+  final WebSocketChannelFactory _channelFactory;
+  final StreamController<String> _incoming =
+      StreamController<String>.broadcast();
+  final List<String> _unsent = [];
+  WebSocketChannel? _channel;
+  StreamSubscription<dynamic>? _sub;
+  bool _opened = false;
+  bool _closed = false;
+
+  void _connect({required bool proxied}) {
+    final url = proxied ? ApiConfig.singleRelayUrl(_relayUrl) : _relayUrl;
+    final WebSocketChannel ch;
+    try {
+      ch = _channelFactory(Uri.parse(url));
+    } catch (e) {
+      debugPrint('[NIP46] Failed to open socket for $url: $e');
+      if (proxied) {
+        _connect(proxied: false);
+      } else {
+        _finish();
+      }
+      return;
+    }
+    _channel = ch;
+    for (final f in _unsent) {
+      ch.sink.add(f);
+    }
+    ch.ready.then((_) {
+      if (!identical(_channel, ch)) return;
+      _opened = true;
+      _unsent.clear();
+    }, onError: (_) {});
+    _sub = ch.stream.listen(
+      (e) {
+        if (e is String && !_incoming.isClosed) _incoming.add(e);
+      },
+      onError: (_) {},
+      onDone: () {
+        if (_closed || !identical(_channel, ch)) return;
+        if (proxied && !_opened) {
+          _connect(proxied: false);
+          return;
+        }
+        _finish();
+      },
+    );
+  }
+
+  void _finish() {
+    if (!_incoming.isClosed) unawaited(_incoming.close());
+  }
 
   @override
-  Stream<String> get messages =>
-      _channel.stream.where((e) => e is String).cast<String>();
+  Stream<String> get messages => _incoming.stream;
 
   @override
-  void send(String data) => _channel.sink.add(data);
+  void send(String data) {
+    if (_closed) return;
+    if (!_opened) _unsent.add(data);
+    _channel?.sink.add(data);
+  }
 
   @override
-  Future<void> close() => _channel.sink.close();
+  Future<void> close() async {
+    _closed = true;
+    _unsent.clear();
+    await _sub?.cancel();
+    _sub = null;
+    final ch = _channel;
+    _channel = null;
+    _finish();
+    if (ch != null) {
+      try {
+        await ch.sink.close();
+      } catch (_) {}
+    }
+  }
 }
 
 /// A socket that failed to open; keeps the service alive and logs the failure.
@@ -77,26 +150,33 @@ class _FailingNip46Socket implements Nip46Socket {
   Future<void> close() async {}
 }
 
-Nip46Socket _defaultSocketFactory(String relayUrl) {
-  try {
-    return _WebSocketNip46Socket(relayUrl);
-  } catch (e) {
-    debugPrint('[NIP46] Failed to open socket for $relayUrl: $e');
-    return _FailingNip46Socket(e);
-  }
-}
-
-/// Routes relays the pool already covers through it (proxy privacy, reconnect); other `bunker://` relays get a raw socket.
-Nip46SocketFactory _makeDefaultFactory(
-    PoolTransport? Function()? poolProvider) {
+Nip46SocketFactory nip46SocketFactory(
+  PoolTransport? Function()? poolProvider, {
+  bool Function()? directMode,
+  WebSocketChannelFactory channelFactory = defaultRelayChannelFactory,
+}) {
   return (relayUrl) {
     final pool = poolProvider?.call();
     if (pool != null &&
-        RelayConfig.defaultRelays.contains(_canonicalRelayUrl(relayUrl))) {
+        RelayConfig.defaultRelays.contains(_canonicalRelayUrl(relayUrl)) &&
+        !_poolBlocks(pool, relayUrl)) {
       return _PoolNip46Socket(pool);
     }
-    return _defaultSocketFactory(relayUrl);
+    final proxied = pool is RelayPoolProxy ||
+        (pool == null && directMode != null && !directMode());
+    try {
+      return _ChannelNip46Socket(relayUrl, channelFactory, proxied: proxied);
+    } catch (e) {
+      debugPrint('[NIP46] Failed to open socket for $relayUrl: $e');
+      return _FailingNip46Socket(e);
+    }
   };
+}
+
+bool _poolBlocks(PoolTransport pool, String relayUrl) {
+  if (pool is RelayPoolProxy) return pool.isRelayBlocked(relayUrl);
+  if (pool is RelayPool) return pool.isRelayBlocked(relayUrl);
+  return false;
 }
 
 /// Trims and drops one trailing `/`, so Amber's `wss://relay.primal.net/` matches the pool instead of bypassing the proxy.
@@ -225,8 +305,10 @@ class Nip46Service implements Nip46Signer {
     required this._secure,
     Nip46SocketFactory? socketFactory,
     PoolTransport? Function()? poolProvider,
+    bool Function()? directMode,
     this._requestTimeout = kNip46RequestTimeout,
-  })  : _socketFactory = socketFactory ?? _makeDefaultFactory(poolProvider);
+  })  : _socketFactory = socketFactory ??
+            nip46SocketFactory(poolProvider, directMode: directMode);
 
   final Nip46KeyValueStore _kv;
   final Nip46SecureStore _secure;
@@ -462,6 +544,13 @@ class Nip46Service implements Nip46Signer {
     } catch (_) {
       return false;
     }
+  }
+
+  void reopenRelay() {
+    if (!_connected || _relayUrl == null || _clientPubkey == null) return;
+    final old = _socket;
+    if (old != null) unawaited(old.close());
+    _openRelay(persistent: true);
   }
 
   void _openRelay({bool persistent = false}) {

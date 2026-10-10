@@ -21,6 +21,7 @@ import 'features/groups/group_invite_confirm.dart';
 import 'features/i18n/i18n.dart';
 import 'features/i18n/localization_service.dart';
 import 'features/mesh/mesh_controller.dart';
+import 'features/notifications/app_badge.dart';
 import 'features/notifications/notification_route_target.dart';
 import 'features/notifications/notification_routing.dart';
 import 'features/onboarding/boot_gate.dart';
@@ -53,6 +54,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     with WidgetsBindingObserver {
   DeepLinkService? _deepLinks;
   StreamSubscription<String>? _payloadSub;
+  ProviderSubscription<int>? _appBadgeSub;
   ShareIntake? _shareIntake;
 
   /// Background keep-alive, held only while backgrounded with the setting on and released on every resume.
@@ -101,6 +103,13 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     _wireChatLock();
     installEventToasts(ProviderScope.containerOf(context, listen: false),
         () => _navKey.currentContext);
+    try {
+      _appBadgeSub?.close();
+      _appBadgeSub =
+          installAppBadge(ProviderScope.containerOf(context, listen: false));
+    } catch (e) {
+      debugPrint('[Platform] app badge skipped: ${e.runtimeType}');
+    }
     DeepLinkService? deepLinks;
     try {
       deepLinks = DeepLinkService(NostrControllerDeepLinkTarget(controller,
@@ -231,6 +240,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
     WidgetsBinding.instance.removeObserver(this);
     _heartbeat?.dispose();
     _payloadSub?.cancel();
+    _appBadgeSub?.close();
     _deepLinks?.dispose();
     _shareIntake?.dispose();
     unawaited(_backgroundConnectivity.stop());
@@ -363,7 +373,7 @@ class _NymchatAppState extends ConsumerState<NymchatApp>
       navigatorKey: _navKey,
       navigatorObservers: [EventToastCenter.instance.observer],
       debugShowCheckedModeBanner: false,
-      theme: buildNymThemeData(colors),
+      theme: buildNymThemeData(colors, a11y: ref.watch(nymA11yProvider)),
       // Tint system bars per color mode and flip icon brightness so they stay legible.
       builder: (context, child) {
         final isLight = colors.isLight;

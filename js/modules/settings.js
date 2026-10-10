@@ -8,8 +8,8 @@ const NYM_SETTINGS_SECTION_KEYS = {
         'blurOthersImages', 'chatLayout', 'chatViewMode', 'columnsLayout', 'nickStyle', 'colorMode',
         'wallpaperType', 'wallpaperCustomUrl', 'textSize', 'transparencyEnabled', 'columnsWallpaper',
         'sidebarSectionOrder', 'uiLanguage', 'colorfulMessages', 'colorfulMessagesTs', 'pubkeyFormat',
-        'pubkeyFormatTs'],
-    privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'hiddenChannels',
+        'pubkeyFormatTs', 'largeTargets', 'largeTargetsTs', 'highContrast', 'highContrastTs'],
+    privacy: ['blockedUsers', 'friends', 'blockedKeywords', 'blockedChannels', 'blockedRelays', 'hiddenChannels',
         'lightningAddress', 'dmForwardSecrecyEnabled', 'dmTTLSeconds', 'readReceiptsEnabled',
         'readReceiptsScope', 'typingIndicatorsEnabled', 'typingIndicatorsScope', 'acceptPMs',
         'acceptCalls', 'showStatus', 'powDifficulty', 'appVerifiedFilter', 'filterPacks',
@@ -29,6 +29,8 @@ const NYM_SETTINGS_SECTION_KEYS = {
 
 // Sealed classically, never to the root-derived key (a circular lock). Spec §5.1.
 const NYM_PQ_ROOT_CATEGORY = 'nymchat-pq-root';
+const SETTINGS_DELTA_OVERLAP_MS = 120000;
+const SETTINGS_HAVE_MAX = 5000;
 
 const NYM_PREF_STAMPS_KEY = 'nym_pref_sync_ts';
 
@@ -85,17 +87,23 @@ Object.assign(NYM.prototype, {
             return this.notificationHistory
                 .filter(n => n && n.timestamp > cutoff)
                 .slice(-100)
-                .map(n => ({
-                    title: n.title,
-                    body: typeof n.body === 'string' ? n.body.slice(0, 240) : '',
-                    timestamp: n.timestamp,
-                    receivedAt: (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : undefined,
-                    senderNym: n.senderNym,
-                    senderPubkey: n.senderPubkey,
-                    channelInfo: n.channelInfo || null,
-                    eventId: n.eventId || n.channelInfo?.eventId || undefined,
-                    viewed: !!n.viewed
-                }));
+                .map(n => {
+                    const out = {
+                        title: n.title,
+                        body: typeof n.body === 'string' ? n.body.slice(0, 240) : '',
+                        timestamp: n.timestamp,
+                        receivedAt: (typeof n.receivedAt === 'number' && n.receivedAt > 0) ? n.receivedAt : undefined,
+                        senderNym: n.senderNym,
+                        senderPubkey: n.senderPubkey,
+                        channelInfo: n.channelInfo || null,
+                        eventId: n.eventId || n.channelInfo?.eventId || undefined,
+                        viewed: !!n.viewed
+                    };
+                    if (!n.channelInfo) {
+                        for (const k of ['type', 'route', 'threadRoot']) if (typeof n[k] === 'string' && n[k]) out[k] = n[k];
+                    }
+                    return out;
+                });
         } catch (_) { return []; }
     },
 
@@ -117,6 +125,7 @@ Object.assign(NYM.prototype, {
             blockedUsers: Array.from(this.blockedUsers || []),
             friends: Array.from(this.friends || []),
             blockedKeywords: Array.from(this.blockedKeywords || []),
+            blockedRelays: typeof this._blockedRelaysForSync === 'function' ? this._blockedRelaysForSync() : { items: {}, removed: {} },
             lightningAddress: this.lightningAddress,
             dmForwardSecrecyEnabled: !!this.settings.dmForwardSecrecyEnabled,
             dmTTLSeconds: this.settings.dmTTLSeconds || 86400,
@@ -232,7 +241,11 @@ Object.assign(NYM.prototype, {
             voiceSpeed: this._voiceSpeedWire(ls('nym_voice_speed')),
             voiceSpeedTs: ts.voiceSpeed || 0,
             keepCallHistory: ls('nym_keep_call_history') !== 'off',
-            keepCallHistoryTs: ts.keepCallHistory || 0
+            keepCallHistoryTs: ts.keepCallHistory || 0,
+            largeTargets: ls('nym_large_targets') === '1',
+            largeTargetsTs: ts.largeTargets || 0,
+            highContrast: ls('nym_high_contrast') === '1',
+            highContrastTs: ts.highContrast || 0
         };
     },
 
@@ -248,11 +261,11 @@ Object.assign(NYM.prototype, {
     _syncSpamFilterUi() {
         if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return;
         const on = this.spamFilterEnabled !== false;
-        const sel = document.getElementById('spamFilterSelect');
-        if (sel) sel.value = on ? 'on' : 'off';
-        const agg = document.getElementById('spamFilterAggressiveSelect');
+        const sel = document.getElementById('spamFilterToggle');
+        if (sel) sel.checked = on;
+        const agg = document.getElementById('spamFilterAggressiveToggle');
         if (agg) {
-            agg.value = this.spamFilterAggressive === false ? 'off' : 'on';
+            agg.checked = this.spamFilterAggressive !== false;
             agg.disabled = !on;
         }
     },
@@ -305,6 +318,14 @@ Object.assign(NYM.prototype, {
         stamped('keepCallHistory', ['keepCallHistory'], () => typeof s.keepCallHistory === 'boolean', () => {
             if (typeof this.setKeepCallHistory === 'function') this.setKeepCallHistory(s.keepCallHistory, { fromSync: true, ts: s.keepCallHistoryTs });
             else ls('nym_keep_call_history', s.keepCallHistory ? null : 'off');
+        });
+        stamped('largeTargets', ['largeTargets'], () => typeof s.largeTargets === 'boolean', () => {
+            if (window.NymLayout && typeof window.NymLayout.setLargeTargets === 'function') window.NymLayout.setLargeTargets(s.largeTargets);
+            else ls('nym_large_targets', s.largeTargets ? '1' : null);
+        });
+        stamped('highContrast', ['highContrast'], () => typeof s.highContrast === 'boolean', () => {
+            if (window.NymLayout && typeof window.NymLayout.setHighContrast === 'function') window.NymLayout.setHighContrast(s.highContrast);
+            else ls('nym_high_contrast', s.highContrast ? '1' : null);
         });
         return skipped;
     },
@@ -941,6 +962,9 @@ Object.assign(NYM.prototype, {
         if (this._applyingRemoteSettings) return;
 
         const ts = Number(ping.ts) || rumorTs || 0;
+        const sync = this._settingsSync;
+        if (ts && sync && sync.pk === this.pubkey && sync.fullOk && sync.fullAt > 0
+            && ts * 1000 < sync.fullAt - SETTINGS_DELTA_OVERLAP_MS) return;
         if (ts && ts <= (this._lastSyncPingTs || 0)) return;
         this._lastSyncPingTs = ts;
 
@@ -949,7 +973,7 @@ Object.assign(NYM.prototype, {
             this._syncPingTimer = null;
             try {
                 if (typeof this.settingsLoadFromD1 === 'function') {
-                    await this.settingsLoadFromD1();
+                    await this.settingsLoadFromD1({ delta: true });
                 }
             } catch (_) {
                 // A failed pull just leaves the next scheduled read to catch up.
@@ -1431,6 +1455,7 @@ Object.assign(NYM.prototype, {
         } catch (_) { }
         this._settingsRestoreUnreadable = false;
         try { await this.settingsLoadFromD1(); } catch (_) { }
+        if (typeof this._pmCursorResetAfterLink === 'function') this._pmCursorResetAfterLink();
     },
 
     async _saveSettingsBlobToD1(dTag, plaintext) {
@@ -1466,6 +1491,7 @@ Object.assign(NYM.prototype, {
             if (hash && resp) {
                 try { localStorage.setItem(hashKey, hash); } catch (_) { }
             }
+            if (resp && Number.isFinite(resp.updatedAt)) this._settingsNoteOwnWrite(dTag, category, resp.updatedAt, toStore);
             return true;
         } catch (_) {
             return false;
@@ -1511,40 +1537,132 @@ Object.assign(NYM.prototype, {
     },
 
     // Returns 'loaded', 'empty' (no rows), or 'failed' (no answer or unreadable; saving stays off).
-    settingsLoadFromD1() {
+    settingsLoadFromD1(opts) {
         const pubkey = this.pubkey;
         if (!pubkey) return Promise.resolve('failed');
+        const mode = opts && opts.delta ? 'delta' : (opts && opts.root ? 'root' : 'full');
         const inflight = this._settingsLoadInFlight;
-        if (inflight && inflight.pubkey === pubkey) return inflight.promise;
-        const promise = this._settingsLoadFromD1Run(pubkey).then(async (r) => {
-            if (r !== 'failed' && this.pubkey === pubkey && typeof this._chReconcileRow === 'function') {
+        if (inflight && inflight.pubkey === pubkey) {
+            if (inflight.mode === 'full' || inflight.mode === mode) return inflight.promise;
+            return inflight.promise.catch(() => { }).then(() => this.settingsLoadFromD1(opts));
+        }
+        this._settingsDeltaCalls = false;
+        const promise = this._settingsLoadFromD1Run(pubkey, mode).then(async (r) => {
+            const reconcile = r === 'loaded' || r === 'empty' || (r === 'delta' && this._settingsDeltaCalls);
+            if (reconcile && this.pubkey === pubkey && typeof this._chReconcileRow === 'function') {
                 try { await this._chReconcileRow(this._loadedCallsRow); } catch (_) { }
             }
+            if (this.pubkey === pubkey && typeof this._pmRetryHeld === 'function') this._pmRetryHeld().catch(() => { });
             return r;
         }).finally(() => {
             if (this._settingsLoadInFlight && this._settingsLoadInFlight.promise === promise) {
                 this._settingsLoadInFlight = null;
             }
         });
-        this._settingsLoadInFlight = { pubkey, promise };
+        this._settingsLoadInFlight = { pubkey, promise, mode };
         return promise;
     },
 
-    async _settingsLoadFromD1Run(pubkey) {
+    _settingsSyncState(pubkey) {
+        let st = this._settingsSync;
+        if (!st || st.pk !== pubkey) {
+            st = { pk: pubkey, cursor: null, fullOk: false, hasSections: false, have: null };
+            this._settingsSync = st;
+        }
+        return st;
+    },
+
+    _settingsHaveFor(pubkey) {
+        const st = this._settingsSyncState(pubkey);
+        if (st.have) return st.have;
+        const rec = typeof this._pmCursorMetaFor === 'function' ? this._pmCursorMetaFor('settingsHave', pubkey) : null;
+        const out = {};
+        if (rec && rec.map && typeof rec.map === 'object') {
+            for (const [k, v] of Object.entries(rec.map)) {
+                if (typeof k === 'string' && k.startsWith('nymchat-') && Number.isFinite(v)) out[k] = v;
+            }
+        }
+        st.have = out;
+        return out;
+    },
+
+    _settingsHaveCommit(pubkey, have, convKeys) {
+        const st = this._settingsSyncState(pubkey);
+        st.have = have;
+        if (typeof this.persistPMMessages === 'function') {
+            for (const k of convKeys) this.persistPMMessages(k);
+        }
+        const keys = Object.keys(have).slice(0, SETTINGS_HAVE_MAX);
+        const map = {};
+        for (const k of keys) map[k] = have[k];
+        if (typeof this._pmMetaCommit === 'function') this._pmMetaCommit({ key: 'settingsHave', pk: pubkey, map });
+    },
+
+    _settingsNoteOwnWrite(dTag, category, updatedAt, json) {
+        const pubkey = this.pubkey;
+        if (!pubkey || typeof category !== 'string') return;
+        const sync = this._settingsSyncState(pubkey);
+        this._settingsNoteKnown(sync, { [category]: { updatedAt } });
+        if (typeof dTag === 'string' && dTag.startsWith('nymchat-history-') && sync.fullOk) {
+            const have = Object.assign({}, this._settingsHaveFor(pubkey));
+            have[category] = updatedAt;
+            let convKeys = [];
+            try { convKeys = this._settingsHistoryConvKeys(JSON.parse(json)); } catch (_) { convKeys = []; }
+            this._settingsHaveCommit(pubkey, have, convKeys);
+        }
+    },
+
+    _settingsHistoryConvKeys(payload) {
+        const h = payload && payload.groupMessageHistory;
+        return h && typeof h === 'object' ? Object.keys(h).filter((k) => typeof k === 'string' && k.startsWith('group-')) : [];
+    },
+
+    async _settingsLoadFromD1Run(pubkey, mode) {
+        const sync = this._settingsSyncState(pubkey);
+        if (mode === 'root' && !sync.answered) mode = 'full';
+        const wantDelta = mode === 'delta' && sync.fullOk && Number.isFinite(sync.cursor);
+        let req = { app: 'nymchat' };
+        let sentHave = null;
+        if (mode === 'root') {
+            const names = [NYM_PQ_ROOT_CATEGORY];
+            try {
+                const hashed = await this._d1Category(NYM_PQ_ROOT_CATEGORY);
+                if (typeof hashed === 'string' && hashed && hashed !== NYM_PQ_ROOT_CATEGORY) names.unshift(hashed);
+            } catch (_) { }
+            req = { categories: names };
+        } else if (wantDelta) {
+            req.since = Math.max(0, sync.cursor - SETTINGS_DELTA_OVERLAP_MS);
+            const near = {};
+            for (const [cat, at] of Object.entries(sync.known || {})) if (at > req.since) near[cat] = at;
+            if (Object.keys(near).length) req.have = near;
+        } else if (mode !== 'plain') {
+            if (!this._settingsSyncState(pubkey).have && typeof this.hydrateGate === 'function') {
+                await Promise.race([this.hydrateGate(), new Promise((r) => setTimeout(r, 5000))]);
+                if (this.pubkey !== pubkey) return 'failed';
+            }
+            const have = this._settingsHaveFor(pubkey);
+            if (have && Object.keys(have).length) { req.have = have; sentHave = have; }
+        }
+        if (mode !== 'root' && !wantDelta) sync.reqAt = Date.now();
         let data;
         try {
-            data = await this._storageApiRequest('settings-get', {});
+            data = await this._storageApiRequest('settings-get', req);
         } catch (_) {
             return 'failed';
         }
         if (this.pubkey !== pubkey) return 'failed';
         const cats = data && data.categories;
         if (!cats || typeof cats !== 'object') return 'failed';
+        const serverCursor = data && typeof data.cursor === 'number' && Number.isFinite(data.cursor) ? data.cursor : null;
+        if (wantDelta && serverCursor !== null) return this._settingsApplyDelta(pubkey, cats, serverCursor);
+        if (mode === 'root' && serverCursor !== null) return this._settingsApplyRoot(pubkey, cats);
+        sync.answered = true;
 
         this._loadedCallsRow = null;
         // Real category rides inside the blob as __cat; legacy rows fall back to the cleartext column.
         const decoded = [];
         let storedBlobs = 0;
+        let stubs = 0;
         const pending = [];
         const decodeOne = async ([cat, entry]) => {
             try {
@@ -1558,18 +1676,25 @@ Object.assign(NYM.prototype, {
                 if (!this._lastInboundSections) this._lastInboundSections = {};
                 this._lastInboundSections[realCat] = { ...payload };
                 if (realCat === 'nymchat-calls') this._loadedCallsRow = (payload.callHistory && typeof payload.callHistory === 'object') ? payload.callHistory : {};
-                decoded.push({ realCat, payload, updatedAt: entry.updatedAt || 0 });
+                decoded.push({ cat, realCat, payload, updatedAt: entry.updatedAt || 0 });
                 return true;
             } catch (_) { return false; }
         };
 
         if (this._lastInboundSections) delete this._lastInboundSections['nymchat-calls'];
+        const stubbed = {};
         for (const [cat, entry] of Object.entries(cats)) {
+            if (entry && entry.same === 1 && sentHave && Object.prototype.hasOwnProperty.call(sentHave, cat)) {
+                stubs++;
+                stubbed[cat] = sentHave[cat];
+                continue;
+            }
             if (!entry || !entry.blob) continue;
             storedBlobs++;
             if (!await decodeOne([cat, entry])) pending.push([cat, entry]);
         }
         if (this.pubkey !== pubkey) return 'failed';
+        if (stubs && !storedBlobs) return this._settingsLoadFromD1Run(pubkey, 'plain');
 
         // Other categories may be sealed to the root key; adopt the classical root row, then retry failures.
         const rootRow = await this._pqRootApplyFromDecoded(
@@ -1582,6 +1707,7 @@ Object.assign(NYM.prototype, {
         if (storedBlobs === 0) {
             // A fresh account has to be able to save, so this is not a failure.
             this._settingsRestoreUnreadable = false;
+            this._settingsNoteFull(pubkey, serverCursor, false, decoded, stubbed, cats);
             return 'empty';
         }
 
@@ -1647,14 +1773,151 @@ Object.assign(NYM.prototype, {
         }
 
         // Non-core rows were read, so a save carries them forward.
-        if (coreApplied === 0) return 'empty';
+        if (coreApplied === 0) {
+            this._settingsNoteFull(pubkey, pending.length ? null : serverCursor, sectionEntries.length > 0, decoded, stubbed, cats);
+            return 'empty';
+        }
         if (newestCoreTs > (this._lastSettingsSyncTs || 0)) {
             this._lastSettingsSyncTs = newestCoreTs;
             try { localStorage.setItem('nym_last_settings_sync_ts', String(newestCoreTs)); } catch (_) { }
         }
         // D1 had real settings and we applied them, so saving is safe from here.
         this._markSettingsHydrated();
+        this._settingsNoteFull(pubkey, pending.length ? null : serverCursor, sectionEntries.length > 0, decoded, stubbed, cats);
         return 'loaded';
+    },
+
+    _settingsNoteKnown(sync, cats) {
+        if (!sync.known) sync.known = {};
+        for (const [cat, entry] of Object.entries(cats || {})) {
+            const at = entry && Number(entry.updatedAt);
+            if (!Number.isFinite(at)) continue;
+            delete sync.known[cat];
+            sync.known[cat] = at;
+        }
+        const keys = Object.keys(sync.known);
+        for (let i = 0; i < keys.length - SETTINGS_HAVE_MAX; i++) delete sync.known[keys[i]];
+    },
+
+    _settingsNoteFull(pubkey, serverCursor, hasSections, decoded, stubbed, cats) {
+        if (this.pubkey !== pubkey) return;
+        const sync = this._settingsSyncState(pubkey);
+        sync.hasSections = !!hasSections;
+        sync.known = {};
+        if (serverCursor === null) {
+            sync.fullOk = false;
+            sync.cursor = null;
+            return;
+        }
+        sync.fullOk = true;
+        sync.fullAt = sync.reqAt || 0;
+        sync.cursor = serverCursor;
+        this._settingsNoteKnown(sync, cats);
+        const have = Object.assign({}, stubbed);
+        const convKeys = new Set();
+        for (const d of decoded) {
+            if (typeof d.realCat !== 'string' || !d.realCat.startsWith('nymchat-history-')) continue;
+            have[d.cat] = d.updatedAt || 0;
+            for (const k of this._settingsHistoryConvKeys(d.payload)) convKeys.add(k);
+        }
+        this._settingsHaveCommit(pubkey, have, [...convKeys]);
+    },
+
+    async _settingsApplyRoot(pubkey, cats) {
+        const present = await this._pqRootRowPresent(cats);
+        if (this.pubkey !== pubkey) return 'failed';
+        if (!present) return this._settingsLoadFromD1Run(pubkey, 'full');
+        const decoded = [];
+        for (const [cat, entry] of Object.entries(cats)) {
+            if (!entry || !entry.blob) continue;
+            try {
+                const plain = await this._decryptSettingsBlob(entry.blob);
+                const payload = plain ? JSON.parse(plain) : null;
+                if (!payload || typeof payload !== 'object') continue;
+                const realCat = typeof payload.__cat === 'string' ? payload.__cat : cat;
+                delete payload.__cat;
+                if (realCat === NYM_PQ_ROOT_CATEGORY) decoded.push({ cat, realCat, payload, updatedAt: entry.updatedAt || 0 });
+            } catch (_) { }
+        }
+        if (this.pubkey !== pubkey) return 'failed';
+        const opened = decoded.length > 0;
+        const rootRow = await this._pqRootApplyFromDecoded(decoded, present, await this._pqRootRowBlob(cats));
+        if (this.pubkey !== pubkey) return 'failed';
+        if (rootRow.adopted || (opened && !this._settingsSyncState(pubkey).fullOk)) {
+            return this._settingsLoadFromD1Run(pubkey, 'full');
+        }
+        return 'root';
+    },
+
+    async _settingsApplyDelta(pubkey, cats, serverCursor) {
+        const sync = this._settingsSyncState(pubkey);
+        const decoded = [];
+        let callsRow = null;
+        let rootHashed = null;
+        try { rootHashed = await this._d1Category(NYM_PQ_ROOT_CATEGORY); } catch (_) { }
+        for (const [cat, entry] of Object.entries(cats)) {
+            if (!entry || !entry.blob) continue;
+            if (cat === rootHashed || cat === NYM_PQ_ROOT_CATEGORY) return this._settingsLoadFromD1Run(pubkey, 'full');
+            let payload = null;
+            try {
+                const plain = await this._decryptSettingsBlob(entry.blob);
+                payload = plain ? JSON.parse(plain) : null;
+            } catch (_) { payload = null; }
+            if (!payload || typeof payload !== 'object') return this._settingsLoadFromD1Run(pubkey, 'full');
+            const realCat = typeof payload.__cat === 'string' ? payload.__cat : cat;
+            delete payload.__cat;
+            if (realCat === NYM_PQ_ROOT_CATEGORY) return this._settingsLoadFromD1Run(pubkey, 'full');
+            if (!this._lastInboundSections) this._lastInboundSections = {};
+            this._lastInboundSections[realCat] = { ...payload };
+            if (realCat === 'nymchat-calls') callsRow = (payload.callHistory && typeof payload.callHistory === 'object') ? payload.callHistory : {};
+            decoded.push({ cat, realCat, payload, updatedAt: entry.updatedAt || 0 });
+        }
+        if (this.pubkey !== pubkey) return 'failed';
+        if (callsRow) {
+            this._loadedCallsRow = callsRow;
+            this._settingsDeltaCalls = true;
+        }
+        const isCore = (c) => c === 'nymchat-settings' || c.startsWith('nymchat-settings-');
+        for (const d of decoded) {
+            if (isCore(d.realCat)) continue;
+            try { await applyNostrSettingsAdditive(d.payload); } catch (_) { }
+        }
+        const sections = decoded
+            .filter((d) => isCore(d.realCat) && (d.realCat !== 'nymchat-settings' || !sync.hasSections))
+            .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0));
+        const merged = {};
+        let applied = 0;
+        let newestCoreTs = 0;
+        for (const d of sections) {
+            try {
+                await applyNostrSettingsAdditive(d.payload);
+                Object.assign(merged, d.payload);
+                applied++;
+                const ts = d.updatedAt ? Math.floor(d.updatedAt / 1000) : 0;
+                if (ts > newestCoreTs) newestCoreTs = ts;
+            } catch (_) { }
+        }
+        if (applied) {
+            try { await applyNostrSettings(merged); } catch (_) { }
+            if (newestCoreTs > (this._lastSettingsSyncTs || 0)) {
+                this._lastSettingsSyncTs = newestCoreTs;
+                try { localStorage.setItem('nym_last_settings_sync_ts', String(newestCoreTs)); } catch (_) { }
+            }
+        }
+        if (this.pubkey !== pubkey) return 'failed';
+        if (serverCursor > (sync.cursor || 0)) sync.cursor = serverCursor;
+        this._settingsNoteKnown(sync, cats);
+        const have = Object.assign({}, this._settingsHaveFor(pubkey));
+        const convKeys = new Set();
+        let historyChanged = false;
+        for (const d of decoded) {
+            if (typeof d.realCat !== 'string' || !d.realCat.startsWith('nymchat-history-')) continue;
+            have[d.cat] = d.updatedAt || 0;
+            historyChanged = true;
+            for (const k of this._settingsHistoryConvKeys(d.payload)) convKeys.add(k);
+        }
+        if (historyChanged) this._settingsHaveCommit(pubkey, have, [...convKeys]);
+        return 'delta';
     },
 
     // Unreadable rows invalidate the hash gate, which could skip the recovering write.
@@ -1689,6 +1952,7 @@ Object.assign(NYM.prototype, {
         this.notifyFriendsOnly = enabled;
         localStorage.setItem('nym_notify_friends_only', String(enabled));
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
     applyTheme(theme) {
@@ -2059,19 +2323,6 @@ Object.assign(NYM.prototype, {
         this.powDifficulty = powDifficulty;
         this.enablePow = powDifficulty > 0;
         localStorage.setItem('nym_pow_difficulty', powDifficulty.toString());
-        const packBoxes = document.querySelectorAll('[data-filter-pack]');
-        if (packBoxes.length && typeof this.setFilterPacks === 'function') {
-            this.setFilterPacks(Array.from(packBoxes)
-                .filter((b) => b.checked)
-                .map((b) => b.dataset.filterPack));
-        }
-        const appVerifiedEl = document.getElementById('appVerifiedSelect');
-        if (appVerifiedEl) {
-            const mode = (typeof normalizeAppVerifiedFilter === 'function')
-                ? normalizeAppVerifiedFilter(appVerifiedEl.value) : 'off';
-            this.appVerifiedFilter = mode;
-            localStorage.setItem('nym_app_verified_filter', mode);
-        }
     },
 
 });
@@ -2080,10 +2331,10 @@ if (typeof window !== 'undefined') {
     const SPAM_ACTIONS = (window.NYM_ACTIONS = window.NYM_ACTIONS || {});
     SPAM_ACTIONS.onSpamFilterChange = function (_e, t) {
         const n = window.nym;
-        if (n && typeof n.setSpamFilter === 'function') n.setSpamFilter({ enabled: !(t && t.value === 'off') });
+        if (n && typeof n.setSpamFilter === 'function') n.setSpamFilter({ enabled: !!(t && t.checked) });
     };
     SPAM_ACTIONS.onSpamFilterAggressiveChange = function (_e, t) {
         const n = window.nym;
-        if (n && typeof n.setSpamFilter === 'function') n.setSpamFilter({ aggressive: !(t && t.value === 'off') });
+        if (n && typeof n.setSpamFilter === 'function') n.setSpamFilter({ aggressive: !!(t && t.checked) });
     };
 }

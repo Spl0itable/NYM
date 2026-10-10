@@ -595,7 +595,8 @@ select,
 .form-textarea,
 .search-input,
 .message-input,
-div.message-input {
+div.message-input,
+.nm-h-37 {
     color: #ffffff !important;
 }
 
@@ -607,7 +608,8 @@ body.light-mode .form-select,
 body.light-mode .form-textarea,
 body.light-mode .search-input,
 body.light-mode .message-input,
-body.light-mode div.message-input {
+body.light-mode div.message-input,
+body.light-mode .nm-h-37 {
     color: #000000 !important;
 }
 
@@ -1074,7 +1076,8 @@ body.light-mode .supporter-badge-text {
     color: #7a5c00;
 }
 
-body.light-mode .supporter-badge-icon {
+body.light-mode .supporter-badge-icon,
+body.light-mode .uh-badges .supporter-mark {
     color: #9a7800;
 }
 
@@ -1625,21 +1628,23 @@ body.light-mode .relay-stats-low-data {
     background: rgba(0, 0, 0, 0.03);
 }
 
-body.light-mode .nym-switch-track {
-    background: rgba(0, 0, 0, 0.12);
-}
-
-body.light-mode .nym-switch-thumb {
-    background: #fff;
-}
-
 body.light-mode .relay-stat-card {
     background: rgba(0, 0, 0, 0.03);
 }
 
 body.light-mode .relay-stats-graph-wrap,
-body.light-mode .relay-stats-relay-list {
+body.light-mode .relay-stats-relay-list,
+body.light-mode .relay-stats-blocked-list {
     background: rgba(0, 0, 0, 0.02);
+}
+
+body.light-mode .relay-stats-blocked-row {
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+body.light-mode .rs-relay-clear-btn,
+body.light-mode .rs-relay-unblock-btn {
+    background: rgba(0, 0, 0, 0.03);
 }
 
 body.light-mode .relay-stats-row:hover {

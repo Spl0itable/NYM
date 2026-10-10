@@ -1,5 +1,8 @@
 // shop.js - Shop UI: styles, flair, cosmetics
 
+const SHOP_STATUS_FRESH_MS = 30 * 60 * 1000;
+const SHOP_STATUS_BATCH_MS = 2000;
+
 Object.assign(NYM.prototype, {
 
     _apiWsUrl() {
@@ -143,7 +146,8 @@ Object.assign(NYM.prototype, {
         }
         const id = sock.nextId++;
         return new Promise((resolve, reject) => {
-            const p = { resolve, reject, action };
+            const statsAction = opts.statsAction || action;
+            const p = { resolve, reject, action: statsAction };
             if (opts.stream) p.items = [];
             if (opts.raw) p.raw = true;
             const timer = setTimeout(() => {
@@ -153,7 +157,7 @@ Object.assign(NYM.prototype, {
             p.reject = (e) => { clearTimeout(timer); reject(e); };
             sock.pending.set(id, p);
             const frame = JSON.stringify(['REQ', id, action, extra || {}]);
-            this._trackApiData(action, frame.length, 0);
+            this._trackApiData(statsAction, frame.length, 0);
             try { sock.ws.send(frame); }
             catch (e) { sock.pending.delete(id); p.reject(e); }
         });
@@ -247,14 +251,14 @@ Object.assign(NYM.prototype, {
     },
 
     // Returns a fetch Response (HTTP fallback) or { _wsItems }; both are consumed by _readNdjsonStream.
-    async _storageApiStream(action, extra, withAuth = true) {
+    async _storageApiStream(action, extra, withAuth = true, opts) {
         const apiHost = this._getApiHost();
         if (!apiHost) throw new Error('Storage is unavailable on this host.');
         // Public reads (withAuth === false) ride the api socket even logged out.
         if (this.pubkey || !withAuth) {
             try {
                 await this._ensureApiSocket();
-                return await this._apiSocketSend(action, extra, { stream: true });
+                return await this._apiSocketSend(action, extra, { stream: true, statsAction: opts && opts.statsAction });
             } catch (_) { /* fall back to HTTP */ }
         }
         const body = Object.assign({ action }, extra || {});
@@ -343,6 +347,7 @@ Object.assign(NYM.prototype, {
         if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
         if (this.shopItemsCache) this.shopItemsCache.delete(pubkey);
         if (this._shopStatusInFlight) this._shopStatusInFlight.delete(pubkey);
+        if (this._shopStatusMissAt) this._shopStatusMissAt.delete(pubkey);
         if (!this._shopStatusForceFresh) this._shopStatusForceFresh = new Set();
         this._shopStatusForceFresh.add(pubkey);
         try {
@@ -467,13 +472,16 @@ Object.assign(NYM.prototype, {
     // Skips anyone with a fresh cache entry so we don't repeatedly hit the worker.
     _queueShopStatusFetch(pubkey) {
         if (!pubkey || pubkey === this.pubkey || !/^[0-9a-f]{64}$/.test(pubkey)) return;
+        const now = Date.now();
         const cached = this.shopItemsCache.get(pubkey);
-        if (cached && (Date.now() - cached.timestamp) < 600000) return;
+        if (cached && (now - cached.timestamp) < SHOP_STATUS_FRESH_MS) return;
+        const missAt = this._shopStatusMissAt ? this._shopStatusMissAt.get(pubkey) || 0 : 0;
+        if (missAt && now - missAt < SHOP_STATUS_FRESH_MS) return;
         if (this._shopStatusInFlight && this._shopStatusInFlight.has(pubkey)) return;
         if (!this._shopStatusQueue) this._shopStatusQueue = new Set();
         this._shopStatusQueue.add(pubkey);
         if (this._shopStatusTimer) return;
-        this._shopStatusTimer = setTimeout(() => this._flushShopStatusQueue(), 600);
+        this._shopStatusTimer = setTimeout(() => this._flushShopStatusQueue(), SHOP_STATUS_BATCH_MS);
     },
 
     async _flushShopStatusQueue() {
@@ -490,6 +498,13 @@ Object.assign(NYM.prototype, {
         try {
             const data = await this._shopApiRequest('shop-status', fresh.length ? { pubkeys, fresh } : { pubkeys }, false);
             const statuses = (data && data.statuses) || {};
+            if (!this._shopStatusMissAt) this._shopStatusMissAt = new Map();
+            const at = Date.now();
+            for (const pk of pubkeys) {
+                if (Object.prototype.hasOwnProperty.call(statuses, pk)) this._shopStatusMissAt.delete(pk);
+                else this._shopStatusMissAt.set(pk, at);
+            }
+            if (this._shopStatusMissAt.size > 5000) this._shopStatusMissAt = new Map(Array.from(this._shopStatusMissAt).slice(-2500));
             Object.entries(statuses).forEach(([pk, st]) => {
                 const active = (st && st.active) || {};
                 const items = {
@@ -591,6 +606,9 @@ Object.assign(NYM.prototype, {
             this._applyShopClassesToMessage(msg, items.style, items.cosmetics, items.supporter);
             this._applyFlairBadgesToMessage(msg, items.flair, items.supporter, items.editions);
         });
+        if (this.inPMMode && !this.currentGroup && this.currentPM === pubkey && typeof this._renderPMHeaderForPubkey === 'function') {
+            this._renderPMHeaderForPubkey(pubkey);
+        }
     },
 
     applyShopStylesToOwnMessages() {
@@ -979,7 +997,7 @@ Object.assign(NYM.prototype, {
 
         const colorClass = this.getUserColorClass(this.pubkey);
         const authorExtra = cosmetics.includes('cosmetic-redacted') ? ' cosmetic-redacted' : '';
-        const nym = this.escapeHtml(this.nym || 'You');
+        const nym = this.escapeHtml(this.stripPubkeySuffix(this.nym) || 'You');
         const suffix = this.escapeHtml(this.getPubkeySuffix(this.pubkey));
         const editions = this._ownEditions();
         const flairHtml = flairs.map(f => `<span class="flair-badge ${f.id}">${this._flairIconHtml(f.id, editions[f.id])}</span>`).join('');
@@ -1121,6 +1139,17 @@ TRANSFER TO PUBKEY
     // Canonical supporter-badge markup so the badge never changes shape when an author re-renders.
     _supporterBadgeMarkup() {
         return `<span class="supporter-badge"><span class="supporter-badge-icon">${this.getSupporterTrophyIcon()}</span><span class="supporter-badge-text">Supporter</span></span>`;
+    },
+
+    _supporterMarkFor(pubkey) {
+        const items = this.getUserShopItems(pubkey);
+        if (!items || !items.supporter) return '';
+        const label = this.escapeHtml(typeof this.uiText === 'function' ? this.uiText('Supporter') : 'Supporter');
+        const glyph = this.getSupporterTrophyIcon()
+            .replace(/<title>[^<]*<\/title>/g, '')
+            .replace(/\srole="[^"]*"/, '')
+            .replace(/\saria-label="[^"]*"/, ' aria-hidden="true" focusable="false"');
+        return `<span class="supporter-mark" role="img" aria-label="${label}" data-tip="">${glyph}</span>`;
     },
 
     getSupporterBadgeHtml(pubkey) {
@@ -1347,7 +1376,7 @@ TRANSFER TO PUBKEY
     async _claimShopPurchase(invoiceId, receipt) {
         const extra = { invoiceId };
         if (receipt) extra.receipt = receipt;
-        if (this.nym) extra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
+        if (this.nym) extra.gifterNym = String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey);
         let data = null;
         for (let attempt = 0; attempt < 6; attempt++) {
             try {
@@ -1643,9 +1672,9 @@ ${bundleCodes || (code ? `
             class="nm-shop-22" />
         <p id="giftError" class="nm-shop-23 nm-hidden"></p>
     </div>
-    <div class="nm-shop-24">
-        <button class="send-btn nm-flex1" data-action="executeGiftShopItem" data-item-id="${itemId}">Continue</button>
-        <button class="send-btn nm-shop-25" data-action="removeElementById" data-remove-id="giftShopModal">Cancel</button>
+    <div class="modal-actions">
+        <button class="icon-btn" data-action="removeElementById" data-remove-id="giftShopModal">Cancel</button>
+        <button class="send-btn" data-action="executeGiftShopItem" data-item-id="${itemId}">Continue</button>
     </div>
 </div>`;
         document.body.appendChild(modal);
@@ -1723,9 +1752,9 @@ ${bundleCodes || (code ? `
             class="nm-shop-22" />
         <p id="transferError" class="nm-shop-23 nm-hidden"></p>
     </div>
-    <div class="nm-shop-24">
-        <button class="send-btn nm-flex1" data-action="executeTransferShopItem" data-item-id="${itemId}">Confirm</button>
-        <button class="send-btn nm-shop-25" data-action="removeElementById" data-remove-id="transferModal">Cancel</button>
+    <div class="modal-actions">
+        <button class="icon-btn" data-action="removeElementById" data-remove-id="transferModal">Cancel</button>
+        <button class="send-btn" data-action="executeTransferShopItem" data-item-id="${itemId}">Confirm</button>
     </div>
 </div>`;
         document.body.appendChild(modal);
@@ -1758,7 +1787,7 @@ ${bundleCodes || (code ? `
 
         try {
             const extra = { itemId, toPubkey: recipientPubkey };
-            if (this.nym) extra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
+            if (this.nym) extra.gifterNym = String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey);
             const data = await this._shopApiRequest('shop-transfer', extra);
 
             if (data.giftEvent) {
@@ -1924,13 +1953,13 @@ ${bundleCodes || (code ? `
             if (s) {
                 if (s.theme) document.getElementById('themeSelect').value = s.theme;
                 if (s.sound !== undefined) document.getElementById('soundSelect').value = ({ icq: 'uhoh', msn: 'msnding' })[s.sound] || s.sound;
-                if (s.autoscroll !== undefined) document.getElementById('autoscrollSelect').value = String(s.autoscroll);
+                if (s.autoscroll !== undefined) document.getElementById('autoscrollToggle').checked = String(s.autoscroll) === 'true';
                 if (s.threadsEnabled !== undefined) {
-                    const thEl = document.getElementById('threadsSelect');
-                    if (thEl) thEl.value = String(s.threadsEnabled !== false);
+                    const thEl = document.getElementById('threadsToggle');
+                    if (thEl) thEl.checked = s.threadsEnabled !== false;
                 }
                 if (s.showTimestamps !== undefined) {
-                    document.getElementById('timestampSelect').value = String(s.showTimestamps);
+                    document.getElementById('timestampToggle').checked = String(s.showTimestamps) === 'true';
                     const timeFormatGroup = document.getElementById('timeFormatGroup');
                     if (timeFormatGroup) timeFormatGroup.style.display = s.showTimestamps ? 'block' : 'none';
                 }
@@ -1940,8 +1969,8 @@ ${bundleCodes || (code ? `
                     if (dfEl) dfEl.value = s.dateFormat;
                 }
                 if (s.sortByProximity !== undefined) {
-                    const el = document.getElementById('proximitySelect');
-                    if (el) el.value = String(s.sortByProximity);
+                    const el = document.getElementById('proximityToggle');
+                    if (el) el.checked = String(s.sortByProximity) === 'true';
                 }
                 if (s.blurOthersImages !== undefined) {
                     const el = document.getElementById('blurImagesSelect');
@@ -1952,8 +1981,8 @@ ${bundleCodes || (code ? `
                     if (el) el.value = s.lightningAddress;
                 }
                 if (s.dmForwardSecrecyEnabled !== undefined) {
-                    const el = document.getElementById('dmForwardSecrecySelect');
-                    if (el) el.value = String(s.dmForwardSecrecyEnabled);
+                    const el = document.getElementById('dmForwardSecrecyToggle');
+                    if (el) el.checked = String(s.dmForwardSecrecyEnabled) === 'true';
                     const ttlGroup = document.getElementById('dmTTLGroup');
                     if (ttlGroup) ttlGroup.classList.toggle('nm-hidden', !s.dmForwardSecrecyEnabled);
                 }

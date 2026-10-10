@@ -6,6 +6,7 @@
     const MODAL = 'gtCallLinksModal';
     const PHONE = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>';
     const VIDEO = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>';
+    const REJOIN = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 2 16 8 22 8"></polyline><line x1="22" y1="2" x2="16" y2="8"></line><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>';
     const LABELS = { missed: 'Missed', incoming: 'Incoming', outgoing: 'Outgoing' };
 
     function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
@@ -135,13 +136,21 @@
                 this._chSetClearedAt(ts);
             }
             if (!on && !fromSync) this._chDeletePending = true;
-            const sel = document.getElementById('keepCallHistorySelect');
-            if (sel) sel.value = on ? 'on' : 'off';
+            const sel = document.getElementById('keepCallHistoryToggle');
+            if (sel) sel.checked = !!on;
             if (!fromSync && typeof this.notePrefChanged === 'function') this.notePrefChanged('keepCallHistory');
         },
 
         _chHidden() {
-            return (r) => this._chLocked(r);
+            return (r) => this._chLocked(r) ||
+                (!!r.peer && typeof this.isPersonHidden === 'function' && this.isPersonHidden(r.peer));
+        },
+
+        _chRefreshForFilters() {
+            if (!this.pubkey) return;
+            this._chRenderBadges();
+            const panel = typeof document !== 'undefined' ? document.getElementById('chRecentPanel') : null;
+            if (panel && panel.offsetParent !== null) this._chRenderRecent(panel);
         },
 
         _chRenderBadges() {
@@ -193,7 +202,34 @@
             const modal = document.getElementById(MODAL);
             if (!modal || !modal.classList.contains('active') || this._chTab !== 'recent') return;
             const panel = document.getElementById('chRecentPanel');
-            if (panel) this._chRenderRecent(panel);
+            if (!panel) return;
+            const f = document.activeElement;
+            const had = f && typeof panel.contains === 'function' && panel.contains(f) && f.dataset ? { id: f.dataset.callId, open: f.classList.contains('ch-open') } : null;
+            this._chRenderRecent(panel);
+            if (!had || !had.id || typeof panel.querySelector !== 'function') return;
+            const row = panel.querySelector(`.ch-row[data-call-id="${CSS.escape(had.id)}"]`);
+            const next = row && row.querySelector(had.open ? '.ch-open' : '.ch-callback');
+            if (next) next.focus();
+        },
+
+        _chCallStateChanged() {
+            if (this._chStateTimer) return;
+            this._chStateTimer = setTimeout(() => {
+                this._chStateTimer = 0;
+                this._chRefreshIfOpen();
+            }, 0);
+        },
+
+        _chBusy() {
+            return !!(this.activeCall || this.incomingCall);
+        },
+
+        _chRowState(r) {
+            const ac = this.activeCall;
+            if (ac && ac.callId === r.id) return 'active';
+            const left = this._leftGroupCall;
+            if (r.group && left && left.callId === r.id && left.groupId === r.group && typeof this.canRejoinGroupCall === 'function' && this.canRejoinGroupCall(r.group)) return 'rejoin';
+            return this._chBusy() ? 'busy' : '';
         },
 
         _chLocked(r) {
@@ -230,16 +266,31 @@
             const rows = items.map((r) => {
                 const who = this._chWho(r);
                 const lbl = H().label(r);
-                const dur = r.missed ? '' : H().duration(r.dur);
+                const state = this._chRowState(r);
+                const live = state === 'active' ? this._chText('In call') : (state === 'rejoin' ? this._chText('Ongoing') : '');
+                const dur = r.missed || live ? '' : H().duration(r.dur);
                 const time = new Date(r.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: h12 });
                 const kindLabel = this._chText(r.kind === 'video' ? 'Video call' : 'Voice call');
-                return `<div class="ch-row${r.missed ? ' ch-missed' : ''}" data-call-id="${esc(r.id)}" data-kind="${r.kind}">
-                    <button type="button" class="ch-open" data-action="chOpenChat" data-call-id="${esc(r.id)}">
+                const icon = r.kind === 'video' ? VIDEO : PHONE;
+                const id = esc(r.id);
+                let btn;
+                if (state === 'active') {
+                    btn = `<button type="button" class="icon-btn ch-callback ch-return" data-action="chReturnToCall" data-call-id="${id}" aria-label="${esc(this._chText('Return to the call'))}" data-tip="">${icon}</button>`;
+                } else if (state === 'rejoin') {
+                    btn = `<button type="button" class="icon-btn ch-callback ch-rejoin" data-action="chRejoin" data-call-id="${id}" aria-label="${esc(this._chText('Rejoin the call'))}" data-tip="">${REJOIN}</button>`;
+                } else if (state === 'busy') {
+                    btn = `<button type="button" class="icon-btn ch-callback" data-action="chCallBack" data-call-id="${id}" aria-label="${esc(this._chText('Call back'))}" aria-disabled="true" data-tip="${esc(this._chText('Already in a call'))}">${icon}</button>`;
+                } else {
+                    btn = `<button type="button" class="icon-btn ch-callback" data-action="chCallBack" data-call-id="${id}" aria-label="${esc(this._chText('Call back'))}" data-tip="">${icon}</button>`;
+                }
+                const dir = live ? `<span class="ch-dir ch-live">${esc(live)}</span>` : `<span class="ch-dir">${esc(this._chText(LABELS[lbl]))}</span>`;
+                return `<div class="ch-row${r.missed ? ' ch-missed' : ''}${live ? ' ch-ongoing' : ''}" data-call-id="${id}" data-kind="${r.kind}">
+                    <button type="button" class="ch-open" data-action="chOpenChat" data-call-id="${id}">
                         <span class="ch-avatar">${who.avatar}</span>
                         <span class="ch-main"><span class="ch-name">${who.name}</span>
-                        <span class="ch-meta"><span class="ch-kind" role="img" aria-label="${esc(kindLabel)}">${r.kind === 'video' ? VIDEO : PHONE}</span><span class="ch-dir">${esc(this._chText(LABELS[lbl]))}</span><span class="ch-sep" aria-hidden="true">·</span><span class="ch-time">${esc(time)}</span>${dur ? `<span class="ch-sep" aria-hidden="true">·</span><span class="ch-dur">${esc(dur)}</span>` : ''}</span></span>
+                        <span class="ch-meta"><span class="ch-kind" role="img" aria-label="${esc(kindLabel)}">${icon}</span>${dir}<span class="ch-sep" aria-hidden="true">·</span><span class="ch-time">${esc(time)}</span>${dur ? `<span class="ch-sep" aria-hidden="true">·</span><span class="ch-dur">${esc(dur)}</span>` : ''}</span></span>
                     </button>
-                    <button type="button" class="icon-btn ch-callback" data-action="chCallBack" data-call-id="${esc(r.id)}" aria-label="${esc(this._chText('Call back'))}" data-tip="">${r.kind === 'video' ? VIDEO : PHONE}</button>
+                    ${btn}
                 </div>`;
             }).join('');
             panel.innerHTML = `<div class="ch-head"><button type="button" class="icon-btn danger ch-clear" id="chClearBtn" data-action="chClearHistory">${esc(this._chText('Clear history'))}</button></div><div class="ch-list">${rows}</div>`;
@@ -270,10 +321,36 @@
 
         async chCallBack(id) {
             const r = this._chFind(id);
+            if (!r) return;
+            if (this._chBusy() || this._callStarting) {
+                this.displaySystemMessage(this._chText('Already in a call'));
+                return;
+            }
+            if (r.group && typeof this.canRejoinGroupCall === 'function' && this.canRejoinGroupCall(r.group)) {
+                await this.chRejoin(id);
+                return;
+            }
             this._ctCloseModal(MODAL);
             if (!this._chOpenChatFor(r)) return;
             await new Promise((done) => setTimeout(done, 50));
             await this.startCall(r.kind === 'video' ? 'video' : 'audio');
+        },
+
+        async chRejoin(id) {
+            const r = this._chFind(id);
+            if (!r || !r.group || typeof this.canRejoinGroupCall !== 'function' || !this.canRejoinGroupCall(r.group)) {
+                this._chRefreshIfOpen();
+                return;
+            }
+            this._ctCloseModal(MODAL);
+            this._chOpenChatFor(r);
+            await this.rejoinGroupCall(r.group);
+        },
+
+        chReturnToCall() {
+            this._ctCloseModal(MODAL);
+            const ov = document.getElementById('callOverlay');
+            if (this.activeCall && ov && !ov.classList.contains('active')) this._showCallOverlay();
         },
 
         async chClearHistory() {
@@ -288,15 +365,17 @@
             chTab: function (_e, t) { nym()._chShowTab(t.dataset.tab); },
             chOpenChat: function (_e, t) { nym().chOpenChat(t.dataset.callId); },
             chCallBack: function (_e, t) { nym().chCallBack(t.dataset.callId); },
+            chRejoin: function (_e, t) { nym().chRejoin(t.dataset.callId); },
+            chReturnToCall: function () { nym().chReturnToCall(); },
             chClearHistory: function () { nym().chClearHistory(); },
-            onKeepCallHistoryChange: function (_e, t) { nym().setKeepCallHistory(!(t && t.value === 'off')); },
+            onKeepCallHistoryChange: function (_e, t) { nym().setKeepCallHistory(!!(t && t.checked)); },
         });
     }
 
     if (typeof document !== 'undefined') {
         const sync = () => {
-            const sel = document.getElementById('keepCallHistorySelect');
-            if (sel) sel.value = lsGet(KEEP_KEY) === 'off' ? 'off' : 'on';
+            const sel = document.getElementById('keepCallHistoryToggle');
+            if (sel) sel.checked = lsGet(KEEP_KEY) !== 'off';
         };
         const boot = () => {
             sync();

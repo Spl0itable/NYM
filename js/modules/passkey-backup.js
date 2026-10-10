@@ -140,14 +140,26 @@
         return b ? b.secret : null;
     }
 
-    function relayList(nym) {
+    function allRelays(nym) {
         const own = nym && Array.isArray(nym.defaultRelays) ? nym.defaultRelays : [];
         return [...new Set([...own, ...FIXED_RELAYS])].filter((u) => typeof u === 'string' && /^wss:\/\//.test(u));
     }
 
+    function withoutBlocked(nym, urls) {
+        const RB = window.NymRelayBlock;
+        if (!RB || !nym || typeof nym.blockedRelayList !== 'function') return urls;
+        let blocked = [];
+        try { blocked = nym.blockedRelayList() || []; } catch (_) { blocked = []; }
+        return RB.usable(urls, blocked);
+    }
+
+    function relayList(nym) {
+        return withoutBlocked(nym, allRelays(nym));
+    }
+
     function readableRelays(nym) {
         const writeOnly = nym && nym.writeOnlyRelays instanceof Set ? nym.writeOnlyRelays : new Set();
-        return relayList(nym).filter((u) => !writeOnly.has(u));
+        return withoutBlocked(nym, allRelays(nym).filter((u) => !writeOnly.has(u)));
     }
 
     function createRelayClient(opts) {

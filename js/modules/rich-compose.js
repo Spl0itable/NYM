@@ -359,8 +359,8 @@ Object.assign(NYM.prototype, {
             picker.setAttribute('role', 'dialog');
             picker.innerHTML = `<label class="ts-picker-label"><span class="ts-picker-title"></span>`
                 + `<input type="datetime-local" class="ts-picker-input" step="60"></label>`
-                + `<button type="button" class="ts-picker-insert"></button>`
-                + `<button type="button" class="ts-picker-cancel"></button>`;
+                + `<button type="button" class="ts-picker-cancel"></button>`
+                + `<button type="button" class="ts-picker-insert"></button>`;
             const toolbar = document.getElementById('formatToolbar');
             panels.insertBefore(picker, toolbar || null);
             picker.addEventListener('keydown', (e) => {

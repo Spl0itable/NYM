@@ -87,6 +87,7 @@ Object.assign(NYM.prototype, {
             // Original send time, so the message keeps its place in the conversation.
             createdAt: entry.createdAt || Math.floor(Date.now() / 1000),
             localId: entry.localId,
+            ...(this.pubkey ? { owner: this.pubkey } : {}),
             ...(entry.threadRoot ? { threadRoot: entry.threadRoot } : {}),
             ...(entry.meshMessageId ? { meshMessageId: entry.meshMessageId } : {}),
             // Reusing the send-time event means a gateway's copy shares the id and relays dedup it.
@@ -109,6 +110,7 @@ Object.assign(NYM.prototype, {
             // Snapshot: publishing mutates the live array.
             for (const entry of list.slice()) {
                 if (!this._meshOutbox.includes(entry)) continue;
+                if (!this._meshOutboxMine(entry)) continue;
                 let sent = false;
                 try {
                     sent = await this._publishMeshOutboxEntry(entry);
@@ -127,6 +129,13 @@ Object.assign(NYM.prototype, {
             this._meshOutboxFlushing = false;
             this._meshOutboxSave();
         }
+    },
+
+    _meshOutboxMine(entry) {
+        const who = (entry && typeof entry.owner === 'string' && entry.owner)
+            || (entry && entry.signedEvent && typeof entry.signedEvent.pubkey === 'string' && entry.signedEvent.pubkey)
+            || '';
+        return !who || who === this.pubkey;
     },
 
     // Channels only (offline PMs are refused in `sendMessage`); the relay proxy archives it to D1.

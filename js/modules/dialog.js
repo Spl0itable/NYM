@@ -98,7 +98,9 @@
             }
             document.getElementById('appDialogTitle').textContent =
                 opts.title || (opts.alertOnly ? 'Notice' : 'Confirm');
-            document.getElementById('appDialogMessage').textContent = opts.message || '';
+            var msgEl = document.getElementById('appDialogMessage');
+            if (window.NymSuffix) window.NymSuffix.render(msgEl, opts.message || '', window.nym && typeof window.nym._nymKnown === 'function' ? window.nym._nymKnown() : true);
+            else msgEl.textContent = opts.message || '';
             var copyRow = document.getElementById('appDialogCopyRow');
             var copyVal = document.getElementById('appDialogCopyValue');
             var copyBtn = document.getElementById('appDialogCopyBtn');

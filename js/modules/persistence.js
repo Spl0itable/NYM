@@ -32,6 +32,10 @@
     // Ids verified in past sessions; safe to trust because _verifiedIdCheck re-hashes on every cache hit.
     const META_VERIFIED_EVENT_IDS = 'verifiedEventIds';
     const META_EVENT_TIME_CEILINGS = 'eventTimeCeilings';
+    const META_PM_D1_CURSOR = 'pmD1Cursor';
+    const META_PM_INBOX_CURSORS = 'pmInboxCursors';
+    const PM_CURSOR_META_KEYS = [META_PM_D1_CURSOR, META_PM_INBOX_CURSORS, 'settingsHave'];
+    const META_CHANNEL_COVERED = 'channelCovered';
 
     Object.assign(NYM.prototype, {
 
@@ -271,13 +275,89 @@
         },
 
         async clearPMCache() {
+            this._pmCursorInvalidate();
             await this._cacheClearStore('pms');
         },
 
         async resetCache() {
+            this._pmCursorInvalidate();
+            this._channelCoveredTo = new Map();
+            this._channelCoveredSaved = null;
             for (const s of STORES) {
                 await this._cacheClearStore(s);
             }
+        },
+
+        _pmCursorInvalidate() {
+            this._pmCursorBlocked = true;
+            this._pmCursorMeta = null;
+            if (this._pendingPersists) {
+                for (const k of PM_CURSOR_META_KEYS) this._pendingPersists.delete('meta:' + k);
+            }
+            for (const k of PM_CURSOR_META_KEYS) this._cacheDelete('meta', k).catch(() => { });
+        },
+
+        _pmCursorPersistOk(pk) {
+            if (this._cacheDisabled || !this._pmCacheHydrated || this._pmCursorBlocked) return false;
+            if (!pk || this.pubkey !== pk) return false;
+            if (this.settings && this.settings.cachePMs === false) return false;
+            if (typeof this.vaultEnabled === 'function' && this.vaultEnabled() && !this._vaultKey) return false;
+            return true;
+        },
+
+        _pmCursorMetaFor(key, pk) {
+            const all = this._pmCursorMeta;
+            const rec = all && all[key];
+            if (!rec || rec.pk !== pk || !this._pmCursorPersistOk(pk)) return null;
+            return rec;
+        },
+
+        _pmMetaCommit(rec) {
+            if (!rec || !PM_CURSOR_META_KEYS.includes(rec.key)) return;
+            if (!this._pmCursorPersistOk(rec.pk)) return;
+            this._ensurePersistState();
+            const tkey = 'meta:' + rec.key;
+            this._pendingPersists.delete(tkey);
+            this._pendingPersists.set(tkey, () => {
+                const waits = this._pmPersistWrites ? [...this._pmPersistWrites] : [];
+                Promise.allSettled(waits).then(() => {
+                    if (!this._pmCursorPersistOk(rec.pk)) return;
+                    if (!this._pmCursorMeta) this._pmCursorMeta = {};
+                    this._pmCursorMeta[rec.key] = rec;
+                    return this._cachePut('meta', rec);
+                }).catch(() => { });
+            });
+            if (!this._pendingPersistTimer) {
+                this._pendingPersistTimer = setTimeout(() => this.flushPendingPersists(), PERSIST_DEBOUNCE_MS);
+            }
+        },
+
+        _trackPmPersistWrite(p) {
+            if (!p || typeof p.then !== 'function') return;
+            if (!this._pmPersistWrites) this._pmPersistWrites = new Set();
+            const w = p.catch(() => { });
+            this._pmPersistWrites.add(w);
+            w.then(() => { if (this._pmPersistWrites) this._pmPersistWrites.delete(w); });
+        },
+
+        _persistChannelCovered() {
+            if (this._cacheDisabled || !this.pubkey) return;
+            const pk = this.pubkey;
+            this._schedulePersist('meta', META_CHANNEL_COVERED, () => {
+                if (this.pubkey !== pk) return;
+                const map = {};
+                const saved = this._channelCoveredSaved && this._channelCoveredSaved.pk === pk ? this._channelCoveredSaved.map : null;
+                if (saved) for (const [k, v] of Object.entries(saved)) if (Number.isFinite(v) && v > 0) map[k] = v;
+                if (this._channelCoveredTo) for (const [k, v] of this._channelCoveredTo) if (Number.isFinite(v) && v > (map[k] || 0)) map[k] = v;
+                const keys = Object.keys(map).sort((a, b) => map[b] - map[a]).slice(0, 200);
+                const out = {};
+                for (const k of keys) out[k] = map[k];
+                this._cachePut('meta', { key: META_CHANNEL_COVERED, pk, map: out });
+            });
+        },
+
+        hydrateGate() {
+            return this._hydrateGate || Promise.resolve();
         },
 
         async _trimStore(storeName) {
@@ -299,6 +379,7 @@
                 return r.key; // channels, pms, meta
             };
 
+            if (storeName === 'pms' && toEvict.length) this._pmCursorInvalidate();
             for (const r of toEvict) {
                 const k = keyForRecord(r);
                 if (k != null) await this._cacheDelete(storeName, k);
@@ -455,6 +536,15 @@
                 const meta = await this._cacheGetAll('meta');
                 try { await this._hydratePqKeys(meta); } catch (_) { }
                 for (const m of meta) {
+                    if (m && m.key === META_CHANNEL_COVERED && m.map && typeof m.map === 'object' && typeof m.pk === 'string') {
+                        this._channelCoveredSaved = { pk: m.pk, map: m.map };
+                        continue;
+                    }
+                    if (m && PM_CURSOR_META_KEYS.includes(m.key) && !this._pmCursorBlocked) {
+                        if (!this._pmCursorMeta) this._pmCursorMeta = {};
+                        this._pmCursorMeta[m.key] = m;
+                        continue;
+                    }
                     if (!m || !m.key || !Array.isArray(m.ids)) continue;
                     if (m.key === META_DELETED_EVENT_IDS && this.deletedEventIds) {
                         for (const id of m.ids) this.deletedEventIds.add(id);
@@ -528,6 +618,13 @@
         },
 
         async hydrateFromCache() {
+            if (this._hydrateGate) return this._hydrateGate;
+            let open = null;
+            this._hydrateGate = new Promise((r) => { open = r; });
+            try { await this._hydrateFromCacheRun(); } finally { open(); }
+        },
+
+        async _hydrateFromCacheRun() {
             if (this._cacheDisabled) return;
             const cachePMsAllowed = this.settings && this.settings.cachePMs !== false;
 
@@ -654,14 +751,15 @@
                 if (cachePMsAllowed) {
                     const pmVaultOn = typeof this.vaultEnabled === 'function' && this.vaultEnabled();
                     const migrateKeys = [];
+                    let pmSkipped = 0;
                     for (const p of pms) {
                         if (!p || !p.key) continue;
                         let rawMsgs = null;
                         if (p.enc === 'v1' && typeof p.payload === 'string') {
-                            if (!pmVaultOn || !this._vaultKey) continue;
+                            if (!pmVaultOn || !this._vaultKey) { pmSkipped++; continue; }
                             try {
                                 rawMsgs = JSON.parse(await this._vaultDecrypt(p.payload));
-                            } catch (_) { continue; }
+                            } catch (_) { pmSkipped++; continue; }
                         } else if (Array.isArray(p.messages)) {
                             rawMsgs = p.messages;
                             if (pmVaultOn && this._vaultKey) migrateKeys.push(p.key);
@@ -677,6 +775,7 @@
                         if (typeof this._pruneForeignBotThreads === 'function') this._pruneForeignBotThreads(p.key);
                     }
                     for (const k of migrateKeys) this.persistPMMessages(k);
+                    if (!pmSkipped && !(pmVaultOn && !this._vaultKey)) this._pmCacheHydrated = true;
                     if (typeof this._cvScheduleReconcile === 'function') this._cvScheduleReconcile();
                     // Rebuild peer-format sets; relay copies are dedup-dropped so they never repopulate after a reload.
                     for (const msgs of this.pmMessages.values()) {
@@ -984,11 +1083,10 @@
                 // With Identity Encryption on, PM/group cache is vault-encrypted and never written while locked.
                 if (typeof this.vaultEnabled === 'function' && this.vaultEnabled()) {
                     if (!this._vaultKey) return;
-                    this._vaultEncrypt(JSON.stringify(serialised))
-                        .then(payload => this._cachePut('pms', { key, enc: 'v1', payload }))
-                        .catch(() => { });
+                    this._trackPmPersistWrite(this._vaultEncrypt(JSON.stringify(serialised))
+                        .then(payload => this._cachePut('pms', { key, enc: 'v1', payload })));
                 } else {
-                    this._cachePut('pms', { key, messages: serialised });
+                    this._trackPmPersistWrite(this._cachePut('pms', { key, messages: serialised }));
                 }
                 this._scheduleTrim();
             });

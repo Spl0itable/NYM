@@ -9,6 +9,7 @@ import 'p2p_models.dart';
 import 'p2p_service.dart';
 import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/dialog_button.dart';
 
 /// Lists seeding files and active transfers, rebuilding live from [P2PService].
 class P2PTransfersModal extends ConsumerWidget {
@@ -134,7 +135,7 @@ class P2PTransfersModal extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _IconBtn(
+                  DialogButton.secondary(
                     label: tr('Close'),
                     onTap: () => Navigator.of(context).maybePop(),
                   ),
@@ -370,55 +371,6 @@ class _CancelBtn extends StatelessWidget {
         child: Text(
           label,
           style: TextStyle(color: c.danger, fontSize: 11),
-        ),
-      ),
-    );
-  }
-}
-
-class _IconBtn extends StatefulWidget {
-  const _IconBtn({required this.label, required this.onTap});
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  State<_IconBtn> createState() => _IconBtnState();
-}
-
-class _IconBtnState extends State<_IconBtn> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            color: _hover
-                ? (c.isLight
-                    ? const Color(0x0F000000)
-                    : c.primary.withValues(alpha: 0.12))
-                : c.subtleFill,
-            borderRadius: NymRadius.rxs,
-            border: Border.all(
-              color: _hover ? c.primary.withValues(alpha: 0.3) : c.glassBorder,
-            ),
-          ),
-          child: Text(
-            widget.label.toUpperCase(),
-            style: TextStyle(
-              color: _hover || c.isLight ? c.primary : c.text,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              letterSpacing: 0.8,
-            ),
-          ),
         ),
       ),
     );

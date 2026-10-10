@@ -13,13 +13,16 @@ import '../../services/platform/deep_links.dart' show parseGroupInvite;
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
+import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/nym_icons.dart';
 import '../groups/group_invite_confirm.dart';
 import '../i18n/i18n.dart';
 import '../chat_lock/chat_lock_providers.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
+import '../settings/settings_widgets.dart' show SettingsToggleRow;
 
 /// A picked recipient: 64-hex pubkey plus display nym.
 class PmRecipient {
@@ -405,7 +408,15 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
                       _charCount(
                           c, _groupDescController.text.length, 150),
                       const SizedBox(height: 12),
-                      _allowInvitesRow(c),
+                      SettingsToggleRow(
+                        key: const ValueKey('panel-allowMemberInvites'),
+                        label: tr('Allow members to add others'),
+                        hint: tr(
+                            'When off, only you (the group owner) can add new members.'),
+                        value: _allowInvites,
+                        spacing: 0,
+                        onChanged: (v) => setState(() => _allowInvites = v),
+                      ),
                     ],
                     const SizedBox(height: 16),
                     _label(c, tr('Message'), optional: true),
@@ -427,11 +438,9 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              child: DialogActions(
                 children: [
                   _cancelBtn(c),
-                  const SizedBox(width: 10),
                   _startBtn(c),
                 ],
               ),
@@ -495,56 +504,14 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
   }
 
   Widget _cancelBtn(NymColors c) {
-    return InkWell(
-      onTap: () => Navigator.of(context).pop(),
-      borderRadius: NymRadius.rxs,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.05),
-          border: Border.all(color: c.glassBorder),
-          borderRadius: NymRadius.rxs,
-        ),
-        child: Text(
-          tr('Cancel').toUpperCase(),
-          style: TextStyle(
-            color: c.text,
-            fontSize: 12,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.8,
-          ),
-        ),
-      ),
-    );
+    return DialogButton.secondary(
+        label: tr('Cancel'), onTap: () => Navigator.of(context).pop());
   }
 
   Widget _startBtn(NymColors c) {
-    final enabled = _recipients.isNotEmpty;
-    return Opacity(
-      opacity: enabled ? 1 : 0.35,
-      child: InkWell(
-        onTap: enabled ? _start : null,
-        borderRadius: NymRadius.rsm,
-        child: Container(
-          height: 42,
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 10),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: c.primaryA(0.1),
-            border: Border.all(color: c.primaryA(0.3)),
-            borderRadius: NymRadius.rsm,
-          ),
-          child: Text(
-            (_groupMode ? tr('Create') : tr('Start')).toUpperCase(),
-            style: TextStyle(
-              color: c.primary,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 1.5,
-            ),
-          ),
-        ),
-      ),
+    return DialogButton(
+      label: _groupMode ? tr('Create') : tr('Start'),
+      onTap: _recipients.isNotEmpty ? _start : null,
     );
   }
 
@@ -843,17 +810,11 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
             ),
             const SizedBox(width: 6),
             Flexible(
-              child: Text(
+              child: NymLabel(
                 base,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                suffix: suffix,
                 style: TextStyle(color: c.text, fontSize: 13),
               ),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              '#$suffix',
-              style: TextStyle(color: c.textDim, fontSize: 11),
             ),
           ],
         ),
@@ -999,43 +960,6 @@ class _NewPmModalState extends ConsumerState<NewPmModal> {
     );
   }
 
-  /// Checked by default; off means only the owner can add members.
-  Widget _allowInvitesRow(NymColors c) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InkWell(
-          onTap: () => setState(() => _allowInvites = !_allowInvites),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 22,
-                height: 22,
-                child: Checkbox(
-                  value: _allowInvites,
-                  onChanged: (v) => setState(() => _allowInvites = v ?? true),
-                  activeColor: c.primary,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(tr('Allow members to add others'),
-                  style: TextStyle(color: c.text, fontSize: 13)),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(left: 30, top: 2),
-          child: Text(
-            tr('When off, only you (the group owner) can add new members.'),
-            style: TextStyle(color: c.textDim, fontSize: 11),
-          ),
-        ),
-      ],
-    );
-  }
-
   InputDecoration _inputDecoration(NymColors c, String hint) {
     return NymField.decoration(c, hint: hint);
   }
@@ -1065,8 +989,8 @@ class _Chip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(base, style: TextStyle(color: c.text, fontSize: 12)),
-          Text('#$suffix', style: TextStyle(color: c.textDim, fontSize: 11)),
+          NymLabel(base,
+              suffix: suffix, style: TextStyle(color: c.text, fontSize: 12)),
           const SizedBox(width: 4),
           // Uses `×` (U+00D7), not the modal-close ✕.
           InkWell(

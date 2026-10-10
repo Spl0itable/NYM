@@ -93,6 +93,7 @@
             body.className = 'nym-toast-text';
             const shown = typeof this.localizeCommandTokensIn === 'function' ? this.localizeCommandTokensIn(raw) : raw;
             if (html) body.innerHTML = shown;
+            else if (window.NymSuffix && typeof this.renderNymText === 'function') this.renderNymText(body, shown);
             else body.textContent = shown;
             const close = document.createElement('button');
             close.type = 'button';

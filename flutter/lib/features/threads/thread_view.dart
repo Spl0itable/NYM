@@ -9,6 +9,7 @@ import '../../state/app_state.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/chat/message_row.dart';
 import '../../widgets/chat/typing_indicator.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import '../nymbot/bot_runs_view.dart' show botRunTrailing;
@@ -143,7 +144,9 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
     ref.watch(appStateProvider.select((s) => s.displayRev));
     final app = ref.read(appStateProvider);
     final storageKey = widget.thread.view.storageKey;
-    final root = threadRootMessage(app, storageKey, widget.thread.rootId);
+    final rawRoot = threadRootMessage(app, storageKey, widget.thread.rootId);
+    final root =
+        rawRoot != null && app.isMessageFiltered(rawRoot) ? null : rawRoot;
     final replies = threadRepliesFor(app, storageKey, widget.thread.rootId);
     final reactions = ref.watch(reactionsProvider);
 
@@ -213,11 +216,12 @@ class _ThreadViewState extends ConsumerState<ThreadView> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    _contextLabel(app),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: c.textDim, fontSize: 12),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: NymLabel(
+                      _contextLabel(app),
+                      style: TextStyle(color: c.textDim, fontSize: 12),
+                    ),
                   ),
                 ),
               ],

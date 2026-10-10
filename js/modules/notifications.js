@@ -42,13 +42,16 @@ if (typeof navigator !== 'undefined' && navigator.serviceWorker && typeof naviga
 Object.assign(NYM.prototype, {
 
     showNotification(title, body, channelInfo = null, timestamp = null) {
-        body = this._notifPreviewText(body);
+        const origBody = typeof body === 'string' ? body : '';
+        const rawBody = this._notifCleanBody(body);
+        body = this._notifPreviewText(rawBody);
         if (!this.notificationsEnabled) return;
 
         const baseTitle = this.parseNymFromDisplay(title);
 
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
+        if (this._notifEntryHidden({ senderPubkey, body: origBody, channelInfo, title: baseTitle })) return;
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
         if (body && body.includes('10 recent messages:')) return;
         if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
@@ -116,23 +119,139 @@ Object.assign(NYM.prototype, {
         }
 
         if ((!toastDecision || toastDecision.system) && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            const route = channelInfo ? _nymNotifRoute(channelInfo, lockedChat ? '' : (channelInfo.nym || baseTitle)) : null;
-            this._notifSystemShow(titleToShow, {
-                body: body,
+            const route = channelInfo ? _nymNotifRoute(channelInfo, lockedChat || channelInfo.type !== 'pm' ? '' : (channelInfo.nym || baseTitle)) : null;
+            const nymFilter = {
+                sender: senderPubkey,
+                body: lockedChat ? '' : origBody,
+                channel: this._notifChannelKey(channelInfo),
+                subject: channelInfo && typeof channelInfo.subject === 'string' ? channelInfo.subject : ''
+            };
+            this._notifSystemShow(this._notifSystemTitle(entry), {
+                body: this._notifSystemBody(entry),
                 icon: NYM_NOTIFICATION_ICON,
-                tag: channelInfo ? (channelInfo.id || 'nym-notification') : 'nym-notification',
+                tag: this._notifTag(channelInfo),
                 renotify: true,
                 requireInteraction: false,
                 data: route ? { nymRoute: route } : {}
-            }, route);
+            }, route, nymFilter);
         }
 
     },
 
-    _notifSystemShow(title, opts, route) {
+    _notifSyncedInfo(n) {
+        if (!n || n.channelInfo) return null;
+        const route = typeof n.route === 'string' ? n.route : '';
+        const peer = /^[0-9a-f]{64}$/i.test(route);
+        const inThread = typeof n.threadRoot === 'string' && !!n.threadRoot;
+        switch (n.type) {
+            case 'pm': return { type: 'pm', inThread };
+            case 'group': return route ? { type: 'group', groupId: route, inThread } : null;
+            case 'channel':
+            case 'geohash': return route ? { type: 'geohash', geohash: route, inThread } : null;
+            case 'mention': return route && !peer ? { type: 'geohash', geohash: route, inThread } : { type: 'mention' };
+            case 'reaction': return { type: 'reaction' };
+            case 'call': return { type: 'call', isGroup: !!route && !peer, groupId: route && !peer ? route : null };
+            default: return null;
+        }
+    },
+
+    _notifTag(info) {
+        const i = info || {};
+        if ((i.type === 'geohash' || i.type === 'channel') && (i.geohash || i.channel)) {
+            return 'channel-' + String(i.geohash || i.channel).toLowerCase();
+        }
+        if (i.type === 'reaction') {
+            const byGroup = i.sourceType === 'group' && i.sourceGroupId && !i.zapMessageId;
+            const route = byGroup ? i.sourceGroupId : i.pubkey;
+            if (route) return 'reaction-' + route;
+        }
+        return i.id || 'nym-notification';
+    },
+
+    _notifPreviewsHidden() {
+        try { return localStorage.getItem('nym_hide_previews') === '1'; } catch (_) { return false; }
+    },
+
+    _notifSystemTitle(entry) {
+        const E = typeof self !== 'undefined' ? self.NymEventToasts : null;
+        if (!entry) return '';
+        if (!E || typeof E.systemTitle !== 'function') return String(entry.title || '');
+        const info = entry.channelInfo || {};
+        const tr = (s, p) => (typeof this._etTr === 'function' ? this._etTr(s, p) : E.fill(s, p));
+        return E.systemTitle({ title: entry.title, topic: E.topicOf(info.eventId || entry.eventId), locked: !!entry.locked }, { hidePreviews: this._notifPreviewsHidden() }, tr);
+    },
+
+    _notifSystemBody(entry) {
+        if (entry && !entry.channelInfo) return String(entry.body || '');
+        try {
+            const shown = typeof this._etSystemBody === 'function' ? this._etSystemBody(entry) : null;
+            if (typeof shown === 'string') return shown;
+        } catch (_) { }
+        let hidden = true;
+        try { hidden = localStorage.getItem('nym_hide_previews') === '1'; } catch (_) { }
+        return hidden && !entry.locked ? '' : entry.body;
+    },
+
+    _notifFilterHidden(f) {
+        const F = window.NymContentFilter;
+        if (!f || typeof f !== 'object' || !F || typeof this._cfCtx !== 'function') return false;
+        const sender = typeof f.sender === 'string' ? f.sender : '';
+        const nym = sender && typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(sender) : '';
+        return F.entryHidden(this._cfCtx(), {
+            sender,
+            nym,
+            body: typeof f.body === 'string' ? f.body : '',
+            channel: typeof f.channel === 'string' ? f.channel : '',
+            subject: typeof f.subject === 'string' ? f.subject : ''
+        });
+    },
+
+    _closeHiddenSystemNotifications() {
+        const byTag = this._notifTagFilters;
+        const hidden = (n) => {
+            if (!n) return false;
+            const info = n._nymFilter || (byTag && n.tag ? byTag.get(n.tag) : null);
+            if (info && this._notifFilterHidden(info)) return true;
+            const r = n.data && n.data.nymRoute;
+            if (!r || typeof r !== 'object') return false;
+            return this._notifFilterHidden({ sender: r.type === 'pm' ? (r.pubkey || '') : '', channel: this._notifChannelKey(r) });
+        };
+        if (Array.isArray(this._postedNotifications)) {
+            this._postedNotifications = this._postedNotifications.filter((n) => {
+                if (!n || n._nymClosed) return false;
+                if (!hidden(n)) return true;
+                try { n.close(); } catch (_) { }
+                return false;
+            });
+        }
+        const sw = typeof navigator !== 'undefined' ? navigator.serviceWorker : null;
+        if (!sw || typeof sw.getRegistration !== 'function') return;
+        Promise.resolve()
+            .then(() => sw.getRegistration())
+            .then((reg) => (reg && typeof reg.getNotifications === 'function' ? reg.getNotifications() : []))
+            .then((list) => {
+                for (const n of list || []) {
+                    if (hidden(n)) { try { n.close(); } catch (_) { } }
+                }
+            })
+            .catch(() => { });
+    },
+
+    _notifSystemShow(title, opts, route, filterInfo) {
+        if (filterInfo && opts && opts.tag) {
+            if (!this._notifTagFilters) this._notifTagFilters = new Map();
+            this._notifTagFilters.delete(opts.tag);
+            this._notifTagFilters.set(opts.tag, filterInfo);
+            if (this._notifTagFilters.size > 200) this._notifTagFilters.delete(this._notifTagFilters.keys().next().value);
+        }
         const page = () => {
             try {
                 const notification = new Notification(title, opts);
+                if (filterInfo) notification._nymFilter = filterInfo;
+                if (!Array.isArray(this._postedNotifications)) this._postedNotifications = [];
+                this._postedNotifications.push(notification);
+                if (this._postedNotifications.length > 50) this._postedNotifications.splice(0, this._postedNotifications.length - 50);
+                try { notification.addEventListener && notification.addEventListener('close', () => { notification._nymClosed = true; }); } catch (_) { }
                 if (route) {
                     notification.onclick = (event) => {
                         event.preventDefault();
@@ -177,14 +296,49 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _notifCleanBody(body) {
+        const F = window.NymContentFilter;
+        if (typeof body !== 'string' || !F || typeof this._cfCtx !== 'function') return body;
+        return F.stripBlockedQuotes(this._cfCtx(), body);
+    },
+
+    _notifChannelKey(info) {
+        const i = info || {};
+        if (i.type === 'geohash' || i.type === 'channel') return i.geohash || i.channel || '';
+        if (i.sourceType === 'geohash' || i.sourceType === 'channel') return i.sourceGeohash || i.sourceChannel || '';
+        return '';
+    },
+
+    _notifEntryHidden(entry) {
+        const F = window.NymContentFilter;
+        const e = entry || {};
+        if (!F || typeof this._cfCtx !== 'function') {
+            const pk = e.senderPubkey || (e.channelInfo && e.channelInfo.pubkey) || '';
+            return !!(pk && this.blockedUsers && this.blockedUsers.has(pk));
+        }
+        const info = e.channelInfo || (typeof this._notifSyncedInfo === 'function' && this._notifSyncedInfo(e)) || {};
+        const sender = e.senderPubkey || info.pubkey || '';
+        const nym = sender && typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(sender) : '';
+        return F.entryHidden(this._cfCtx(), {
+            sender,
+            nym,
+            body: typeof e.body === 'string' ? e.body : '',
+            channel: this._notifChannelKey(info) || (typeof e.channel === 'string' ? e.channel : ''),
+            subject: typeof info.subject === 'string' ? info.subject : (typeof e.subject === 'string' ? e.subject : '')
+        });
+    },
+
     _addNotificationToHistory(title, body, channelInfo, timestamp) {
-        body = this._notifPreviewText(body);
+        const origBody = typeof body === 'string' ? body : '';
+        const rawBody = this._notifCleanBody(body);
+        body = this._notifPreviewText(rawBody);
         if (!this.notificationsEnabled) return;
 
         const baseTitle = this.parseNymFromDisplay(title);
 
         const senderPubkey = channelInfo?.pubkey || '';
         if (senderPubkey && this.blockedUsers.has(senderPubkey)) return;
+        if (this._notifEntryHidden({ senderPubkey, body: origBody, channelInfo, title: baseTitle })) return;
         if (this.notifyFriendsOnly && senderPubkey && !this.isFriend(senderPubkey)) return;
         if (body && body.includes('10 recent messages:')) return;
         if (senderPubkey && this.isVerifiedBot(senderPubkey)) return;
@@ -666,29 +820,26 @@ Object.assign(NYM.prototype, {
             const observedAt = n.receivedAt || n.timestamp || 0;
             if (observedAt <= lastRead) return false;
             if (this._notificationAlreadySeen(n.channelInfo, this._notifReadTs(n), n.live === true)) return false;
-            const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
-            if (pubkey && this.blockedUsers.has(pubkey)) return false;
+            if (this._notifEntryHidden(n)) return false;
             return true;
         });
     },
 
     _appBadgeCount() {
-        let total = 0;
-        if (this.unreadCounts) {
-            for (const [key, n] of this.unreadCounts) {
-                if ((key.startsWith('pm-') || key.startsWith('group-')) && n > 0) total += n;
-            }
-        }
-        if (this.notificationsEnabled) {
-            for (const n of this._unreadNotifications()) {
-                const type = n.channelInfo && n.channelInfo.type;
-                if (type !== 'pm' && type !== 'group') total++;
-            }
-        }
-        return total;
+        if (!this.notificationsEnabled) return 0;
+        return this._unreadNotifications().length;
     },
 
     _scheduleAppBadge() {
+        if (typeof document !== 'undefined' && document.hidden) {
+            if (this._appBadgeQueued) return;
+            this._appBadgeQueued = true;
+            Promise.resolve().then(() => {
+                this._appBadgeQueued = false;
+                this._applyAppBadge();
+            });
+            return;
+        }
         if (this._appBadgeTimer) return;
         this._appBadgeTimer = setTimeout(() => {
             this._appBadgeTimer = null;
@@ -700,44 +851,52 @@ Object.assign(NYM.prototype, {
         if (this._readStateKnown === false) return;
         let count = 0;
         try { count = this._appBadgeCount(); } catch (_) { return; }
+        this._renderBellCount(count);
+        this._applyTitleCount(count);
         if (count === this._appBadgeShown) return;
         this._appBadgeShown = count;
+        this._sendAppBadge(count);
+    },
+
+    _applyTitleCount(count) {
+        if (typeof document === 'undefined') return;
+        const base = String(document.title || '').replace(/^\(\d+\+?\) /, '');
+        const next = count > 0 ? `(${count > 99 ? '99+' : count}) ${base}` : base;
+        if (document.title !== next) document.title = next;
+    },
+
+    _sendAppBadge(count) {
         const nav = typeof navigator !== 'undefined' ? navigator : null;
-        if (nav && typeof nav.setAppBadge === 'function') {
+        if (!nav || typeof nav.setAppBadge !== 'function' || typeof nav.clearAppBadge !== 'function') return;
+        try {
             const done = count > 0 ? nav.setAppBadge(count) : nav.clearAppBadge();
             if (done && typeof done.catch === 'function') done.catch(() => { });
-            return;
-        }
-        if (typeof document === 'undefined') return;
-        if (this._appBaseTitle === undefined) this._appBaseTitle = document.title.replace(/^\(\d+\+?\) /, '');
-        document.title = count > 0 ? `(${count > 99 ? '99+' : count}) ${this._appBaseTitle}` : this._appBaseTitle;
+        } catch (_) { }
+    },
+
+    _resetAppBadge() {
+        this._appBadgeShown = 0;
+        this._applyTitleCount(0);
+        this._sendAppBadge(0);
     },
 
     _doUpdateNotificationBadge() {
         if (typeof this._refreshThreadNewMarks === 'function') this._refreshThreadNewMarks();
-        const desktopBadge = document.getElementById('notifBadgeDesktop');
-        const mobileBadge = document.getElementById('notifBadgeMobile');
-        const sidebarBadge = document.getElementById('notifBadgeSidebar');
-        const identityBadge = document.getElementById('notifBadgeIdentity');
+        this._renderBellCount(this._appBadgeCount());
+    },
 
-        if (!this.notificationsEnabled) {
-            [desktopBadge, mobileBadge, sidebarBadge, identityBadge].forEach(badge => {
-                if (badge) badge.classList.add('nm-hidden');
-            });
-            return;
-        }
-
-        const unreadCount = this._unreadNotifications().length;
-
-        [desktopBadge, mobileBadge, sidebarBadge, identityBadge].forEach(badge => {
-            if (!badge) return;
-            if (unreadCount > 0) {
-                badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+    _renderBellCount(count) {
+        if (typeof document === 'undefined') return;
+        for (const id of ['notifBadgeDesktop', 'notifBadgeMobile', 'notifBadgeSidebar', 'notifBadgeIdentity']) {
+            const badge = document.getElementById(id);
+            if (!badge) continue;
+            if (count > 0) {
+                badge.textContent = count > 99 ? '99+' : count;
                 badge.classList.remove('nm-hidden');
             } else {
                 badge.classList.add('nm-hidden');
             }
-        });
+        }
     },
 
     openNotificationsModal() {
@@ -764,8 +923,7 @@ Object.assign(NYM.prototype, {
         const cutoff24h = Date.now() - 24 * 60 * 60 * 1000;
         const recent = this.notificationHistory.filter(n => {
             if (n.timestamp <= cutoff24h) return false;
-            const pubkey = n.senderPubkey || n.channelInfo?.pubkey || '';
-            if (pubkey && this.blockedUsers.has(pubkey)) return false;
+            if (this._notifEntryHidden(n)) return false;
             return true;
         }).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
@@ -787,8 +945,17 @@ Object.assign(NYM.prototype, {
                 }
             }
             body.innerHTML = '';
+            const ET = typeof self !== 'undefined' ? self.NymEventToasts : null;
+            const hidePreviews = this._notifPreviewsHidden();
+            const etTr = (s, p) => (typeof this._etTr === 'function' ? this._etTr(s, p) : (ET ? ET.fill(s, p) : s));
+            const groupName = (id) => {
+                const g = id && this.groupConversations && this.groupConversations.get(id);
+                return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : this.uiText('Group');
+            };
             for (let i = recent.length - 1; i >= 0; i--) {
                 const n = recent[i];
+                const info = n.channelInfo || this._notifSyncedInfo(n);
+                const system = !n.channelInfo && !n.senderPubkey && !n.eventId && !n.route;
                 const item = document.createElement('div');
                 item.className = 'notification-item';
                 item._notif = n;
@@ -802,6 +969,9 @@ Object.assign(NYM.prototype, {
 
                 const hiddenChat = typeof this._clNotifHidden === 'function' && this._clNotifHidden(n);
                 const pubkey = hiddenChat ? '' : (n.senderPubkey || n.channelInfo?.pubkey || '');
+                const topic = ET ? ET.entryTopic(n.channelInfo?.eventId || n.eventId, n.title, etTr) : '';
+                const textHidden = hidePreviews && !hiddenChat && !system;
+                const shownTitle = (t) => (ET ? ET.systemTitle({ title: t, topic }, { hidePreviews }, etTr) : String(t || ''));
                 let avatarHtml = '';
                 let authorHtml = '';
                 if (hiddenChat) {
@@ -810,7 +980,7 @@ Object.assign(NYM.prototype, {
                     const avatarSrc = this.getAvatarUrl(pubkey);
                     const safePk = this._safePubkey(pubkey);
                     avatarHtml = `<img src="${this.escapeHtml(avatarSrc)}" class="avatar-message" data-avatar-pubkey="${safePk}" alt="" decoding="async" loading="lazy">`;
-                    const baseNym = this.resolveDisplayNym(pubkey, n.senderNym || '');
+                    const baseNym = this.resolveDisplayNym(pubkey, shownTitle(n.senderNym || ''));
                     const suffix = this.getPubkeySuffix(pubkey);
                     const flairHtml = this.getFlairForUser(pubkey);
                     const verifiedBadge = this.isVerifiedDeveloper(pubkey)
@@ -819,32 +989,42 @@ Object.assign(NYM.prototype, {
                             ? '<span class="verified-badge" title="Nymchat Bot">✓</span>'
                             : '';
                     authorHtml = `<span class="notification-item-author" data-notif-pubkey="${this.escapeHtml(pubkey)}"><span class="nym-bracket">&lt;</span>${this.escapeHtml(baseNym)}<span class="nym-suffix">#${suffix}</span><span class="nym-bracket">&gt;</span>${flairHtml} ${verifiedBadge}</span>`;
+                } else if (n.title) {
+                    authorHtml = `<span class="notification-item-author"><span class="nym-bracket">&lt;</span>${this.escapeHtml(shownTitle(n.title))}<span class="nym-bracket">&gt;</span></span>`;
                 }
 
                 let contextHtml = '';
                 if (hiddenChat) {
                     contextHtml = `<span class="notification-item-context">${this.escapeHtml(this._cl(window.NymChatLock.STRINGS.lockedChats))}</span>`;
-                } else if (n.channelInfo) {
-                    const inThread = !!n.channelInfo.inThread;
-                    if (n.channelInfo.type === 'geohash') {
-                        const where = `#${this.escapeHtml(n.channelInfo.geohash)}`;
+                } else if (info) {
+                    const inThread = !!info.inThread;
+                    if (info.type === 'geohash') {
+                        const where = `#${this.escapeHtml(info.geohash)}`;
                         contextHtml = inThread
                             ? `<span class="notification-item-context">in a thread in ${where}</span>`
                             : `<span class="notification-item-context">in ${where}</span>`;
-                    } else if (n.channelInfo.type === 'group') {
-                        const groupName = n.title.split(':')[0] || 'Group';
-                        const where = this.escapeHtml(groupName);
+                    } else if (info.type === 'group') {
+                        const where = this.escapeHtml(groupName(info.groupId || String(info.id || '').replace(/^group-/, '')));
                         contextHtml = inThread
                             ? `<span class="notification-item-context">in a thread in ${where}</span>`
                             : `<span class="notification-item-context">in ${where}</span>`;
-                    } else if (n.channelInfo.type === 'pm') {
+                    } else if (info.type === 'pm') {
                         const dmLabel = this.escapeHtml(this.uiText(inThread ? 'Private message thread' : 'Private message'));
                         contextHtml = `<span class="notification-item-context">${dmLabel}</span>`;
-                    } else if (n.channelInfo.type === 'reaction') {
-                        contextHtml = `<span class="notification-item-context">Reaction</span>`;
-                    } else if (n.channelInfo.type === 'call') {
-                        const label = n.channelInfo.callKind === 'video' ? 'Missed video call' : 'Missed audio call';
-                        contextHtml = `<span class="notification-item-context">${label}</span>`;
+                    } else if (info.type === 'reaction') {
+                        const zap = !!info.zapMessageId || String(n.body || '').trim().indexOf('⚡') === 0;
+                        contextHtml = `<span class="notification-item-context">${this.escapeHtml(this.uiText(zap ? 'Zap' : 'Reaction'))}</span>`;
+                    } else if (info.type === 'mention') {
+                        contextHtml = `<span class="notification-item-context">${this.escapeHtml(this.uiText('Mention'))}</span>`;
+                    } else if (info.type === 'call' && ET) {
+                        const evId = String(info.eventId || n.eventId || '');
+                        const label = ET.callLabel({
+                            topic,
+                            missed: evId.indexOf('missed-call-') === 0,
+                            video: info.callKind ? info.callKind === 'video' : ET.callIsVideo(n.body, etTr),
+                            chat: textHidden && info.isGroup && info.groupId ? groupName(info.groupId) : '',
+                        }, etTr);
+                        contextHtml = `<span class="notification-item-context">${this.escapeHtml(label)}</span>`;
                     }
                 }
 
@@ -856,14 +1036,20 @@ Object.assign(NYM.prototype, {
                 }
 
                 const newMessageLines = this._notifPreviewText(rawBody).split('\n').filter(line => !line.startsWith('>'));
-                const displayBody = newMessageLines.join(' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+                let displayBody = newMessageLines.join(' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+                if (!hiddenChat && hidePreviews) {
+                    displayBody = ET ? ET.listBody({ body: displayBody, viewOnce: ET.isViewOnce(displayBody, etTr), system }, { hidePreviews }, etTr) : (system ? displayBody : '');
+                }
+                const bodyHtml = displayBody || !hidePreviews
+                    ? `<div class="notification-item-body">${this.renderCustomEmojiInEscapedText((pubkey && this.isVerifiedBot(pubkey) ? window.NymSuffix.dimHtml(this.escapeHtml(displayBody), '*') : this.nymTextHtml(displayBody, pubkey ? [pubkey] : [])))}</div>`
+                    : '';
 
                 item.innerHTML = `
                     <div class="notification-item-header">
                         ${avatarHtml}
                         <div class="notification-item-meta">
                             <div class="notification-item-title">${authorHtml}</div>
-                            <div class="notification-item-body">${this.renderCustomEmojiInEscapedText(this.escapeHtml(displayBody))}</div>
+                            ${bodyHtml}
                             <div class="notification-item-footer">${contextHtml} <span class="notification-item-time">${time}</span></div>
                         </div>
                     </div>

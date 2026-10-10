@@ -14,6 +14,8 @@ import '../../models/nostr_event.dart';
 import '../../services/nostr/event_provenance.dart';
 import '../../state/nostr_controller.dart';
 import '../common/nym_sheet.dart';
+import '../common/dialog_button.dart';
+import '../common/nym_label.dart';
 
 /// Shows a message's signed event JSON and relays, from the session, the D1 archive, or the message itself.
 Future<void> showEventDetails(
@@ -136,17 +138,14 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
         Divider(color: c.glassBorder, height: 20),
         Flexible(child: SingleChildScrollView(child: _body(c))),
         const SizedBox(height: 14),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        DialogActions(
           children: [
-            if (_event != null) ...[
-              _Btn(
+            if (_event != null)
+              DialogButton.secondary(
                 label: tr('Copy Raw JSON'),
                 onTap: () => Clipboard.setData(ClipboardData(text: _json)),
               ),
-              const SizedBox(width: 8),
-            ],
-            _Btn(
+            DialogButton.secondary(
               label: tr('Close'),
               onTap: () => Navigator.of(context).pop(),
             ),
@@ -189,7 +188,7 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
       if (nevent.isNotEmpty) rows.add(_row(c, tr('nevent'), nevent, mono: true));
     }
     if (widget.nym != null && widget.nym!.isNotEmpty) {
-      rows.add(_row(c, tr('Nym'), widget.nym!));
+      rows.add(_row(c, tr('Nym'), widget.nym!, nym: true));
     }
     if (ev != null) rows.add(_row(c, tr('Kind'), '${ev.kind}'));
     final ch = widget.channel;
@@ -294,7 +293,9 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
         ),
       );
 
-  Widget _row(NymColors c, String label, String value, {bool mono = false}) => Padding(
+  Widget _row(NymColors c, String label, String value,
+          {bool mono = false, bool nym = false}) =>
+      Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -306,14 +307,17 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: SelectableText(
-                value,
-                style: TextStyle(
-                  color: c.text,
-                  fontSize: mono ? 11 : 12,
-                  fontFamily: mono ? 'monospace' : null,
-                ),
-              ),
+              child: nym
+                  ? SelectableText.rich(nymTextSpan(context, value,
+                      style: TextStyle(color: c.text, fontSize: 12)))
+                  : SelectableText(
+                      value,
+                      style: TextStyle(
+                        color: c.text,
+                        fontSize: mono ? 11 : 12,
+                        fontFamily: mono ? 'monospace' : null,
+                      ),
+                    ),
             ),
           ],
         ),
@@ -326,37 +330,3 @@ class _EventDetailsDialogState extends ConsumerState<_EventDetailsDialog> {
       );
 }
 
-class _Btn extends StatelessWidget {
-  const _Btn({required this.label, required this.onTap});
-
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.nym;
-    return Material(
-      color: Colors.white.withValues(alpha: 0.05),
-      borderRadius: NymRadius.rxs,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: NymRadius.rxs,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-          decoration: BoxDecoration(
-            borderRadius: NymRadius.rxs,
-            border: Border.all(color: c.glassBorder),
-          ),
-          child: Text(
-            label.toUpperCase(),
-            style: TextStyle(
-                color: c.text,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                letterSpacing: 0.8),
-          ),
-        ),
-      ),
-    );
-  }
-}

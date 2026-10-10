@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/dialog_button.dart';
 
 import '../../core/crypto/key_format.dart' show normalizePrivkeyInput;
 import '../../core/crypto/keys.dart';
@@ -138,12 +139,10 @@ class _DevNsecModalState extends State<DevNsecModal> {
                   ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(32, 24, 32, 32),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    child: DialogActions(
                       children: [
                         ModalChrome.iconButton(c, tr('Cancel'),
                             () => Navigator.of(context).pop()),
-                        const SizedBox(width: 10),
                         ModalChrome.sendButton(c, tr('Verify'), _verify),
                       ],
                     ),

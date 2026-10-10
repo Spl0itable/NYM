@@ -57,7 +57,10 @@ class CustomEmojiState {
 }
 
 /// Loads cached emoji, requiring a valid shortcode and http(s) url and never shadowing built-in shortcodes.
-CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
+CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) =>
+    loadCustomEmojiStateWith(prefs.getString);
+
+CustomEmojiState loadCustomEmojiStateWith(String? Function(String key) read) {
   final codeToUrl = <String, String>{};
 
   void register(String? shortcode, String? url) {
@@ -68,7 +71,7 @@ CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
   }
 
   // Array of [shortcode, url] pairs.
-  final rawMap = prefs.getString(kCustomEmojiMapKey);
+  final rawMap = read(kCustomEmojiMapKey);
   if (rawMap != null && rawMap.isNotEmpty) {
     try {
       final decoded = jsonDecode(rawMap);
@@ -84,7 +87,7 @@ CustomEmojiState loadCustomEmojiState(SharedPreferences prefs) {
 
   final packs = <CustomEmojiPack>[];
   final seenPackKeys = <String>{};
-  final rawPacks = prefs.getString(kCustomEmojiPacksKey);
+  final rawPacks = read(kCustomEmojiPacksKey);
   if (rawPacks != null && rawPacks.isNotEmpty) {
     try {
       final decoded = jsonDecode(rawPacks);

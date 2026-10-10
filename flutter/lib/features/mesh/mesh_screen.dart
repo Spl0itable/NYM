@@ -13,6 +13,7 @@ import '../../widgets/chat/chat_pane.dart' show NymPageAction, NymPageHeader;
 import '../../widgets/common/list_empty_note.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../../widgets/common/nym_tooltip.dart';
 import '../../widgets/nym_icons.dart';
@@ -140,8 +141,10 @@ class _MeshScreenState extends ConsumerState<MeshScreen> {
             onBack: _close,
             onBackToList: widget.onBackToList,
             onOpenSidebar: widget.onOpenSidebar,
+            kind: 'mesh',
             actions: [
               NymPageAction(
+                id: 'ghost',
                 key: const ValueKey('meshGhost'),
                 svg: NymIcons.ghost,
                 tooltip: ghost ? tr('Ghost Mode on') : tr('Ghost Mode off'),
@@ -218,8 +221,12 @@ class _MeshBody extends ConsumerWidget {
     } else {
       powerSub = tr('On · your mesh ID {id}', {'id': short});
     }
-    final peers = [...mesh.peers]
-      ..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
+    ref.watch(contentFilterRevisionProvider);
+    final app = ref.read(appStateProvider);
+    final peers = [
+      for (final p in mesh.peers)
+        if (!app.isPersonHidden(p.nostrPubkey ?? '', p.nickname ?? '')) p
+    ]..sort((a, b) => b.lastSeen.compareTo(a.lastSeen));
     final peersTitle = enabled && mesh.running && peers.isNotEmpty
         ? tr('Peers nearby ({count})', {'count': peers.length})
         : tr('Peers nearby');
@@ -509,20 +516,9 @@ class _PeerRow extends ConsumerWidget {
         imageUrl: peer.avatarUrl,
         label: peer.displayName,
       ),
-      title: Text.rich(
-        TextSpan(
-          text: parts.base,
-          children: parts.suffix.isEmpty
-              ? null
-              : [
-                  TextSpan(
-                    text: parts.suffix,
-                    style: TextStyle(color: c.textDim.withValues(alpha: 0.7)),
-                  ),
-                ],
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
+      title: NymLabel(
+        parts.base,
+        suffix: parts.suffix,
         style: _nameStyle(c, textSize),
       ),
       sub: meshPeerLine(peer, ping),

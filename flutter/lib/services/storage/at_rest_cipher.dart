@@ -13,20 +13,22 @@ abstract class AtRestKeyStore {
 }
 
 class SecureAtRestKeyStore implements AtRestKeyStore {
-  SecureAtRestKeyStore([SecureStore? store]) : _store = store ?? SecureStore();
+  SecureAtRestKeyStore([SecureStore? store, this.name = keyName])
+      : _store = store ?? SecureStore();
 
   static const String keyName = 'nym_at_rest_key';
 
   final SecureStore _store;
+  final String name;
 
   @override
-  Future<String?> read() => _store.get(keyName);
+  Future<String?> read() => _store.get(name);
 
   @override
-  Future<void> write(String value) => _store.set(keyName, value);
+  Future<void> write(String value) => _store.set(name, value);
 
   @override
-  Future<void> delete() => _store.remove(keyName);
+  Future<void> delete() => _store.remove(name);
 }
 
 class AtRestKeyUnavailable implements Exception {

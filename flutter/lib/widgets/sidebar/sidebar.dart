@@ -47,6 +47,7 @@ import '../../state/settings_provider.dart';
 import '../common/hit_slop.dart';
 import '../common/app_dialog.dart';
 import '../common/nym_avatar.dart';
+import '../common/nym_label.dart';
 import '../../features/chat_nav/chat_nav_providers.dart';
 import '../../features/chat_nav/chat_nav_ui.dart';
 import '../../features/chat_lock/chat_lock.dart' show ChatLockStrings;
@@ -70,6 +71,7 @@ import '../common/nym_focusable.dart';
 import 'unread_pill.dart';
 import '../common/nym_field.dart';
 import '../common/nym_tooltip.dart';
+import '../../core/theme/nym_a11y.dart';
 
 enum _SectionId { channels, pms, nyms }
 
@@ -838,17 +840,33 @@ class _SidebarState extends ConsumerState<Sidebar> {
       child: Row(
         children: [
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _ConnectionStatusIndicator(
-                  connectedCount: connectedRelays,
-                  proxyMode: proxyMode,
-                ),
-                _MeshStatusIndicator(onItemSelected: widget.onItemSelected),
-              ],
-            ),
+            child: context.largeTouchTargets
+                ? Row(
+                    children: [
+                      Flexible(
+                        child: _ConnectionStatusIndicator(
+                          connectedCount: connectedRelays,
+                          proxyMode: proxyMode,
+                        ),
+                      ),
+                      const SizedBox(width: NymSpace.s1),
+                      Flexible(
+                        child: _MeshStatusIndicator(
+                            onItemSelected: widget.onItemSelected),
+                      ),
+                    ],
+                  )
+                : Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _ConnectionStatusIndicator(
+                        connectedCount: connectedRelays,
+                        proxyMode: proxyMode,
+                      ),
+                      _MeshStatusIndicator(onItemSelected: widget.onItemSelected),
+                    ],
+                  ),
           ),
           const SizedBox(width: NymSpace.s2),
           _editButton(context),
@@ -1051,23 +1069,9 @@ class _NymValueText extends StatelessWidget {
             pubkey.length >= 4 ? pubkey.substring(pubkey.length - 4) : '????';
       }
     }
-    return Text.rich(
-      TextSpan(
-        children: [
-          TextSpan(text: base),
-          // The base `.nym-suffix` rule still applies, so the suffix dims and thins.
-          TextSpan(
-            text: '#$suffix',
-            style: TextStyle(
-              color: c.textDim.withValues(alpha: 0.7),
-              fontSize: 15 * 0.9,
-              fontWeight: FontWeight.w100,
-            ),
-          ),
-        ],
-      ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
+    return NymLabel(
+      base,
+      suffix: suffix,
       style: TextStyle(
         color: c.secondary,
         fontSize: 15,
@@ -1182,7 +1186,8 @@ class _StatusRow extends StatelessWidget {
               hoverColor: c.primary.withValues(alpha: 0.08),
               onTap: onTap,
               child: Container(
-                constraints: const BoxConstraints(minHeight: 28),
+                constraints: BoxConstraints(
+                    minHeight: context.largeTouchTargets ? 44 : 28),
                 padding: const EdgeInsets.symmetric(
                     horizontal: NymSpace.s2, vertical: NymSpace.s1),
                 child: Row(
@@ -1455,7 +1460,7 @@ class _ActionButtonState extends State<_ActionButton> {
                           padding: const EdgeInsets.symmetric(horizontal: 4),
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: c.danger,
+                            color: badgeFill(context, c.danger),
                             borderRadius:
                                 const BorderRadius.all(Radius.circular(8)),
                           ),
@@ -1478,7 +1483,9 @@ class _ActionButtonState extends State<_ActionButton> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: fg,
+                    color: context.highContrast
+                        ? legibleOn(fg, flattenOver(fill, sidebarRowBg(c)))
+                        : fg,
                     fontSize: NymType.xs,
                     fontWeight: FontWeight.w500,
                   ),
@@ -1581,14 +1588,14 @@ class _NavSection extends StatelessWidget {
                   const SizedBox(width: 10),
                   if (leadingIcon != null) ...[
                     leadingIcon!,
-                    SizedBox(width: touchPlatform() ? 12 : 10),
+                    SizedBox(width: context.largeTouchTargets ? 12 : 10),
                   ],
                   _MiniIcon(
                     svg: NymIcons.search,
                     tooltip: searchTooltip,
                     onTap: onToggleSearch,
                   ),
-                  SizedBox(width: touchPlatform() ? 12 : 10),
+                  SizedBox(width: context.largeTouchTargets ? 12 : 10),
                   _MiniIcon(
                     svg: open ? NymIcons.chevronDown : NymIcons.chevronRight,
                     tooltip:
@@ -1996,12 +2003,12 @@ class _GroupListItem extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                    RichText(
+                    Text.rich(
                       key: const ValueKey('sidebarName'),
                       maxLines: 1,
                       softWrap: false,
                       overflow: TextOverflow.ellipsis,
-                      text: TextSpan(
+                      TextSpan(
                         style: TextStyle(
                           color: c.textDim,
                           fontSize: textSize,
@@ -2014,7 +2021,9 @@ class _GroupListItem extends ConsumerWidget {
                             text:
                                 ' · ${_abbreviateNumber(group.members.length)}',
                             style: TextStyle(
-                              color: c.textDim.withValues(alpha: 0.55),
+                              color: context.highContrast
+                                  ? legibleOn(c.textDim, sidebarRowBg(c))
+                                  : c.textDim.withValues(alpha: 0.55),
                               fontSize: textSize * 0.8,
                               fontWeight: FontWeight.w300,
                             ),
@@ -2023,7 +2032,8 @@ class _GroupListItem extends ConsumerWidget {
                       ),
                     ),
                     if (preview.text.isNotEmpty)
-                      rowPreviewLine(context, preview.text, 'group'),
+                      rowPreviewLine(context, preview.text, 'group',
+                          preview.dim, preview.sender, preview.bodyAt),
                     ],
                     ),
                   ),
@@ -2383,7 +2393,7 @@ class _IdentityBellState extends ConsumerState<_IdentityBell> {
                   padding: const EdgeInsets.symmetric(horizontal: 4),
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: c.danger,
+                    color: badgeFill(context, c.danger),
                     borderRadius: const BorderRadius.all(Radius.circular(8)),
                   ),
                   child: Text(

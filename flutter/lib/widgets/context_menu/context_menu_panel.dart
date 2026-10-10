@@ -31,6 +31,7 @@ import '../../models/user.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../common/app_dialog.dart';
+import '../common/nym_label.dart';
 import '../common/nym_sheet.dart';
 import '../common/nym_avatar.dart';
 import '../nym_icons.dart';
@@ -41,6 +42,7 @@ import 'menu_layer.dart';
 import 'profile_badges.dart';
 import 'report_modal.dart';
 import '../common/hit_slop.dart';
+import '../../core/theme/nym_a11y.dart';
 
 CtxTarget enrichCtxTarget(AppState s, CtxTarget target) {
   final self = s.selfPubkey;
@@ -424,26 +426,14 @@ class ContextMenuPanel extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Flexible(
-                child: Text.rich(
-                  TextSpan(
-                    style: TextStyle(
-                      color: c.secondary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    children: [
-                      TextSpan(text: target.nym),
-                      TextSpan(
-                        text: '#${getPubkeySuffix(target.pubkey)}',
-                        style: TextStyle(
-                          color: c.secondary.withValues(alpha: 0.7),
-                          fontSize: 13 * 0.9,
-                          fontWeight: FontWeight.w100,
-                        ),
-                      ),
-                    ],
+                child: NymLabel(
+                  target.nym,
+                  pubkey: target.pubkey,
+                  style: TextStyle(
+                    color: c.secondary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
                   ),
-                  textAlign: TextAlign.center,
                 ),
               ),
               CosmeticNymBadges(
@@ -623,7 +613,10 @@ class ContextMenuPanel extends ConsumerWidget {
       case CtxAction.quote:
         onClose();
         if (t.content != null) {
-          hooks.requestQuote(fullNym: fullNym, content: t.content!);
+          hooks.requestQuote(
+              fullNym: fullNym,
+              content: t.content!,
+              messageId: t.messageId ?? '');
         }
         break;
       case CtxAction.privateMessage:
@@ -1114,7 +1107,7 @@ class _ActionItemState extends State<_ActionItem> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Container(
-          constraints: touchPlatform()
+          constraints: context.largeTouchTargets
               ? const BoxConstraints(minHeight: kMinTouchTarget)
               : null,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),

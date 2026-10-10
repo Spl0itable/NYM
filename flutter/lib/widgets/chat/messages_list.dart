@@ -708,6 +708,8 @@ class _MessagesListState extends ConsumerState<MessagesList> {
 
   /// Polls are filtered out earlier, so they never merge.
   bool _groupsWith(Message prev, Message cur) =>
+      !prev.localOnlyRow &&
+      !cur.localOnlyRow &&
       !prev.isSystemRow &&
       !cur.isSystemRow &&
       !prev.isMeAction &&

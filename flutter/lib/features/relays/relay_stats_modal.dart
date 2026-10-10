@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/relays.dart';
@@ -17,9 +18,12 @@ import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_switch.dart';
 import '../i18n/i18n.dart';
+import '../settings/settings_widgets.dart';
 import '../../widgets/common/nym_focusable.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import 'blocked_relays.dart';
+import 'relay_block.dart';
 
 /// At or below this width: 3-column cards, no latency column, tighter padding.
 const double _kMobileMaxWidth = 480;
@@ -97,6 +101,66 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     }
   }
 
+  final TextEditingController _search = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+
+  String get _query => _search.text.trim();
+
+  void _clearSearch() {
+    _search.clear();
+    setState(() {});
+    _searchFocus.requestFocus();
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return KeyEventResult.ignored;
+    }
+    if (_search.text.isEmpty) return KeyEventResult.ignored;
+    _clearSearch();
+    return KeyEventResult.handled;
+  }
+
+  Future<void> _confirmBlock(String url) async {
+    final nostr = ref.read(nostrControllerProvider);
+    final why = nostr.relayBlockGuard(url);
+    if (why != 'ok' && why != 'signer') return;
+    final shown = RelayBlock.shown(url);
+    final parts = <String>[
+      if (why == 'signer')
+        tr('{relay} is the relay your remote signer uses. Your signer keeps '
+            'its own connection, so signing still works.', {'relay': shown}),
+      tr('Block {relay}? The app stops connecting to it for this account, '
+          'here and on your other devices.', {'relay': shown}),
+    ];
+    final bare = nostr.relayBlockLeavesGeoBare(url);
+    if (bare.isNotEmpty) {
+      parts.add(tr('Live messages in #{geohash} need one of its nearest '
+          'relays, and this is the last one you have not blocked.',
+          {'geohash': bare}));
+    }
+    parts.add(tr("History the app backend already stored can't be filtered "
+        "by relay, and blocking doesn't reduce app backend traffic."));
+    final ok = await showAppConfirm(
+      context,
+      parts.join('\n\n'),
+      title: tr('Block relay?'),
+      okLabel: tr('Block'),
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    final res = nostr.blockRelay(url, confirmed: why == 'signer');
+    setState(() {
+      if (res == 'blocked' && _expandedRow == url) _expandedRow = null;
+    });
+  }
+
+  void _unblock(String url) {
+    ref.read(nostrControllerProvider).unblockRelay(url);
+    setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
@@ -108,6 +172,8 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _search.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -127,6 +193,7 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
     final relayStatus = ref.read(nostrControllerProvider).relayConnectionStatus;
     final proxyMode = ref.watch(appStateProvider.select((s) => s.proxyMode));
     final nostr = ref.read(nostrControllerProvider);
+    final blocked = ref.watch(blockedRelaysProvider);
     final fallbackActive = nostr.isProxyFallbackActive;
     final userDirect = nostr.isUserDirectMode;
 
@@ -186,6 +253,31 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                         stats: stats,
                         expandedRow: _expandedRow,
                         onToggleRow: _toggleRow,
+                        query: _query,
+                        search: Semantics(
+                          label: tr('Search relays'),
+                          textField: true,
+                          child: FormInput(
+                            key: const ValueKey('relay-search'),
+                            controller: _search,
+                            focusNode: _searchFocus,
+                            hint: tr('Search relays'),
+                            prefix: Icon(Icons.search,
+                                size: 16, color: c.textDim),
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                        onClearSearch: _clearSearch,
+                        guardFor: nostr.relayBlockGuard,
+                        onBlock: _confirmBlock,
+                        blocked: blocked.toSet(),
+                      ),
+                      const SizedBox(height: 12),
+                      _BlockedSection(
+                        blocked: blocked,
+                        query: _query,
+                        geoNoteFor: nostr.relayBlockGeoNote,
+                        onUnblock: _unblock,
                       ),
                       if (BackgroundConnectivityService.isSupported) ...[
                         const SizedBox(height: 14),
@@ -210,9 +302,10 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
                       const SizedBox(height: 14),
                       _TogglePanel(
                         title: tr('Using too much data?'),
-                        hint: tr('Enable Low Data Mode to limit relay '
-                            'connections to a small core set and load geo '
-                            'relays only when entering channels.'),
+                        semanticLabel: tr('Low Data Mode'),
+                        hint: tr('Enable Low Data Mode to connect only to '
+                            'the 18 default relays and load geo relays only '
+                            'for the channels you open.'),
                         enabled: lowData,
                         onToggle: (v) => ref
                             .read(settingsProvider.notifier)
@@ -234,9 +327,14 @@ class _RelayStatsModalState extends ConsumerState<RelayStatsModal> {
         ),
       ],
     );
+    final keyed = FocusScope(
+      autofocus: true,
+      onKeyEvent: _onKey,
+      child: body,
+    );
     return nymSheetOr(
       context,
-      body,
+      keyed,
       (body) => Center(
         child: Material(
           color: Colors.transparent,
@@ -740,7 +838,20 @@ class _RelayListSection extends StatelessWidget {
     required this.stats,
     required this.expandedRow,
     required this.onToggleRow,
+    this.query = '',
+    this.search,
+    this.onClearSearch,
+    this.guardFor,
+    this.onBlock,
+    this.blocked = const {},
   });
+
+  final Set<String> blocked;
+  final String query;
+  final Widget? search;
+  final VoidCallback? onClearSearch;
+  final String Function(String url)? guardFor;
+  final ValueChanged<String>? onBlock;
 
   /// url -> open; empty before boot.
   final Map<String, bool> relayStatus;
@@ -761,6 +872,7 @@ class _RelayListSection extends StatelessWidget {
     final entries = <_RelayRowData>[];
     for (final e in relayStatus.entries) {
       if (RelayConfig.writeOnlyRelays.contains(e.key)) continue;
+      if (RelayBlock.isBlocked(blocked, e.key)) continue;
       entries.add(_RelayRowData(
         url: e.key,
         open: e.value,
@@ -774,11 +886,42 @@ class _RelayListSection extends StatelessWidget {
       return b.events - a.events;
     });
 
-    final hasApiData = stats?.hasApiData ?? false;
+    final searching = query.isNotEmpty;
+    final total = entries.length;
+    final shown = searching
+        ? [
+            for (final e in entries)
+              if (RelayBlock.searchMatch(e.url, query)) e
+          ]
+        : entries;
+
+    final hasApiData = !searching && (stats?.hasApiData ?? false);
 
     final rows = <Widget>[];
-    final contentEmpty = entries.isEmpty && !hasApiData;
-    if (contentEmpty) {
+    final contentEmpty = !searching && entries.isEmpty && !hasApiData;
+    if (searching && shown.isEmpty) {
+      rows.add(Padding(
+        key: const ValueKey('relay-search-empty'),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+        child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            Text(
+              tr("No relays match '{query}'", {'query': query}),
+              style: TextStyle(color: c.textDim, fontSize: 12),
+            ),
+            _SmallButton(
+              key: const ValueKey('relay-search-clear'),
+              label: tr('Clear'),
+              onTap: onClearSearch,
+            ),
+          ],
+        ),
+      ));
+    } else if (contentEmpty) {
       // Empty state inside the list box.
       rows.add(Padding(
         padding: const EdgeInsets.all(12),
@@ -796,14 +939,17 @@ class _RelayListSection extends StatelessWidget {
           onTap: () => onToggleRow(_kApiRowKey),
         ));
       }
-      if (entries.isNotEmpty) {
+      if (shown.isNotEmpty) {
         rows.add(_ListSubHeader(tr('Relay data')));
-        for (final e in entries) {
+        for (final e in shown) {
           rows.add(_RelayRow(
+            key: ValueKey('relay-row-${e.url}'),
             data: e,
             stats: stats,
             expanded: expandedRow == e.url,
             onTap: () => onToggleRow(e.url),
+            guard: guardFor?.call(e.url) ?? 'invalid',
+            onBlock: onBlock == null ? null : () => onBlock!(e.url),
           ));
         }
       }
@@ -813,6 +959,27 @@ class _RelayListSection extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _SectionTitle(tr('Data transferred')),
+        if (search != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(
+              children: [
+                Expanded(child: search!),
+                if (searching) ...[
+                  const SizedBox(width: 8),
+                  Text(
+                    tr('{n} of {m}', {'n': shown.length, 'm': total}),
+                    key: const ValueKey('relay-search-count'),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: c.textDim,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         Container(
           constraints: const BoxConstraints(maxHeight: 240),
           decoration: BoxDecoration(
@@ -1000,15 +1167,20 @@ class _StatsRow extends StatelessWidget {
 /// Relay row, expandable to its per-kind breakdown.
 class _RelayRow extends StatelessWidget {
   const _RelayRow({
+    super.key,
     required this.data,
     required this.stats,
     required this.expanded,
     required this.onTap,
+    this.guard = 'invalid',
+    this.onBlock,
   });
   final _RelayRowData data;
   final RelayStats? stats;
   final bool expanded;
   final VoidCallback onTap;
+  final String guard;
+  final VoidCallback? onBlock;
 
   @override
   Widget build(BuildContext context) {
@@ -1024,8 +1196,304 @@ class _RelayRow extends StatelessWidget {
       expanded: expanded,
       onTap: onTap,
       detail: expanded
-          ? _KindDetail(perKind: stats?.kindStatsPerRelay[data.url])
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _KindDetail(perKind: stats?.kindStatsPerRelay[data.url]),
+                _RelayActions(guard: guard, onBlock: onBlock),
+              ],
+            )
           : null,
+    );
+  }
+}
+
+class _RelayActions extends StatelessWidget {
+  const _RelayActions({required this.guard, this.onBlock});
+  final String guard;
+  final VoidCallback? onBlock;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final noteStyle = TextStyle(color: c.textDim, fontSize: 11, height: 1.35);
+    Widget? body;
+    if (guard == 'required') {
+      body = Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        runSpacing: 6,
+        children: [
+          Container(
+            key: const ValueKey('relay-required'),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              borderRadius: NymRadius.rsm,
+              border: Border.all(color: c.glassBorder),
+            ),
+            child: Text(
+              tr('Required'),
+              style: TextStyle(
+                color: c.text,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Text(
+            tr("The app relay carries Nymchat's own channels and can't be "
+                'blocked.'),
+            style: noteStyle,
+          ),
+        ],
+      );
+    } else if (guard == 'ok' || guard == 'signer' || guard == 'last-default') {
+      final last = guard == 'last-default';
+      body = Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        runSpacing: 6,
+        children: [
+          _SmallButton(
+            key: const ValueKey('relay-block'),
+            label: tr('Block'),
+            danger: true,
+            onTap: last ? null : onBlock,
+          ),
+          if (last)
+            Text(
+              tr('Keep at least one default relay unblocked: direct '
+                  'connections read from these.'),
+              style: noteStyle,
+            ),
+        ],
+      );
+    }
+    if (body == null) return const SizedBox.shrink();
+    return Padding(padding: const EdgeInsets.only(top: 8), child: body);
+  }
+}
+
+class _SmallButton extends StatefulWidget {
+  const _SmallButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+    this.semanticsLabel,
+  });
+
+  final String label;
+  final VoidCallback? onTap;
+  final bool danger;
+  final String? semanticsLabel;
+
+  @override
+  State<_SmallButton> createState() => _SmallButtonState();
+}
+
+class _SmallButtonState extends State<_SmallButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final enabled = widget.onTap != null;
+    final hovered = _hover && enabled;
+    final accent = widget.danger ? c.danger : c.primary;
+    final fg = widget.danger ? c.danger : (hovered ? c.primary : c.text);
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: widget.semanticsLabel ?? widget.label,
+      excludeSemantics: true,
+      child: NymFocusable(
+        onActivate: widget.onTap,
+        radius: NymRadius.rsm,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          cursor:
+              enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+          child: GestureDetector(
+            onTap: widget.onTap,
+            behavior: HitTestBehavior.opaque,
+            child: Opacity(
+              opacity: enabled ? 1 : 0.5,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 28),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+                decoration: BoxDecoration(
+                  borderRadius: NymRadius.rsm,
+                  color: widget.danger
+                      ? c.danger.withValues(alpha: hovered ? 0.18 : 0.08)
+                      : (c.isLight ? Colors.black : Colors.white)
+                          .withValues(alpha: hovered ? 0.08 : 0.05),
+                  border: Border.all(
+                    color: widget.danger
+                        ? c.danger.withValues(alpha: 0.4)
+                        : (hovered ? accent : c.glassBorder),
+                  ),
+                ),
+                child: Align(
+                  widthFactor: 1,
+                  heightFactor: 1,
+                  child: Text(
+                    widget.label,
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BlockedSection extends StatelessWidget {
+  const _BlockedSection({
+    required this.blocked,
+    required this.query,
+    required this.geoNoteFor,
+    required this.onUnblock,
+  });
+
+  final List<String> blocked;
+  final String query;
+  final String Function(String url) geoNoteFor;
+  final ValueChanged<String> onUnblock;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.nym;
+    final list = query.isEmpty
+        ? blocked
+        : [
+            for (final u in blocked)
+              if (RelayBlock.searchMatch(u, query)) u
+          ];
+    final rows = <Widget>[];
+    if (blocked.isEmpty || list.isEmpty) {
+      rows.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+        child: Text(
+          blocked.isEmpty
+              ? tr('No blocked relays. Open a relay above to block it.')
+              : tr("No blocked relays match '{query}'", {'query': query}),
+          style: TextStyle(color: c.textDim, fontSize: 12),
+        ),
+      ));
+    }
+    for (var i = 0; i < list.length; i++) {
+      final url = list[i];
+      final note = geoNoteFor(url);
+      final shown = RelayBlock.shown(url);
+      rows.add(Container(
+        key: ValueKey('blocked-relay-$url'),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
+        decoration: BoxDecoration(
+          border: i == list.length - 1
+              ? null
+              : Border(
+                  bottom: BorderSide(
+                    color: c.isLight
+                        ? const Color(0x0F000000)
+                        : Colors.white.withValues(alpha: 0.04),
+                  ),
+                ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: NymTooltip(
+                    message: url,
+                    child: Text(
+                      shown,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: c.textDim,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                _SmallButton(
+                  key: ValueKey('relay-unblock-$url'),
+                  label: tr('Unblock'),
+                  semanticsLabel: tr('Unblock {relay}', {'relay': shown}),
+                  onTap: () => onUnblock(url),
+                ),
+              ],
+            ),
+            if (note.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  tr('Live messages in #{geohash} need one of its nearest '
+                      'relays. Unblock one of them to receive them.',
+                      {'geohash': note}),
+                  style:
+                      TextStyle(color: c.textDim, fontSize: 11, height: 1.35),
+                ),
+              ),
+          ],
+        ),
+      ));
+    }
+    return Column(
+      key: const ValueKey('relay-blocked-section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SectionTitle(tr('Blocked ({n})', {'n': blocked.length})),
+        Container(
+          decoration: BoxDecoration(
+            color: c.isLight
+                ? const Color(0x05000000)
+                : Colors.white.withValues(alpha: 0.02),
+            borderRadius: NymRadius.rsm,
+            border: Border.all(color: c.glassBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: rows,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          tr("Blocking stops live traffic with a relay for this account on "
+              "every device. History the app backend already stored can't be "
+              "filtered by relay, because the backend doesn't record which "
+              "relay a message came from, and blocking doesn't reduce app "
+              'backend traffic.'),
+          style: TextStyle(color: c.textDim, fontSize: 11, height: 1.35),
+        ),
+        if (RelayConfig.writeOnlyRelays.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            tr("Messages you send are also published to {relay}, a "
+                "publish-only relay. It isn't listed here and can't be "
+                'blocked.', {
+              'relay':
+                  RelayConfig.writeOnlyRelays.map(RelayBlock.shown).join(', '),
+            }),
+            key: const ValueKey('relay-blocked-publish-only'),
+            style: TextStyle(color: c.textDim, fontSize: 11, height: 1.35),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1101,6 +1569,7 @@ class _ApiActionDetail extends StatelessWidget {
     'channel-active': 'Active channels',
     'channel-delete': 'Channel cleanup',
     'pm-get': 'Private messages',
+    'pm-get:inbox': 'Group messages',
     'pm-put': 'Message backup',
     'pm-deposit': 'Message delivery',
     'pm-delete': 'Message cleanup',
@@ -1109,6 +1578,9 @@ class _ApiActionDetail extends StatelessWidget {
     'emoji-get': 'Emoji',
     'settings-get': 'Settings',
     'settings-set': 'Settings sync',
+    'settings-delete': 'Settings cleanup',
+    'shop-status': 'Shop status',
+    'filter-get': 'Filters',
     'auth': 'Sign-in',
     'other': 'Other',
   };
@@ -1116,8 +1588,8 @@ class _ApiActionDetail extends StatelessWidget {
   /// Title-case fallback so no raw hyphenated action shows.
   static String _labelFor(String action) {
     final known = _labels[action];
-    if (known != null) return known;
-    final words = action.split(RegExp(r'[-_]+')).where((w) => w.isNotEmpty);
+    if (known != null) return tr(known);
+    final words = action.split(RegExp(r'[-_:]+')).where((w) => w.isNotEmpty);
     return words.map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
   }
 
@@ -1187,16 +1659,18 @@ class _TogglePanel extends StatelessWidget {
     required this.hint,
     required this.enabled,
     required this.onToggle,
+    this.semanticLabel,
   });
   final String title;
   final String hint;
   final bool enabled;
   final ValueChanged<bool> onToggle;
+  final String? semanticLabel;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return Container(
+    final panel = Container(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
       decoration: BoxDecoration(
         color: c.isLight
@@ -1235,6 +1709,15 @@ class _TogglePanel extends StatelessWidget {
           const SizedBox(width: 12),
           NymSwitch(value: enabled, onChanged: onToggle),
         ],
+      ),
+    );
+    return MergeSemantics(
+      child: Semantics(
+        toggled: enabled,
+        label: semanticLabel ?? title,
+        hint: hint,
+        onTap: () => onToggle(!enabled),
+        child: ExcludeSemantics(child: panel),
       ),
     );
   }

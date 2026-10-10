@@ -32,15 +32,53 @@
         return s;
     }
 
+    function senderSuffix(pubkey) {
+        const s = typeof pubkey === 'string' ? pubkey : '';
+        const tail = s.length >= 4 ? s.slice(-4) : '';
+        return /^[0-9a-f]{4}$/i.test(tail) ? '#' + tail : '';
+    }
+
+    function previewSender(x, t) {
+        if (x.self) return { name: fill(t, 'You'), sfx: '' };
+        if (x.kind === 'pm') return null;
+        const name = String(x.author || '');
+        return name ? { name, sfx: senderSuffix(x.pubkey) } : null;
+    }
+
     function rowPreview(o, t) {
         const x = o || {};
         if (x.hide) return '';
         if (x.locked) return String(x.redacted || '');
         const body = stripMarkdown(x.text || '');
         if (!body) return '';
-        const who = x.self ? fill(t, 'You') : String(x.author || '');
-        if (x.kind === 'pm' && !x.self) return body;
-        return who ? who + ': ' + body : body;
+        const who = previewSender(x, t);
+        return who && who.name ? who.name + who.sfx + ': ' + body : body;
+    }
+
+    const MENTION_SUFFIX = /@[^@#\n]*?(?<!\s)#[0-9a-f]{4}\b/gi;
+
+    function mentionSuffixRanges(text, from) {
+        const at = Number(from) || 0;
+        const out = [];
+        if (typeof text !== 'string' || !text) return out;
+        for (const m of text.matchAll(MENTION_SUFFIX)) {
+            const end = at + m.index + m[0].length;
+            out.push([end - 5, end]);
+        }
+        return out;
+    }
+
+    function rowPreviewParts(o, t) {
+        const x = o || {};
+        const text = rowPreview(x, t);
+        if (!text || x.hide || x.locked) return { text, dim: [], sender: null, bodyAt: 0 };
+        const body = stripMarkdown(x.text || '');
+        const from = text.length - body.length;
+        const who = previewSender(x, t);
+        const sender = who && who.name && who.sfx ? [who.name.length, who.name.length + who.sfx.length] : null;
+        const whole = from >= 0 && text.slice(from) === body;
+        const mentions = whole ? mentionSuffixRanges(body, from) : [];
+        return { text, dim: sender ? [sender.slice()].concat(mentions) : mentions, sender, bodyAt: whole ? from : 0 };
     }
 
     function relativeTime(nowMs, tsMs, t) {
@@ -64,6 +102,7 @@
     const DOCK_WIDTH = 320;
     const READ_CH = 85;
     const CH_EM = 0.55;
+    const PREVIEW_BODY_MIN_EM = 2;
 
     function readWidthPx(fontSize) {
         return Math.round(READ_CH * CH_EM * (Number(fontSize) || 15));
@@ -153,8 +192,52 @@
         return Math.round(Math.min(COLUMN_MAX, Math.max(COLUMN_MIN, n)));
     }
 
+    const HEADER_MIN_TITLE = 96;
+    const HEADER_ESSENTIAL = Object.freeze(['bell', 'more', 'rejoin']);
+    const HEADER_PRIORITY = Object.freeze({
+        channel: Object.freeze(['share', 'favorite']),
+        pm: Object.freeze(['video', 'audio']),
+        group: Object.freeze(['video', 'audio']),
+        mesh: Object.freeze(['addDevice', 'ghost'])
+    });
+    const HEADER_KINDS = Object.freeze({
+        channel: 'channel', geohash: 'channel', thread: 'channel',
+        pm: 'pm', bot: 'pm', group: 'group', groupcall: 'group', mesh: 'mesh'
+    });
+
+    function headerActionMetrics(phone, targets) {
+        const box = phone && !targets ? 34 : 40;
+        const gap = targets ? 4 : 2;
+        return { box, gap, pitch: box + gap };
+    }
+
+    function headerOverflow(o) {
+        const x = o || {};
+        const order = HEADER_PRIORITY[x.kind] || [];
+        const present = Array.isArray(x.actions) ? x.actions : [];
+        const step = Number(x.step) || 0;
+        const min = x.min == null ? HEADER_MIN_TITLE : Number(x.min);
+        const base = Number(x.base) || 0;
+        const more = !!x.more;
+        let room = base;
+        let shown = more;
+        const moved = [];
+        if (room < min) {
+            for (const id of order) {
+                if (present.indexOf(id) < 0 || HEADER_ESSENTIAL.indexOf(id) >= 0) continue;
+                moved.push(id);
+                if (shown) room += step;
+                else shown = true;
+                if (room >= min) break;
+            }
+        }
+        if (room <= base) return { moved: [], room: base, more };
+        return { moved, room, more: shown };
+    }
+
     G.NymLayoutModel = {
-        MAX, DOCK_MIN, SETTINGS_TWO_PANE_MIN, DOCK_WIDTH, READ_CH, CH_EM,
-        stripMarkdown, rowPreview, relativeTime, infoPanelMode, settingsMode, chatHeaderHeight, CHAT_HEADER_H_COMPACT, CHAT_HEADER_H_WIDE, readWidthPx, notifGroupKey, groupNotifications, formatToolbarVisible, ROLE_SECTIONS, memberSections, presenceClass, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT, clampSidebarWidth, COLUMN_MIN, COLUMN_MAX, COLUMN_DEFAULT, ADD_RAIL, clampColumnWidth
+        MAX, DOCK_MIN, SETTINGS_TWO_PANE_MIN, DOCK_WIDTH, READ_CH, CH_EM, PREVIEW_BODY_MIN_EM,
+        stripMarkdown, rowPreview, rowPreviewParts, mentionSuffixRanges, relativeTime, infoPanelMode, settingsMode, chatHeaderHeight, CHAT_HEADER_H_COMPACT, CHAT_HEADER_H_WIDE, readWidthPx, notifGroupKey, groupNotifications, formatToolbarVisible, ROLE_SECTIONS, memberSections, presenceClass, SIDEBAR_MIN, SIDEBAR_MAX, SIDEBAR_DEFAULT, clampSidebarWidth, COLUMN_MIN, COLUMN_MAX, COLUMN_DEFAULT, ADD_RAIL, clampColumnWidth,
+        HEADER_MIN_TITLE, HEADER_ESSENTIAL, HEADER_PRIORITY, HEADER_KINDS, headerActionMetrics, headerOverflow
     };
 })();

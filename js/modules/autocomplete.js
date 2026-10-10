@@ -274,6 +274,7 @@ Object.assign(NYM.prototype, {
             const searchableNym = `${baseNym}#${suffix}`;
 
             if (!this.blockedUsers.has(pubkey) &&
+                !(pubkey !== this.pubkey && typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey, user.nym)) &&
                 searchableNym.toLowerCase().includes(search.toLowerCase())) {
 
                 // 'hidden' groups with offline so opted-out users aren't surfaced as active.
@@ -539,8 +540,11 @@ Object.assign(NYM.prototype, {
 
         const validChannelPattern = /^[\p{L}\p{N}]+$/u;
         const searchLower = search.toLowerCase();
+        const CF = window.NymContentFilter;
+        const cfCtx = CF && typeof this._cfCtx === 'function' ? this._cfCtx() : null;
         let matches = Array.from(channelMap.values())
-            .filter(ch => validChannelPattern.test(ch.name) && ch.name.toLowerCase().includes(searchLower));
+            .filter(ch => validChannelPattern.test(ch.name) && ch.name.toLowerCase().includes(searchLower) &&
+                !(cfCtx && CF.channelBlocked(cfCtx, ch.name)));
 
         matches.sort((a, b) => {
             if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;

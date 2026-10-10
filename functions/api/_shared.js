@@ -3145,27 +3145,286 @@ function ipv6NetKey(ip) {
 }
 
 var RATE_CACHE_HOST = "https://nymchat-rate.invalid";
+var CACHE_RATE_SLOTS = 60;
+var CACHE_RATE_WRITERS_MAX = 16;
+var CACHE_RATE_KEYS_MAX = 4096;
+var CACHE_RATE_ENTRIES_MAX = 32768;
+var RATE_LOCK_WAIT_MS = 2000;
+var RATE_LOG_FIRST = 20;
+var rateWriterId = "";
+var rateKnown = new Map();
+var rateKnownEntries = 0;
+var rateLocks = new Map();
+var rateErrors = 0;
+var rateMisses = 0;
+var rateOpen = 0;
+
+function rateWriter() {
+  if (!rateWriterId) rateWriterId = bytesToHex(randomBytes(6));
+  return rateWriterId;
+}
+
+function rateSlotMs(span) {
+  return Math.max(1, Math.floor(span / CACHE_RATE_SLOTS));
+}
+
+function rateNote(count, what, detail) {
+  if (count <= RATE_LOG_FIRST || count % 1000 === 0) console.warn("rate limit " + what + " (" + count + "): " + detail);
+}
+
+function rateEmpty() {
+  return { s: [], v: Object.create(null), f: 0 };
+}
+
+function rateParse(text) {
+  var out = rateEmpty();
+  var obj = null;
+  try { obj = JSON.parse(text); } catch (e) { return out; }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return out;
+  if (Array.isArray(obj.s)) {
+    for (var i = 0; i < obj.s.length && out.s.length <= CACHE_RATE_SLOTS; i++) {
+      var e = obj.s[i];
+      if (Array.isArray(e) && Number.isFinite(e[0]) && Number.isFinite(e[1]) && e[1] > 0) out.s.push([e[0], e[1]]);
+    }
+    out.s.sort(function (x, y) { return x[0] - y[0]; });
+  }
+  if (obj.v && typeof obj.v === "object" && !Array.isArray(obj.v)) {
+    var n = 0;
+    for (var w of Object.keys(obj.v)) {
+      if (n >= CACHE_RATE_WRITERS_MAX * 4) break;
+      var x = obj.v[w];
+      if (!/^[0-9a-f]{1,32}$/.test(w) || !Array.isArray(x) || !Number.isFinite(x[0]) || x[0] < 0 || !Number.isFinite(x[1])) continue;
+      out.v[w] = [x[0], x[1]];
+      n++;
+    }
+  }
+  if (Number.isFinite(obj.f)) out.f = obj.f;
+  return out;
+}
+
+function rateClone(rec) {
+  var out = rateEmpty();
+  out.s = rec.s.map(function (e) { return [e[0], e[1]]; });
+  for (var w in rec.v) out.v[w] = [rec.v[w][0], rec.v[w][1]];
+  out.f = rec.f;
+  return out;
+}
+
+function rateTrim(rec, now, span) {
+  rec.s = rec.s.filter(function (e) { return e[0] + span > now; });
+  for (var w in rec.v) if (rec.v[w][1] + span <= now) delete rec.v[w];
+  if (rec.f + span <= now) rec.f = 0;
+}
+
+function rateTotal(rec) {
+  var n = 0;
+  for (var i = 0; i < rec.s.length; i++) n += rec.s[i][1];
+  return n;
+}
+
+function rateSlotAdd(list, ts, units, span) {
+  var slot = rateSlotMs(span);
+  var idx = Math.floor(ts / slot);
+  for (var i = list.length - 1; i >= 0; i--) {
+    if (Math.floor(list[i][0] / slot) === idx) {
+      list[i] = [Math.max(list[i][0], ts), list[i][1] + units];
+      return;
+    }
+  }
+  list.push([ts, units]);
+  list.sort(function (x, y) { return x[0] - y[0]; });
+  if (list.length > CACHE_RATE_SLOTS + 1) list.splice(0, list.length - CACHE_RATE_SLOTS - 1);
+}
+
+function rateMine(known, rec) {
+  var mine = known ? known.mine : { total: 0, last: 0, log: [] };
+  var have = rec.v[rateWriter()];
+  if (have && have[0] > mine.total) {
+    mine.total = have[0];
+    mine.last = Math.max(mine.last, have[1]);
+  }
+  return mine;
+}
+
+function rateRepair(rec, mine, now, span) {
+  var me = rateWriter();
+  var have = rec.v[me];
+  var included = have ? have[0] : (mine.last <= rec.f ? mine.total : 0);
+  var missing = mine.total - included;
+  var added = 0;
+  for (var i = mine.log.length - 1; i >= 0 && missing > 0; i--) {
+    var e = mine.log[i];
+    if (e[0] + span <= now) break;
+    var n = Math.min(missing, e[1]);
+    rateSlotAdd(rec.s, e[0], n, span);
+    missing -= n;
+    added += n;
+  }
+  if (mine.last + span > now && mine.total > 0) rec.v[me] = [mine.total, mine.last];
+  return added;
+}
+
+function rateCapWriters(rec) {
+  var me = rateWriter();
+  var others = Object.keys(rec.v).filter(function (w) { return w !== me; });
+  var room = CACHE_RATE_WRITERS_MAX - (rec.v[me] ? 1 : 0);
+  if (others.length <= room) return;
+  others.sort(function (a, b) { return (rec.v[b][1] - rec.v[a][1]) || (a < b ? -1 : 1); });
+  others.slice(room).forEach(function (w) {
+    rec.f = Math.max(rec.f, rec.v[w][1]);
+    delete rec.v[w];
+  });
+}
+
+function rateWaitMs(rec, units, limit, now, span) {
+  var total = rateTotal(rec);
+  if (total + units <= limit) return 0;
+  if (units > limit) return span;
+  var freed = 0;
+  for (var i = 0; i < rec.s.length; i++) {
+    freed += rec.s[i][1];
+    if (total - freed + units <= limit) return Math.min(span, Math.max(1, rec.s[i][0] + span - now));
+  }
+  return span;
+}
+
+function rateForget(key) {
+  var old = rateKnown.get(key);
+  if (!old) return;
+  rateKnownEntries -= old.size;
+  rateKnown.delete(key);
+}
+
+function rateRemember(key, rec, mine, now, span) {
+  rateForget(key);
+  mine.log = mine.log.filter(function (e) { return e[0] + span > now; });
+  var until = 0;
+  rec.s.forEach(function (e) { until = Math.max(until, e[0] + span); });
+  mine.log.forEach(function (e) { until = Math.max(until, e[0] + span); });
+  var size = rec.s.length + mine.log.length + Object.keys(rec.v).length;
+  if (until > now) {
+    rateKnown.set(key, { rec: rec, mine: mine, until: until, size: size });
+    rateKnownEntries += size;
+  }
+  for (var entry of rateKnown) {
+    if (entry[1].until > now && rateKnown.size <= CACHE_RATE_KEYS_MAX && rateKnownEntries <= CACHE_RATE_ENTRIES_MAX) break;
+    rateForget(entry[0]);
+  }
+}
+
+function rateLocked(keys, fn) {
+  var uniq = Array.from(new Set(keys));
+  var before = [];
+  uniq.forEach(function (k) { if (rateLocks.has(k)) before.push(rateLocks.get(k)); });
+  var release;
+  var gate = new Promise(function (r) { release = r; });
+  uniq.forEach(function (k) { rateLocks.set(k, gate); });
+  var timer = null;
+  var ready = before.length
+    ? Promise.race([Promise.all(before), new Promise(function (r) { timer = setTimeout(r, RATE_LOCK_WAIT_MS); })])
+    : Promise.resolve();
+  return ready.then(function () {
+    if (timer) clearTimeout(timer);
+    return fn();
+  }).finally(function () {
+    uniq.forEach(function (k) { if (rateLocks.get(k) === gate) rateLocks.delete(k); });
+    release();
+  });
+}
+
+function rateRequest(url) {
+  return new Request(url, { method: "GET" });
+}
+
+async function rateRead(url) {
+  try {
+    var hit = await caches.default.match(rateRequest(url));
+    return hit ? rateParse(await hit.text()) : null;
+  } catch (e) {
+    rateErrors++;
+    rateNote(rateErrors, "cache read failed", (e && e.message) || e);
+    return null;
+  }
+}
+
+async function rateWrite(url, rec, span) {
+  try {
+    await caches.default.put(rateRequest(url), new Response(JSON.stringify({ s: rec.s, v: rec.v, f: rec.f }), {
+      headers: { "Content-Type": "application/json", "Cache-Control": "max-age=" + Math.ceil(span / 1000) }
+    }));
+  } catch (e) {
+    rateErrors++;
+    rateNote(rateErrors, "cache write failed", (e && e.message) || e);
+  }
+}
+
+async function cacheRateTakeAll(checks) {
+  var list = [];
+  (Array.isArray(checks) ? checks : []).forEach(function (c) {
+    if (!c || !c.who) return;
+    list.push({
+      bucket: String(c.bucket),
+      url: RATE_CACHE_HOST + "/roll/" + encodeURIComponent(c.bucket) + "?k=" + encodeURIComponent(c.who),
+      units: Number(c.units) > 0 ? Number(c.units) : 0,
+      limit: Number(c.limit) || 0,
+      span: c.windowMs > 0 ? c.windowMs : 60000
+    });
+  });
+  if (!list.length || typeof caches === "undefined" || !caches.default) return { ok: true, retryAfterMs: 0 };
+  return rateLocked(list.map(function (c) { return c.url; }), async function () {
+    try {
+      var cached = await Promise.all(list.map(function (c) { return rateRead(c.url); }));
+      var now = Date.now();
+      var wait = 0;
+      list.forEach(function (c, i) {
+        var known = rateKnown.get(c.url);
+        if (known && known.until <= now) known = null;
+        if (!cached[i] && known) {
+          rateMisses++;
+          rateNote(rateMisses, "cache miss, count kept from memory", c.bucket);
+        }
+        c.rec = cached[i] || (known ? rateClone(known.rec) : rateEmpty());
+        rateTrim(c.rec, now, c.span);
+        c.mine = rateMine(known, c.rec);
+        c.dirty = rateRepair(c.rec, c.mine, now, c.span) > 0 || (!cached[i] && c.rec.s.length > 0);
+        wait = Math.max(wait, rateWaitMs(c.rec, c.units, c.limit, now, c.span));
+      });
+      if (wait <= 0) {
+        list.forEach(function (c) {
+          if (c.units <= 0) return;
+          rateSlotAdd(c.rec.s, now, c.units, c.span);
+          rateSlotAdd(c.mine.log, now, c.units, c.span);
+          c.mine.total += c.units;
+          c.mine.last = Math.max(c.mine.last, now);
+          c.rec.v[rateWriter()] = [c.mine.total, c.mine.last];
+          c.dirty = true;
+        });
+      }
+      list.forEach(function (c) {
+        rateCapWriters(c.rec);
+        rateRemember(c.url, c.rec, c.mine, now, c.span);
+      });
+      await Promise.all(list.filter(function (c) { return c.dirty; }).map(function (c) { return rateWrite(c.url, c.rec, c.span); }));
+      return wait > 0 ? { ok: false, retryAfterMs: wait } : { ok: true, retryAfterMs: 0 };
+    } catch (e) {
+      rateOpen++;
+      rateNote(rateOpen, "failed open", (e && e.message) || e);
+      return { ok: true, retryAfterMs: 0 };
+    }
+  });
+}
 
 async function cacheRateTake(bucket, who, units, limit, windowMs) {
-  try {
-    if (typeof caches === "undefined" || !caches.default || !who) return true;
-    var span = windowMs > 0 ? windowMs : 60000;
-    var windowId = Math.floor(Date.now() / span);
-    var key = new Request(RATE_CACHE_HOST + "/" + bucket + "?k=" + encodeURIComponent(who) + "&w=" + windowId, { method: "GET" });
-    var count = 0;
-    var hit = await caches.default.match(key);
-    if (hit) {
-      var n = parseInt(await hit.text(), 10);
-      if (Number.isFinite(n)) count = n;
-    }
-    if (count + units > limit) return false;
-    await caches.default.put(key, new Response(String(count + units), {
-      headers: { "Content-Type": "text/plain", "Cache-Control": "max-age=" + Math.ceil(span / 1000) }
-    }));
-    return true;
-  } catch (e) {
-    return true;
-  }
+  return (await cacheRateTakeAll([{ bucket: bucket, who: who, units: units, limit: limit, windowMs: windowMs }])).ok;
+}
+
+function cacheRateStats() {
+  return { keys: rateKnown.size, entries: rateKnownEntries, locks: rateLocks.size, writer: rateWriterId, errors: rateErrors, misses: rateMisses, failedOpen: rateOpen };
+}
+
+function cacheRateReset() {
+  rateKnown.clear();
+  rateKnownEntries = 0;
 }
 
 const CLIENT_CORS_HEADERS = {
@@ -3198,6 +3457,12 @@ export {
   ipv6Blocked,
   ipv6NetKey,
   cacheRateTake,
+  cacheRateTakeAll,
+  cacheRateStats,
+  cacheRateReset,
+  CACHE_RATE_KEYS_MAX,
+  CACHE_RATE_ENTRIES_MAX,
+  CACHE_RATE_WRITERS_MAX,
   validateZapReceipt,
   parseNwcUri,
   nwcInvoicePaid,

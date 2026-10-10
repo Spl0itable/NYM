@@ -33,6 +33,7 @@ import 'call_state.dart';
 import '../chat_lock/chat_lock_providers.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../settings/settings_widgets.dart' show SettingsToggleRow;
 
 void showCallEmojiPicker(
   BuildContext context, {
@@ -1053,7 +1054,7 @@ class _ChatRow extends ConsumerWidget {
               ),
             const SizedBox(height: 2),
             Text.rich(
-              callChatTextSpans(msg.text, base, c.primary),
+              callChatTextSpans(context, msg.text, base, c.primary),
               textAlign: TextAlign.left,
             ),
             if (msg.reactions.isNotEmpty) ...[
@@ -1732,31 +1733,12 @@ class _PresenterMenu extends ConsumerWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              InkWell(
-                onTap: onToggleRestrict,
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: Checkbox(
-                          value: call.shareRestricted,
-                          onChanged: (_) => onToggleRestrict(),
-                          materialTapTargetSize:
-                              MaterialTapTargetSize.shrinkWrap,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(tr('Only the presenter can share'),
-                            style:
-                                TextStyle(color: c.textBright, fontSize: 14)),
-                      ),
-                    ],
-                  ),
-                ),
+              SettingsToggleRow(
+                key: const ValueKey('panel-shareRestricted'),
+                label: tr('Only the presenter can share'),
+                value: call.shareRestricted,
+                spacing: 8,
+                onChanged: (_) => onToggleRestrict(),
               ),
               if (requests.isNotEmpty) ...[
                 _Head(text: tr('Requests')),

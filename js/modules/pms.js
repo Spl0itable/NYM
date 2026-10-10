@@ -1150,7 +1150,11 @@ Object.assign(NYM.prototype, {
                 return;
             }
 
-            if (!isOwn && this.blockedUsers && this.blockedUsers.has(senderPubkey)) return;
+            if (!isOwn && this.blockedUsers && this.blockedUsers.has(senderPubkey)
+                && !(typeof this._keepsBlockedGroupRumor === 'function' && this._keepsBlockedGroupRumor(rumor))) {
+                if (typeof this._recordBlockedMemberKey === 'function') this._recordBlockedMemberKey(rumor, senderPubkey, senderVerified);
+                return;
+            }
 
             if (senderVerified === true && rumor.kind === 14
                 && !(rumor.tags || []).some(t => Array.isArray(t) && t[0] === 'g')) {
@@ -1164,14 +1168,15 @@ Object.assign(NYM.prototype, {
             if (!fromD1) this._archivePMEvent(event);
 
             if (!isOwn && !this.users.has(senderPubkey)) {
-                await this.fetchProfileDirect(senderPubkey);
+                const profileFetch = Promise.resolve(this.fetchProfileDirect(senderPubkey)).catch(() => { });
+                if (!fromD1) await profileFetch;
             }
 
             // Route group messages before 1:1 PM logic.
             const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && typeof t[1] === 'string');
             if (groupTag) {
                 if (!senderVerified) return;
-                await this.handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap, gap);
+                await this.handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap, gap, fromD1);
                 return;
             }
 
@@ -1266,18 +1271,12 @@ Object.assign(NYM.prototype, {
             }
 
             // Stale relay backlog must not resurrect a conversation the user just deleted.
+            let reopenClosed = false;
             if (this.closedPMs.has(peerPubkey)) {
                 const closedAt = this.closedPMTimes?.get(peerPubkey) || 0;
                 const msgTs = Math.floor(rumor.created_at || 0);
-                if (msgTs > closedAt) {
-                    this.closedPMs.delete(peerPubkey);
-                    if (this.closedPMTimes) this.closedPMTimes.delete(peerPubkey);
-                    try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
-                    try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes || new Map()))); } catch { }
-                    this._debouncedNostrSettingsSave();
-                } else {
-                    return;
-                }
+                if (msgTs > closedAt) reopenClosed = true;
+                else return;
             }
 
             const conversationKey = this.getPMConversationKey(peerPubkey);
@@ -1449,6 +1448,15 @@ Object.assign(NYM.prototype, {
             }
             this._recordMsgVerification(nymMsgId, senderVerified);
 
+            const pmHidden = !isOwn && typeof this.isContentHidden === 'function' && this.isContentHidden(msg);
+            if (reopenClosed && !pmHidden) {
+                this.closedPMs.delete(peerPubkey);
+                if (this.closedPMTimes) this.closedPMTimes.delete(peerPubkey);
+                try { localStorage.setItem('nym_closed_pms', JSON.stringify([...this.closedPMs])); } catch { }
+                try { localStorage.setItem('nym_closed_pm_times', JSON.stringify(Object.fromEntries(this.closedPMTimes || new Map()))); } catch { }
+                this._debouncedNostrSettingsSave();
+            }
+
             if (this._botThreadForeign(msg, list)) {
                 this._holdBotThreadOrphan(msg);
                 return;
@@ -1473,6 +1481,8 @@ Object.assign(NYM.prototype, {
             if (!isOwn && nymMsgId && this.nymUsers.has(senderPubkey)) {
                 this.sendNymReceipt(nymMsgId, 'delivered', senderPubkey);
             }
+
+            if (pmHidden) return;
 
             const peerName = this.getNymFromPubkey(peerPubkey);
             this.addPMConversation(peerName, peerPubkey, tsSec * 1000);
@@ -1916,27 +1926,262 @@ Object.assign(NYM.prototype, {
         return this._yieldToIdle();
     },
 
-    async pmRestoreFromD1() {
-        if (!this._pmArchiveAllowed()) return;
+    pmRestoreFromD1(opts) {
+        if (!this._pmArchiveAllowed()) return Promise.resolve();
+        const D = (typeof window !== 'undefined' && window.NymD1Cursor) || null;
+        if (!D) return this._pmRestoreCold(this.pubkey);
+        const pk = this.pubkey;
+        if (this._pmPass && this._pmPass.pk === pk) return this._pmPass.promise;
+        if (!(opts && opts.force) && this._pmPassDone && this._pmPassDone.pk === pk
+            && D.coalesce(this._pmPassDone.at, Date.now())) return Promise.resolve();
+        const promise = this._pmRestorePass(pk).finally(() => {
+            if (this._pmPass && this._pmPass.promise === promise) this._pmPass = null;
+            this._pmPassDone = { pk, at: Date.now() };
+        });
+        this._pmPass = { pk, promise };
+        return promise;
+    },
+
+    _pmCursorState(pk) {
+        let st = this._pmCurState;
+        if (!st || st.pk !== pk) {
+            st = { pk, c: null, loaded: false, holds: [], heldSince: 0 };
+            this._pmCurState = st;
+        }
+        return st;
+    },
+
+    _pmD1CursorValue() {
+        const st = this._pmCurState;
+        return st && st.pk === this.pubkey ? st.c : null;
+    },
+
+    async _pmCursorLoad(pk) {
+        const st = this._pmCursorState(pk);
+        if (st.loaded) return st;
+        if (typeof this.hydrateGate === 'function') {
+            await Promise.race([this.hydrateGate(), new Promise((r) => setTimeout(r, 20000))]);
+        }
+        if (st.loaded || this.pubkey !== pk) return st;
+        st.loaded = true;
+        const D = window.NymD1Cursor;
+        const rec = typeof this._pmCursorMetaFor === 'function' ? this._pmCursorMetaFor('pmD1Cursor', pk) : null;
+        if (!rec) return st;
+        if (Number.isFinite(rec.heldSince) && rec.heldSince > 0) st.heldSince = rec.heldSince;
+        if (!D.valid(rec.c)) return st;
+        st.c = rec.c;
+        this._pmPagerFromCache(rec);
+        return st;
+    },
+
+    _pmPagerFromCache(rec) {
+        const cap = this.pmStorageLimit || 1000;
+        let cappedOldest = 0;
+        let anyCapped = false;
+        for (const msgs of this.pmMessages.values()) {
+            if (!Array.isArray(msgs) || msgs.length < cap) continue;
+            anyCapped = true;
+            let oldest = 0;
+            for (const m of msgs) {
+                const t = m && m.created_at;
+                if (Number.isFinite(t) && t > 0 && (!oldest || t < oldest)) oldest = t;
+            }
+            if (oldest > cappedOldest) cappedOldest = oldest;
+        }
+        const saved = Number.isFinite(rec.oldestTs) && rec.oldestTs > 0 ? rec.oldestTs : 0;
+        const capStart = anyCapped && cappedOldest ? cappedOldest + 172800 : 0;
+        const start = Math.max(saved, capStart);
+        this._pmD1OldestTs = start || null;
+        this._pmD1NoMore = !!rec.noMore && !anyCapped;
+        if (!this._pmD1OldestTs && !this._pmD1NoMore) this._pmD1NoMore = true;
+    },
+
+    async _pmRestorePass(pk) {
+        const D = window.NymD1Cursor;
+        const st = await this._pmCursorLoad(pk);
+        if (this.pubkey !== pk) return;
+        if (!D.valid(st.c)) return this._pmRestoreCold(pk);
+        let after = D.startAfter(st.c);
+        let best = st.c;
+        for (let page = 0; page < D.MAX_PAGES; page++) {
+            let resp;
+            const events = [];
+            try {
+                resp = await this._storageApiStream('pm-get', { after, limit: D.PAGE_LIMIT });
+                await this._readNdjsonStream(resp, (ev) => { events.push(ev); });
+            } catch (_) {
+                break;
+            }
+            if (this.pubkey !== pk) return;
+            const step = D.step(page, after, resp.headers.get('X-Cursor'), resp.headers.get('X-Has-More'));
+            if (!step.serverOk) {
+                st.c = null;
+                st.holds = [];
+                await this._pmReplayD1(events, null);
+                return this._pmRestoreCold(pk, { noCursor: true });
+            }
+            await this._pmReplayD1(events, after);
+            if (this.pubkey !== pk) return;
+            best = D.newer(best, step.cursor);
+            st.c = best;
+            if (!step.next) break;
+            after = step.next;
+        }
+        await this._pmRetryHeld();
+        this._pmCursorCommit();
+    },
+
+    async _pmRestoreCold(pk, opts) {
+        if (!this._pmArchiveAllowed() || this.pubkey !== pk) return;
+        const D = (typeof window !== 'undefined' && window.NymD1Cursor) || null;
         this._pmD1OldestTs = null;
         this._pmD1NoMore = false;
         this._pmD1InitialPageSize = 200;
         const maxPages = 5;
         let before = 0;
+        let head = null;
         for (let page = 0; page < maxPages; page++) {
-            const got = await this._pmRestoreD1Page({ before, limit: this._pmD1InitialPageSize });
+            const got = await this._pmRestoreD1Page({
+                before, limit: this._pmD1InitialPageSize,
+                onHead: page === 0 ? (h) => { head = h; } : null,
+                hold: true,
+            });
             if (!got || this._pmD1NoMore || !this._pmD1OldestTs) break;
             before = this._pmD1OldestTs;
         }
+        if (!D || (opts && opts.noCursor) || this.pubkey !== pk) return;
+        const c = D.fromHead(head);
+        if (!c) return;
+        const st = this._pmCursorState(pk);
+        st.loaded = true;
+        st.c = D.newer(st.c, c);
+        await this._pmRetryHeld();
+        this._pmCursorCommit();
+    },
+
+    _pmWrapRetryable(ev) {
+        if (!ev || typeof ev.id !== 'string') return false;
+        if (this._decryptedWrapIds && this._decryptedWrapIds.has(ev.id)) return false;
+        if (!this.privkey) return 'hold';
+        if (typeof this.vaultEnabled === 'function' && this.vaultEnabled() && !this._vaultKey) return 'hold';
+        if (this._isPqPayload(ev.content)) {
+            if (typeof this.pqRootSettled === 'function' && !this.pqRootSettled()) return 'hold';
+            if (typeof this.pqRootLocked === 'function' && this.pqRootLocked()) return 'retry';
+        }
+        return false;
+    },
+
+    _pmHoldWrap(ev, after, kind) {
+        const D = window.NymD1Cursor;
+        const st = this._pmCursorState(this.pubkey);
+        if (st.holds.some((h) => h.id === ev.id)) return;
+        const now = Date.now();
+        const persist = kind === 'hold';
+        const since = persist && st.heldSince && now - st.heldSince < D.HOLD_MS ? st.heldSince : now;
+        if (persist && !st.heldSince) st.heldSince = since;
+        st.holds.push({ id: ev.id, ev, since, persist, after: D.valid(after) ? after : null });
+        while (st.holds.length > 500) st.holds.shift();
+    },
+
+    _pmCursorResetAfterLink() {
+        const D = (typeof window !== 'undefined' && window.NymD1Cursor) || null;
+        if (!D || !this.pubkey) return;
+        const st = this._pmCursorState(this.pubkey);
+        st.c = null;
+        st.loaded = true;
+        if (this._pmArchivedIds) this._pmArchivedIds.clear();
+        this._pmPassDone = null;
+        if (this._pmInboxCur && this._pmInboxCur.pk === this.pubkey) this._pmInboxCur.map = {};
+        if (this._pmInboxDoneAt) this._pmInboxDoneAt.clear();
+        this._pmCursorCommit();
+        if (typeof this._pmInboxCommit === 'function') this._pmInboxCommit();
+        this.pmRestoreFromD1({ force: true }).catch(() => { });
+    },
+
+    async _pmReplayD1(events, holdAfter) {
+        if (!Array.isArray(events) || !events.length) return;
+        events.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
+        if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
+        const D = (typeof window !== 'undefined' && window.NymD1Cursor) || null;
+        this._restoreFromD1Depth = (this._restoreFromD1Depth || 0) + 1;
+        try {
+            for (let k = 0; k < events.length; k++) {
+                const ev = events[k];
+                if (!ev || typeof ev.id !== 'string') continue;
+                if (this._pmArchivedIds.has(ev.id)) continue;
+                this._pmArchivedIds.add(ev.id);
+                try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
+                const kind = D && holdAfter !== undefined ? this._pmWrapRetryable(ev) : false;
+                if (kind) this._pmHoldWrap(ev, holdAfter, kind);
+                if (k + 1 < events.length) await this._yieldIfDue();
+            }
+        } finally {
+            this._restoreFromD1Depth = Math.max(0, (this._restoreFromD1Depth || 1) - 1);
+        }
+    },
+
+    async _pmRetryHeld() {
+        const st = this._pmCurState;
+        if (!st || st.pk !== this.pubkey || !st.holds.length) return false;
+        if (this._pmRetrying) return false;
+        this._pmRetrying = true;
+        let changed = false;
+        try {
+            const D = window.NymD1Cursor;
+            const now = Date.now();
+            const keep = [];
+            this._restoreFromD1Depth = (this._restoreFromD1Depth || 0) + 1;
+            try {
+                for (const h of st.holds.slice()) {
+                    if (this._decryptedWrapIds && this._decryptedWrapIds.has(h.id)) { changed = true; continue; }
+                    if (now - h.since >= D.HOLD_MS) { changed = true; continue; }
+                    if (this._pmWrapAttempted) this._pmWrapAttempted.delete(h.id);
+                    try { await this.handleGiftWrapDM(h.ev, { fromD1: true }); } catch (_) { }
+                    if (this._decryptedWrapIds && this._decryptedWrapIds.has(h.id)) { changed = true; continue; }
+                    keep.push(h);
+                    await this._yieldIfDue();
+                }
+            } finally {
+                this._restoreFromD1Depth = Math.max(0, (this._restoreFromD1Depth || 1) - 1);
+            }
+            if (this._pmCurState === st) {
+                st.holds = keep;
+                if (!keep.length) st.heldSince = 0;
+            }
+        } finally {
+            this._pmRetrying = false;
+        }
+        if (changed) this._pmCursorCommit();
+        if (typeof this._pmInboxRetryHeld === 'function') await this._pmInboxRetryHeld();
+        return changed;
+    },
+
+    _pmCursorCommit() {
+        const st = this._pmCurState;
+        const D = (typeof window !== 'undefined' && window.NymD1Cursor) || null;
+        if (!D || !st || st.pk !== this.pubkey || typeof this._pmMetaCommit !== 'function') return;
+        const now = Date.now();
+        const held = st.holds.filter((h) => h.persist);
+        const c = D.persistable(st.c, held, now);
+        const active = held.filter((h) => now - h.since < D.HOLD_MS);
+        this._pmMetaCommit({
+            key: 'pmD1Cursor', pk: st.pk, c,
+            noMore: !!this._pmD1NoMore,
+            oldestTs: Number.isFinite(this._pmD1OldestTs) ? this._pmD1OldestTs : 0,
+            heldSince: active.length ? st.heldSince || now : 0,
+        });
     },
 
     async pmLoadOlderFromD1() {
         if (this._pmD1NoMore) return false;
         if (!this._pmD1OldestTs) return false;
-        return this._pmRestoreD1Page({ before: this._pmD1OldestTs, limit: 200 });
+        const got = await this._pmRestoreD1Page({ before: this._pmD1OldestTs, limit: 200 });
+        if (this._pmCurState && this._pmCurState.pk === this.pubkey && window.NymD1Cursor
+            && window.NymD1Cursor.valid(this._pmCurState.c)) this._pmCursorCommit();
+        return got;
     },
 
-    async _pmRestoreD1Page({ before = 0, limit = 200 } = {}) {
+    async _pmRestoreD1Page({ before = 0, limit = 200, onHead = null, hold = false } = {}) {
         if (!this._pmArchiveAllowed()) return false;
         if (this._pmD1Loading) return false;
         this._pmD1Loading = true;
@@ -1945,6 +2190,7 @@ Object.assign(NYM.prototype, {
         try {
             const resp = await this._storageApiStream('pm-get', { since: 0, before, limit });
             hasMore = resp.headers.get('X-Has-More') === '1';
+            if (onHead) onHead(resp.headers.get('X-Cursor-Head'));
             await this._readNdjsonStream(resp, (ev) => events.push(ev));
         } catch (_) {
             this._pmD1Loading = false;
@@ -1958,22 +2204,11 @@ Object.assign(NYM.prototype, {
                 this._pmD1OldestTs = oldest;
             }
         }
-        if (!this._pmArchivedIds) this._pmArchivedIds = new Set();
-        // Suppress the settings save the replay would otherwise trigger.
-        this._restoreFromD1Depth = (this._restoreFromD1Depth || 0) + 1;
         try {
-            for (let k = 0; k < events.length; k++) {
-                const ev = events[k];
-                if (!ev || typeof ev.id !== 'string') continue;
-                if (this._pmArchivedIds.has(ev.id)) continue;
-                this._pmArchivedIds.add(ev.id);
-                try { await this.handleGiftWrapDM(ev, { fromD1: true }); } catch (_) { }
-                if (k + 1 < events.length) await this._yieldIfDue();
-            }
+            await this._pmReplayD1(events, hold ? null : undefined);
         } finally {
-            this._restoreFromD1Depth = Math.max(0, (this._restoreFromD1Depth || 1) - 1);
+            this._pmD1Loading = false;
         }
-        this._pmD1Loading = false;
         return events.length > 0;
     },
 
@@ -3224,11 +3459,12 @@ Object.assign(NYM.prototype, {
             : this.isVerifiedBot(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
-        const pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
+        const supporterMark = this._supporterMarkFor(pubkey);
+        const pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterMark}|${friendBadge}`;
         if (channelEl.dataset.pmHeaderSig === pmHeaderSig) return;
         const pmAvatarSrc = this.getAvatarUrl(pubkey);
         const lastSeenHtml = typeof this._pmLastSeenHtml === 'function' ? this._pmLastSeenHtml(pubkey) : '';
-        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
+        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
         channelEl.innerHTML = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
         channelEl.dataset.pmHeaderSig = pmHeaderSig;
         // Preserve the header's click-to-open-profile behavior across rebuilds.
@@ -3602,13 +3838,14 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
             : this.isVerifiedBot(pubkey)
                 ? `<span class="verified-badge" title="${this.verifiedBot.title}">✓</span>`
                 : '';
-        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${friendBadge}`;
+        const supporterMark = this._supporterMarkFor(pubkey);
+        const displayNym = `<span class="pm-name-text">${this.escapeHtml(baseNym)}</span><span class="nym-suffix">#${suffix}</span>${flairHtml}${verifiedBadge}${supporterMark}${friendBadge}`;
         const lastSeenHtml = this._pmLastSeenHtml(pubkey);
         const pmHeaderHtml = `<span class="pm-header-row">${this._pmHeaderAvatarHtml(pubkey, pmAvatarSrc, safePk)}${displayNym}</span>${lastSeenHtml}`;
 
         const _pmHeaderEl = document.getElementById('currentChannel');
         _pmHeaderEl.innerHTML = pmHeaderHtml;
-        _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${friendBadge}`;
+        _pmHeaderEl.dataset.pmHeaderSig = `${safePk}|${baseNym}|${suffix}|${flairHtml}|${verifiedBadge}|${supporterMark}|${friendBadge}`;
         delete _pmHeaderEl.dataset.groupHeaderSig;
 
         const _pmHeaderRow = _pmHeaderEl.querySelector('.pm-header-row');
@@ -4200,15 +4437,10 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
 
         const nymSpan = document.createElement('span');
         nymSpan.className = 'pm-suggestion-nym';
-        nymSpan.textContent = nym;
-
-        const suffixSpan = document.createElement('span');
-        suffixSpan.className = 'pm-suggestion-suffix';
-        suffixSpan.textContent = '#' + this.getPubkeySuffix(pubkey);
+        nymSpan.innerHTML = window.NymSuffix.html(nym, this.getPubkeySuffix(pubkey));
 
         item.appendChild(img);
         item.appendChild(nymSpan);
-        item.appendChild(suffixSpan);
 
         item.addEventListener('click', () => this.addNewPMRecipient(safePk, nym));
         return item;
@@ -4345,7 +4577,7 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         document.getElementById('pmRecipientChips').innerHTML = this._newPMRecipients.map(r => {
             const suffix = this.getPubkeySuffix(r.pubkey);
             const baseNym = this.stripPubkeySuffix(this.parseNymFromDisplay(r.nym));
-            return `<span class="pm-recipient-chip">${this.escapeHtml(baseNym)}<span class="pm-chip-suffix">#${suffix}</span><button class="pm-chip-remove" data-action="removeNewPMRecipient" data-pubkey="${r.pubkey}" type="button">×</button></span>`;
+            return `<span class="pm-recipient-chip"><bdi>${window.NymSuffix.html(baseNym, suffix)}</bdi><button class="pm-chip-remove" data-action="removeNewPMRecipient" data-pubkey="${r.pubkey}" type="button">×</button></span>`;
         }).join('');
     },
 
@@ -4406,14 +4638,9 @@ ${this._pmSupportBadgeHtml(pubkey)}<span class="unread-badge nm-hidden">0</span>
         return (Array.isArray(subset) ? subset : pmMessages).filter(msg => {
             if (_threadsOn && msg.threadRoot && _threadRoots.has(msg.threadRoot)) return false;
             if (this._botThreadForeign(msg, pmMessages)) return false;
-            if (this.deletedEventIds.has(msg.id)) return false;
-            if (msg.nymMessageId && this.deletedEventIds.has(msg.nymMessageId)) return false;
             if (typeof this._isMessageDeleted === 'function' && this._isMessageDeleted(msg)) return false;
             if (typeof this._consumePendingDeletion === 'function' && this._consumePendingDeletion(msg)) return false;
-            const isOwn = msg.pubkey === this.pubkey;
-            if (!isOwn && (this.blockedUsers.has(msg.pubkey) || msg.blocked)) return false;
-            if (!isOwn && this.hasBlockedKeyword(msg.content, msg.author, msg.pubkey)) return false;
-            if (!isOwn && this.isSpamMessage(msg.content)) return false;
+            if (typeof this.isContentHidden === 'function' && this.isContentHidden(msg)) return false;
             if (msg.conversationKey !== conversationKey) return false;
             // Derive the peer from the conversation key so column view renders every PM column correctly.
             if (!msg.isGroup && msg.pubkey !== this.pubkey && this.getPMConversationKey(msg.pubkey) !== conversationKey) return false;

@@ -206,7 +206,7 @@ class _BootUnlockGateState extends ConsumerState<_BootUnlockGate> {
     return MaterialApp(
       title: 'Nymchat',
       debugShowCheckedModeBanner: false,
-      theme: buildNymThemeData(colors),
+      theme: buildNymThemeData(colors, a11y: ref.watch(nymA11yProvider)),
       home: VaultBootUnlock(
         onUnlocked: resumed
             ? (_) => setState(() => _wakeUnlocked = false)

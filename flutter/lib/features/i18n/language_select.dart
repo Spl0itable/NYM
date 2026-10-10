@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import '../nymbot/nymbot_providers.dart' show primeBotWelcomeCopy;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/storage_keys.dart';
@@ -18,6 +19,7 @@ import 'i18n.dart';
 import 'localization_service.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_field.dart';
+import '../../widgets/common/nym_focusable.dart';
 
 /// A UI-language option: stored code (empty for English source) and English display name.
 class UiLanguageOption {
@@ -163,11 +165,87 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
   );
 
   final FocusNode _selectedFocus = FocusNode(debugLabel: 'selectedLanguage');
+  final FocusNode _firstFocus = FocusNode(debugLabel: 'firstLanguage');
+  final FocusNode _searchFocus = FocusNode(debugLabel: 'languageSearch');
+  final TextEditingController _search = TextEditingController();
+  bool _keyed = false;
+  FocusHighlightMode _mode = FocusManager.instance.highlightMode;
+  late final bool _keyboardFirst =
+      FocusManager.instance.highlightMode == FocusHighlightMode.traditional;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _revealSelected(6));
+    FocusManager.instance.addHighlightModeListener(_onMode);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _keyboardFirst) _searchFocus.requestFocus();
+      _revealSelected(6);
+    });
+  }
+
+  void _onMode(FocusHighlightMode mode) {
+    if (mounted && mode != _mode) setState(() => _mode = mode);
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (!_keyed) setState(() => _keyed = true);
+    final keys = HardwareKeyboard.instance;
+    if (keys.isControlPressed || keys.isMetaPressed || keys.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (_searchFocus.hasFocus) {
+      if (event.logicalKey == LogicalKeyboardKey.tab && !keys.isShiftPressed) {
+        return _focusFirstRow()
+            ? KeyEventResult.handled
+            : KeyEventResult.ignored;
+      }
+      return KeyEventResult.ignored;
+    }
+    final ch = event.character;
+    if (ch == null || !_typed(ch)) return KeyEventResult.ignored;
+    final text = _search.text + ch;
+    _search.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+    setState(() => _query = text);
+    _searchFocus.requestFocus();
+    return KeyEventResult.handled;
+  }
+
+  static bool _typed(String ch) {
+    final runes = ch.runes.toList();
+    if (runes.length != 1) return false;
+    final r = runes.first;
+    return r > 0x20 && r != 0x7f && !(r >= 0x80 && r < 0xa0) && ch.trim() == ch;
+  }
+
+  bool _isSelected(UiLanguageOption o) =>
+      o.code == widget.selectedCode ||
+      (o.code.isEmpty && widget.selectedCode == 'en');
+
+  List<UiLanguageOption> get _items {
+    final q = _query.trim().toLowerCase();
+    if (q.isEmpty) return kUiLanguageOptions;
+    return kUiLanguageOptions
+        .where((o) => languageSearchKey(o.code, o.name).contains(q))
+        .toList();
+  }
+
+  bool _focusFirstRow() {
+    final items = _items;
+    if (items.isEmpty) return false;
+    final node = _isSelected(items.first) ? _selectedFocus : _firstFocus;
+    if (node.context != null && (!_scroll.hasClients || _scroll.offset == 0)) {
+      node.requestFocus();
+      return true;
+    }
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) node.requestFocus();
+    });
+    return true;
   }
 
   int get _selectedIndex {
@@ -180,7 +258,7 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
     final row = _selectedFocus.context;
     if (row != null) {
       unawaited(Scrollable.ensureVisible(row, alignment: 0.3));
-      _selectedFocus.requestFocus();
+      if (!_keyboardFirst) _selectedFocus.requestFocus();
       return;
     }
     final i = _selectedIndex;
@@ -201,72 +279,84 @@ class _LanguagePickerListState extends State<LanguagePickerList> {
 
   @override
   void dispose() {
+    FocusManager.instance.removeHighlightModeListener(_onMode);
     _scroll.dispose();
     _selectedFocus.dispose();
+    _firstFocus.dispose();
+    _searchFocus.dispose();
+    _search.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    final q = _query.trim().toLowerCase();
-    final items = q.isEmpty
-        ? kUiLanguageOptions
-        : kUiLanguageOptions
-            .where((o) => languageSearchKey(o.code, o.name).contains(q))
-            .toList();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        NymFieldBox(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: [
-              Icon(Icons.search, size: 18, color: NymField.icon(c)),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  style: TextStyle(color: c.inputText, fontSize: 14),
-                  cursorColor: c.primary,
-                  decoration: NymField.bare(c,
-                      hint: tr('Search languages'), fontSize: 14),
-                  onChanged: (v) => setState(() => _query = v),
+    final items = _items;
+    final keyboard = _keyed && _mode == FocusHighlightMode.traditional;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _onKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          NymFieldBox(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                Icon(Icons.search, size: 18, color: NymField.icon(c)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _search,
+                    focusNode: _searchFocus,
+                    style: TextStyle(color: c.inputText, fontSize: 14),
+                    cursorColor: c.primary,
+                    decoration: NymField.bare(c,
+                        hint: tr('Search languages'), fontSize: 14),
+                    onChanged: (v) => setState(() => _query = v),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 8),
-        Expanded(
-          child: ListView.builder(
-            controller: _scroll,
-            itemCount: items.length,
-            itemBuilder: (_, i) {
-              final o = items[i];
-              final selected = o.code == widget.selectedCode ||
-                  (o.code.isEmpty && widget.selectedCode == 'en');
-              return _LanguageRow(
-                key: ValueKey('langRow-${o.code}'),
-                name: o.code.isEmpty ? o.name : languageNative(o.code),
-                subtitle: o.code.isEmpty ? '' : languageSubtitle(o.code),
-                selected: selected,
-                focusNode: selected ? _selectedFocus : null,
-                onTap: () => widget.onSelected(o.code),
-              );
-            },
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView.builder(
+              controller: _scroll,
+              itemCount: items.length,
+              itemBuilder: (_, i) {
+                final o = items[i];
+                final selected = _isSelected(o);
+                return _LanguageRow(
+                  key: ValueKey('langRow-${o.code}'),
+                  name: o.code.isEmpty ? o.name : languageNative(o.code),
+                  subtitle: o.code.isEmpty ? '' : languageSubtitle(o.code),
+                  selected: selected,
+                  keyboard: keyboard,
+                  focusNode: selected
+                      ? _selectedFocus
+                      : i == 0
+                          ? _firstFocus
+                          : null,
+                  onTap: () => widget.onSelected(o.code),
+                );
+              },
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-class _LanguageRow extends StatelessWidget {
+class _LanguageRow extends StatefulWidget {
   const _LanguageRow({
     super.key,
     required this.name,
     required this.subtitle,
     required this.selected,
+    required this.keyboard,
     required this.onTap,
     this.focusNode,
   });
@@ -277,54 +367,83 @@ class _LanguageRow extends StatelessWidget {
   /// The English name, shown under the endonym when it adds something.
   final String subtitle;
   final bool selected;
+  final bool keyboard;
   final VoidCallback onTap;
+
+  @override
+  State<_LanguageRow> createState() => _LanguageRowState();
+}
+
+class _LanguageRowState extends State<_LanguageRow> {
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
     final c = context.nym;
-    return InkWell(
-      onTap: onTap,
-      focusNode: focusNode,
-      borderRadius: NymRadius.rsm,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected ? c.primary.withValues(alpha: 0.12) : null,
+    final name = widget.name;
+    final subtitle = widget.subtitle;
+    final selected = widget.selected;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Semantics(
+        button: true,
+        selected: selected,
+        child: InkWell(
+          onTap: widget.onTap,
+          focusNode: widget.focusNode,
+          focusColor: Colors.transparent,
+          onFocusChange: (f) {
+            if (f != _focused) setState(() => _focused = f);
+          },
           borderRadius: NymRadius.rsm,
-          border: Border.all(
-            color: selected ? c.primary : c.glassBorder,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    name,
-                    style: TextStyle(
-                      color: c.text,
-                      fontSize: 15,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                    ),
-                  ),
-                  if (subtitle.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        subtitle,
-                        style: TextStyle(color: c.textDim, fontSize: 12),
-                      ),
-                    ),
-                ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            foregroundDecoration: _focused && widget.keyboard
+                ? BoxDecoration(
+                    borderRadius: NymRadius.rsm,
+                    border: Border.all(
+                        color: c.secondary, width: NymFocusable.ringWidth),
+                  )
+                : null,
+            decoration: BoxDecoration(
+              color: selected ? c.primary.withValues(alpha: 0.12) : null,
+              borderRadius: NymRadius.rsm,
+              border: Border.all(
+                color: selected ? c.primary : c.glassBorder,
+                width: selected ? 1.5 : 1,
               ),
             ),
-            if (selected) Icon(Icons.check, size: 18, color: c.primary),
-          ],
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        name,
+                        style: TextStyle(
+                          color: c.text,
+                          fontSize: 15,
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                      if (subtitle.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            subtitle,
+                            style: TextStyle(color: c.textDim, fontSize: 12),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (selected) Icon(Icons.check, size: 18, color: c.primary),
+              ],
+            ),
+          ),
         ),
       ),
     );

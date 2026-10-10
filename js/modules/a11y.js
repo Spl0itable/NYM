@@ -165,8 +165,19 @@
         }
     }
 
+    function onSwitchEnter(e) {
+        if (e.key !== 'Enter' || e.repeat || e.isComposing || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return false;
+        var t = e.target;
+        if (!t || !t.matches || !t.matches('input[type="checkbox"][role="switch"], .nym-switch input[type="checkbox"]') || t.disabled) return false;
+        e.preventDefault();
+        t.click();
+        return true;
+    }
+
     function onActivate(e) {
-        if (e.defaultPrevented || (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar')) return;
+        if (e.defaultPrevented) return;
+        if (onSwitchEnter(e)) return;
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
         var t = e.target;
         if (!t || !t.matches || !t.matches('[role="button"]') || t.matches('button, a, input, select, textarea, [contenteditable="true"]')) return;
         e.preventDefault();

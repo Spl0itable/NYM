@@ -57,7 +57,8 @@ export const SPAM_DDL = [
   "CREATE INDEX IF NOT EXISTS spam_nyms_last ON spam_nyms (last_seen)",
   "ALTER TABLE spam_pubkeys ADD COLUMN admin_ok INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE spam_pubkeys ADD COLUMN admin_spam INTEGER NOT NULL DEFAULT 0",
-  "ALTER TABLE spam_events ADD COLUMN event_json TEXT"
+  "ALTER TABLE spam_events ADD COLUMN event_json TEXT",
+  "CREATE INDEX IF NOT EXISTS spam_domains_pubkey ON spam_domains (pubkey)"
 ];
 
 export const SPAM_SCHEMA_VERSION = 3;

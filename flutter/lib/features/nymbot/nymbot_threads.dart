@@ -22,7 +22,10 @@ List<Message> threadChainFor(AppState s, String storageKey, String rootId) {
   if (!appThreadsEnabled || rootId.isEmpty) return const <Message>[];
   final root = threadRootMessage(s, storageKey, rootId);
   if (root == null) return const <Message>[];
-  return <Message>[root, ...threadRepliesFor(s, storageKey, rootId)];
+  return <Message>[
+    if (!s.isMessageFiltered(root)) root,
+    ...threadRepliesFor(s, storageKey, rootId),
+  ];
 }
 
 /// Bot message a plain reply answers, only if the bot is the root or last speaker.
@@ -80,9 +83,14 @@ List<Map<String, String>> threadBotConversation(
   String? exclude,
   int limit = _maxEntries,
   String botPubkey = kNymbotPubkey,
+  bool publishedOnly = false,
 }) {
   final entries = <Map<String, String>>[];
   for (final m in threadChainFor(s, storageKey, rootId)) {
+    if (publishedOnly &&
+        (m.optimistic || m.deliveryStatus == DeliveryStatus.failed)) {
+      continue;
+    }
     var text = threadEntryText(m.content, isBot: _isBotMessage(m, botPubkey));
     if (text.isEmpty) continue;
     if (text.length > _maxEntryChars) text = text.substring(0, _maxEntryChars);

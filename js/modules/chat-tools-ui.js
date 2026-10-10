@@ -77,7 +77,7 @@
             if (t === 'group') {
                 const gid = String(key).slice(6);
                 const g = this.groupConversations && this.groupConversations.get(gid);
-                return { t, k: key, n: (g && g.name) || this._ct('Group') };
+                return { t, k: key, n: g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : this._ct('Group') };
             }
             const name = String(key || '').replace(/^#/, '');
             return { t, k: key.startsWith('#') ? key : '#' + name, n: '#' + name };
@@ -102,8 +102,9 @@
             const isPm = k.startsWith('pm-') || k.startsWith('group-');
             const store = isPm ? this.pmMessages : this.messages;
             const list = (store && (store.get(k) || (!isPm && store.get(k.replace(/^#/, ''))))) || [];
-            return list.filter((m) => m && !m.blocked
-                && !(this.blockedUsers && this.blockedUsers.has(m.pubkey))
+            const hidden = (m) => (typeof this.isContentHidden === 'function' ? this.isContentHidden(m)
+                : (!!m.blocked || !!(this.blockedUsers && this.blockedUsers.has(m.pubkey))));
+            return list.filter((m) => m && !hidden(m)
                 && !(this.deletedEventIds && (this.deletedEventIds.has(m.id) || (m.nymMessageId && this.deletedEventIds.has(m.nymMessageId))))
                 && !this._ctHidden(m));
         },
@@ -297,17 +298,33 @@
                     : this._ct('Synced across your devices');
         },
 
+        _savedHidden(e) {
+            if (!e) return true;
+            const F = window.NymContentFilter;
+            const pk = (e.a && e.a.pk) || '';
+            const nym = (e.a && e.a.n) || '';
+            if (!F || typeof this._cfCtx !== 'function') return !!(pk && pk !== this.pubkey && this.blockedUsers && this.blockedUsers.has(pk));
+            const ctx = this._cfCtx();
+            if (e.chat && e.chat.t === 'channel' && e.chat.k && F.channelBlocked(ctx, e.chat.k)) return true;
+            if (e.chat && e.chat.t === 'dm' && e.chat.k && F.userBlocked(ctx, String(e.chat.k).replace(/^pm-/, ''))) return true;
+            return F.hidden(ctx, { pubkey: pk, content: e.text || '', nym: this._cfNym(nym) });
+        },
+
+        _ctRefreshSavedIfOpen() {
+            this._renderSavedPanel();
+        },
+
         _renderSavedPanel() {
             const modal = typeof document !== 'undefined' ? document.getElementById('savedMessagesModal') : null;
             if (!modal || !modal.classList.contains('active')) return;
             const body = modal.querySelector('.ct-modal-body');
-            const items = this._savedLoad().items;
+            const items = this._savedLoad().items.filter((e) => !this._savedHidden(e));
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             const rows = items.map((e) => {
                 const when = this._formatFullTimestamp((e.at || 0) * 1000);
                 const chat = e.chat.t === 'channel' ? e.chat.n : e.chat.t === 'group' ? this._ct('Group: {name}', { name: e.chat.n }) : this._ct('PM with {name}', { name: e.chat.n });
                 return `<div class="ct-saved-item" data-saved-id="${esc(e.id)}">
-                    <div class="ct-saved-meta"><span class="ct-saved-author">${this.nymLabelHtml(e.a.n)}</span><span class="ct-saved-chat">${esc(chat)}</span><span class="ct-saved-time">${esc(when)}</span></div>
+                    <div class="ct-saved-meta"><span class="ct-saved-author">${this.nymLabelHtml(e.a.n)}</span><span class="ct-saved-chat">${e.chat.t === 'channel' || e.chat.t === 'group' ? esc(chat) : this.nymTextHtml(chat, [e.chat.n])}</span><span class="ct-saved-time">${esc(when)}</span></div>
                     <div class="ct-saved-text message-content">${this.formatMessageWithQuotes(e.text, 0)}</div>
                     <div class="ct-saved-actions">
                         <button type="button" class="ct-btn" data-action="ctSavedJump" data-saved-id="${esc(e.id)}">${esc(this._ct('Jump to original'))}</button>
@@ -786,7 +803,8 @@
             const { body } = this._ctModal('exportChatModal', this._ct('Export chat'));
             const esc = (s) => this.escapeHtml(String(s == null ? '' : s));
             this._ctExportKey = key;
-            body.innerHTML = `<p class="ct-note">${esc(this._ct('Export {count} messages from {chat} that are on this device.', { count: msgs.length, chat: info.n }))}</p>
+            const note = this._ct('Export {count} messages from {chat} that are on this device.', { count: msgs.length, chat: info.n });
+            body.innerHTML = `<p class="ct-note">${info.t === 'dm' ? this.nymTextHtml(note, [info.n]) : esc(note)}</p>
                 <p class="ct-note">${esc(this._ct('The .zip adds media already downloaded to this device. View-once media is never exported.'))}</p>
                 <div class="ct-export-actions">
                     <button type="button" class="ct-btn" data-action="ctExportTxt">${esc(this._ct('Text transcript (.txt)'))}</button>

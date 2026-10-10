@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/nym_utils.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../i18n/i18n.dart';
+import '../identity/deleted_notice.dart' show dimRangeSpans;
+import '../layout/layout_model.dart';
 import '../mesh/mesh_controller.dart';
 import '../search/unified_search_panel.dart' show nymSuffixStyle;
 import 'geo_explore.dart';
 
 enum GeoPeekReach { online, offline, meshOnly }
+
+String _peekTr(String s, [Map<String, Object?>? vars]) => tr(s);
 
 abstract class GeoPeekSource {
   GeoPeekReach reach(String geohash);
@@ -117,7 +122,7 @@ class _GeoPeekViewState extends ConsumerState<GeoPeekView> {
       body = _note(
         Icons.cloud_off,
         _reach == GeoPeekReach.meshOnly
-            ? tr('Peek needs the internet. Over the Bluetooth mesh, join the room to see its messages.')
+            ? tr('Peek needs the internet. Over the Bluetooth mesh, join the channel to see its messages.')
             : tr("You're offline. Peek shows recent messages once you're back online."),
         nym,
         key: const ValueKey('geo-peek-offline'),
@@ -130,13 +135,19 @@ class _GeoPeekViewState extends ConsumerState<GeoPeekView> {
           tr("Couldn't load recent messages."), nym);
     } else if (_summary == null || _summary!.messages.isEmpty) {
       body = _note(Icons.chat_bubble_outline,
-          tr('No recent messages in this room.'), nym);
+          tr('No recent messages in this channel.'), nym);
     } else {
-      body = Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      body = Table(
+        columnWidths: const {
+          0: IntrinsicColumnWidth(),
+          1: FlexColumnWidth(),
+        },
+        defaultVerticalAlignment: TableCellVerticalAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
         children: [
-          for (final m in _summary!.messages) _message(m, nym),
+          for (final m in _summary!.messages)
+            _message(m, nym, nowMs, context.highContrast),
         ],
       );
     }
@@ -194,28 +205,48 @@ class _GeoPeekViewState extends ConsumerState<GeoPeekView> {
     );
   }
 
-  Widget _message(GeoPeekMessage m, NymColors nym) {
+  TableRow _message(
+      GeoPeekMessage m, NymColors nym, int nowMs, bool contrast) {
     final base = stripPubkeySuffix(m.nym.isEmpty ? tr('anon') : m.nym);
     final whoStyle = TextStyle(
         fontSize: 11, color: nym.secondary, fontWeight: FontWeight.w600);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Text.rich(
-        TextSpan(children: [
-          TextSpan(text: base, style: whoStyle),
-          TextSpan(
-            text: '#${getPubkeySuffix(m.pubkey)}',
-            style: nymSuffixStyle(whoStyle),
+    final textStyle = TextStyle(fontSize: 11, color: nym.text);
+    return TableRow(children: [
+      Padding(
+        padding: const EdgeInsets.only(top: 3, bottom: 3, right: 6),
+        child: Text(
+          relativeTime(nowMs, m.createdAt * 1000, _peekTr),
+          key: const ValueKey('geo-peek-time'),
+          textAlign: TextAlign.end,
+          maxLines: 1,
+          softWrap: false,
+          style: TextStyle(
+            fontSize: 11,
+            color: nym.textDim,
+            fontFeatures: const [FontFeature.tabularFigures()],
           ),
-          TextSpan(text: ' ', style: whoStyle),
-          TextSpan(
-            text: m.content,
-            style: TextStyle(fontSize: 11, color: nym.text),
-          ),
-        ]),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
+        ),
       ),
-    );
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Text.rich(
+          TextSpan(children: [
+            TextSpan(text: base, style: whoStyle),
+            TextSpan(
+              text: '#${getPubkeySuffix(m.pubkey)}',
+              style: nymSuffixStyle(whoStyle, contrast: contrast),
+            ),
+            TextSpan(text: ' ', style: whoStyle),
+            TextSpan(
+              style: textStyle,
+              children: dimRangeSpans(m.content, mentionSuffixRanges(m.content),
+                  nymSuffixStyle(textStyle, contrast: contrast)),
+            ),
+          ]),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    ]);
   }
 }

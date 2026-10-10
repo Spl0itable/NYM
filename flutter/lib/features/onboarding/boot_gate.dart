@@ -11,6 +11,7 @@ import '../../screens/home_shell.dart';
 import '../../state/nostr_controller.dart';
 import '../../state/settings_provider.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../../widgets/common/nym_label.dart';
 import '../accounts/account_host.dart';
 import '../i18n/i18n.dart';
 import '../i18n/language_select.dart';
@@ -108,7 +109,7 @@ class _BootGateState extends ConsumerState<BootGate> {
                     child: TextButton(
                       key: const ValueKey('accountCancelAddBtn'),
                       onPressed: () => unawaited(accounts.cancelAdd()),
-                      child: Text(
+                      child: NymText(
                         from == null
                             ? tr('Back to my identities')
                             : tr('Back to {nym}', {

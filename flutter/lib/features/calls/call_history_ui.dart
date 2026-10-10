@@ -15,6 +15,7 @@ import '../group_tools/group_tools_ui.dart';
 import '../i18n/i18n.dart';
 import '../notifications/notification_route_target.dart';
 import '../notifications/notification_routing.dart';
+import '../toasts/toast_center.dart';
 import 'call_history.dart';
 import 'call_history_providers.dart';
 import 'call_nym.dart';
@@ -233,17 +234,36 @@ class CallHistoryRow extends ConsumerWidget {
     nav.maybePop();
   }
 
+  bool _busy(WidgetRef ref) {
+    final call = ref.read(currentCallStateProvider);
+    return call.isActiveCall ||
+        call.isIncoming ||
+        ref.read(callServiceProvider).busy;
+  }
+
   void _callBack(BuildContext context, WidgetRef ref) {
+    if (_busy(ref)) {
+      showToast(tr('Already in a call'));
+      return;
+    }
     final nav = Navigator.of(context);
     final ok = _open(context, ref);
     nav.maybePop();
     if (!ok) return;
+    ref.read(callServiceProvider).callBack(record);
+  }
+
+  void _rejoin(BuildContext context, WidgetRef ref) {
     final svc = ref.read(callServiceProvider);
-    if (record.group.isNotEmpty) {
-      svc.startGroupCall(record.group, video: record.isVideo);
-    } else {
-      svc.startCall(record.peer, video: record.isVideo);
-    }
+    if (record.group.isEmpty || !svc.canRejoinGroupCall(record.group)) return;
+    final nav = Navigator.of(context);
+    _open(context, ref);
+    nav.maybePop();
+    svc.rejoinGroupCall(record.group);
+  }
+
+  void _returnToCall(BuildContext context) {
+    Navigator.of(context).maybePop();
   }
 
   @override
@@ -256,13 +276,24 @@ class CallHistoryRow extends ConsumerWidget {
             .select((s) => s.groups.where((g) => g.id == record.group).firstOrNull))
         : null;
     final timeFormat = ref.watch(settingsProvider.select((s) => s.timeFormat));
+    final call = ref.watch(currentCallStateProvider);
+    final inCall = call.isActiveCall && call.callId == record.id;
+    final rejoin = !inCall &&
+        record.group.isNotEmpty &&
+        call.rejoinCallId == record.id &&
+        call.rejoinGroupId == record.group;
+    final busy = call.isActiveCall || call.isIncoming;
+    final live = inCall ? tr('In call') : (rejoin ? tr('Ongoing') : '');
     final label = switch (CallHistory.label(record)) {
       'missed' => tr('Missed'),
       'incoming' => tr('Incoming'),
       _ => tr('Outgoing'),
     };
-    final dur = record.missed ? '' : CallHistory.duration(record.dur);
+    final dur = record.missed || live.isNotEmpty
+        ? ''
+        : CallHistory.duration(record.dur);
     final metaColor = record.missed ? c.danger : c.textDim;
+    final kindColor = live.isNotEmpty ? c.primary : metaColor;
     final kindSvg = record.isVideo ? NymIcons.video : NymIcons.phone;
 
     final Widget avatar;
@@ -303,6 +334,24 @@ class CallHistoryRow extends ConsumerWidget {
       );
     }
 
+    final String actionLabel;
+    final String actionGlyph;
+    final VoidCallback onAction;
+    if (inCall) {
+      actionLabel = tr('Return to the call');
+      actionGlyph = kindSvg;
+      onAction = () => _returnToCall(context);
+    } else if (rejoin) {
+      actionLabel = tr('Rejoin the call');
+      actionGlyph = NymIcons.phoneRejoin;
+      onAction = () => _rejoin(context, ref);
+    } else {
+      actionLabel = tr('Call back');
+      actionGlyph = kindSvg;
+      onAction = () => _callBack(context, ref);
+    }
+    final blocked = busy && !inCall && !rejoin;
+
     final sep = Text('·', style: TextStyle(color: c.textDim, fontSize: 12));
     return Container(
       key: ValueKey('callRow-${record.id}'),
@@ -335,13 +384,21 @@ class CallHistoryRow extends ConsumerWidget {
                                     ? tr('Video call')
                                     : tr('Voice call'),
                                 child: NymSvgIcon(kindSvg,
-                                    size: 14, color: metaColor),
+                                    size: 14, color: kindColor),
                               ),
                               const SizedBox(width: 5),
-                              Text(label,
-                                  key: ValueKey('callDir-${record.id}'),
-                                  style: TextStyle(
-                                      color: metaColor, fontSize: 12)),
+                              if (live.isNotEmpty)
+                                Text(live,
+                                    key: ValueKey('callLive-${record.id}'),
+                                    style: TextStyle(
+                                        color: c.primary,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600))
+                              else
+                                Text(label,
+                                    key: ValueKey('callDir-${record.id}'),
+                                    style: TextStyle(
+                                        color: metaColor, fontSize: 12)),
                               const SizedBox(width: 5),
                               sep,
                               const SizedBox(width: 5),
@@ -373,11 +430,23 @@ class CallHistoryRow extends ConsumerWidget {
               ),
             ),
           ),
-          IconButton(
-            key: ValueKey('callBack-${record.id}'),
-            tooltip: tr('Call back'),
-            onPressed: () => _callBack(context, ref),
-            icon: NymSvgIcon(kindSvg, size: 18, color: c.primary),
+          Semantics(
+            container: true,
+            button: true,
+            enabled: !blocked,
+            label: actionLabel,
+            hint: blocked ? tr('Already in a call') : null,
+            onTap: onAction,
+            excludeSemantics: true,
+            child: IconButton(
+              key: ValueKey('callAction-${record.id}'),
+              tooltip: blocked ? tr('Already in a call') : actionLabel,
+              onPressed: onAction,
+              icon: NymSvgIcon(actionGlyph,
+                  size: 18,
+                  color:
+                      blocked ? c.primary.withValues(alpha: 0.45) : c.primary),
+            ),
           ),
         ],
       ),

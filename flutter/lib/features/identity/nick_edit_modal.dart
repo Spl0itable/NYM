@@ -21,6 +21,8 @@ import '../../services/nostr/nym_generator.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
 import '../../widgets/common/app_dialog.dart';
+import '../../widgets/common/nym_label.dart';
+import '../../widgets/common/dialog_button.dart';
 import '../../widgets/common/nym_avatar.dart';
 import '../../widgets/nym_icons.dart';
 import '../../widgets/common/nym_sheet.dart';
@@ -305,11 +307,8 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
                 padding: const EdgeInsets.only(left: 4, right: 12),
                 child: Text(
                   _suffix,
-                  style: TextStyle(
-                    color: c.primary,
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                  ),
+                  style: nymSuffixStyleOf(
+                      context, TextStyle(color: c.inputText, fontSize: 14)),
                 ),
               ),
               suffixIconConstraints:
@@ -1056,10 +1055,7 @@ class _NickEditModalState extends ConsumerState<NickEditModal> {
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: c.glassBorder)),
       ),
-      child: Wrap(
-        alignment: WrapAlignment.center,
-        spacing: 10,
-        runSpacing: 10,
+      child: DialogActions(
         children: [
           ModalChrome.iconButton(
               c, tr('Randomize'), _saving ? null : _randomize),

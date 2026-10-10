@@ -292,7 +292,7 @@ Object.assign(NYM.prototype, {
         this._resetZapModalToDefault();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
-        document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}`;
+        this.renderNymText(document.getElementById('zapRecipientInfo'), `Zapping @${recipientNym}`);
         document.getElementById('zapCustomAmount').value = '';
         document.getElementById('zapComment').value = '';
         this._wireZapAutoGenerate(() => this.generateZapInvoice());
@@ -317,7 +317,7 @@ Object.assign(NYM.prototype, {
         this._resetZapModalToDefault();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
-        document.getElementById('zapRecipientInfo').textContent = `Zapping @${recipientNym}'s profile`;
+        this.renderNymText(document.getElementById('zapRecipientInfo'), `Zapping @${recipientNym}'s profile`);
         document.getElementById('zapCustomAmount').value = '';
         document.getElementById('zapComment').value = '';
         this._wireZapAutoGenerate(() => this.generateZapInvoice());
@@ -569,9 +569,9 @@ Object.assign(NYM.prototype, {
         this._captureDefaultZapAmounts();
         document.getElementById('zapAmountSection').style.display = 'block';
         document.getElementById('zapInvoiceSection').style.display = 'none';
-        document.getElementById('zapRecipientInfo').textContent = isGift
+        this.renderNymText(document.getElementById('zapRecipientInfo'), isGift
             ? `Gift Nymbot credits to @${giftRecipient.nym}`
-            : 'Buy Nymbot private message credits';
+            : 'Buy Nymbot private message credits');
         document.getElementById('zapCustomAmount').value = '';
         document.getElementById('zapComment').value = '';
         const refreshTier = () => {
@@ -770,7 +770,7 @@ Object.assign(NYM.prototype, {
             if (!apiHost) return false;
             const reqExtra = { invoiceId };
             if (receipt) reqExtra.receipt = receipt;
-            if (this.nym && !anon) reqExtra.gifterNym = this.nym + '#' + this.getPubkeySuffix(this.pubkey);
+            if (this.nym && !anon) reqExtra.gifterNym = String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey);
             let data = null, status = 0;
             for (let attempt = 0; attempt < 5; attempt++) {
                 const res = await this._botMoneyRequest('claim-credits', reqExtra, { anon: !!anon });
@@ -1242,7 +1242,9 @@ Object.assign(NYM.prototype, {
             const verified = !!providerPubkey && typeof event.pubkey === 'string' &&
                 event.pubkey.toLowerCase() === providerPubkey;
 
-            const zapper = (verified || zapperPubkey === event.pubkey) ? zapperPubkey : event.pubkey;
+            const CF = window.NymContentFilter;
+            const zapper = CF ? CF.zapper(zapperPubkey || '', event.pubkey, verified)
+                : ((verified || zapperPubkey === event.pubkey) ? zapperPubkey : event.pubkey);
             if (this.blockedUsers && this.blockedUsers.has(zapper)) return;
 
             if (zapper === this.pubkey) {
@@ -1746,9 +1748,16 @@ Object.assign(NYM.prototype, {
             existingZapBtn.remove();
         }
 
-        if (messageZaps && messageZaps.amounts.size > 0) {
+        const zapAmounts = new Map();
+        if (messageZaps && messageZaps.amounts) {
+            messageZaps.amounts.forEach((amount, zapper) => {
+                if (typeof this.isPersonHidden === 'function' && this.isPersonHidden(zapper)) return;
+                zapAmounts.set(zapper, amount);
+            });
+        }
+        if (zapAmounts.size > 0) {
             let totalZaps = 0;
-            messageZaps.amounts.forEach(amount => {
+            zapAmounts.forEach(amount => {
                 totalZaps += amount;
             });
 
@@ -1761,7 +1770,7 @@ Object.assign(NYM.prototype, {
     ${this.abbreviateNumber(totalZaps)}
 `;
 
-            const zapperCount = messageZaps.amounts.size;
+            const zapperCount = zapAmounts.size;
             let zapTitle = `${this.abbreviateNumber(zapperCount)} zapper${zapperCount > 1 ? 's' : ''} • ${this.abbreviateNumber(totalZaps)} sats total`;
             let unverifiedSats = 0;
             if (messageZaps.unverified) messageZaps.unverified.forEach(s => { unverifiedSats += s; });

@@ -313,6 +313,7 @@
         const warning = (cs.getPropertyValue('--warning') || '#ffcc00').trim() || '#ffcc00';
         const isLight = document.body.classList.contains('light-mode');
         return {
+            font: (cs.getPropertyValue('--font-sans') || '').trim() || 'system-ui, sans-serif',
             primary,
             warning,
             joined: '#28e07a',
@@ -409,7 +410,7 @@ Object.assign(NYM.prototype, {
     ${ctl('gxLocationBtn', '', 'Your Location', 'locate', showYourLocation ? ' data-on="1"' : '')}
     <button type="button" class="gx-ctl gx-layers-btn" id="gxLayersBtn" aria-label="${esc(L('Layers'))}" title="${esc(L('Layers'))}" aria-haspopup="menu" aria-expanded="false" aria-controls="gxLayersMenu">${icon('layers')}<span class="gx-badge nm-hidden" aria-hidden="true"></span></button>
     ${ctl('gxResetBtn', 'resetGlobeView', 'Reset View', 'globe')}
-    ${ctl('gxListsBtn', '', 'Rooms list', 'list', ' aria-expanded="false" aria-controls="gxLists"')}
+    ${ctl('gxListsBtn', '', 'Channels list', 'list', ' aria-expanded="false" aria-controls="gxLists"')}
 </div>
 
 <div class="gx-layers nm-hidden" id="gxLayers">
@@ -424,13 +425,21 @@ Object.assign(NYM.prototype, {
         <div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot gx-dot-joined" aria-hidden="true"></div><span>${esc(L('Joined'))}</span></div>
         <div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot gx-dot-saved" aria-hidden="true"></div><span>${esc(L('Saved'))}</span></div>
         ${showYourLocation ? `<div class="geohash-legend-item" role="listitem"><div class="geohash-legend-dot nm-geo-2" aria-hidden="true"></div><span>${esc(L('Your Location'))}</span></div>` : ''}
-        <div class="geohash-legend-item gx-legend-cluster" role="listitem"><span class="gx-swatch gx-swatch-cluster" aria-hidden="true">3</span><span>${esc(L('Number = rooms grouped together'))}</span></div>
+        <div class="geohash-legend-item gx-legend-cluster" role="listitem"><span class="gx-swatch gx-swatch-cluster" aria-hidden="true">3</span><span>${esc(L('Number = channels grouped together'))}</span></div>
         <div class="geohash-legend-item gx-legend-pulse" role="listitem"><span class="gx-swatch gx-swatch-pulse" aria-hidden="true"></span><span>${esc(L('Pulsing = active in the last {n} minutes').replace('{n}', String(Math.round(GX.PULSE_WINDOW_MS / 60000))))}</span></div>
     </div>
 </div>
 
+<div class="gx-stack nm-hidden" id="gxStack" role="dialog" aria-modal="false" aria-labelledby="gxStackTitle">
+    <div class="gx-stack-head">
+        <div class="gx-stack-title" id="gxStackTitle"></div>
+        <button type="button" class="gx-icon-btn" id="gxStackClose" aria-label="${esc(L('Close'))}" title="${esc(L('Close'))}">${icon('close')}</button>
+    </div>
+    <div class="gx-rows gx-stack-rows" id="gxStackRows"></div>
+</div>
+
 <div class="gx-lists nm-hidden" id="gxLists">
-    <div class="gx-tabs" role="tablist" aria-label="${esc(L('Rooms'))}">
+    <div class="gx-tabs" role="tablist" aria-label="${esc(L('Channels'))}">
         <button type="button" class="gx-tab" role="tab" id="gxTabActive" data-tab="active" aria-selected="true">${esc(L('Active now'))}</button>
         <button type="button" class="gx-tab" role="tab" id="gxTabNearby" data-tab="nearby" aria-selected="false">${esc(L('Nearby'))}</button>
         <button type="button" class="gx-tab" role="tab" id="gxTabSaved" data-tab="saved" aria-selected="false">${esc(L('Saved'))}</button>
@@ -461,7 +470,7 @@ Object.assign(NYM.prototype, {
 
         let dpr = GX.capDpr(window.devicePixelRatio || 1);
 
-        const view = { cx: 0, cy: 0, zoom: 1, minZoom: 1, maxZoom: 16 };
+        const view = { cx: 0, cy: 0, zoom: 1, minZoom: 1, maxZoom: GX.MAX_ZOOM };
 
         let cssWidth = container.clientWidth || 1;
         let cssHeight = container.clientHeight || 1;
@@ -620,6 +629,7 @@ Object.assign(NYM.prototype, {
             const startLi = Math.floor((latMin + 90) / latStep);
             const endLi = Math.ceil((latMax + 90) / latStep);
 
+            const corner = !geohashGridMode;
             const isLight = document.body.classList.contains('light-mode');
             const lineColor = isLight ? 'rgba(0, 100, 140, 0.45)' : 'rgba(0, 220, 255, 0.35)';
             const fillColor = isLight ? 'rgba(0, 140, 180, 0.04)' : 'rgba(0, 220, 255, 0.04)';
@@ -650,11 +660,15 @@ Object.assign(NYM.prototype, {
             const cellPxW = lngStep * s;
             const cellPxH = latStep * s;
             const showLabels = cellPxW >= 38 && cellPxH >= 22;
+            lastGridLabels = [];
             if (showLabels) {
                 const fontSize = Math.max(9, Math.min(14, Math.floor(Math.min(cellPxW, cellPxH) / 5)));
-                ctx.font = `600 ${fontSize}px var(--font-sans, system-ui, sans-serif)`;
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
+                const font = `600 ${fontSize}px ${styles.font}`;
+                const lineH = fontSize * 1.4;
+                const blocked = corner ? gridLabelBlocked() : null;
+                ctx.font = font;
+                ctx.textAlign = corner ? 'left' : 'center';
+                ctx.textBaseline = corner ? 'top' : 'middle';
                 ctx.lineJoin = 'round';
                 ctx.lineWidth = 3;
                 for (let li = startLi; li < endLi; li++) {
@@ -664,8 +678,19 @@ Object.assign(NYM.prototype, {
                         const cellLng = -180 + gi * lngStep + lngStep / 2;
                         if (cellLng < -180 || cellLng > 180) continue;
                         const gh = encodeGeohashRaw(cellLat, cellLng, precision);
-                        const p = project(cellLng, cellLat);
-                        if (!inView(p, 0)) continue;
+                        let p;
+                        if (corner) {
+                            const tl = project(cellLng - lngStep / 2, cellLat + latStep / 2);
+                            const br = project(cellLng + lngStep / 2, cellLat - latStep / 2);
+                            const textW = measureLabel(ctx, font, gh);
+                            p = GX.gridCornerLabel({ x0: tl.x, y0: tl.y, x1: br.x, y1: br.y }, textW, lineH, { width: cssWidth, height: cssHeight, blocked });
+                            if (!p) continue;
+                            ctx.font = font;
+                            lastGridLabels.push({ text: gh, x0: p.x, y0: p.y, x1: p.x + textW, y1: p.y + lineH });
+                        } else {
+                            p = project(cellLng, cellLat);
+                            if (!inView(p, 0)) continue;
+                        }
                         ctx.strokeStyle = labelStroke;
                         ctx.strokeText(gh, p.x, p.y);
                         ctx.fillStyle = labelColor;
@@ -674,6 +699,20 @@ Object.assign(NYM.prototype, {
                 }
             }
             ctx.restore();
+        };
+
+        const deepGrid = () => GX.deepGrid(baseScale() * view.zoom);
+
+        let lastGridLabels = [];
+        const gridLabelBlocked = () => {
+            const out = occupiedRects().slice();
+            for (const l of lastLabels) out.push(l.box);
+            if (heatmapMode) return out;
+            for (const k of currentClusters()) {
+                const r = (k.count > 1 ? k.r : 4) + 2;
+                if (inView({ x: k.x, y: k.y }, r)) out.push({ x0: k.x - r, y0: k.y - r, x1: k.x + r, y1: k.y + r });
+            }
+            return out;
         };
 
         const findGeohashAt = (x, y) => {
@@ -792,7 +831,7 @@ Object.assign(NYM.prototype, {
         const occupiedRects = () => {
             const c = canvas.getBoundingClientRect();
             const out = [];
-            for (const el of [container.querySelector('#gxSearch'), container.querySelector('.gx-controls')]) {
+            for (const el of [container.querySelector('#gxSearch'), container.querySelector('.gx-controls'), document.getElementById('gxStack')]) {
                 if (!el || el.offsetParent === null) continue;
                 const r = el.getBoundingClientRect();
                 if (r.width <= 0 || r.height <= 0) continue;
@@ -801,7 +840,7 @@ Object.assign(NYM.prototype, {
             lastOccupied = out;
             return out;
         };
-        const FONT = (w, px) => `${w} ${px}px var(--font-sans, system-ui, sans-serif)`;
+        const FONT = (w, px) => `${w} ${px}px ${styles.font}`;
         const layoutLabels = () => {
             const cands = [];
             const add = (text, kind, p, px, weight, color, halo, center) => {
@@ -1015,7 +1054,7 @@ Object.assign(NYM.prototype, {
         let clusterCache = { key: '', list: [] };
         const worldClusters = () => {
             const chans = this.geohashChannels || [];
-            const zq = Math.floor(view.zoom * GX.CLUSTER_ZOOM_STEPS);
+            const zq = GX.clusterZoomStep(view.zoom);
             let key = zq + '|' + cssWidth + '|' + cssHeight;
             for (const c of chans) key += '|' + c.geohash + ':' + c.lat + ':' + c.lng + ':' + c.messages;
             if (clusterCache.key !== key) {
@@ -1025,7 +1064,7 @@ Object.assign(NYM.prototype, {
             return clusterCache.list;
         };
         const currentClusters = () => {
-            if (heatmapMode || view.zoom >= GX.CLUSTER_MAX_ZOOM) return [];
+            if (heatmapMode) return [];
             return worldClusters().map((k) => Object.assign({}, k, project(k.lng, k.lat)));
         };
 
@@ -1139,21 +1178,26 @@ Object.assign(NYM.prototype, {
             ctx.fillStyle = styles.primary;
             ctx.fill();
             ctx.globalAlpha = 1;
-            ctx.font = '700 11px var(--font-sans, system-ui, sans-serif)';
+            ctx.font = `700 11px ${styles.font}`;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillStyle = '#000000';
             ctx.fillText(String(k.count), k.x, k.y);
         };
 
+        const groupedIds = (clusters) => {
+            const out = new Set();
+            for (const k of clusters) if (k.count > 1) for (const id of k.ids) out.add(id);
+            return out;
+        };
+
         const drawChannels = () => {
             const baseR = 4;
             const channels = this.geohashChannels || [];
-            const hidden = new Set();
-            for (const k of currentClusters()) {
-                if (k.count < 2) continue;
-                for (const id of k.ids) hidden.add(id);
-                if (inView({ x: k.x, y: k.y }, 24)) drawClusterMarker(k);
+            const clusters = currentClusters();
+            const hidden = groupedIds(clusters);
+            for (const k of clusters) {
+                if (k.count > 1 && inView({ x: k.x, y: k.y }, 24)) drawClusterMarker(k);
             }
 
             for (const ch of channels) {
@@ -1205,7 +1249,7 @@ Object.assign(NYM.prototype, {
 
         let legendKey = '';
         const syncLegend = () => {
-            const clusters = !heatmapMode && view.zoom < GX.CLUSTER_MAX_ZOOM;
+            const clusters = !heatmapMode;
             const pulses = !heatmapMode && !gxReducedMotion();
             const key = `${clusters}|${pulses}`;
             if (key === legendKey) return;
@@ -1230,6 +1274,7 @@ Object.assign(NYM.prototype, {
             drawWorld();
             drawAdmin1();
             drawPlaceLabels();
+            if (!geohashGridMode && deepGrid()) drawGeohashGrid();
             if (heatmapMode) {
                 drawHeatmap();
             } else {
@@ -1254,6 +1299,7 @@ Object.assign(NYM.prototype, {
             view.cx = fly.from.cx + (fly.to.cx - fly.from.cx) * e;
             view.cy = fly.from.cy + (fly.to.cy - fly.from.cy) * e;
             view.zoom = Math.exp(Math.log(fly.from.zoom) + (Math.log(fly.to.zoom) - Math.log(fly.from.zoom)) * e);
+            if (t >= 1) { view.cx = fly.to.cx; view.cy = fly.to.cy; view.zoom = fly.to.zoom; }
             clampView();
             if (t >= 1) { fly = null; ensureSubregions(); }
         };
@@ -1271,6 +1317,7 @@ Object.assign(NYM.prototype, {
         };
 
         const flyTo = (target, animate) => {
+            this._gxCloseStack(false);
             if (!animate || gxReducedMotion()) {
                 fly = null;
                 view.cx = target.cx; view.cy = target.cy; view.zoom = target.zoom;
@@ -1294,6 +1341,7 @@ Object.assign(NYM.prototype, {
         });
 
         let hoveredChannel = null;
+        let hoveredGroup = false;
         let dragging = false;
         let dragStart = null;
         let dragOriginCenter = null;
@@ -1305,7 +1353,9 @@ Object.assign(NYM.prototype, {
             let nearest = null;
             let best = Infinity;
             const channels = this.geohashChannels || [];
+            const hidden = groupedIds(currentClusters());
             for (const ch of channels) {
+                if (hidden.has(ch.geohash)) continue;
                 const p = project(ch.lng, ch.lat);
                 const d = Math.hypot(p.x - x, p.y - y);
                 if (d < hitR && d < best) { best = d; nearest = ch; }
@@ -1324,8 +1374,16 @@ Object.assign(NYM.prototype, {
             return hit;
         };
 
+        let swallow = false;
         const onPointerDown = (e) => {
             if (e.pointerType === 'touch' && e.isPrimary === false) return;
+            if (this._gxStackOpen) {
+                swallow = true;
+                dragging = false;
+                this._gxCloseStack(false);
+                return;
+            }
+            swallow = false;
             try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
             fly = null;
             dragging = true;
@@ -1342,9 +1400,10 @@ Object.assign(NYM.prototype, {
 
             if (!dragging) {
                 const ch = findChannelAt(localX, localY);
+                hoveredGroup = !ch && !!clusterAt(localX, localY);
+                canvas.style.cursor = ch || hoveredGroup ? 'pointer' : 'grab';
                 if (ch !== hoveredChannel) {
                     hoveredChannel = ch;
-                    canvas.style.cursor = ch ? 'pointer' : 'grab';
                     requestDraw();
                 }
                 return;
@@ -1362,11 +1421,12 @@ Object.assign(NYM.prototype, {
         };
 
         const onPointerUp = (e) => {
+            if (swallow) { swallow = false; return; }
             const wasDrag = movedDistance > CLICK_THRESHOLD;
             const wasDown = dragging;
             dragging = false;
             try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
-            canvas.style.cursor = hoveredChannel ? 'pointer' : 'grab';
+            canvas.style.cursor = hoveredChannel || hoveredGroup ? 'pointer' : 'grab';
 
             if (!wasDown || wasDrag) return;
 
@@ -1376,13 +1436,22 @@ Object.assign(NYM.prototype, {
             if (this._gxLayersOpen) { this._gxToggleLayers(false); return; }
             const cluster = clusterAt(localX, localY);
             if (cluster) {
+                const ids = new Set(cluster.ids);
+                const members = (this.geohashChannels || []).filter((c) => ids.has(c.geohash));
+                const pts = members.map((c) => ({ id: c.geohash, lat: c.lat, lng: c.lng, messages: c.messages }));
+                const split = GX.clusterSplitZoom(pts, view.zoom, { width: cssWidth, height: cssHeight });
+                if (split === null) {
+                    this._gxOpenStack(cluster, members, { width: cssWidth, height: cssHeight });
+                    return;
+                }
                 const bs = cluster.ids.map((id) => GX.cellBounds(id)).filter(Boolean);
                 const bounds = {
                     lat: [Math.min(...bs.map((b) => b.latLo)), Math.max(...bs.map((b) => b.latHi))],
                     lng: [Math.min(...bs.map((b) => b.lngLo)), Math.max(...bs.map((b) => b.lngHi))],
                 };
-                const t = targetForBounds(bounds, 0.5);
-                if (t.zoom <= view.zoom) t.zoom = Math.min(view.maxZoom, GX.CLUSTER_MAX_ZOOM + 0.5);
+                let t = targetForBounds(bounds, 0.5);
+                if (t.zoom < split) t = { cx: cluster.lng, cy: cluster.lat, zoom: Math.min(view.maxZoom, split) };
+                if (t.zoom <= view.zoom) t.zoom = Math.min(view.maxZoom, view.zoom * 2);
                 flyTo(t, true);
                 return;
             }
@@ -1399,6 +1468,7 @@ Object.assign(NYM.prototype, {
 
         const onWheel = (e) => {
             e.preventDefault();
+            if (this._gxStackOpen) return;
             const rect = canvas.getBoundingClientRect();
             const px = e.clientX - rect.left;
             const py = e.clientY - rect.top;
@@ -1415,6 +1485,7 @@ Object.assign(NYM.prototype, {
 
         let pinch = null;
         const onTouchStart = (e) => {
+            if (this._gxStackOpen) return;
             if (e.touches.length === 2) {
                 const t0 = e.touches[0], t1 = e.touches[1];
                 const dx = t0.clientX - t1.clientX;
@@ -1466,6 +1537,7 @@ Object.assign(NYM.prototype, {
 
         let resizeTimer = null;
         const onResize = () => {
+            this._gxCloseStack(false);
             if (resizeTimer) clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 resizeCanvas();
@@ -1539,10 +1611,12 @@ Object.assign(NYM.prototype, {
                 if (this._gxListsOpen) this._gxRenderLists();
             },
             resetView: () => {
+                this._gxCloseStack(false);
                 fly = null;
                 selectPulseStart = 0;
                 view.cx = 0; view.cy = 0; view.zoom = 1;
                 hoveredChannel = null;
+                hoveredGroup = false;
                 if (heatmapMode) {
                     heatmapMode = false;
                     this._heatmapPreference = false;
@@ -1562,6 +1636,7 @@ Object.assign(NYM.prototype, {
                 requestDraw();
             },
             zoomBy: (factor) => {
+                this._gxCloseStack(false);
                 const before = unproject(cssWidth / 2, cssHeight / 2);
                 view.zoom = Math.max(view.minZoom, Math.min(view.maxZoom, view.zoom * factor));
                 const after = unproject(cssWidth / 2, cssHeight / 2);
@@ -1602,10 +1677,12 @@ Object.assign(NYM.prototype, {
                 if (!admin1Loaded) { admin1Loaded = true; loadAdmin1Features().then((f) => { admin1Features = f; requestDraw(); }); }
                 if (!citiesLoaded) { citiesLoaded = true; loadCityFeatures().then((f) => { cityFeatures = f; requestDraw(); }); }
             },
-            debugState: () => ({ view: { cx: view.cx, cy: view.cy, zoom: view.zoom }, width: cssWidth, height: cssHeight,
+            debugState: () => ({ view: { cx: view.cx, cy: view.cy, zoom: view.zoom }, width: cssWidth, height: cssHeight, maxZoom: view.maxZoom,
+                grid: { shown: geohashGridMode || deepGrid(), auto: !geohashGridMode && deepGrid(), precision: computeGridPrecision(), labels: !geohashGridMode && deepGrid() ? lastGridLabels.slice() : [] },
+                stack: this._gxStackOpen ? { ids: (this._gxStackIds || []).slice() } : null,
                 clusters: currentClusters(), recent: [...recentSet()], saved: [...savedSet()], selected: this._gxSelected || null,
                 pulse: this._gxAnim ? this._gxAnim.pulseT : null, ambient: this._gxAnim ? this._gxAnim.ambientT : null,
-                flying: !!fly, project: (lat, lng) => project(lng, lat),
+                flying: !!fly, project: (lat, lng) => project(lng, lat), hovered: hoveredChannel ? hoveredChannel.geohash : null,
                 dpr, heat: heatCanvas ? { w: heatCanvas.width, h: heatCanvas.height } : null,
                 geo: (() => {
                     const t0 = features.length ? pathsForFeatures(features, true).layer : null;
@@ -1621,6 +1698,7 @@ Object.assign(NYM.prototype, {
                 occupied: lastOccupied,
                 labels: lastLabels.map((l) => ({ text: l.text, kind: l.kind, x0: l.box.x0, y0: l.box.y0, x1: l.box.x1, y1: l.box.y1 })) }),
             zoomToBounds: (bounds, padding = 0.7) => {
+                this._gxCloseStack(false);
                 const lngSpan = Math.max(1e-6, bounds.lng[1] - bounds.lng[0]);
                 const latSpan = Math.max(1e-6, bounds.lat[1] - bounds.lat[0]);
                 const s = baseScale();
@@ -1752,9 +1830,20 @@ Object.assign(NYM.prototype, {
             this._gxToggleLayers(false, true);
         });
         on('geohashExplorerModal', 'nym-sheet-escape', (e) => {
+            if (this._gxStackOpen) {
+                e.preventDefault();
+                this._gxCloseStack(true);
+                return;
+            }
             if (!this._gxLayersOpen) return;
             e.preventDefault();
             this._gxToggleLayers(false, true);
+        });
+        on('gxStack', 'keydown', (e) => this._gxStackKey(e));
+        on('gxStack', 'click', (e) => {
+            if (e.target.closest('#gxStackClose')) { this._gxCloseStack(true); return; }
+            const row = e.target.closest('.gx-row');
+            if (row && row.dataset.gh) this._gxPickStack(row.dataset.gh);
         });
         on('gxListsBtn', 'click', () => this._gxToggleLists());
         on('gxLocationBtn', 'click', () => this._gxGoToLocation());
@@ -1795,6 +1884,9 @@ Object.assign(NYM.prototype, {
     _gxTeardownUi() {
         for (const f of (this._gxUnbind || [])) { try { f(); } catch (_) { } }
         this._gxUnbind = [];
+        this._gxStackOpen = false;
+        this._gxStackIds = null;
+        this._gxStackReturn = null;
         this._gxCancelPeek();
         this._gxSelected = null;
     },
@@ -1802,6 +1894,7 @@ Object.assign(NYM.prototype, {
     _gxToggleLayers(force, moveFocus) {
         const was = !!this._gxLayersOpen;
         const open = typeof force === 'boolean' ? force : !was;
+        if (open) this._gxCloseStack(false);
         this._gxLayersOpen = open;
         const menu = document.getElementById('gxLayers');
         const btn = document.getElementById('gxLayersBtn');
@@ -1870,6 +1963,7 @@ Object.assign(NYM.prototype, {
     _gxToggleLists(force) {
         const open = typeof force === 'boolean' ? force : !this._gxListsOpen;
         this._gxListsOpen = open;
+        this._gxCloseStack(false);
         this._gxToggleLayers(false);
         const btn = document.getElementById('gxListsBtn');
         if (btn) { btn.setAttribute('aria-expanded', open ? 'true' : 'false'); btn.classList.toggle('active', open); }
@@ -1982,17 +2076,17 @@ Object.assign(NYM.prototype, {
             const wl = { 1: 'Last hour', 24: 'Last 24 hours', 168: 'Last 7 days' }[this._geohashActiveWindowHours] || 'Last 24 hours';
             html = `<div class="gx-lists-head"><span>${this.escapeHtml(this._gxL(wl))}</span>${this._gxWindowGroupHtml(this._geohashActiveWindowHours)}</div>`
                 + (rows.length ? `<div class="gx-rows">${rows.map((c) => this._gxRow(c)).join('')}</div>`
-                    : this._gxEmpty('No active rooms', 'Nothing was posted in this window.'));
+                    : this._gxEmpty('No active channels', 'Nothing was posted in this window.'));
         } else if (tab === 'nearby') {
             const loc = this._gxUserLoc();
             if (!loc) {
-                html = this._gxEmpty('Location is off', 'Turn on "Sort by proximity" in Settings to list rooms near you. Distances are worked out on this device and your location is never sent.');
+                html = this._gxEmpty('Location is off', 'Turn on "Sort by proximity" in Settings to list channels near you. Distances are worked out on this device and your location is never sent.');
             } else {
                 const seen = new Set(active.map((c) => c.geohash));
                 const pool = active.concat(this._gxSavedRows().filter((c) => !seen.has(c.geohash)));
                 const rows = GX.rankNearby(pool, loc);
                 html = rows.length ? `<div class="gx-rows">${rows.map((r) => this._gxRow(r, r.distanceKm)).join('')}</div>`
-                    : this._gxEmpty('No rooms yet', 'No active or saved rooms to measure.');
+                    : this._gxEmpty('No channels yet', 'No active or saved channels to measure.');
             }
         } else {
             const rows = this._gxSavedRows();
@@ -2015,6 +2109,7 @@ Object.assign(NYM.prototype, {
 
     _gxAfterSelect(channel) {
         const gh = String(channel.geohash).toLowerCase();
+        this._gxCloseStack(false);
         this._gxSelected = gh;
         this._gxToggleLayers(false);
         this._gxSyncSave();
@@ -2022,6 +2117,103 @@ Object.assign(NYM.prototype, {
         this._gxStartPeek(gh);
         this._gxSyncListsVisibility();
         if (this.geohashMap && this.geohashMap.redraw) this.geohashMap.redraw();
+    },
+
+    _gxOpenStack(k, members, size) {
+        const el = document.getElementById('gxStack');
+        const rows = document.getElementById('gxStackRows');
+        const title = document.getElementById('gxStackTitle');
+        if (!el || !rows || !title || !members.length) return;
+        this._gxToggleLayers(false);
+        const list = window.NymGeoExplore.rankActive(members);
+        const label = this._gxL('{n} channels here').replace('{n}', String(list.length));
+        title.textContent = label;
+        el.setAttribute('aria-label', label);
+        rows.innerHTML = list.map((c) => this._gxRow(c)).join('');
+        const inset = this._gxNarrow() ? 10 : 16;
+        const maxX = size.width - inset - 52;
+        const w = Math.max(0, Math.min(300, maxX - inset));
+        const left = Math.max(inset, Math.min(maxX - w, k.x - w / 2));
+        const below = size.height - inset - (k.y + k.r + 8);
+        const above = k.y - k.r - 8 - (inset + 52);
+        el.style.left = left + 'px';
+        el.style.width = w + 'px';
+        if (below >= above) {
+            el.style.top = (k.y + k.r + 8) + 'px';
+            el.style.bottom = 'auto';
+            el.style.maxHeight = Math.max(0, below) + 'px';
+        } else {
+            el.style.top = 'auto';
+            el.style.bottom = (size.height - (k.y - k.r - 8)) + 'px';
+            el.style.maxHeight = Math.max(0, above) + 'px';
+        }
+        const a = document.activeElement;
+        this._gxStackReturn = a && a !== document.body && !el.contains(a) ? a : null;
+        this._gxStackOpen = true;
+        this._gxStackIds = list.map((c) => c.geohash);
+        el.classList.remove('nm-hidden');
+        const first = rows.querySelector('.gx-row');
+        if (first) first.focus({ preventScroll: true });
+        if (this.geohashMap && this.geohashMap.redraw) this.geohashMap.redraw();
+        const ids = this._gxStackIds;
+        this._gxLoadPlaces().then(() => {
+            if (!this._gxStackOpen || this._gxStackIds !== ids) return;
+            const at = document.activeElement && rows.contains(document.activeElement) ? document.activeElement.dataset.gh : null;
+            rows.innerHTML = list.map((c) => this._gxRow(c)).join('');
+            const again = at ? rows.querySelector(`.gx-row[data-gh="${at}"]`) : null;
+            if (again) again.focus({ preventScroll: true });
+        }).catch(() => { });
+    },
+
+    _gxCloseStack(restoreFocus) {
+        if (!this._gxStackOpen) return;
+        this._gxStackOpen = false;
+        this._gxStackIds = null;
+        const el = document.getElementById('gxStack');
+        const had = !!el && el.contains(document.activeElement);
+        if (el) el.classList.add('nm-hidden');
+        const back = this._gxStackReturn;
+        this._gxStackReturn = null;
+        if (this.geohashMap && this.geohashMap.redraw) this.geohashMap.redraw();
+        if (restoreFocus && had) {
+            if (back && back.isConnected) back.focus({ preventScroll: true });
+            else if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+        }
+    },
+
+    _gxPickStack(gh) {
+        const ch = (this.geohashChannels || []).find((c) => c.geohash === gh);
+        this._gxCloseStack(false);
+        if (ch && typeof this.selectGeohashChannel === 'function') this.selectGeohashChannel(ch);
+    },
+
+    _gxStackKey(e) {
+        const el = document.getElementById('gxStack');
+        if (!el) return;
+        const rows = [...el.querySelectorAll('.gx-row')];
+        const all = [...el.querySelectorAll('button')];
+        const at = rows.indexOf(document.activeElement);
+        let next = -1;
+        if (e.key === 'ArrowDown') next = at < 0 ? 0 : Math.min(rows.length - 1, at + 1);
+        else if (e.key === 'ArrowUp') next = at < 0 ? rows.length - 1 : Math.max(0, at - 1);
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = rows.length - 1;
+        else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            this._gxCloseStack(true);
+            return;
+        } else if (e.key === 'Tab' && all.length) {
+            const i = all.indexOf(document.activeElement);
+            const to = e.shiftKey ? (i <= 0 ? all.length - 1 : i - 1) : (i < 0 || i >= all.length - 1 ? 0 : i + 1);
+            e.preventDefault();
+            e.stopPropagation();
+            all[to].focus({ preventScroll: true });
+            return;
+        }
+        if (next < 0 || !rows[next]) return;
+        e.preventDefault();
+        rows[next].focus({ preventScroll: true });
     },
 
     _gxRenderPrecision(gh) {
@@ -2054,6 +2246,22 @@ Object.assign(NYM.prototype, {
         return 'online';
     },
 
+    _gxRoomBlocked(gh) {
+        const F = window.NymContentFilter;
+        return !!(F && typeof this._cfCtx === 'function' && F.channelBlocked(this._cfCtx(), gh));
+    },
+
+    _gxPeekHidden(ev) {
+        const F = window.NymContentFilter;
+        if (!ev || !F || typeof this._cfCtx !== 'function') return false;
+        const tag = Array.isArray(ev.tags) ? ev.tags.find((t) => Array.isArray(t) && t[0] === 'n') : null;
+        const nym = tag && typeof tag[1] === 'string' ? tag[1] : '';
+        const content = typeof ev.content === 'string' ? ev.content : '';
+        const ref = { id: ev.id, pubkey: ev.pubkey, content };
+        if (F.hidden(this._cfCtx(), { pubkey: ev.pubkey || '', content, nym: this._cfNym(nym) }, ref)) return true;
+        return ev.pubkey !== this.pubkey && typeof this.isSpamMessage === 'function' && this.isSpamMessage(content);
+    },
+
     async _gxStartPeek(gh) {
         this._gxCancelPeek();
         const el = document.getElementById('gxPeek');
@@ -2064,7 +2272,7 @@ Object.assign(NYM.prototype, {
         const reach = this._gxPeekReach(gh);
         if (reach !== 'online') {
             el.innerHTML = note('gx-peek-offline', reach === 'mesh'
-                ? 'Peek needs the internet. Over the Bluetooth mesh, join the room to see its messages.'
+                ? 'Peek needs the internet. Over the Bluetooth mesh, join the channel to see its messages.'
                 : "You're offline. Peek shows recent messages once you're back online.");
             return;
         }
@@ -2076,8 +2284,10 @@ Object.assign(NYM.prototype, {
             const events = await this._gxPeekFetch(gh, run);
             if (run.cancelled) return;
             const ok = [];
+            const roomBlocked = this._gxRoomBlocked(gh);
             for (const ev of events) {
                 if (run.cancelled) return;
+                if (roomBlocked || this._gxPeekHidden(ev)) continue;
                 if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
                 if (await this._verifyRelayEventAsync(ev)) ok.push(ev);
             }
@@ -2087,7 +2297,7 @@ Object.assign(NYM.prototype, {
             const set = this.channelUsers && this.channelUsers.get(gh);
             if (set) for (const pk of set) {
                 const u = this.users && this.users.get(pk);
-                if (u && now - u.lastSeen < 300000) local.push(pk);
+                if (u && now - u.lastSeen < 300000 && !(typeof this.isPersonHidden === 'function' && this.isPersonHidden(pk, u.nym))) local.push(pk);
             }
             summary = window.NymGeoExplore.summarizePeek(ok, {
                 geohash: gh, nowSec: Math.floor(now / 1000), blocked: [...(this.blockedUsers || [])], localOnline: local,
@@ -2102,12 +2312,16 @@ Object.assign(NYM.prototype, {
         const countEl = document.getElementById('geohashInfoMessages');
         if (countEl && this.selectedGeohash === gh) countEl.textContent = window.NymGeoExplore.peekCountLabel(summary);
         if (!summary.messages.length) {
-            el.innerHTML = `${head(summary.online)}<div class="gx-peek-note">${e(this._gxL('No recent messages in this room.'))}</div>`;
+            el.innerHTML = `${head(summary.online)}<div class="gx-peek-note">${e(this._gxL('No recent messages in this channel.'))}</div>`;
             return;
         }
+        const nowMs = Date.now();
+        const LM = window.NymLayoutModel;
+        const ui = (t) => this._gxL(t);
         const rows = summary.messages.map((m) => {
             const who = this.formatNymWithPubkey(m.nym || this._gxL('anon'), m.pubkey);
-            return `<div class="gx-peek-msg"><span class="gx-peek-who">${who}</span> <span class="gx-peek-text">${e(m.content)}</span></div>`;
+            const when = LM && typeof LM.relativeTime === 'function' ? LM.relativeTime(nowMs, m.createdAt * 1000, ui) : '';
+            return `<div class="gx-peek-msg"><span class="gx-peek-time">${e(when)}</span><span class="gx-peek-line"><span class="gx-peek-who">${who}</span> <span class="gx-peek-text">${this.mentionSuffixHtml(m.content)}</span></span></div>`;
         }).join('');
         el.innerHTML = `${head(summary.online)}<div class="gx-peek-list" aria-label="${e(this._gxL('Recent messages, read only'))}">${rows}</div>`;
     },

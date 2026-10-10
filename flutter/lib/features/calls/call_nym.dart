@@ -6,6 +6,7 @@ import '../../core/utils/nym_utils.dart';
 import '../../features/shop/cosmetics.dart';
 import '../../state/app_state.dart';
 import '../../state/nostr_controller.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/context_menu/profile_badges.dart';
 import '../i18n/i18n.dart';
 
@@ -25,7 +26,6 @@ class CallNym extends ConsumerWidget {
     this.self = false,
     this.baseColor,
     this.baseStyle,
-    this.suffixOpacity = 0.7,
     this.badgeSize = 14,
   });
 
@@ -41,7 +41,6 @@ class CallNym extends ConsumerWidget {
   /// Base-nym text style override; color comes from [baseColor].
   final TextStyle? baseStyle;
 
-  final double suffixOpacity;
   final double badgeSize;
 
   @override
@@ -77,26 +76,13 @@ class CallNym extends ConsumerWidget {
     // Genesis holders bold the base nym; the suffix stays weight 400.
     final genesis = hasGenesisFlair(cosmetics);
 
-    // Single ellipsizing run, so no `Flexible` is needed in bounded or unbounded parents.
-    final nameRun = Text.rich(
-      TextSpan(children: [
-        TextSpan(
-          text: baseNym,
-          style: base.copyWith(
-            fontWeight: genesis ? FontWeight.w700 : base.fontWeight,
-          ),
-        ),
-        TextSpan(
-          text: '#$suffix',
-          style: base.copyWith(
-            fontWeight: FontWeight.w400,
-            color: (baseColor ?? c.textBright).withValues(alpha: suffixOpacity),
-          ),
-        ),
-      ]),
-      maxLines: 1,
-      softWrap: false,
-      overflow: TextOverflow.ellipsis,
+    final nameRun = NymLabel(
+      baseNym,
+      suffix: suffix,
+      genesis: genesis,
+      style: base.copyWith(
+        fontWeight: genesis ? FontWeight.w700 : base.fontWeight,
+      ),
     );
 
     return Row(
@@ -123,7 +109,8 @@ class CallNym extends ConsumerWidget {
 }
 
 /// Highlights `@name#suffix` mentions in call-chat text.
-TextSpan callChatTextSpans(String text, TextStyle base, Color mentionColor) {
+TextSpan callChatTextSpans(
+    BuildContext context, String text, TextStyle base, Color mentionColor) {
   final raw = text;
   final re = RegExp(r'(^|\s)@([^\s#@]+)(#[0-9a-fA-F]{4})?');
   final spans = <InlineSpan>[];
@@ -136,10 +123,13 @@ TextSpan callChatTextSpans(String text, TextStyle base, Color mentionColor) {
     final name = m.group(2) ?? '';
     final sfx = m.group(3) ?? '';
     if (pre.isNotEmpty) spans.add(TextSpan(text: pre, style: base));
-    spans.add(TextSpan(
-      text: '@$name$sfx',
-      style: base.copyWith(color: mentionColor, fontWeight: FontWeight.w600),
-    ));
+    final mention =
+        base.copyWith(color: mentionColor, fontWeight: FontWeight.w600);
+    spans.add(TextSpan(text: '@$name', style: mention));
+    if (sfx.isNotEmpty) {
+      spans.add(
+          TextSpan(text: sfx, style: nymSuffixStyleOf(context, mention)));
+    }
     last = m.end;
   }
   if (last < raw.length) {

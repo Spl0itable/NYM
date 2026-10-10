@@ -488,8 +488,8 @@
                     <p class="form-hint cl-error" role="alert">${esc(o.error || '')}</p></div>
                     <div class="modal-actions">
                     <button type="button" class="icon-btn" data-cl="cancel" data-sheet-close>${esc(this._cl('Cancel'))}</button>
-                    ${o.alt ? `<button type="button" class="icon-btn" data-cl="alt">${esc(o.alt)}</button>` : ''}
-                    <button type="button" class="send-btn" data-cl="ok">${esc(o.ok)}</button></div>`;
+                    <button type="button" class="send-btn" data-cl="ok">${esc(o.ok)}</button></div>
+                    ${o.alt ? `<div class="modal-actions cl-alt-actions"><button type="button" class="icon-btn" data-cl="alt">${esc(o.alt)}</button></div>` : ''}`;
                 ov.appendChild(box);
                 document.body.appendChild(ov);
                 const done = (v) => { try { ov.remove(); } catch (_) { } resolve(v); };
@@ -609,7 +609,7 @@
             }
             if (p.kind === 'group') {
                 const g = this.groupConversations && this.groupConversations.get(p.id);
-                return (g && g.name) || this._cl('Group');
+                return g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : this._cl('Group');
             }
             return '#' + p.id;
         },
@@ -814,10 +814,10 @@
         _clRenderSettings() {
             if (typeof document === 'undefined') return;
             const C = L();
-            const ss = document.getElementById('screenSecuritySelect');
-            if (ss) ss.value = this.screenSecurityEnabled() ? 'on' : 'off';
-            const ik = document.getElementById('incognitoKeyboardSelect');
-            if (ik) ik.value = this.incognitoKeyboardEnabled() ? 'on' : 'off';
+            const ss = document.getElementById('screenSecurityToggle');
+            if (ss) ss.checked = this.screenSecurityEnabled();
+            const ik = document.getElementById('incognitoKeyboardToggle');
+            if (ik) ik.checked = this.incognitoKeyboardEnabled();
             const sh = document.getElementById('screenSecurityHint');
             if (sh) sh.textContent = this._cl(C.screenSecurityHint(this._clPlatform()));
             const ih = document.getElementById('incognitoKeyboardHint');
@@ -846,8 +846,9 @@
             body.innerHTML = `<p class="form-hint">${esc(this._cl(C.STRINGS.settingsHint))}</p>
                 <div class="form-group"><label class="form-label">${esc(this._cl(C.STRINGS.relockAfter))}</label>
                 <select class="form-select" id="clRelockSelect" data-on-change="clRelockChange">${C.relockOptions((x) => this._cl(x)).map((o) => `<option value="${o.value}"${o.value === relock ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></div>
-                <div class="form-group"><label class="form-label cl-check"><input type="checkbox" id="clHideEntry"${s.hide.on ? ' checked' : ''}> ${esc(this._cl(C.STRINGS.hideEntry))}</label>
-                <div class="form-hint">${esc(this._cl(C.STRINGS.hideEntryHint))}</div>
+                <div class="form-group"><label class="setting-toggle-row"><span class="form-label" id="clHideEntryLabel">${esc(this._cl(C.STRINGS.hideEntry))}</span>
+                <span class="nym-switch"><input type="checkbox" role="switch" id="clHideEntry" data-panel-toggle="chatLockHideEntry" aria-labelledby="clHideEntryLabel" aria-describedby="clHideEntryHint" data-on-change="clHideEntryChange"${s.hide.on ? ' checked' : ''}><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span></label>
+                <div class="form-hint" id="clHideEntryHint">${esc(this._cl(C.STRINGS.hideEntryHint))}</div>
                 <input type="password" class="form-input" id="clSecretCode" autocomplete="off" spellcheck="false" placeholder="${esc(this._cl(C.STRINGS.secretCode))}" aria-label="${esc(this._cl(C.STRINGS.secretCode))}" value="${esc(s.hide.code)}">
                 <p class="form-hint cl-error" id="clSettingsError" role="alert"></p>
                 <button type="button" class="ct-btn" data-action="clSaveHide">${esc(this._cl('Save'))}</button></div>
@@ -910,22 +911,6 @@
     gate('openPM', function (_nym, pubkey) { return pubkey && pubkey !== this.pubkey ? this.getPMConversationKey(pubkey) : null; });
     gate('openGroup', function (groupId) { return groupId ? this.getGroupConversationKey(groupId) : null; });
 
-    const origBadge = NYM.prototype._appBadgeCount;
-    if (typeof origBadge === 'function') {
-        NYM.prototype._appBadgeCount = function () {
-            const total = origBadge.apply(this, arguments);
-            let hidden = 0;
-            try {
-                if (!Object.keys(this._clState().items || {}).length) return Math.max(0, total);
-                for (const e of this._clUnreadEntries()) {
-                    const k = String(e.key || '');
-                    if ((k.startsWith('pm-') || k.startsWith('group-')) && e.n > 0 && this.isConversationLocked(k)) hidden += e.n;
-                }
-            } catch (_) { hidden = 0; }
-            return Math.max(0, total - hidden);
-        };
-    }
-
     const origUnread = NYM.prototype._unreadNotifications;
     if (typeof origUnread === 'function') {
         NYM.prototype._unreadNotifications = function () {
@@ -981,10 +966,18 @@
                 const el = document.getElementById('clSettingsError');
                 if (el) el.textContent = err;
             },
+            clHideEntryChange: function (_e, t) {
+                const n = nym();
+                const code = (document.getElementById('clSecretCode') || {}).value || '';
+                const err = n.chatLockSaveHide(!!t.checked, code);
+                if (err) t.checked = !t.checked;
+                const el = document.getElementById('clSettingsError');
+                if (el) el.textContent = err;
+            },
             clChangePasscode: function () { nym().chatLockChangePasscode(); },
-            onScreenSecurityChange: function (_e, t) { nym().setScreenSecurity(t.value === 'on'); },
-            onIncognitoKeyboardChange: function (_e, t) { nym().setIncognitoKeyboard(t.value === 'on'); },
-            onFallbackNoticeChange: function (_e, t) { nym().setFallbackNoticeEnabled(t.value === 'on'); },
+            onScreenSecurityChange: function (_e, t) { nym().setScreenSecurity(!!t.checked); },
+            onIncognitoKeyboardChange: function (_e, t) { nym().setIncognitoKeyboard(!!t.checked); },
+            onFallbackNoticeChange: function (_e, t) { nym().setFallbackNoticeEnabled(!!t.checked); },
         });
         let tries = 0;
         const boot = () => {

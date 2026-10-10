@@ -36,8 +36,10 @@
 
         remotePanicRender() {
             if (typeof document === 'undefined') return;
-            const sel = document.getElementById('remotePanicSelect');
-            if (sel) sel.value = this.remotePanicEnabled() ? 'on' : 'off';
+            const sel = document.getElementById('remotePanicToggle');
+            if (!sel) return;
+            sel.checked = this.remotePanicEnabled();
+            sel.disabled = !!this._remotePanicPending;
         },
 
         async setRemotePanic(on) {
@@ -47,6 +49,9 @@
                 return true;
             }
             if (this.remotePanicEnabled()) return true;
+            if (this._remotePanicPending) return false;
+            this._remotePanicPending = true;
+            this.remotePanicRender();
             let ok = false;
             try {
                 ok = await window.showAppConfirm(this._rp(STRINGS.confirm), {
@@ -56,6 +61,7 @@
                     danger: true,
                 });
             } catch (_) { ok = false; }
+            this._remotePanicPending = false;
             if (!ok) {
                 this.remotePanicRender();
                 try {
@@ -290,7 +296,7 @@
         Object.assign(window.NYM_ACTIONS, {
             onRemotePanicChange: function (_e, t) {
                 const n = window.nym;
-                if (n) n.setRemotePanic(t.value === 'on');
+                if (n) n.setRemotePanic(!!t.checked);
             },
         });
     }

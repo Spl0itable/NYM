@@ -1,3 +1,5 @@
+const CHANNEL_COVER_OVERLAP_S = 600;
+
 Object.assign(NYM.prototype, {
 
     async handleChannelLink(channelInput, event) {
@@ -65,6 +67,14 @@ Object.assign(NYM.prototype, {
             });
         }
 
+        const F = window.NymContentFilter;
+        if (F && typeof this._cfCtx === 'function') {
+            const ctx = this._cfCtx();
+            for (const g of [...allGeohashes]) {
+                if (F.channelHidden(ctx, g)) allGeohashes.delete(g);
+            }
+        }
+
         const windowHours = window.NymGeoExplore
             ? window.NymGeoExplore.normalizeWindowHours(this._geohashActiveWindowHours) : 24;
         const nowSec = Math.floor(Date.now() / 1000);
@@ -78,7 +88,7 @@ Object.assign(NYM.prototype, {
                 const d1LastSec = (this._d1ChannelLast && this._d1ChannelLast.get(geohash.toLowerCase())) || 0;
                 let lastMs = Math.max((this.channelLastActivity && this.channelLastActivity.get(`#${geohash}`)) || 0, d1LastSec * 1000);
                 for (const m of allMsgs) {
-                    if (m._spamGated) continue;
+                    if (m._spamGated || (typeof this.isContentHidden === 'function' && this.isContentHidden(m))) continue;
                     const ts = m.created_at || 0;
                     if (!ts) continue;
                     if (ts * 1000 > lastMs) lastMs = ts * 1000;
@@ -267,6 +277,7 @@ Object.assign(NYM.prototype, {
     _seedUnreadFromD1Activity() {
         const act = this._d1UnreadBuckets;
         if (!act || act.size === 0 || !this.channels) return;
+        if (typeof this._contentFiltersActive === 'function' && this._contentFiltersActive()) return;
         if (!this.channelLastRead) this.channelLastRead = new Map();
         if (!this._d1Unread) this._d1Unread = new Map();
         const now = Math.floor(Date.now() / 1000);
@@ -821,6 +832,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             btn.disabled = true;
             btn.classList.remove('active');
             btn.title = typeof this.uiText === 'function' ? this.uiText('#nymchat is always at the top') : '#nymchat is always at the top';
+            btn.setAttribute('aria-label', btn.title);
             return;
         }
         btn.disabled = false;
@@ -973,6 +985,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     saveHiddenChannels() {
         localStorage.setItem('nym_hidden_channels', JSON.stringify(Array.from(this.hiddenChannels)));
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
     loadHiddenChannels() {
@@ -983,6 +996,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
     saveBlockedChannels() {
         localStorage.setItem('nym_blocked_channels', JSON.stringify(Array.from(this.blockedChannels)));
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        if (typeof this._contentFiltersChanged === 'function') this._contentFiltersChanged();
     },
 
     isChannelBlocked(channel, geohash) {
@@ -995,7 +1009,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         this.blockedChannels.add(key);
         this.saveBlockedChannels();
         if (typeof nostrSettingsSave === 'function') nostrSettingsSave();
+        this._dropBlockedChannelRow(channel, geohash);
+        this.updateViewMoreButton('channelList');
+    },
 
+    _dropBlockedChannelRow(channel, geohash) {
+        const key = geohash || channel;
         const selector = geohash ?
             `[data-geohash="${geohash}"]` :
             `[data-channel="${channel}"][data-geohash=""]`;
@@ -1005,13 +1024,24 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         }
 
         this.channels.delete(key);
+        if (this.unreadCounts) this._setUnreadCount(geohash ? `#${geohash}` : channel, 0);
 
         if ((this.currentChannel === channel && this.currentGeohash === geohash) ||
             (geohash && this.currentGeohash === geohash)) {
             this.switchChannel('nymchat', 'nymchat');
         }
+    },
 
-        this.updateViewMoreButton('channelList');
+    _applySyncedChannelBlocks(before) {
+        if (!this.blockedChannels) return;
+        let dropped = false;
+        for (const key of this.blockedChannels) {
+            if (!key || (before && before.has(key))) continue;
+            const isGeo = typeof this.isValidGeohash === 'function' && this.isValidGeohash(key);
+            this._dropBlockedChannelRow(key, isGeo ? key : '');
+            dropped = true;
+        }
+        if (dropped && typeof this.updateViewMoreButton === 'function') this.updateViewMoreButton('channelList');
     },
 
     unblockChannel(channel, geohash) {
@@ -1507,15 +1537,53 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             if (names.length >= 50) break;
         }
         if (names.length === 0) return true;
+        const gap = Number(opts.since) > 0 ? Math.floor(Number(opts.since)) : 0;
+        const bySince = new Map();
+        for (const name of names) {
+            const covered = this._channelCoveredSince(name);
+            const since = covered && gap ? Math.min(covered, gap) : (covered || gap);
+            if (!bySince.has(since)) bySince.set(since, []);
+            bySince.get(since).push(name);
+        }
+        let ok = true;
+        for (const [since, group] of bySince) {
+            if (!await this._channelRestoreGroupFromD1(group, since)) ok = false;
+        }
+        return ok;
+    },
+
+    _channelCoveredSince(name) {
+        const D = typeof window !== 'undefined' ? window.NymD1Cursor : null;
+        if (!D) return 0;
+        let covered = this._channelCoveredTo ? this._channelCoveredTo.get(name) || 0 : 0;
+        if (!covered && this._channelCoveredSaved && this._channelCoveredSaved.pk === this.pubkey) {
+            const saved = this._channelCoveredSaved.map[name] || 0;
+            const msgs = this.messages && (this.messages.get(name) || this.messages.get('#' + name));
+            const cap = this.channelMessageLimit || 1000;
+            if (saved > 0 && Array.isArray(msgs) && msgs.length > 0 && msgs.length < cap) covered = saved;
+        }
+        return covered > 0 ? Math.max(1, covered - CHANNEL_COVER_OVERLAP_S) : 0;
+    },
+
+    _noteChannelCovered(names, newest) {
+        if (!(newest > 0)) return;
+        if (!this._channelCoveredTo) this._channelCoveredTo = new Map();
+        for (const name of names) {
+            if ((this._channelCoveredTo.get(name) || 0) < newest) this._channelCoveredTo.set(name, newest);
+        }
+        if (typeof this._persistChannelCovered === 'function') this._persistChannelCovered();
+    },
+
+    async _channelRestoreGroupFromD1(names, since) {
         let resp;
         try {
-            const since = Number(opts.since) > 0 ? Math.floor(Number(opts.since)) : 0;
             resp = await this._storageApiStream('channel-get', since ? { channels: names, since } : { channels: names }, false);
         } catch (_) {
             for (const name of names) this._channelD1FetchedAt.delete(name);
             this._noteArchiveResult(names, false);
             return false;
         }
+        let newest = 0;
 
         let applied = false;
         const applyBatch = async (batch) => {
@@ -1528,6 +1596,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 try { await this._preformatBatch(batch.map(ev => ev && ev.content)); } catch (_) { }
             }
             for (const ev of batch) {
+                if (ev && Number.isFinite(ev.created_at) && ev.created_at > newest) newest = ev.created_at;
                 if (typeof this._quietHit === 'function' && this._quietHit(ev)) continue;
                 if (await this._verifyRelayEventAsync(ev)) {
                     if (!this._archiveEvents) this._archiveEvents = new WeakSet();
@@ -1576,6 +1645,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
         // Paint the active channel if its view settled empty before the archive arrived.
         if (applied) this._repaintActiveChannelIfEmpty(names);
+        if (completed) this._noteChannelCovered(names, newest);
         this._noteArchiveResult(names, completed);
         return completed;
     },
@@ -2162,6 +2232,7 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
 
     _d1UnreadFloor(channel) {
         if (!this._d1Unread) return 0;
+        if (typeof this._contentFiltersActive === 'function' && this._contentFiltersActive()) return 0;
         const floor = this._d1Unread.get(channel) || 0;
         if (!floor) return 0;
         const basis = this._d1UnreadBasis && this._d1UnreadBasis.get(channel);
@@ -2203,12 +2274,12 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
             messages = this.messages && this.messages.get(channel);
         }
         if (!Array.isArray(messages) || messages.length === 0) return 0;
+        const filtered = typeof this.isContentHidden === 'function';
         let count = 0;
         for (const m of messages) {
-            if (!m || m.isOwn) continue;
-            if (m._spamGated) continue;
+            if (!m || m.isOwn || m.slowHeld || m._spamGated) continue;
             if ((m.created_at || 0) <= lastRead) continue;
-            if (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey)) continue;
+            if (filtered ? this.isContentHidden(m) : (this.blockedUsers && m.pubkey && this.blockedUsers.has(m.pubkey))) continue;
             count++;
         }
         return count;
@@ -2499,6 +2570,9 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
                 }
             }
         } catch (_) { }
+        if (!this._cfLastSnap && typeof this._cfSnapshot === 'function') {
+            try { this._cfLastSnap = this._cfSnapshot(); } catch (_) { }
+        }
     },
 
     // Store an unread count and stamp the lastRead it was derived from.
@@ -2544,6 +2618,208 @@ ${distance ? `<div class="geohash-info-item"><strong>Distance:</strong> ${distan
         const activity = this._channelActivityTime(channel);
         if (activity <= 0) return true;
         return activity > lastRead;
+    },
+
+    _contentFiltersChanged(opts) {
+        this._cfVersion = (this._cfVersion || 0) + 1;
+        if (opts && opts.force) this._cfForce = true;
+        const run = () => {
+            this._cfChangeTimer = null;
+            const force = this._cfForce === true;
+            this._cfForce = false;
+            const snap = this._cfSnapshot();
+            const prev = this._cfLastSnap || null;
+            if (!force && prev && prev.sig === snap.sig) return;
+            this._cfLastSnap = snap;
+            this._cfRecountAll(prev);
+            this._cfRefreshRows();
+            if (window.NymLayout && typeof window.NymLayout.refreshPreviews === 'function') window.NymLayout.refreshPreviews();
+            if (typeof this._updateNotificationBadge === 'function') this._updateNotificationBadge();
+            if (typeof this._refreshNotificationsModalIfOpen === 'function') this._refreshNotificationsModalIfOpen();
+            for (const hook of ['_cnPruneHiddenMentions', '_refreshVisibleReactions', '_refreshAllThreadIndicators',
+                'renderTypingIndicator', '_refreshGroupReaders', '_pruneHiddenNostrCards', '_pruneBlockedQuotes',
+                '_refreshChannelPollsForFilters', '_ctRefreshSavedIfOpen', '_chRefreshForFilters', '_meshRefreshForFilters',
+                '_cvRefreshForFilters', '_refreshGroupLabelsForFilters', '_closeHiddenSystemNotifications']) {
+                if (typeof this[hook] === 'function') {
+                    try { this[hook](); } catch (_) { }
+                }
+            }
+        };
+        if (opts && opts.sync) {
+            if (this._cfChangeTimer) clearTimeout(this._cfChangeTimer);
+            run();
+            return;
+        }
+        if (this._cfChangeTimer) return;
+        this._cfChangeTimer = setTimeout(run, 60);
+    },
+
+    _cfSnapshot() {
+        const sorted = (v) => Array.from(v || []).map((x) => String(x)).sort();
+        const gates = typeof this._clientGatesActive === 'function' && this._clientGatesActive();
+        const now = Date.now();
+        const muted = [];
+        if (this.autoMutedPubkeys && typeof this.autoMutedPubkeys.forEach === 'function') {
+            this.autoMutedPubkeys.forEach((until, pk) => { if (until > now) muted.push(pk); });
+        }
+        muted.sort();
+        const packs = typeof this.activeFilterPacks === 'function' ? sorted(this.activeFilterPacks()) : [];
+        const snap = {
+            blockedUsers: new Set(this.blockedUsers || []),
+            keywords: sorted(this.blockedKeywords),
+            blockedChannels: sorted(this.blockedChannels),
+            hiddenChannels: sorted(this.hiddenChannels),
+            friends: new Set(this.friends || []),
+            friendsOnly: !!this.notifyFriendsOnly,
+            muted: new Set(muted),
+            packs,
+            gates: !!gates
+        };
+        snap.sig = JSON.stringify([sorted(snap.blockedUsers), snap.keywords, snap.blockedChannels, snap.hiddenChannels,
+            sorted(snap.friends), snap.friendsOnly, muted, packs, snap.gates]);
+        return snap;
+    },
+
+    _cfCtxFrom(snap) {
+        const cur = this._cfCtx();
+        return {
+            self: this.pubkey || '',
+            blockedUsers: snap.blockedUsers,
+            keywords: snap.keywords,
+            blockedChannels: snap.blockedChannels,
+            hiddenChannels: snap.hiddenChannels,
+            friendsOnly: snap.friendsOnly,
+            packs: snap.packs.length > 0,
+            friend: (pk) => snap.friends.has(pk),
+            bot: cur.bot,
+            pack: snap.packs.length ? cur.pack : undefined,
+            muted: (pk) => snap.gates && snap.muted.has(pk),
+            deleted: cur.deleted,
+            quiet: cur.quiet,
+            spam: (m) => (m.isPM || snap.gates) && typeof this.isSpamMessage === 'function' && this.isSpamMessage(m.content),
+            gated: cur.gated
+        };
+    },
+
+    _cfUnreadWith(key, ctx) {
+        const F = window.NymContentFilter;
+        const list = this.messages && this.messages.get(key);
+        if (!F || !Array.isArray(list)) return 0;
+        const lastRead = (this.channelLastRead && this.channelLastRead.get(key)) || 0;
+        let count = 0;
+        for (const m of list) {
+            if (!m || m.isOwn || m.slowHeld || m._spamGated) continue;
+            if ((m.created_at || 0) <= lastRead) continue;
+            if (F.hidden(ctx, this._cfView(m), m)) continue;
+            count++;
+        }
+        return count;
+    },
+
+    _cfRecountAll(prev) {
+        const keys = new Set();
+        if (this.messages) for (const k of this.messages.keys()) keys.add(k);
+        if (this.pmMessages) for (const k of this.pmMessages.keys()) keys.add(k);
+        const prevCtx = prev ? this._cfCtxFrom(prev) : null;
+        for (const k of keys) {
+            if (!k) continue;
+            const isConv = k.startsWith('pm-') || k.startsWith('group-');
+            const store = isConv ? this.pmMessages : this.messages;
+            const cached = store && store.get(k);
+            if (!Array.isArray(cached) || cached.length === 0) continue;
+            const visible = this._recomputeUnreadCount(k);
+            let count = visible;
+            if (!isConv && this._unreadCountStillValid(k)) {
+                const standing = this.unreadCounts.get(k) || 0;
+                const before = prevCtx ? this._cfUnreadWith(k, prevCtx) : visible;
+                count = Math.max(visible, standing + visible - before);
+            }
+            count = Math.max(count, this._d1UnreadFloor(k));
+            if ((this.unreadCounts.get(k) || 0) === count) continue;
+            this._setUnreadCount(k, count);
+            this._renderUnreadBadge(k, count);
+        }
+        if (typeof this._persistUnreadCounts === 'function') this._persistUnreadCounts(true);
+    },
+
+    _cfNewest(list) {
+        const F = window.NymContentFilter;
+        let all = 0;
+        for (const m of list) {
+            const ms = m ? this._messageMs(m) : 0;
+            if (ms > all) all = ms;
+        }
+        const i = F ? F.lastVisible(this._cfCtx(), list, (m) => this._cfView(m)) : list.length - 1;
+        return { all, visible: i >= 0 ? this._messageMs(list[i]) : 0 };
+    },
+
+    _cfRefreshRows() {
+        const pmList = typeof document !== 'undefined' ? document.getElementById('pmList') : null;
+        const moved = [];
+        const place = (selector, ts) => {
+            const item = pmList && pmList.querySelector(selector);
+            if (!item || !item.dataset || String(item.dataset.lastMessageTime) === String(ts)) return;
+            item.dataset.lastMessageTime = ts;
+            moved.push(item);
+        };
+        if (this.pmMessages) {
+            for (const [key, list] of this.pmMessages) {
+                if (!Array.isArray(list) || !list.length) continue;
+                const { visible } = this._cfNewest(list);
+                if (!(visible > 0)) continue;
+                if (key.startsWith('group-')) {
+                    const groupId = key.substring(6);
+                    const group = this.groupConversations && this.groupConversations.get(groupId);
+                    if (!group) continue;
+                    group.lastMessageTime = visible;
+                    place(`[data-group-id="${groupId}"]`, visible);
+                    continue;
+                }
+                if (!key.startsWith('pm-') || list.some((m) => m && m.isGroup)) continue;
+                const parts = key.substring(3).split('-');
+                const peer = parts.find((k) => k !== this.pubkey) || parts[0];
+                if (!/^[0-9a-f]{64}$/i.test(peer || '')) continue;
+                const conv = this.pmConversations && this.pmConversations.get(peer);
+                if (conv) {
+                    conv.lastMessageTime = visible;
+                    place(`.pm-item[data-pubkey="${peer}"]`, visible);
+                    continue;
+                }
+                const closedAt = this.closedPMs && this.closedPMs.has(peer)
+                    ? ((this.closedPMTimes && this.closedPMTimes.get(peer)) || 0) : -1;
+                if (closedAt >= 0 && Math.floor(visible / 1000) <= closedAt) continue;
+                if (typeof this.addPMConversation !== 'function') continue;
+                const nym = typeof this.getNymFromPubkey === 'function' ? this.getNymFromPubkey(peer) : '';
+                this.addPMConversation(nym, peer, visible);
+                const unread = this._recomputeUnreadCount(key);
+                if (unread) {
+                    this._setUnreadCount(key, unread);
+                    this._renderUnreadBadge(key, unread);
+                }
+            }
+        }
+        if (pmList && typeof this.insertPMInOrder === 'function') {
+            for (const item of moved) {
+                if (item.parentNode) item.remove();
+                this.insertPMInOrder(item, pmList);
+            }
+        }
+        let channelsMoved = false;
+        if (this.messages && this.channelLastActivity) {
+            for (const [key, list] of this.messages) {
+                if (!Array.isArray(list) || !list.length) continue;
+                const { all, visible } = this._cfNewest(list);
+                const cur = this.channelLastActivity.get(key);
+                if (cur !== undefined && cur > all) continue;
+                if (visible > 0) {
+                    if (cur !== visible) { this.channelLastActivity.set(key, visible); channelsMoved = true; }
+                } else if (cur !== undefined) {
+                    this.channelLastActivity.delete(key);
+                    channelsMoved = true;
+                }
+            }
+        }
+        if (channelsMoved && typeof this._scheduleChannelSort === 'function') this._scheduleChannelSort();
     },
 
     recomputeAllUnreadCounts() {

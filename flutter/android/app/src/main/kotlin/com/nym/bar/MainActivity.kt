@@ -7,6 +7,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Resources
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -450,6 +451,7 @@ class MainActivity : FlutterFragmentActivity() {
                     eraseKey()
                     reply.success(null)
                 }
+                "biometryType" -> reply.success(biometryType())
                 else -> reply.error("unimplemented", call.method)
             }
         } catch (e: KeyPermanentlyInvalidatedException) {
@@ -459,6 +461,37 @@ class MainActivity : FlutterFragmentActivity() {
             reply.error("failed", e.message)
         }
     }
+
+    private fun biometryType(): String {
+        val status = BiometricManager.from(this).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        if (status == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED ||
+            status == BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE
+        ) {
+            return "none"
+        }
+        val sensors = listOf(
+            "android.hardware.fingerprint" to "fingerprint",
+            "android.hardware.biometrics.face" to "face",
+            "android.hardware.biometrics.iris" to "iris",
+        ).filter { packageManager.hasSystemFeature(it.first) }.map { it.second }
+        return strongBiometryName(strongSettingName(), sensors) { systemString(it) }
+    }
+
+    private fun strongSettingName(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        return runCatching {
+            getSystemService(android.hardware.biometrics.BiometricManager::class.java)
+                ?.getStrings(android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                ?.settingName
+                ?.toString()
+        }.getOrNull()
+    }
+
+    private fun systemString(name: String): String? = runCatching {
+        val resources = Resources.getSystem()
+        val id = resources.getIdentifier(name, "string", "android")
+        if (id == 0) null else resources.getString(id)
+    }.getOrNull()
 
     private fun storeKey(secret: String, title: String, cancel: String, reply: Reply) {
         if (BiometricManager.from(this).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
@@ -638,4 +671,23 @@ class MainActivity : FlutterFragmentActivity() {
         private const val VAULT_KEY_ALIAS = "nymchat_vault_key"
         private const val VAULT_KEY_FILE = "nymchat_vault_key.bin"
     }
+}
+
+internal fun strongBiometryName(
+    strongSetting: String?,
+    sensors: List<String>,
+    systemString: (String) -> String?,
+): String {
+    if (strongSetting != null) {
+        val generic = systemString("biometric_app_setting_name")
+        val named = listOf(
+            "fingerprint_app_setting_name" to "fingerprint",
+            "face_app_setting_name" to "face",
+        ).filter { (resource, _) ->
+            val label = systemString(resource)
+            label != null && label == strongSetting && label != generic
+        }
+        if (named.size == 1 && named[0].second in sensors) return named[0].second
+    }
+    return if (sensors.size == 1) sensors[0] else "biometrics"
 }

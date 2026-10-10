@@ -188,31 +188,57 @@ Object.assign(NYM.prototype, {
     const userId = crypto.getRandomValues(new Uint8Array(16));
     const authenticatorSelection = { userVerification: 'required', residentKey: 'required' };
     if (platformOnly) authenticatorSelection.authenticatorAttachment = 'platform';
-    const cred = await navigator.credentials.create({ publicKey: {
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
-      rp: { name: 'Nymchat', id: this._webauthnRpId() },
-      user: { id: userId, name: 'nym-vault', displayName: 'Nymchat Vault' },
-      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-      authenticatorSelection,
-      timeout: 60000,
-      extensions: { prf: {} }
-    }});
-    if (!cred) throw new Error('Passkey enrollment was canceled.');
+    const method = platformOnly ? 'biometric' : 'passkey';
+    let cred;
+    try {
+      cred = await navigator.credentials.create({ publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: 'Nymchat', id: this._webauthnRpId() },
+        user: { id: userId, name: 'nym-vault', displayName: 'Nymchat Vault' },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection,
+        timeout: 60000,
+        extensions: { prf: {} }
+      }});
+    } catch (e) { throw this._webauthnError(e, method); }
+    if (!cred) throw this._webauthnError(null, method);
     // Derive via a follow-up get(), since PRF results are only reliable on get; also fails fast without PRF.
     const credId = this._vb64(new Uint8Array(cred.rawId));
-    const key = await this._webauthnDeriveKey(credId, salt);
+    const key = await this._webauthnDeriveKey(credId, salt, method);
     return { credId, key };
   },
 
-  async _webauthnDeriveKey(credId, salt) {
-    const assertion = await navigator.credentials.get({ publicKey: {
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
-      allowCredentials: [{ id: this._vb64d(credId), type: 'public-key' }],
-      userVerification: 'required',
-      timeout: 60000,
-      extensions: { prf: { eval: { first: salt } } }
-    }});
-    const ext = assertion && assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
+  _webauthnError(e, method) {
+    const bio = method === 'biometric';
+    const name = e && e.name;
+    if (name === 'NotAllowedError' || name === 'AbortError') {
+      return new Error(bio ? 'Biometric unlock was canceled.' : 'The passkey request was canceled or timed out.');
+    }
+    if (name === 'SecurityError') {
+      return new Error(bio ? 'Biometric unlock can\'t be used on this address.' : 'Passkeys can\'t be used on this address.');
+    }
+    return new Error(bio ? 'Biometric authentication failed.' : 'Your passkey could not be used.');
+  },
+
+  _vaultWrongSecret(method) {
+    if (method === 'passkey') return 'That passkey did not unlock this identity. Try again.';
+    if (method === 'biometric') return 'Biometric authentication failed.';
+    return 'Wrong password or PIN. Try again.';
+  },
+
+  async _webauthnDeriveKey(credId, salt, method) {
+    let assertion;
+    try {
+      assertion = await navigator.credentials.get({ publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        allowCredentials: [{ id: this._vb64d(credId), type: 'public-key' }],
+        userVerification: 'required',
+        timeout: 60000,
+        extensions: { prf: { eval: { first: salt } } }
+      }});
+    } catch (e) { throw this._webauthnError(e, method); }
+    if (!assertion) throw this._webauthnError(null, method);
+    const ext = assertion.getClientExtensionResults ? assertion.getClientExtensionResults() : {};
     if (!ext.prf || !ext.prf.results || !ext.prf.results.first) {
       throw new Error('This passkey/authenticator does not support key derivation (WebAuthn PRF). Try a different passkey, or use a password or PIN instead.');
     }
@@ -297,7 +323,7 @@ Object.assign(NYM.prototype, {
       const salt = this._vb64d(localStorage.getItem('nym_vault_salt') || '');
       const credId = localStorage.getItem('nym_vault_cred');
       if (!credId) return false;
-      const freshKey = await this._webauthnDeriveKey(credId, salt);
+      const freshKey = await this._webauthnDeriveKey(credId, salt, this.vaultMethod());
       const blob = localStorage.getItem('nym_vault_check');
       if (!blob) return false;
       const p = String(blob).split(':');
@@ -311,10 +337,11 @@ Object.assign(NYM.prototype, {
     if (!this.vaultEnabled()) return true;
     let salt;
     try { salt = this._vb64d(localStorage.getItem('nym_vault_salt') || ''); } catch (e) { throw new Error('Vault metadata is corrupt.'); }
-    if (this._vaultIsWebAuthn(this.vaultMethod())) {
+    const method = this.vaultMethod();
+    if (this._vaultIsWebAuthn(method)) {
       const credId = localStorage.getItem('nym_vault_cred');
       if (!credId) throw new Error('Passkey credential is missing.');
-      this._vaultKey = await this._webauthnDeriveKey(credId, salt);
+      this._vaultKey = await this._webauthnDeriveKey(credId, salt, method);
     } else {
       if (!password) throw new Error('Enter your password or PIN.');
       this._vaultKey = await this._deriveKeyFromPassword(String(password), salt);
@@ -330,7 +357,7 @@ Object.assign(NYM.prototype, {
         verifiedOne = true;
       }
     } catch (e) {
-      throw new Error('Wrong password/PIN or unrecognized passkey.');
+      throw new Error(this._vaultWrongSecret(method));
     }
     for (const name of this._VAULT_KEYS) {
       let blob = null;
@@ -449,26 +476,32 @@ Object.assign(NYM.prototype, {
   },
 
   _vt(text, vars) {
-    return typeof this._ac === 'function' ? this._ac(text, vars) : text;
+    if (typeof this._ac === 'function') return this._ac(text, vars);
+    let s = text;
+    if (vars) for (const k of Object.keys(vars)) s = s.split('{' + k + '}').join(String(vars[k]));
+    return s;
   },
 
   _vaultPromptModal() {
     return new Promise((resolve) => {
-      const webauthn = this._vaultIsWebAuthn(this.vaultMethod());
-      const isPasskey = this.vaultMethod() === 'passkey';
+      const method = this.vaultMethod();
+      const webauthn = this._vaultIsWebAuthn(method);
+      const label = this._vaultGateLabels(method);
       const o = this._vaultOverlay('gate');
       o.box.innerHTML =
         '<h1 class="nm-vault-title">Unlock your identity</h1>' +
-        '<p class="nm-vault-lede">Your Nymchat identity key is encrypted on this device.' +
-        (webauthn ? (isPasskey ? ' Use your passkey to unlock.' : ' Use your biometric to unlock.') : '') + '</p>' +
+        '<p class="nm-vault-lede"></p>' +
         (webauthn ? '' : '<label class="nm-vault-label" for="nymVaultPw">Password or PIN</label>' +
           '<input id="nymVaultPw" type="password" inputmode="numeric" autocomplete="off" class="form-input">') +
         '<p id="nymVaultErr" class="nm-vault-error-line" role="alert" hidden></p>' +
         '<div class="nm-vault-actions">' +
-        '<button id="nymVaultGo" class="send-btn">Unlock</button>' +
-        '<button id="nymVaultReset" class="icon-btn">Forget identity</button>' +
+        '<button id="nymVaultGo" class="send-btn"></button>' +
+        '<button id="nymVaultReset" class="icon-btn"></button>' +
         '</div>' +
         '<p id="nymVaultBusy" class="nm-vault-busy" role="status" hidden>Unlocking…</p>';
+      o.box.querySelector('.nm-vault-lede').textContent = label.lede;
+      o.box.querySelector('#nymVaultGo').textContent = label.go;
+      o.box.querySelector('#nymVaultReset').textContent = label.forget;
       this._vaultWordmark(o);
       const inp = o.box.querySelector('#nymVaultPw');
       const goBtn = o.box.querySelector('#nymVaultGo');
@@ -494,7 +527,7 @@ Object.assign(NYM.prototype, {
           setWorking(false);
           err.textContent = this._vt(e && e.message ? e.message : 'Unlock failed.');
           err.hidden = false;
-          if (inp) { inp.value = ''; inp.focus(); }
+          if (inp) { inp.value = ''; inp.focus(); } else goBtn.focus();
           return;
         }
         o.close();
@@ -504,20 +537,50 @@ Object.assign(NYM.prototype, {
       resetBtn.onclick = async () => {
         if (working) return;
         o.hide();
-        const ok = await this._vaultConfirm(this._vaultForgetMessage(), { title: 'Forget identity', danger: true, okLabel: 'Forget' });
+        const t = typeof this.acctForgetTarget === 'function' ? this.acctForgetTarget() : null;
+        const ok = await this._vaultConfirm(this._vaultForgetMessage(), {
+          title: this._vt('Forget this identity?'),
+          danger: true,
+          okLabel: t && t.to ? this._vt('Forget') : this._vt('Delete and start over')
+        });
         if (ok) { o.close(); resolve('reset'); return; }
         o.show();
-        if (inp) inp.focus();
+        if (inp) inp.focus(); else goBtn.focus();
       };
-      if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === 'Enter') go(); }; }
+      if (inp) { inp.focus(); inp.onkeydown = (e) => { if (e.key === 'Enter') go(); }; } else goBtn.focus();
     });
+  },
+
+  _vaultGateLabels(method) {
+    if (method === 'passkey') {
+      return {
+        lede: this._vt('Your Nymchat identity is encrypted on this device. Use your passkey to unlock it.'),
+        go: this._vt('Unlock with passkey'),
+        forget: this._vt('Lost your passkey?')
+      };
+    }
+    if (method === 'biometric') {
+      return {
+        lede: this._vt('Your Nymchat identity is encrypted on this device. Use your fingerprint, face or device unlock to open it.'),
+        go: this._vt('Unlock with biometrics'),
+        forget: this._vt('Can\'t unlock?')
+      };
+    }
+    return {
+      lede: this._vt('Your Nymchat identity is encrypted on this device. Enter your password or PIN to unlock it.'),
+      go: this._vt('Unlock'),
+      forget: this._vt('Forgot your password or PIN?')
+    };
   },
 
   _vaultForgetMessage() {
     const t = typeof this.acctForgetTarget === 'function' ? this.acctForgetTarget() : null;
-    if (!t) return 'This permanently deletes the encrypted identity on this device and starts a fresh one. Continue?';
-    if (t.to) return this._ac('This permanently deletes {nym} and its data on this device, and you will switch to {next}. Continue?', { nym: t.from, next: t.to });
-    return this._ac('This permanently deletes {nym} and its data on this device, and you will return to the welcome screen. Continue?', { nym: t.from });
+    if (t && t.to) return this._vt('This permanently deletes {nym} and its data on this device, and you will switch to {next}. Continue?', { nym: t.from, next: t.to });
+    const vars = { nym: t && t.from ? t.from : this._vt('this identity') };
+    const method = this.vaultMethod();
+    if (method === 'passkey') return this._vt('Without your passkey, {nym} cannot be recovered. Starting over permanently deletes it and its data on this device, and you will return to the welcome screen. If you saved your nsec somewhere else, you can sign back in with it there.', vars);
+    if (method === 'biometric') return this._vt('Without your biometrics, {nym} cannot be recovered. Starting over permanently deletes it and its data on this device, and you will return to the welcome screen. If you saved your nsec somewhere else, you can sign back in with it there.', vars);
+    return this._vt('Without the password or PIN, {nym} cannot be recovered. Starting over permanently deletes it and its data on this device, and you will return to the welcome screen. If you saved your nsec somewhere else, you can sign back in with it there.', vars);
   },
 
   _hasPersistedSecret() {
@@ -609,7 +672,7 @@ Object.assign(NYM.prototype, {
   _vaultMethodName() {
     const m = this.vaultMethod();
     if (m === 'passkey') return 'Passkey (device, security key, or synced)';
-    if (m === 'biometric') return 'Biometric (Face/Touch ID)';
+    if (m === 'biometric') return 'Biometrics';
     return 'Password or PIN';
   },
 
@@ -633,8 +696,8 @@ Object.assign(NYM.prototype, {
         '<div class="modal-header">Identity encryption</div>' +
         '<div class="modal-body"><p class="form-hint nm-vault-text" id="nymVMethodText"></p></div>' +
         '<div class="modal-actions nm-vault-manage-actions">' +
-        '<button id="nymVClose" class="icon-btn" data-sheet-close>Close</button>' +
         (webauthn ? '' : '<button id="nymVChange" class="icon-btn">Change password or PIN</button>') +
+        '<button id="nymVClose" class="icon-btn" data-sheet-close>Close</button>' +
         '<button id="nymVDisable" class="send-btn danger">Turn off</button>' +
         '</div>';
       view.querySelector('#nymVMethodText').textContent =
@@ -744,7 +807,7 @@ Object.assign(NYM.prototype, {
       '<option value="password">Password</option>' +
       '<option value="pin">PIN</option>' +
       (passkey ? '<option value="passkey">Passkey (device, security key, or synced)</option>' : '') +
-      (bio ? '<option value="biometric">Biometric (Face/Touch ID)</option>' : '') +
+      (bio ? '<option value="biometric">Biometrics</option>' : '') +
       '</select>' +
       '</div>' +
       '<div class="form-group"><label class="form-label" id="nymVPwLabel" for="nymVPw">Choose a password</label><input id="nymVPw" type="password" inputmode="text" autocomplete="new-password" class="form-input"></div>' +

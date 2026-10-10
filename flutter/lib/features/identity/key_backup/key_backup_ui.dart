@@ -8,6 +8,7 @@ import '../../../core/crypto/keys.dart';
 import '../../../core/theme/nym_colors.dart';
 import '../../../core/theme/nym_metrics.dart';
 import '../../../widgets/common/app_dialog.dart';
+import '../../../widgets/common/dialog_button.dart';
 import '../../../widgets/common/brand_buttons.dart';
 import '../../../widgets/common/keyboard_inset_dialog.dart';
 import '../../i18n/i18n.dart';
@@ -235,10 +236,7 @@ class _KeyBackupPinDialogState extends State<KeyBackupPinDialog> {
                       ),
                     ],
                     const SizedBox(height: 24),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 10,
-                      runSpacing: 10,
+                    DialogActions(
                       children: [
                         ModalChrome.iconButton(
                           c,

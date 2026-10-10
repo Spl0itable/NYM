@@ -5,6 +5,7 @@ import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../state/app_state.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_label.dart';
 import '../i18n/i18n.dart';
 import '../messages/format/message_content.dart';
 import '../../widgets/anchored_popup.dart';
@@ -173,21 +174,10 @@ class ReactorsModal extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  RichText(
-                    overflow: TextOverflow.ellipsis,
-                    text: TextSpan(
-                      style: TextStyle(fontSize: 13, color: c.text),
-                      children: [
-                        TextSpan(text: r.nym),
-                        TextSpan(
-                          text: '#${r.suffix}',
-                          style: TextStyle(
-                            color: c.text.withValues(alpha: 0.5),
-                            fontSize: 13 * 0.9,
-                          ),
-                        ),
-                      ],
-                    ),
+                  NymLabel(
+                    r.nym,
+                    suffix: r.suffix,
+                    style: TextStyle(fontSize: 13, color: c.text),
                   ),
                   if (r.subtitle != null && r.subtitle!.isNotEmpty)
                     Text(

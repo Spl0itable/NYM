@@ -8,8 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/site_links.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/utils/safe_url.dart';
-import '../../widgets/common/nym_switch.dart';
+import '../settings/settings_widgets.dart';
 import '../i18n/i18n.dart';
+import '../../widgets/common/dialog_button.dart';
 
 const String kAiConsentKey = 'nym_ai_consent';
 const String kAiTranslateConsentKey = 'nym_ai_translate_consent';
@@ -37,7 +38,7 @@ class AiConsentCopy {
     required this.title,
     required this.paragraphs,
     required this.settingLabel,
-    required this.settingSwitch,
+    required this.settingKey,
     required this.switchKey,
     required this.groupKey,
   });
@@ -45,7 +46,7 @@ class AiConsentCopy {
   final String Function() title;
   final List<String> Function() paragraphs;
   final String Function() settingLabel;
-  final String Function() settingSwitch;
+  final String settingKey;
   final Key switchKey;
   final Key groupKey;
 }
@@ -153,7 +154,7 @@ final AiConsentCopy kNymbotConsentCopy = AiConsentCopy(
     AiConsentStrings.later,
   ],
   settingLabel: () => AiConsentStrings.settingLabel,
-  settingSwitch: () => AiConsentStrings.settingSwitch,
+  settingKey: 'aiConsent',
   switchKey: const Key('aiConsentSwitch'),
   groupKey: const Key('aiConsentGroup'),
 );
@@ -166,7 +167,7 @@ final AiConsentCopy kTranslateConsentCopy = AiConsentCopy(
     AiConsentStrings.later,
   ],
   settingLabel: () => TranslateConsentStrings.settingLabel,
-  settingSwitch: () => TranslateConsentStrings.settingSwitch,
+  settingKey: 'aiTranslateConsent',
   switchKey: const Key('aiTranslateSwitch'),
   groupKey: const Key('aiTranslateGroup'),
 );
@@ -339,15 +340,20 @@ class AiConsentDialog extends StatelessWidget {
         child: SingleChildScrollView(child: body),
       ),
       actions: [
-        TextButton(
-          key: const Key('aiConsentDeny'),
-          onPressed: () => answer(false),
-          child: Text(AiConsentStrings.deny),
-        ),
-        FilledButton(
-          key: const Key('aiConsentAllow'),
-          onPressed: () => answer(true),
-          child: Text(AiConsentStrings.allow),
+        DialogActions(
+          alignment: WrapAlignment.end,
+          children: [
+            DialogButton.secondary(
+              key: const Key('aiConsentDeny'),
+              label: AiConsentStrings.deny,
+              onTap: () => answer(false),
+            ),
+            DialogButton(
+              key: const Key('aiConsentAllow'),
+              label: AiConsentStrings.allow,
+              onTap: () => answer(true),
+            ),
+          ],
         ),
       ],
     );
@@ -385,31 +391,18 @@ class _AiConsentSettingRowState extends State<AiConsentSettingRow> {
     setState(() => _on = d == AiConsentDecision.allowed);
   }
 
-  Future<void> _set(bool v) async {
-    setState(() => _on = v);
-    await widget.consent.set(v);
-  }
-
   @override
   Widget build(BuildContext context) {
-    final c = context.nym;
-    final label = widget.consent.copy.settingSwitch();
-    return Row(
-      children: [
-        Expanded(
-          child: Text(label, style: TextStyle(color: c.text, fontSize: 14)),
-        ),
-        const SizedBox(width: 12),
-        Semantics(
-          toggled: _on,
-          label: label,
-          child: NymSwitch(
-            key: widget.consent.copy.switchKey,
-            value: _on,
-            onChanged: _set,
-          ),
-        ),
-      ],
+    final copy = widget.consent.copy;
+    final paragraphs = copy.paragraphs();
+    return SettingsToggleRow(
+      key: ValueKey('setting-${copy.settingKey}'),
+      switchKey: copy.switchKey,
+      label: copy.settingLabel(),
+      semanticHint: paragraphs.take(paragraphs.length - 1).join(' '),
+      value: _on,
+      onChanged: (v) => unawaited(widget.consent.set(v)),
+      footer: AiConsentSettingFooter(consent: widget.consent),
     );
   }
 }
@@ -428,7 +421,7 @@ class AiConsentSettingFooter extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (final p in paragraphs.take(paragraphs.length - 1)) ...[
-          Text(p, style: style),
+          ExcludeSemantics(child: Text(p, style: style)),
           const SizedBox(height: 6),
         ],
         _PolicyLink(style: style.copyWith(color: c.primary)),

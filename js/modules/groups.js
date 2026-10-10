@@ -503,15 +503,16 @@ Object.assign(NYM.prototype, {
         if (!dropped || !dropped.length) return;
         const group = this.groupConversations.get(groupId);
         const name = (group && group.name) || 'Group';
+        const shown = group ? (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) : name;
         for (const pk of dropped) {
             const key = groupId + ':' + pk;
             if (this._gcLocalAdds && this._gcLocalAdds.has(key)) {
                 this._gcLocalAdds.delete(key);
-                this.displaySystemMessage(this._gx("{group} is full, so {nym} wasn't added.", { group: name, nym: this.getNymFromPubkey(pk) }));
+                this.displaySystemMessage(this._gx("{group} is full, so {nym} wasn't added.", { group: shown, nym: this.getNymFromPubkey(pk) }));
                 this._gcSendFullDecline(groupId, pk, name).catch(() => { });
             }
         }
-        if (dropped.includes(this.pubkey)) this._gcLeaveFull(groupId, name);
+        if (dropped.includes(this.pubkey)) this._gcLeaveFull(groupId, shown);
     },
 
     async _gcSendFullDecline(groupId, joinerPubkey, name) {
@@ -543,7 +544,7 @@ Object.assign(NYM.prototype, {
     async _gcRefuseFullJoin(groupId, joinerPubkey) {
         const group = this.groupConversations.get(groupId);
         const name = (group && group.name) || 'Group';
-        this.displaySystemMessage(this._gx("{group} is full, so {nym} couldn't join.", { group: name, nym: this.getNymFromPubkey(joinerPubkey) }));
+        this.displaySystemMessage(this._gx("{group} is full, so {nym} couldn't join.", { group: group ? (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) : name, nym: this.getNymFromPubkey(joinerPubkey) }));
         await this._gcSendFullDecline(groupId, joinerPubkey, name);
     },
 
@@ -673,7 +674,8 @@ Object.assign(NYM.prototype, {
         }
         if (targetPubkey !== this.pubkey) return;
         const tsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
-        const title = `${spec.title} ${grp.name || ctx.groupName}`;
+        const shownName = grp && grp.name ? grp.name : ctx.groupName;
+        const title = `${spec.title} ${typeof this._groupLabel === 'function' ? this._groupLabel({ name: shownName }) : shownName}`;
         const body = `${actorName} ${spec.body}`;
         const info = { type: 'group', groupId, id: ctx.groupConvKey, pubkey: senderPubkey, eventId: ctx.eventId };
         if ((Math.floor(Date.now() / 1000) - tsSec) > 10) {
@@ -1119,7 +1121,7 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap = false, gap = null) {
+    async handleGroupMessage(rumor, event, senderPubkey, isOwn, senderVerified, isPqWrap = false, gap = null, fromD1 = false) {
         const gapStale = !!(gap && gap.stale);
         const groupTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
         if (!groupTag) return;
@@ -1150,15 +1152,18 @@ Object.assign(NYM.prototype, {
             if (this.settings.acceptPMs === 'friends' && !this.isFriend(senderPubkey)) return;
         }
 
-        if (!isOwn && this.blockedUsers.has(senderPubkey)) {
-            return;
-        }
-
         const typeTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'type' && t[1]);
         const msgType = typeTag ? typeTag[1] : null;
 
+        if (!isOwn && this.blockedUsers.has(senderPubkey)
+            && !(typeof this._keepsBlockedGroupControl === 'function' && this._keepsBlockedGroupControl(msgType))) {
+            return;
+        }
+
         const subjectTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'subject' && t[1]);
         const groupName = subjectTag ? subjectTag[1] : 'Group';
+        const shownGroupName = () => (typeof this._groupLabel === 'function'
+            ? this._groupLabel(this.groupConversations.get(groupId) || { name: groupName }) : groupName);
 
         // Drop messages for left groups unless it's a newer reinvite or unban.
         if (this.leftGroups.has(groupId)) {
@@ -1174,7 +1179,6 @@ Object.assign(NYM.prototype, {
 
         if (typeTag && typeTag[1] === 'group-unban') {
             if (isOwn) return;
-            if (this.blockedUsers.has(senderPubkey)) return;
             const unbanTag = (rumor.tags || []).find(t => Array.isArray(t) && t[0] === 'unban' && t[1]);
             const unbannedPubkey = unbanTag ? unbanTag[1] : null;
             const grpUnban = this.groupConversations.get(groupId);
@@ -1199,12 +1203,13 @@ Object.assign(NYM.prototype, {
                 }
             }
             if (unbannedPubkey && unbannedPubkey !== this.pubkey) return;
+            if (this.blockedUsers.has(senderPubkey)) return;
             if (!this.users.has(senderPubkey)) await this.fetchProfileDirect(senderPubkey);
             const actorName = this.getNymFromPubkey(senderPubkey);
             const unbanTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
             const unbanIsHistorical = (Math.floor(Date.now() / 1000) - unbanTsSec) > 10;
-            const unbanTitle = `Unbanned from ${groupName}`;
-            const unbanBody = `${actorName} unbanned you from "${groupName}". You may be re-invited.`;
+            const unbanTitle = `Unbanned from ${shownGroupName()}`;
+            const unbanBody = `${actorName} unbanned you from "${shownGroupName()}". You may be re-invited.`;
             const unbanChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
             if (!unbanIsHistorical) {
                 this.showNotification(unbanTitle, unbanBody, unbanChannelInfo, unbanTsSec * 1000);
@@ -1385,7 +1390,8 @@ Object.assign(NYM.prototype, {
                     groupId,
                     id: groupConvKeyForNotif,
                     pubkey: senderPubkey,
-                    eventId: event.id
+                    eventId: event.id,
+                    subject: groupName
                 };
                 if (!isHistorical) {
                     this.showNotification(`Group invite: ${groupName}`, inviteBody, inviteChannelInfo, inviteTsSec * 1000);
@@ -1548,6 +1554,7 @@ Object.assign(NYM.prototype, {
                 this.leftGroups.add(groupId);
                 this._saveLeftGroups();
                 this.groupConversations.delete(groupId);
+                if (typeof this._callGroupRemoved === 'function') this._callGroupRemoved(groupId);
                 this._saveGroupConversations();
                 this._debouncedNostrSettingsSave();
                 const gck = this.getGroupConversationKey(groupId);
@@ -1560,9 +1567,9 @@ Object.assign(NYM.prototype, {
                     this.currentGroup = null;
                     this.inPMMode = false;
                     this.switchChannel(this.currentChannel || 'nymchat', this.currentChannel || 'nymchat');
-                    this.displaySystemMessage(`You were removed from "${groupName}" by ${removerName}.`, 'system', { kind: 'info' });
+                    this.displaySystemMessage(`You were removed from "${shownGroupName()}" by ${removerName}.`, 'system', { kind: 'info' });
                 }
-                const titleSelf = banTag ? `Banned from ${groupName}` : `Removed from ${groupName}`;
+                const titleSelf = banTag ? `Banned from ${shownGroupName()}` : `Removed from ${shownGroupName()}`;
                 const bodySelf = banTag
                     ? `${removerName} banned you. You can be re-invited only by the group owner or a moderator.`
                     : `${removerName} removed you from the group.`;
@@ -1639,7 +1646,7 @@ Object.assign(NYM.prototype, {
                     this.openGroup(groupId);
                 }
                 if (newOwner === this.pubkey) {
-                    const transferTitle = `Owner of ${grp.name || groupName}`;
+                    const transferTitle = `Owner of ${shownGroupName()}`;
                     const transferBody = `${actorName} transferred group ownership to you.`;
                     const transferChannelInfo = { type: 'group', groupId, id: groupConvKey, pubkey: senderPubkey, eventId: event.id };
                     const transferTsSec = Math.floor(rumor.created_at) || Math.floor(Date.now() / 1000);
@@ -1742,7 +1749,8 @@ Object.assign(NYM.prototype, {
         const senderName = this.getNymFromPubkey(senderPubkey);
 
         if (!isOwn && !this.users.has(senderPubkey)) {
-            await this.fetchProfileDirect(senderPubkey);
+            const profileFetch = Promise.resolve(this.fetchProfileDirect(senderPubkey)).catch(() => { });
+            if (!fromD1) await profileFetch;
         }
 
         const groupFileOffer = this.parseFileOfferTag(rumor.tags, senderPubkey);
@@ -1793,11 +1801,12 @@ Object.assign(NYM.prototype, {
         if (typeof this._gtSlowmodeIngest === 'function') this._gtSlowmodeIngest(groupId, list, senderPubkey);
         this.persistPMMessages(groupConvKey);
         if (isOwn) this._applyEarlyReceipt(msg, groupConvKey);
+        const groupHidden = !isOwn && ((typeof this.isContentHidden === 'function' && this.isContentHidden(msg)) || !!msg.slowHeld);
 
         const rosterFromSender = isOwn || !grpForRoster
             || (!grpForRoster.createdBy && grpForRoster.members.filter(pk => pk !== this.pubkey).length === 0)
             || grpForRoster.members.includes(senderPubkey);
-        this.addGroupConversation(groupId, groupName, rosterFromSender ? memberPubkeys : [], tsSec * 1000, {
+        this.addGroupConversation(groupId, groupName, rosterFromSender ? memberPubkeys : [], groupHidden ? 0 : tsSec * 1000, {
             memberAt: tsSec,
             nameAuthoritative: !!grpForRoster && grpForRoster.createdBy === senderPubkey
         });
@@ -1811,7 +1820,7 @@ Object.assign(NYM.prototype, {
         }
         this._saveGroupConversations();
         this._debouncedNostrSettingsSave(15000);
-        this.moveGroupToTop(groupId, tsSec * 1000);
+        if (!groupHidden) this.moveGroupToTop(groupId, tsSec * 1000);
 
         if (!isOwn) {
             const convTypers = this.typingUsers.get(groupConvKey);
@@ -1823,7 +1832,7 @@ Object.assign(NYM.prototype, {
             }
         }
 
-        const senderBlocked = this.blockedUsers.has(senderPubkey) || this.hasBlockedKeyword(msg.content, msg.author, senderPubkey) || !!msg.slowHeld;
+        const senderBlocked = groupHidden;
         const mentionsAll = typeof this._gtMentionsAll === 'function' && this._gtMentionsAll(msg);
         // A collapsed thread reply is off screen, so it must not advance the read watermark.
         const groupThreadHidden = typeof this._threadReplyHidden === 'function' &&
@@ -1853,9 +1862,9 @@ Object.assign(NYM.prototype, {
                     ? { inThread: true, threadRoot: msg.threadRoot } : {})
             };
             if (!treatAsHistorical) {
-                this.showNotification(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
+                this.showNotification(`${shownGroupName()}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
             } else {
-                this._addNotificationToHistory(`${groupName}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
+                this._addNotificationToHistory(`${shownGroupName()}: ${msg.author}`, messageContent, groupMsgChannelInfo, tsSec * 1000);
             }
         };
         if (this.inPMMode && this.currentGroup === groupId && document.hidden) {
@@ -2079,7 +2088,7 @@ Object.assign(NYM.prototype, {
         if (skipped.length) {
             const g = this.groupConversations.get(groupId);
             const names = skipped.map(pk => this.getNymFromPubkey(pk)).join(', ');
-            this.displaySystemMessage(this._gx("{group} is full, so these weren't added: {names}.", { group: (g && g.name) || 'Group', names }));
+            this.displaySystemMessage(this._gx("{group} is full, so these weren't added: {names}.", { group: g ? (typeof this._groupLabel === 'function' ? this._groupLabel(g) : (g.name || 'Group')) : 'Group', names }));
         }
         return added;
     },
@@ -2698,8 +2707,7 @@ Object.assign(NYM.prototype, {
             const otherMembers = group.members.filter(pk => pk !== this.pubkey);
             if (otherMembers.length > 0) {
                 const now = Math.floor(Date.now() / 1000);
-                const suffix = this.getPubkeySuffix(this.pubkey);
-                const leaveContent = `${this.nym}#${suffix} left the group.`;
+                const leaveContent = `${String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '')}#${this.getPubkeySuffix(this.pubkey)} left the group.`;
                 const tags = group.members.map(pk => ['p', pk]);
                 tags.push(['g', groupId]);
                 tags.push(['subject', group.name]);
@@ -2725,6 +2733,7 @@ Object.assign(NYM.prototype, {
 
         try { localStorage.removeItem(`nym_groups_${this.pubkey}`); } catch (_) { }
         this.groupConversations.delete(groupId);
+        if (typeof this._callGroupRemoved === 'function') this._callGroupRemoved(groupId);
         this._saveGroupConversations();
 
         const groupConvKey = this.getGroupConversationKey(groupId);
@@ -3567,6 +3576,7 @@ Object.assign(NYM.prototype, {
     },
 
     _buildGroupItemHTML(groupId, name, members) {
+        name = this._groupLabel(Object.assign({}, this.groupConversations.get(groupId) || {}, { name }));
         const memberCount = members.length;
         const avatarStackHtml = this._groupAvatarHtml(groupId, members);
 
@@ -3611,6 +3621,7 @@ Object.assign(NYM.prototype, {
             const readers = readersStore.get(idOf(msg));
             if (!readers) continue;
             for (const [pk] of readers) {
+                if (this._readerHidden(pk, readers.get(pk))) continue;
                 if (!latestReadByReader.has(pk)) latestReadByReader.set(pk, idOf(msg));
             }
         }
@@ -3628,7 +3639,7 @@ Object.assign(NYM.prototype, {
     _updateSingleGroupReaders(nymMessageId) {
         const el = document.querySelector(`.group-readers[data-nym-msg-id="${nymMessageId}"]`);
         if (!el) return;
-        const readers = this.groupMessageReaders.get(nymMessageId);
+        const readers = this._visibleReaders(this.groupMessageReaders.get(nymMessageId));
         if (!readers || readers.size === 0) return;
         this._syncReaderAvatars(el, readers);
         if (!el._readerLongPressBound) {
@@ -3637,7 +3648,24 @@ Object.assign(NYM.prototype, {
         }
     },
 
-    _buildGroupReadersHtmlFromMap(readersMap) {
+    _refreshGroupReaders() {
+        if (!this.inPMMode || !this.currentGroup || typeof this.updateGroupReaderAvatars !== 'function') return;
+        this.updateGroupReaderAvatars(null, this.getGroupConversationKey(this.currentGroup));
+    },
+
+    _readerHidden(pubkey, nym) {
+        return typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey, nym);
+    },
+
+    _visibleReaders(readers) {
+        if (!readers || typeof readers.forEach !== 'function') return readers;
+        const out = new Map();
+        readers.forEach((nym, pk) => { if (!this._readerHidden(pk, nym)) out.set(pk, nym); });
+        return out;
+    },
+
+    _buildGroupReadersHtmlFromMap(rawReaders) {
+        const readersMap = this._visibleReaders(rawReaders);
         const MAX_VISIBLE = 3;
         if (!readersMap || readersMap.size === 0) return '';
         const entries = Array.from(readersMap.entries());
@@ -3656,7 +3684,8 @@ Object.assign(NYM.prototype, {
         return avatarHtml + overflowHtml;
     },
 
-    _syncReaderAvatars(el, readersMap) {
+    _syncReaderAvatars(el, rawReaders) {
+        const readersMap = this._visibleReaders(rawReaders);
         const MAX_VISIBLE = 3;
         const entries = readersMap ? Array.from(readersMap.entries()) : [];
         const visible = entries.slice(0, MAX_VISIBLE);
@@ -3853,8 +3882,9 @@ Object.assign(NYM.prototype, {
         this._showReadersModalFromMap(readers, anchorEl);
     },
 
-    _showReadersModalFromMap(readers, anchorEl) {
+    _showReadersModalFromMap(rawReaders, anchorEl) {
         this.closeReadersModal();
+        const readers = this._visibleReaders(rawReaders);
         if (!readers || readers.size === 0) return;
 
         const entries = Array.from(readers.entries());
@@ -3914,7 +3944,7 @@ Object.assign(NYM.prototype, {
         if (!group) return '';
         const otherMembers = (group.members || []).filter(pk => pk !== this.pubkey);
         const displayPks = otherMembers.slice(0, 3).map(pk => this._safePubkey(pk)).join(',');
-        return `${displayPks}|${group.members ? group.members.length : 0}|${group.name || ''}|${group.avatar || ''}`;
+        return `${displayPks}|${group.members ? group.members.length : 0}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${group.avatar || ''}`;
     },
 
     // Signature for the in-chat group header; changes force a header re-render.
@@ -3923,7 +3953,7 @@ Object.assign(NYM.prototype, {
         if (!group) return '';
         const displayPks = group.members.filter(pk => pk !== this.pubkey)
             .slice(0, 4).map(pk => this._safePubkey(pk));
-        return `${displayPks.join(',')}|${group.members.length}|${group.name || ''}|${group.avatar || ''}|${group.description || ''}`;
+        return `${displayPks.join(',')}|${group.members.length}|${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}|${group.avatar || ''}|${(typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))}`;
     },
 
     _buildGroupHeaderHtml(groupId) {
@@ -3948,11 +3978,51 @@ Object.assign(NYM.prototype, {
         }
         const nameCls = (!customAvatar && otherMembers.length > 0) ? 'nm-grp-ml8' : '';
         const memberLabel = `<div class="channel-location"><span class="loc-country">${this.abbreviateNumber(group.members.length)} members</span></div>`;
-        const descLine = window.NymGroupTools ? window.NymGroupTools.descriptionLine(group.description) : '';
+        const descLine = window.NymGroupTools ? window.NymGroupTools.descriptionLine((typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''))) : '';
         const descHtml = descLine
             ? `<div class="gt-desc-line" role="button" tabindex="0" data-action="gtShowDescription" data-group-id="${this.escapeHtml(groupId)}" title="${this.escapeHtml(descLine)}">${this.escapeHtml(descLine)}</div>`
             : '';
-        return `<span class="group-header-row">${iconPart}<span class="group-name-text ${nameCls}">${this.escapeHtml(group.name)}</span></span>${descHtml}${memberLabel}`;
+        return `<span class="group-header-row">${iconPart}<span class="group-name-text ${nameCls}">${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}</span></span>${descHtml}${memberLabel}`;
+    },
+
+    _recordBlockedMemberKey(rumor, senderPubkey, senderVerified) {
+        if (senderVerified !== true || !rumor || !senderPubkey || senderPubkey === this.pubkey) return;
+        const tags = Array.isArray(rumor.tags) ? rumor.tags : [];
+        const g = tags.find(t => Array.isArray(t) && t[0] === 'g' && t[1]);
+        const eph = tags.find(t => Array.isArray(t) && t[0] === 'ephemeral_pk' && t[1]);
+        if (!g || !eph) return;
+        const group = this.groupConversations && this.groupConversations.get(g[1]);
+        if (!group || !Array.isArray(group.members) || !group.members.includes(senderPubkey)) return;
+        this._updateMemberEphemeralKey(g[1], senderPubkey, eph[1], rumor.created_at || 0);
+        this._saveEphemeralKeys();
+        this._debouncedNostrSettingsSave(15000);
+    },
+
+    _groupLabel(group) {
+        const name = group && typeof group.name === 'string' ? group.name.trim() : '';
+        const fallback = typeof this.uiText === 'function' ? this.uiText('Group') : 'Group';
+        if (!name) return fallback;
+        return typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(name, '', '') ? fallback : name;
+    },
+
+    _groupDescription(group) {
+        const d = group && typeof group.description === 'string' ? group.description : '';
+        return d && typeof this.hasBlockedKeyword === 'function' && this.hasBlockedKeyword(d, '', '') ? '' : d;
+    },
+
+    _refreshGroupLabelsForFilters() {
+        if (!this.groupConversations) return;
+        for (const groupId of this.groupConversations.keys()) this.updateGroupConversationUI(groupId);
+        const groupId = this.inPMMode ? this.currentGroup : null;
+        const channelEl = groupId && typeof document !== 'undefined' ? document.getElementById('currentChannel') : null;
+        if (channelEl && this.groupConversations.has(groupId)) {
+            const sig = this._groupHeaderSig(groupId);
+            if (channelEl.dataset.groupHeaderSig !== sig) {
+                channelEl.innerHTML = this._buildGroupHeaderHtml(groupId);
+                channelEl.dataset.groupHeaderSig = sig;
+                this._wireGroupHeaderClick(channelEl, groupId);
+            }
+        }
     },
 
     updateGroupConversationUI(groupId) {
@@ -4040,7 +4110,7 @@ Object.assign(NYM.prototype, {
             grpCtxIcon.innerHTML = groupSvg;
         }
 
-        document.getElementById('grpCtxName').textContent = group.name || 'Group';
+        document.getElementById('grpCtxName').textContent = (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'));
         const capText = (x) => (typeof this.uiText === 'function' ? this.uiText(x) : x);
         const capMax = this.MAX_GROUP_MEMBERS || 100;
         const capCount = group.members.length;
@@ -4049,7 +4119,7 @@ Object.assign(NYM.prototype, {
         capEl.textContent = capText('{n}/{max} members').split('{n}').join(String(capCount)).split('{max}').join(String(capMax))
             + (capFull ? ' · ' + capText('Full') : '');
         capEl.classList.toggle('group-full', capFull);
-        document.getElementById('grpCtxBio').textContent = group.description || '';
+        document.getElementById('grpCtxBio').textContent = (typeof this._groupDescription === 'function' ? this._groupDescription(group) : (group.description || ''));
 
         const inviteLink = this._canAddMembers(groupId, this.pubkey) ? this.buildGroupInviteLink(groupId) : null;
         const grpCtxInviteLink = document.getElementById('grpCtxInviteLink');
@@ -4225,7 +4295,7 @@ Object.assign(NYM.prototype, {
         if (!group) return;
         this.closeGroupContextMenu();
         const name = await window.showAppPrompt('Enter a new group name:', {
-            title: 'Rename Group', okLabel: 'Save', defaultValue: group.name || '', maxLength: 40
+            title: 'Rename Group', okLabel: 'Save', defaultValue: (typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')) === group.name ? group.name : '', maxLength: 40
         });
         if (name === null) return;
         await this.setGroupName(groupId, name);
@@ -4317,7 +4387,7 @@ Object.assign(NYM.prototype, {
         const group = this.groupConversations.get(groupId);
         if (!group) return;
         this.closeGroupContextMenu();
-        const ok = await window.showAppConfirm(`Leave "${group.name}"? You'll stop receiving messages from this group.`, { danger: true, okLabel: 'Leave' });
+        const ok = await window.showAppConfirm(`Leave "${(typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group'))}"? You'll stop receiving messages from this group.`, { danger: true, okLabel: 'Leave' });
         if (ok) this.leaveGroup(groupId);
     },
 
@@ -4592,7 +4662,7 @@ Object.assign(NYM.prototype, {
         };
         const membersHtml = sorted.map(memberRow).join('');
         const infoId = `group-info-${Date.now().toString(36)}`;
-        const html = `<div class="group-info" id="${infoId}"><div class="group-info-title">Group: "${this.escapeHtml(group.name)}"</div><div class="group-info-count">Members (${group.members.length})</div><div class="group-info-members">${membersHtml}</div></div>`;
+        const html = `<div class="group-info" id="${infoId}"><div class="group-info-title">Group: "${this.escapeHtml((typeof this._groupLabel === 'function' ? this._groupLabel(group) : (group.name || 'Group')))}"</div><div class="group-info-count">Members (${group.members.length})</div><div class="group-info-members">${membersHtml}</div></div>`;
         this.displaySystemMessage(html, 'system', { html: true, feed: true });
         if (typeof this.ensureListProfiles === 'function') {
             this.ensureListProfiles(document.getElementById(infoId), sorted);

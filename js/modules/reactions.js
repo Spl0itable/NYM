@@ -460,6 +460,31 @@ Object.assign(NYM.prototype, {
         }
     },
 
+    _visibleReactions(messageId) {
+        const all = this.reactions && this.reactions.get(messageId);
+        if (!all || typeof this.isPersonHidden !== 'function') return all;
+        const out = new Map();
+        all.forEach((reactors, emoji) => {
+            const kept = new Map();
+            reactors.forEach((nym, pk) => { if (!this.isPersonHidden(pk, nym)) kept.set(pk, nym); });
+            if (kept.size) out.set(emoji, kept);
+        });
+        return out;
+    },
+
+    _refreshVisibleReactions() {
+        if (typeof document === 'undefined') return;
+        const ids = new Set();
+        document.querySelectorAll('.message[data-message-id] > .reactions-row').forEach((row) => {
+            const id = row.parentElement && row.parentElement.dataset.messageId;
+            if (id) ids.add(id);
+        });
+        for (const id of ids) {
+            if (this.reactions && this.reactions.has(id)) this.updateMessageReactions(id);
+            else if (typeof this.updateMessageZaps === 'function') this.updateMessageZaps(id);
+        }
+    },
+
     updateMessageReactions(messageId) {
         // A message can render more than once (main + thread view); `.message` excludes the hover `.reaction-btn`.
         const els = document.querySelectorAll(`.message[data-message-id="${messageId}"]`);
@@ -479,7 +504,7 @@ Object.assign(NYM.prototype, {
         messageEl.querySelectorAll('.msg-hover-buttons .reactions-row, .reaction-btn .reactions-row')
             .forEach(el => el.remove());
 
-        const reactions = this.reactions.get(messageId);
+        const reactions = this._visibleReactions(messageId);
         if (!reactions || reactions.size === 0) {
             const reactionsRow = messageEl.querySelector(':scope > .reactions-row');
             if (reactionsRow) {
@@ -632,7 +657,7 @@ Object.assign(NYM.prototype, {
     showReactorsModal(messageId, emoji, badge) {
         this.closeReactorsModal();
 
-        const reactions = this.reactions.get(messageId);
+        const reactions = this._visibleReactions(messageId);
         if (!reactions) return;
         const reactors = reactions.get(emoji);
         if (!reactors || reactors.size === 0) return;

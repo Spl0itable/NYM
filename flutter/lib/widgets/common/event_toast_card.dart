@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../features/i18n/i18n.dart';
+import '../../features/identity/deleted_notice.dart' show dimRangeSpans;
+import '../../features/layout/layout_model.dart' show mentionSuffixRanges;
 import '../../features/search/unified_search_panel.dart' show nymSuffixStyle;
 import '../../features/toasts/event_toast_center.dart';
 import '../../features/toasts/event_toasts.dart';
+import 'nym_label.dart' show knownNymSuffix, mergeNymRanges, nymSuffixRanges;
 
 final RegExp _suffixRe = RegExp(r'^(.*\S)(#[0-9a-f]{4})$', caseSensitive: false);
 
-TextSpan _titleSpan(String title, String sender, TextStyle style) {
+TextSpan _titleSpan(String title, String sender, TextStyle style,
+    {bool contrast = false}) {
   final m = _suffixRe.firstMatch(sender);
   final at = m == null ? -1 : title.lastIndexOf(sender);
   if (m == null || at < 0) return TextSpan(text: title, style: style);
@@ -17,9 +22,28 @@ TextSpan _titleSpan(String title, String sender, TextStyle style) {
   final suffix = m.group(2)!;
   return TextSpan(style: style, children: [
     TextSpan(text: title.substring(0, cut)),
-    TextSpan(text: suffix, style: nymSuffixStyle(style)),
+    TextSpan(text: suffix, style: nymSuffixStyle(style, contrast: contrast)),
     if (cut + suffix.length < title.length)
       TextSpan(text: title.substring(cut + suffix.length)),
+  ]);
+}
+
+List<List<int>> _bodyRanges(String text, String sender) => mergeNymRanges(
+    mentionSuffixRanges(text),
+    nymSuffixRanges(text, known: knownNymSuffix(sender: sender)));
+
+TextSpan _bodySpan(String body, String sender, TextStyle style, TextStyle dim) {
+  final m = _suffixRe.firstMatch(sender);
+  if (m == null || !body.startsWith('$sender: ')) {
+    return TextSpan(
+        style: style,
+        children: dimRangeSpans(body, _bodyRanges(body, sender), dim));
+  }
+  final rest = body.substring(sender.length);
+  return TextSpan(style: style, children: [
+    TextSpan(text: m.group(1)!),
+    TextSpan(text: m.group(2)!, style: dim),
+    ...dimRangeSpans(rest, _bodyRanges(rest, sender), dim),
   ]);
 }
 
@@ -118,7 +142,8 @@ class _EventToastCardState extends State<EventToastCard> {
                   color: fg,
                   fontSize: 13,
                   height: 1.4,
-                  fontWeight: FontWeight.w700)),
+                  fontWeight: FontWeight.w700),
+              contrast: context.highContrast),
           key: ValueKey('eventToastTitle-${t.id}'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -132,12 +157,16 @@ class _EventToastCardState extends State<EventToastCard> {
             style: TextStyle(color: dim, fontSize: 11, height: 1.4),
           ),
         if (text.body.isNotEmpty)
-          Text(
-            text.body,
+          Text.rich(
+            _bodySpan(
+                text.body,
+                t.locked ? '' : (t.last?.sender ?? ''),
+                TextStyle(color: fg, fontSize: 13, height: 1.4),
+                nymSuffixStyle(TextStyle(color: fg, fontSize: 13, height: 1.4),
+                    contrast: context.highContrast)),
             key: ValueKey('eventToastBody-${t.id}'),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: fg, fontSize: 13, height: 1.4),
           ),
       ],
     );

@@ -57,7 +57,6 @@ const INDIC_LANGS = new Map(Object.entries({
 // Near-neighbor codes the MT model would answer in the wrong variant.
 const LLM_ONLY = new Set(['zh-TW']);
 
-// Names for every app language (the instruct model is also the MT fallback); test:translate syncs with js/modules/translate.js.
 const LLM_LANG_NAMES = new Map(Object.entries({
   af: "Afrikaans", sq: "Albanian", am: "Amharic", ar: "Arabic",
   hy: "Armenian", as: "Assamese", ay: "Aymara", az: "Azerbaijani",

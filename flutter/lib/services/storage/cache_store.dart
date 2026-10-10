@@ -54,6 +54,40 @@ class CacheStore {
   /// Past-verified event ids, restored at boot to skip signature checks; ids are content-bound, so this is safe.
   static const String metaVerifiedEventIds = 'verifiedEventIds';
 
+  static const List<String> pmCursorMetaKeys = [
+    'pmD1Cursor',
+    'pmInboxCursors',
+    'settingsHave',
+  ];
+
+  bool _cursorBlocked = false;
+
+  bool get cursorBlocked => _cursorBlocked;
+
+  static const String channelCoveredMetaKey = 'channelCovered';
+
+  Future<void> saveCursorMeta(String key, Map<String, dynamic> map,
+      {DatabaseExecutor? executor}) async {
+    final pmKey = pmCursorMetaKeys.contains(key);
+    if (!pmKey && key != channelCoveredMetaKey) return;
+    if (pmKey && _cursorBlocked) return;
+    await (executor ?? _database).insert(
+      'meta',
+      {
+        'key': key,
+        'json': jsonEncode({'map': map}),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> deleteCursorMeta({bool block = false}) async {
+    if (block) _cursorBlocked = true;
+    final placeholders = List.filled(pmCursorMetaKeys.length, '?').join(',');
+    await _database.delete('meta',
+        where: 'key IN ($placeholders)', whereArgs: pmCursorMetaKeys);
+  }
+
   static const int _dbVersion = 2;
 
   /// Every logical store, plus the unbounded `meta` store.
@@ -417,6 +451,7 @@ class CacheStore {
   /// Wipes the `pms` table when PM caching is disabled.
   Future<void> clearPms() async {
     await _database.delete('pms');
+    await deleteCursorMeta();
   }
 
   List<Message> _decodeMessages(String? json) {
@@ -804,6 +839,7 @@ class CacheStore {
       where: '$keyColumn IN ($placeholders)',
       whereArgs: keys,
     );
+    if (table == 'pms') await deleteCursorMeta(block: true);
   }
 
   String _keyColumnFor(String table) {
@@ -911,6 +947,9 @@ class CacheStore {
     ]) {
       await _database.delete(table);
     }
+    await deleteCursorMeta();
+    await _database.delete('meta',
+        where: 'key = ?', whereArgs: [channelCoveredMetaKey]);
     // Reclaim freed pages; VACUUM can't run in a transaction, and the deletes auto-committed.
     try {
       await _database.execute('VACUUM');

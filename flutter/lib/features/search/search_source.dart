@@ -60,10 +60,12 @@ class UnifiedSearchIndex {
     return true;
   }
 
-  SearchMessageItem _itemFor(String key, Message m) {
+  SearchMessageItem _itemFor(
+      String key, Message m, String Function(String text)? clean) {
+    final text = clean == null ? m.content : clean(m.content);
     final hit = _items[m];
     if (hit != null &&
-        identical(hit.text, m.content) &&
+        (identical(hit.text, text) || hit.text == text) &&
         hit.key == key &&
         hit.at == m.timestamp) {
       return hit;
@@ -72,7 +74,7 @@ class UnifiedSearchIndex {
       id: m.id,
       key: key,
       at: m.timestamp,
-      text: m.content,
+      text: text,
       ref: m,
     );
     _items[m] = it;
@@ -81,7 +83,7 @@ class UnifiedSearchIndex {
 
   List<SearchMessageItem> messages(
       Map<String, List<Message>> map, bool Function(String key) locked,
-      {int rev = 0}) {
+      {int rev = 0, String Function(String text)? clean}) {
     final lockedKeys = [
       for (final k in map.keys)
         if (locked(k)) k
@@ -96,7 +98,7 @@ class UnifiedSearchIndex {
       if (locked(e.key)) continue;
       for (final m in e.value) {
         if (m.isSystemRow || m.content.isEmpty) continue;
-        out.add(_itemFor(e.key, m));
+        out.add(_itemFor(e.key, m, clean));
       }
     }
     _map = map;
@@ -120,7 +122,7 @@ SearchCorpus buildSearchCorpus(
   final channels = <SearchChannelItem>[];
   final seen = <String>{};
   for (final ch in s.channels) {
-    if (s.blockedChannels.contains(ch.key)) continue;
+    if (s.isChannelHidden(ch.key)) continue;
     if (locked(ch.storageKey)) continue;
     if (!seen.add(ch.key)) continue;
     channels.add(SearchChannelItem(
@@ -133,7 +135,7 @@ SearchCorpus buildSearchCorpus(
   }
   for (final e in s.geohashD1Activity.entries) {
     final gh = e.key.toLowerCase();
-    if (seen.contains(gh) || s.blockedChannels.contains(gh)) continue;
+    if (seen.contains(gh) || s.isChannelHidden(gh)) continue;
     if (!isSearchGeohash(gh)) continue;
     seen.add(gh);
     var sum = 0;
@@ -157,6 +159,9 @@ SearchCorpus buildSearchCorpus(
   final people = <String>{};
   for (final u in s.users.values) {
     if (u.pubkey.isEmpty || s.blockedUsers.contains(u.pubkey)) continue;
+    if (u.pubkey != s.selfPubkey && s.isPersonHidden(u.pubkey, u.nym)) {
+      continue;
+    }
     if (!people.add(u.pubkey)) continue;
     nyms.add(SearchNymItem(
       pubkey: u.pubkey,
@@ -168,6 +173,7 @@ SearchCorpus buildSearchCorpus(
   }
   for (final p in s.pmConversations) {
     if (p.pubkey.isEmpty || s.blockedUsers.contains(p.pubkey)) continue;
+    if (s.isPersonHidden(p.pubkey, p.nym)) continue;
     if (locked('pm-${p.pubkey}')) continue;
     if (!people.add(p.pubkey)) continue;
     nyms.add(SearchNymItem(
@@ -178,11 +184,14 @@ SearchCorpus buildSearchCorpus(
     ));
   }
   final blockedRooms = <String>{
-    for (final k in s.blockedChannels) '#$k',
+    for (final k in [...s.blockedChannels, ...s.hiddenChannels]) ...[
+      '#$k',
+      k,
+    ],
   };
   final messages = index.messages(
       s.messages, (k) => blockedRooms.contains(k) || locked(k),
-      rev: s.displayRev);
+      rev: s.displayRev, clean: s.stripBlockedQuotes);
   bool visible(SearchMessageItem it) {
     final m = it.ref;
     if (m is! Message) return true;

@@ -4,9 +4,14 @@
     const BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
     const WINDOW_OPTIONS = Object.freeze([1, 24, 168]);
     const CLUSTER_CELL_PX = 48;
-    const CLUSTER_MAX_ZOOM = 4;
+    const CLUSTER_GRID_ZOOM = 4;
+    const CLUSTER_SEED_PX = 6;
     const CLUSTER_GAP_PX = 2;
     const CLUSTER_ZOOM_STEPS = 4;
+    const MAX_ZOOM = 32768;
+    const GRID_AUTO_PX_PER_DEG = 400;
+    const GRID_LABEL_DX = 6;
+    const GRID_LABEL_DY = 5;
     const PULSE_WINDOW_MS = 300000;
     const ONLINE_WINDOW_SEC = 300;
     const SEARCH_MIN_CHARS = 2;
@@ -316,13 +321,67 @@
         return 12 + Math.min(6, 2 * bits);
     }
 
+    function clusterZoomStep(zoom) {
+        const z = typeof zoom === 'number' && zoom > 0 ? Math.min(zoom, MAX_ZOOM) : 1;
+        if (z < CLUSTER_GRID_ZOOM) return Math.max(1, Math.floor(z * CLUSTER_ZOOM_STEPS) / CLUSTER_ZOOM_STEPS);
+        let base = CLUSTER_GRID_ZOOM;
+        while (base * 2 <= z) base *= 2;
+        const q = base / CLUSTER_ZOOM_STEPS;
+        return base + Math.floor((z - base) / q) * q;
+    }
+
+    function stepAt(i) {
+        const below = (CLUSTER_GRID_ZOOM - 1) * CLUSTER_ZOOM_STEPS;
+        if (i < below) return 1 + i / CLUSTER_ZOOM_STEPS;
+        const j = i - below;
+        return CLUSTER_GRID_ZOOM * Math.pow(2, Math.floor(j / CLUSTER_ZOOM_STEPS)) * (1 + (j % CLUSTER_ZOOM_STEPS) / CLUSTER_ZOOM_STEPS);
+    }
+
+    function stepIndex(zq) {
+        let i = 0;
+        while (stepAt(i) < zq) i++;
+        return i;
+    }
+
+    function clusterSplitZoom(points, zoom, viewport) {
+        const splits = (z) => clusterChannels(points, z, viewport).length > 1;
+        if (!splits(MAX_ZOOM)) return null;
+        let lo = stepIndex(clusterZoomStep(zoom));
+        if (splits(stepAt(lo))) return stepAt(lo);
+        let hi = stepIndex(MAX_ZOOM);
+        while (hi - lo > 1) {
+            const mid = Math.floor((lo + hi) / 2);
+            if (splits(stepAt(mid))) hi = mid; else lo = mid;
+        }
+        return stepAt(hi);
+    }
+
+    function deepGrid(pxPerDeg) {
+        return typeof pxPerDeg === 'number' && pxPerDeg >= GRID_AUTO_PX_PER_DEG;
+    }
+
+    function gridCornerLabel(cell, textW, lineH, o) {
+        const opts = o || {};
+        const x = Math.max(cell.x0, 0) + GRID_LABEL_DX;
+        const y = Math.max(cell.y0, 0) + GRID_LABEL_DY;
+        if (x + textW > opts.width || y + lineH > opts.height) return null;
+        if (x + textW > cell.x1 || y + lineH > cell.y1) return null;
+        if (cell.y0 < 0 && cell.y1 + GRID_LABEL_DY - y < 2 * lineH) return null;
+        if (cell.x0 < 0 && cell.x1 + GRID_LABEL_DX - (x + textW) < lineH) return null;
+        const x1 = x + textW, y1 = y + lineH;
+        for (const b of opts.blocked || []) {
+            if (x < b.x1 && x1 > b.x0 && y < b.y1 && y1 > b.y0) return null;
+        }
+        return { x, y };
+    }
+
     function clusterChannels(points, zoom, viewport) {
-        if (!(zoom < CLUSTER_MAX_ZOOM)) return [];
         const w = viewport && viewport.width > 0 ? viewport.width : 1;
         const h = viewport && viewport.height > 0 ? viewport.height : 1;
-        const zq = Math.max(1, Math.floor(zoom * CLUSTER_ZOOM_STEPS) / CLUSTER_ZOOM_STEPS);
+        const zq = clusterZoomStep(zoom);
         const s = Math.max(w / 360, h / 180) * zq;
         const cell = CLUSTER_CELL_PX;
+        const seed = zq < CLUSTER_GRID_ZOOM ? CLUSTER_CELL_PX : CLUSTER_SEED_PX;
         const make = (members) => {
             const m = members.slice().sort((a, b) => cmp(a.id, b.id));
             let sLat = 0, sLng = 0, msgs = 0;
@@ -333,48 +392,63 @@
         const groups = new Map();
         for (const p of (Array.isArray(points) ? points : [])) {
             if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lng) || typeof p.id !== 'string') continue;
-            const key = Math.floor((p.lng + 180) * s / cell) + ',' + Math.floor((90 - p.lat) * s / cell);
+            const key = Math.floor((p.lng + 180) * s / seed) + ',' + Math.floor((90 - p.lat) * s / seed);
             let g = groups.get(key);
             if (!g) { g = []; groups.set(key, g); }
             g.push(p);
         }
         let list = [...groups.values()].map(make);
-        for (;;) {
-            list.sort((a, b) => cmp(a.key, b.key));
-            const buckets = new Map();
-            list.forEach((k, i) => {
-                const key = Math.floor(k.wx / cell) + ',' + Math.floor(k.wy / cell);
-                let b = buckets.get(key);
-                if (!b) { b = []; buckets.set(key, b); }
-                b.push(i);
-            });
-            const pairs = [];
-            list.forEach((k, i) => {
-                const bx = Math.floor(k.wx / cell), by = Math.floor(k.wy / cell);
-                for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
-                    const b = buckets.get((bx + ox) + ',' + (by + oy));
-                    if (!b) continue;
-                    for (const j of b) {
-                        if (j <= i) continue;
-                        const o = list[j];
-                        const dx = o.wx - k.wx, dy = o.wy - k.wy;
-                        const lim = k.r + o.r + CLUSTER_GAP_PX;
-                        const d = dx * dx + dy * dy;
-                        if (d < lim * lim) pairs.push({ i, j, d });
-                    }
+        const bucketOf = (k) => Math.floor(k.wx / cell) + ',' + Math.floor(k.wy / cell);
+        const buckets = new Map();
+        const put = (k) => {
+            const key = bucketOf(k);
+            let b = buckets.get(key);
+            if (!b) { b = new Set(); buckets.set(key, b); }
+            b.add(k);
+        };
+        const near = (k) => {
+            const out = [];
+            const bx = Math.floor(k.wx / cell), by = Math.floor(k.wy / cell);
+            for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+                const b = buckets.get((bx + ox) + ',' + (by + oy));
+                if (!b) continue;
+                for (const o of b) {
+                    if (o === k) continue;
+                    const lo = cmp(k.key, o.key) < 0 ? k : o, hi = lo === k ? o : k;
+                    const dx = hi.wx - lo.wx, dy = hi.wy - lo.wy;
+                    const lim = lo.r + hi.r + CLUSTER_GAP_PX;
+                    const d = dx * dx + dy * dy;
+                    if (d < lim * lim) out.push({ a: lo, b: hi, d });
                 }
-            });
-            if (!pairs.length) break;
-            pairs.sort((a, b) => (a.d - b.d) || cmp(list[a.i].key, list[b.i].key) || cmp(list[a.j].key, list[b.j].key));
+            }
+            return out;
+        };
+        list.forEach(put);
+        let pairs = [];
+        for (const k of list) for (const p of near(k)) if (p.a === k) pairs.push(p);
+        while (pairs.length) {
+            pairs.sort((x, y) => (x.d - y.d) || cmp(x.a.key, y.a.key) || cmp(x.b.key, y.b.key));
             const used = new Set();
             const merged = [];
             for (const p of pairs) {
-                if (used.has(p.i) || used.has(p.j)) continue;
-                used.add(p.i); used.add(p.j);
-                merged.push(make(list[p.i].members.concat(list[p.j].members)));
+                if (used.has(p.a) || used.has(p.b)) continue;
+                used.add(p.a); used.add(p.b);
+                merged.push(make(p.a.members.concat(p.b.members)));
             }
-            list = list.filter((_, i) => !used.has(i)).concat(merged);
+            for (const k of used) buckets.get(bucketOf(k)).delete(k);
+            pairs = pairs.filter((p) => !used.has(p.a) && !used.has(p.b));
+            merged.forEach(put);
+            const fresh = new Set(merged);
+            for (const m of merged) {
+                for (const p of near(m)) {
+                    const o = p.a === m ? p.b : p.a;
+                    if (fresh.has(o) && p.a !== m) continue;
+                    pairs.push(p);
+                }
+            }
+            list = list.filter((k) => !used.has(k)).concat(merged);
         }
+        list.sort((a, b) => cmp(a.key, b.key));
         return list.map((k) => ({
             ids: k.members.map((p) => p.id), lat: k.lat, lng: k.lng, count: k.members.length, messages: k.messages, r: k.r,
         }));
@@ -528,7 +602,8 @@
     }
 
     G.NymGeoExplore = Object.freeze({
-        BASE32, WINDOW_OPTIONS, CLUSTER_CELL_PX, CLUSTER_MAX_ZOOM, CLUSTER_GAP_PX, CLUSTER_ZOOM_STEPS, PULSE_WINDOW_MS, ONLINE_WINDOW_SEC,
+        BASE32, WINDOW_OPTIONS, CLUSTER_CELL_PX, CLUSTER_GRID_ZOOM, CLUSTER_SEED_PX, CLUSTER_GAP_PX, CLUSTER_ZOOM_STEPS, MAX_ZOOM, GRID_AUTO_PX_PER_DEG,
+        PULSE_WINDOW_MS, ONLINE_WINDOW_SEC, clusterZoomStep, clusterSplitZoom, deepGrid, GRID_LABEL_DX, GRID_LABEL_DY, gridCornerLabel,
         SEARCH_MIN_CHARS, SEARCH_LIMIT, MIN_TOUCH_PX, PRECISION_LABELS, KIND_PRECISION,
         foldText, normalizeQuery, classifyQuery, isValidGeohash, encodeGeohash, cellBounds, placeGeohash,
         rankPlaces, buildPlaceIndex, buildSearchResults, roomPlaceLabel, formatLength, cellSizeMeters, precisionSteps, haversineKm, formatDistanceKm,

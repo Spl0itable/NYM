@@ -28,6 +28,8 @@ const Map<String, List<String>> kStampedPrefs = {
   'pubkeyFormat': ['pubkeyFormat'],
   'voiceSpeed': ['voiceSpeed'],
   'keepCallHistory': ['keepCallHistory'],
+  'largeTargets': ['largeTargets'],
+  'highContrast': ['highContrast'],
 };
 
 final RegExp _event = RegExp(r'^[0-9a-f]{16}$');

@@ -12,6 +12,7 @@ import '../calls/call_wake.dart' show ringRegistrationProvider;
 import '../../services/attest/attest_badge.dart';
 import 'package:flutter/services.dart';
 import '../../widgets/common/nym_sheet.dart';
+import '../../widgets/common/nym_label.dart';
 import '../calls/call_history_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -21,6 +22,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../core/constants/storage_keys.dart';
 import '../../core/crypto/pow.dart';
 import '../../core/crypto/bech32_codec.dart' as bech32;
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/theme/nym_theme.dart';
@@ -44,6 +46,8 @@ import '../../widgets/wallpaper/wallpaper_layer.dart';
 import '../emoji/emoji_picker.dart';
 import '../ai_consent/ai_consent.dart';
 import '../i18n/i18n.dart';
+import '../relays/blocked_relays.dart';
+import '../relays/relay_block.dart';
 import '../i18n/language_select.dart';
 import '../messages/format/message_content.dart' show InlineEmojiText;
 import '../identity/modal_chrome.dart';
@@ -65,6 +69,7 @@ import '../../state/fallback_notice.dart';
 import 'settings_helpers.dart';
 import 'settings_widgets.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/dialog_button.dart';
 
 /// Post-quantum status line, named so a test can hold the translation catalog to it.
 const String kPqStatusFull = 'Active for messages with other Nymchat users.';
@@ -194,9 +199,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// Save-gated draft of settings; live-applied controls also mirror into it so Save doesn't revert them.
   late Settings _draft;
 
-  /// `cachePMs` at open; the cache is wiped on Save only when it flipped on to off.
-  late bool _cachePMsAtOpen;
-
   // Save-gated drafts for the KV-only keypair, PoW and blur controls.
   late String _draftKeypair; // 'persistent' | 'random' | 'hardcore'
   late int _draftPow;
@@ -224,7 +226,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             : 'everywhere',
       ),
     );
-    _cachePMsAtOpen = _draft.cachePMs;
     final ctrl0 = ref.read(settingsProvider.notifier);
     _draftKeypair = ctrl0.keypairMode;
     // Map retired 8/12 values onto the offered set so the dropdown isn't empty.
@@ -371,6 +372,75 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   bool _touched = false;
+
+  void _mirror(Settings Function(Settings draft) fn) {
+    if (!mounted) return;
+    setState(() => _draft = fn(_draft));
+  }
+
+  int _proximityAsk = 0;
+
+  bool _cachePMsPending = false;
+
+  Future<void> _onProximityFlip(bool on) async {
+    final ctrl = ref.read(settingsProvider.notifier);
+    final ask = ++_proximityAsk;
+    _mirror((d) => d.copyWith(sortByProximity: on));
+    final granted = await _resolveProximity(on);
+    if (ask != _proximityAsk) return;
+    ctrl.setSortByProximity(granted);
+    _mirror((d) => d.copyWith(sortByProximity: granted));
+  }
+
+  Future<void> _onCachePMsFlip(bool on) async {
+    final ctrl = ref.read(settingsProvider.notifier);
+    final nostr = ref.read(nostrControllerProvider);
+    final wasOn = ref.read(settingsProvider).cachePMs;
+    if (wasOn && !on) {
+      setState(() {
+        _cachePMsPending = true;
+        _draft = _draft.copyWith(cachePMs: false);
+      });
+      final ok = await showAppConfirm(
+        context,
+        tr(kCachePMsOffBody),
+        title: tr(kCachePMsOffTitle),
+        okLabel: tr(kCachePMsOffOk),
+        danger: true,
+      );
+      if (mounted) {
+        setState(() {
+          _cachePMsPending = false;
+          _draft = _draft.copyWith(cachePMs: !ok);
+        });
+      }
+      if (!ok) return;
+    } else {
+      _mirror((d) => d.copyWith(cachePMs: on));
+    }
+    ctrl.setCachePMs(on);
+    if (wasOn && !on) unawaited(nostr.clearPmGroupCache());
+  }
+
+  void _onFilterPackFlip(String id, bool on) {
+    final ctrl = ref.read(settingsProvider.notifier);
+    setState(() {
+      if (on) {
+        _draftFilterPacks.add(id);
+      } else {
+        _draftFilterPacks.remove(id);
+      }
+    });
+    ctrl.setFilterPacks(_draftFilterPacks.toList());
+    unawaited(FilterPacks.setActive(Set.of(_draftFilterPacks)));
+    ctrl.notifySyncedChange();
+  }
+
+  bool _remotePanicPending = false;
+
+  void _markRemotePanicPending(bool pending) {
+    if (mounted) setState(() => _remotePanicPending = pending);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -676,40 +746,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget _actions(NymColors c) {
     return Container(
       padding: const EdgeInsets.fromLTRB(32, 20, 32, 32),
-      child: Wrap(
-        alignment: WrapAlignment.center,
-        spacing: 10,
-        runSpacing: 10,
+      child: DialogActions(
         children: [
-          // Stretched to match the 42px Save button.
-          NymOutlineButton(
-            label: tr('Cancel'),
-            onPressed: () => Navigator.of(context).pop(),
-            height: 42,
-          ),
-          InkWell(
-            onTap: _onSave,
-            borderRadius: NymRadius.rsm,
-            child: Container(
-              height: 42,
-              alignment: Alignment.center,
-              padding: const EdgeInsets.symmetric(horizontal: 22),
-              decoration: BoxDecoration(
-                color: c.primaryA(0.10),
-                borderRadius: NymRadius.rsm,
-                border: Border.all(color: c.primaryA(0.30)),
-              ),
-              child: Text(
-                tr('SAVE'),
-                style: TextStyle(
-                  color: c.primary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1.5,
-                ),
-              ),
-            ),
-          ),
+          DialogButton.secondary(
+              label: tr('Cancel'), onTap: () => Navigator.of(context).pop()),
+          DialogButton(label: tr('SAVE'), onTap: _onSave),
         ],
       ),
     );
@@ -721,14 +762,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     });
   }
 
-  /// Fans the Save-gated draft out to the real setters, resolves proximity, conditionally wipes the PM cache, and closes.
   Future<void> _onSave() async {
     final ctrl = ref.read(settingsProvider.notifier);
     final d = _draft;
-
-    // Resolve the proximity grant first so a denial flips it back to Disabled.
-    final proximity = await _resolveProximityOnSave(d.sortByProximity);
-    if (!mounted) return;
 
     // Snapshot status visibility to re-broadcast immediately if it changes.
     final prevShowStatus = ref.read(settingsProvider).showStatus;
@@ -744,7 +780,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     ctrl.setTextSize(d.textSize);
     ctrl.setAcceptPMs(d.acceptPMs);
     ctrl.setAcceptCalls(d.acceptCalls);
-    ctrl.setDmForwardSecrecy(d.dmForwardSecrecyEnabled);
     ctrl.setDmTtlSeconds(d.dmTtlSeconds);
     ctrl.setReadReceiptsScope(d.readReceiptsScope);
     ctrl.setTypingIndicatorsScope(d.typingIndicatorsScope);
@@ -758,27 +793,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             awayMessage: awayMsg,
           ));
     }
-    ctrl.setCachePMs(d.cachePMs);
     ctrl.setTranslateLanguage(d.translateLanguage);
     ctrl.setSound(d.sound);
-    ctrl.setAutoscroll(d.autoscroll);
-    ctrl.setShowTimestamps(d.showTimestamps);
     ctrl.setTimeFormat(d.timeFormat);
     ctrl.setDateFormat(d.dateFormat);
     ctrl.setNickStyle(d.nickStyle);
-    ctrl.setGroupChatPMOnlyMode(d.groupChatPMOnlyMode);
-    ctrl.setSortByProximity(proximity);
-    ctrl.setHideNonPinned(d.hideNonPinned);
-    ctrl.setGesturesEnabled(d.gesturesEnabled);
     ctrl.setSwipeLeftAction(d.swipeLeftAction);
     ctrl.setSwipeRightAction(d.swipeRightAction);
     ctrl.setSwipeThreshold(d.swipeThreshold);
     ctrl.setSwipeReactEmoji(d.swipeReactEmoji);
-    ctrl.setLowDataMode(d.lowDataMode);
-    if (d.backgroundConnectivity !=
-        ref.read(settingsProvider).backgroundConnectivity) {
-      ctrl.setBackgroundConnectivity(d.backgroundConnectivity);
-    }
 
     // Keypair is locked to 'persistent' while logged in with a Nostr identity.
     final nostrLoggedIn =
@@ -807,16 +830,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       }
     }
     ctrl.setPowDifficulty(_draftPow);
-    ctrl.setAppVerifiedFilter(_draftVerified);
-    ctrl.setFilterPacks(_draftFilterPacks.toList());
-    unawaited(FilterPacks.setActive(_draftFilterPacks));
     ctrl.setBlurImages(_draftBlur,
         pubkey: ref.read(appStateProvider).selfPubkey);
-
-    // Wipe the PM/group cache only when caching flipped on to off.
-    if (_cachePMsAtOpen && !d.cachePMs) {
-      ref.read(nostrControllerProvider).clearPmGroupCache();
-    }
 
     // Commit via the synced setter so Save publishes it like other settings.
     ctrl.setPinnedLandingChannel(_landing.toJsonString());
@@ -1113,13 +1128,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   /// Enabling proximity without a cached location asks permission; a denial flips it off and clears the location.
-  Future<bool> _resolveProximityOnSave(bool desired) async {
+  Future<bool> _resolveProximity(bool desired) async {
+    final location = ref.read(userLocationProvider.notifier);
     if (!desired) {
-      ref.read(userLocationProvider.notifier).state = null;
+      location.state = null;
       return false;
     }
     // Already located: keep proximity on silently.
-    if (ref.read(userLocationProvider) != null) return true;
+    if (location.state != null) return true;
     try {
       var status = await Permission.locationWhenInUse.status;
       if (!status.isGranted) {
@@ -1129,37 +1145,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         // Granted: fetch a fix; failure disables proximity.
         final loc = await fetchCurrentUserLocation();
         if (loc != null) {
-          ref.read(userLocationProvider.notifier).state = loc;
+          location.state = loc;
           _systemMessage(tr(
               'Location access granted. Geohash channels sorted by proximity.'));
           return true;
         }
-        ref.read(userLocationProvider.notifier).state = null;
+        location.state = null;
         _systemMessage(tr('Location unavailable. Proximity sorting disabled.'));
         return false;
       }
-      ref.read(userLocationProvider.notifier).state = null;
+      location.state = null;
       _systemMessage(tr('Location access denied. Proximity sorting disabled.'));
       return false;
     } catch (_) {
-      ref.read(userLocationProvider.notifier).state = null;
+      location.state = null;
       _systemMessage(tr('Location access denied. Proximity sorting disabled.'));
       return false;
     }
   }
 
   List<_GroupSpec> _appearance(Settings s, SettingsController ctrl) {
-    final columnsWallpaperItems = <({bool value, String label})>[
-      (value: false, label: tr('Solid background')),
-      (value: true, label: tr('Show wallpaper through messages')),
-    ];
     final transparencyItems = <({bool value, String label})>[
       (value: false, label: tr('Solid')),
       (value: true, label: tr('Glass')),
-    ];
-    final threadsItems = <({bool value, String label})>[
-      (value: true, label: tr('Enabled')),
-      (value: false, label: tr('Disabled (classic flat view)')),
     ];
     final customWallpaperPath = s.wallpaperType == 'custom'
         ? ref
@@ -1204,6 +1212,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           label: tr('Language'),
           hint: tr('Show the app interface in your chosen language.'),
           child: _LanguageSelectRow(
+            key: const ValueKey('setting-uiLanguage'),
             currentName: uiLanguageName(s.uiLanguage),
             onTap: () async {
               await showLanguagePickerDialog(context, ref);
@@ -1223,6 +1232,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         child: FormGroup(
           label: tr('Theme'),
           child: FormSelect<NymThemeKey>(
+            key: const ValueKey('setting-theme'),
             value: s.theme,
             items: _themeOptions(),
             onChanged: (v) {
@@ -1232,25 +1242,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      _GroupSpec(
-        text: '${tr('Colorful Messages')} ${tr('Disabled')} ${tr('Enabled')} ${tr(kColorfulHint)}',
-        child: FormGroup(
-          label: tr('Colorful Messages'),
-          hint: tr(kColorfulHint),
-          child: FormSelect<String>(
-            key: const Key('colorfulMessagesSelect'),
-            value: ref.watch(settingsProvider.select((x) => x.colorfulMessages))
-                ? 'on'
-                : 'off',
-            items: [
-              (value: 'off', label: tr('Disabled')),
-              (value: 'on', label: tr('Enabled')),
-            ],
-            onChanged: (v) => ref
-                .read(settingsProvider.notifier)
-                .setColorfulMessages(v == 'on'),
-          ),
-        ),
+      _toggleSpec(
+        key: 'colorfulMessages',
+        label: tr('Colorful Messages'),
+        hint: tr(kColorfulHint),
+        value: ref.watch(settingsProvider.select((x) => x.colorfulMessages)),
+        onChanged: (v) =>
+            ref.read(settingsProvider.notifier).setColorfulMessages(v),
       ),
       // Search text includes the mock preview lines.
       _GroupSpec(
@@ -1269,26 +1267,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      // Default on; off restores the flat view.
-      _GroupSpec(
-        text: tr('Message Threads {options} Group replies under their '
-            'original message. Replies open in a thread view and the '
-            'original shows a reply count. Disabling shows every message '
-            'inline like before.', {'options': _optText(threadsItems)}),
-        child: FormGroup(
-          label: tr('Message Threads'),
-          hint: tr('Group replies under their original message. Replies '
-              'open in a thread view and the original shows a reply count. '
-              'Disabling shows every message inline like before.'),
-          child: FormSelect<bool>(
-            value: s.threadsEnabled,
-            items: threadsItems,
-            onChanged: (v) {
-              ctrl.setThreadsEnabled(v);
-              _mutate((d) => d.copyWith(threadsEnabled: v));
-            },
-          ),
-        ),
+      _toggleSpec(
+        key: 'threadsEnabled',
+        label: tr('Message Threads'),
+        hint: tr('Group replies under their original message. Replies '
+            'open in a thread view and the original shows a reply count. '
+            'Disabling shows every message inline like before.'),
+        value: s.threadsEnabled,
+        onChanged: (v) {
+          ctrl.setThreadsEnabled(v);
+          _mirror((d) => d.copyWith(threadsEnabled: v));
+        },
       ),
       // The reset-columns button shows in single view too.
       _GroupSpec(
@@ -1320,25 +1309,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       if (s.useColumns)
-        _GroupSpec(
-          text: tr(
-              'Column Message Wallpaper {options} In column view, let your '
-              'chat wallpaper show through the message area of each column '
-              'instead of a solid background.',
-              {'options': _optText(columnsWallpaperItems)}),
-          child: FormGroup(
-            label: tr('Column Message Wallpaper'),
-            hint: tr('In column view, let your chat wallpaper show through the '
-                'message area of each column instead of a solid background.'),
-            child: FormSelect<bool>(
-              value: s.columnsWallpaper,
-              items: columnsWallpaperItems,
-              onChanged: (v) {
-                ctrl.setColumnsWallpaper(v);
-                _mutate((d) => d.copyWith(columnsWallpaper: v));
-              },
-            ),
-          ),
+        _toggleSpec(
+          key: 'columnsWallpaper',
+          label: tr('Column Message Wallpaper'),
+          hint: tr('In column view, let your chat wallpaper show through the '
+              'message area of each column instead of a solid background.'),
+          value: s.columnsWallpaper,
+          onChanged: (v) {
+            ctrl.setColumnsWallpaper(v);
+            _mirror((d) => d.copyWith(columnsWallpaper: v));
+          },
         ),
       _GroupSpec(
         text: tr('Chat Wallpaper None Geometric Circuit Dots Waves Topography '
@@ -1373,6 +1353,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'sidebars, and other surfaces are rendered with either solid '
               'backgrounds or a translucent "Glass" look.'),
           child: FormSelect<bool>(
+            key: const ValueKey('setting-transparencyEnabled'),
             value: s.transparencyEnabled,
             items: transparencyItems,
             onChanged: (v) {
@@ -1408,18 +1389,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
       _GroupSpec(
-        text: tr('Show Timestamps Show Hide'),
-        child: FormGroup(
-          label: tr('Show Timestamps'),
-          child: FormSelect<bool>(
-            value: s.showTimestamps,
-            items: [
-              (value: true, label: tr('Show')),
-              (value: false, label: tr('Hide')),
-            ],
-            onChanged: (v) => _mutate((d) => d.copyWith(showTimestamps: v)),
-          ),
+        text: '${tr('Accessibility')} ${tr('Larger touch targets')} '
+            '${tr(kLargeTargetsHint)}',
+        child: SettingsToggleRow(
+          key: const ValueKey('setting-largeTargets'),
+          switchKey: const Key('a11yTargetsSwitch'),
+          label: tr('Larger touch targets'),
+          hint: tr(kLargeTargetsHint),
+          value: ref.watch(settingsProvider.select((x) => x.largeTargets)),
+          onChanged: (v) =>
+              ref.read(settingsProvider.notifier).setLargeTargets(v),
         ),
+      ),
+      _GroupSpec(
+        text: '${tr('Accessibility')} ${tr('Higher contrast')} '
+            '${tr(kHighContrastHint)}',
+        child: SettingsToggleRow(
+          key: const ValueKey('setting-highContrast'),
+          switchKey: const Key('a11yContrastSwitch'),
+          label: tr('Higher contrast'),
+          hint: tr(kHighContrastHint),
+          value: ref.watch(settingsProvider.select((x) => x.highContrast)),
+          onChanged: (v) =>
+              ref.read(settingsProvider.notifier).setHighContrast(v),
+        ),
+      ),
+      _toggleSpec(
+        key: 'showTimestamps',
+        label: tr('Show Timestamps'),
+        value: s.showTimestamps,
+        onChanged: (v) {
+          ctrl.setShowTimestamps(v);
+          _mirror((d) => d.copyWith(showTimestamps: v));
+        },
       ),
       // Time/date format hide when timestamps are hidden.
       if (s.showTimestamps) ...[
@@ -1429,6 +1431,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           child: FormGroup(
             label: tr('Time Format'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-timeFormat'),
               value: s.timeFormat,
               items: timeFormatItems,
               onChanged: (v) => _mutate((d) => d.copyWith(timeFormat: v)),
@@ -1445,6 +1448,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             hint: tr('Used in the full timestamp shown when tapping a message '
                 'time'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-dateFormat'),
               value: s.dateFormat,
               items: dateFormatItems,
               onChanged: (v) => _mutate((d) => d.copyWith(dateFormat: v)),
@@ -1459,6 +1463,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _privacy(Settings s, SettingsController ctrl) {
     // Moderation sets live on AppState.
     final app = ref.watch(appStateProvider);
+    final blockedRelays = ref.watch(blockedRelaysProvider);
     // A durable Nostr login locks keypair rotation to 'persistent'.
     final nostrLoggedIn =
         ref.read(nostrControllerProvider).identity?.loginMethod != null;
@@ -1479,10 +1484,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: 16, label: tr('16 bits (Nymchat minimum)')),
       (value: 20, label: tr('20 bits — also hides Nymchat messages')),
       (value: 24, label: tr('24 bits — also hides Nymchat messages')),
-    ];
-    final verifiedItems = <({String value, String label})>[
-      (value: 'off', label: tr('Disabled')),
-      (value: 'on', label: tr('Enabled')),
     ];
     final acceptItems = <({String value, String label})>[
       (value: 'enabled', label: tr('Enabled')),
@@ -1572,22 +1573,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _GroupSpec(
           text: '${AiConsentStrings.settingSearch} '
               '${AiConsentStrings.what} ${AiConsentStrings.who}',
-          child: FormGroup(
-            key: const Key('aiConsentGroup'),
-            label: AiConsentStrings.settingLabel,
-            footer: AiConsentSettingFooter(consent: AiConsent.instance),
-            child: AiConsentSettingRow(consent: AiConsent.instance),
-          ),
+          child: AiConsentSettingRow(consent: AiConsent.instance),
         ),
         _GroupSpec(
           text: '${TranslateConsentStrings.settingSearch} '
               '${TranslateConsentStrings.what} ${TranslateConsentStrings.who}',
-          child: FormGroup(
-            key: const Key('aiTranslateGroup'),
-            label: TranslateConsentStrings.settingLabel,
-            footer: AiConsentSettingFooter(consent: AiConsent.translation),
-            child: AiConsentSettingRow(consent: AiConsent.translation),
-          ),
+          child: AiConsentSettingRow(consent: AiConsent.translation),
         ),
         chatLock.first,
         _remotePanicGroup(),
@@ -1624,6 +1615,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             // A plain amber hint, not the danger box.
             amberHint: keypairValue == 'hardcore' ? hardcoreWarning : null,
             child: FormSelect<String>(
+              key: const ValueKey('setting-keypairMode'),
               value: keypairValue,
               // Locked while logged in with a Nostr identity.
               disabled: nostrLoggedIn,
@@ -1649,6 +1641,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'drops clients that do no work. Above 16 also hides messages '
                 'from other Nymchat users.'),
             child: FormSelect<int>(
+              key: const ValueKey('setting-powDifficulty'),
               value: _draftPow,
               items: powItems,
               onChanged: (v) => setState(() => _draftPow = v),
@@ -1664,6 +1657,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             label: tr('Random Nickname Style'),
             hint: tr('Style used when generating random nicknames'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-nickStyle'),
               value: s.nickStyle,
               items: nickStyleItems,
               onChanged: (v) => _mutate((d) => d.copyWith(nickStyle: v)),
@@ -1683,6 +1677,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             hint: tr('Control who can send you PMs and group chat invites. '
                 '"Friends only" filters messages from non-friends.'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-acceptPMs'),
               value: s.acceptPMs,
               items: acceptItems,
               onChanged: (v) => _mutate((d) => d.copyWith(acceptPMs: v)),
@@ -1701,6 +1696,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 '"Friends only" silently ignores calls from non-friends.'),
             warning: callsWarning,
             child: FormSelect<String>(
+              key: const ValueKey('setting-acceptCalls'),
               value: s.acceptCalls,
               items: acceptItems,
               onChanged: (v) => _mutate((d) => d.copyWith(acceptCalls: v)),
@@ -1748,26 +1744,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
           ),
         ),
-        _GroupSpec(
-          text: tr('Disappearing PM (forward secrecy) Disabled Enabled When '
-              'enabled, your private messages include an "expiration" tag '
-              '(NIP‑40) so relays/clients can delete them after the period '
-              'chosen when enabled.'),
-          child: FormGroup(
-            label: tr('Disappearing PM (forward secrecy)'),
-            hint: tr('When enabled, your private messages include an '
-                '"expiration" tag (NIP‑40) so relays/clients can delete them '
-                'after the period chosen when enabled.'),
-            child: FormSelect<bool>(
-              value: s.dmForwardSecrecyEnabled,
-              items: [
-                (value: false, label: tr('Disabled')),
-                (value: true, label: tr('Enabled')),
-              ],
-              onChanged: (v) =>
-                  _mutate((d) => d.copyWith(dmForwardSecrecyEnabled: v)),
-            ),
-          ),
+        _toggleSpec(
+          key: 'dmForwardSecrecyEnabled',
+          label: tr('Disappearing PM (forward secrecy)'),
+          hint: tr('When enabled, your private messages include an '
+              '"expiration" tag (NIP‑40) so relays/clients can delete them '
+              'after the period chosen when enabled.'),
+          value: s.dmForwardSecrecyEnabled,
+          onChanged: (v) {
+            ctrl.setDmForwardSecrecy(v);
+            _mirror((d) => d.copyWith(dmForwardSecrecyEnabled: v));
+          },
         ),
         if (s.dmForwardSecrecyEnabled)
           _GroupSpec(
@@ -1789,6 +1776,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 hint: tr('This sets the "expiration" timestamp on each outgoing '
                     'gift‑wrapped PM.'),
                 child: FormSelect<int>(
+                  key: const ValueKey('setting-dmTTLSeconds'),
                   value: s.dmTtlSeconds,
                   items: dmTtlItems,
                   onChanged: (v) => _mutate((d) => d.copyWith(dmTtlSeconds: v)),
@@ -1808,6 +1796,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'messages (✓✓). "Enabled everywhere" includes PMs, group '
                 'chats, and public channels.'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-readReceiptsScope'),
               value: s.readReceiptsScope,
               items: scopeItems,
               onChanged: (v) => _mutate((d) => d.copyWith(readReceiptsScope: v)),
@@ -1826,6 +1815,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 '"Enabled everywhere" includes PMs, group chats, and public '
                 'channels.'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-typingIndicatorsScope'),
               value: s.typingIndicatorsScope,
               items: scopeItems,
               onChanged: (v) =>
@@ -1852,6 +1842,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'see it. When disabled, your status is hidden from everyone, '
                 "but you can still see other people's status indicators."),
             child: FormSelect<String>(
+              key: const ValueKey('setting-showStatus'),
               value: s.showStatus,
               items: showStatusItems,
               onChanged: (v) => _mutate((d) => d.copyWith(showStatus: v)),
@@ -1860,56 +1851,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ],
       safety: <_GroupSpec>[
-        _GroupSpec(
-          text: '${tr('Spam filter')} ${_optText(verifiedItems)} ${tr(kSpamFilterHint)}',
-          child: FormGroup(
-            label: tr('Spam filter'),
-            hint: tr(kSpamFilterHint),
-            child: FormSelect<String>(
-              key: const Key('spamFilterSelect'),
-              value: ctrl.spamFilterEnabled ? 'on' : 'off',
-              items: verifiedItems,
-              onChanged: (v) => setState(
-                  () => ctrl.setSpamFilter(enabled: v != 'off')),
-            ),
-          ),
+        _toggleSpec(
+          key: 'spamFilterEnabled',
+          label: tr('Spam filter'),
+          hint: tr(kSpamFilterHint),
+          value: ctrl.spamFilterEnabled,
+          onChanged: (v) => setState(() => ctrl.setSpamFilter(enabled: v)),
         ),
-        _GroupSpec(
-          text: '${tr('Aggressive filtering')} ${_optText(verifiedItems)} ${tr(kSpamFilterAggressiveHint)}',
-          child: FormGroup(
-            label: tr('Aggressive filtering'),
-            hint: tr(kSpamFilterAggressiveHint),
-            child: FormSelect<String>(
-              key: const Key('spamFilterAggressiveSelect'),
-              value: ctrl.spamFilterAggressive ? 'on' : 'off',
-              items: verifiedItems,
-              disabled: !ctrl.spamFilterEnabled,
-              onChanged: (v) => setState(
-                  () => ctrl.setSpamFilter(aggressive: v != 'off')),
-            ),
-          ),
+        _toggleSpec(
+          key: 'spamFilterAggressive',
+          label: tr('Aggressive filtering'),
+          hint: tr(kSpamFilterAggressiveHint),
+          value: ctrl.spamFilterAggressive,
+          onChanged: ctrl.spamFilterEnabled
+              ? (v) => setState(() => ctrl.setSpamFilter(aggressive: v))
+              : null,
         ),
-        _GroupSpec(
-          text: tr(
-              'Verified Nymchat Users Only {options} Filters incoming channel '
-              'messages to senders who proved they are running Nymchat, on the '
-              'web app or the phone apps. Scripted senders cannot prove it and '
-              'are dropped. Your own messages, friends and Nymbot are always '
-              'shown.',
-              {'options': _optText(verifiedItems)}),
-          child: FormGroup(
-            label: tr('Verified Nymchat Users Only'),
-            hint: tr(
-                'Filters incoming channel messages to senders who proved they '
-                'are running Nymchat, on the web app or the phone apps. '
-                'Scripted senders cannot prove it and are dropped. Your own '
-                'messages, friends and Nymbot are always shown.'),
-            child: FormSelect<String>(
-              value: _draftVerified,
-              items: verifiedItems,
-              onChanged: (v) => setState(() => _draftVerified = v),
-            ),
-          ),
+        _toggleSpec(
+          key: 'appVerifiedFilter',
+          label: tr('Verified Nymchat Users Only'),
+          hint: tr(
+              'Filters incoming channel messages to senders who proved they '
+              'are running Nymchat, on the web app or the phone apps. '
+              'Scripted senders cannot prove it and are dropped. Your own '
+              'messages, friends and Nymbot are always shown.'),
+          value: _draftVerified == 'on',
+          onChanged: (v) {
+            setState(() => _draftVerified = v ? 'on' : 'off');
+            ctrl.setAppVerifiedFilter(_draftVerified);
+            ctrl.notifySyncedChange();
+          },
         ),
         _GroupSpec(
           text: tr('This Device {status} What this install proved to the '
@@ -1939,6 +1910,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 'images are never blurred. "Friends only" shows images from '
                 'friends unblurred.'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-blurOthersImages'),
               value: _draftBlur,
               items: blurItems,
               onChanged: (v) => setState(() => _draftBlur = v),
@@ -1960,6 +1932,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 FormInput(
+                  largeTarget: true,
                   controller: _keywordController,
                   hint: tr('Add keyword or phrase to block'),
                 ),
@@ -2027,6 +2000,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       controller.syncSettings();
                     },
                   ),
+          ),
+        ),
+        _GroupSpec(
+          text: tr('Blocked Relays Unblock {list} Block a relay from Network '
+              'Stats.', {
+            'list': blockedRelays.isEmpty
+                ? tr('No blocked relays')
+                : blockedRelays.map(RelayBlock.shown).join(' ')
+          }),
+          child: FormGroup(
+            key: const ValueKey('settings-blocked-relays'),
+            label: tr('Blocked Relays'),
+            hint: tr("Block a relay from Network Stats. Blocking stops live "
+                "traffic with that relay for this account on every device. "
+                "History the app backend already stored can't be filtered by "
+                "relay, because the backend doesn't record which relay a "
+                "message came from, and blocking doesn't reduce app backend "
+                'traffic.'),
+            child: _removableList(
+              entries: blockedRelays,
+              emptyText: tr('No blocked relays'),
+              buttonLabel: tr('Unblock'),
+              labelFor: RelayBlock.shown,
+              onRemove: (url) =>
+                  ref.read(nostrControllerProvider).unblockRelay(url),
+            ),
           ),
         ),
         _GroupSpec(
@@ -2115,55 +2114,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget _filterPackRow(({String id, String label, String desc}) pack,
       {required bool first}) {
     final c = context.nym;
-    final on = _draftFilterPacks.contains(pack.id);
-    return InkWell(
-      borderRadius: NymRadius.rxs,
-      onTap: () => setState(() {
-        if (on) {
-          _draftFilterPacks.remove(pack.id);
-        } else {
-          _draftFilterPacks.add(pack.id);
-        }
-      }),
-      child: Container(
-        decoration: first
-            ? null
-            : BoxDecoration(
-                border: Border(top: BorderSide(color: c.glassBorder))),
+    return DecoratedBox(
+      decoration: first
+          ? const BoxDecoration()
+          : BoxDecoration(border: Border(top: BorderSide(color: c.glassBorder))),
+      child: SettingsToggleRow(
+        key: ValueKey('setting-filterPacks.${pack.id}'),
+        sub: true,
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 24,
-              height: 24,
-              child: Checkbox(
-                value: on,
-                visualDensity: VisualDensity.compact,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                onChanged: (v) => setState(() {
-                  if (v == true) {
-                    _draftFilterPacks.add(pack.id);
-                  } else {
-                    _draftFilterPacks.remove(pack.id);
-                  }
-                }),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(tr(pack.label), style: TextStyle(fontSize: 13, color: c.text)),
-                  const SizedBox(height: 2),
-                  Text(tr(pack.desc),
-                      style: TextStyle(fontSize: 11, height: 1.4, color: c.textDim)),
-                ],
-              ),
-            ),
-          ],
-        ),
+        label: tr(pack.label),
+        hint: tr(pack.desc),
+        value: _draftFilterPacks.contains(pack.id),
+        onChanged: (v) => _onFilterPackFlip(pack.id, v),
       ),
     );
   }
@@ -2171,26 +2133,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// Moderation row nym with a dim `#suffix`.
   TextSpan _nymSpanFor(String pubkey) {
     final c = context.nym;
-    final nym = _nymLabelFor(pubkey);
-    final m = RegExp(r'^([\s\S]*?)#([0-9a-f]{4})$', caseSensitive: false)
-        .firstMatch(nym);
-    if (m == null) {
-      return TextSpan(text: nym, style: TextStyle(color: c.text, fontSize: 13));
-    }
+    final style = TextStyle(color: c.text, fontSize: 13);
+    final p = splitNymLabel(_nymLabelFor(pubkey));
     return TextSpan(
-      children: [
-        TextSpan(
-            text: m.group(1), style: TextStyle(color: c.text, fontSize: 13)),
-        TextSpan(
-          text: '#${m.group(2)}',
-          style: TextStyle(
-            color: c.text.withValues(alpha: 0.7),
-            fontSize: 13 * 0.9,
-            fontWeight: FontWeight.w100,
-          ),
-        ),
-      ],
-    );
+        style: style,
+        children: nymLabelSpans(context, p.base, p.suffix, style));
   }
 
   List<_GroupSpec> _messaging(Settings s, SettingsController ctrl) {
@@ -2206,6 +2153,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               'via the context menu.'),
           // Same language chooser as the app language.
           child: _LanguageSelectRow(
+            key: const ValueKey('setting-translateLanguage'),
             currentName: uiLanguageName(s.translateLanguage),
             onTap: () => showLanguageListDialog(
               context,
@@ -2223,6 +2171,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         child: FormGroup(
           label: tr('Notification Sound'),
           child: FormSelect<String>(
+            key: const ValueKey('setting-sound'),
             value: s.sound,
             items: notificationSoundOptions(),
             // Stage and preview the chosen tone.
@@ -2230,19 +2179,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
         ),
       ),
-      _GroupSpec(
-        text: tr('Auto-scroll Messages Enabled Disabled'),
-        child: FormGroup(
-          label: tr('Auto-scroll Messages'),
-          child: FormSelect<bool>(
-            value: s.autoscroll,
-            items: [
-              (value: true, label: tr('Enabled')),
-              (value: false, label: tr('Disabled')),
-            ],
-            onChanged: (v) => _mutate((d) => d.copyWith(autoscroll: v)),
-          ),
-        ),
+      _toggleSpec(
+        key: 'autoscroll',
+        label: tr('Auto-scroll Messages'),
+        value: s.autoscroll,
+        onChanged: (v) {
+          ctrl.setAutoscroll(v);
+          _mirror((d) => d.copyWith(autoscroll: v));
+        },
       ),
       // Auto-ephemeral has no visible control; its Save cleanup is in `_onSave`.
     ];
@@ -2250,55 +2194,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   List<_GroupSpec> _channels(Settings s, SettingsController ctrl) {
     final state = ref.watch(appStateProvider);
-    final gcPmOnlyItems = <({bool value, String label})>[
-      (value: false, label: tr('Disabled (show geohash channels)')),
-      (value: true, label: tr('Enabled (group chats & PMs only)')),
-    ];
-    final proximityItems = <({bool value, String label})>[
-      (value: false, label: tr('Disabled')),
-      (value: true, label: tr('Enabled (requires location access)')),
-    ];
-    final hideNonPinnedItems = <({bool value, String label})>[
-      (value: false, label: tr('Disabled')),
-      (value: true, label: tr('Enabled (only show favorited channels)')),
-    ];
     return [
-      _GroupSpec(
-        text: tr(
-            'Group Chats & PMs Only Mode {options} Hides all geohash channels '
-            'and focuses the app on group chats and private messages only. '
-            'Reduces bandwidth by skipping channel subscriptions.',
-            {'options': _optText(gcPmOnlyItems)}),
-        child: FormGroup(
-          label: tr('Group Chats & PMs Only Mode'),
-          hint: tr('Hides all geohash channels and focuses the app on group '
-              'chats and private messages only. Reduces bandwidth by skipping '
-              'channel subscriptions.'),
-          child: FormSelect<bool>(
-            value: s.groupChatPMOnlyMode,
-            items: gcPmOnlyItems,
-            onChanged: (v) =>
-                _mutate((d) => d.copyWith(groupChatPMOnlyMode: v)),
-          ),
-        ),
+      _toggleSpec(
+        key: 'groupChatPMOnlyMode',
+        label: tr('Group Chats & PMs Only Mode'),
+        hint: tr('Hides all geohash channels and focuses the app on group '
+            'chats and private messages only. Reduces bandwidth by skipping '
+            'channel subscriptions.'),
+        value: s.groupChatPMOnlyMode,
+        onChanged: (v) {
+          ctrl.setGroupChatPMOnlyMode(v);
+          _mirror((d) => d.copyWith(groupChatPMOnlyMode: v));
+        },
       ),
       // Geohash settings are hidden in group-chat/PM-only mode.
       if (!s.groupChatPMOnlyMode) ...[
-        _GroupSpec(
-          text: tr(
-              'Sort Geohash Channels by Proximity {options} Sort geohash '
-              'channels by distance from your location',
-              {'options': _optText(proximityItems)}),
-          child: FormGroup(
-            label: tr('Sort Geohash Channels by Proximity'),
-            hint: tr('Sort geohash channels by distance from your location'),
-            // Save-gated; the permission flow runs in `_onSave`.
-            child: FormSelect<bool>(
-              value: s.sortByProximity,
-              items: proximityItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(sortByProximity: v)),
-            ),
-          ),
+        _toggleSpec(
+          key: 'sortByProximity',
+          label: tr('Sort Geohash Channels by Proximity'),
+          hint: tr('Sort geohash channels by distance from your location'),
+          value: s.sortByProximity,
+          onChanged: (v) => unawaited(_onProximityFlip(v)),
         ),
         _GroupSpec(
           text: tr('Default Landing Channel Type to search or select a '
@@ -2310,21 +2226,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: _landingChannelField(state.channels),
           ),
         ),
-        _GroupSpec(
-          text: tr(
-              'Hide All Non-Favorited Channels {options} When enabled, only '
-              'your favorited channels will appear in the sidebar',
-              {'options': _optText(hideNonPinnedItems)}),
-          child: FormGroup(
-            label: tr('Hide All Non-Favorited Channels'),
-            hint: tr('When enabled, only your favorited channels will appear '
-                'in the sidebar'),
-            child: FormSelect<bool>(
-              value: s.hideNonPinned,
-              items: hideNonPinnedItems,
-              onChanged: (v) => _mutate((d) => d.copyWith(hideNonPinned: v)),
-            ),
-          ),
+        _toggleSpec(
+          key: 'hideNonPinned',
+          label: tr('Hide All Non-Favorited Channels'),
+          hint: tr('When enabled, only your favorited channels will appear '
+              'in the sidebar'),
+          value: s.hideNonPinned,
+          onChanged: (v) {
+            ctrl.setHideNonPinned(v);
+            ctrl.notifySyncedChange();
+            _mirror((d) => d.copyWith(hideNonPinned: v));
+          },
         ),
         _GroupSpec(
           text: tr('Hidden Channels Unhide {list}', {
@@ -2406,6 +2318,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         FormInput(
+          largeTarget: true,
           controller: _landingController,
           focusNode: _landingFocus,
           hint: tr('Type to search or select a channel...'),
@@ -2510,23 +2423,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       (value: 100, label: tr('Very Low (100px)')),
     ];
     return [
-      _GroupSpec(
-        text: tr('Swipe Gestures Enabled Disabled Swipe a message '
-            'horizontally to trigger an action. Disable to turn off all swipe '
-            'gestures on messages.'),
-        child: FormGroup(
-          label: tr('Swipe Gestures'),
-          hint: tr('Swipe a message horizontally to trigger an action. '
-              'Disable to turn off all swipe gestures on messages.'),
-          child: FormSelect<bool>(
-            value: s.gesturesEnabled,
-            items: [
-              (value: true, label: tr('Enabled')),
-              (value: false, label: tr('Disabled')),
-            ],
-            onChanged: (v) => _mutate((d) => d.copyWith(gesturesEnabled: v)),
-          ),
-        ),
+      _toggleSpec(
+        key: 'gesturesEnabled',
+        label: tr('Swipe Gestures'),
+        hint: tr('Swipe a message horizontally to trigger an action. '
+            'Disable to turn off all swipe gestures on messages.'),
+        value: s.gesturesEnabled,
+        onChanged: (v) {
+          ctrl.setGesturesEnabled(v);
+          _mirror((d) => d.copyWith(gesturesEnabled: v));
+        },
       ),
       // Swipe sub-settings hide when gestures are disabled.
       if (s.gesturesEnabled) ...[
@@ -2539,6 +2445,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             label: tr('Swipe Left Action'),
             hint: tr('Action triggered when swiping a message to the left.'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-swipeLeftAction'),
               value: s.swipeLeftAction,
               items: swipeActions,
               onChanged: (v) => _onSwipeActionChanged(
@@ -2559,6 +2466,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             label: tr('Swipe Right Action'),
             hint: tr('Action triggered when swiping a message to the right.'),
             child: FormSelect<String>(
+              key: const ValueKey('setting-swipeRightAction'),
               value: s.swipeRightAction,
               items: swipeRightActions,
               onChanged: (v) => _onSwipeActionChanged(
@@ -2616,6 +2524,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             hint: tr('How far you need to swipe before the action fires. '
                 'Higher sensitivity means a shorter swipe.'),
             child: FormSelect<int>(
+              key: const ValueKey('setting-swipeThreshold'),
               value: s.swipeThreshold,
               items: thresholdItems,
               onChanged: (v) => _mutate((d) => d.copyWith(swipeThreshold: v)),
@@ -2631,81 +2540,46 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return [
       // Keep-alive first, offered only where the platform can honor it.
       if (BackgroundConnectivityService.isSupported)
-        _GroupSpec(
-          text: tr('Stay Connected in Background Disabled Enabled Keeps relay '
-              'connections and the Bluetooth mesh running while the app is in '
-              'the background, so messages arrive without reopening it. Uses more '
-              'battery and data. Android shows a permanent notification while it '
-              'is on; iOS limits how long connections can be held, wakes the app '
-              'about every 20 minutes with an empty push every device gets '
-              'alike, and, with identity encryption on, catches up only while the device has '
-              'been unlocked at least once since it was powered on.'),
-          child: FormGroup(
-            label: tr('Stay Connected in Background'),
-            hint: tr('Keeps relay connections and the Bluetooth mesh running '
-                'while the app is in the background, so messages arrive '
-                'without reopening it. Uses more battery and data. Android shows a '
-                'permanent notification while it is on; iOS limits how long '
-                'connections can be held, wakes the app about every 20 '
-                'minutes with an empty push every device gets alike, and, '
-                'with identity encryption on, '
-                'catches up only while the device has been unlocked at least '
-                'once since it was powered on.'),
-            // Save-gated; the shell starts the keep-alive when the committed value flips.
-            child: FormSelect<bool>(
-              value: s.backgroundConnectivity,
-              items: [
-                (value: false, label: tr('Disabled')),
-                (value: true, label: tr('Enabled')),
-              ],
-              onChanged: (v) =>
-                  _mutate((d) => d.copyWith(backgroundConnectivity: v)),
-            ),
-          ),
+        _toggleSpec(
+          key: 'backgroundConnectivity',
+          label: tr('Stay Connected in Background'),
+          hint: tr('Keeps relay connections and the Bluetooth mesh running '
+              'while the app is in the background, so messages arrive '
+              'without reopening it. Uses more battery and data. Android shows a '
+              'permanent notification while it is on; iOS limits how long '
+              'connections can be held, wakes the app about every 20 '
+              'minutes with an empty push every device gets alike, and, '
+              'with identity encryption on, '
+              'catches up only while the device has been unlocked at least '
+              'once since it was powered on.'),
+          value: s.backgroundConnectivity,
+          onChanged: (v) {
+            ctrl.setBackgroundConnectivity(v);
+            _mirror((d) => d.copyWith(backgroundConnectivity: v));
+          },
         ),
-      _GroupSpec(
-        text: tr('Low Data Mode Disabled Enabled Reduces bandwidth by '
-            'connecting to only 5 default relays and loading geo relays '
-            'on-demand when entering channels'),
-        child: FormGroup(
-          label: tr('Low Data Mode'),
-          hint: tr('Reduces bandwidth by connecting to only 5 default relays '
-              'and loading geo relays on-demand when entering channels'),
-          // A select, not a switch, and Save-gated.
-          child: FormSelect<bool>(
-            value: s.lowDataMode,
-            items: [
-              (value: false, label: tr('Disabled')),
-              (value: true, label: tr('Enabled')),
-            ],
-            onChanged: (v) => _mutate((d) => d.copyWith(lowDataMode: v)),
-          ),
-        ),
+      _toggleSpec(
+        key: 'lowDataMode',
+        label: tr('Low Data Mode'),
+        hint: tr('Reduces bandwidth by connecting only to the 18 default '
+            'relays and loading geo relays only for the channels you open'),
+        value: s.lowDataMode,
+        onChanged: (v) {
+          ctrl.setLowDataMode(v);
+          _mirror((d) => d.copyWith(lowDataMode: v));
+        },
       ),
-      _GroupSpec(
-        text: tr('Cache PMs & Group Chats On Device Enabled Disabled When '
-            'enabled, decrypted private messages and group chats are stored '
-            'on this device so they appear instantly on app launch. Disable '
-            "if you'd rather not have decrypted message content kept at rest "
-            'in app storage. Toggling off clears the existing cached PM/group '
-            'data.'),
-        child: FormGroup(
-          label: tr('Cache PMs & Group Chats On Device'),
-          hint: tr('When enabled, decrypted private messages and group chats '
-              'are stored on this device so they appear instantly on app '
-              "launch. Disable if you'd rather not have decrypted message "
-              'content kept at rest in app storage. Toggling off clears the '
-              'existing cached PM/group data.'),
-          child: FormSelect<bool>(
-            value: s.cachePMs,
-            items: [
-              (value: true, label: tr('Enabled')),
-              (value: false, label: tr('Disabled')),
-            ],
-            // The cache wipe happens in `_onSave`, only on an on-to-off flip.
-            onChanged: (v) => _mutate((d) => d.copyWith(cachePMs: v)),
-          ),
-        ),
+      _toggleSpec(
+        key: 'cachePMs',
+        label: tr('Cache PMs & Group Chats On Device'),
+        hint: tr('When enabled, decrypted private messages and group chats '
+            'are stored on this device so they appear instantly on app '
+            "launch. Disable if you'd rather not have decrypted message "
+            'content kept at rest in app storage. Toggling off clears the '
+            'existing cached PM/group data.'),
+        value: s.cachePMs,
+        onChanged:
+            _cachePMsPending ? null : (v) => unawaited(_onCachePMsFlip(v)),
       ),
       _GroupSpec(
         text: tr('Transfer Settings to Another User Recipient npub or hex '
@@ -2973,11 +2847,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                NymLabel(
                   t.fromNym,
                   style: TextStyle(
                       color: c.text, fontSize: 13, fontWeight: FontWeight.w500),
-                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
                 NymTooltip(
@@ -3037,24 +2910,12 @@ extension _ChatLockSettings on _SettingsScreenState {
   _GroupSpec _remotePanicGroup() {
     ref.watch(remotePanicRevisionProvider);
     final on = ref.read(keyValueStoreProvider).getBool(StorageKeys.remotePanic);
-    final onOff = <({String value, String label})>[
-      (value: 'off', label: tr('Disabled')),
-      (value: 'on', label: tr('Enabled')),
-    ];
-    final label = tr(RemotePanicStrings.label);
-    final hint = tr(RemotePanicStrings.hint);
-    return _GroupSpec(
-      text: '$label ${_SettingsScreenState._optText(onOff)} $hint',
-      child: FormGroup(
-        label: label,
-        hint: hint,
-        child: FormSelect<String>(
-          key: const Key('remotePanicSelect'),
-          value: on ? 'on' : 'off',
-          items: onOff,
-          onChanged: (v) => _setRemotePanic(v == 'on'),
-        ),
-      ),
+    return _toggleSpec(
+      key: 'remotePanic',
+      label: tr(RemotePanicStrings.label),
+      hint: tr(RemotePanicStrings.hint),
+      value: on,
+      onChanged: _remotePanicPending ? null : (v) => _setRemotePanic(v),
     );
   }
 
@@ -3062,14 +2923,20 @@ extension _ChatLockSettings on _SettingsScreenState {
     final kv = ref.read(keyValueStoreProvider);
     if (on == kv.getBool(StorageKeys.remotePanic)) return;
     if (on) {
-      final ok = await showAppConfirm(
-        context,
-        tr(RemotePanicStrings.confirm),
-        title: tr(RemotePanicStrings.confirmTitle),
-        okLabel: tr(RemotePanicStrings.confirmOk),
-        cancelLabel: tr(RemotePanicStrings.confirmBackup),
-        danger: true,
-      );
+      _markRemotePanicPending(true);
+      bool ok;
+      try {
+        ok = await showAppConfirm(
+          context,
+          tr(RemotePanicStrings.confirm),
+          title: tr(RemotePanicStrings.confirmTitle),
+          okLabel: tr(RemotePanicStrings.confirmOk),
+          cancelLabel: tr(RemotePanicStrings.confirmBackup),
+          danger: true,
+        );
+      } finally {
+        _markRemotePanicPending(false);
+      }
       if (!mounted) return;
       if (!ok) {
         ref.read(remotePanicRevisionProvider.notifier).state++;
@@ -3089,10 +2956,6 @@ extension _ChatLockSettings on _SettingsScreenState {
     ref.watch(chatLockRevisionProvider);
     final lock = ref.read(chatLockProvider);
     final platform = chatLockPlatform();
-    final onOff = <({String value, String label})>[
-      (value: 'off', label: tr(ChatLockStrings.disabled)),
-      (value: 'on', label: tr(ChatLockStrings.enabled)),
-    ];
     final screenHint = tr(screenSecurityHint(platform));
     final incog = incognitoSupport(platform);
     final incogHint = tr(incog.hint);
@@ -3111,86 +2974,56 @@ extension _ChatLockSettings on _SettingsScreenState {
           ),
         ),
       ),
-      _GroupSpec(
-        text: '${tr('Hide Previews')} ${_SettingsScreenState._optText(onOff)} ${tr(kHidePreviewsHint)}',
-        child: FormGroup(
-          label: tr('Hide Previews'),
-          hint: tr(kHidePreviewsHint),
-          child: FormSelect<String>(
-            key: const Key('hidePreviewsSelect'),
-            value: ref.watch(settingsProvider.select((s) => s.hidePreviews))
-                ? 'on'
-                : 'off',
-            items: onOff,
-            onChanged: (v) => ref
-                .read(settingsProvider.notifier)
-                .setHidePreviews(v == 'on'),
-          ),
-        ),
+      _toggleSpec(
+        key: 'hidePreviews',
+        label: tr('Hide Previews'),
+        hint: tr(kHidePreviewsHint),
+        value: ref.watch(settingsProvider.select((s) => s.hidePreviews)),
+        onChanged: (v) =>
+            ref.read(settingsProvider.notifier).setHidePreviews(v),
       ),
-      _GroupSpec(
-        text: '${tr('Keep call history')} ${_SettingsScreenState._optText(onOff)} ${tr(kKeepCallHistoryHint)}',
-        child: FormGroup(
-          label: tr('Keep call history'),
-          hint: tr(kKeepCallHistoryHint),
-          child: FormSelect<String>(
-            key: const Key('keepCallHistorySelect'),
-            value: () {
-              ref.watch(callHistoryProvider);
-              return ref.read(callHistoryProvider.notifier).keep ? 'on' : 'off';
-            }(),
-            items: onOff,
-            onChanged: (v) =>
-                ref.read(callHistoryProvider.notifier).setKeep(v != 'off'),
-          ),
-        ),
+      _toggleSpec(
+        key: 'keepCallHistory',
+        label: tr('Keep call history'),
+        hint: tr(kKeepCallHistoryHint),
+        value: () {
+          ref.watch(callHistoryProvider);
+          return ref.read(callHistoryProvider.notifier).keep;
+        }(),
+        onChanged: (v) => ref.read(callHistoryProvider.notifier).setKeep(v),
       ),
-      _GroupSpec(
-        text: '${tr(ChatLockStrings.screenSecurity)} ${_SettingsScreenState._optText(onOff)} $screenHint',
-        child: FormGroup(
-          label: tr(ChatLockStrings.screenSecurity),
-          hint: screenHint,
-          child: FormSelect<String>(
-            key: const Key('screenSecuritySelect'),
-            value: lock.screenSecurity ? 'on' : 'off',
-            items: onOff,
-            onChanged: (v) => lock.screenSecurity = v == 'on',
-          ),
-        ),
+      _toggleSpec(
+        key: 'screenSecurity',
+        label: tr(ChatLockStrings.screenSecurity),
+        hint: screenHint,
+        value: lock.screenSecurity,
+        onChanged: (v) => lock.screenSecurity = v,
       ),
-      _GroupSpec(
-        text: '${tr(ChatLockStrings.incognitoKeyboard)} ${_SettingsScreenState._optText(onOff)} $incogHint',
-        child: FormGroup(
-          label: tr(ChatLockStrings.incognitoKeyboard),
-          hint: incogHint,
-          child: FormSelect<String>(
-            key: const Key('incognitoKeyboardSelect'),
-            value: incog.available && lock.incognitoKeyboard ? 'on' : 'off',
-            items: onOff,
-            disabled: !incog.available,
-            tooltip: incogHint,
-            onChanged: (v) => lock.incognitoKeyboard = v == 'on',
-          ),
-        ),
+      _toggleSpec(
+        key: 'incognitoKeyboard',
+        label: tr(ChatLockStrings.incognitoKeyboard),
+        hint: incogHint,
+        value: incog.available && lock.incognitoKeyboard,
+        tooltip: incogHint,
+        onChanged: incog.available ? (v) => lock.incognitoKeyboard = v : null,
       ),
-      _GroupSpec(
-        text: '${tr(kFallbackNoticeLabel)} ${_SettingsScreenState._optText(onOff)} ${tr(kFallbackNoticeHint)}',
-        child: FormGroup(
-          label: tr(kFallbackNoticeLabel),
-          hint: tr(kFallbackNoticeHint),
-          child: FormSelect<String>(
-            key: const Key('fallbackNoticeSelect'),
-            value: ref.watch(fallbackNoticeProvider) ? 'on' : 'off',
-            items: onOff,
-            onChanged: (v) => unawaited(ref
-                .read(fallbackNoticeProvider.notifier)
-                .setEnabled(v == 'on')),
-          ),
-        ),
+      _toggleSpec(
+        key: 'fallbackNotice',
+        label: tr(kFallbackNoticeLabel),
+        hint: tr(kFallbackNoticeHint),
+        value: ref.watch(fallbackNoticeProvider),
+        onChanged: (v) =>
+            unawaited(ref.read(fallbackNoticeProvider.notifier).setEnabled(v)),
       ),
     ];
   }
 }
+
+const String kCachePMsOffTitle = 'Stop caching PMs & group chats?';
+const String kCachePMsOffBody =
+    'This clears the PMs and group chats cached on this device. They load '
+    'from the network again instead of appearing instantly at launch.';
+const String kCachePMsOffOk = 'Turn off';
 
 const String kSpamFilterHint =
     'Hides incoming messages that look like spam, starting with posts from known spam clients. Your own messages are never filtered.';
@@ -3203,6 +3036,26 @@ class _GroupSpec {
   final String text;
   final Widget child;
 }
+
+_GroupSpec _toggleSpec({
+  required String key,
+  required String label,
+  String? hint,
+  required bool value,
+  required ValueChanged<bool>? onChanged,
+  String? tooltip,
+}) =>
+    _GroupSpec(
+      text: hint == null ? label : '$label $hint',
+      child: SettingsToggleRow(
+        key: ValueKey('setting-$key'),
+        label: label,
+        hint: hint,
+        value: value,
+        tooltip: tooltip,
+        onChanged: onChanged,
+      ),
+    );
 
 /// Persisted section collapse layout key.
 const String _kSettingsSectionsCollapsedKey = 'nym_settings_sections_collapsed';
@@ -3246,7 +3099,8 @@ String? settingsSectionForAnchor(String? anchor) {
     'data',
   };
   if (keys.contains(anchor)) return anchor;
-  return kSettingsAnchors[anchor];
+  return kSettingsAnchors[anchor] ??
+      kSettingsAnchors[anchor.replaceFirst(RegExp(r'Toggle$'), 'Select')];
 }
 
 /// Theme options in order.
@@ -3605,21 +3459,22 @@ class _LayoutPicker extends StatelessWidget {
             selected: bubblesSel,
             label: tr('Bubbles (Default)'),
             onTap: () => onChanged('bubbles'),
-            preview: _layoutPreviewBox(c, bubbles: true),
+            preview: _layoutPreviewBox(context, c, bubbles: true),
           ),
           const SizedBox(width: 12),
           _PreviewCard(
             selected: ircSel,
             label: tr('IRC Style'),
             onTap: () => onChanged('irc'),
-            preview: _layoutPreviewBox(c, bubbles: false),
+            preview: _layoutPreviewBox(context, c, bubbles: false),
           ),
         ],
       ),
     );
   }
 
-  Widget _layoutPreviewBox(NymColors c, {required bool bubbles}) {
+  Widget _layoutPreviewBox(BuildContext context, NymColors c,
+      {required bool bubbles}) {
     return Container(
       constraints: const BoxConstraints(minHeight: 72),
       width: double.infinity,
@@ -3636,7 +3491,7 @@ class _LayoutPicker extends StatelessWidget {
         children: [
           for (var i = 0; i < _rows.length; i++) ...[
             if (i > 0) SizedBox(height: bubbles ? 4 : 3),
-            bubbles ? _bubble(c, _rows[i]) : _ircLine(c, _rows[i]),
+            bubbles ? _bubble(c, _rows[i]) : _ircLine(context, c, _rows[i]),
           ],
         ],
       ),
@@ -3667,19 +3522,9 @@ class _LayoutPicker extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(text: r.nick),
-                TextSpan(
-                  text: r.suffix,
-                  style: TextStyle(
-                    color: c.secondary.withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w100,
-                  ),
-                ),
-              ],
-            ),
+          NymLabel(
+            r.nick,
+            suffix: r.suffix,
             style: TextStyle(
               color: c.secondary,
               fontSize: 7,
@@ -3707,7 +3552,7 @@ class _LayoutPicker extends StatelessWidget {
   }
 
   /// IRC preview line `<nick#suffix> msg`.
-  Widget _ircLine(
+  Widget _ircLine(BuildContext context,
       NymColors c, ({String nick, String suffix, String msg, bool self}) r) {
     final nickColor = r.self ? c.primary : c.secondary;
     return Text.rich(
@@ -3719,10 +3564,15 @@ class _LayoutPicker extends StatelessWidget {
           ),
           TextSpan(
             text: r.suffix,
-            style: TextStyle(
-              color: nickColor.withValues(alpha: 0.7),
-              fontWeight: FontWeight.w100,
-            ),
+            style: nymSuffixStyle(
+                TextStyle(
+                  color: nickColor,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: kMonoFont,
+                  fontSize: 9,
+                  height: 1.4,
+                ),
+                contrast: context.highContrast),
           ),
           TextSpan(
             text: '> ',
@@ -3838,7 +3688,8 @@ List<({String value, String label})> notificationSoundOptions() => [
 
 /// Opens the full language chooser, since the list is too long for a dropdown.
 class _LanguageSelectRow extends StatelessWidget {
-  const _LanguageSelectRow({required this.currentName, required this.onTap});
+  const _LanguageSelectRow(
+      {super.key, required this.currentName, required this.onTap});
 
   final String currentName;
   final VoidCallback onTap;
@@ -3934,3 +3785,7 @@ class _PqDiagnosticsState extends ConsumerState<_PqDiagnostics> {
     );
   }
 }
+
+const String kLargeTargetsHint =
+    'Bigger buttons, menu rows and fields for easier tapping.';
+const String kHighContrastHint = 'Stronger colors for small and dim text.';

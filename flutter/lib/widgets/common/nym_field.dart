@@ -40,6 +40,7 @@ class NymField {
     Widget? suffix,
     bool isDense = true,
     bool alignLabelWithHint = false,
+    double? minHeight,
   }) {
     OutlineInputBorder side(Color color) => OutlineInputBorder(
           borderRadius: radius,
@@ -63,6 +64,8 @@ class NymField {
       suffixIconColor: icon(c),
       suffix: suffix,
       alignLabelWithHint: alignLabelWithHint,
+      constraints:
+          minHeight == null ? null : BoxConstraints(minHeight: minHeight),
       border: side(border(c)),
       enabledBorder: side(border(c)),
       disabledBorder: side(border(c)),

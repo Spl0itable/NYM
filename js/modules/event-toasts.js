@@ -80,6 +80,23 @@
         typesHeading: 'Show banners for',
     });
 
+    const TOPICS = Object.freeze({
+        reminder: Object.freeze({ prefix: 'event-reminder-', title: 'Event reminder', template: 'Reminder: {title}' }),
+        callLink: Object.freeze({ prefix: 'call-link-', title: 'Call link', template: 'Call link: {name}' }),
+    });
+
+    const LEGACY_ID_PREFIX = 'gt-';
+
+    const CALL_STRINGS = Object.freeze({
+        call: 'Call',
+        missed: 'Missed {kind} call',
+        inGroup: ' in {group}',
+        audio: 'audio',
+        video: 'video',
+    });
+
+    const ONCE_LABELS = Object.freeze(['View-once photo', 'View-once video', 'View-once voice message']);
+
     function fill(s, params) {
         let out = String(s);
         if (params) {
@@ -159,11 +176,115 @@
         return s.slice(0, CONFIG.bodyChars).trimEnd() + '…';
     }
 
-    function bodyOf(ev, prefs) {
+    function preview(ev, prefs) {
         if (!ev || ev.locked) return '';
         if (ev.viewOnce) return STRINGS.viewOnce;
         if (prefs && prefs.hidePreviews) return '';
-        return clip(ev.body);
+        return String(ev.body == null ? '' : ev.body);
+    }
+
+    function bodyOf(ev, prefs) {
+        return clip(preview(ev, prefs));
+    }
+
+    function metaLine(ev, T) {
+        const label = T(LABELS[category(ev)]);
+        const chat = String((ev && ev.chat) || '');
+        return chat ? label + ' · ' + chat : label;
+    }
+
+    function systemBody(ev, prefs, tr) {
+        const T = typeof tr === 'function' ? tr : plainTr;
+        if (!ev) return '';
+        if (ev.locked) return T(STRINGS.newMessage);
+        const shown = preview(ev, prefs);
+        if (shown === STRINGS.viewOnce) return T(shown);
+        if (shown || !(prefs && prefs.hidePreviews)) return shown;
+        return metaLine(ev, T);
+    }
+
+    function topicOf(eventId) {
+        const id = String(eventId == null ? '' : eventId);
+        for (const k of Object.keys(TOPICS)) if (id.indexOf(TOPICS[k].prefix) === 0) return k;
+        return '';
+    }
+
+    function systemTitle(ev, prefs, tr) {
+        const T = typeof tr === 'function' ? tr : plainTr;
+        if (!ev) return '';
+        const title = String(ev.title == null ? '' : ev.title);
+        const known = typeof ev.topic === 'string' && Object.prototype.hasOwnProperty.call(TOPICS, ev.topic);
+        if (!known || ev.locked || !(prefs && prefs.hidePreviews)) return title;
+        return T(TOPICS[ev.topic].title);
+    }
+
+    const WORD_CHAR = /[\p{L}\p{N}]/u;
+
+    function onceLabelOf(body, tr) {
+        const T = typeof tr === 'function' ? tr : plainTr;
+        const s = String(body == null ? '' : body).trim();
+        let best = '';
+        for (const l of ONCE_LABELS) {
+            for (const f of [l, String(T(l) || '')]) {
+                if (!f || f.length <= best.length || s.indexOf(f) !== 0) continue;
+                if (s.length > f.length && WORD_CHAR.test(s.charAt(f.length))) continue;
+                best = f;
+            }
+        }
+        return best;
+    }
+
+    function isViewOnce(body, tr) {
+        return onceLabelOf(body, tr) !== '';
+    }
+
+    function listBody(ev, prefs, tr) {
+        const T = typeof tr === 'function' ? tr : plainTr;
+        if (!ev || ev.locked) return '';
+        const body = String(ev.body == null ? '' : ev.body);
+        if (!(prefs && prefs.hidePreviews) || ev.system) return body;
+        if (ev.viewOnce) return onceLabelOf(body, T) || T(STRINGS.viewOnce);
+        return '';
+    }
+
+    function fitsTemplate(text, template) {
+        const m = /\{[A-Za-z]+\}/.exec(template);
+        if (!m) return false;
+        const pre = template.slice(0, m.index);
+        const post = template.slice(m.index + m[0].length);
+        if (!pre.trim() && !post.trim()) return false;
+        return text.length >= pre.length + post.length && text.indexOf(pre) === 0 && text.slice(text.length - post.length) === post;
+    }
+
+    function entryTopic(eventId, title, tr) {
+        const T = typeof tr === 'function' ? tr : plainTr;
+        const byId = topicOf(eventId);
+        if (byId) return byId;
+        const id = String(eventId == null ? '' : eventId);
+        if (id.indexOf(LEGACY_ID_PREFIX) !== 0) return '';
+        const t = String(title == null ? '' : title);
+        for (const k of Object.keys(TOPICS)) {
+            const tpl = TOPICS[k].template;
+            if (fitsTemplate(t, tpl) || fitsTemplate(t, String(T(tpl) || ''))) return k;
+        }
+        return '';
+    }
+
+    function callLabel(c, tr) {
+        const T = typeof tr === 'function' ? tr : plainTr;
+        const e = c || {};
+        if (e.topic === 'callLink') return T(TOPICS.callLink.title);
+        if (!e.missed) return T(CALL_STRINGS.call);
+        const base = T(CALL_STRINGS.missed, { kind: T(e.video ? CALL_STRINGS.video : CALL_STRINGS.audio) });
+        return e.chat ? base + T(CALL_STRINGS.inGroup, { group: e.chat }) : base;
+    }
+
+    function callIsVideo(body, tr) {
+        const T = typeof tr === 'function' ? tr : plainTr;
+        const s = String(body == null ? '' : body).trim();
+        if (!s) return false;
+        const forms = [plainTr(CALL_STRINGS.missed, { kind: CALL_STRINGS.video }), T(CALL_STRINGS.missed, { kind: T(CALL_STRINGS.video) })];
+        return forms.some((f) => !!f && s.indexOf(f) === 0);
     }
 
     function isPmKey(key) {
@@ -185,7 +306,7 @@
             const label = T(LABELS[cat]);
             const chat = String(ev.chat || '');
             const title = String(ev.sender || '') || chat || label;
-            const meta = chat && chat !== title ? label + ' · ' + chat : label;
+            const meta = chat && chat !== title ? metaLine(ev, T) : label;
             const body = bodyOf(ev, p);
             return { title, meta, body: body === STRINGS.viewOnce ? T(body) : body, target: 'conversation' };
         }
@@ -378,8 +499,8 @@
     }
 
     G.NymEventToasts = Object.freeze({
-        CONFIG, PLACEMENT, TYPES, FOREGROUND_MODES, DEFAULTS, LABELS, SETTING_LABELS, FOREGROUND_LABELS, STRINGS,
-        fill, normalizeSettings, patchSettings, category, decide, clip, present, place,
+        CONFIG, PLACEMENT, TYPES, FOREGROUND_MODES, DEFAULTS, LABELS, SETTING_LABELS, FOREGROUND_LABELS, STRINGS, TOPICS, ONCE_LABELS, CALL_STRINGS,
+        fill, normalizeSettings, patchSettings, category, decide, clip, present, systemBody, systemTitle, topicOf, entryTopic, isViewOnce, listBody, callLabel, callIsVideo, place,
         emptyState, add, addMany, dismiss, pause, resume, expire, nextExpiry,
     });
 })();

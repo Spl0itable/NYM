@@ -49,6 +49,7 @@ import '../context_menu/profile_badges.dart';
 import '../nym_icons.dart';
 import '../../features/chat_lock/chat_lock_providers.dart';
 import '../common/nym_field.dart';
+import '../common/nym_label.dart';
 import '../common/nym_sheet.dart';
 import '../common/nym_tooltip.dart';
 
@@ -1089,25 +1090,7 @@ class _ColumnsDeckState extends ConsumerState<ColumnsDeck> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Flexible(
-          child: Text.rich(
-            TextSpan(
-              style: style,
-              children: [
-                TextSpan(text: base),
-                if (suffix.isNotEmpty)
-                  TextSpan(
-                    text: '#$suffix',
-                    style: style.copyWith(
-                      color: style.color?.withValues(alpha: 0.7),
-                      fontSize: (style.fontSize ?? 14) * 0.9,
-                      fontWeight: FontWeight.w100,
-                    ),
-                  ),
-              ],
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+          child: NymLabel(base, suffix: suffix, style: style),
         ),
         CosmeticNymBadges(
           cosmetics: cosmetics,
@@ -2736,10 +2719,12 @@ class _PickerRowState extends State<_PickerRow> {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(
-                  widget.label,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: c.text, fontSize: 13),
+                child: Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: NymLabel(
+                    widget.label,
+                    style: TextStyle(color: c.text, fontSize: 13),
+                  ),
                 ),
               ),
             ],

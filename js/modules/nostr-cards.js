@@ -366,8 +366,30 @@
             }).catch(() => { });
         },
 
+        _nostrRefHidden(data) {
+            if (!data) return true;
+            const F = window.NymContentFilter;
+            if (!F || typeof this._cfCtx !== 'function') {
+                return !!(data.pubkey && data.pubkey !== this.pubkey && this.blockedUsers && this.blockedUsers.has(data.pubkey));
+            }
+            const ctx = this._cfCtx();
+            const nym = typeof this._cfNym === 'function' ? this._cfNym(data.author || '') : (data.author || '');
+            if (data.type === 'profile') return F.personHidden(ctx, data.pubkey || '', nym);
+            if (data.channel && F.channelHidden(ctx, data.channel)) return true;
+            const stored = data.id ? this._findStoredMessage(data.id) : null;
+            if (stored && typeof this.isContentHidden === 'function') return this.isContentHidden(stored);
+            return F.hidden(ctx, { pubkey: data.pubkey || '', content: data.content || '', nym });
+        },
+
+        _pruneHiddenNostrCards() {
+            if (typeof document === 'undefined') return;
+            document.querySelectorAll('.nostr-card-container').forEach((el) => {
+                if (el._nostrRefData && this._nostrRefHidden(el._nostrRefData)) el.remove();
+            });
+        },
+
         _renderNostrRefCard(data) {
-            if (!data) return '';
+            if (!data || this._nostrRefHidden(data)) return '';
             const esc = (s) => this.escapeHtml(s || '');
             const avatarSrc = (data.pubkey && typeof this.getAvatarUrl === 'function')
                 ? this.getAvatarUrl(data.pubkey) : '';
@@ -438,6 +460,7 @@
                 if (!html) return;
                 const el = document.createElement('div');
                 el.className = 'nostr-card-container';
+                el._nostrRefData = data;
                 el.innerHTML = html;
                 container.appendChild(el);
                 this._attachCardBody(el, data);

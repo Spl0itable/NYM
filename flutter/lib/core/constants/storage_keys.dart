@@ -128,6 +128,8 @@ class StorageKeys {
   static const sidebarWidth = 'nym_sidebar_width';
   static const columnWidth = 'nym_column_width';
   static const colorfulMessages = 'nym_colorful_messages';
+  static const largeTargets = 'nym_large_targets';
+  static const highContrast = 'nym_high_contrast';
   static const infoPanelOpen = 'nym_info_panel_open';
   static const imageBlur = 'nym_image_blur';
   static String imageBlurFor(String pubkey) => 'nym_image_blur_$pubkey';
@@ -157,6 +159,7 @@ class StorageKeys {
   static const autoMuted = 'nym_auto_muted';
   static const friends = 'nym_friends';
   static const blockedKeywords = 'nym_blocked_keywords';
+  static const blockedRelays = 'nym_blocked_relays';
 
   static const spamFilterEnabled = 'nym_spam_filter_enabled';
   static const spamFilterAggressive = 'nym_spam_filter_aggressive';

@@ -213,6 +213,9 @@ class AccountRuntime {
     return false;
   }
 
+  String? storedPref(String? id, String key) => _get(
+      id == null || id == index.active ? key : AccountLogic.nsKey(id, key));
+
   Future<String?> storedSecret(String id, String key) async {
     final name = id == index.active ? key : AccountLogic.nsKey(id, key);
     try {

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../core/constants/relays.dart';
+import '../../features/relays/relay_block.dart';
 import '../nostr/event_provenance.dart';
 import '../../models/nostr_event.dart';
 import '../api/api_config.dart';
@@ -38,12 +39,7 @@ const Set<String> _blockedRelays = {
   'wss://nostr-server-production.up.railway.app',
 };
 
-/// Canonical url for discovered-bucket dedup: lowercase host, no trailing slash.
-String canonicalRelayUrl(String url) {
-  var u = url.trim();
-  if (u.endsWith('/')) u = u.substring(0, u.length - 1);
-  return u.toLowerCase();
-}
+String canonicalRelayUrl(String url) => RelayBlock.canon(url);
 
 /// Port of `_shardRelaysByRole`: `app-0`, `critical-N`, `geo-N`, `discovered-N`, chunked at [chunkSize].
 List<RelayShard> shardRelaysByRole(
@@ -53,6 +49,7 @@ List<RelayShard> shardRelaysByRole(
   List<String> defaultRelays = RelayConfig.defaultRelays,
   String appRelay = RelayConfig.appRelay,
   Set<String> permanentBlacklist = const {},
+  Set<String> blocked = const {},
   int chunkSize = RelayConfig.relaysPerWorker,
 }) {
   bool isValid(String url) =>
@@ -150,14 +147,24 @@ List<RelayShard> shardRelaysByRole(
         dmRelays: const []));
   }
 
-  if (shards.isEmpty) {
-    shards.add(RelayShard(
-        id: 'critical-0',
-        role: 'critical',
-        relays: const [],
-        dmRelays: const []));
+  final kept = RelayBlock.filterShards<RelayShard>(
+    shards,
+    RelayBlock.toSet(blocked),
+    relaysOf: (s) => s.relays,
+    dmRelaysOf: (s) => s.dmRelays,
+    rebuild: (s, relays, dmRelays) => RelayShard(
+        id: s.id, role: s.role, relays: relays, dmRelays: dmRelays),
+  );
+  if (kept.isEmpty) {
+    return [
+      RelayShard(
+          id: 'critical-0',
+          role: 'critical',
+          relays: const [],
+          dmRelays: const [])
+    ];
   }
-  return shards;
+  return kept;
 }
 
 /// Wrapped outbound frames for the `/api/relay-pool` socket.
@@ -276,6 +283,13 @@ sealed class PoolMessage {
           });
         }
         return PoolStatus(connected, latency);
+      case 'POOL:SEEN':
+        if (arr.length < 3) return null;
+        final seenId = arr[1]?.toString() ?? '';
+        final seenRelay = arr[2]?.toString() ?? '';
+        if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(seenId)) return null;
+        if (!seenRelay.startsWith('wss://')) return null;
+        return PoolSeen(seenId, seenRelay);
       case 'POOL:RETRACT':
         final retractId = arr.length > 1 ? arr[1]?.toString() ?? '' : '';
         if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(retractId)) return null;
@@ -351,6 +365,12 @@ class PoolRelayBan extends PoolMessage {
   const PoolRelayBan(this.url, this.reason);
   final String url;
   final String reason;
+}
+
+class PoolSeen extends PoolMessage {
+  const PoolSeen(this.eventId, this.relayUrl);
+  final String eventId;
+  final String relayUrl;
 }
 
 class PoolRetract extends PoolMessage {
@@ -602,6 +622,7 @@ class RelayPoolProxy implements PoolTransport {
     List<String>? geoRelayUrls,
     List<String>? dmRelays,
     Set<String>? permanentBlacklist,
+    Iterable<String>? blockedRelays,
     String? poolUrl,
     WebSocketChannelFactory? channelFactory,
     Random? random,
@@ -623,6 +644,7 @@ class RelayPoolProxy implements PoolTransport {
         _geoRelayUrls = [...?geoRelayUrls],
         _dmRelays = dmRelays ?? RelayConfig.defaultRelays,
         _permanentBlacklist = {...?permanentBlacklist},
+        _blocked = RelayBlock.toSet(blockedRelays),
         _poolUrl = poolUrl ?? ApiConfig.relayPoolUrl(),
         _channelFactory = channelFactory ?? defaultRelayChannelFactory,
         _rng = random ?? Random();
@@ -635,6 +657,7 @@ class RelayPoolProxy implements PoolTransport {
   final List<String> _geoRelayUrls;
   final List<String> _dmRelays;
   final Set<String> _permanentBlacklist;
+  Set<String> _blocked;
   final String _poolUrl;
   final WebSocketChannelFactory _channelFactory;
   final Random _rng;
@@ -655,6 +678,9 @@ class RelayPoolProxy implements PoolTransport {
   void Function(String eventId)? onPublishRateLimited;
 
   void Function(String eventId)? onPublishAccepted;
+
+  void Function(String eventId, bool accepted, String message, String? relayUrl)?
+      onPublishResult;
 
   void Function(DateTime? lastLiveAt)? onShardLost;
 
@@ -886,6 +912,37 @@ class RelayPoolProxy implements PoolTransport {
 
   List<RelayShard> get shards => _sockets.map((s) => s.shard).toList();
 
+  Set<String> get blockedRelays => Set.unmodifiable(_blocked);
+
+  bool isRelayBlocked(String url) => RelayBlock.isBlocked(_blocked, url);
+
+  void setBlockedRelays(Iterable<String> urls) {
+    final next = RelayBlock.toSet(urls);
+    if (next.length == _blocked.length && next.containsAll(_blocked)) return;
+    _blocked = next;
+    _reconcileShards();
+  }
+
+  static const Duration relayListGrace = Duration(seconds: 15);
+
+  final Map<String, DateTime> _relayLastSeen = {};
+
+  void _noteConnectedRelays() {
+    final now = _now();
+    final connected = connectedRelayUrls;
+    for (final u in connected) {
+      _relayLastSeen[u] = now;
+    }
+    _relayLastSeen.removeWhere((u, t) =>
+        !connected.contains(u) && now.difference(t) > relayListGrace);
+  }
+
+  Map<String, bool> get relayListStatus {
+    _noteConnectedRelays();
+    final connected = connectedRelayUrls;
+    return {for (final u in _relayLastSeen.keys) u: connected.contains(u)};
+  }
+
   @override
   void connectAll() {
     _startSampler();
@@ -901,6 +958,7 @@ class RelayPoolProxy implements PoolTransport {
       _geoRelayUrls,
       _dmRelays,
       permanentBlacklist: _permanentBlacklist,
+      blocked: _blocked,
     );
     for (final shard in layout) {
       final sock = _ShardSocket(
@@ -1089,6 +1147,7 @@ class RelayPoolProxy implements PoolTransport {
       _geoRelayUrls,
       _dmRelays,
       permanentBlacklist: _permanentBlacklist,
+      blocked: _blocked,
     );
     final byId = {for (final s in layout) s.id: s};
 
@@ -1346,6 +1405,7 @@ class RelayPoolProxy implements PoolTransport {
           _subscriptions[id]?.onEose(sock.shard.id, closed: true);
         }
       case PoolOk(:final id, :final accepted, :final message, :final relayUrl):
+        onPublishResult?.call(id, accepted, message, relayUrl);
         if (accepted) {
           onPublishAccepted?.call(id);
         } else if (isRateLimitRejection(message)) {
@@ -1368,6 +1428,10 @@ class RelayPoolProxy implements PoolTransport {
         latency.forEach((url, ms) {
           _stats.latencyPerRelay[url] = ms;
         });
+        _noteConnectedRelays();
+        break;
+      case PoolSeen(:final eventId, :final relayUrl):
+        eventProvenance.addSource(eventId, relayUrl);
         break;
       case PoolRelayBan(:final url):
         // Mirror the proxy's permanent ban so future shard layouts exclude the relay.

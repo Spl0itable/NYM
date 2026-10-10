@@ -1,11 +1,30 @@
 Object.assign(NYM.prototype, {
 
+    _botContextKeeps(m) {
+        if (!m || (m._optimistic && !m.isOwn)) return false;
+        if (typeof this.isContentHidden === 'function') return !this.isContentHidden(m);
+        return !m._spamGated && !(this.blockedUsers && this.blockedUsers.has(m.pubkey));
+    },
+
+    _botContextText(text) {
+        const F = window.NymContentFilter;
+        const s = typeof text === 'string' ? text : '';
+        return F && typeof this._cfCtx === 'function' ? F.stripBlockedQuotes(this._cfCtx(), s) : s;
+    },
+
+    _botChannelExcluded(key, includeHidden) {
+        const F = window.NymContentFilter;
+        if (!F || typeof this._cfCtx !== 'function') return false;
+        const ctx = this._cfCtx();
+        return includeHidden ? F.channelHidden(ctx, key) : F.channelBlocked(ctx, key);
+    },
+
     async cmdShare() {
         this.shareChannel();
     },
 
-    async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot, anon) {
-        if (typeof this.aiConsentAllowed === 'function' && !this.aiConsentAllowed('nymbot')) return anon ? 'failed' : undefined;
+    async _handleBotCommand(content, geohash, quoteContext, publishedContent, threadRoot, anon, as) {
+        if (!as && typeof this.aiConsentAllowed === 'function' && !this.aiConsentAllowed('nymbot')) return anon ? 'failed' : undefined;
         const anonModel = anon ? window.NymAnonNymbot : null;
         if (anon && !anonModel) return 'unavailable';
         if (!this._getApiHost()) return anon ? 'unavailable' : undefined;
@@ -41,7 +60,7 @@ Object.assign(NYM.prototype, {
         if (['ask', 'guess'].includes(command.toLowerCase())) {
             const storageKey = geohash ? `#${geohash}` : this.currentChannel;
             if (threadRoot && typeof this._threadBotConversation === 'function') {
-                conversation = this._threadBotConversation(threadRoot, storageKey, { exclude: publishedContent });
+                conversation = this._threadBotConversation(threadRoot, storageKey, as ? { exclude: publishedContent, skip: (m) => this._sendAsUnsent(m) } : { exclude: publishedContent });
             }
             if (!conversation.length && quoteContext) {
                 conversation = this._extractQuoteChain(quoteContext);
@@ -68,7 +87,7 @@ Object.assign(NYM.prototype, {
                             referencedChannels.add(`#${name}`);
                             found = true;
                         }
-                        if (!found) {
+                        if (!found && !as) {
                             for (const key of this.messages.keys()) {
                                 if (!key.startsWith('#')) continue;
                                 const stored = key.substring(1).toLowerCase();
@@ -79,7 +98,7 @@ Object.assign(NYM.prototype, {
                                 }
                             }
                         }
-                        if (!found) {
+                        if (!found && !as) {
                             for (const chanKey of this.channels.keys()) {
                                 if (chanKey.toLowerCase() === name || chanKey.toLowerCase().startsWith(name) || name.startsWith(chanKey.toLowerCase())) {
                                     const storeKey = `#${chanKey}`;
@@ -95,7 +114,7 @@ Object.assign(NYM.prototype, {
                             referencedChannels.add(`#${name}`);
                         }
                     }
-                    if (channelsToFetch.length > 0) {
+                    if (channelsToFetch.length > 0 && !as) {
                         for (const ch of channelsToFetch) {
                             this.channelLoadedFromRelays.delete(ch.name);
                             this.subscribeToChannelTargeted(ch.name, ch.type);
@@ -109,15 +128,16 @@ Object.assign(NYM.prototype, {
                 referencedChannels.add(currentKey);
             }
             for (const chanKey of referencedChannels) {
-                const msgs = (this.messages.get(chanKey) || []).filter(m => !m._spamGated);
+                if (chanKey !== currentKey && this._botChannelExcluded(chanKey, false)) continue;
+                const msgs = (this.messages.get(chanKey) || []).filter(m => this._botContextKeeps(m));
                 const mapped = msgs.slice(-msgLimit).map(m => ({
                     nym: this.resolveDisplayNym(m.pubkey, m.author || ''),
                     pubkey: m.pubkey || '',
-                    content: this.truncateText(m.content || '', 300),
+                    content: this.truncateText(this._botContextText(m.content), 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
                     channel: chanKey,
-                    ...(anon && m._optimistic ? { pending: true } : {})
+                    ...((anon && m._optimistic) || (as && this._sendAsUnsent(m)) ? { pending: true } : {})
                 }));
                 channelMessages.push(...mapped);
             }
@@ -128,6 +148,7 @@ Object.assign(NYM.prototype, {
             // user.channels stores raw geohashes without #, which may vary in precision.
             const channelKeys = referencedChannels;
             this.users.forEach((user, pubkey) => {
+                if (typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey, user.nym)) return;
                 if (user.channels) {
                     let found = false;
                     for (const chanKey of channelKeys) {
@@ -142,7 +163,9 @@ Object.assign(NYM.prototype, {
                         if (found) break;
                     }
                     if (found) {
-                        const shopItems = this.getUserShopItems(pubkey);
+                        const shopItems = as && pubkey === this.pubkey
+                            ? ((this.otherUsersShopItems && this.otherUsersShopItems.get(pubkey)) || null)
+                            : this.getUserShopItems(pubkey);
                         activeUsers.push({
                             nym: user.nym + '#' + pubkey.slice(-4),
                             pubkey: pubkey,
@@ -156,21 +179,27 @@ Object.assign(NYM.prototype, {
         const inMemoryCommands = ['top', 'last', 'seen', 'who'];
         if (inMemoryCommands.includes(command.toLowerCase())) {
             channelMessages = [];
+            const asKey = as ? (geohash ? `#${geohash}` : this.currentChannel) : null;
             for (const [chanKey, msgs] of this.messages) {
-                const mapped = msgs.filter(m => !m._spamGated).map(m => ({
+                if (as && chanKey !== asKey) continue;
+                if (this._botChannelExcluded(chanKey, true)) continue;
+                const mapped = msgs.filter(m => this._botContextKeeps(m)).map(m => ({
                     nym: this.resolveDisplayNym(m.pubkey, m.author || ''),
                     pubkey: m.pubkey || '',
-                    content: this.truncateText(m.content || '', 300),
+                    content: this.truncateText(this._botContextText(m.content), 300),
                     timestamp: m.created_at || 0,
                     isBot: !!m.isBot,
                     channel: chanKey,
-                    ...(anon && m._optimistic ? { pending: true } : {})
+                    ...((anon && m._optimistic) || (as && this._sendAsUnsent(m)) ? { pending: true } : {})
                 }));
                 channelMessages.push(...mapped);
             }
             channelMessages.sort((a, b) => a.timestamp - b.timestamp);
             activeUsers = [];
+            const asRaw = asKey ? asKey.replace(/^#/, '') : '';
             this.users.forEach((user, pubkey) => {
+                if (typeof this.isPersonHidden === 'function' && this.isPersonHidden(pubkey, user.nym)) return;
+                if (as && !(asRaw && user.channels && [...user.channels].some((c) => c === asRaw || c.startsWith(asRaw) || asRaw.startsWith(c)))) return;
                 if (user.nym) {
                     activeUsers.push({
                         nym: user.nym + '#' + pubkey.slice(-4),
@@ -183,10 +212,13 @@ Object.assign(NYM.prototype, {
             const scrubbed = anonModel.scrubContext({ messages: channelMessages, users: activeUsers, self: [this.pubkey] });
             channelMessages = scrubbed.messages;
             activeUsers = scrubbed.users;
+        } else if (as) {
+            channelMessages = channelMessages.filter((m) => !m.pending);
+            if (!channelMessages.some((m) => m.pubkey === this.pubkey)) activeUsers = activeUsers.filter((u) => u.pubkey !== this.pubkey);
         }
         const senderNym = anon
             ? anonModel.senderNym(anon.nym, anon.pubkey)
-            : this.nym + '#' + this.getPubkeySuffix(this.pubkey);
+            : (as ? as.nym + '#' + as.pubkey.slice(-4) : String(this.nym || 'nym').replace(/#[0-9a-f]{4}$/i, '') + '#' + this.getPubkeySuffix(this.pubkey));
         this._setBotChannelThinking(true);
         try {
             const apiHost = this._getApiHost();
@@ -206,7 +238,9 @@ Object.assign(NYM.prototype, {
                 this._setBotChannelThinking(false);
                 return anonModel.outcome(resp.status, false);
             }
-            if (data.event) {
+            if (data.event && as && typeof as.publish === 'function') {
+                as.publish(data.event);
+            } else if (data.event) {
                 const msg = JSON.stringify(['EVENT', data.event]);
                 if (this.useRelayProxy && this.poolSockets.length > 0) {
                     for (const pool of this.poolSockets) {
@@ -647,7 +681,9 @@ Object.assign(NYM.prototype, {
         const users = Array.from(channelUserSet)
             .map(pubkey => this.users.get(pubkey))
             .filter(u => u && Date.now() - u.lastSeen < 300000)
-            .filter(u => !this.blockedUsers.has(u.pubkey))
+            .filter(u => (typeof this.isPersonHidden === 'function'
+                ? !this.isPersonHidden(u.pubkey, u.nym)
+                : !this.blockedUsers.has(u.pubkey)))
             .map(u => {
                 const baseNym = this.stripPubkeySuffix(u.nym);
                 const suffix = this.getPubkeySuffix(u.pubkey);

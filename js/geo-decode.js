@@ -51,6 +51,19 @@
         return a / 2;
     }
 
+    function ringWrapsAntimeridian(ring) {
+        let lo = Infinity, hi = -Infinity, slo = Infinity, shi = -Infinity;
+        for (const p of ring) {
+            const lng = p[0];
+            const s = lng < 0 ? lng + 360 : lng;
+            if (lng < lo) lo = lng;
+            if (lng > hi) hi = lng;
+            if (s < slo) slo = s;
+            if (s > shi) shi = s;
+        }
+        return hi - lo > 180 && shi - slo < 180;
+    }
+
     function annotateFeature(feat) {
         let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
         let largestRing = null, largestArea = -Infinity;
@@ -74,12 +87,15 @@
 
         let cx = 0, cy = 0;
         if (largestRing && largestRing.length) {
+            const wrap = ringWrapsAntimeridian(largestRing);
             for (let i = 0, n = largestRing.length; i < n; i++) {
-                cx += largestRing[i][0];
+                const lng = largestRing[i][0];
+                cx += wrap && lng < 0 ? lng + 360 : lng;
                 cy += largestRing[i][1];
             }
             cx /= largestRing.length;
             cy /= largestRing.length;
+            if (cx > 180) cx -= 360;
         }
 
         feat.bounds = [minLng, minLat, maxLng, maxLat];

@@ -15,7 +15,7 @@
     var HANDLES = '.sheet-grabber, .modal-header, .geohash-explorer-header, .shop-header, [data-sheet-handle]';
     var CLOSERS = '.modal-close, .shop-close';
     var TEXT_TYPES = ['', 'text', 'password', 'number', 'email', 'url', 'tel'];
-    var IGNORE = '[type="search"], [inputmode="search"], [readonly], [disabled], [data-sheet-ignore], #settingsSearchInput';
+    var IGNORE = '[type="search"], [inputmode="search"], [readonly], [disabled], [data-sheet-ignore], [role="switch"], #settingsSearchInput';
     var FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]), [contenteditable="true"]';
 
     var EXPAND_MAX = 768;
@@ -450,6 +450,7 @@
 
     window.nymSheets = {
         closeVelocity: CLOSE_VELOCITY,
+        closeFraction: CLOSE_FRACTION,
         isSheet: function (modal) { return !!(modal && modal.classList && modal.classList.contains('is-sheet')); },
         isDirty: function (modal) { return dirty(modal); },
         close: function (modal) { requestClose(modal); },

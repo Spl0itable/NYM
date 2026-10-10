@@ -19,6 +19,7 @@ import '../../features/away/away_sync.dart';
 import '../../features/toasts/event_toast_settings_store.dart';
 import '../../features/media_notes/media_notes.dart' show parseSpeed, speedWire;
 import '../../features/sync/pref_stamps.dart';
+import '../../features/relays/relay_block.dart';
 import '../attest/attest_badge.dart' show normalizeAppVerifiedFilter;
 import '../filter/filter_packs.dart' show kFilterPackIds;
 import '../../features/chat_lock/chat_lock.dart'
@@ -35,6 +36,7 @@ import '../nostr/event_signer.dart';
 import '../storage/key_value_store.dart';
 import 'api_client.dart';
 import 'api_config.dart';
+import 'd1_cursor.dart';
 
 const int kPmDepositRetryBaseMs = 2000;
 
@@ -51,6 +53,39 @@ const String kPmDepositStoreKey = 'pmDepositQueue';
 const String kCallsDTag = 'nymchat-calls';
 
 const String kGroupToolsDTag = 'nymchat-grouptools';
+
+typedef ArchiveReplay = Future<Map<String, String>> Function(
+    List<Map<String, dynamic>> wraps);
+
+class _PmPage {
+  _PmPage({
+    required this.events,
+    required this.rows,
+    required this.oldest,
+    required this.hasMore,
+  });
+  final List<Map<String, dynamic>> events;
+  final int rows;
+  final int oldest;
+  final bool hasMore;
+}
+
+class _HeldWrap {
+  _HeldWrap({
+    required this.id,
+    required this.wrap,
+    required this.since,
+    required this.persist,
+    required this.after,
+    required this.keys,
+  });
+  final String id;
+  final Map<String, dynamic> wrap;
+  final int since;
+  final bool persist;
+  final String? after;
+  final List<String> keys;
+}
 
 class _Deposit {
   _Deposit(this.wrap, this.tier, this.seq, this.at, this.tries);
@@ -140,12 +175,17 @@ class StorageSync {
       'colorfulMessagesTs',
       'pubkeyFormat',
       'pubkeyFormatTs',
+      'largeTargets',
+      'largeTargetsTs',
+      'highContrast',
+      'highContrastTs',
     ],
     'privacy': [
       'blockedUsers',
       'friends',
       'blockedKeywords',
       'blockedChannels',
+      'blockedRelays',
       'hiddenChannels',
       'lightningAddress',
       'dmForwardSecrecyEnabled',
@@ -287,6 +327,8 @@ class StorageSync {
       'uiLanguage': s.uiLanguage,
       'hidePreviews': s.hidePreviews,
       'colorfulMessages': s.colorfulMessages,
+      'largeTargets': s.largeTargets,
+      'highContrast': s.highContrast,
     };
 
     if (kv != null) {
@@ -301,6 +343,7 @@ class StorageSync {
       flat['friends'] = _kvJsonList(kv, StorageKeys.friends);
       flat['blockedKeywords'] = _kvJsonList(kv, StorageKeys.blockedKeywords);
       flat['blockedChannels'] = _kvJsonList(kv, StorageKeys.blockedChannels);
+      flat['blockedRelays'] = _blockedRelaysForSync(kv);
       flat['hiddenChannels'] = _kvJsonList(kv, StorageKeys.hiddenChannels);
       flat['pinnedChannels'] = _kvJsonList(kv, StorageKeys.pinnedChannels);
       flat['userJoinedChannels'] =
@@ -374,6 +417,8 @@ class StorageSync {
       flat['spamFilterTs'] = stamps['spamFilter'] ?? 0;
       flat['hidePreviewsTs'] = stamps['hidePreviews'] ?? 0;
       flat['colorfulMessagesTs'] = stamps['colorfulMessages'] ?? 0;
+      flat['largeTargetsTs'] = stamps['largeTargets'] ?? 0;
+      flat['highContrastTs'] = stamps['highContrast'] ?? 0;
       flat['pubkeyFormat'] =
           kv.getString(StorageKeys.pubkeyFormat) == 'hex' ? 'hex' : 'npub';
       flat['pubkeyFormatTs'] = stamps['pubkeyFormat'] ?? 0;
@@ -426,6 +471,18 @@ class StorageSync {
     if (showStatus == 'false') return false;
     if (showStatus == 'friends') return 'friends';
     return true;
+  }
+
+  static Map<String, Map<String, int>> _blockedRelaysForSync(
+      KeyValueStore kv) {
+    Object? raw;
+    try {
+      final s = kv.getString(StorageKeys.blockedRelays);
+      if (s != null && s.isNotEmpty) raw = jsonDecode(s);
+    } catch (_) {
+      raw = null;
+    }
+    return RelayBlock.norm(raw, DateTime.now().millisecondsSinceEpoch);
   }
 
   /// Decodes a KV JSON array; anything else is empty.
@@ -1393,7 +1450,7 @@ class StorageSync {
       final blob = await _encryptToSelf(plaintext, allowPq: allowPq);
       if (blob == null) return false;
 
-      await _signedWrite(<String, dynamic>{
+      final res = await _signedWrite(<String, dynamic>{
         'action': 'settings-set',
         'pubkey': _pubkey,
         'category': category,
@@ -1401,6 +1458,8 @@ class StorageSync {
         'contentHash': hash,
       });
       _lastSettingsHash[hashKey] = hash;
+      final at = res['updatedAt'];
+      if (at is num) _settingsNoteOwnWrite(category, at.toInt(), plaintext);
       return true;
     } catch (_) {
       return false;
@@ -1457,12 +1516,148 @@ class StorageSync {
   }
 
   /// Loads and merges D1 settings (newest wins); null only on a real failure or rows a remote signer couldn't open.
-  Future<SettingsLoadResult?> settingsGet() async {
+  static const int settingsDeltaOverlapMs = 120000;
+  static const int settingsHaveMax = 5000;
+  static const String settingsHaveKey = 'settingsHave';
+
+  int? _settingsCursor;
+  bool _settingsFullOk = false;
+  bool _settingsHasSections = false;
+  bool _settingsAnswered = false;
+  final Map<String, int> _settingsKnown = {};
+  Map<String, int>? _settingsHave;
+
+  int? get settingsCursor => _settingsCursor;
+
+  bool get settingsFullOk => _settingsFullOk;
+
+  bool get settingsAnswered => _settingsAnswered;
+
+  Future<SettingsLoadResult?> settingsGet(
+          {SettingsReadMode mode = SettingsReadMode.full}) =>
+      _settingsRead(mode.name);
+
+  Future<Map<String, int>> _settingsHaveLoad() async {
+    final cached = _settingsHave;
+    if (cached != null) return cached;
+    final out = <String, int>{};
+    final load = _cursorLoad;
+    if (load != null) {
+      Map<String, dynamic>? rec;
+      try {
+        rec = await load(settingsHaveKey);
+      } catch (_) {
+        rec = null;
+      }
+      final pk = rec?['pk'];
+      final map = rec?['map'];
+      if (map is Map && (pk is! String || pk.isEmpty || pk == _pubkey)) {
+        map.forEach((k, v) {
+          if (k is String && k.startsWith('nymchat-') && v is num) {
+            out[k] = v.toInt();
+          }
+        });
+      }
+    }
+    _settingsHave ??= out;
+    return _settingsHave!;
+  }
+
+  void _settingsHaveCommit(Map<String, int> have) {
+    _settingsHave = have;
+    final commit = _cursorCommit;
+    if (commit == null) return;
+    final keys = have.keys.take(settingsHaveMax);
+    commit(settingsHaveKey, {
+      'pk': _pubkey,
+      'map': {for (final k in keys) k: have[k]},
+    });
+  }
+
+  void _settingsNoteKnown(Map<dynamic, dynamic> cats) {
+    cats.forEach((k, entry) {
+      if (entry is! Map) return;
+      final at = entry['updatedAt'];
+      if (at is! num) return;
+      final key = k.toString();
+      _settingsKnown.remove(key);
+      _settingsKnown[key] = at.toInt();
+    });
+    while (_settingsKnown.length > settingsHaveMax) {
+      _settingsKnown.remove(_settingsKnown.keys.first);
+    }
+  }
+
+  void _settingsNoteFull(int? cursor, bool hasSections,
+      List<_DecodedCategory> decoded, Map<String, int> stubbed, Map cats) {
+    _settingsHasSections = hasSections;
+    _settingsKnown.clear();
+    if (cursor == null) {
+      _settingsFullOk = false;
+      _settingsCursor = null;
+      return;
+    }
+    _settingsFullOk = true;
+    _settingsCursor = cursor;
+    _settingsNoteKnown(cats);
+    final have = <String, int>{...stubbed};
+    for (final d in decoded) {
+      if (d.key.isEmpty || !d.category.startsWith('nymchat-history-')) continue;
+      have[d.key] = d.updatedAt;
+    }
+    _settingsHaveCommit(have);
+  }
+
+  void _settingsNoteOwnWrite(
+      String category, int updatedAt, String plaintext) {
+    _settingsNoteKnown({
+      category: {'updatedAt': updatedAt},
+    });
+    if (!_settingsFullOk ||
+        !plaintext.contains('"__cat":"nymchat-history-')) {
+      return;
+    }
+    final have = <String, int>{...?_settingsHave};
+    have[category] = updatedAt;
+    _settingsHaveCommit(have);
+  }
+
+  Future<SettingsLoadResult?> _settingsRead(String mode) async {
+    if (mode == 'root' && !_settingsAnswered) mode = 'full';
+    final wantDelta =
+        mode == 'delta' && _settingsFullOk && _settingsCursor != null;
+    if (mode == 'delta' && !wantDelta) mode = 'full';
+    final req = <String, dynamic>{};
+    Map<String, int>? sentHave;
+    if (mode == 'root') {
+      final hashed = d1Category(pqRootCategory);
+      req['categories'] = [
+        hashed,
+        if (hashed != pqRootCategory) pqRootCategory,
+      ];
+    } else if (wantDelta) {
+      final since = max(0, _settingsCursor! - settingsDeltaOverlapMs);
+      req['app'] = 'nymchat';
+      req['since'] = since;
+      final near = <String, int>{
+        for (final e in _settingsKnown.entries)
+          if (e.value > since) e.key: e.value,
+      };
+      if (near.isNotEmpty) req['have'] = near;
+    } else if (mode == 'full') {
+      req['app'] = 'nymchat';
+      final have = await _settingsHaveLoad();
+      if (have.isNotEmpty) {
+        req['have'] = Map<String, int>.of(have);
+        sentHave = have;
+      }
+    }
     Map<String, dynamic> data;
     try {
       data = await _api.storageAction({
         'action': 'settings-get',
         'pubkey': _pubkey,
+        ...req,
         'auth': await _auth('settings-get'),
       });
     } catch (_) {
@@ -1470,15 +1665,34 @@ class StorageSync {
     }
     final cats = data['categories'];
     if (cats is! Map) return null;
+    final rawCursor = data['cursor'];
+    final serverCursor = rawCursor is num ? rawCursor.toInt() : null;
+    if (wantDelta && serverCursor != null) {
+      return _settingsApplyDelta(cats, serverCursor);
+    }
+    if (mode == 'root' && serverCursor != null) {
+      return _settingsApplyRoot(cats);
+    }
+    _settingsAnswered = true;
     _notePqRootColumns(cats);
 
     final decoded = <_DecodedCategory>[];
     var storedBlobs = 0;
+    var stubs = 0;
+    final stubbed = <String, int>{};
     var pending = 0; // Rows that did not open.
     _lastInboundSections.remove(kCallsDTag);
     for (final e in cats.entries) {
       final entry = e.value;
       if (entry is! Map) continue;
+      final key = e.key.toString();
+      if (entry['same'] == 1 &&
+          sentHave != null &&
+          sentHave.containsKey(key)) {
+        stubs++;
+        stubbed[key] = sentHave[key]!;
+        continue;
+      }
       final blob = entry['blob'];
       if (blob is! String || blob.isEmpty) continue;
       storedBlobs++;
@@ -1505,28 +1719,120 @@ class StorageSync {
           category: realCat,
           payload: payload,
           updatedAt: updatedAt,
+          key: key,
         ));
       } catch (_) {
         // Skip an undecryptable or corrupt category.
         pending++;
       }
     }
+    if (stubs > 0 && storedBlobs == 0) return _settingsRead('plain');
 
     // Unopened rows sealed to a root this device lacks are recoverable, so they must block saving.
     _lastLoadPending = pending;
     _settingsRestoreUnreadable = pending > 0 && _pqRootLockedOut;
+    final noteCursor = pending > 0 ? null : serverCursor;
+    bool sectionRows(List<_DecodedCategory> list) =>
+        list.any((d) => d.category.startsWith('nymchat-settings-'));
     if (decoded.isEmpty) {
       // Null means failure and keeps saves off; empty accounts and rows a local nsec can never open still return a result.
       if (storedBlobs == 0) {
+        _settingsNoteFull(serverCursor, false, decoded, stubbed, cats);
         return const SettingsLoadResult(payload: {}, newestTs: 0);
       }
       // Locked out of the root: recoverable by linking, so never final.
       if (_pqRootLockedOut) return null;
       if (_signer is LocalSigner) {
+        _settingsNoteFull(noteCursor, false, decoded, stubbed, cats);
         return const SettingsLoadResult(payload: {}, newestTs: 0);
       }
       return null;
     }
+    final result = _settingsResult(decoded, delta: false);
+    if (result != null) {
+      _settingsNoteFull(
+          noteCursor, sectionRows(decoded), decoded, stubbed, cats);
+    }
+    return result;
+  }
+
+  Future<SettingsLoadResult?> _settingsApplyRoot(Map cats) async {
+    _notePqRootColumns(cats);
+    if (!_pqRootRowPresent) return _settingsRead('full');
+    final hashed = d1Category(pqRootCategory);
+    for (final e in cats.entries) {
+      final key = e.key.toString();
+      if (key != hashed && key != pqRootCategory) continue;
+      final entry = e.value;
+      if (entry is! Map) continue;
+      final blob = entry['blob'];
+      if (blob is! String || blob.isEmpty) continue;
+      try {
+        final plain = await _decryptFromSelf(blob);
+        if (plain == null) continue;
+        final payload = jsonDecode(plain);
+        if (payload is! Map<String, dynamic>) continue;
+        final realCat =
+            payload['__cat'] is String ? payload['__cat'] as String : key;
+        payload.remove('__cat');
+        if (realCat != pqRootCategory) continue;
+        _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
+        _lastInboundPqRoot = Map<String, dynamic>.of(payload);
+      } catch (_) {}
+    }
+    return const SettingsLoadResult(
+        payload: {}, newestTs: 0, delta: true, rootOnly: true);
+  }
+
+  Future<SettingsLoadResult?> _settingsApplyDelta(
+      Map cats, int serverCursor) async {
+    final rootHashed = d1Category(pqRootCategory);
+    final decoded = <_DecodedCategory>[];
+    for (final e in cats.entries) {
+      final entry = e.value;
+      if (entry is! Map) continue;
+      final blob = entry['blob'];
+      if (blob is! String || blob.isEmpty) continue;
+      final key = e.key.toString();
+      if (key == rootHashed || key == pqRootCategory) {
+        return _settingsRead('full');
+      }
+      Map<String, dynamic>? payload;
+      try {
+        final plain = await _decryptFromSelf(blob);
+        final parsed = plain == null ? null : jsonDecode(plain);
+        if (parsed is Map<String, dynamic>) payload = parsed;
+      } catch (_) {
+        payload = null;
+      }
+      if (payload == null) return _settingsRead('full');
+      final realCat =
+          payload['__cat'] is String ? payload['__cat'] as String : key;
+      payload.remove('__cat');
+      if (realCat == pqRootCategory) return _settingsRead('full');
+      _lastInboundSections[realCat] = Map<String, dynamic>.from(payload);
+      decoded.add(_DecodedCategory(
+        category: realCat,
+        payload: payload,
+        updatedAt: (entry['updatedAt'] as num?)?.toInt() ?? 0,
+        key: key,
+      ));
+    }
+    if (serverCursor > (_settingsCursor ?? 0)) _settingsCursor = serverCursor;
+    _settingsNoteKnown(cats);
+    var historyChanged = false;
+    final have = <String, int>{...?_settingsHave};
+    for (final d in decoded) {
+      if (!d.category.startsWith('nymchat-history-')) continue;
+      have[d.key] = d.updatedAt;
+      historyChanged = true;
+    }
+    if (historyChanged) _settingsHaveCommit(have);
+    return _settingsResult(decoded, delta: true);
+  }
+
+  SettingsLoadResult? _settingsResult(List<_DecodedCategory> decoded,
+      {required bool delta}) {
 
     // Notification read-state wrap, a separate category, for merging seen keys.
     Map<String, dynamic>? notificationsPayload;
@@ -1609,7 +1915,9 @@ class StorageSync {
       ..sort((a, b) => a.updatedAt.compareTo(b.updatedAt));
     final toApply = sections.isNotEmpty
         ? sections
-        : core.where((d) => d.category == 'nymchat-settings').toList();
+        : (delta && _settingsHasSections)
+            ? <_DecodedCategory>[]
+            : core.where((d) => d.category == 'nymchat-settings').toList();
     final hasGroupData = groupConversations != null ||
         groupEphemeralKeys.isNotEmpty ||
         groupMessageHistory.isNotEmpty ||
@@ -1625,8 +1933,11 @@ class StorageSync {
       return (notificationsPayload == null &&
               readStatePayload == null &&
               !hasGroupData)
-          ? null
+          ? (delta
+              ? const SettingsLoadResult(payload: {}, newestTs: 0, delta: true)
+              : null)
           : SettingsLoadResult(
+              delta: delta,
               payload: const {},
               newestTs: 0,
               notificationsPayload: notificationsPayload,
@@ -1651,6 +1962,7 @@ class StorageSync {
       if (d.updatedAt > newestTs) newestTs = d.updatedAt;
     }
     return SettingsLoadResult(
+      delta: delta,
       payload: merged,
       newestTs: newestTs,
       notificationsPayload: notificationsPayload,
@@ -1676,6 +1988,8 @@ class StorageSync {
       data = await _api.storageAction({
         'action': 'settings-get',
         'pubkey': _pubkey,
+        'app': 'nymchat',
+        'since': sinceMs < 0 ? 0 : sinceMs,
         'auth': await _auth('settings-get'),
       });
     } catch (_) {
@@ -1683,7 +1997,8 @@ class StorageSync {
     }
     final cats = data['categories'];
     if (cats is! Map) return const [];
-    _notePqRootColumns(cats);
+    final partial = data['cursor'] is num;
+    if (!partial) _notePqRootColumns(cats);
 
     final decoded = <_DecodedCategory>[];
     for (final e in cats.entries) {
@@ -1729,7 +2044,9 @@ class StorageSync {
         core.where((d) => d.category != 'nymchat-settings').toList();
     final source = sections.isNotEmpty
         ? sections
-        : core.where((d) => d.category == 'nymchat-settings').toList();
+        : (partial && _settingsHasSections)
+            ? <_DecodedCategory>[]
+            : core.where((d) => d.category == 'nymchat-settings').toList();
 
     final offers = <SettingsTransferOffer>[];
     for (final d in source) {
@@ -1766,10 +2083,13 @@ class StorageSync {
   static const int _profileCacheTtlMs = 5 * 60 * 1000;
 
   /// Batch-reads kind-0s from D1 (public, 100 per request); cache hits count as found; failures return empty.
+  static const int profileMissTtlMs = 30 * 60 * 1000;
+  final Map<String, int> _profileMissAt = {};
+
   Future<Map<String, Map<String, dynamic>>> profileGet(
     List<String> pubkeys,
   ) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = _nowMs();
     final toFetch = <String>[];
     final foundFromCache = <String>{};
     for (final raw in pubkeys) {
@@ -1780,6 +2100,8 @@ class StorageSync {
         foundFromCache.add(pk);
         continue;
       }
+      final missAt = _profileMissAt[pk];
+      if (missAt != null && now - missAt < profileMissTtlMs) continue;
       toFetch.add(pk);
     }
     final out = <String, Map<String, dynamic>>{};
@@ -1814,6 +2136,16 @@ class StorageSync {
         if (event is! Map) continue;
         out[pk.toLowerCase()] = Map<String, dynamic>.from(event);
         _profileCacheAt[pk.toLowerCase()] = now;
+      }
+      for (final pk in batch) {
+        if (out.containsKey(pk)) {
+          _profileMissAt.remove(pk);
+        } else {
+          _profileMissAt[pk] = now;
+        }
+      }
+      while (_profileMissAt.length > 5000) {
+        _profileMissAt.remove(_profileMissAt.keys.first);
       }
     }
     return out;
@@ -2203,7 +2535,19 @@ class StorageSync {
     int before = 0,
     int limit = 200,
   }) async {
-    if (!_durable) return const [];
+    final page = await _pmLegacyPage(since: since, before: before, limit: limit);
+    if (page == null) return const [];
+    _pmNotePage(page, limit);
+    return page.events;
+  }
+
+  Future<_PmPage?> _pmLegacyPage({
+    int since = 0,
+    int before = 0,
+    int limit = 200,
+    void Function(String? head)? onHead,
+  }) async {
+    if (!_durable) return null;
     StorageStream stream;
     try {
       stream = await _api.storageStream({
@@ -2215,28 +2559,35 @@ class StorageSync {
         'auth': await _auth('pm-get'),
       });
     } catch (_) {
-      return const [];
+      return null;
     }
+    onHead?.call(stream.headers['x-cursor-head']);
+    var rows = 0;
+    var oldest = 0;
     final events = <Map<String, dynamic>>[];
     for (final item in stream.items) {
       if (item is! Map) continue;
       final id = item['id'];
       if (id is! String || id.isEmpty) continue;
+      rows++;
+      final ts = (item['created_at'] as num?)?.toInt() ?? 0;
+      if (ts > 0 && (oldest == 0 || ts < oldest)) oldest = ts;
       if (_archivedIds.contains(id)) continue;
       _archivedIds.add(id);
       events.add(Map<String, dynamic>.from(item));
     }
     _trim(_archivedIds);
-    // End of history when the worker says so or the page was short.
-    if (!stream.hasMore || events.length < limit) _pmNoMore = true;
     events.sort((a, b) => _createdAt(a).compareTo(_createdAt(b)));
-    if (events.isNotEmpty) {
-      final oldest = _createdAt(events.first);
-      if (oldest > 0 && (_pmOldestTs == null || oldest < _pmOldestTs!)) {
-        _pmOldestTs = oldest;
-      }
+    return _PmPage(
+        events: events, rows: rows, oldest: oldest, hasMore: stream.hasMore);
+  }
+
+  void _pmNotePage(_PmPage page, int limit) {
+    if (!page.hasMore || page.rows < limit) _pmNoMore = true;
+    final oldest = page.oldest;
+    if (oldest > 0 && (_pmOldestTs == null || oldest < _pmOldestTs!)) {
+      _pmOldestTs = oldest;
     }
-    return events;
   }
 
   Future<List<Map<String, dynamic>>> pmScanForward({
@@ -2271,21 +2622,293 @@ class StorageSync {
     ];
   }
 
-  /// Restores up to 5 pages of 200 at boot and resets the pager.
-  Future<List<Map<String, dynamic>>> pmRestoreFromD1() async {
-    if (!_durable) return const [];
-    _pmOldestTs = null;
-    _pmNoMore = false;
-    const maxPages = 5;
-    var before = 0;
-    final all = <Map<String, dynamic>>[];
-    for (var page = 0; page < maxPages; page++) {
-      final got = await pmGet(before: before, limit: 200);
-      all.addAll(got);
-      if (got.isEmpty || _pmNoMore || _pmOldestTs == null) break;
-      before = _pmOldestTs!;
+  static const String pmCursorKey = 'pmD1Cursor';
+  static const String inboxCursorKey = 'pmInboxCursors';
+
+  Future<Map<String, dynamic>?> Function(String key)? _cursorLoad;
+  void Function(String key, Map<String, dynamic> rec)? _cursorCommit;
+  ({bool anyCapped, int cappedOldest}) Function()? _pmCacheShape;
+
+  void setCursorStore({
+    required Future<Map<String, dynamic>?> Function(String key) load,
+    required void Function(String key, Map<String, dynamic> rec) commit,
+    ({bool anyCapped, int cappedOldest}) Function()? cacheShape,
+  }) {
+    _cursorLoad = load;
+    _cursorCommit = commit;
+    _pmCacheShape = cacheShape;
+  }
+
+  String? _pmCursor;
+  bool _pmCursorLoaded = false;
+  final List<_HeldWrap> _pmHolds = [];
+  int _pmHeldSince = 0;
+  Future<void>? _pmPass;
+  int _pmPassDoneAt = 0;
+  bool _pmRetrying = false;
+
+  String? get pmD1Cursor => _pmCursor;
+
+  int get pmHeldCount => _pmHolds.length;
+
+  void resetD1Cursors() {
+    _pmCursor = null;
+    _pmCursorLoaded = true;
+    _pmHolds.clear();
+    _pmHeldSince = 0;
+    _pmPassDoneAt = 0;
+    _archivedIds.clear();
+    _inboxMap = {};
+    _inboxLoaded = true;
+    _inboxHolds.clear();
+    _inboxHeldSince = 0;
+    _inboxDoneAt.clear();
+    _inboxLegacyServer = false;
+    _pmCursorCommitNow();
+    _inboxCommitNow();
+  }
+
+  Future<void> pmRestore({required ArchiveReplay replay, bool force = false}) {
+    if (!_durable) return Future.value();
+    final running = _pmPass;
+    if (running != null) return running;
+    if (!force && D1Cursor.coalesce(_pmPassDoneAt, _nowMs())) {
+      return Future.value();
     }
-    return all;
+    late final Future<void> pass;
+    pass = _pmRestorePass(replay).whenComplete(() {
+      if (identical(_pmPass, pass)) _pmPass = null;
+      _pmPassDoneAt = _nowMs();
+    });
+    _pmPass = pass;
+    return pass;
+  }
+
+  Future<void> _pmCursorLoad() async {
+    if (_pmCursorLoaded) return;
+    _pmCursorLoaded = true;
+    final load = _cursorLoad;
+    if (load == null) return;
+    Map<String, dynamic>? rec;
+    try {
+      rec = await load(pmCursorKey);
+    } catch (_) {
+      rec = null;
+    }
+    if (rec == null) return;
+    final pk = rec['pk'];
+    if (pk is String && pk.isNotEmpty && pk != _pubkey) return;
+    final held = (rec['heldSince'] as num?)?.toInt() ?? 0;
+    if (held > 0) _pmHeldSince = held;
+    final c = rec['c'];
+    if (!D1Cursor.valid(c)) return;
+    _pmCursor = c as String;
+    _pmPagerFromRecord(rec);
+  }
+
+  void _pmPagerFromRecord(Map<String, dynamic> rec) {
+    final shape = _pmCacheShape?.call() ?? (anyCapped: false, cappedOldest: 0);
+    final saved = (rec['oldestTs'] as num?)?.toInt() ?? 0;
+    final capStart = shape.anyCapped && shape.cappedOldest > 0
+        ? shape.cappedOldest + 172800
+        : 0;
+    final start = saved > capStart ? saved : capStart;
+    _pmOldestTs = start > 0 ? start : null;
+    _pmNoMore = rec['noMore'] == true && !shape.anyCapped;
+    if (_pmOldestTs == null && !_pmNoMore) _pmNoMore = true;
+  }
+
+  Future<void> _pmRestorePass(ArchiveReplay replay) async {
+    await _pmCursorLoad();
+    final start = _pmCursor;
+    if (start == null) return _pmRestoreCold(replay);
+    var after = D1Cursor.startAfter(start)!;
+    String? best = start;
+    for (var page = 0; page < D1Cursor.maxPages; page++) {
+      StorageStream stream;
+      try {
+        stream = await _api.storageStream({
+          'action': 'pm-get',
+          'pubkey': _pubkey,
+          'after': after,
+          'limit': D1Cursor.pageLimit,
+          'auth': await _auth('pm-get'),
+        });
+      } catch (_) {
+        break;
+      }
+      final events = _freshWraps(stream.items);
+      final step = D1Cursor.step(page, after, stream.headers['x-cursor'],
+          stream.headers['x-has-more']);
+      if (!step.serverOk) {
+        _pmCursor = null;
+        _pmHolds.clear();
+        _pmHeldSince = 0;
+        await replay(events);
+        _pmCursorCommitNow();
+        return _pmRestoreCold(replay, noCursor: true);
+      }
+      final verdicts = await replay(events);
+      _holdVerdicts(_pmHolds, events, verdicts, after, const [],
+          (since) => _pmHeldSince = since, () => _pmHeldSince);
+      best = D1Cursor.newer(best, step.cursor);
+      _pmCursor = best;
+      final next = step.next;
+      if (next == null) break;
+      after = next;
+    }
+    await pmRetryHeld(replay: replay);
+    _pmCursorCommitNow();
+  }
+
+  bool _pmColdDone = false;
+
+  Future<void> _pmRestoreCold(ArchiveReplay replay,
+      {bool noCursor = false}) async {
+    final first = !_pmColdDone;
+    if (first) {
+      _pmOldestTs = null;
+      _pmNoMore = false;
+    }
+    var before = 0;
+    String? head;
+    for (var page = 0; page < D1Cursor.maxPages; page++) {
+      final got = await _pmLegacyPage(
+        before: before,
+        limit: D1Cursor.pageLimit,
+        onHead: page == 0 ? (h) => head = h : null,
+      );
+      if (got == null) break;
+      _pmColdDone = true;
+      _pmNotePage(got, D1Cursor.pageLimit);
+      final verdicts = await replay(got.events);
+      _holdVerdicts(_pmHolds, got.events, verdicts, null, const [],
+          (since) => _pmHeldSince = since, () => _pmHeldSince);
+      if (!got.hasMore || got.rows < D1Cursor.pageLimit || got.oldest == 0) {
+        break;
+      }
+      if (!first && got.events.isEmpty) break;
+      before = got.oldest;
+    }
+    if (noCursor) return;
+    final c = D1Cursor.fromHead(head);
+    if (c == null) return;
+    _pmCursorLoaded = true;
+    _pmCursor = D1Cursor.newer(_pmCursor, c);
+    await pmRetryHeld(replay: replay);
+    _pmCursorCommitNow();
+  }
+
+  List<Map<String, dynamic>> _freshWraps(List<dynamic> items) {
+    final out = <Map<String, dynamic>>[];
+    for (final item in items) {
+      if (item is! Map) continue;
+      final id = item['id'];
+      if (id is! String || id.isEmpty) continue;
+      _archivedIds.add(id);
+      out.add(Map<String, dynamic>.from(item));
+    }
+    _trim(_archivedIds);
+    out.sort((a, b) => _createdAt(a).compareTo(_createdAt(b)));
+    return out;
+  }
+
+  void _holdVerdicts(
+    List<_HeldWrap> holds,
+    List<Map<String, dynamic>> events,
+    Map<String, String> verdicts,
+    String? after,
+    List<String> keys,
+    void Function(int since) setHeldSince,
+    int Function() heldSince,
+  ) {
+    if (verdicts.isEmpty) return;
+    final now = _nowMs();
+    for (final ev in events) {
+      final id = ev['id'] as String;
+      final kind = verdicts[id];
+      if (kind != 'hold' && kind != 'retry') continue;
+      if (holds.any((h) => h.id == id)) continue;
+      final persist = kind == 'hold';
+      final prior = heldSince();
+      final since =
+          persist && prior > 0 && now - prior < D1Cursor.holdMs ? prior : now;
+      if (persist && prior == 0) setHeldSince(since);
+      holds.add(_HeldWrap(
+        id: id,
+        wrap: ev,
+        since: since,
+        persist: persist,
+        after: D1Cursor.valid(after) ? after : null,
+        keys: keys,
+      ));
+      while (holds.length > 500) {
+        holds.removeAt(0);
+      }
+    }
+  }
+
+  Future<bool> pmRetryHeld({required ArchiveReplay replay}) async {
+    var changed = false;
+    if (_pmHolds.isNotEmpty && !_pmRetrying) {
+      _pmRetrying = true;
+      try {
+        changed = await _retryHolds(_pmHolds, replay);
+        if (_pmHolds.isEmpty) _pmHeldSince = 0;
+      } finally {
+        _pmRetrying = false;
+      }
+      if (changed) _pmCursorCommitNow();
+    }
+    final inbox = await _inboxRetryHeld(replay);
+    return changed || inbox;
+  }
+
+  Future<bool> _retryHolds(List<_HeldWrap> holds, ArchiveReplay replay) async {
+    final now = _nowMs();
+    var changed = false;
+    final live = <_HeldWrap>[];
+    for (final h in holds) {
+      if (now - h.since >= D1Cursor.holdMs) {
+        changed = true;
+      } else {
+        live.add(h);
+      }
+    }
+    if (live.isEmpty) {
+      holds.clear();
+      return changed;
+    }
+    final verdicts = await replay([for (final h in live) h.wrap]);
+    final keep = [
+      for (final h in live)
+        if (verdicts[h.id] == 'hold' || verdicts[h.id] == 'retry') h,
+    ];
+    if (keep.length != live.length) changed = true;
+    holds
+      ..clear()
+      ..addAll(keep);
+    return changed;
+  }
+
+  void _pmCursorCommitNow() {
+    final commit = _cursorCommit;
+    if (commit == null) return;
+    final now = _nowMs();
+    final held = [
+      for (final h in _pmHolds)
+        if (h.persist) (since: h.since as int?, after: h.after as Object?),
+    ];
+    final active = held.where((h) => now - h.since! < D1Cursor.holdMs);
+    commit(pmCursorKey, {
+      'pk': _pubkey,
+      'c': D1Cursor.persistable(_pmCursor, held, now),
+      'noMore': _pmNoMore,
+      'oldestTs': _pmOldestTs ?? 0,
+      'heldSince': active.isNotEmpty
+          ? (_pmHeldSince > 0 ? _pmHeldSince : now)
+          : 0,
+    });
   }
 
   /// Loads the next older page; empty when there is no more history.
@@ -2293,7 +2916,277 @@ class StorageSync {
 
   Future<List<Map<String, dynamic>>> pmLoadOlderFromD1() async {
     if (_pmNoMore || _pmOldestTs == null) return const [];
-    return pmGet(before: _pmOldestTs!, limit: 200);
+    final got = await pmGet(before: _pmOldestTs!, limit: 200);
+    if (D1Cursor.valid(_pmCursor)) _pmCursorCommitNow();
+    return got;
+  }
+
+  Map<String, String> _inboxMap = {};
+  bool _inboxLoaded = false;
+  final List<_HeldWrap> _inboxHolds = [];
+  int _inboxHeldSince = 0;
+  final Map<String, int> _inboxDoneAt = {};
+  final Set<String> _inboxQueue = {};
+  Future<void>? _inboxRunning;
+  bool _inboxLegacyServer = false;
+  bool _inboxRetrying = false;
+  List<String>? Function()? _inboxLiveKeys;
+
+  Map<String, String> get pmInboxCursors => Map.unmodifiable(_inboxMap);
+
+  void setInboxLiveKeys(List<String>? Function() live) => _inboxLiveKeys = live;
+
+  Future<void> pmInboxRestore(List<String> keys,
+      {required ArchiveReplay replay}) {
+    for (final raw in keys) {
+      final pk = raw.toLowerCase();
+      if (_isHex64(pk)) _inboxQueue.add(pk);
+    }
+    final running = _inboxRunning;
+    if (running != null) return running;
+    late final Future<void> run;
+    run = _inboxDrain(replay).whenComplete(() {
+      if (identical(_inboxRunning, run)) _inboxRunning = null;
+    });
+    _inboxRunning = run;
+    return run;
+  }
+
+  Future<void> _inboxDrain(ArchiveReplay replay) async {
+    while (_inboxQueue.isNotEmpty) {
+      final batch = _inboxQueue.toList();
+      _inboxQueue.clear();
+      final now = _nowMs();
+      final due = [
+        for (final k in batch)
+          if (!D1Cursor.coalesce(_inboxDoneAt[k], now)) k,
+      ];
+      if (due.isEmpty) continue;
+      try {
+        await _inboxPass(due, replay);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _inboxLoad() async {
+    if (_inboxLoaded) return;
+    _inboxLoaded = true;
+    final load = _cursorLoad;
+    if (load == null) return;
+    Map<String, dynamic>? rec;
+    try {
+      rec = await load(inboxCursorKey);
+    } catch (_) {
+      rec = null;
+    }
+    if (rec == null) return;
+    final pk = rec['pk'];
+    if (pk is String && pk.isNotEmpty && pk != _pubkey) return;
+    final map = rec['map'];
+    if (map is Map) {
+      _inboxMap = D1Cursor.inboxStore(
+          map.cast<String, Object?>(), const [], null, null);
+    }
+    final held = (rec['heldSince'] as num?)?.toInt() ?? 0;
+    if (held > 0) _inboxHeldSince = held;
+  }
+
+  Future<StorageStream> _inboxRead(List<String> chunk,
+          [Map<String, dynamic>? extra]) =>
+      _api.storageStream({
+        'action': 'pm-get',
+        'pubkeys': chunk,
+        ...?extra,
+      }, statsAction: 'pm-get:inbox');
+
+  void _inboxDone(List<String> keys) {
+    final t = _nowMs();
+    for (final k in keys) {
+      _inboxDoneAt[k] = t;
+    }
+  }
+
+  Future<void> _inboxPass(List<String> keys, ArchiveReplay replay) async {
+    await _inboxLoad();
+    final plan = D1Cursor.inboxPlan(keys, _inboxMap);
+    for (final chunk in plan.legacy) {
+      StorageStream stream;
+      try {
+        stream = await _inboxRead(chunk);
+      } catch (_) {
+        continue;
+      }
+      final events = _freshWraps(stream.items);
+      final verdicts = await replay(events);
+      _holdVerdicts(_inboxHolds, events, verdicts, null, chunk,
+          (since) => _inboxHeldSince = since, () => _inboxHeldSince);
+      final head = D1Cursor.fromHead(stream.headers['x-cursor-head']);
+      if (head != null) {
+        _inboxMap = D1Cursor.inboxStore(_inboxMap, chunk, head, null);
+      }
+      _inboxDone(chunk);
+    }
+    for (final group in plan.cursor) {
+      var after = group.after;
+      String? best;
+      var legacy = false;
+      try {
+        for (var page = 0; page < D1Cursor.maxPages; page++) {
+          final stream = await _inboxRead(
+              group.keys, {'after': after, 'limit': D1Cursor.pageLimit});
+          final events = _freshWraps(stream.items);
+          final step = D1Cursor.step(page, after, stream.headers['x-cursor'],
+              stream.headers['x-has-more']);
+          if (!step.serverOk) {
+            legacy = true;
+            await replay(events);
+            break;
+          }
+          final verdicts = await replay(events);
+          _holdVerdicts(_inboxHolds, events, verdicts, after, group.keys,
+              (since) => _inboxHeldSince = since, () => _inboxHeldSince);
+          best = D1Cursor.newer(best, step.cursor);
+          final next = step.next;
+          if (next == null) break;
+          after = next;
+        }
+      } catch (_) {}
+      if (legacy) {
+        _inboxMap = {
+          for (final e in _inboxMap.entries)
+            if (!group.keys.contains(e.key)) e.key: e.value,
+        };
+        _inboxLegacyServer = true;
+        try {
+          final stream = await _inboxRead(group.keys);
+          await replay(_freshWraps(stream.items));
+        } catch (_) {}
+        _inboxDone(group.keys);
+        continue;
+      }
+      if (best != null) {
+        _inboxMap = D1Cursor.inboxStore(_inboxMap, group.keys, best, null);
+      }
+      _inboxDone(group.keys);
+    }
+    if (_inboxLegacyServer) _inboxMap = {};
+    await _inboxRetryHeld(replay);
+    _inboxCommitNow();
+  }
+
+  Future<void> pmAnonInboxRestore(List<({String pk, Uint8List sk})> ids,
+      {required ArchiveReplay replay}) async {
+    if (ids.isEmpty) return;
+    await _inboxLoad();
+    for (final id in ids) {
+      final key = id.pk.toLowerCase();
+      if (!_isHex64(key) || D1Cursor.coalesce(_inboxDoneAt[key], _nowMs())) {
+        continue;
+      }
+      try {
+        final cur = _inboxMap[key];
+        if (!D1Cursor.valid(cur)) {
+          final stream = await _anonRead(
+              id, {'since': 0, 'before': 0, 'limit': 1000});
+          await replay(_freshWraps(stream.items));
+          final head = D1Cursor.fromHead(stream.headers['x-cursor-head']);
+          if (head != null) {
+            _inboxMap = D1Cursor.inboxStore(_inboxMap, [key], head, null);
+          }
+        } else {
+          var after = D1Cursor.startAfter(cur)!;
+          String? best;
+          var legacy = false;
+          for (var page = 0; page < D1Cursor.maxPages; page++) {
+            final stream = await _anonRead(
+                id, {'after': after, 'limit': D1Cursor.pageLimit});
+            final step = D1Cursor.step(page, after,
+                stream.headers['x-cursor'], stream.headers['x-has-more']);
+            await replay(_freshWraps(stream.items));
+            if (!step.serverOk) {
+              legacy = true;
+              break;
+            }
+            best = D1Cursor.newer(best, step.cursor);
+            final next = step.next;
+            if (next == null) break;
+            after = next;
+          }
+          if (legacy) {
+            _inboxMap = Map.of(_inboxMap)..remove(key);
+            final stream = await _anonRead(
+                id, {'since': 0, 'before': 0, 'limit': 1000});
+            await replay(_freshWraps(stream.items));
+          } else if (best != null) {
+            _inboxMap = D1Cursor.inboxStore(_inboxMap, [key], best, null);
+          }
+        }
+        _inboxDoneAt[key] = _nowMs();
+      } catch (_) {}
+    }
+    _inboxCommitNow();
+  }
+
+  Future<StorageStream> _anonRead(
+      ({String pk, Uint8List sk}) id, Map<String, dynamic> extra) {
+    final body = <String, dynamic>{
+      'action': 'pm-get',
+      'pubkey': id.pk.toLowerCase(),
+      ...extra,
+    };
+    body['auth'] = Nip98Auth.build(
+      action: 'pm-get',
+      url: storageUrl(),
+      privkey: id.sk,
+      pubkey: id.pk.toLowerCase(),
+      payload: Nip98Auth.payloadHashHex(body),
+    );
+    return _api.storageStream(body,
+        statsAction: 'pm-get:inbox', socket: false);
+  }
+
+  Future<bool> _inboxRetryHeld(ArchiveReplay replay) async {
+    if (_inboxHolds.isEmpty || _inboxRetrying) return false;
+    _inboxRetrying = true;
+    var changed = false;
+    try {
+      changed = await _retryHolds(_inboxHolds, replay);
+      if (_inboxHolds.isEmpty) _inboxHeldSince = 0;
+    } finally {
+      _inboxRetrying = false;
+    }
+    if (changed) _inboxCommitNow();
+    return changed;
+  }
+
+  void _inboxCommitNow() {
+    final commit = _cursorCommit;
+    if (commit == null) return;
+    final live = _inboxLiveKeys?.call();
+    _inboxMap = D1Cursor.inboxStore(_inboxMap, const [], null, live);
+    final now = _nowMs();
+    final out = Map<String, String>.of(_inboxMap);
+    final active = [
+      for (final h in _inboxHolds)
+        if (h.persist && now - h.since < D1Cursor.holdMs) h,
+    ];
+    for (final h in active) {
+      for (final k in h.keys) {
+        if (!out.containsKey(k)) continue;
+        if (!D1Cursor.valid(h.after)) {
+          out.remove(k);
+        } else {
+          out[k] = D1Cursor.older(out[k], h.after)!;
+        }
+      }
+    }
+    commit(inboxCursorKey, {
+      'pk': _pubkey,
+      'map': out,
+      'heldSince': active.isNotEmpty
+          ? (_inboxHeldSince > 0 ? _inboxHeldSince : now)
+          : 0,
+    });
   }
 
   /// Restores group history deposited under our per-group ephemeral keys; public, no `since`, 200-pubkey chunks.
@@ -2346,6 +3239,7 @@ class StorageSync {
     List<String> channelNames, {
     bool force = false,
     int sinceSec = 0,
+    bool cover = true,
     void Function(bool ok)? onResult,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -2361,25 +3255,112 @@ class StorageSync {
       if (names.length >= 50) break;
     }
     if (names.isEmpty) return const [];
-    StorageStream stream;
-    try {
-      // channel-get is a public read.
-      stream = await _api.storageStream({
-        'action': 'channel-get',
-        'channels': names,
-        if (sinceSec > 0) 'since': sinceSec,
-      });
-    } catch (_) {
-      onResult?.call(false);
-      return const [];
+    final gap = sinceSec > 0 ? sinceSec : 0;
+    final bySince = <int, List<String>>{};
+    for (final name in names) {
+      final covered = cover ? await _channelCoveredSince(name) : 0;
+      final since = covered > 0 && gap > 0
+          ? min(covered, gap)
+          : (covered > 0 ? covered : gap);
+      (bySince[since] ??= <String>[]).add(name);
     }
     final events = <Map<String, dynamic>>[];
-    for (final item in stream.items) {
-      if (item is! Map) continue;
-      events.add(Map<String, dynamic>.from(item));
+    var ok = true;
+    for (final entry in bySince.entries) {
+      StorageStream stream;
+      try {
+        stream = await _api.storageStream({
+          'action': 'channel-get',
+          'channels': entry.value,
+          if (entry.key > 0) 'since': entry.key,
+        });
+      } catch (_) {
+        ok = false;
+        continue;
+      }
+      var newest = 0;
+      for (final item in stream.items) {
+        if (item is! Map) continue;
+        final at = item['created_at'];
+        if (at is num && at.toInt() > newest) newest = at.toInt();
+        events.add(Map<String, dynamic>.from(item));
+      }
+      if (cover) _noteChannelCovered(entry.value, newest);
     }
-    onResult?.call(true);
+    onResult?.call(ok);
     return events;
+  }
+
+  static const String channelCoveredKey = 'channelCovered';
+  static const int channelCoverOverlapSec = 600;
+  static const int channelCoverMax = 200;
+
+  final Map<String, int> _channelCovered = {};
+  Map<String, int> _channelCoveredSaved = {};
+  bool _channelCoveredLoaded = false;
+  bool Function(String name)? _channelCoverGate;
+
+  void setChannelCoverGate(bool Function(String name) gate) =>
+      _channelCoverGate = gate;
+
+  void resetChannelCovered() {
+    _channelCovered.clear();
+    _channelCoveredSaved = {};
+    _channelCoveredLoaded = true;
+  }
+
+  Future<void> _channelCoveredLoad() async {
+    if (_channelCoveredLoaded) return;
+    _channelCoveredLoaded = true;
+    final load = _cursorLoad;
+    if (load == null) return;
+    Map<String, dynamic>? rec;
+    try {
+      rec = await load(channelCoveredKey);
+    } catch (_) {
+      rec = null;
+    }
+    final pk = rec?['pk'];
+    final map = rec?['map'];
+    if (map is! Map || (pk is String && pk.isNotEmpty && pk != _pubkey)) {
+      return;
+    }
+    final out = <String, int>{};
+    map.forEach((k, v) {
+      if (k is String && v is num && v > 0) out[k] = v.toInt();
+    });
+    _channelCoveredSaved = out;
+  }
+
+  Future<int> _channelCoveredSince(String name) async {
+    await _channelCoveredLoad();
+    var covered = _channelCovered[name] ?? 0;
+    if (covered <= 0) {
+      final saved = _channelCoveredSaved[name] ?? 0;
+      if (saved > 0 && (_channelCoverGate?.call(name) ?? false)) {
+        covered = saved;
+      }
+    }
+    return covered > 0 ? max(1, covered - channelCoverOverlapSec) : 0;
+  }
+
+  void _noteChannelCovered(List<String> names, int newest) {
+    if (newest <= 0) return;
+    for (final name in names) {
+      if ((_channelCovered[name] ?? 0) < newest) _channelCovered[name] = newest;
+    }
+    final commit = _cursorCommit;
+    if (commit == null) return;
+    final merged = <String, int>{..._channelCoveredSaved};
+    _channelCovered.forEach((k, v) {
+      if (v > (merged[k] ?? 0)) merged[k] = v;
+    });
+    final keys = merged.keys.toList()
+      ..sort((a, b) => merged[b]!.compareTo(merged[a]!));
+    commit(channelCoveredKey, {
+      'pk': _pubkey,
+      'map': {for (final k in keys.take(channelCoverMax)) k: merged[k]},
+    });
   }
 
   Future<List<Map<String, dynamic>>> channelPeek(String channel) async {
@@ -2543,26 +3524,66 @@ class StorageSync {
   int _emojiFetchedAt = 0;
 
   /// Archived NIP-30 packs and our 10030 list from D1, throttled to 10 minutes; empty on failure.
-  Future<List<Map<String, dynamic>>> emojiGet({bool force = false}) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
+  static const String emojiMetaKey = 'nym_custom_emoji_d1';
+  static const int emojiRefreshMs = 6 * 60 * 60 * 1000;
+  static const int emojiPackCacheMax = 200;
+  static final RegExp _etagRe = RegExp(r'^[0-9a-f]{32}$');
+
+  Future<List<Map<String, dynamic>>> emojiGet(
+      {bool force = false, bool heldPacks = false}) async {
+    final now = _nowMs();
     if (!force && _emojiFetchedAt != 0 && now - _emojiFetchedAt < 600000) {
       return const [];
     }
+    final kv = await _kvOrOpen();
+    Map<String, dynamic>? meta;
+    if (heldPacks && kv != null) {
+      try {
+        final raw = jsonDecode(kv.getString(emojiMetaKey) ?? 'null');
+        if (raw is Map) meta = raw.cast<String, dynamic>();
+      } catch (_) {
+        meta = null;
+      }
+    }
+    final at = meta?['at'];
+    if (!force &&
+        at is num &&
+        now >= at.toInt() &&
+        now - at.toInt() < emojiRefreshMs) {
+      return const [];
+    }
     _emojiFetchedAt = now;
+    final held = meta?['etag'];
+    final etag = held is String && _etagRe.hasMatch(held) ? held : null;
     StorageStream stream;
     try {
       // Empty body so the HTTP fallback stays anonymous; the authed socket adds our 10030 server-side.
       stream = await _api.storageStream({
         'action': 'emoji-get',
+        'etag': ?etag,
       });
     } catch (_) {
       _emojiFetchedAt = 0; // Allow a retry.
       return const [];
     }
     final events = <Map<String, dynamic>>[];
+    var packs = 0;
     for (final item in stream.items) {
       if (item is! Map) continue;
+      if (item['kind'] == 30030) packs++;
       events.add(Map<String, dynamic>.from(item));
+    }
+    final tag = stream.headers['x-etag'];
+    final same = etag != null && stream.headers['x-same'] == '1';
+    final keep = tag != null &&
+            _etagRe.hasMatch(tag) &&
+            (same || packs <= emojiPackCacheMax)
+        ? tag
+        : null;
+    if (kv != null) {
+      try {
+        await kv.setString(emojiMetaKey, jsonEncode({'at': now, 'etag': keep}));
+      } catch (_) {}
     }
     return events;
   }
@@ -2902,11 +3923,15 @@ class _DecodedCategory {
     required this.category,
     required this.payload,
     required this.updatedAt,
+    this.key = '',
   });
   final String category;
   final Map<String, dynamic> payload;
   final int updatedAt;
+  final String key;
 }
+
+enum SettingsReadMode { full, delta, root }
 
 /// Merged settings payload and newest core `updatedAt` (ms); apply only when newer than the stored sync ts.
 class SettingsLoadResult {
@@ -2925,8 +3950,14 @@ class SettingsLoadResult {
     this.callHistory,
     this.groupTools,
     this.awayStatus,
+    this.delta = false,
+    this.rootOnly = false,
   });
   final Map<String, dynamic> payload;
+
+  final bool delta;
+
+  final bool rootOnly;
 
   final Map<String, dynamic>? callHistory;
 

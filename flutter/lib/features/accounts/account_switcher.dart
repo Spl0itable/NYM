@@ -12,6 +12,7 @@ import '../../state/nostr_controller.dart';
 import '../../widgets/common/hit_slop.dart';
 import '../../widgets/common/app_dialog.dart';
 import '../../widgets/common/nym_avatar.dart';
+import '../../widgets/common/nym_label.dart';
 import '../../widgets/nym_icons.dart';
 import '../i18n/i18n.dart';
 import '../identity/modal_chrome.dart';
@@ -20,6 +21,8 @@ import 'account_host.dart';
 import 'account_logic.dart';
 import '../../widgets/common/nym_sheet.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/dialog_button.dart';
+import '../settings/settings_widgets.dart' show SettingsToggleRow;
 
 String accountMethodLabel(String method) {
   switch (method) {
@@ -360,22 +363,22 @@ class _AccountSwitcherPanelState extends ConsumerState<AccountSwitcherPanel> {
                   children: [
                     Expanded(
                       child: _FooterButton(
-                        key: const ValueKey('accountAddBtn'),
-                        label: tr('Add identity'),
-                        icon: NymIcons.plus,
-                        enabled: !full,
-                        onTap: _add,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _FooterButton(
                         key: const ValueKey('accountLogoutAllBtn'),
                         label: tr('Log out of all identities'),
                         icon: NymIcons.logout,
                         danger: true,
                         enabled: index.accounts.isNotEmpty,
                         onTap: _logoutAll,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _FooterButton(
+                        key: const ValueKey('accountAddBtn'),
+                        label: tr('Add identity'),
+                        icon: NymIcons.plus,
+                        enabled: !full,
+                        onTap: _add,
                       ),
                     ),
                   ],
@@ -419,11 +422,10 @@ class _AccountRow extends StatelessWidget {
     final c = context.nym;
     final a = account;
     final canNotify = a.pubkey.isNotEmpty && a.method != 'anonymous';
-    return InkWell(
+    final main = InkWell(
       onTap: onTap,
-      child: Container(
+      child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        color: active ? c.primaryA(0.08) : null,
         child: Row(
           children: [
             NymAvatar(
@@ -437,10 +439,8 @@ class _AccountRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
+                  NymLabel(
                     accountDisplayName(a),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: c.text,
                       fontSize: 14,
@@ -492,17 +492,6 @@ class _AccountRow extends StatelessWidget {
                       color: c.primary),
                 ),
               ),
-            if (canNotify)
-              IconButton(
-                key: ValueKey('accountNotify-${a.id}'),
-                tooltip: tr('Notify me for this identity while it\'s not active'),
-                onPressed: onToggleNotify,
-                icon: NymSvgIcon(
-                  a.notifyInactive ? NymIcons.bell : NymIcons.bellOff,
-                  size: 16,
-                  color: a.notifyInactive ? c.primary : c.textDim,
-                ),
-              ),
             IconButton(
               key: ValueKey('accountRemove-${a.id}'),
               tooltip: tr('Remove identity'),
@@ -511,6 +500,29 @@ class _AccountRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+    return Container(
+      color: active ? c.primaryA(0.08) : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          main,
+          if (canNotify)
+            Padding(
+              padding: EdgeInsets.fromLTRB(
+                  MediaQuery.sizeOf(context).width <= 768 ? 16 : 64, 0, 16, 10),
+              child: SettingsToggleRow(
+                key: ValueKey('panel-notifyInactive-${a.id}'),
+                label: tr('Notify me for this identity while it\'s not active'),
+                hint: tr(
+                    'This can let the server see that these identities share a device.'),
+                value: a.notifyInactive,
+                spacing: 0,
+                onChanged: (_) => onToggleNotify(),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -608,7 +620,7 @@ class _RemoveAccountDialog extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Text(
+                NymText(
                   [
                     tr('Remove {nym} from this device? Its messages, settings '
                         'and caches on this device are deleted.',
@@ -623,32 +635,26 @@ class _RemoveAccountDialog extends StatelessWidget {
                   style: TextStyle(color: c.textDim, fontSize: 13, height: 1.4),
                 ),
                 const SizedBox(height: 18),
-                Wrap(
+                DialogActions(
                   alignment: WrapAlignment.end,
-                  spacing: 8,
-                  runSpacing: 8,
                   children: [
                     if (key != null)
-                      TextButton(
+                      DialogButton.secondary(
                         key: const ValueKey('accountCopyNsecBtn'),
-                        onPressed: () {
+                        label: tr('Copy nsec'),
+                        onTap: () {
                           unawaited(SecretScreen.copy(key));
                           showToast(tr('Private key copied'));
                         },
-                        child: Text(tr('Copy nsec'),
-                            style: TextStyle(color: c.primary)),
                       ),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(false),
-                      child: Text(tr('Cancel'),
-                          style: TextStyle(color: c.textDim)),
+                    DialogButton.secondary(
+                      label: tr('Cancel'),
+                      onTap: () => Navigator.of(context).pop(false),
                     ),
-                    TextButton(
+                    DialogButton.danger(
                       key: const ValueKey('accountRemoveConfirmBtn'),
-                      onPressed: () => Navigator.of(context).pop(true),
-                      child: Text(tr('Remove'),
-                          style: TextStyle(
-                              color: c.danger, fontWeight: FontWeight.w700)),
+                      label: tr('Remove'),
+                      onTap: () => Navigator.of(context).pop(true),
                     ),
                   ],
                 ),

@@ -23,6 +23,7 @@ import '../../features/identity/pq_registry.dart';
 import '../../features/messages/server_quiet.dart';
 import '../../features/messages/trust_graph.dart';
 import '../../features/pms/upload_activity.dart';
+import '../../features/relays/relay_block.dart';
 import '../../models/channel.dart' as ch;
 import '../../models/nostr_event.dart';
 import '../api/api_client.dart';
@@ -412,21 +413,35 @@ class NostrService {
 
   bool get isProxyRetryInFlight => _bgRestoreInFlight;
 
-  RelayPool _newDirectPool() =>
-      _directPoolFactory?.call() ??
+  RelayPool _newDirectPool() => (_directPoolFactory?.call() ??
       RelayPool(
         relays: _relays ?? RelayConfig.defaultRelays,
         writeOnlyRelays: RelayConfig.writeOnlyRelays,
         verify: _verifyOffThread,
-      );
+      ))
+    ..setBlockedRelays(_blockedRelays);
 
-  RelayPoolProxy _newProxyPool() =>
-      _proxyPoolFactory?.call() ??
+  RelayPoolProxy _newProxyPool() => (_proxyPoolFactory?.call() ??
       RelayPoolProxy(
         relays: _relays ?? RelayConfig.defaultRelays,
         dmRelays: RelayConfig.defaultRelays,
         verify: _verifyOffThread,
-      );
+      ))
+    ..setBlockedRelays(_blockedRelays);
+
+  Set<String> _blockedRelays = const {};
+
+  Set<String> get blockedRelays => _blockedRelays;
+
+  void setBlockedRelays(Iterable<String> urls) {
+    _blockedRelays = Set.unmodifiable(urls.toSet());
+    final p = _pool;
+    if (p is RelayPoolProxy) {
+      p.setBlockedRelays(_blockedRelays);
+    } else if (p is RelayPool) {
+      p.setBlockedRelays(_blockedRelays);
+    }
+  }
 
   final ApiClient _apiClient;
 
@@ -1414,6 +1429,12 @@ class NostrService {
     unawaited(_handleGiftWrap(wrap, fromArchive: true));
   }
 
+  Future<bool> replayArchivedWrap(NostrEvent wrap) async {
+    if (wrap.kind != EventKind.giftWrap) return true;
+    await _handleGiftWrap(wrap, fromArchive: true);
+    return wrap.id.isNotEmpty && _processedWrapIds.contains(wrap.id);
+  }
+
   Future<GiftWrapUnwrapped?> probeArchivedWrap(NostrEvent wrap) async {
     if (wrap.kind != EventKind.giftWrap) return null;
     GiftWrapUnwrapped? out;
@@ -1662,42 +1683,20 @@ class NostrService {
     if (sig == null) return null;
 
     final isGeo = geohash != null && geohash.isNotEmpty;
-    final kind = isGeo ? EventKind.geoChannel : EventKind.namedChannel;
-    final hasStamp = createdAtSec != null && createdAtSec > 0;
-    final nowSec =
-        hasStamp ? createdAtSec : DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final nowMs =
-        hasStamp ? createdAtSec * 1000 : DateTime.now().millisecondsSinceEpoch;
-
-    // No attestation badge on pseudonymous sends, or it would link the throwaway key.
     final badge = signerOverride == null ? attestBadge : null;
-
-    final tags = <List<String>>[
-      ['n', nym],
-      ['ms', '$nowMs'],
-      [isGeo ? 'g' : 'd', isGeo ? geohash : channelKey],
-      if (badge != null && badge.isNotEmpty) ['nymattest', badge],
-      if (threadRoot != null && threadRoot.isNotEmpty)
-        ['e', threadRoot, '', 'root'],
-      // NIP-30: declare custom emoji used in the message.
-      ...emojiTags,
-      ...extraTags,
-    ];
-
-    // Mine at least the Nymchat PoW floor off the main thread, then sign.
-    final difficulty =
-        powDifficulty > kNymchatPowFloor ? powDifficulty : kNymchatPowFloor;
-    final mined = await mineNonce(
-      UnsignedEvent(
-        pubkey: sig.pubkey,
-        createdAt: nowSec,
-        kind: kind,
-        tags: tags,
-        content: content,
-      ),
-      difficulty,
+    final signed = await buildChannelMessage(
+      signer: sig,
+      channelKey: channelKey,
+      content: content,
+      nym: nym,
+      geohash: geohash,
+      badge: badge,
+      emojiTags: emojiTags,
+      powDifficulty: powDifficulty,
+      threadRoot: threadRoot,
+      createdAtSec: createdAtSec,
+      extraTags: extraTags,
     );
-    final signed = await sig.sign(mined);
     eventProvenance.recordLocal(signed, 'THIS CLIENT');
     if (buildOnly) return signed;
 
@@ -1714,6 +1713,51 @@ class NostrService {
       if (queuedKey != null) QueuedSends.instance.release(signed.id);
     }
     return signed;
+  }
+
+  static Future<NostrEvent> buildChannelMessage({
+    required EventSigner signer,
+    required String channelKey,
+    required String content,
+    required String nym,
+    String? geohash,
+    String? badge,
+    List<List<String>> emojiTags = const [],
+    int powDifficulty = 0,
+    String? threadRoot,
+    int? createdAtSec,
+    List<List<String>> extraTags = const [],
+  }) async {
+    final isGeo = geohash != null && geohash.isNotEmpty;
+    final kind = isGeo ? EventKind.geoChannel : EventKind.namedChannel;
+    final hasStamp = createdAtSec != null && createdAtSec > 0;
+    final nowSec =
+        hasStamp ? createdAtSec : DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final nowMs =
+        hasStamp ? createdAtSec * 1000 : DateTime.now().millisecondsSinceEpoch;
+    final tags = <List<String>>[
+      ['n', nym],
+      ['ms', '$nowMs'],
+      [isGeo ? 'g' : 'd', isGeo ? geohash : channelKey],
+      if (badge != null && badge.isNotEmpty) ['nymattest', badge],
+      if (threadRoot != null && threadRoot.isNotEmpty)
+        ['e', threadRoot, '', 'root'],
+      ...emojiTags,
+      ...extraTags,
+    ];
+    final difficulty =
+        powDifficulty > kNymchatPowFloor ? powDifficulty : kNymchatPowFloor;
+    final mined = await mineNonce(
+      UnsignedEvent(
+        pubkey: signer.pubkey,
+        createdAt: nowSec,
+        kind: kind,
+        tags: tags,
+        content: content,
+      ),
+      difficulty,
+    );
+    return signer.sign(mined);
   }
 
   /// Publishes a kind-7 channel reaction with `e`/`p`/`k`, NIP-30 emoji, channel `g`/`d`, and `action: remove` when [remove].
@@ -2731,6 +2775,8 @@ class NostrService {
   Timer? _geoKeepAliveTimer;
   String? _geoKeepAliveGeohash;
 
+  String? get activeGeohash => _geoKeepAliveGeohash;
+
   /// Every 30s, re-adds the active geohash's closest relays if any dropped; restarted per channel entry.
   void startGeoRelayKeepAlive(String geohash) {
     _geoKeepAliveTimer?.cancel();
@@ -2752,7 +2798,9 @@ class NostrService {
     final closest = closestGeoRelays(gh);
     if (closest.isEmpty) return;
     final present = pool.connectedRelayUrls;
-    final anyMissing = closest.any((r) => !present.contains(r.url));
+    final anyMissing = closest.any((r) =>
+        !present.contains(r.url) &&
+        !RelayBlock.isBlocked(_blockedRelays, r.url));
     if (anyMissing) unawaited(connectGeoRelaysForGeohash(gh));
   }
 

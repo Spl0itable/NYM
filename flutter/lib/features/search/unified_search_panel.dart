@@ -5,6 +5,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme/nym_a11y.dart';
 import '../../core/theme/nym_colors.dart';
 import '../../core/theme/nym_metrics.dart';
 import '../../core/utils/nym_utils.dart';
@@ -26,11 +27,15 @@ import '../chat_lock/chat_lock_providers.dart';
 import '../chat_tools/chat_tools_ui.dart'
     show ChatToolsReader, chatDisplayNym, chatInfoFor, jumpToMessage;
 import '../i18n/i18n.dart';
+import '../layout/layout_model.dart' show mentionSuffixRanges;
 import '../shortcuts/shortcuts.dart';
 import 'search_source.dart';
 import 'unified_search.dart';
 import '../../widgets/common/nym_field.dart';
 import '../../widgets/common/nym_tooltip.dart';
+import '../../widgets/common/nym_label.dart';
+
+export '../../widgets/common/nym_label.dart' show nymSuffixStyle;
 
 String _s(String key, [Map<String, Object?>? args]) =>
     tr(kUnifiedSearchStrings[key]!, args);
@@ -622,7 +627,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
                   Text('  ·  ',
                       style: TextStyle(color: c.textDim, fontSize: 12)),
                   Flexible(
-                    child: Text(chat,
+                    child: NymText(chat,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: c.textDim, fontSize: 12)),
@@ -639,6 +644,7 @@ class _UnifiedSearchPanelState extends ConsumerState<UnifiedSearchPanel> {
                 _Highlighted(
                   text: snip.text,
                   ranges: snip.ranges,
+                  dim: mentionSuffixRanges(snip.text),
                   maxLines: 3,
                   style: TextStyle(color: c.text, fontSize: 13, height: 1.3),
                   hit: TextStyle(
@@ -849,12 +855,14 @@ class _Highlighted extends StatelessWidget {
     required this.hit,
     this.tokens,
     this.ranges,
+    this.dim = const [],
     this.maxLines = 1,
   });
 
   final String text;
   final List<String>? tokens;
   final List<List<int>>? ranges;
+  final List<List<int>> dim;
   final TextStyle style;
   final TextStyle hit;
   final int maxLines;
@@ -862,14 +870,27 @@ class _Highlighted extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final rs = ranges ?? searchHighlight(text, tokens ?? const []);
-    final spans = <TextSpan>[];
-    var at = 0;
-    for (final r in rs) {
-      if (r[0] > at) spans.add(TextSpan(text: text.substring(at, r[0])));
-      spans.add(TextSpan(text: text.substring(r[0], r[1]), style: hit));
-      at = r[1];
+    final cuts = <int>{0, text.length};
+    for (final r in [...rs, ...dim]) {
+      cuts
+        ..add(r[0].clamp(0, text.length))
+        ..add(r[1].clamp(0, text.length));
     }
-    if (at < text.length) spans.add(TextSpan(text: text.substring(at)));
+    final at = cuts.toList()..sort();
+    bool inside(List<List<int>> list, int a, int b) =>
+        list.any((r) => r[0] <= a && b <= r[1]);
+    final spans = <TextSpan>[];
+    for (var i = 0; i + 1 < at.length; i++) {
+      final a = at[i], b = at[i + 1];
+      if (b <= a) continue;
+      final h = inside(rs, a, b);
+      final d = inside(dim, a, b);
+      final TextStyle? st = d
+          ? nymSuffixStyle(h ? style.merge(hit) : style,
+              contrast: context.highContrast)
+          : (h ? hit : null);
+      spans.add(TextSpan(text: text.substring(a, b), style: st));
+    }
     return Text.rich(
       TextSpan(style: style, children: spans),
       maxLines: maxLines,
@@ -944,13 +965,6 @@ class _UnifiedSearchButtonState extends State<UnifiedSearchButton> {
   }
 }
 
-TextStyle nymSuffixStyle(TextStyle base) => base.copyWith(
-      color: (base.color ?? const Color(0xFFFFFFFF)).withValues(
-          alpha: (base.color ?? const Color(0xFFFFFFFF)).a * 0.7),
-      fontSize: (base.fontSize ?? 14) * 0.9,
-      fontWeight: FontWeight.w100,
-    );
-
 class _NymName extends StatelessWidget {
   const _NymName({
     required this.base,
@@ -971,7 +985,7 @@ class _NymName extends StatelessWidget {
     final suffix = '#${getPubkeySuffix(pubkey)}';
     final label = '$base$suffix';
     final rs = searchHighlight(label, tokens);
-    final suffixStyle = nymSuffixStyle(style);
+    final suffixStyle = nymSuffixStyle(style, contrast: context.highContrast);
     List<InlineSpan> part(int from, int to) {
       final out = <InlineSpan>[];
       var at = from;

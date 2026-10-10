@@ -67,6 +67,8 @@
 
     <!-- Preload critical assets -->
     <link rel="preload" href="css/styles-core.css" as="style">
+    <link rel="preload" href="js/languages.js" as="script">
+    <link rel="preload" href="js/first-lang.js" as="script">
     <link rel="preload" href="js/nostr-tools.js" as="script">
     <link rel="preload" href="js/app.js" as="script">
 
@@ -88,6 +90,20 @@
     <script src="js/accounts.js"></script>
     <script src="js/theme-init.js"></script>
     <script src="js/setup-modal-init.js"></script>
+    <div class="first-lang" id="firstLangScreen" role="dialog" aria-modal="true" aria-labelledby="firstLangTitle">
+        <div class="first-lang-card">
+            <header class="first-lang-head">
+                <h2 class="first-lang-title" id="firstLangTitle">Choose your language</h2>
+                <button type="button" class="first-lang-close" id="firstLangClose" aria-label="Close">&times;</button>
+            </header>
+            <p class="first-lang-lede">You can change this anytime in Settings.</p>
+            <input type="search" class="first-lang-search" id="firstLangSearch" placeholder="Search languages" autocomplete="off" spellcheck="false" data-sheet-ignore>
+            <div class="first-lang-list" id="firstLangList" data-no-i18n></div>
+            <p class="first-lang-empty nm-hidden" id="firstLangEmpty">No language by that name.</p>
+        </div>
+    </div>
+    <script src="js/languages.js"></script>
+    <script src="js/first-lang.js"></script>
     <div id="wallpaperLayer"></div>
     <div class="mobile-overlay" id="mobileOverlay" data-action="closeSidebar"></div>
 
@@ -398,11 +414,11 @@
                     <div class="input-char-count" id="newGroupDescCharCount">0/150</div>
                 </div>
                 <div class="form-group nm-hidden" id="newGroupAllowInvitesGroup">
-                    <label class="nm-h-78">
-                        <input type="checkbox" id="newGroupAllowInvites" class="nm-h-79" checked>
-                        Allow members to add others
+                    <label class="setting-toggle-row">
+                        <span class="form-label" id="newGroupAllowInvitesLabel">Allow members to add others</span>
+                        <span class="nym-switch"><input type="checkbox" role="switch" id="newGroupAllowInvites" data-panel-toggle="allowMemberInvites" aria-labelledby="newGroupAllowInvitesLabel" aria-describedby="newGroupAllowInvitesHint" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
                     </label>
-                    <div class="form-hint">When off, only you (the group owner) can add new members.</div>
+                    <div class="form-hint" id="newGroupAllowInvitesHint">When off, only you (the group owner) can add new members.</div>
                 </div>
                 <div class="form-group nm-h-3">
                     <label class="form-label">Message <span class="nm-h-2">(optional)</span></label>
@@ -660,7 +676,7 @@
                 <div class="sidebar-footer-status">
                         <button type="button" class="status-indicator" data-action="openRelayStats" data-tip="View network stats">
                             <span class="status-dot" id="statusDot"></span>
-                            <span id="connectionStatus">Disconnected</span>
+                            <span id="connectionStatus">Connecting...</span>
                         </button>
                         <button type="button" class="mesh-status-row nm-hidden" id="meshStatusRow"
                             data-action="openMeshPanel" data-tip="Bluetooth mesh">
@@ -712,7 +728,7 @@
                 <div class="channel-title-wrap uh-mid" id="chatTitleBtn">
                     <span class="uh-avatar" id="chatHeaderAvatar" aria-hidden="true"></span>
                     <span class="uh-text">
-                        <span class="uh-title-row"><span class="uh-title" id="chatHeaderTitle"></span><svg class="uh-info" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></span>
+                        <span class="uh-title-row"><span class="uh-title" id="chatHeaderTitle"></span><span class="uh-badges" id="chatHeaderBadges"></span><svg class="uh-info" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg></span>
                         <span class="uh-sub" id="chatHeaderSub"></span>
                     </span>
                     <div class="uh-src" hidden>
@@ -735,6 +751,14 @@
                                     aria-label="Conversation info" aria-pressed="false" data-tip="">
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
                                 </button>
+                    <button class="call-channel-btn call-rejoin-btn nm-call-hidden" id="rejoinCallBtn" data-action="rejoinGroupCall"
+                                    aria-label="Rejoin the call">
+                                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <polyline points="16 2 16 8 22 8"></polyline>
+                                        <line x1="22" y1="2" x2="16" y2="8"></line>
+                                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                                    </svg>
+                                </button>
                     <button class="call-channel-btn nm-call-hidden" id="audioCallBtn" data-action="initiateAudioCall"
                                     aria-label="Start audio call">
                                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -748,17 +772,10 @@
                                         <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
                                     </svg>
                                 </button>
-                    <button class="call-channel-btn call-rejoin-btn nm-call-hidden" id="rejoinCallBtn" data-action="rejoinGroupCall"
-                                    aria-label="Rejoin the call">
-                                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
-                                    </svg>
-                                    <span>Rejoin</span>
-                                </button>
                 </div>
                 <div class="uh-actions mesh-hdr-actions">
                     <button type="button" id="meshGhostBtn" data-action="meshToggleGhost" aria-label="Ghost Mode" aria-pressed="false" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V10a7 7 0 0 1 14 0v11l-2.33-2-2.34 2L12 19l-2.33 2-2.34-2Z"></path><path d="M9.5 10.5h.01M14.5 10.5h.01"></path></svg></button>
-                    <button type="button" id="meshAddBtn" data-action="meshAddPeer" aria-label="Add device" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 7 14 17 9 22 9 2 14 7 4 17"></polyline><path d="M19 8v6M16 11h6"></path></svg></button>
+                    <button type="button" id="meshAddBtn" data-action="meshAddPeer" aria-label="Add device" data-tip=""><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 7 13 17 8 22 8 2 13 7 3 17"></polyline><path d="M18 8v6M15 11h6"></path></svg></button>
                 </div>
                 <div class="header-actions" role="group" aria-label="Main menu">
                     <div class="header-actions-row header-actions-primary">
@@ -1018,6 +1035,9 @@
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle><line x1="3" y1="21" x2="21" y2="3"></line></svg>
                         <span class="composer-menu-text"><span class="composer-menu-label">Send anonymously</span></span>
                     </button>
+                    <div class="composer-menu-sep" id="sendAsSep" role="separator" hidden></div>
+                    <div class="composer-menu-heading" id="sendAsHeading" role="presentation" hidden>Send as…</div>
+                    <div class="send-as-group" id="sendAsGroup" role="group" aria-labelledby="sendAsHeading" hidden></div>
                 </div>
                 <div class="emoji-picker" id="emojiPicker"></div>
                 <div class="gif-picker" id="gifPicker"></div>
@@ -1341,17 +1361,24 @@
                 <!-- Relay List -->
                 <div class="relay-stats-section">
                     <div class="relay-stats-section-title">Data transferred</div>
+                    <div class="relay-stats-search-wrap" id="rsRelaySearchWrap">
+                        <input type="search" class="form-input relay-stats-search" id="rsRelaySearch"
+                            placeholder="Search relays" aria-label="Search relays" autocomplete="off"
+                            spellcheck="false" enterkeyhint="search">
+                        <span class="relay-stats-search-count" id="rsRelaySearchCount" aria-live="polite"></span>
+                    </div>
                     <div class="relay-stats-relay-list" id="rsRelayList"></div>
+                    <div class="relay-stats-blocked" id="rsBlockedRelays"></div>
                 </div>
 
                 <div class="relay-stats-low-data" id="rsLowDataPanel">
                     <div class="relay-stats-low-data-text">
                         <div class="relay-stats-low-data-title">Using too much data?</div>
-                        <div class="relay-stats-low-data-hint">Enable Low Data Mode to limit relay
-                            connections to a small core set and load geo relays only when entering channels.</div>
+                        <div class="relay-stats-low-data-hint">Enable Low Data Mode to connect only to the 18 default
+                            relays and load geo relays only for the channels you open.</div>
                     </div>
                     <label class="nym-switch" title="Toggle Low Data Mode">
-                        <input type="checkbox" id="rsLowDataToggle" data-on-change="toggleLowDataModeFromStats">
+                        <input type="checkbox" id="rsLowDataToggle" role="switch" aria-checked="false" aria-label="Low Data Mode" data-on-change="toggleLowDataModeFromStats">
                         <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
                     </label>
                 </div>
@@ -1553,19 +1580,6 @@
     <div class="acct-switch-overlay" id="acctSwitchOverlay" aria-live="polite"><span class="loader"></span><span>Switching identity…</span></div>
 
     <!-- Initial Setup Modal -->
-    <div class="first-lang" id="firstLangScreen" role="dialog" aria-modal="true" aria-labelledby="firstLangTitle">
-        <div class="first-lang-card">
-            <header class="first-lang-head">
-                <h2 class="first-lang-title" id="firstLangTitle">Choose your language</h2>
-                <button type="button" class="first-lang-close" id="firstLangClose" aria-label="Close">&times;</button>
-            </header>
-            <p class="first-lang-lede">You can change this anytime in Settings.</p>
-            <input type="search" class="first-lang-search" id="firstLangSearch" placeholder="Search languages" autocomplete="off" spellcheck="false" data-sheet-ignore>
-            <div class="first-lang-list" id="firstLangList" data-no-i18n></div>
-            <p class="first-lang-empty nm-hidden" id="firstLangEmpty">No language by that name.</p>
-        </div>
-    </div>
-
     <div class="modal" id="setupModal">
         <div class="modal-content setup-modal-content">
             <button class="modal-close nm-hidden" id="setupCloseBtn" data-action="closeModal" data-modal-id="setupModal" aria-label="Close">&#x2715;</button>
@@ -1810,7 +1824,7 @@
 
                     <div class="form-group">
                         <label class="form-label">App Language</label>
-                        <select class="form-select" id="uiLanguageSelect" data-no-i18n>
+                        <select class="form-select" id="uiLanguageSelect" data-setting-key="uiLanguage" data-no-i18n>
                             <option value="">English (default)</option>
                         </select>
                         <div class="form-hint">Translate the entire app interface into your language. Message text is handled separately by the translation settings below.</div>
@@ -1818,7 +1832,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Theme</label>
-                        <select class="form-select" id="themeSelect">
+                        <select class="form-select" id="themeSelect" data-setting-key="theme">
                             <option value="bitchat">Bitchat (Multicolor)</option>
                             <option value="matrix">Matrix Green</option>
                             <option value="amber">Amber Terminal</option>
@@ -1829,12 +1843,11 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Colorful Messages</label>
-                        <select class="form-select" id="colorfulMessagesSelect" data-on-change="onColorfulMessagesChange">
-                            <option value="off" selected>Disabled</option>
-                            <option value="on">Enabled</option>
-                        </select>
-                        <div class="form-hint">Tint message text with each sender's color. Off keeps text neutral and colors only the nym and avatar.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="colorfulMessagesLabel">Colorful Messages</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="colorfulMessagesToggle" data-setting-key="colorfulMessages" aria-labelledby="colorfulMessagesLabel" aria-describedby="colorfulMessagesHint" data-on-change="onColorfulMessagesChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="colorfulMessagesHint">Tint message text with each sender's color. Off keeps text neutral and colors only the nym and avatar.</div>
                     </div>
 
                     <div class="form-group">
@@ -1861,12 +1874,11 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Message Threads</label>
-                        <select class="form-select" id="threadsSelect" data-on-change="onThreadsEnabledChange">
-                            <option value="true">Enabled</option>
-                            <option value="false">Disabled (classic flat view)</option>
-                        </select>
-                        <div class="form-hint">Group replies under their original message. Replies open in a thread view and the original shows a reply count. Disabling shows every message inline like before.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="threadsLabel">Message Threads</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="threadsToggle" data-setting-key="threadsEnabled" aria-labelledby="threadsLabel" aria-describedby="threadsHint" data-on-change="onThreadsEnabledChange" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="threadsHint">Group replies under their original message. Replies open in a thread view and the original shows a reply count. Disabling shows every message inline like before.</div>
                     </div>
 
                     <div class="form-group">
@@ -1892,12 +1904,11 @@
                     </div>
 
                     <div class="form-group cv-only-setting">
-                        <label class="form-label">Column Message Wallpaper</label>
-                        <select class="form-select" id="columnsWallpaperSelect" data-on-change="onColumnsWallpaperChange">
-                            <option value="false">Solid background</option>
-                            <option value="true">Show wallpaper through messages</option>
-                        </select>
-                        <div class="form-hint">In column view, let your chat wallpaper show through the message area of each column instead of a solid background.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="columnsWallpaperLabel">Column Message Wallpaper</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="columnsWallpaperToggle" data-setting-key="columnsWallpaper" aria-labelledby="columnsWallpaperLabel" aria-describedby="columnsWallpaperHint" data-on-change="onColumnsWallpaperChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="columnsWallpaperHint">In column view, let your chat wallpaper show through the message area of each column instead of a solid background.</div>
                     </div>
 
                     <div class="form-group">
@@ -1962,7 +1973,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Visual Transparency</label>
-                        <select class="form-select" id="transparencySelect" data-on-change="onTransparencyChange">
+                        <select class="form-select" id="transparencySelect" data-setting-key="transparencyEnabled" data-on-change="onTransparencyChange">
                             <option value="false">Solid</option>
                             <option value="true">Glass</option>
                         </select>
@@ -1983,17 +1994,34 @@
                         <div class="form-hint">Adjust the size of all text across the app</div>
                     </div>
 
+                    <div class="form-group" id="a11yTargetsGroup">
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="a11yTargetsTitle">Larger touch targets</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="a11yTargetsToggle" data-setting-key="largeTargets" aria-labelledby="a11yTargetsTitle" aria-describedby="a11yTargetsHint" data-on-change="onLargeTargetsChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="a11yTargetsHint">Bigger buttons, menu rows and fields for easier tapping.</div>
+                        <span class="visually-hidden" aria-hidden="true">Accessibility</span>
+                    </div>
+
+                    <div class="form-group" id="a11yContrastGroup">
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="a11yContrastTitle">Higher contrast</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="a11yContrastToggle" data-setting-key="highContrast" aria-labelledby="a11yContrastTitle" aria-describedby="a11yContrastHint" data-on-change="onHighContrastChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="a11yContrastHint">Stronger colors for small and dim text.</div>
+                        <span class="visually-hidden" aria-hidden="true">Accessibility</span>
+                    </div>
+
                     <div class="form-group">
-                        <label class="form-label">Show Timestamps</label>
-                        <select class="form-select" id="timestampSelect">
-                            <option value="true">Show</option>
-                            <option value="false">Hide</option>
-                        </select>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="timestampLabel">Show Timestamps</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="timestampToggle" data-setting-key="showTimestamps" data-on-change="onSettingPillChange" aria-labelledby="timestampLabel" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
                     </div>
 
                     <div class="form-group" id="timeFormatGroup">
                         <label class="form-label">Time Format</label>
-                        <select class="form-select" id="timeFormatSelect">
+                        <select class="form-select" id="timeFormatSelect" data-setting-key="timeFormat">
                             <option value="24hr">24-hour (14:30)</option>
                             <option value="12hr" selected>12-hour (2:30 PM)</option>
                         </select>
@@ -2001,7 +2029,7 @@
 
                     <div class="form-group" id="dateFormatGroup">
                         <label class="form-label">Date Format</label>
-                        <select class="form-select" id="dateFormatSelect">
+                        <select class="form-select" id="dateFormatSelect" data-setting-key="dateFormat">
                             <option value="default" selected>Default (May 28, 2026)</option>
                             <option value="mdy">MM/DD/YYYY (05/28/2026)</option>
                             <option value="dmy">DD/MM/YYYY (28/05/2026)</option>
@@ -2025,24 +2053,22 @@
                     </div>
 
                     <div class="form-group" id="aiConsentGroup">
-                        <label class="form-label" for="aiConsentSelect">Nymbot AI Processing</label>
-                        <select class="form-select" id="aiConsentSelect" data-on-change="onAiConsentChange">
-                            <option value="off" selected>Not allowed</option>
-                            <option value="on">Allowed</option>
-                        </select>
-                        <div class="form-hint">What is sent: to answer you, Nymbot sends what you ask it to AI services. That is your question or message, earlier messages in that Nymbot conversation, images and links you include and your nym. For a question in a channel it also sends the channel's recent messages from other people and the channel's approximate location. Allowing this also turns on AI translation, which sends text you choose to translate to our servers.</div>
-                        <div class="form-hint">Who receives it: the Nymbot service run by 21 Million LLC, which processes it on our servers. If you pick a Pro model or an image or video generator, it also goes to that model's maker, such as OpenAI, Anthropic, Google, xAI, Moonshot AI, Alibaba or MiniMax.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="aiConsentLabel">Nymbot AI Processing</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="aiConsentToggle" data-setting-key="aiConsent" aria-labelledby="aiConsentLabel" aria-describedby="aiConsentHint aiConsentHint2" data-on-change="onAiConsentChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="aiConsentHint">What is sent: to answer you, Nymbot sends what you ask it to AI services. That is your question or message, earlier messages in that Nymbot conversation, images and links you include and your nym. For a question in a channel it also sends the channel's recent messages from other people and the channel's approximate location. Allowing this also turns on AI translation, which sends text you choose to translate to our servers.</div>
+                        <div class="form-hint" id="aiConsentHint2">Who receives it: the Nymbot service run by 21 Million LLC, which processes it on our servers. If you pick a Pro model or an image or video generator, it also goes to that model's maker, such as OpenAI, Anthropic, Google, xAI, Moonshot AI, Alibaba or MiniMax.</div>
                         <div class="form-hint"><a href="/privacy/" target="_blank" rel="noopener">Privacy Policy</a></div>
                     </div>
 
                     <div class="form-group" id="aiTranslateGroup">
-                        <label class="form-label" for="aiTranslateSelect">AI Translation</label>
-                        <select class="form-select" id="aiTranslateSelect" data-on-change="onAiTranslateChange">
-                            <option value="off" selected>Not allowed</option>
-                            <option value="on">Allowed</option>
-                        </select>
-                        <div class="form-hint">What is sent: only the text you choose to translate, such as a message, a poll or your draft, and the language to translate it into.</div>
-                        <div class="form-hint">Who receives it: the Nymchat service run by 21 Million LLC, which translates it with AI models on our servers and sends the translation back. A translation may be cached for up to a day so repeats are faster, and it is not used for anything else.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="aiTranslateLabel">AI Translation</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="aiTranslateToggle" data-setting-key="aiTranslateConsent" aria-labelledby="aiTranslateLabel" aria-describedby="aiTranslateHint aiTranslateHint2" data-on-change="onAiTranslateChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="aiTranslateHint">What is sent: only the text you choose to translate, such as a message, a poll or your draft, and the language to translate it into.</div>
+                        <div class="form-hint" id="aiTranslateHint2">Who receives it: the Nymchat service run by 21 Million LLC, which translates it with AI models on our servers and sends the translation back. A translation may be cached for up to a day so repeats are faster, and it is not used for anything else.</div>
                     </div>
 
                     <div class="form-group" id="chatLockSettingsGroup">
@@ -2052,57 +2078,51 @@
                     </div>
 
                     <div class="form-group" id="remotePanicGroup">
-                        <label class="form-label">Panic wipe also erases my other devices</label>
-                        <select class="form-select" id="remotePanicSelect" data-on-change="onRemotePanicChange">
-                            <option value="off" selected>Disabled</option>
-                            <option value="on">Enabled</option>
-                        </select>
-                        <div class="form-hint">When you hold "Your Nym" or the wordmark on the unlock screen for 2 seconds, every other device signed in as this identity also wipes this identity the next time it connects. Other identities on those devices are not touched. An encrypted identity that is still locked when you panic from the unlock screen can't send this signal.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="remotePanicLabel">Panic wipe also erases my other devices</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="remotePanicToggle" data-setting-key="remotePanic" aria-labelledby="remotePanicLabel" aria-describedby="remotePanicHint" data-on-change="onRemotePanicChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="remotePanicHint">When you hold "Your Nym" or the wordmark on the unlock screen for 2 seconds, every other device signed in as this identity also wipes this identity the next time it connects. Other identities on those devices are not touched. An encrypted identity that is still locked when you panic from the unlock screen can't send this signal.</div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Hide Previews</label>
-                        <select class="form-select" id="hidePreviewsSelect" data-on-change="onHidePreviewsChange">
-                            <option value="off" selected>Disabled</option>
-                            <option value="on">Enabled</option>
-                        </select>
-                        <div class="form-hint">Hide the last-message line under each chat in the sidebar. Previews come only from messages already on this device.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="hidePreviewsLabel">Hide Previews</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="hidePreviewsToggle" data-setting-key="hidePreviews" aria-labelledby="hidePreviewsLabel" aria-describedby="hidePreviewsHint" data-on-change="onHidePreviewsChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="hidePreviewsHint">Hide the last-message line under each chat in the sidebar. Previews come only from messages already on this device.</div>
                     </div>
 
                     <div class="form-group" id="keepCallHistoryGroup">
-                        <label class="form-label" for="keepCallHistorySelect">Keep call history</label>
-                        <select class="form-select" id="keepCallHistorySelect" data-on-change="onKeepCallHistoryChange">
-                            <option value="off">Disabled</option>
-                            <option value="on" selected>Enabled</option>
-                        </select>
-                        <div class="form-hint">Keep a list of your recent calls. It syncs encrypted to your other devices signed in with this identity, and each identity has its own list. Turning this off deletes the list on every device.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="keepCallHistoryLabel">Keep call history</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="keepCallHistoryToggle" data-setting-key="keepCallHistory" aria-labelledby="keepCallHistoryLabel" aria-describedby="keepCallHistoryHint" data-on-change="onKeepCallHistoryChange" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="keepCallHistoryHint">Keep a list of your recent calls. It syncs encrypted to your other devices signed in with this identity, and each identity has its own list. Turning this off deletes the list on every device.</div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Screen Security</label>
-                        <select class="form-select" id="screenSecuritySelect" data-on-change="onScreenSecurityChange">
-                            <option value="off" selected>Disabled</option>
-                            <option value="on">Enabled</option>
-                        </select>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="screenSecurityLabel">Screen Security</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="screenSecurityToggle" data-setting-key="screenSecurity" aria-labelledby="screenSecurityLabel" aria-describedby="screenSecurityHint" data-on-change="onScreenSecurityChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
                         <div class="form-hint" id="screenSecurityHint">Blur chats when you switch away from Nymchat. Browsers do not let websites block screenshots or screen recording. Always on inside locked chats and view-once media.</div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Incognito Keyboard</label>
-                        <select class="form-select" id="incognitoKeyboardSelect" data-on-change="onIncognitoKeyboardChange">
-                            <option value="off" selected>Disabled</option>
-                            <option value="on">Enabled</option>
-                        </select>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="incognitoKeyboardLabel">Incognito Keyboard</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="incognitoKeyboardToggle" data-setting-key="incognitoKeyboard" aria-labelledby="incognitoKeyboardLabel" aria-describedby="incognitoKeyboardHint" data-on-change="onIncognitoKeyboardChange"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
                         <div class="form-hint" id="incognitoKeyboardHint">Turn off autocomplete, autocorrect and spell check in message boxes. The browser can't ask your keyboard app to stop learning; only Android keyboards support that.</div>
                     </div>
 
                     <div class="form-group" id="fallbackNoticeGroup">
-                        <label class="form-label">Direct Connection Notice</label>
-                        <select class="form-select" id="fallbackNoticeSelect" data-on-change="onFallbackNoticeChange">
-                            <option value="off">Disabled</option>
-                            <option value="on" selected>Enabled</option>
-                        </select>
-                        <div class="form-hint">Tell me when Nymchat falls back to direct relay connections because the proxy is unreachable. Relays can see your IP address in direct mode.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="fallbackNoticeLabel">Direct Connection Notice</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="fallbackNoticeToggle" data-setting-key="fallbackNotice" aria-labelledby="fallbackNoticeLabel" aria-describedby="fallbackNoticeHint" data-on-change="onFallbackNoticeChange" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="fallbackNoticeHint">Tell me when Nymchat falls back to direct relay connections because the proxy is unreachable. Relays can see your IP address in direct mode.</div>
                     </div>
 
                     <div class="form-group nm-hidden" id="keyBackupSettingsLink">
@@ -2113,7 +2133,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Generate Random Keypair Per Session</label>
-                        <select class="form-select" id="randomKeypairSelect" data-on-change="onRandomKeypairChange">
+                        <select class="form-select" id="randomKeypairSelect" data-setting-key="keypairMode" data-on-change="onRandomKeypairChange">
                             <option value="persistent">Disabled (reuse same keypair)</option>
                             <option value="random">Enabled (new identity each session)</option>
                             <option value="hardcore">Hardcore (new keypair every message)</option>
@@ -2124,7 +2144,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Proof of Work Difficulty</label>
-                        <select class="form-select" id="powDifficultySelect">
+                        <select class="form-select" id="powDifficultySelect" data-setting-key="powDifficulty">
                             <option value="0" selected>Disabled</option>
                             <option value="16">16 bits (Nymchat minimum)</option>
                             <option value="20">20 bits &mdash; also hides Nymchat messages</option>
@@ -2144,7 +2164,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Random Nickname Style</label>
-                        <select class="form-select" id="nickStyleSelect">
+                        <select class="form-select" id="nickStyleSelect" data-setting-key="nickStyle">
                             <option value="fancy">Fancy (adjective_noun)</option>
                             <option value="simple">Simple (nym1234)</option>
                         </select>
@@ -2161,7 +2181,7 @@
                     <div class="settings-section-body">
                     <div class="form-group">
                         <label class="form-label">Accept Private Messages &amp; Group Chat Requests</label>
-                        <select class="form-select" id="acceptPMsSelect">
+                        <select class="form-select" id="acceptPMsSelect" data-setting-key="acceptPMs">
                             <option value="enabled">Enabled</option>
                             <option value="friends">Friends only</option>
                             <option value="disabled">Disabled</option>
@@ -2171,7 +2191,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Accept Audio &amp; Video Calls</label>
-                        <select class="form-select" id="acceptCallsSelect">
+                        <select class="form-select" id="acceptCallsSelect" data-setting-key="acceptCalls">
                             <option value="enabled">Enabled</option>
                             <option value="friends">Friends only</option>
                             <option value="disabled">Disabled</option>
@@ -2200,12 +2220,11 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Disappearing PM (forward secrecy)</label>
-                        <select class="form-select" id="dmForwardSecrecySelect">
-                            <option value="false">Disabled</option>
-                            <option value="true">Enabled</option>
-                        </select>
-                        <div class="form-hint">
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="dmForwardSecrecyLabel">Disappearing PM (forward secrecy)</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="dmForwardSecrecyToggle" data-setting-key="dmForwardSecrecyEnabled" data-on-change="onSettingPillChange" aria-labelledby="dmForwardSecrecyLabel" aria-describedby="dmForwardSecrecyHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="dmForwardSecrecyHint">
                             When enabled, your private messages include an "expiration" tag (NIP‑40) so relays/clients can
                             delete them after the period chosen when enabled.
                         </div>
@@ -2213,7 +2232,7 @@
 
                     <div class="form-group form-subgroup nm-hidden" id="dmTTLGroup">
                         <label class="form-label">Disappear After</label>
-                        <select class="form-select" id="dmTTLSelect">
+                        <select class="form-select" id="dmTTLSelect" data-setting-key="dmTTLSeconds">
                             <option value="3600">1 hour</option>
                             <option value="21600">6 hours</option>
                             <option value="86400" selected>1 day</option>
@@ -2225,7 +2244,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Read Receipts</label>
-                        <select class="form-select" id="readReceiptsSelect">
+                        <select class="form-select" id="readReceiptsSelect" data-setting-key="readReceiptsScope">
                             <option value="everywhere">Enabled everywhere</option>
                             <option value="pms-groups">Both PMs and group chats</option>
                             <option value="pms">Only PMs</option>
@@ -2238,7 +2257,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Typing Indicators</label>
-                        <select class="form-select" id="typingIndicatorsSelect">
+                        <select class="form-select" id="typingIndicatorsSelect" data-setting-key="typingIndicatorsScope">
                             <option value="everywhere">Enabled everywhere</option>
                             <option value="pms-groups">Both PMs and group chats</option>
                             <option value="pms">Only PMs</option>
@@ -2250,7 +2269,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Show Status Indicators</label>
-                        <select class="form-select" id="showStatusSelect">
+                        <select class="form-select" id="showStatusSelect" data-setting-key="showStatus">
                             <option value="true">Enabled</option>
                             <option value="friends">Friends only</option>
                             <option value="false">Disabled</option>
@@ -2267,35 +2286,32 @@
                     </button>
                     <div class="settings-section-body">
                     <div class="form-group" id="spamFilterGroup">
-                        <label class="form-label" for="spamFilterSelect">Spam filter</label>
-                        <select class="form-select" id="spamFilterSelect" data-on-change="onSpamFilterChange">
-                            <option value="off">Disabled</option>
-                            <option value="on" selected>Enabled</option>
-                        </select>
-                        <div class="form-hint">Hides incoming messages that look like spam, starting with posts from known spam clients. Your own messages are never filtered.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="spamFilterLabel">Spam filter</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="spamFilterToggle" data-setting-key="spamFilterEnabled" aria-labelledby="spamFilterLabel" aria-describedby="spamFilterHint" data-on-change="onSpamFilterChange" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="spamFilterHint">Hides incoming messages that look like spam, starting with posts from known spam clients. Your own messages are never filtered.</div>
                     </div>
 
                     <div class="form-group" id="spamFilterAggressiveGroup">
-                        <label class="form-label" for="spamFilterAggressiveSelect">Aggressive filtering</label>
-                        <select class="form-select" id="spamFilterAggressiveSelect" data-on-change="onSpamFilterAggressiveChange">
-                            <option value="off">Disabled</option>
-                            <option value="on" selected>Enabled</option>
-                        </select>
-                        <div class="form-hint">Also hides keyboard-mash text, random-letter nyms and other spam patterns. Turn it off if real messages go missing. Needs the spam filter on.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="spamFilterAggressiveLabel">Aggressive filtering</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="spamFilterAggressiveToggle" data-setting-key="spamFilterAggressive" aria-labelledby="spamFilterAggressiveLabel" aria-describedby="spamFilterAggressiveHint" data-on-change="onSpamFilterAggressiveChange" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="spamFilterAggressiveHint">Also hides keyboard-mash text, random-letter nyms and other spam patterns. Turn it off if real messages go missing. Needs the spam filter on.</div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Verified Nymchat Users Only</label>
-                        <select class="form-select" id="appVerifiedSelect">
-                            <option value="off" selected>Disabled</option>
-                            <option value="on">Enabled</option>
-                        </select>
-                        <div class="form-hint">Filters <strong>incoming</strong> channel messages to senders who proved they are running Nymchat, on the web app or the phone apps. Scripted senders cannot prove it and are dropped. Your own messages, friends, and Nymbot are always shown.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="appVerifiedLabel">Verified Nymchat Users Only</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="appVerifiedToggle" data-setting-key="appVerifiedFilter" data-on-change="onSettingPillChange" aria-labelledby="appVerifiedLabel" aria-describedby="appVerifiedHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="appVerifiedHint">Filters <strong>incoming</strong> channel messages to senders who proved they are running Nymchat, on the web app or the phone apps. Scripted senders cannot prove it and are dropped. Your own messages, friends, and Nymbot are always shown.</div>
                     </div>
 
                     <div class="form-group">
                         <label class="form-label">Blur Images from Others</label>
-                        <select class="form-select" id="blurImagesSelect">
+                        <select class="form-select" id="blurImagesSelect" data-setting-key="blurOthersImages">
                             <option value="true">Enabled (blur by default)</option>
                             <option value="friends">Disabled (for friends only)</option>
                             <option value="false">Disabled (show all images)</option>
@@ -2317,10 +2333,34 @@
                     <div class="form-group">
                         <label class="form-label">Filter Packs</label>
                         <div class="filter-pack-list" id="filterPackList">
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="profanity"><span class="filter-pack-name">Profanity</span><span class="filter-pack-desc">Swearing and slurs, in 28 languages. Matched as whole words, so Scunthorpe, classic, cocktail and analysis are not caught.</span></label>
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="scams"><span class="filter-pack-name">Scams &amp; spam</span><span class="filter-pack-desc">Seed-phrase requests, non-Bitcoin chain addresses, doubling offers, Telegram handoffs, lookalike links. Recognizes shapes, so it works in every language.</span></label>
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="crypto"><span class="filter-pack-name">Crypto shilling</span><span class="filter-pack-desc">Price hype, launch promotion and altcoin tickers &mdash; not crypto talk. Bitcoin, sats, zaps, nodes and wallets are explicitly allowed.</span></label>
-                            <label class="filter-pack"><input type="checkbox" data-filter-pack="politics"><span class="filter-pack-name">Politics</span><span class="filter-pack-desc">Party labels, political figures and charged coinages. Ordinary words like state, party, vote, left and right are allowed.</span></label>
+                            <label class="setting-toggle-row setting-toggle-sub filter-pack">
+                                <span class="setting-toggle-text">
+                                    <span class="setting-toggle-title filter-pack-name" id="filterPackProfanityTitle">Profanity</span>
+                                    <span class="form-hint filter-pack-desc" id="filterPackProfanityHint">Swearing and slurs, in 28 languages. Matched as whole words, so Scunthorpe, classic, cocktail and analysis are not caught.</span>
+                                </span>
+                                <span class="nym-switch"><input type="checkbox" role="switch" id="filterPackProfanityToggle" data-filter-pack="profanity" data-setting-key="filterPacks.profanity" data-on-change="onSettingPillChange" aria-labelledby="filterPackProfanityTitle" aria-describedby="filterPackProfanityHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                            </label>
+                            <label class="setting-toggle-row setting-toggle-sub filter-pack">
+                                <span class="setting-toggle-text">
+                                    <span class="setting-toggle-title filter-pack-name" id="filterPackScamsTitle">Scams &amp; spam</span>
+                                    <span class="form-hint filter-pack-desc" id="filterPackScamsHint">Seed-phrase requests, non-Bitcoin chain addresses, doubling offers, Telegram handoffs, lookalike links. Recognizes shapes, so it works in every language.</span>
+                                </span>
+                                <span class="nym-switch"><input type="checkbox" role="switch" id="filterPackScamsToggle" data-filter-pack="scams" data-setting-key="filterPacks.scams" data-on-change="onSettingPillChange" aria-labelledby="filterPackScamsTitle" aria-describedby="filterPackScamsHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                            </label>
+                            <label class="setting-toggle-row setting-toggle-sub filter-pack">
+                                <span class="setting-toggle-text">
+                                    <span class="setting-toggle-title filter-pack-name" id="filterPackCryptoTitle">Crypto shilling</span>
+                                    <span class="form-hint filter-pack-desc" id="filterPackCryptoHint">Price hype, launch promotion and altcoin tickers &mdash; not crypto talk. Bitcoin, sats, zaps, nodes and wallets are explicitly allowed.</span>
+                                </span>
+                                <span class="nym-switch"><input type="checkbox" role="switch" id="filterPackCryptoToggle" data-filter-pack="crypto" data-setting-key="filterPacks.crypto" data-on-change="onSettingPillChange" aria-labelledby="filterPackCryptoTitle" aria-describedby="filterPackCryptoHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                            </label>
+                            <label class="setting-toggle-row setting-toggle-sub filter-pack">
+                                <span class="setting-toggle-text">
+                                    <span class="setting-toggle-title filter-pack-name" id="filterPackPoliticsTitle">Politics</span>
+                                    <span class="form-hint filter-pack-desc" id="filterPackPoliticsHint">Party labels, political figures and charged coinages. Ordinary words like state, party, vote, left and right are allowed.</span>
+                                </span>
+                                <span class="nym-switch"><input type="checkbox" role="switch" id="filterPackPoliticsToggle" data-filter-pack="politics" data-setting-key="filterPacks.politics" data-on-change="onSettingPillChange" aria-labelledby="filterPackPoliticsTitle" aria-describedby="filterPackPoliticsHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                            </label>
                         </div>
                         <div class="form-hint">Ready-made keyword lists, applied like your own blocked keywords: a matching message is hidden, and so is one from a matching nym. Your friends and your own messages are never filtered. Each pack loads only when you turn it on.</div>
                     </div>
@@ -2330,6 +2370,14 @@
                         <div class="blocked-list" id="blockedList">
                             <div class="nm-dim12">No blocked users</div>
                         </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Blocked Relays</label>
+                        <div class="blocked-list" id="blockedRelaysList">
+                            <div class="nm-dim12">No blocked relays</div>
+                        </div>
+                        <div class="form-hint">Block a relay from Network Stats. Blocking stops live traffic with that relay for this account on every device. History the app backend already stored can't be filtered by relay, because the backend doesn't record which relay a message came from, and blocking doesn't reduce app backend traffic.</div>
                     </div>
 
                     <div class="form-group">
@@ -2350,7 +2398,7 @@
                     <div class="settings-section-body">
                     <div class="form-group">
                         <label class="form-label">Translation Language</label>
-                        <select class="form-select" id="translateLanguageSelect" data-no-i18n>
+                        <select class="form-select" id="translateLanguageSelect" data-setting-key="translateLanguage" data-no-i18n>
                             <option value="">Disabled</option>
                             <option value="en">English</option>
                             <option value="es">Spanish</option>
@@ -2404,7 +2452,7 @@
 
                     <div class="form-group">
                         <label class="form-label">Notification Sound</label>
-                        <select class="form-select" id="soundSelect">
+                        <select class="form-select" id="soundSelect" data-setting-key="sound">
                             <option value="beep">Classic Beep</option>
                             <option value="low">Low Tone</option>
                             <option value="high">High Ping</option>
@@ -2428,11 +2476,10 @@
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Auto-scroll Messages</label>
-                        <select class="form-select" id="autoscrollSelect">
-                            <option value="true">Enabled</option>
-                            <option value="false">Disabled</option>
-                        </select>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="autoscrollLabel">Auto-scroll Messages</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="autoscrollToggle" data-setting-key="autoscroll" data-on-change="onSettingPillChange" aria-labelledby="autoscrollLabel" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
                     </div>
 
                     <div class="form-group" id="speechModelGroup">
@@ -2451,21 +2498,19 @@
                     </button>
                     <div class="settings-section-body">
                     <div class="form-group">
-                        <label class="form-label">Group Chats & PMs Only Mode</label>
-                        <select class="form-select" id="groupChatPMOnlySelect">
-                            <option value="false">Disabled (show geohash channels)</option>
-                            <option value="true">Enabled (group chats & PMs only)</option>
-                        </select>
-                        <div class="form-hint">Hides all geohash channels and focuses the app on group chats and private messages only. Reduces bandwidth by skipping channel subscriptions.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="groupChatPMOnlyLabel">Group Chats & PMs Only Mode</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="groupChatPMOnlyToggle" data-setting-key="groupChatPMOnlyMode" data-on-change="onSettingPillChange" aria-labelledby="groupChatPMOnlyLabel" aria-describedby="groupChatPMOnlyHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="groupChatPMOnlyHint">Hides all geohash channels and focuses the app on group chats and private messages only. Reduces bandwidth by skipping channel subscriptions.</div>
                     </div>
 
                     <div class="form-group" data-geohash-setting>
-                        <label class="form-label">Sort Geohash Channels by Proximity</label>
-                        <select class="form-select" id="proximitySelect">
-                            <option value="false">Disabled</option>
-                            <option value="true">Enabled (requires location access)</option>
-                        </select>
-                        <div class="form-hint">Sort geohash channels by distance from your location</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="proximityLabel">Sort Geohash Channels by Proximity</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="proximityToggle" data-setting-key="sortByProximity" data-on-change="onSettingPillChange" aria-labelledby="proximityLabel" aria-describedby="proximityHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="proximityHint">Sort geohash channels by distance from your location</div>
                     </div>
 
                     <div class="form-group" data-geohash-setting>
@@ -2481,12 +2526,11 @@
                     </div>
 
                     <div class="form-group" data-geohash-setting>
-                        <label class="form-label">Hide All Non-Favorited Channels</label>
-                        <select class="form-select" id="hideNonPinnedSelect">
-                            <option value="false">Disabled</option>
-                            <option value="true">Enabled (only show favorited channels)</option>
-                        </select>
-                        <div class="form-hint">When enabled, only your favorited channels will appear in the sidebar</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="hideNonPinnedLabel">Hide All Non-Favorited Channels</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="hideNonPinnedToggle" data-setting-key="hideNonPinned" data-on-change="onSettingPillChange" aria-labelledby="hideNonPinnedLabel" aria-describedby="hideNonPinnedHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="hideNonPinnedHint">When enabled, only your favorited channels will appear in the sidebar</div>
                     </div>
 
                     <div class="form-group" data-geohash-setting>
@@ -2512,17 +2556,16 @@
                     </button>
                     <div class="settings-section-body">
                     <div class="form-group mobile-only">
-                        <label class="form-label">Swipe Gestures</label>
-                        <select class="form-select" id="gesturesEnabledSelect">
-                            <option value="true">Enabled</option>
-                            <option value="false">Disabled</option>
-                        </select>
-                        <div class="form-hint">Swipe a message horizontally to trigger an action. Disable to turn off all swipe gestures on messages.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="gesturesEnabledLabel">Swipe Gestures</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="gesturesEnabledToggle" data-setting-key="gesturesEnabled" data-on-change="onSettingPillChange" aria-labelledby="gesturesEnabledLabel" aria-describedby="gesturesEnabledHint" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="gesturesEnabledHint">Swipe a message horizontally to trigger an action. Disable to turn off all swipe gestures on messages.</div>
                     </div>
 
                     <div class="form-group mobile-only" id="swipeLeftActionGroup">
                         <label class="form-label">Swipe Left Action</label>
-                        <select class="form-select" id="swipeLeftActionSelect">
+                        <select class="form-select" id="swipeLeftActionSelect" data-setting-key="swipeLeftAction">
                             <option value="quote">Quote Reply</option>
                             <option value="translate">Translate</option>
                             <option value="copy">Copy Message</option>
@@ -2537,7 +2580,7 @@
 
                     <div class="form-group mobile-only" id="swipeRightActionGroup">
                         <label class="form-label">Swipe Right Action</label>
-                        <select class="form-select" id="swipeRightActionSelect">
+                        <select class="form-select" id="swipeRightActionSelect" data-setting-key="swipeRightAction">
                             <option value="translate">Translate</option>
                             <option value="quote">Quote Reply</option>
                             <option value="copy">Copy Message</option>
@@ -2561,7 +2604,7 @@
 
                     <div class="form-group mobile-only" id="swipeThresholdGroup">
                         <label class="form-label">Swipe Sensitivity</label>
-                        <select class="form-select" id="swipeThresholdSelect">
+                        <select class="form-select" id="swipeThresholdSelect" data-setting-key="swipeThreshold">
                             <option value="40">High (40px)</option>
                             <option value="60">Medium (60px)</option>
                             <option value="80">Low (80px)</option>
@@ -2579,21 +2622,19 @@
                     </button>
                     <div class="settings-section-body">
                     <div class="form-group">
-                        <label class="form-label">Low Data Mode</label>
-                        <select class="form-select" id="lowDataModeSelect">
-                            <option value="false">Disabled</option>
-                            <option value="true">Enabled</option>
-                        </select>
-                        <div class="form-hint">Reduces bandwidth by connecting to only 5 default relays and loading geo relays on-demand when entering channels</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="lowDataModeLabel">Low Data Mode</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="lowDataModeToggle" data-setting-key="lowDataMode" data-on-change="onSettingPillChange" aria-labelledby="lowDataModeLabel" aria-describedby="lowDataModeHint"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="lowDataModeHint">Reduces bandwidth by connecting only to the 18 default relays and loading geo relays only for the channels you open</div>
                     </div>
 
                     <div class="form-group">
-                        <label class="form-label">Cache PMs &amp; Group Chats On Device</label>
-                        <select class="form-select" id="cachePMsSelect">
-                            <option value="true">Enabled</option>
-                            <option value="false">Disabled</option>
-                        </select>
-                        <div class="form-hint">When enabled, decrypted private messages and group chats are stored on this device so they appear instantly on app launch. Disable if you'd rather not have decrypted message content kept at rest in app storage. Toggling off clears the existing cached PM/group data.</div>
+                        <label class="setting-toggle-row">
+                            <span class="form-label" id="cachePMsLabel">Cache PMs &amp; Group Chats On Device</span>
+                            <span class="nym-switch"><input type="checkbox" role="switch" id="cachePMsToggle" data-setting-key="cachePMs" data-on-change="onSettingPillChange" aria-labelledby="cachePMsLabel" aria-describedby="cachePMsHint" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+                        </label>
+                        <div class="form-hint" id="cachePMsHint">When enabled, decrypted private messages and group chats are stored on this device so they appear instantly on app launch. Disable if you'd rather not have decrypted message content kept at rest in app storage. Toggling off clears the existing cached PM/group data.</div>
                     </div>
 
                     <div class="form-group nm-h-67">
@@ -2769,16 +2810,13 @@
             <button class="modal-close" data-action="closeModal" data-modal-id="botAnonModal" aria-label="Close">✕</button>
             <div class="modal-header">Anonymous Nymbot Chat</div>
             <p class="bot-modal-intro">Your premium chat is already end-to-end encrypted, but Nymbot still sees which pubkey is talking to it. Turn this on and every message, and every reply, travels under a throwaway key generated on this device — the same trick group chats use. Nymbot bills that key, answers it, and never learns your nym. Credits move across as blind vouchers Nymbot signs without seeing, so its own records cannot link the two.</p>
-            <div class="form-group bot-toggle-row">
-                <div class="bot-toggle-text">
-                    <div class="bot-toggle-title">Anonymous mode</div>
-                    <div class="form-hint">Send this chat from a throwaway key</div>
-                </div>
-                <label class="nym-switch">
-                    <input type="checkbox" id="botAnonToggle" data-on-change="botAnonToggle">
-                    <span class="nym-switch-track"><span class="nym-switch-thumb"></span></span>
-                </label>
-            </div>
+            <label class="form-group bot-toggle-row">
+                <span class="bot-toggle-text">
+                    <span class="bot-toggle-title" id="botAnonTitle">Anonymous mode</span>
+                    <span class="form-hint" id="botAnonHint">Send this chat from a throwaway key</span>
+                </span>
+                <span class="nym-switch"><input type="checkbox" role="switch" id="botAnonToggle" aria-labelledby="botAnonTitle" aria-describedby="botAnonHint" data-on-change="botAnonToggle"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
+            </label>
             <div id="botAnonActiveBody" class="nm-hidden">
                 <div class="form-group">
                     <label class="form-label">Throwaway key</label>
@@ -2968,11 +3006,15 @@
     <script defer src="js/modules/ai-consent.js"></script>
     <script defer src="js/modules/attest.js"></script>
     <script defer src="js/modules/filter-packs.js"></script>
+    <script defer src="js/modules/content-filter.js"></script>
     <script defer src="js/modules/event-details.js"></script>
     <script defer src="js/modules/wrap-outbox.js"></script>
+    <script defer src="js/modules/relay-block.js"></script>
+    <script defer src="js/modules/d1-cursor.js"></script>
     <script defer src="js/modules/relays.js"></script>
     <script defer src="js/modules/upload-activity.js"></script>
     <script defer src="js/modules/nostr-core.js"></script>
+    <script defer src="js/modules/nym-suffix.js"></script>
     <script defer src="js/modules/users.js"></script>
     <script defer src="js/modules/channels.js"></script>
     <script defer src="js/modules/syntax-highlight.js"></script>
@@ -2983,6 +3025,7 @@
     <script defer src="js/modules/chat-nav.js"></script>
     <script defer src="js/modules/day-labels.js"></script>
     <script defer src="js/modules/composer-model.js"></script>
+    <script defer src="js/modules/send-as-model.js"></script>
     <script defer src="js/modules/anon-nymbot-model.js"></script>
     <script defer src="js/modules/chat-lock.js"></script>
     <script defer src="js/modules/message-format.js"></script>
@@ -3051,6 +3094,7 @@
     <script defer src="js/modules/unified-search-ui.js"></script>
     <script defer src="js/modules/shortcuts.js"></script>
     <script defer src="js/modules/accounts-ui.js"></script>
+    <script defer src="js/modules/send-as.js"></script>
     <script defer src="js/modules/composer-ui.js"></script>
     <script defer src="js/modules/layout-model.js"></script>
     <script defer src="js/modules/layout-ui.js"></script>
@@ -3076,27 +3120,24 @@
                 <button class="notifications-mark-read-btn nm-hidden" id="markAllNotificationsReadBtn" data-action="markAllNotificationsRead" type="button">Mark all as read</button>
             </div>
             <div class="notif-prefs nm-hidden" id="notifPrefs">
-                <label class="nm-h-78">
-                    <input type="checkbox" id="enableNotificationsCheckbox" checked data-on-change="toggleNotificationsEnabled" class="nm-h-79">
-                    Enable notifications
+                <label class="setting-toggle-row">
+                    <span class="form-label" id="enableNotificationsLabel">Enable notifications</span>
+                    <span class="nym-switch"><input type="checkbox" role="switch" id="enableNotificationsCheckbox" data-panel-toggle="notificationsEnabled" aria-labelledby="enableNotificationsLabel" data-on-change="toggleNotificationsEnabled" checked><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
                 </label>
-                <br>
-                <label class="nm-h-80">
-                    <input type="checkbox" id="groupMentionsOnlyCheckbox" data-on-change="toggleGroupMentionsOnly" class="nm-h-79">
-                    Only notify for mentions in group chats
+                <label class="setting-toggle-row">
+                    <span class="form-label" id="groupMentionsOnlyLabel">Only notify for mentions in group chats</span>
+                    <span class="nym-switch"><input type="checkbox" role="switch" id="groupMentionsOnlyCheckbox" data-panel-toggle="groupNotifyMentionsOnly" aria-labelledby="groupMentionsOnlyLabel" data-on-change="toggleGroupMentionsOnly"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
                 </label>
-                <br>
-                <label class="nm-h-80">
-                    <input type="checkbox" id="threadMentionsOnlyCheckbox" data-on-change="toggleThreadMentionsOnly" class="nm-h-79">
-                    Only notify for mentions in threads
+                <label class="setting-toggle-row">
+                    <span class="form-label" id="threadMentionsOnlyLabel">Only notify for mentions in threads</span>
+                    <span class="nym-switch"><input type="checkbox" role="switch" id="threadMentionsOnlyCheckbox" data-panel-toggle="threadNotifyMentionsOnly" aria-labelledby="threadMentionsOnlyLabel" data-on-change="toggleThreadMentionsOnly"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
                 </label>
-                <br>
-                <label class="nm-h-80">
-                    <input type="checkbox" id="notifyFriendsOnlyCheckbox" data-on-change="toggleNotifyFriendsOnly" class="nm-h-79">
-                    Only notify for messages from friends
+                <label class="setting-toggle-row">
+                    <span class="form-label" id="notifyFriendsOnlyLabel">Only notify for messages from friends</span>
+                    <span class="nym-switch"><input type="checkbox" role="switch" id="notifyFriendsOnlyCheckbox" data-panel-toggle="notifyFriendsOnly" aria-labelledby="notifyFriendsOnlyLabel" data-on-change="toggleNotifyFriendsOnly"><span class="nym-switch-track" aria-hidden="true"><span class="nym-switch-thumb"></span></span></span>
                 </label>
                 <div class="notif-sound-row">
-                    <label class="notif-sound-label" for="notifSoundSelect">Notification Sound</label>
+                    <label class="notif-sound-label form-label" for="notifSoundSelect">Notification Sound</label>
                     <select class="form-select notif-sound-select" id="notifSoundSelect" data-on-change="onNotifSoundChange"></select>
                 </div>
             </div>

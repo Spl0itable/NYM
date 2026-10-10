@@ -442,8 +442,19 @@ class MeshBridge {
     if (landed && !isOwn) _maybeNotifyChannelMention(m, channelName);
   }
 
+  bool _pmRefused(String pubkey) {
+    final st = _appState;
+    if (pubkey == st.selfPubkey) return false;
+    if (st.blockedUsers.contains(pubkey)) return true;
+    final scope = _ref.read(settingsProvider).acceptPMs;
+    if (scope == 'disabled') return true;
+    if (scope == 'friends' && !st.isFriend(pubkey)) return true;
+    return false;
+  }
+
   void _onPrivate(MeshPrivateMessage msg) {
     final pubkey = _pubkeyForPeerId(msg.senderPeerID);
+    if (_pmRefused(pubkey)) return;
     // Mesh-only until a linked announce upgrades the peer, since a DM can precede its announce.
     final peer = _service.peerById(msg.senderPeerID);
     if (peer != null) {
@@ -517,6 +528,7 @@ class MeshBridge {
           : (e.channel!.startsWith('#') ? e.channel!.substring(1) : e.channel!);
       storageKey = '#${ch.toLowerCase()}';
     }
+    if (_appState.isPersonHidden(pubkey, e.nickname)) return;
     _app.setTyping(
       storageKey: storageKey,
       pubkey: pubkey,
@@ -533,6 +545,7 @@ class MeshBridge {
     final pubkey = _pubkeyForPeerId(e.senderPeerID);
     // Never apply an inbound reaction as if it were ours.
     if (pubkey == _appState.selfPubkey) return;
+    if (_appState.blockedUsers.contains(pubkey)) return;
     _app.applyReaction(
       messageId: existing.id,
       emoji: e.emoji,
@@ -573,6 +586,17 @@ class MeshBridge {
   }
 
   Future<void> _onFile(MeshFileReceived event) async {
+    final sender = _pubkeyForPeerId(event.fromPeerID);
+    if (event.isDirect && _pmRefused(sender)) return;
+    if (!event.isDirect) {
+      final ch = (event.channel == null || event.channel!.isEmpty)
+          ? kMeshNearbyChannel
+          : event.channel!;
+      if (_appState.blockedUsers.contains(sender) ||
+          _appState.isChannelBlockedKey(ch)) {
+        return;
+      }
+    }
     final path = await _saveFile(event.fileName, event.bytes);
     if (path == null) return;
     if (event.isDirect) {
@@ -984,6 +1008,10 @@ class MeshBridge {
   void _maybeNotifyChannelMention(Message m, String channelName) {
     final nym = _selfNym().toLowerCase();
     if (nym.isEmpty) return;
+    if (_appState.isChannelHidden(channelName) ||
+        _appState.isMessageFiltered(m)) {
+      return;
+    }
     final body = m.content.toLowerCase();
     if (!body.contains('@$nym') && !body.contains(nym)) return;
     _ref.read(nostrControllerProvider).dispatchMeshNotification(

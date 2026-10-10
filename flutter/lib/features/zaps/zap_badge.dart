@@ -57,12 +57,14 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
   @override
   Widget build(BuildContext context) {
     final zaps = ref.watch(zapsProvider)[message.id];
-    if (zaps == null || zaps.totalSats <= 0) {
+    final shown = ref.watch(appStateProvider
+        .select((s) => zaps?.visible((pk) => s.isPersonHidden(pk))));
+    if (zaps == null || shown == null || shown.sats <= 0) {
       if (_lastTotal < 0) _lastTotal = 0;
       return const SizedBox.shrink();
     }
 
-    final total = zaps.totalSats;
+    final total = shown.sats;
     // Burst and pulse on a live total increase, anchored to the badge.
     if (_lastTotal >= 0 && total > _lastTotal) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -77,7 +79,7 @@ class _ZapBadgeState extends ConsumerState<ZapBadge>
     }
     _lastTotal = total;
 
-    final zappers = zaps.zapperCount;
+    final zappers = shown.zappers;
     // Tooltip adds " (U unverified)" when any zap wasn't validated against the recipient's LNURL provider key.
     final unverifiedSats = zaps.unverifiedSats;
     final zapperLabel = zappers == 1
