@@ -344,20 +344,6 @@ Pull requests are welcome.
 4. Push to the branch
 5. Open a Pull Request
 
-### Browser end-to-end tests
-
-`e2e/` runs the real app in Chromium against a local bed: it builds `dist/` from this checkout, compiles `functions/` with `wrangler pages functions build`, and serves both through Miniflare next to the ledger Durable Object (`ledger/index.js`), local D1 databases (`e2e/schema.sql`), a Workers AI shim and one stub server for every outside host (Nostr relay, Lightning, NWC, models, media). Chromium resolves `nymchat.app` to the bed and nothing else, and the run fails if any call reaches a host without a stub.
-
-```sh
-npm install                      # once: playwright-core, wrangler, miniflare, ws
-npm run e2e                      # build dist/, start the bed, run every test in e2e/tests/
-npm run e2e -- g78 g79           # only tests whose file name starts with or contains these
-npm run e2e -- --no-build g78    # reuse the existing dist/
-npm run e2e:bed                  # start the bed and keep it running (prints one JSON line)
-```
-
-Chromium comes from `/opt/pw-browsers` (`PLAYWRIGHT_BROWSERS_PATH`), or set `PLAYWRIGHT_CHROMIUM_PATH`. `openssl` is needed for the bed's TLS certificate. A new test is a `gNN-name.mjs` file in `e2e/tests/` whose default export receives the bed context; `e2e/tests/harness.mjs` and `e2e/tests/nc.mjs` hold the shared helpers. Run browser tests one at a time, not alongside other heavy jobs.
-
 ## Changelog
 
 See the [releases page](https://github.com/Spl0itable/NYM/releases) for each update's changes.
